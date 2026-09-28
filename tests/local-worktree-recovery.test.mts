@@ -44,6 +44,7 @@ import {
   normalizeGitWorktreePathForComparison,
   type PathPresence,
   parseArgs,
+  pathFingerprintOnDisk,
   resolveDevelopmentBranchProduction,
   resolveEffectiveRealpath,
   runLocalWorktreeRecovery,
@@ -216,6 +217,53 @@ test('copyPathWithSafeSymlinks refuses a directory outside declared source roots
       /source directory escaped the declared roots during copy/,
     );
     assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pathFingerprintOnDisk does not follow a symlink outside the removed root', {
+  // The external target is a fifo. Walking it fails closed; preserving the
+  // link must not. Windows has no mkfifo fixture here.
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-fp-external-'));
+  const sourceRoot = join(root, 'worktree');
+  const external = join(root, 'external');
+  try {
+    mkdirSync(sourceRoot);
+    mkdirSync(external);
+    execFileSync('mkfifo', [join(external, 'pipe')]);
+    writeFileSync(join(external, 'data.txt'), 'one\n');
+    symlinkSync(external, join(sourceRoot, 'link'));
+    const first = pathFingerprintOnDisk(join(sourceRoot, 'link'), [sourceRoot]);
+    assert.notEqual(first, null);
+    writeFileSync(join(external, 'data.txt'), 'two\n');
+    assert.equal(
+      pathFingerprintOnDisk(join(sourceRoot, 'link'), [sourceRoot]),
+      first,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pathFingerprintOnDisk includes a symlink target inside the removed root', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-fp-internal-'));
+  const sourceRoot = join(root, 'worktree');
+  try {
+    mkdirSync(sourceRoot);
+    writeFileSync(join(sourceRoot, 'inside.txt'), 'one\n');
+    symlinkSync('inside.txt', join(sourceRoot, 'link'));
+    const first = pathFingerprintOnDisk(join(sourceRoot, 'link'), [sourceRoot]);
+    writeFileSync(join(sourceRoot, 'inside.txt'), 'two\n');
+    const second = pathFingerprintOnDisk(join(sourceRoot, 'link'), [
+      sourceRoot,
+    ]);
+    assert.notEqual(first, null);
+    assert.notEqual(second, first);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1979,6 +2027,7 @@ test('retains a partial prunable admin copy and blocks removal', () => {
   assert.deepEqual(verdict.plan.prunableAdminCopy, {
     source: '/repo/primary/.git/worktrees/linked',
     copiedTo: '/tmp/preserve/prunable-gitdir',
+    destinationFingerprint: null,
     copyFailed: true,
     plannedTo: '/tmp/preserve/prunable-gitdir',
   });
@@ -2510,6 +2559,7 @@ test('dry-run plans a prunable worktree private admin-directory backup without c
   assert.deepEqual(verdict.plan.prunableAdminCopy, {
     source: '/repo/primary/.git/worktrees/linked',
     copiedTo: null,
+    destinationFingerprint: null,
     copyFailed: false,
     plannedTo: '/tmp/explicit/prunable-gitdir',
   });
@@ -4253,16 +4303,133 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
+test('stops removal when a preserved ignored backup changes before cleanup', () => {
+  let destinationReads = 0;
+  let removalAttempted = false;
+  let cleaned = false;
+  const cleanedPaths = new Set<string>();
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        return { ok: true, status: 0, stdout: '!! secret.env\0', stderr: '' };
+      }
+      if (argv[0] === 'clean') {
+        cleaned = true;
+        cleanedPaths.add(
+          `/repo/linked/${String(argv.at(-1)).replace(':(literal)', '')}`,
+        );
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removalAttempted = true;
+      }
+      return cleanRepoRunGit(argv);
+    },
+    pathExists: (path) => !cleanedPaths.has(path),
+    readPathFingerprint: (path) => {
+      if (String(path).startsWith('/tmp/preserve/')) {
+        destinationReads += 1;
+        return destinationReads === 1 ? 'recorded-backup' : 'tampered-backup';
+      }
+      return 'source-stable';
+    },
+    copyPath: () => {},
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(cleaned, false);
+  assert.equal(removalAttempted, false);
+  assert.match(
+    verdict.result,
+    /no longer verifies fresh|backup changed|preservation artifact/,
+  );
+});
+
+test('verifies only the newest ignored snapshot after a refresh', () => {
+  let removalAttempted = false;
+  let sourceVisible = true;
+  let generation = 1;
+  let visibleTopLevelScans = 0;
+  const deps = fakeDeps({
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        const topLevel = cwd === undefined || cwd === '/repo/linked';
+        if (topLevel && sourceVisible) {
+          visibleTopLevelScans += 1;
+          // The second top-level scan refreshes the same ignored path after
+          // the initial copy. Reverify then runs before cleanup, while the
+          // source is still present, so an older fingerprint must not veto
+          // the newest snapshot.
+          if (visibleTopLevelScans === 2) generation = 2;
+          return {
+            ok: true,
+            status: 0,
+            stdout: '!! secret.env\0',
+            stderr: '',
+          };
+        }
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'clean') {
+        if (String(argv.at(-1)).includes('secret.env')) sourceVisible = false;
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removalAttempted = true;
+      }
+      return cleanRepoRunGit(argv, cwd);
+    },
+    pathExists: (path) =>
+      path === '/repo/linked/secret.env' ? sourceVisible : true,
+    readPathFingerprint: (path) =>
+      String(path).startsWith('/tmp/preserve/')
+        ? 'dest-stable'
+        : `source-v${generation}`,
+    copyPath: () => {},
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(
+    removalAttempted,
+    true,
+    `${verdict.result} (visible scans: ${visibleTopLevelScans}, generation: ${generation})`,
+  );
+  assert.equal(verdict.plan.removal?.ran, true);
+  assert.equal(
+    verdict.plan.ignoredFilesCopied.some(
+      (entry) =>
+        entry.path === 'secret.env' && entry.sourceFingerprint === 'source-v1',
+    ),
+    true,
+  );
+  assert.equal(
+    verdict.plan.ignoredFilesCopied.some(
+      (entry) =>
+        entry.path === 'secret.env' && entry.sourceFingerprint === 'source-v2',
+    ),
+    true,
+    `visibleScans=${visibleTopLevelScans} gen=${generation} fingers=${verdict.plan.ignoredFilesCopied
+      .map((entry) => entry.sourceFingerprint)
+      .join(',')} result=${verdict.result}`,
+  );
+});
+
 test('blocks cleanup when a preserved ignored source changes after its copy', () => {
   let fingerprintCalls = 0;
+  let ignoredScans = 0;
   let removalAttempted = false;
   const deps = fakeDeps({
     runGit: (argv) => {
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        ignoredScans += 1;
         return {
           ok: true,
           status: 0,
-          stdout: '!! race.env\0',
+          stdout: ignoredScans === 1 ? '!! race.env\0' : '',
           stderr: '',
         };
       }
@@ -4274,9 +4441,12 @@ test('blocks cleanup when a preserved ignored source changes after its copy', ()
       }
       return cleanRepoRunGit(argv);
     },
-    readPathFingerprint: () => {
+    readPathFingerprint: (path) => {
+      if (String(path).startsWith('/tmp/preserve/')) return 'backup-stable';
       fingerprintCalls += 1;
-      return fingerprintCalls <= 5 ? 'before-change' : 'after-change';
+      // The copy records a matching before/after pair. The next source read
+      // is the post-copy check and must observe the edit.
+      return fingerprintCalls <= 2 ? 'before-change' : 'after-change';
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -4286,7 +4456,7 @@ test('blocks cleanup when a preserved ignored source changes after its copy', ()
   assert.equal(removalAttempted, false);
   assert.match(
     verdict.result,
-    /changed contents or identity|late preservation artifact disappeared/,
+    /changed contents or identity|no longer verifies fresh|preservation artifact disappeared/,
   );
 });
 
@@ -7824,6 +7994,7 @@ test('copies linked worktree admin data for top-level local refs', () => {
   assert.deepEqual(verdict.plan.worktreeAdminCopy, {
     copiedTo: '/tmp/preserve/worktree-gitdir',
     plannedTo: '/tmp/preserve/worktree-gitdir',
+    destinationFingerprint: 'test-fingerprint',
   });
   assert.deepEqual(copied, [
     {
@@ -7869,6 +8040,7 @@ test('retains a partial top-level worktree admin copy and blocks removal', () =>
   assert.deepEqual(verdict.plan.worktreeAdminCopy, {
     copiedTo: '/tmp/preserve/worktree-gitdir',
     plannedTo: '/tmp/preserve/worktree-gitdir',
+    destinationFingerprint: null,
   });
   assert.equal(verdict.mutated, true);
   assert.equal(verdict.plan.removal, null);
@@ -7975,6 +8147,7 @@ test('copies linked worktree admin data for an interrupted operation without loc
   assert.deepEqual(verdict.plan.worktreeAdminCopy, {
     copiedTo: '/tmp/preserve/worktree-gitdir',
     plannedTo: '/tmp/preserve/worktree-gitdir',
+    destinationFingerprint: 'test-fingerprint',
   });
   assert.deepEqual(copied, [
     {
@@ -8037,6 +8210,7 @@ test('dry-run plans an initialized submodule admin export without copying it', (
       path: 'submodule',
       copiedTo: null,
       plannedTo: '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
+      destinationFingerprint: null,
       copyFailed: false,
     },
   ]);

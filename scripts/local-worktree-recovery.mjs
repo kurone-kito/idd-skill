@@ -171,18 +171,36 @@ function readFileOrNull(path) {
  * Ignored files are copied before destructive cleanup, so checking only that
  * the path is still ignored is insufficient: a writer can replace its
  * contents after the copy and `git clean` would then delete newer data. The
- * fingerprint covers regular-file bytes, symlink text, and recursive
- * directory contents together with lstat identity metadata. Any unreadable
- * or concurrently changing path fails closed by returning null. */
-function pathFingerprintOnDisk(path) {
+ * fingerprint covers regular-file bytes, symlink text, and directory
+ * contents together with lstat identity metadata. A symlink target is walked
+ * only when it resolves inside a soon-to-be-removed source root. External
+ * links are preserved as links rather than materialized, so walking their
+ * targets would fingerprint data this recovery does not remove (Codex review
+ * #4125636076). Any unreadable or concurrently changing path fails closed by
+ * returning null. */
+export function pathFingerprintOnDisk(path, sourceRoots = []) {
   const hash = createHash('sha256');
   const activeDirectories = new Set();
+  const sourceRootsReal = [];
+  for (const root of sourceRoots) {
+    try {
+      const resolved = realpathSync(root);
+      if (!sourceRootsReal.includes(resolved)) sourceRootsReal.push(resolved);
+    } catch {
+      // A declared source root that cannot be resolved makes in-tree versus
+      // external classification unknowable. Fail closed instead of walking
+      // every symlink target or silently skipping an in-tree one.
+      return null;
+    }
+  }
   const statSignature = (stat) =>
     [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs].join(
       ':',
     );
   const sameStat = (before, after) =>
     statSignature(before) === statSignature(after);
+  const targetIsInsideRemovedRoot = (resolvedTarget) =>
+    sourceRootsReal.some((root) => isPathContainedIn(resolvedTarget, root));
   const visit = (candidate) => {
     let before;
     try {
@@ -208,7 +226,12 @@ function pathFingerprintOnDisk(path) {
       }
       if (resolvedTarget !== null) {
         hash.update(`resolved:${resolvedTarget}\0`);
-        if (!visit(resolvedTarget)) return false;
+        if (
+          targetIsInsideRemovedRoot(resolvedTarget) &&
+          !visit(resolvedTarget)
+        ) {
+          return false;
+        }
       }
       try {
         return sameStat(before, lstatSync(candidate));
@@ -325,10 +348,17 @@ function isStashPlanEntry(value) {
     (value.verifiedCount === null || typeof value.verifiedCount === 'number') &&
     isNullableString(value.createdStashEntry) &&
     isNullableString(value.unmergedFallbackCopiedTo) &&
+    (value.unmergedFallbackDestinationFingerprint === undefined ||
+      isNullableString(value.unmergedFallbackDestinationFingerprint)) &&
     Array.isArray(value.unmergedFallbackCopiedFiles) &&
     value.unmergedFallbackCopiedFiles.every(
       (entry) => typeof entry === 'string',
     ) &&
+    (value.unmergedFallbackCopiedFileFingerprints === undefined ||
+      (Array.isArray(value.unmergedFallbackCopiedFileFingerprints) &&
+        value.unmergedFallbackCopiedFileFingerprints.every((entry) =>
+          isNullableString(entry),
+        ))) &&
     (value.unmergedFallbackCopiedSources === undefined ||
       (Array.isArray(value.unmergedFallbackCopiedSources) &&
         value.unmergedFallbackCopiedSources.every(
@@ -380,6 +410,8 @@ function isPrimaryRecoveryPreservationManifest(value) {
         isRecord(entry) &&
         typeof entry.path === 'string' &&
         isNullableString(entry.copiedTo) &&
+        (entry.destinationFingerprint === undefined ||
+          isNullableString(entry.destinationFingerprint)) &&
         typeof entry.copyFailed === 'boolean',
     ) &&
     Array.isArray(value.backupRefs) &&
@@ -393,6 +425,8 @@ function isPrimaryRecoveryPreservationManifest(value) {
         isNullableString(entry.copiedTo) &&
         (entry.sourceFingerprint === undefined ||
           isNullableString(entry.sourceFingerprint)) &&
+        (entry.destinationFingerprint === undefined ||
+          isNullableString(entry.destinationFingerprint)) &&
         typeof entry.copyFailed === 'boolean',
     ) &&
     typeof value.ignoredFilesScanFailed === 'boolean' &&
@@ -404,12 +438,16 @@ function isPrimaryRecoveryPreservationManifest(value) {
         typeof entry.path === 'string' &&
         isNullableString(entry.copiedTo) &&
         isNullableString(entry.plannedTo) &&
+        (entry.destinationFingerprint === undefined ||
+          isNullableString(entry.destinationFingerprint)) &&
         typeof entry.copyFailed === 'boolean',
     ) &&
     (worktreeAdmin === null ||
       (isRecord(worktreeAdmin) &&
         isNullableString(worktreeAdmin.copiedTo) &&
-        isNullableString(worktreeAdmin.plannedTo)))
+        isNullableString(worktreeAdmin.plannedTo) &&
+        (worktreeAdmin.destinationFingerprint === undefined ||
+          isNullableString(worktreeAdmin.destinationFingerprint))))
   );
 }
 function parsePrimaryRecoveryPreservationManifest(encoded) {
@@ -425,10 +463,16 @@ function parsePrimaryRecoveryPreservationManifest(encoded) {
       stashes: parsed.stashes.map((entry) => ({
         ...entry,
         // Older interrupted recoveries did not persist the unmerged-fallback
-        // source paths. Keep them readable, but the primary cleanup gate will
-        // stop safely rather than deleting an unverified source.
+        // source paths or destination fingerprints. Keep them readable, but
+        // the primary cleanup gate will stop safely rather than deleting an
+        // unverified source.
         unmergedFallbackCopiedSources:
           entry.unmergedFallbackCopiedSources ?? [],
+        unmergedFallbackDestinationFingerprint:
+          entry.unmergedFallbackDestinationFingerprint ?? null,
+        unmergedFallbackCopiedFileFingerprints:
+          entry.unmergedFallbackCopiedFileFingerprints ??
+          entry.unmergedFallbackCopiedFiles.map(() => null),
       })),
       backupRefs: parsed.backupRefs.map((entry) => ({
         ...entry,
@@ -436,11 +480,28 @@ function parsePrimaryRecoveryPreservationManifest(encoded) {
       })),
       ignoredFilesCopied: parsed.ignoredFilesCopied.map((entry) => ({
         ...entry,
-        // Markers written before source fingerprints were introduced are
-        // readable, but their ignored-file evidence is incomplete and must
-        // fail closed before destructive cleanup.
+        // Markers written before source or destination fingerprints were
+        // introduced are readable, but their ignored-file evidence is
+        // incomplete and must fail closed before destructive cleanup.
         sourceFingerprint: entry.sourceFingerprint ?? null,
+        destinationFingerprint: entry.destinationFingerprint ?? null,
       })),
+      uninitializedSubmodules: parsed.uninitializedSubmodules.map((entry) => ({
+        ...entry,
+        destinationFingerprint: entry.destinationFingerprint ?? null,
+      })),
+      submoduleAdminCopies: parsed.submoduleAdminCopies.map((entry) => ({
+        ...entry,
+        destinationFingerprint: entry.destinationFingerprint ?? null,
+      })),
+      worktreeAdminCopy:
+        parsed.worktreeAdminCopy === null
+          ? null
+          : {
+              ...parsed.worktreeAdminCopy,
+              destinationFingerprint:
+                parsed.worktreeAdminCopy.destinationFingerprint ?? null,
+            },
     };
   } catch {
     return null;
@@ -1317,7 +1378,9 @@ function planAndMaybeStashScope(
     verifiedCount: null,
     createdStashEntry: null,
     unmergedFallbackCopiedTo: null,
+    unmergedFallbackDestinationFingerprint: null,
     unmergedFallbackCopiedFiles: [],
+    unmergedFallbackCopiedFileFingerprints: [],
     unmergedFallbackCopiedSources: [],
     unmergedFallbackAllPreserved: null,
     hardStashFailure: false,
@@ -1382,40 +1445,49 @@ function planAndMaybeStashScope(
         preserveDir,
         `unmerged-${Buffer.from(scopeLabel).toString('base64url')}`,
       );
+      const fallbackRoots = recoverySourceRoots(targetPath, scopePath, deps);
       let allLanded = dirtyPaths.length === allDirtyPaths.length;
       for (const relPath of dirtyPaths) {
         const from = join(scopePath, relPath);
         const to = join(destination, relPath);
         entry.unmergedFallbackCopiedFiles.push(to);
+        let fileFingerprint = null;
         if (
-          !isCopyDestinationOutsideTarget(to, targetPath, deps) ||
-          !deps.pathExists(from)
+          isCopyDestinationOutsideTarget(to, targetPath, deps) &&
+          deps.pathExists(from)
         ) {
+          try {
+            deps.copyPath(
+              from,
+              to,
+              targetPath,
+              targetGitDirForScope ? [targetGitDirForScope] : undefined,
+            );
+            if (deps.pathExists(to)) {
+              fileFingerprint = deps.readPathFingerprint(to, fallbackRoots);
+            }
+          } catch {
+            // Keep the attempted destination in the public plan even when a
+            // recursive copy wrote only a prefix before failing. The caller
+            // must retain that partial artifact and block removal rather than
+            // losing the only record of where recovery may have mutated data.
+            fileFingerprint = null;
+          }
+        }
+        entry.unmergedFallbackCopiedFileFingerprints.push(fileFingerprint);
+        if (fileFingerprint === null) {
           allLanded = false;
           continue;
         }
-        try {
-          deps.copyPath(
-            from,
-            to,
-            targetPath,
-            targetGitDirForScope ? [targetGitDirForScope] : undefined,
-          );
-        } catch {
-          // Keep the attempted destination in the public plan even when a
-          // recursive copy wrote only a prefix before failing. The caller
-          // must retain that partial artifact and block removal rather than
-          // losing the only record of where recovery may have mutated data.
-          allLanded = false;
-          continue;
-        }
-        if (!deps.pathExists(to)) {
-          allLanded = false;
-        } else {
-          entry.unmergedFallbackCopiedSources.push(from);
-        }
+        entry.unmergedFallbackCopiedSources.push(from);
       }
       entry.unmergedFallbackCopiedTo = destination;
+      entry.unmergedFallbackDestinationFingerprint = allLanded
+        ? deps.readPathFingerprint(destination, fallbackRoots)
+        : null;
+      if (entry.unmergedFallbackDestinationFingerprint === null) {
+        allLanded = false;
+      }
       entry.unmergedFallbackAllPreserved = allLanded;
     } else {
       // Nothing dirty by this scan's own accounting, so there is nothing to
@@ -1617,6 +1689,7 @@ function scanAndMaybeCopyIgnoredFiles(
         path: ignoredPath,
         copiedTo: null,
         sourceFingerprint: null,
+        destinationFingerprint: null,
         copyFailed: false,
       });
       continue;
@@ -1647,11 +1720,15 @@ function scanAndMaybeCopyIgnoredFiles(
           path: ignoredPath,
           copiedTo: null,
           sourceFingerprint: null,
+          destinationFingerprint: null,
           copyFailed: false,
         });
         continue;
       }
-      sourceFingerprintBeforeCopy = deps.readPathFingerprint(source);
+      sourceFingerprintBeforeCopy = deps.readPathFingerprint(
+        source,
+        recoverySourceRoots(targetPath, scopePath, deps),
+      );
       if (sourceFingerprintBeforeCopy === null) {
         scanFailed = true;
         copied.push({
@@ -1659,6 +1736,7 @@ function scanAndMaybeCopyIgnoredFiles(
           path: ignoredPath,
           copiedTo: null,
           sourceFingerprint: null,
+          destinationFingerprint: null,
           copyFailed: false,
         });
         continue;
@@ -1676,27 +1754,64 @@ function scanAndMaybeCopyIgnoredFiles(
           path: ignoredPath,
           copiedTo: destination,
           sourceFingerprint: null,
+          destinationFingerprint: null,
           copyFailed: true,
         });
         continue;
       }
     }
-    const sourceFingerprint = apply ? deps.readPathFingerprint(source) : null;
+    const fingerprintRoots = recoverySourceRoots(targetPath, scopePath, deps);
+    const sourceFingerprint = apply
+      ? deps.readPathFingerprint(source, fingerprintRoots)
+      : null;
     const sourceChangedDuringCopy =
       apply && sourceFingerprintBeforeCopy !== sourceFingerprint;
-    if (apply && (sourceFingerprint === null || sourceChangedDuringCopy)) {
-      scanFailed = true;
+    let destinationFingerprint = null;
+    if (
+      apply &&
+      destination !== null &&
+      sourceFingerprint !== null &&
+      !sourceChangedDuringCopy
+    ) {
+      destinationFingerprint = deps.readPathFingerprint(
+        destination,
+        fingerprintRoots,
+      );
     }
+    const copyFailed =
+      apply &&
+      (sourceFingerprint === null ||
+        sourceChangedDuringCopy ||
+        destinationFingerprint === null);
+    if (copyFailed) scanFailed = true;
     copied.push({
       scope: scopeLabel,
       path: ignoredPath,
       copiedTo: destination,
       sourceFingerprint,
-      copyFailed:
-        apply && (sourceFingerprint === null || sourceChangedDuringCopy),
+      destinationFingerprint,
+      copyFailed,
     });
   }
   return { copied, scanFailed };
+}
+/** Source roots whose removal can delete a symlink target. Fingerprints
+ * recorded at copy time and re-read before cleanup must use the same set,
+ * or an in-tree link's target is hashed on only one side. */
+function recoverySourceRoots(targetPath, scopePath, deps) {
+  const roots = [];
+  const add = (root) => {
+    if (root && root.length > 0 && !roots.includes(root)) roots.push(root);
+  };
+  add(targetPath);
+  add(scopePath);
+  const addGitDir = (cwd) => {
+    const result = deps.runGit(['rev-parse', '--absolute-git-dir'], cwd);
+    add(result.ok ? result.stdout.trim() : null);
+  };
+  addGitDir(targetPath);
+  if (scopePath !== targetPath) addGitDir(scopePath);
+  return roots;
 }
 /** Remove ignored paths that were copied out before destructive cleanup.
  * Unlike linked-worktree removal, a checkout leaves ignored files in place,
@@ -1768,13 +1883,25 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
         if (entry?.sourceFingerprint === null) {
           return `preserved ignored path ${scope}/${path} has no source fingerprint`;
         }
+        if (entry?.destinationFingerprint == null || entry.copiedTo === null) {
+          return `preserved ignored path ${scope}/${path} has no destination fingerprint`;
+        }
+        const roots = recoverySourceRoots(targetPath, scopePath, deps);
+        const destinationFingerprint = deps.readPathFingerprint(
+          entry.copiedTo,
+          roots,
+        );
+        if (destinationFingerprint !== entry.destinationFingerprint) {
+          return `preserved ignored path ${scope}/${path} backup changed before cleanup`;
+        }
         const currentFingerprint = deps.readPathFingerprint(
           join(scopePath, path),
+          roots,
         );
         if (currentFingerprint === null) {
           return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
         }
-        if (currentFingerprint !== entry?.sourceFingerprint) {
+        if (currentFingerprint !== entry.sourceFingerprint) {
           return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
         }
       }
@@ -1907,6 +2034,40 @@ function cleanPreservedUnmergedFallbackFilesBeforePrimaryCheckout(
     ) {
       return `unmerged fallback source paths for ${stash.scope} are incomplete`;
     }
+    if (
+      stash.unmergedFallbackDestinationFingerprint === null ||
+      stash.unmergedFallbackCopiedFileFingerprints.length !==
+        stash.unmergedFallbackCopiedFiles.length
+    ) {
+      return `unmerged fallback for ${stash.scope} has no destination fingerprint`;
+    }
+    const fallbackScopePath =
+      stash.scope === '.' ? targetPath : join(targetPath, stash.scope);
+    const fallbackRoots = recoverySourceRoots(
+      targetPath,
+      fallbackScopePath,
+      deps,
+    );
+    if (
+      deps.readPathFingerprint(
+        stash.unmergedFallbackCopiedTo,
+        fallbackRoots,
+      ) !== stash.unmergedFallbackDestinationFingerprint
+    ) {
+      return `unmerged fallback backup for ${stash.scope} changed before cleanup`;
+    }
+    for (const [
+      index,
+      destination,
+    ] of stash.unmergedFallbackCopiedFiles.entries()) {
+      const expected = stash.unmergedFallbackCopiedFileFingerprints[index];
+      if (
+        expected == null ||
+        deps.readPathFingerprint(destination, fallbackRoots) !== expected
+      ) {
+        return `unmerged fallback backup for ${stash.scope} changed before cleanup`;
+      }
+    }
     const sources = sourcesByScope.get(stash.scope) ?? [];
     sources.push(...stash.unmergedFallbackCopiedSources);
     sourcesByScope.set(stash.scope, sources);
@@ -1985,6 +2146,18 @@ function cleanPreservedUninitializedSubmodulesBeforePrimaryCheckout(
     }
     if (entry.copyFailed) {
       return `uninitialized submodule ${entry.path} was only partially preserved`;
+    }
+    if (entry.destinationFingerprint === null) {
+      return `uninitialized submodule ${entry.path} has no destination fingerprint`;
+    }
+    const copiedTo = entry.copiedTo;
+    const expectedFingerprint = entry.destinationFingerprint;
+    const backupFingerprint = deps.readPathFingerprint(
+      copiedTo,
+      recoverySourceRoots(targetPath, join(targetPath, entry.path), deps),
+    );
+    if (backupFingerprint !== expectedFingerprint) {
+      return `uninitialized submodule ${entry.path} backup changed before cleanup`;
     }
     if (!isSafeRelativePath(entry.path)) {
       return `uninitialized submodule ${entry.path} is unsafe`;
@@ -2202,6 +2375,7 @@ function planAndMaybePreserve(
         uninitializedSubmodules.push({
           path: submodule.path,
           copiedTo: null,
+          destinationFingerprint: null,
           copyFailed: false,
         });
       } else if (submodulePresence === 'present') {
@@ -2218,6 +2392,7 @@ function planAndMaybePreserve(
             )
           : null;
         let copyFailed = false;
+        let destinationFingerprint = null;
         if (apply && destination) {
           if (isCopyDestinationOutsideTarget(destination, path, deps)) {
             try {
@@ -2227,8 +2402,14 @@ function planAndMaybePreserve(
                 path,
                 targetGitDirForScope ? [targetGitDirForScope] : undefined,
               );
+              destinationFingerprint = deps.readPathFingerprint(
+                destination,
+                recoverySourceRoots(path, submodulePath, deps),
+              );
+              if (destinationFingerprint === null) copyFailed = true;
             } catch {
               copyFailed = true;
+              destinationFingerprint = null;
             }
           } else {
             // Keep the planned path visible in dry-run only; an unsafe apply
@@ -2239,6 +2420,7 @@ function planAndMaybePreserve(
         uninitializedSubmodules.push({
           path: submodule.path,
           copiedTo: destination,
+          destinationFingerprint,
           copyFailed,
         });
       }
@@ -2304,6 +2486,7 @@ function planAndMaybePreserve(
     worktreeAdminCopy = {
       copiedTo: null,
       plannedTo: plannedDestination,
+      destinationFingerprint: null,
     };
     if (apply) {
       const preserveDirForAdmin = preserveDeps.ensurePreserveDir();
@@ -2326,7 +2509,13 @@ function planAndMaybePreserve(
             targetGitDirForScope,
             [path],
           );
+          const destinationFingerprint = deps.readPathFingerprint(
+            destination,
+            recoverySourceRoots(path, path, deps),
+          );
           worktreeAdminCopy.copiedTo = destination;
+          worktreeAdminCopy.destinationFingerprint = destinationFingerprint;
+          if (destinationFingerprint === null) worktreeAdminCopyFailed = true;
         } catch {
           // Retain the attempted destination so a partial recursive copy is
           // visible to the verdict and counts as a mutation, while the
@@ -2396,6 +2585,7 @@ function planAndMaybePreserve(
         path: submodule.path,
         copiedTo: null,
         plannedTo: plannedDestination,
+        destinationFingerprint: null,
         copyFailed: true,
       });
       continue;
@@ -2405,6 +2595,7 @@ function planAndMaybePreserve(
         path: submodule.path,
         copiedTo: null,
         plannedTo: plannedDestination,
+        destinationFingerprint: null,
         copyFailed: false,
       });
       continue;
@@ -2421,6 +2612,7 @@ function planAndMaybePreserve(
         path: submodule.path,
         copiedTo: null,
         plannedTo: destination,
+        destinationFingerprint: null,
         copyFailed: true,
       });
       continue;
@@ -2436,6 +2628,22 @@ function planAndMaybePreserve(
         path: submodule.path,
         copiedTo: destination,
         plannedTo: destination,
+        destinationFingerprint: null,
+        copyFailed: true,
+      });
+      continue;
+    }
+    const destinationFingerprint = deps.readPathFingerprint(
+      destination,
+      recoverySourceRoots(path, submodulePath, deps),
+    );
+    if (destinationFingerprint === null) {
+      submoduleAdminCopyFailed = true;
+      submoduleAdminCopies.push({
+        path: submodule.path,
+        copiedTo: destination,
+        plannedTo: destination,
+        destinationFingerprint: null,
         copyFailed: true,
       });
       continue;
@@ -2444,6 +2652,7 @@ function planAndMaybePreserve(
       path: submodule.path,
       copiedTo: destination,
       plannedTo: destination,
+      destinationFingerprint,
       copyFailed: false,
     });
   }
@@ -2516,6 +2725,16 @@ function preservationVerified(preserve, pathExists) {
       ) {
         return false;
       }
+      if (
+        stash.unmergedFallbackDestinationFingerprint === null ||
+        stash.unmergedFallbackCopiedFileFingerprints.length !==
+          stash.unmergedFallbackCopiedFiles.length ||
+        stash.unmergedFallbackCopiedFileFingerprints.some(
+          (fingerprint) => fingerprint === null,
+        )
+      ) {
+        return false;
+      }
       continue;
     }
     if (!stash.stashed) return false;
@@ -2542,6 +2761,7 @@ function preservationVerified(preserve, pathExists) {
   for (const submodule of preserve.uninitializedSubmodules) {
     if (submodule.copiedTo === null) return false;
     if (submodule.copyFailed) return false;
+    if (submodule.destinationFingerprint === null) return false;
     if (!pathExists(submodule.copiedTo)) return false;
   }
   // Copilot review: `ignoredFilesCopied` was never included in verification
@@ -2550,6 +2770,7 @@ function preservationVerified(preserve, pathExists) {
   for (const ignored of preserve.ignoredFilesCopied) {
     if (ignored.copyFailed || ignored.copiedTo === null) return false;
     if (ignored.sourceFingerprint === null) return false;
+    if (ignored.destinationFingerprint === null) return false;
     if (!pathExists(ignored.copiedTo)) return false;
   }
   if (preserve.submoduleAdminCopyFailed) return false;
@@ -2557,6 +2778,7 @@ function preservationVerified(preserve, pathExists) {
     if (
       admin.copyFailed ||
       admin.copiedTo === null ||
+      admin.destinationFingerprint === null ||
       !pathExists(admin.copiedTo)
     ) {
       return false;
@@ -2566,6 +2788,7 @@ function preservationVerified(preserve, pathExists) {
   if (
     preserve.worktreeAdminCopy !== null &&
     (preserve.worktreeAdminCopy.copiedTo === null ||
+      preserve.worktreeAdminCopy.destinationFingerprint === null ||
       !pathExists(preserve.worktreeAdminCopy.copiedTo))
   ) {
     return false;
@@ -2590,9 +2813,12 @@ function reverifyPreservationArtifactsFresh(
 ) {
   const scopePath = (scope) =>
     scope === '.' ? targetPath : join(targetPath, scope);
-  const copyVerified = (destination) =>
+  const copyVerified = (destination, destinationFingerprint, sourceRoots) =>
+    destinationFingerprint !== null &&
     deps.pathExists(destination) &&
-    isCopyDestinationOutsideTarget(destination, targetPath, deps);
+    isCopyDestinationOutsideTarget(destination, targetPath, deps) &&
+    deps.readPathFingerprint(destination, sourceRoots) ===
+      destinationFingerprint;
   const normalizeStashEntry = (line) => line.replace(/^stash@\{\d+\}: /, '');
   const stashGroups = new Map();
   for (const stash of preserve.stashes) {
@@ -2649,19 +2875,42 @@ function reverifyPreservationArtifactsFresh(
     // stash entries and backup refs -- an ignored-file, uninitialized-
     // submodule, or unmerged-fallback copy could be silently deleted
     // during the lock wait and removal would still proceed. Re-confirm
-    // every copy destination this scope recorded still exists.
+    // every copy destination still exists and still matches the fingerprint
+    // recorded immediately after the copy (Codex review #4125484740).
+    if (stash.unmergedFallbackCopiedTo === null) continue;
+    const fallbackRoots = recoverySourceRoots(
+      targetPath,
+      scopePath(stash.scope),
+      deps,
+    );
     if (
-      stash.unmergedFallbackCopiedTo !== null &&
-      !copyVerified(stash.unmergedFallbackCopiedTo)
+      !copyVerified(
+        stash.unmergedFallbackCopiedTo,
+        stash.unmergedFallbackDestinationFingerprint,
+        fallbackRoots,
+      )
     ) {
       return false;
     }
     if (
-      stash.unmergedFallbackCopiedFiles.some(
-        (destination) => !copyVerified(destination),
-      )
+      stash.unmergedFallbackCopiedFileFingerprints.length !==
+      stash.unmergedFallbackCopiedFiles.length
     ) {
       return false;
+    }
+    for (const [
+      index,
+      destination,
+    ] of stash.unmergedFallbackCopiedFiles.entries()) {
+      if (
+        !copyVerified(
+          destination,
+          stash.unmergedFallbackCopiedFileFingerprints[index] ?? null,
+          fallbackRoots,
+        )
+      ) {
+        return false;
+      }
     }
   }
   for (const ref of preserve.backupRefs) {
@@ -2680,46 +2929,91 @@ function reverifyPreservationArtifactsFresh(
   }
   for (const submodule of preserve.uninitializedSubmodules) {
     if (submodule.copyFailed) return false;
-    if (submodule.copiedTo !== null && !copyVerified(submodule.copiedTo)) {
+    if (submodule.copiedTo === null) continue;
+    const submoduleRoots = recoverySourceRoots(
+      targetPath,
+      join(targetPath, submodule.path),
+      deps,
+    );
+    if (
+      !copyVerified(
+        submodule.copiedTo,
+        submodule.destinationFingerprint,
+        submoduleRoots,
+      )
+    ) {
       return false;
     }
   }
+  // A refreshed ignored path appends a new entry. Older fingerprints no
+  // longer describe the source, so compare only the newest scope/path
+  // snapshot — the same dedupe cleanup already uses (Codex review
+  // #4125636084).
+  const latestIgnored = new Map();
   for (const ignored of preserve.ignoredFilesCopied) {
+    latestIgnored.set(`${ignored.scope}\0${ignored.path}`, ignored);
+  }
+  for (const ignored of latestIgnored.values()) {
     if (
       ignored.copyFailed ||
       ignored.copiedTo === null ||
       ignored.sourceFingerprint === null ||
-      !copyVerified(ignored.copiedTo)
+      ignored.destinationFingerprint === null
     ) {
       return false;
     }
     if (!isSafeRelativePath(ignored.path)) return false;
-    const source = join(scopePath(ignored.scope), ignored.path);
+    const ignoredScopePath = scopePath(ignored.scope);
+    const ignoredRoots = recoverySourceRoots(
+      targetPath,
+      ignoredScopePath,
+      deps,
+    );
+    if (
+      !copyVerified(
+        ignored.copiedTo,
+        ignored.destinationFingerprint,
+        ignoredRoots,
+      )
+    ) {
+      return false;
+    }
+    const source = join(ignoredScopePath, ignored.path);
     const presence = pathPresenceForDeps(deps, source);
     if (presence === 'unknown') return false;
     if (
       presence === 'present' &&
-      deps.readPathFingerprint(source) !== ignored.sourceFingerprint
+      deps.readPathFingerprint(source, ignoredRoots) !==
+        ignored.sourceFingerprint
     ) {
       return false;
     }
   }
   for (const admin of preserve.submoduleAdminCopies) {
     if (admin.copyFailed) return false;
-    if (admin.copiedTo !== null && !copyVerified(admin.copiedTo)) {
+    if (admin.copiedTo === null) continue;
+    const adminRoots = recoverySourceRoots(
+      targetPath,
+      join(targetPath, admin.path),
+      deps,
+    );
+    if (
+      !copyVerified(admin.copiedTo, admin.destinationFingerprint, adminRoots)
+    ) {
       return false;
     }
   }
   if (
     preserve.worktreeAdminCopy !== null &&
-    preserve.worktreeAdminCopy !== undefined
+    preserve.worktreeAdminCopy !== undefined &&
+    preserve.worktreeAdminCopy.copiedTo !== null &&
+    !copyVerified(
+      preserve.worktreeAdminCopy.copiedTo,
+      preserve.worktreeAdminCopy.destinationFingerprint,
+      recoverySourceRoots(targetPath, targetPath, deps),
+    )
   ) {
-    if (
-      preserve.worktreeAdminCopy.copiedTo !== null &&
-      !copyVerified(preserve.worktreeAdminCopy.copiedTo)
-    ) {
-      return false;
-    }
+    return false;
   }
   return true;
 }
@@ -2802,6 +3096,7 @@ function refreshUninitializedSubmoduleCopies(
       entry = {
         path: submodule.path,
         copiedTo: destination,
+        destinationFingerprint: null,
         copyFailed: false,
       };
       knownEntries.set(submodule.path, entry);
@@ -2845,17 +3140,24 @@ function refreshUninitializedSubmoduleCopies(
         preserveDir,
       };
     }
+    const destinationFingerprint = deps.readPathFingerprint(
+      entry.copiedTo,
+      recoverySourceRoots(targetPath, submodulePath, deps),
+    );
     if (
+      destinationFingerprint === null ||
       !deps.pathExists(entry.copiedTo) ||
       !isCopyDestinationOutsideTarget(entry.copiedTo, targetPath, deps)
     ) {
       entry.copyFailed = true;
+      entry.destinationFingerprint = null;
       return {
         error: `late preservation for uninitialized submodule ${entry.path} could not be verified; stopping before removal`,
         added,
         preserveDir,
       };
     }
+    entry.destinationFingerprint = destinationFingerprint;
   }
   return { error: null, added, preserveDir };
 }
@@ -3575,6 +3877,7 @@ export function runLocalWorktreeRecovery(args, deps) {
           verdict.plan.prunableAdminCopy = {
             source: adminLookup.path,
             copiedTo: null,
+            destinationFingerprint: null,
             copyFailed: false,
             plannedTo: plannedDestination,
           };
@@ -3586,6 +3889,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         verdict.plan.prunableAdminCopy = {
           source: adminLookup.path,
           copiedTo: null,
+          destinationFingerprint: null,
           copyFailed: false,
           plannedTo: plannedDestination,
         };
@@ -5518,6 +5822,7 @@ export function runLocalWorktreeRecovery(args, deps) {
           verdict.plan.prunableAdminCopy = {
             source: adminLookup.path,
             copiedTo: null,
+            destinationFingerprint: null,
             copyFailed: false,
             plannedTo: plannedDestination,
           };
@@ -5530,6 +5835,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         const entry = {
           source: adminLookup.path,
           copiedTo: null,
+          destinationFingerprint: null,
           copyFailed: false,
           plannedTo: destination,
         };
@@ -5548,6 +5854,18 @@ export function runLocalWorktreeRecovery(args, deps) {
         try {
           deps.copyPath(adminLookup.path, destination, adminLookup.path);
           entry.copiedTo = destination;
+          entry.destinationFingerprint = deps.readPathFingerprint(destination, [
+            adminLookup.path,
+          ]);
+          if (entry.destinationFingerprint === null) {
+            entry.copyFailed = true;
+            verdict.preserveDir = preserveDir;
+            verdict.mutated = true;
+            verdict.plan.prunableAdminCopy = entry;
+            return recordRemovalFailure(
+              'could not fingerprint the prunable worktree private admin directory; stopping before removal',
+            );
+          }
         } catch {
           // Retain the attempted destination so a partial recursive copy is
           // visible to the verdict and counts as a mutation, while the
@@ -5636,11 +5954,22 @@ export function runLocalWorktreeRecovery(args, deps) {
         );
       }
       const prunableAdminCopy = verdict.plan.prunableAdminCopy;
+      const prunableFingerprint =
+        prunableAdminCopy?.copiedTo === null ||
+        prunableAdminCopy?.copiedTo === undefined ||
+        prunableAdminCopy.destinationFingerprint === null
+          ? null
+          : deps.readPathFingerprint(prunableAdminCopy.copiedTo, [
+              prunableAdminCopy.source,
+            ]);
       if (
         prunableAdminCopy !== null &&
         (prunableAdminCopy.copyFailed ||
           (prunableAdminCopy.copiedTo !== null &&
-            (!deps.pathExists(prunableAdminCopy.copiedTo) ||
+            (prunableAdminCopy.destinationFingerprint === null ||
+              prunableFingerprint !==
+                prunableAdminCopy.destinationFingerprint ||
+              !deps.pathExists(prunableAdminCopy.copiedTo) ||
               !isCopyDestinationOutsideKnownPaths(
                 prunableAdminCopy.copiedTo,
                 [targetPath, prunableAdminCopy.source],
