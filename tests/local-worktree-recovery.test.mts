@@ -2643,6 +2643,45 @@ test('generic removal failures do not authorize forced retry after an unmerged f
   assert.equal(verdict.plan.removal?.ran, false);
 });
 
+test('verified unmerged fallback authorizes a narrow forced retry for dirty removal', () => {
+  let guardCalls = 0;
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: 'UU conflict.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        return {
+          ok: false,
+          status: 1,
+          stdout: 'conflict.txt: needs merge\n',
+          stderr: '',
+        };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    removeWorktreeIfLockMatches: (_path, _repo, _expected, force) => {
+      guardCalls += 1;
+      return force
+        ? { ok: true, status: 0, stdout: '', stderr: '' }
+        : {
+            ok: false,
+            status: 1,
+            stdout: '',
+            stderr:
+              "fatal: '/repo/linked' contains modified or untracked files, use --force to delete it",
+          };
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(guardCalls, 2);
+  assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, true);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('legacy lockless claims may complete the forced retry through the guard', () => {
   let guardCalls = 0;
   const deps = fakeDeps({

@@ -4831,16 +4831,27 @@ export function runLocalWorktreeRecovery(args, deps) {
       }
       remove = guardedRemove;
     }
+    const submoduleRemovalFailure =
+      /submodules cannot be moved or removed/i.test(remove.stderr);
+    const dirtyWorktreeRemovalFailure =
+      /contains modified or untracked files/i.test(remove.stderr);
     if (
       !shortcut.eligible &&
       !remove.ok &&
-      /submodules cannot be moved or removed/i.test(remove.stderr)
+      (submoduleRemovalFailure || dirtyWorktreeRemovalFailure)
     ) {
       // `git worktree remove --force` can delete content that appeared after
       // step 3. Re-run the complete preservation scan while the clone lock is
       // still held, then re-confirm the claim and worktree-local lock before
       // authorizing the destructive retry after Git's confirmed submodule
       // removal diagnostic (Codex review #4114311005).
+      //
+      // An unmerged-path stash refusal is a distinct, narrowly authorized
+      // dirty-worktree case: the fallback copies every dirty path because
+      // Git cannot stash an unmerged index, but the source checkout remains
+      // dirty by design. Permit `--force` only when this fresh preservation
+      // pass again copied and verified at least one unmerged fallback path;
+      // a generic dirty-worktree failure must never broaden the force path.
       const latePreserve = planAndMaybePreserve(
         targetPath,
         recoveredBranch ?? '',
@@ -4854,6 +4865,19 @@ export function runLocalWorktreeRecovery(args, deps) {
       if (!preservationVerified(latePreserve, deps.pathExists)) {
         return recordRemovalFailure(
           'late preservation before forced removal could not be fully verified; stopping before removal',
+        );
+      }
+      if (
+        dirtyWorktreeRemovalFailure &&
+        !latePreserve.stashes.some(
+          (stash) =>
+            stash.unmergedFallbackCopiedTo !== null &&
+            stash.unmergedFallbackAllPreserved === true &&
+            stash.unmergedFallbackCopiedFiles.length > 0,
+        )
+      ) {
+        return recordRemovalFailure(
+          'the dirty-worktree removal failure was not caused by a freshly verified unmerged fallback; stopping before forced removal',
         );
       }
       if (
