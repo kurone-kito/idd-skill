@@ -138,7 +138,7 @@ The manual six-field fallback — `--type watermark --target pr
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
 --apply` — stays available when `--from-pr` cannot run. Before using it,
-Before fallback, require each required `(checkName, workflowName)`
+require each required `(checkName, workflowName)`
 producer to pass for `{head-SHA}` and verify advisory identity/event;
 raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
