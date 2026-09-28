@@ -62,9 +62,8 @@ GitHub side effect, confirm all of the following:
 
 Before Step 2, confirm merge-gate CI. Run AW1/helper
 `advisory-wait-state`; if unavailable or invalid, stop and ask rather
-than hand-deriving AW2/AW3. For an earlier advisory
-head, Step 2 is eligible at `lastCopilotCommit == prHeadSha`,
-`SATISFIED`, or phase-specific `CAP_EXHAUSTED`. Take Steps 1 and 3;
+than hand-deriving AW2/AW3. For an earlier head, apply the header's
+active-claim `staleRequestRecovery` rule. Take Steps 1 and 3;
 use E15 for CI and E14 for advisory, E14 first when both are pending.
 If incomplete, skip Step 2, wait before branch-sync/F2, then post from
 E1.

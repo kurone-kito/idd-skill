@@ -87,14 +87,15 @@ configured F2 `secondaryQuietWindow` waits until `elapsed`
 since last substantive review activity, not until every login
 configured under `secondaryBotLogin` reviews HEAD.
 
-**CI precondition (Step 2 only).** Before deciding eligibility, run
-AW1/helper `advisory-wait-state`; if unavailable, complete AW1 plus
-AW2/AW3 before accepting elapsed-window `SATISFIED` or
-phase-specific `CAP_EXHAUSTED` (AW1 alone is insufficient). Post the
-watermark only after merge-gate CI completes, including opt-in jobs.
-For an earlier advisory head, require
-`LAST_COPILOT_COMMIT == PR_HEAD_SHA`, `SATISFIED`, or
-phase-specific `CAP_EXHAUSTED`. While incomplete, run Steps 1/3, E2,
+**CI precondition (Step 2 only).** Before eligibility, run
+AW1/helper `advisory-wait-state`; without it, complete AW1-AW3 before
+terminal `SATISFIED`/`CAP_EXHAUSTED`. Post the
+watermark only after required merge-gate CI. For an earlier
+advisory head, only `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is direct.
+Off-head `SATISFIED` requires active claim/agent helper
+`staleRequestRecovery`: `not-applicable` may proceed, `attempt` runs
+AW3-S, and `cap-exhausted` follows the cap route.
+While incomplete, run Steps 1/3, E2,
 E3—not F1/F2; use E15/E14, E14 first if both. For empty E3 (or E8
 with zero Accepted PATH A items), run the waits, then return to E1,
 re-snapshot, and post without a new review. CI after a watermark
