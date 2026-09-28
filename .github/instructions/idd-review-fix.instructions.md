@@ -469,9 +469,9 @@ keys preserve the distributed defaults. The outcome paths below are
 authoritative and override the shared helper's generic outcomes for this
 phase:
 
-**While polling**: if new review threads or comments arrive during the
-CI wait, note them. After CI resolves (any outcome), return to E1 before
-proceeding to F — do not skip triage.
+**While polling**: new review threads/comments → return to E1
+immediately; otherwise, after CI resolves (any outcome), return to E1
+before F — never skip triage.
 
 - **On success** → return to `idd-review-snapshot.instructions.md` (E1)
 - **On failure / code-caused**: fix, run **fix-validate**, commit

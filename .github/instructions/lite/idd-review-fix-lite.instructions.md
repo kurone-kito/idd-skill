@@ -421,8 +421,8 @@ self-critique and record risk.
    shared `ciWait.runningTimeout` / `ciWait.generationTimeout` /
    `ciWait.rerunPolicy` values). The outcomes below override its generic
    routing for this phase.
-3. If new review threads or comments arrive during the wait, note them
-   but keep waiting for CI.
+3. If new review threads/comments arrive, return to E1 immediately;
+   otherwise continue waiting for CI.
 4. On success: return to `idd-review-snapshot-lite.instructions.md`
    (E1) — do not skip triage.
 5. On failure that is code-caused: fix it, run `fix-validate`, commit
