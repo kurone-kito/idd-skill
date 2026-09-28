@@ -57,12 +57,12 @@ Before Step 2, run the profile-selected advisory command with `--pr`,
 `--claim-id`, `--agent-id`, and `--trusted-marker-logins`, then
 profile-selected `ci-wait-state --pr {pr-number}`. Require
 `requiredChecks.status: success`; `no-required-checks` only passes with
-non-empty `checks[]` all `success`; `pending`/`missing` defer, others
-stop and ask. Require `outcome: SATISFIED`; same-head needs
+non-empty `checks[]` all `success`; `pending`/`failing`/`missing` defer
+Step 2; otherwise stop/ask. Require `outcome: SATISFIED`; same-head:
 `lastCopilotCommit == prHeadSha`, off-head needs
 `staleRequestRecovery.action` `not-applicable` or completed AW3-S/cap;
-`attempt` hands off and `hold` defers. Take Steps 1/3;
-use E15 for CI and E14 for advisory, E14 first when both are pending.
+`attempt` hands off and `hold` defers. Take 1/3;
+use E15 for CI, E14 for advisory (E14 first when both pending).
 If incomplete, skip Step 2, wait before branch-sync/F2, then post from
 E1.
 
