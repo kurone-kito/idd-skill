@@ -87,7 +87,20 @@ configured F2 `secondaryQuietWindow` waits until `elapsed`
 since last substantive review activity, not until every login
 configured under `secondaryBotLogin` reviews HEAD.
 
-**Step 2 — Record the watermark.** Using the `{head-SHA}` stored at the
+**CI precondition (Step 2 only).** Before deciding eligibility, run
+AW1/helper `advisory-wait-state`; if unavailable, complete AW1 plus
+AW2/AW3 before accepting elapsed-window `SATISFIED` or
+phase-specific `CAP_EXHAUSTED` (AW1 alone is insufficient). Post the
+watermark only after merge-gate CI completes, including opt-in jobs.
+For an earlier advisory head, require
+`LAST_COPILOT_COMMIT == PR_HEAD_SHA`, `SATISFIED`, or
+phase-specific `CAP_EXHAUSTED`. While incomplete, run Steps 1/3, E2,
+E3—not F1/F2; use E15/E14, E14 first if both. For empty E3 (or E8
+with zero Accepted PATH A items), run the waits, then post from E1
+without a new review. CI after a watermark forces an E1↔F2 round-trip.
+
+**Step 2 — Record the watermark.** Only after the precondition above is
+satisfied, use the `{head-SHA}` stored at the
 start of Step 1, compute `{max-activity-updatedAt}` as the highest
 `updatedAt` server timestamp across the **entire snapshot** (not just
 the items in ReviewItems_snapshot; `none` if empty), and
@@ -142,20 +155,6 @@ no-code-fence note.
   activity/CI freshness are tracked via the data fields above.
 
 Use server-reported timestamps, not the local wall clock.
-
-**CI precondition (Step 2 only).** Run AW1/helper
-`advisory-wait-state` before an off-head decision. Post the
-`review-watermark` after merge-gate CI runs complete, including
-opt-in or label-triggered jobs enabled before pre-merge. If the primary
-advisory bot reviewed an earlier head, post after
-`LAST_COPILOT_COMMIT == PR_HEAD_SHA`, `SATISFIED`, or
-phase-specific `CAP_EXHAUSTED`. If CI or
-the re-review is incomplete, run Steps 1/3, E2, and E3 but not F1/F2.
-Use E15 for CI, E14 for advisory; with both pending, run E14 first.
-For empty E3 (or E8 with zero Accepted PATH A items), run the required
-waits, then E1 posts the watermark even without a new review.
-Do not defer Steps 1/3, E2, or E3. CI after a watermark forces an E1↔F2
-round-trip because F2's latest-CI `completedAt` changes.
 
 Note: the post-idd-marker helper above performs this JSON `POST`
 under `--apply`, sidestepping the `gh issue comment`/`gh api -f body=`

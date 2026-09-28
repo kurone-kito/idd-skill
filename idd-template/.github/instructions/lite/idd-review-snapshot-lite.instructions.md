@@ -55,13 +55,15 @@ GitHub side effect, confirm all of the following:
 
 ### CI-completion precondition (for Step 2)
 
-Before Step 2, confirm merge-gate CI completion. If the primary
-advisory bot reviewed an earlier head, run `advisory-wait-state`; Step 2
-is eligible at `lastCopilotCommit == prHeadSha`, `SATISFIED`, or
-phase-specific `CAP_EXHAUSTED`. Take Steps 1 and 3 regardless. Use E15
-for CI, E14 for advisory; with both pending, run E14 first. If
-incomplete, skip Step 2, run waits before branch-sync/F2, then E1 posts
-the watermark.
+Before Step 2, confirm merge-gate CI. Run AW1/helper
+`advisory-wait-state`; if unavailable, complete AW1 plus AW2/AW3 before
+accepting elapsed-window `SATISFIED` or phase-specific
+`CAP_EXHAUSTED` (AW1 alone is insufficient). For an earlier advisory
+head, Step 2 is eligible at `lastCopilotCommit == prHeadSha`,
+`SATISFIED`, or phase-specific `CAP_EXHAUSTED`. Take Steps 1 and 3;
+use E15 for CI and E14 for advisory, E14 first when both are pending.
+If incomplete, skip Step 2, wait before branch-sync/F2, then post from
+E1.
 
 ### Step 1 — Snapshot the activity universe
 
@@ -228,10 +230,10 @@ author, or claim. ReviewItems_snapshot is session-local — do not inherit
 a previous claim's critique findings unless persisted as reviewer-visible
 comments.
 
-Before the critique pass, capture current PR HEAD as
-`{e2-review-head-SHA}` and review that SHA. Afterward, reread HEAD
-before posting. If it changed, discard the pass and return to E1;
-otherwise post a baseline pinned to the captured SHA: `node
+Before critique, set `{e2-review-head-SHA}` to Step 1's `{head-SHA}`;
+do not capture another HEAD. Reread HEAD before posting. If it changed,
+discard the pass and return to E1; otherwise post a baseline pinned to
+the captured SHA: `node
 scripts/post-idd-marker.mjs --type baseline --target pr {pr-number}
 --agent-id <id> --claim-id <id> --sha {e2-review-head-SHA} --apply`, or
 the package-manager equivalent. Never record a newer SHA as reviewed;

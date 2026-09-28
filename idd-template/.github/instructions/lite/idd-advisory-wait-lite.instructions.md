@@ -19,21 +19,18 @@ advisory-wait instructions instead.
 - Any mismatch between this file and
   `idd-advisory-wait.instructions.md` is a bug in this file.
 
-## Scope boundary (F2/F3 excluded)
+## Scope boundary (E1 Step 2 and E14; F2/F3 excluded)
 
-This file covers only the E14 caller: the fast path, the helper-first
-canonical path, and the outcome table's E14 column. It never attempts
-F2's live-fetch-plus-prose fallback, F3's merge-time call site, the
-terminal stall-recovery contract (`COPILOT_UNAVAILABLE` + waiver
-routing), or the same-HEAD advisory reroll — all F2/F3-only (E14's own
-settled-elapsed-time case, `#2327`, has its own decision table
-instead).
+This file covers E14 and E1's Step 2 precondition: fast/helper-first
+paths plus terminal `SATISFIED`/phase-specific `CAP_EXHAUSTED`
+eligibility. E1 does not inherit E14 request/poll actions. F2's
+live-fetch fallback, F3's merge call, stall recovery, and same-HEAD
+reroll are out of scope; E14's settled-elapsed case (`#2327`) has its
+own table.
 
-A lite session's own routing (A0-A4.5 and E4-E8 excluded, F3-F5
-excluded; only the lite F1-F2 helper-read-only subset and the lite
-F2.5 handoff-stop apply) never reaches those call sites. If it somehow
-does, stop and ask for a stronger session or human to run the
-full-size instructions directly.
+A lite session excludes A0-A4.5/E4-E8 and F3-F5; it uses only E1 Step
+2, E14, lite F1-F2 read-only helpers, and F2.5 handoff-stop. If it
+reaches an excluded call site, stop and ask a stronger session/human.
 
 **Do not build a substitute wait for a non-primary bot** — same
 prohibition as the full-size file's Scope section: rely on the
