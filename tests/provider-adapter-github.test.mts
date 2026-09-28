@@ -1595,8 +1595,8 @@ test('listWorkItemComments: includeEditState reads 300 comments as three GraphQL
   const result = port.listWorkItemComments(900, { includeEditState: true });
   assert.equal(calls.length, 3);
   assert.ok(calls.every((args) => args[1] === 'graphql'));
-  assert.match(calls[0].join('\n'), /pullRequest\(number:\$number\)/);
-  assert.doesNotMatch(calls[1].join('\n'), /pullRequest\(number:\$number\)/);
+  assert.match(calls[0].join('\n'), /issue\(number:\$number\)/);
+  assert.doesNotMatch(calls[0].join('\n'), /pullRequest\(number:\$number\)/);
   assert.equal(result.length, 300);
   assert.equal(result[0]?.id, 1);
   assert.equal(result[299]?.id, 300);
@@ -1636,6 +1636,64 @@ test('listWorkItemComments: includeEditState normalizes GitHub Actions bot login
     result.map((comment) => comment.authorLogin),
     ['github-actions[bot]', 'github-actions[bot]', 'github-actions'],
   );
+});
+
+test('listWorkItemComments: a pull request number survives the issue-side resolve error (#3590)', () => {
+  const calls: string[][] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push(args);
+        const query = args.join('\n');
+        if (query.includes('issue(number:$number)')) {
+          throw new Error(
+            'gh: Could not resolve to an Issue with the number of 900.',
+          );
+        }
+        return graphqlWorkItemCommentsPage({
+          side: 'pullRequest',
+          nodes: [
+            workItemCommentNode({
+              id: 'IC_pr',
+              databaseId: 7,
+              body: 'on the pr',
+            }),
+          ],
+        });
+      },
+    }),
+  );
+  const result = port.listWorkItemComments(900, { includeEditState: true });
+  assert.equal(result[0]?.body, 'on the pr');
+  assert.equal(calls.length, 2);
+  assert.match(calls[1]?.join('\n') ?? '', /pullRequest\(number:\$number\)/);
+});
+
+test('listWorkItemComments: a schema error does not continue to the pull request query (#3590)', () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        return JSON.stringify({
+          errors: [
+            {
+              message:
+                "Field 'lastEditedAt' doesn't exist on type 'IssueComment'",
+            },
+          ],
+        });
+      },
+    }),
+  );
+  assert.throws(() =>
+    port.listWorkItemComments(900, { includeEditState: true }),
+  );
+  assert.equal(calls, 1);
 });
 
 test('listWorkItemComments: includeEditState reads pull request comments when the issue side is null (#3590)', () => {

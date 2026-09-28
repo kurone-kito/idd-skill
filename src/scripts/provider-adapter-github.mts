@@ -377,21 +377,42 @@ function mapWorkItemGraphqlComment(
   };
 }
 
-function workItemCommentsQuery(side: 'both' | WorkItemCommentSide): string {
+function workItemCommentsQuery(side: WorkItemCommentSide): string {
   const connection = `comments(first:${WORK_ITEM_COMMENT_PAGE_SIZE},after:$cursor){ nodes { ${WORK_ITEM_COMMENT_NODE_FIELDS} } pageInfo { hasNextPage endCursor } }`;
-  const issue = `issue(number:$number){ ${connection} }`;
-  const pullRequest = `pullRequest(number:$number){ ${connection} }`;
-  const body =
-    side === 'both'
-      ? `${issue} ${pullRequest}`
-      : side === 'issue'
-        ? issue
-        : pullRequest;
+  const selection =
+    side === 'issue'
+      ? `issue(number:$number){ ${connection} }`
+      : `pullRequest(number:$number){ ${connection} }`;
   return `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){
   repository(owner:$owner,name:$repo){
-    ${body}
+    ${selection}
   }
 }`;
+}
+
+/** GitHub GraphQL errors the whole query when `issue(number:)` is asked
+ * for a pull request (and the reverse). `gh api graphql` then exits
+ * non-zero. That is type discrimination, not a transport or schema
+ * failure, so the other side is still worth one query. */
+function isUnresolvedWorkItemSide(
+  error: unknown,
+  side: WorkItemCommentSide,
+): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return side === 'issue'
+    ? /could not resolve to an issue with the number/i.test(text)
+    : /could not resolve to a pull request with the number/i.test(text);
+}
+
+function unresolvedWorkItemSideError(
+  side: WorkItemCommentSide,
+  number: number,
+): WorkItemCommentReadError {
+  const noun = side === 'issue' ? 'Issue' : 'PullRequest';
+  return new WorkItemCommentReadError(
+    `listWorkItemComments: Could not resolve to an ${noun} with the number of ${number}.`,
+    false,
+  );
 }
 
 function readAdapterGhText(
@@ -430,6 +451,36 @@ function readWorkItemCommentPage(
   cursor: string | null,
   timeoutMs: number | undefined,
 ): WorkItemCommentPage {
+  // A number is an issue or a pull request, never both. Ask for the issue
+  // first. Only the specific "could not resolve to an Issue" failure
+  // continues to the pull-request query. A schema or transport failure
+  // does not.
+  if (side === 'both') {
+    try {
+      return readWorkItemCommentPage(
+        deps,
+        owner,
+        repo,
+        number,
+        'issue',
+        cursor,
+        timeoutMs,
+      );
+    } catch (error) {
+      if (!isUnresolvedWorkItemSide(error, 'issue')) {
+        throw error;
+      }
+    }
+    return readWorkItemCommentPage(
+      deps,
+      owner,
+      repo,
+      number,
+      'pullRequest',
+      cursor,
+      timeoutMs,
+    );
+  }
   const label = `${owner}/${repo}#${number}`;
   const apiArgs = [
     'api',
@@ -451,6 +502,9 @@ function readWorkItemCommentPage(
   try {
     raw = readAdapterGhText(deps, apiArgs, timeoutMs);
   } catch (error) {
+    if (isUnresolvedWorkItemSide(error, side)) {
+      throw unresolvedWorkItemSideError(side, number);
+    }
     const detail = error instanceof Error ? error.message : String(error);
     throw new WorkItemCommentReadError(
       `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
@@ -480,6 +534,13 @@ function readWorkItemCommentPage(
       .filter(Boolean)
       .join('; ')
       .slice(0, 200);
+    if (
+      parsed.errors.every((entry) =>
+        isUnresolvedWorkItemSide(new Error(String(entry.message ?? '')), side),
+      )
+    ) {
+      throw unresolvedWorkItemSideError(side, number);
+    }
     throw new WorkItemCommentReadError(
       `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
     );
@@ -490,32 +551,17 @@ function readWorkItemCommentPage(
       `listWorkItemComments: ${label} returned no repository`,
     );
   }
-  let resolvedSide: WorkItemCommentSide;
-  let connection: unknown;
-  if (side === 'both') {
-    const issuePresent = repository.issue != null;
-    const pullRequestPresent = repository.pullRequest != null;
-    if (issuePresent === pullRequestPresent) {
-      throw new WorkItemCommentReadError(
-        issuePresent
-          ? `listWorkItemComments: ${label} returned both an issue and a pull request`
-          : `listWorkItemComments: ${label} is not an issue or pull request`,
-      );
+  const resolvedSide = side;
+  const node = side === 'issue' ? repository.issue : repository.pullRequest;
+  if (node == null) {
+    if (cursor == null) {
+      throw unresolvedWorkItemSideError(side, number);
     }
-    resolvedSide = issuePresent ? 'issue' : 'pullRequest';
-    connection = issuePresent
-      ? repository.issue?.comments
-      : repository.pullRequest?.comments;
-  } else {
-    resolvedSide = side;
-    const node = side === 'issue' ? repository.issue : repository.pullRequest;
-    if (node == null) {
-      throw new WorkItemCommentReadError(
-        `listWorkItemComments: ${label} ${side} disappeared during pagination`,
-      );
-    }
-    connection = node.comments;
+    throw new WorkItemCommentReadError(
+      `listWorkItemComments: ${label} ${side} disappeared during pagination`,
+    );
   }
+  const connection = node.comments;
   if (connection == null || typeof connection !== 'object') {
     throw new WorkItemCommentReadError(
       `listWorkItemComments: ${label} returned a null comments connection`,
