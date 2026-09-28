@@ -2773,7 +2773,7 @@ function findDirectoryScanAliases(text) {
     namespaceNames.add(match[1] ?? '');
   }
   const defaultImportPattern =
-    /(?:^|[;\n])\s*import\s+([\w$]+)\s+from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
+    /(?:^|[;\n])\s*import\s+([\w$]+)(?:\s*,\s*\{[\s\S]*?\})?\s+from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
   for (const match of text.matchAll(defaultImportPattern)) {
     namespaceNames.add(match[1] ?? '');
   }
@@ -2783,7 +2783,7 @@ function findDirectoryScanAliases(text) {
     namespaceNames.add(match[1] ?? '');
   }
   const importPattern =
-    /(?:^|[;\n])\s*import\s*\{([\s\S]*?)\}\s*from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
+    /(?:^|[;\n])\s*import(?:\s+[\w$]+\s*,)?\s*\{([\s\S]*?)\}\s*from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
   for (const match of text.matchAll(importPattern)) {
     for (const specifier of splitTopLevelArguments(match[1] ?? '')) {
       const alias = /^([\w$]+)\s+as\s+([\w$]+)$/u.exec(specifier.trim());
@@ -3544,6 +3544,10 @@ function hasNestedRepeatingExtglob(text) {
   }
   return false;
 }
+const POSIX_GLOB_CLASS_PATTERN =
+  /^\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]/u;
+const POSIX_GLOB_CLASS_AT_END_PATTERN =
+  /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]$/u;
 function matchSimpleStarGlob(pattern, targetPath) {
   if (pattern.includes('**') || /[?[\]{}\\]|[+@!?*]\(/u.test(pattern)) {
     return null;
@@ -3717,18 +3721,17 @@ function globPatternToRegex(
         questionEnd += 1;
       }
       const captureName = `__iddQuestion${questionCaptures.length}`;
+      const hasAdjacentPosixClass =
+        POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
+        POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(questionEnd));
       questionCaptures.push({
         name: captureName,
         codeUnitCount: questionEnd - index,
         allowsAstralCodePoint:
           questionEnd - index === 1 &&
           ((pattern[questionEnd] === '*' && pattern[questionEnd + 1] !== '(') ||
-            /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]$/u.test(
-              pattern.slice(0, index),
-            ) ||
-            /^\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]/u.test(
-              pattern.slice(questionEnd),
-            )),
+            hasAdjacentPosixClass),
+        requiresCodePointCount: hasAdjacentPosixClass,
       });
       expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;
       index = questionEnd - 1;
@@ -3827,11 +3830,16 @@ function globPatternToRegex(
           expression += `${segmentCharacterClassPrefix}[${characterClass}]`;
         } else {
           const captureName = `__iddQuestion${questionCaptures.length}`;
+          const hasAdjacentPosixClass =
+            POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
+            POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(closing + 1));
           questionCaptures.push({
             name: captureName,
             codeUnitCount: 1,
             allowsAstralCodePoint:
-              pattern[closing + 1] === '*' && pattern[closing + 2] !== '(',
+              (pattern[closing + 1] === '*' && pattern[closing + 2] !== '(') ||
+              hasAdjacentPosixClass,
+            requiresCodePointCount: hasAdjacentPosixClass,
           });
           expression += `(?<${captureName}>${segmentCharacterClassPrefix}[${characterClass}])`;
         }
@@ -3928,10 +3936,20 @@ function globPatternMatchesPath(
     const capturesHaveExpectedWidth = (match) =>
       match !== null &&
       questionCaptures.every(
-        ({ name, codeUnitCount, allowsAstralCodePoint }) => {
+        ({
+          name,
+          codeUnitCount,
+          allowsAstralCodePoint,
+          requiresCodePointCount,
+        }) => {
           const captured = match.groups?.[name];
+          if (captured === undefined) {
+            return true;
+          }
+          if (requiresCodePointCount) {
+            return Array.from(captured).length === codeUnitCount;
+          }
           return (
-            captured === undefined ||
             captured.length === codeUnitCount ||
             (allowsAstralCodePoint && captured.length === 2)
           );
