@@ -1253,6 +1253,7 @@ function scanAndMaybeCopyIgnoredFiles(
   plannedPreserveDir,
   sourceRoots,
   deps,
+  destinationNamespace = '',
 ) {
   const status = deps.runGit(
     [
@@ -1286,6 +1287,7 @@ function scanAndMaybeCopyIgnoredFiles(
       ? join(
           preserveDir,
           'ignored',
+          ...(destinationNamespace ? [destinationNamespace] : []),
           scopeLabel === '.' ? '' : scopeLabel,
           ignoredPath,
         )
@@ -2718,6 +2720,7 @@ export function runLocalWorktreeRecovery(args, deps) {
   // --apply: gate on the operator's own attestation BEFORE any mutation,
   // regardless of what step 1 found.
   if (!args.operatorConfirmedNoLiveSession) {
+    verdict.ready = false;
     verdict.result =
       'refusing: --operator-confirmed-no-live-session was not given (step 2 is never checked mechanically); no mutation';
     return verdict;
@@ -3350,6 +3353,117 @@ export function runLocalWorktreeRecovery(args, deps) {
         ],
         targetPath,
       );
+      // Checkout hooks and `submodule update` can create ignored files after
+      // the pre-checkout scan has already cleaned the recovered worktree.
+      // Preserve and remove only those newly observed paths before the
+      // post-checkout cleanliness gate; otherwise `hasWorkingTreeChanges`
+      // deliberately ignores them and the primary worktree can report a
+      // false release with stale generated data left behind (Copilot review).
+      const postCheckoutIgnoredEntries = [];
+      let postCheckoutIgnoredScanFailed = false;
+      const postCheckoutIgnored = scanAndMaybeCopyIgnoredFiles(
+        targetPath,
+        '.',
+        true,
+        targetPath,
+        null,
+        [targetPath, ...(targetGitDir ? [targetGitDir] : [])],
+        deps,
+        'post-checkout',
+      );
+      postCheckoutIgnoredEntries.push(...postCheckoutIgnored.copied);
+      postCheckoutIgnoredScanFailed ||= postCheckoutIgnored.scanFailed;
+      const postCheckoutSubmodules = deps.runGit(
+        ['submodule', 'status', '--recursive'],
+        targetPath,
+      );
+      if (
+        !postCheckoutSubmodules.ok ||
+        !submoduleStatusOutputIsValid(postCheckoutSubmodules.stdout)
+      ) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `could not inspect submodules for ignored files after checkout ${developmentBranch}; stopping before lock removal`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      for (const submodule of submoduleStatusEntries(
+        postCheckoutSubmodules.stdout,
+      )) {
+        if (submodule.status === '-') continue;
+        const submodulePath = join(targetPath, submodule.path);
+        const submoduleGitDirResult = deps.runGit(
+          ['rev-parse', '--absolute-git-dir'],
+          submodulePath,
+        );
+        const submoduleGitDir =
+          submoduleGitDirResult.ok && submoduleGitDirResult.stdout.trim()
+            ? submoduleGitDirResult.stdout.trim()
+            : null;
+        const postCheckoutSubmoduleIgnored = scanAndMaybeCopyIgnoredFiles(
+          submodulePath,
+          submodule.path,
+          true,
+          targetPath,
+          null,
+          [
+            targetPath,
+            submodulePath,
+            ...(targetGitDir ? [targetGitDir] : []),
+            ...(submoduleGitDir ? [submoduleGitDir] : []),
+          ],
+          deps,
+          'post-checkout',
+        );
+        postCheckoutIgnoredEntries.push(...postCheckoutSubmoduleIgnored.copied);
+        postCheckoutIgnoredScanFailed ||=
+          postCheckoutSubmoduleIgnored.scanFailed;
+      }
+      verdict.plan.ignoredFilesCopied.push(...postCheckoutIgnoredEntries);
+      verdict.plan.ignoredFilesScanFailed ||= postCheckoutIgnoredScanFailed;
+      verdict.mutated ||= postCheckoutIgnoredEntries.some(
+        (ignored) => ignored.copiedTo !== null,
+      );
+      if (
+        postCheckoutIgnoredScanFailed ||
+        postCheckoutIgnoredEntries.some(
+          (ignored) =>
+            ignored.copyFailed ||
+            ignored.copiedTo === null ||
+            !deps.pathExists(ignored.copiedTo),
+        )
+      ) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `ignored files created during checkout ${developmentBranch} could not be fully preserved; stopping before lock removal`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
+      const postCheckoutIgnoredCleanupError =
+        cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+          postCheckoutIgnoredEntries,
+          targetPath,
+          deps,
+        );
+      if (postCheckoutIgnoredCleanupError !== null) {
+        verdict.plan.removal = {
+          kind: 'primary',
+          developmentBranch,
+          wouldRun: true,
+          ran: false,
+          detail: `before removing the primary lock after checkout ${developmentBranch}, ${postCheckoutIgnoredCleanupError}; stopping`,
+        };
+        verdict.result = verdict.plan.removal.detail;
+        return verdict;
+      }
       if (
         !postCheckoutStatus.ok ||
         hasWorkingTreeChanges(postCheckoutStatus.stdout)
@@ -4291,6 +4405,13 @@ export function runLocalWorktreeRecovery(args, deps) {
     );
   } finally {
     deps.releaseCloneLock(lockHandle);
+    // `ready` means the apply operation completed its destructive release,
+    // not merely that step 1 found a recoverable claim. Any apply-mode return
+    // that did not report `removal.ran === true` is therefore a failed or
+    // held release and must not retain the ready gate (Copilot review).
+    if (mode === 'apply' && verdict.plan.removal?.ran !== true) {
+      verdict.ready = false;
+    }
   }
 }
 // ---------------------------------------------------------------------------

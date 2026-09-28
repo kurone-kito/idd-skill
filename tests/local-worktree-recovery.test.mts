@@ -4019,6 +4019,7 @@ test('step 4 stops removal when the fresh claim/branch identity no longer matche
     deps,
   );
   assert.equal(verdict.plan.removal?.ran, false);
+  assert.equal(verdict.ready, false);
   assert.match(verdict.result, /claim being recovered changed since step 1/);
 });
 
@@ -5107,7 +5108,9 @@ test('primary recovery removes late ignored files before reporting release', () 
     join(tmpdir(), 'idd-lwr-primary-ignored-preserve-'),
   );
   const ignoredPath = join(root, 'stale*');
+  const postCheckoutIgnoredPath = join(root, 'generated-during-checkout*');
   let ignoredPresent = true;
+  let postCheckoutIgnoredPresent = false;
   let ignoredScanCalls = 0;
   let confirmCalls = 0;
   let submoduleUpdateArgs: string[] = [];
@@ -5131,6 +5134,7 @@ test('primary recovery removes late ignored files before reporting release', () 
         path === join(root, '.git') ||
         path.startsWith(preserveDir) ||
         (ignoredPresent && path === ignoredPath) ||
+        (postCheckoutIgnoredPresent && path === postCheckoutIgnoredPath) ||
         existsSync(path),
       ensurePreserveDir: () => preserveDir,
       confirmBlock: () => {
@@ -5162,10 +5166,16 @@ test('primary recovery removes late ignored files before reporting release', () 
       runGit: (argv, cwd) => {
         if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
           ignoredScanCalls += 1;
+          if (ignoredScanCalls === 3) postCheckoutIgnoredPresent = true;
           return {
             ok: true,
             status: 0,
-            stdout: ignoredScanCalls === 1 ? '' : '!! stale*\0',
+            stdout:
+              ignoredScanCalls === 1
+                ? ''
+                : ignoredScanCalls === 2
+                  ? '!! stale*\0'
+                  : '!! generated-during-checkout*\0',
             stderr: '',
           };
         }
@@ -5174,6 +5184,7 @@ test('primary recovery removes late ignored files before reporting release', () 
             `clean:${cwd}:${argv.slice(1, 3).join(' ')}:${argv.at(-1)}`,
           );
           ignoredPresent = false;
+          postCheckoutIgnoredPresent = false;
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
         if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
@@ -5212,13 +5223,14 @@ test('primary recovery removes late ignored files before reporting release', () 
       }),
       deps,
     );
-    assert.deepEqual(events.slice(-3), [
-      `clean:${root}:-fdx --::(literal)stale*`,
-      'checkout',
-      'submodule-update',
-    ]);
-    assert.equal(ignoredScanCalls, 2);
+    assert.equal(ignoredScanCalls, 3);
     assert.equal(events.includes(`copy:${preserveDir}/ignored/stale*`), true);
+    assert.equal(
+      events.includes(
+        `copy:${preserveDir}/ignored/post-checkout/generated-during-checkout*`,
+      ),
+      true,
+    );
     assert.equal(ignoredPresent, false);
     assert.deepEqual(submoduleUpdateArgs, [
       'submodule',
