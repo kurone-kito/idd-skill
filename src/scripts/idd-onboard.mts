@@ -3328,6 +3328,13 @@ function isStaticTrueExpression(expression: string): boolean {
 function stripStaticTypeAssertions(expression: string): string {
   let candidate = expression.trim();
   for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (
+      candidate.startsWith('(') &&
+      findGlobGroupEnd(candidate, 0, '(', ')') === candidate.length - 1
+    ) {
+      candidate = candidate.slice(1, -1).trim();
+      continue;
+    }
     const assertion = /^(.*?)\s+(?:as|satisfies)\s+[\s\S]+$/u.exec(candidate);
     if (assertion === null) {
       break;
@@ -3740,11 +3747,37 @@ function pathExpressionCandidates(text: string): string[] {
     return literals.length === 0 ? [] : [literals.join('')];
   }
   if (/\b(?:join|resolve)\s*\(/u.test(expressionText)) {
-    if (
-      /\bresolve\s*\(/u.test(expressionText) &&
-      literals.some((literal) => literal.startsWith('/'))
-    ) {
-      return [];
+    const call = /\b(join|resolve)\s*\(/u.exec(expressionText);
+    if (call !== null) {
+      const open = expressionText.indexOf('(', call.index);
+      const closing = findGlobGroupEnd(expression, open, '(', ')');
+      if (open !== -1 && closing !== -1) {
+        const argumentGroups = splitTopLevelArguments(
+          expression.slice(open + 1, closing),
+        )
+          .map((argument) => pathExpressionCandidates(argument))
+          .filter((candidates) => candidates.length > 0);
+        if (argumentGroups.length === 0) {
+          return [];
+        }
+        if (
+          call[1] === 'resolve' &&
+          argumentGroups.some((candidates) =>
+            candidates.some((candidate) => candidate.startsWith('/')),
+          )
+        ) {
+          return [];
+        }
+        return argumentGroups.reduce<string[]>(
+          (paths, candidates) =>
+            paths.flatMap((path) =>
+              candidates.map((candidate) =>
+                path === '' ? candidate : `${path}/${candidate}`,
+              ),
+            ),
+          [''],
+        );
+      }
     }
     return literals.length === 0 ? [] : [literals.join('/')];
   }
@@ -4328,6 +4361,7 @@ function globPatternToRegex(
   initialSegmentStart = true,
   inheritedSuffix = '',
   questionCaptures: GlobQuestionCapture[] = [],
+  exactQuestionWidth = false,
 ): string {
   let expression = '';
   for (let index = 0; index < pattern.length; index += 1) {
@@ -4368,6 +4402,7 @@ function globPatternToRegex(
               segmentStart,
               trailingPattern,
               questionCaptures,
+              exactQuestionWidth,
             ),
           )
           .join('|'),
@@ -4383,7 +4418,7 @@ function globPatternToRegex(
             slash === -1 ? trailingPattern.length : slash,
           );
           const wildcard = /^\?/u.test(trailingPattern) ? '[^/]*?' : '[^/]*';
-          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false, '', questionCaptures)}(?=$|/))${wildcard}`;
+          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false, '', questionCaptures, true)}(?=$|/))${wildcard}`;
         }
         const quantifier =
           character === '@'
@@ -4437,7 +4472,10 @@ function globPatternToRegex(
             hasPosixClassInSegment),
         requiresCodePointCount: hasAdjacentPosixClass,
       });
-      expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;
+      const questionQuantifier = exactQuestionWidth
+        ? `{${questionEnd - index}}`
+        : `{1,${questionEnd - index}}`;
+      expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]${questionQuantifier})`;
       index = questionEnd - 1;
     } else if (character === '[') {
       let closing = index + 1;
@@ -4595,6 +4633,7 @@ function globPatternToRegex(
               segmentStart,
               trailingPattern,
               questionCaptures,
+              exactQuestionWidth,
             ),
           )
           .join('|')})`;

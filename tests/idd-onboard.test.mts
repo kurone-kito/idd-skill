@@ -4086,6 +4086,21 @@ test('checkHeldSchemaDrift preserves conditional path branches before concatenat
   ]);
 });
 
+test('checkHeldSchemaDrift expands conditional paths inside joins', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync(join('schemas', enabled ? '*.json' : '*.yaml'));\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift matches the outer colon in nested conditionals', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5333,6 +5348,7 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
     'const unused = 1, find = globSync;',
     'const find: typeof globSync = globSync;',
     'const find = globSync as typeof globSync;',
+    'const find = (globSync as typeof globSync);',
   ]) {
     const sourceRoot = makeFixtureDir();
     const targetRoot = makeFixtureDir();
@@ -6720,10 +6736,12 @@ test('checkHeldSchemaDrift backtracks negative extglobs before question runs', (
   const targetRoot = makeFixtureDir();
   const moduleText = "globSync('schemas/!(a|b)??.json');\n";
   writeDriftManifest(sourceRoot, {
+    'schemas/aa.json': '{ "version": 2 }\n',
     'schemas/cc.json': '{ "version": 2 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   writeDriftManifest(targetRoot, {
+    'schemas/aa.json': '{ "version": 1 }\n',
     'schemas/cc.json': '{ "version": 1 }\n',
     [DRIFT_MODULE]: moduleText,
   });
@@ -6731,6 +6749,7 @@ test('checkHeldSchemaDrift backtracks negative extglobs before question runs', (
     hold: [DRIFT_MODULE],
   });
   assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/aa.json', heldModulePath: DRIFT_MODULE },
     { schemaOrFixturePath: 'schemas/cc.json', heldModulePath: DRIFT_MODULE },
   ]);
 });
