@@ -82,14 +82,15 @@ configured F2 `secondaryQuietWindow` waits until `elapsed`
 since last substantive review activity, not until every login
 configured under `secondaryBotLogin` reviews HEAD.
 
-**CI precondition (Step 2 only).** Before eligibility, run
-AW1/helper `advisory-wait-state`; without it, complete AW1-AW3 before
-terminal `SATISFIED`/`CAP_EXHAUSTED`. Post the
-watermark only after required merge-gate CI. For an earlier
-advisory head, only `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is direct.
-Off-head `SATISFIED` requires active claim/agent helper
-`staleRequestRecovery`: `not-applicable` may proceed, `attempt` runs
-AW3-S, and `cap-exhausted` follows the cap route.
+**CI precondition.** Run claim-bound
+`advisory-wait-state` with `--claim-id {claim-id} --agent-id {agent-id}`;
+require `copilotRecovery.activeClaimProvided: true` and
+`staleRequestRecovery.action`; missing/unbound fails closed. Without
+helper,
+finish AW1-AW3 before terminal outcomes. Post after CI. Earlier
+heads require matching `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head
+`SATISFIED`: `not-applicable` may proceed, `attempt` runs AW3-S, and
+`cap-exhausted` uses the cap route.
 While incomplete, run Steps 1/3, E2,
 E3—not F1/F2; use E15/E14, E14 first if both. For empty E3 (or E8
 with zero Accepted PATH A items), run the waits, then return to E1,

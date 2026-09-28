@@ -55,12 +55,14 @@ any bot but `advisoryWait.primaryBotLogin`.
 
 Run the Helper-first canonical path below. Once `lastCopilotCommit`
 equals `prHeadSha`, the gate is **SATISFIED** — take the caller's
-`SATISFIED` action; otherwise, continue.
+`SATISFIED` action. For off-head `SATISFIED`, apply the header's
+`staleRequestRecovery`; lite hands off `attempt` for AW3-S.
 
 ## Helper-first canonical path
 
 ```sh
-node scripts/advisory-wait-state.mjs --pr <pr-number> \
+node scripts/advisory-wait-state.mjs --pr <pr-number> --claim-id <claim-id> \
+  --agent-id <agent-id> \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
 
@@ -74,7 +76,8 @@ Required fields (stop and ask if any are missing): `prHeadSha`,
 `earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
 `pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
 `capExhaustedRoute`, `trustedMarkerSummary`. Every field is always
-present, even empty/false/`[]` — validate presence, not truthiness.
+present, even empty/false/`[]` — validate presence, not truthiness;
+include `staleRequestRecovery`; reject unbound output.
 
 The helper computes `outcome` directly from live evidence — never by
 hand from raw timestamps. Allowed values: `SATISFIED`,

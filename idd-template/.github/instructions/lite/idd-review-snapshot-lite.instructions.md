@@ -55,10 +55,9 @@ GitHub side effect, confirm all of the following:
 
 ### CI-completion precondition (for Step 2)
 
-Before Step 2, confirm merge-gate CI. Run AW1/helper
-`advisory-wait-state`; if unavailable or invalid, stop and ask rather
-than hand-deriving AW2/AW3. For an earlier head, apply the header's
-active-claim `staleRequestRecovery` rule. Take Steps 1 and 3;
+Run `advisory-wait-state --claim-id {claim-id} --agent-id {agent-id}`;
+bad: stop and ask. Use
+`staleRequestRecovery`. Take Steps 1/3;
 use E15 for CI and E14 for advisory, E14 first when both are pending.
 If incomplete, skip Step 2, wait before branch-sync/F2, then post from
 E1.
