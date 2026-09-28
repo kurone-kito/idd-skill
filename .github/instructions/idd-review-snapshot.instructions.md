@@ -90,7 +90,8 @@ CI pass exists yet for this HEAD.
 `ci-wait-state --pr {pr-number}`. Require
 `copilotRecovery.activeClaimProvided: true` and
 `staleRequestRecovery.action` plus `requiredChecks.status: success` (or
-`no-required-checks` only when every `checks[]` entry is `success`).
+`no-required-checks` only when `checks[]` is non-empty and every entry
+is `success`).
 Missing/unbound/pending: defer. Without helper, finish AW1-AW3; for
 CI, follow `idd-ci.instructions.md`'s required-check tables: read
 rulesets/protection, run `gh pr checks {pr-number} --json
