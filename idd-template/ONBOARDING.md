@@ -229,13 +229,9 @@ below instead.
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
    3-5; those steps write the template directly (`direct-import` default).
 
-   For an unborn target, inspect its contents and record an intentional
-   baseline before the clean check. Do not stage files until you have
-   confirmed that the status listing contains only files intended for this
-   onboarding:
-
-   This is preventive guidance; no accidental-staging incident has been
-   observed in this workflow.
+   For an unborn target, inspect contents and record an intentional baseline.
+   Before staging, confirm the status listing contains only onboarding files.
+   Preventive guard; no incident observed in this workflow.
 
    ```sh
    git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
