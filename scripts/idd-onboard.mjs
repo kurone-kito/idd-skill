@@ -2815,7 +2815,7 @@ function findDirectoryScanAliases(text) {
     }
   }
   const directAliasDeclarationPattern =
-    /(?:^|[;\n])\s*(?:const|let|var)\s+([^;]+)/gu;
+    /(?:^|[;\n])\s*(?:export\s+)?(?:const|let|var)\s+([^;]+)/gu;
   for (const match of text.matchAll(directAliasDeclarationPattern)) {
     for (const declarator of splitTopLevelArguments(match[1] ?? '')) {
       const equals = findTopLevelCharacter(declarator, '=');
@@ -2836,7 +2836,7 @@ function findDirectoryScanAliases(text) {
         /^require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\1\s*\)\.([\w$]+)$/u.exec(
           sourceName,
         );
-      const qualifiedSource = /^([\w$]+)\.([\w$]+)$/u.exec(sourceName);
+      const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
       const apiName = knownNames.has(sourceName)
         ? sourceName
         : (aliases.get(sourceName) ??
@@ -2864,7 +2864,7 @@ function findDirectoryScanAliases(text) {
       /^require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\1\s*\)\.([\w$]+)$/u.exec(
         sourceName,
       );
-    const qualifiedSource = /^([\w$]+)\.([\w$]+)$/u.exec(sourceName);
+    const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
     const apiName = knownNames.has(sourceName)
       ? sourceName
       : (aliases.get(sourceName) ??
@@ -3676,16 +3676,16 @@ function hasNestedRepeatingExtglob(text) {
   }
   return false;
 }
-const POSIX_GLOB_CLASS_PATTERN =
-  /^\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]/u;
-const POSIX_GLOB_CLASS_AT_END_PATTERN =
-  /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]$/u;
-const POSIX_GLOB_CLASS_ANYWHERE_PATTERN =
-  /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]/u;
-function hasPosixGlobClassInSegment(pattern, index) {
+const UNICODE_POSIX_GLOB_CLASS_PATTERN =
+  /^\[\[:(?:alnum|alpha|blank|digit|graph|lower|punct|space|upper|word):\]\]/u;
+const UNICODE_POSIX_GLOB_CLASS_AT_END_PATTERN =
+  /\[\[:(?:alnum|alpha|blank|digit|graph|lower|punct|space|upper|word):\]\]$/u;
+const UNICODE_POSIX_GLOB_CLASS_ANYWHERE_PATTERN =
+  /\[\[:(?:alnum|alpha|blank|digit|graph|lower|punct|space|upper|word):\]\]/u;
+function hasUnicodePosixGlobClassInSegment(pattern, index) {
   const segmentStart = pattern.lastIndexOf('/', index) + 1;
   const segmentEnd = pattern.indexOf('/', index);
-  return POSIX_GLOB_CLASS_ANYWHERE_PATTERN.test(
+  return UNICODE_POSIX_GLOB_CLASS_ANYWHERE_PATTERN.test(
     pattern.slice(segmentStart, segmentEnd === -1 ? undefined : segmentEnd),
   );
 }
@@ -3867,9 +3867,12 @@ function globPatternToRegex(
       }
       const captureName = `__iddQuestion${questionCaptures.length}`;
       const hasAdjacentPosixClass =
-        POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
-        POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(questionEnd));
-      const hasPosixClassInSegment = hasPosixGlobClassInSegment(pattern, index);
+        UNICODE_POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
+        UNICODE_POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(questionEnd));
+      const hasPosixClassInSegment = hasUnicodePosixGlobClassInSegment(
+        pattern,
+        index,
+      );
       questionCaptures.push({
         name: captureName,
         codeUnitCount: questionEnd - index,
@@ -3923,12 +3926,12 @@ function globPatternToRegex(
           alnum: '\\p{L}\\p{N}',
           alpha: '\\p{L}',
           ascii: '\\x00-\\x7F',
-          blank: ' \\t',
+          blank: '\\p{Zs}\\t',
           cntrl: '\\x00-\\x1F\\x7F',
           digit: '\\p{Nd}',
           graph: '\\p{L}\\p{M}\\p{N}\\p{P}\\p{S}',
           lower: '\\p{Ll}',
-          print: '\\p{L}\\p{M}\\p{N}\\p{P}\\p{S} ',
+          print: '\\x00-\\x1F\\x7F',
           punct: '\\p{P}',
           space: '\\s',
           upper: '\\p{Lu}',
@@ -3980,9 +3983,11 @@ function globPatternToRegex(
         } else {
           const captureName = `__iddQuestion${questionCaptures.length}`;
           const hasAdjacentPosixClass =
-            POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
-            POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(closing + 1));
-          const hasPosixClassInSegment = hasPosixGlobClassInSegment(
+            UNICODE_POSIX_GLOB_CLASS_AT_END_PATTERN.test(
+              pattern.slice(0, index),
+            ) ||
+            UNICODE_POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(closing + 1));
+          const hasPosixClassInSegment = hasUnicodePosixGlobClassInSegment(
             pattern,
             index,
           );

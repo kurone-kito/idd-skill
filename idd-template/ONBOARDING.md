@@ -255,9 +255,9 @@ below instead.
 3. Import the core template file set (add `--profile vendored-node`
    when that profile was confirmed).
 
-   Before import, record `<pre-import-ref>` (SHA/tag); reuse it with
-   `--target-base-ref` on retries. Never recompute
-   `HEAD^` after checkpoints (preventive; no incident observed).
+   Before import, record `<pre-import-ref>` (SHA/tag). The retry
+   baseline is that recorded ref, supplied with `--target-base-ref`;
+   keep it unchanged across checkpoints.
 
    ```sh
    git -C <target-repo> rev-parse --verify HEAD  # record as <pre-import-ref>

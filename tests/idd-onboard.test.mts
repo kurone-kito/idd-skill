@@ -5379,6 +5379,7 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
     'const find: typeof globSync = globSync;',
     'const find = globSync as typeof globSync;',
     'const find = (globSync as typeof globSync);',
+    'export const find = globSync;',
     "const find = require('node:fs').globSync;",
     'const find =\n  globSync;',
   ]) {
@@ -5421,6 +5422,7 @@ test('checkHeldSchemaDrift resolves namespace-qualified scan aliases', () => {
   for (const moduleText of [
     "import * as fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
     "import fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
+    "import fs from 'node:fs';\nconst find = fs?.globSync;\nfind('schemas/*.json');\n",
     "import fs, { globSync as find } from 'node:fs';\nfind('schemas/*.json');\n",
     "import * as fs from 'node:fs';\nconst find = fs['globSync'];\nfind('schemas/*.json');\n",
   ]) {
@@ -5853,7 +5855,7 @@ test('checkHeldSchemaDrift keeps the dotfile guard for mixed character classes',
   }
 });
 
-test('checkHeldSchemaDrift preserves POSIX regex escapes', () => {
+test('checkHeldSchemaDrift preserves POSIX space matches', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
   const moduleText = "globSync('schemas/widget[[:space:]].json');\n";
@@ -5874,6 +5876,32 @@ test('checkHeldSchemaDrift preserves POSIX regex escapes', () => {
       heldModulePath: DRIFT_MODULE,
     },
   ]);
+});
+
+test('checkHeldSchemaDrift preserves POSIX blank matches', () => {
+  for (const relativePath of [
+    'schemas/widget .json',
+    'schemas/widget\u00a0.json',
+    'schemas/widget\u2003.json',
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = "globSync('schemas/widget[[:blank:]].json');\n";
+    writeDriftManifest(sourceRoot, {
+      [relativePath]: '{ "version": 2 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    writeDriftManifest(targetRoot, {
+      [relativePath]: '{ "version": 1 }\n',
+      [DRIFT_MODULE]: moduleText,
+    });
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift preserves Unicode POSIX alpha matches', () => {
@@ -6154,11 +6182,11 @@ test('checkHeldSchemaDrift follows Node print-class semantics', () => {
   const targetRoot = makeFixtureDir();
   const moduleText = "globSync('schemas/[[:print:]].json');\n";
   writeDriftManifest(sourceRoot, {
-    'schemas/A.json': '{ "version": 2 }\n',
+    'schemas/\t.json': '{ "version": 2 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   writeDriftManifest(targetRoot, {
-    'schemas/A.json': '{ "version": 1 }\n',
+    'schemas/\t.json': '{ "version": 1 }\n',
     [DRIFT_MODULE]: moduleText,
   });
   const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
@@ -6166,10 +6194,28 @@ test('checkHeldSchemaDrift follows Node print-class semantics', () => {
   });
   assert.deepEqual(result.findings, [
     {
-      schemaOrFixturePath: 'schemas/A.json',
+      schemaOrFixturePath: 'schemas/\t.json',
       heldModulePath: DRIFT_MODULE,
     },
   ]);
+});
+
+test('checkHeldSchemaDrift keeps ASCII POSIX classes in code-unit mode', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/?[[:ascii:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂a.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂a.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift preserves UTF-16 code-unit question glob semantics', () => {
