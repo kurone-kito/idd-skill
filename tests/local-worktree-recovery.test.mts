@@ -5245,6 +5245,91 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
   }
 });
 
+test('primary recovery does not treat missing released evidence as a legacy release', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-missing-release-'));
+  const preservation = JSON.stringify({
+    inProgressOperation: null,
+    submoduleInProgressOperations: [],
+    stashes: [],
+    uninitializedSubmodules: [],
+    backupRefs: [],
+    ignoredFilesCopied: [],
+    ignoredFilesScanFailed: false,
+    submoduleListFailed: false,
+    submoduleAdminCopies: [],
+    worktreeAdminCopy: null,
+  });
+  let lockRemoved = false;
+  mkdirSync(join(root, '.git'), { recursive: true });
+  try {
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      confirmBlock: () => ({
+        ok: true,
+        routing: {
+          state: 'unclaimed',
+          reason: 'no-active-claim',
+          active_claim: null,
+          evidence: {
+            local_worktree: {
+              status: 'absent',
+              paths: [],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      }),
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: '',
+          claimId: '',
+          acquiredAt: '2026-09-28T00:00:00Z',
+          primaryRecovery: {
+            phase: 'primary-checkout',
+            worktree: root,
+            claimId: '',
+            branch: 'issue/1-task',
+            developmentBranch: 'main',
+            releasedClaim: true,
+            preserveDir: null,
+            preservation,
+          },
+        },
+      }),
+      removeLockIfMatches: () => {
+        lockRemoved = true;
+        return true;
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(lockRemoved, false);
+    assert.equal(verdict.plan.removal, null);
+    assert.match(verdict.result, /nothing to recover/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary legacy recovery reserves an absent lock before checkout', () => {
   const root = '/repo/primary';
   let checkoutDone = false;

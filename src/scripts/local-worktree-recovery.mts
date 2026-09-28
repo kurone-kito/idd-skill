@@ -757,14 +757,18 @@ export function isAcceptedBlockReason(reason: string): boolean {
  * legacy claim also has a null claim-id, but its lockless recovery is not
  * safe because the absence of a lock does not prove release. */
 function isReleasedClaimRouting(routing: ConfirmBlockRouting): boolean {
+  const releasedClaim = routing.evidence?.released_claim;
+  const hasReleasedClaimEvidence =
+    releasedClaim !== undefined &&
+    releasedClaim !== null &&
+    releasedClaim.branch !== undefined &&
+    releasedClaim.branch !== null;
   return (
     routing.active_claim === null &&
     (routing.reason.startsWith('released-claim-') ||
       (routing.state === 'unclaimed' &&
         (routing.reason === 'legacy-released' ||
-          (routing.reason === 'no-active-claim' &&
-            routing.evidence?.released_claim?.claim_id !== null &&
-            routing.evidence?.released_claim?.branch !== null))))
+          (routing.reason === 'no-active-claim' && hasReleasedClaimEvidence))))
   );
 }
 
