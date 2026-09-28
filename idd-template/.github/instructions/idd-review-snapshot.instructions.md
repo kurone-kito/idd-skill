@@ -248,8 +248,9 @@ Do not infer edit state from the body, `updatedAt`, author, or claim.
 ReviewItems_snapshot is session-local; don't inherit a previous claim's
 critique findings unless persisted as reviewer-visible comments.
 
-Capture `{e2-review-head-SHA}` before critique; review it. Reread HEAD
-before baseline; if changed, return to E1 without posting. Otherwise
+Set `{e2-review-head-SHA}` to Step 1's `{head-SHA}` before critique;
+review it. Reread HEAD before baseline; if changed, return to E1 without
+posting. Otherwise
 post baseline pinned to it:
 `post-idd-marker --type baseline --target pr <pr-number> --agent-id
 <id> --claim-id <id> --sha {e2-review-head-SHA} --apply` (see
