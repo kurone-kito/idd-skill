@@ -1338,14 +1338,14 @@ function scanAndMaybeCopyIgnoredFiles(
   }
   return { copied, scanFailed };
 }
-/** Remove ignored paths that were copied out before a primary-worktree
- * checkout. Unlike linked-worktree removal, a checkout leaves ignored files
- * in place; reporting success with those recovered issue files still present
- * would leak stale configuration or generated data into the development
- * branch. The caller has already verified the backup, so remove only the
- * exact relative paths recorded by the preservation scan and fail closed if
- * any path remains. */
-function cleanPreservedIgnoredFilesBeforePrimaryCheckout(
+/** Remove ignored paths that were copied out before destructive cleanup.
+ * Unlike linked-worktree removal, a checkout leaves ignored files in place,
+ * while a linked-worktree removal can refuse an untracked file that became
+ * visible after `stash push --include-untracked` restored the committed
+ * ignore rules. The caller has already verified the backup, so remove only
+ * the exact relative paths recorded by the preservation scan and fail closed
+ * if any path remains. */
+function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
   entries,
   targetPath,
   deps,
@@ -3181,7 +3181,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         return verdict;
       }
       const ignoredCleanupAfterLateScanError =
-        cleanPreservedIgnoredFilesBeforePrimaryCheckout(
+        cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
           verdict.plan.ignoredFilesCopied,
           targetPath,
           deps,
@@ -3703,6 +3703,17 @@ export function runLocalWorktreeRecovery(args, deps) {
       ) {
         return recordRemovalFailure(
           'a late preservation artifact disappeared before linked-worktree removal; stopping before removal',
+        );
+      }
+      const ignoredCleanupBeforeLinkedRemovalError =
+        cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+          verdict.plan.ignoredFilesCopied,
+          targetPath,
+          deps,
+        );
+      if (ignoredCleanupBeforeLinkedRemovalError !== null) {
+        return recordRemovalFailure(
+          `before linked-worktree removal, ${ignoredCleanupBeforeLinkedRemovalError}; stopping before removal`,
         );
       }
     }

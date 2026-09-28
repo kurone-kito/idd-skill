@@ -1066,6 +1066,77 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
   ]);
 });
 
+test('linked cleanup removes ignored paths reclassified by stash before removal', () => {
+  let ignoredStatusCalls = 0;
+  let stashListCalls = 0;
+  let cleanCalled = false;
+  let sourcePresent = true;
+  const events: string[] = [];
+  const deps = fakeDeps({
+    runGit: (argv) => {
+      if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        ignoredStatusCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          // The modified ignore file initially hides this path. After the
+          // stash restores the committed ignore rules, it is untracked and
+          // therefore absent from the late ignored-only scan.
+          stdout: ignoredStatusCalls === 1 ? '!! hidden.env\0' : '',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: ' M .gitignore\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        stashListCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            stashListCalls === 1
+              ? ''
+              : 'stash@{0}: On issue/1-task: idd-lwr claim-x\n',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'push') {
+        events.push('stash');
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'clean') {
+        cleanCalled = true;
+        sourcePresent = false;
+        events.push('clean');
+        assert.deepEqual(argv, ['clean', '-fdx', '--', ':(literal)hidden.env']);
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        events.push('remove');
+        return cleanCalled
+          ? { ok: true, status: 0, stdout: '', stderr: '' }
+          : {
+              ok: false,
+              status: 1,
+              stdout: '',
+              stderr: 'contains modified or untracked files',
+            };
+      }
+      return cleanRepoRunGit(argv);
+    },
+    copyPath: () => events.push('copy'),
+    pathExists: (path) =>
+      path === '/repo/linked/hidden.env' ? sourcePresent : true,
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.deepEqual(events, ['copy', 'stash', 'clean', 'remove']);
+  assert.equal(verdict.plan.removal?.ran, true);
+});
+
 test('step 4 stops when the target worktree is replaced while waiting for the clone lock', () => {
   let phase: 'before' | 'after' = 'before';
   let removeCalls = 0;
@@ -3289,6 +3360,7 @@ test('late preservation rescans initialized submodule ignored files before remov
     additionalSourceRoots: string[] | undefined;
   }> = [];
   let submoduleIgnoredScans = 0;
+  const cleanedPaths = new Set<string>();
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
@@ -3322,6 +3394,9 @@ test('late preservation rescans initialized submodule ignored files before remov
           stderr: '',
         };
       }
+      if (argv[0] === 'clean') {
+        cleanedPaths.add('/repo/linked/submodule/cache.tmp');
+      }
       if (
         cwd === '/repo/linked/submodule' &&
         argv[0] === 'rev-parse' &&
@@ -3338,6 +3413,7 @@ test('late preservation rescans initialized submodule ignored files before remov
     },
     copyPath: (_from, to, sourceRoot, additionalSourceRoots) =>
       copied.push({ to, sourceRoot, additionalSourceRoots }),
+    pathExists: (path) => !cleanedPaths.has(path),
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
@@ -3798,6 +3874,7 @@ test('captures ignored files before stash can change the ignore rules', () => {
 test('rescans ignored files immediately before ordinary linked removal', () => {
   let ignoredScanCalls = 0;
   const copied: string[] = [];
+  const cleanedPaths = new Set<string>();
   const deps = fakeDeps({
     runGit: (argv) => {
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
@@ -3809,9 +3886,13 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
           stderr: '',
         };
       }
+      if (argv[0] === 'clean') {
+        cleanedPaths.add('/repo/linked/late.env');
+      }
       return cleanRepoRunGit(argv);
     },
     copyPath: (_from, to) => copied.push(to),
+    pathExists: (path) => !cleanedPaths.has(path),
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
