@@ -3356,6 +3356,24 @@ function normalizeComputedDirectoryScanMembers(text: string): string {
   );
 }
 
+function resolveBoundDirectoryScanAlias(
+  sourceName: string,
+  knownNames: Set<string>,
+  namespaceNames: Set<string>,
+): string | undefined {
+  const boundSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)\.bind\([\s\S]*\)$/u.exec(
+    sourceName,
+  );
+  if (
+    boundSource !== null &&
+    namespaceNames.has(boundSource[1] ?? '') &&
+    knownNames.has(boundSource[2] ?? '')
+  ) {
+    return boundSource[2];
+  }
+  return undefined;
+}
+
 function findDirectoryScanAliases(text: string): Map<string, string> {
   const aliases = new Map<string, string>();
   const knownNames: Set<string> = new Set(DIRECTORY_SCAN_API_NAMES);
@@ -3420,6 +3438,11 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
           sourceName,
         );
       const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
+      const boundApiName = resolveBoundDirectoryScanAlias(
+        sourceName,
+        knownNames,
+        namespaceNames,
+      );
       const apiName = knownNames.has(sourceName)
         ? sourceName
         : (aliases.get(sourceName) ??
@@ -3430,7 +3453,7 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
                 namespaceNames.has(qualifiedSource[1] ?? '') &&
                 knownNames.has(qualifiedSource[2] ?? '')
               ? qualifiedSource[2]
-              : undefined));
+              : boundApiName));
       if (apiName !== undefined) {
         aliases.set(aliasName, apiName);
       }
@@ -3448,6 +3471,11 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
         sourceName,
       );
     const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
+    const boundApiName = resolveBoundDirectoryScanAlias(
+      sourceName,
+      knownNames,
+      namespaceNames,
+    );
     const apiName = knownNames.has(sourceName)
       ? sourceName
       : (aliases.get(sourceName) ??
@@ -3458,7 +3486,7 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
               namespaceNames.has(qualifiedSource[1] ?? '') &&
               knownNames.has(qualifiedSource[2] ?? '')
             ? qualifiedSource[2]
-            : undefined));
+            : boundApiName));
     if (apiName !== undefined) {
       aliases.set(aliasName, apiName);
     }

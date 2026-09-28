@@ -2773,6 +2773,23 @@ function normalizeComputedDirectoryScanMembers(text) {
     (_match, _quote, apiName) => `.${apiName}`,
   );
 }
+function resolveBoundDirectoryScanAlias(
+  sourceName,
+  knownNames,
+  namespaceNames,
+) {
+  const boundSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)\.bind\([\s\S]*\)$/u.exec(
+    sourceName,
+  );
+  if (
+    boundSource !== null &&
+    namespaceNames.has(boundSource[1] ?? '') &&
+    knownNames.has(boundSource[2] ?? '')
+  ) {
+    return boundSource[2];
+  }
+  return undefined;
+}
 function findDirectoryScanAliases(text) {
   const aliases = new Map();
   const knownNames = new Set(DIRECTORY_SCAN_API_NAMES);
@@ -2837,6 +2854,11 @@ function findDirectoryScanAliases(text) {
           sourceName,
         );
       const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
+      const boundApiName = resolveBoundDirectoryScanAlias(
+        sourceName,
+        knownNames,
+        namespaceNames,
+      );
       const apiName = knownNames.has(sourceName)
         ? sourceName
         : (aliases.get(sourceName) ??
@@ -2847,7 +2869,7 @@ function findDirectoryScanAliases(text) {
                 namespaceNames.has(qualifiedSource[1] ?? '') &&
                 knownNames.has(qualifiedSource[2] ?? '')
               ? qualifiedSource[2]
-              : undefined));
+              : boundApiName));
       if (apiName !== undefined) {
         aliases.set(aliasName, apiName);
       }
@@ -2865,6 +2887,11 @@ function findDirectoryScanAliases(text) {
         sourceName,
       );
     const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
+    const boundApiName = resolveBoundDirectoryScanAlias(
+      sourceName,
+      knownNames,
+      namespaceNames,
+    );
     const apiName = knownNames.has(sourceName)
       ? sourceName
       : (aliases.get(sourceName) ??
@@ -2875,7 +2902,7 @@ function findDirectoryScanAliases(text) {
               namespaceNames.has(qualifiedSource[1] ?? '') &&
               knownNames.has(qualifiedSource[2] ?? '')
             ? qualifiedSource[2]
-            : undefined));
+            : boundApiName));
     if (apiName !== undefined) {
       aliases.set(aliasName, apiName);
     }

@@ -5421,6 +5421,7 @@ test('checkHeldSchemaDrift resolves scan aliases assigned after declaration', ()
 test('checkHeldSchemaDrift resolves namespace-qualified scan aliases', () => {
   for (const moduleText of [
     "import * as fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
+    "import * as fs from 'node:fs';\nconst find = fs.globSync.bind(fs);\nfind('schemas/*.json');\n",
     "import fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
     "import fs from 'node:fs';\nconst find = fs?.globSync;\nfind('schemas/*.json');\n",
     "import fs, { globSync as find } from 'node:fs';\nfind('schemas/*.json');\n",
