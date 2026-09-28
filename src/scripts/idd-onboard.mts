@@ -3610,7 +3610,6 @@ function scanStringLiterals(text: string): string[] {
       quote === '`' &&
       /(?:^|[^A-Za-z0-9_$])String\.raw\s*$/u.test(text.slice(0, index));
     let content = '';
-    let closed = false;
     for (let cursor = index + 1; cursor < text.length; cursor += 1) {
       const character = text[cursor] ?? '';
       if (character === '\\') {
@@ -3627,15 +3626,12 @@ function scanStringLiterals(text: string): string[] {
           isRawTemplate ? content : decodeJavaScriptStringLiteral(content),
         );
         index = cursor;
-        closed = true;
         break;
       }
       if (character === '\n' || character === '\r') {
         break;
       }
       content += character;
-    }
-    if (!closed) {
     }
   }
   return literals;
