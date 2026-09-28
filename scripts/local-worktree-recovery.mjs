@@ -410,6 +410,13 @@ export function detectInProgressOperation(
   readFile,
   pathPresence = (candidate) => (pathExists(candidate) ? 'present' : 'absent'),
 ) {
+  const markerPresence = (marker) => {
+    const markerPath = runGit(['rev-parse', '--git-path', marker], path);
+    const resolved = markerPath.ok ? markerPath.stdout.trim() : '';
+    if (!resolved) return null;
+    const absolute = isAbsolute(resolved) ? resolved : join(path, resolved);
+    return pathPresence(absolute);
+  };
   const merge = runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], path);
   if (merge.ok) {
     const head = runGit(['rev-parse', 'HEAD'], path);
@@ -417,6 +424,10 @@ export function detectInProgressOperation(
     // empty-string "tip" -- fail closed (null) the same way the bisect
     // branch below does, rather than let a blank tipSha slip through.
     return { kind: 'merge', tipSha: head.ok ? head.stdout.trim() : null };
+  }
+  const mergePresence = markerPresence('MERGE_HEAD');
+  if (mergePresence === 'present' || mergePresence === 'unknown') {
+    return { kind: 'merge', tipSha: null };
   }
   for (const name of ['rebase-merge', 'rebase-apply']) {
     const gitPath = runGit(['rev-parse', '--git-path', name], path);
@@ -446,6 +457,10 @@ export function detectInProgressOperation(
       kind: 'cherry-pick',
       tipSha: head.ok ? head.stdout.trim() : null,
     };
+  }
+  const cherryPickPresence = markerPresence('CHERRY_PICK_HEAD');
+  if (cherryPickPresence === 'present' || cherryPickPresence === 'unknown') {
+    return { kind: 'cherry-pick', tipSha: null };
   }
   const bisectLogPath = runGit(['rev-parse', '--git-path', 'BISECT_LOG'], path);
   if (bisectLogPath.ok) {

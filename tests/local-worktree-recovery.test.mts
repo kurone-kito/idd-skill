@@ -591,6 +591,39 @@ test('detectInProgressOperation fails closed when rebase metadata is unreadable'
   assert.deepEqual(result, { kind: 'rebase', tipSha: null });
 });
 
+for (const operationCase of [
+  { kind: 'merge', marker: 'MERGE_HEAD' },
+  { kind: 'cherry-pick', marker: 'CHERRY_PICK_HEAD' },
+] as const) {
+  test(`detectInProgressOperation fails closed when ${operationCase.kind} metadata is present but unreadable`, () => {
+    const runGit = (argv: string[]): LocalGitCommandResult => {
+      if (argv[0] === 'rev-parse' && argv.includes(operationCase.marker)) {
+        if (argv.includes('--git-path')) {
+          return {
+            ok: true,
+            status: 0,
+            stdout: `/repo/.git/${operationCase.marker}\n`,
+            stderr: '',
+          };
+        }
+        return { ok: false, status: 1, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'rev-parse' && argv.includes('--git-path')) {
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      return { ok: false, status: 1, stdout: '', stderr: '' };
+    };
+    const result = detectInProgressOperation(
+      '/repo',
+      runGit,
+      () => false,
+      () => null,
+      () => 'unknown',
+    );
+    assert.deepEqual(result, { kind: operationCase.kind, tipSha: null });
+  });
+}
+
 test('detectInProgressOperation fails closed when bisect metadata is unreadable', () => {
   const runGit = (argv: string[]): LocalGitCommandResult => {
     if (
