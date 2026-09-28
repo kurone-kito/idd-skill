@@ -2772,6 +2772,11 @@ function findDirectoryScanAliases(text) {
   for (const match of text.matchAll(namespaceImportPattern)) {
     namespaceNames.add(match[1] ?? '');
   }
+  const defaultImportPattern =
+    /(?:^|[;\n])\s*import\s+([\w$]+)\s+from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
+  for (const match of text.matchAll(defaultImportPattern)) {
+    namespaceNames.add(match[1] ?? '');
+  }
   const namespaceRequirePattern =
     /(?:^|[;\n])\s*(?:const|let|var)\s+([\w$]+)\s*=\s*require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*\)\s*;?/gu;
   for (const match of text.matchAll(namespaceRequirePattern)) {

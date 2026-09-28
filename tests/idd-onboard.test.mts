@@ -5311,18 +5311,27 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
 });
 
 test('checkHeldSchemaDrift resolves namespace-qualified scan aliases', () => {
-  const sourceRoot = makeFixtureDir();
-  const targetRoot = makeFixtureDir();
-  const moduleText =
-    "import * as fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n";
-  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
-  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
-  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
-    hold: [DRIFT_MODULE],
-  });
-  assert.deepEqual(result.findings, [
-    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
-  ]);
+  for (const moduleText of [
+    "import * as fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
+    "import fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift ignores regex literals after generic function declarations', () => {
