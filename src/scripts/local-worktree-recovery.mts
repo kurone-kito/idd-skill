@@ -3629,6 +3629,21 @@ export function runLocalWorktreeRecovery(
       }
     }
 
+    // Resolve the development branch before any preservation mutation. A
+    // malformed local config or failed default-branch lookup must leave the
+    // operator with an intact verdict rather than throwing after stashes,
+    // refs, or copied artifacts have already been created (Codex review).
+    let applyDevelopmentBranch: string | null = null;
+    if (verdict.primaryOrLinked === 'primary') {
+      try {
+        applyDevelopmentBranch = deps.resolveDevelopmentBranch();
+      } catch (error) {
+        return recordRemovalFailure(
+          `could not resolve the primary development branch before preservation: ${errorMessage(error)}`,
+        );
+      }
+    }
+
     // Step 3 must run only after the clone-scoped exclusion is held and the
     // routing/claim/lock state has been rechecked under that exclusion. This
     // prevents a stale same-claim session from reacquiring its lock and
@@ -3720,7 +3735,12 @@ export function runLocalWorktreeRecovery(
     }
 
     if (verdict.primaryOrLinked === 'primary') {
-      const developmentBranch = deps.resolveDevelopmentBranch();
+      const developmentBranch = applyDevelopmentBranch;
+      if (developmentBranch === null) {
+        return recordRemovalFailure(
+          'could not resolve the primary development branch before cleanup',
+        );
+      }
       if (verdict.plan.inProgressOperation !== null) {
         // `stash push` can clear a paused merge/cherry-pick while preserving
         // its working-tree state. Re-detect the operation after preservation:

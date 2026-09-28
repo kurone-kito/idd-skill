@@ -4729,6 +4729,53 @@ test('primary recovery rechecks claim and lock identity immediately before check
   }
 });
 
+test('primary recovery resolves the development branch before preservation', () => {
+  let mutationCalls = 0;
+  const deps = fakeDeps({
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-occupied',
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/repo/primary'],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+    resolveDevelopmentBranch: () => {
+      throw new Error('local config is unreadable');
+    },
+    runGit: (argv) => {
+      if (
+        (argv[0] === 'stash' && argv[1] === 'push') ||
+        argv[0] === 'update-ref' ||
+        argv[0] === 'checkout'
+      ) {
+        mutationCalls += 1;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      operatorConfirmedNoLiveSession: true,
+      worktree: '/repo/primary',
+    }),
+    deps,
+  );
+  assert.equal(mutationCalls, 0);
+  assert.equal(verdict.mutated, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /before preservation/);
+});
+
 test('primary recovery does not abort a merge already cleared by stash', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-stash-merge-'));
   mkdirSync(join(root, '.git'), { recursive: true });
