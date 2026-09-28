@@ -7,6 +7,7 @@ import {
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectDevelopmentBranch,
+  inspectIssueAuthoringDelegateLayer,
   inspectProvider,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
@@ -14,7 +15,9 @@ import {
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveDevelopmentBranch,
+  resolveEffectiveIssueAuthoringDelegate,
   resolveEffectiveProvider,
+  resolveIssueAuthoringAdversarialWaitCeiling,
   selectDesyncedIndex,
 } from '../src/scripts/policy-helpers.mts';
 
@@ -1360,4 +1363,272 @@ test('providerHealth.samplingWindow rejects an invalid duration deterministicall
       `expected samplingWindow ${JSON.stringify(invalid)} to fail safe to the default`,
     );
   }
+});
+
+test('issueAuthoring.adversarialReview.waitCeiling defaults to PT20M and ignores critiqueLoop (#3599)', () => {
+  assert.equal(
+    POLICY_DEFAULTS.issueAuthoring.adversarialReview.waitCeiling,
+    'PT20M',
+  );
+  assert.equal(
+    Object.hasOwn(POLICY_DEFAULTS.issueAuthoring.adversarialReview, 'delegate'),
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { subagentWaitCeiling: 'PT45M' },
+    }).issueAuthoring.adversarialReview.waitCeiling,
+    'PT20M',
+  );
+  assert.equal(
+    resolveIssueAuthoringAdversarialWaitCeiling({
+      critiqueLoop: { subagentWaitCeiling: 'PT45M' },
+      issueAuthoring: { adversarialReview: { waitCeiling: 'PT5M' } },
+    }),
+    'PT5M',
+  );
+});
+
+test('issueAuthoring.adversarialReview.waitCeiling falls back to PT20M for an invalid duration (#3599)', () => {
+  for (const invalid of ['not-a-duration', 'PT0S', 'P0D', 42, null]) {
+    assert.equal(
+      resolveIssueAuthoringAdversarialWaitCeiling({
+        issueAuthoring: { adversarialReview: { waitCeiling: invalid } },
+      }),
+      'PT20M',
+      `expected waitCeiling ${JSON.stringify(invalid)} to fail safe to PT20M`,
+    );
+  }
+  assert.equal(
+    resolveIssueAuthoringAdversarialWaitCeiling({
+      issueAuthoring: { adversarialReview: 'not-an-object' },
+    }),
+    'PT20M',
+  );
+});
+
+test('normalizePolicyConfig keeps a parsed issue-authoring delegate and omits it when absent (#3599)', () => {
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({}).issueAuthoring.adversarialReview,
+      'delegate',
+    ),
+    false,
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      issueAuthoring: {
+        adversarialReview: {
+          waitCeiling: 'PT5M',
+          delegate: { command: 'draft-review', mode: 'combined' },
+        },
+      },
+    }).issueAuthoring.adversarialReview,
+    {
+      waitCeiling: 'PT5M',
+      delegate: { command: 'draft-review', mode: 'combined' },
+    },
+  );
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({
+        issueAuthoring: { adversarialReview: { delegate: null } },
+      }).issueAuthoring.adversarialReview,
+      'delegate',
+    ),
+    false,
+  );
+});
+
+test('normalizePolicyConfig fail-safes an invalid issue-authoring mode and ignores a sibling typo (#3599)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review', mode: 'always' },
+          typo: true,
+        },
+      },
+    }).issueAuthoring.adversarialReview.delegate,
+    { command: 'draft-review', mode: 'fallback' },
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review', mode: 'on-success' },
+          typo: true,
+        },
+      },
+    }).issueAuthoring.adversarialReview.delegate,
+    { command: 'draft-review', mode: 'on-success' },
+  );
+});
+
+test('inspectIssueAuthoringDelegateLayer distinguishes absent, disabled, configured, and malformed (#3599)', () => {
+  assert.deepEqual(inspectIssueAuthoringDelegateLayer({}), {
+    status: 'absent',
+  });
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: { adversarialReview: { waitCeiling: 'PT5M' } },
+    }),
+    { status: 'absent' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: { adversarialReview: { delegate: null } },
+    }),
+    { status: 'disabled' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: {
+        adversarialReview: { delegate: { command: 'draft-review' } },
+      },
+    }),
+    {
+      status: 'configured',
+      delegate: { command: 'draft-review', mode: 'fallback' },
+    },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review', mode: 'always' },
+        },
+      },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review' },
+          extra: true,
+        },
+      },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({ issueAuthoring: 'not-an-object' }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: { adversarialReview: 'not-an-object' },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+});
+
+test('resolveEffectiveIssueAuthoringDelegate does not read critiqueLoop.delegate (#3599)', () => {
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {
+        critiqueLoop: { delegate: { command: 'must-not-leak' } },
+        issueAuthoring: {
+          adversarialReview: {
+            delegate: { command: 'local-review', mode: 'combined' },
+          },
+        },
+      },
+      globalConfig: {
+        issueAuthoring: {
+          adversarialReview: { delegate: { command: 'global-review' } },
+        },
+      },
+    }),
+    {
+      status: 'local',
+      source: 'repository-local',
+      delegate: { command: 'local-review', mode: 'combined' },
+    },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {
+        issueAuthoring: { adversarialReview: { delegate: null } },
+      },
+      globalConfig: {
+        critiqueLoop: { delegate: { command: 'must-not-leak' } },
+        issueAuthoring: {
+          adversarialReview: { delegate: { command: 'global-review' } },
+        },
+      },
+    }),
+    { status: 'disabled', source: 'repository-local' },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {
+        issueAuthoring: {
+          adversarialReview: {
+            delegate: { command: 'local-review', mode: 'always' },
+          },
+        },
+      },
+      globalConfig: {
+        issueAuthoring: {
+          adversarialReview: { delegate: { command: 'global-review' } },
+        },
+      },
+    }),
+    {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: 'invalid-repository-local-delegate',
+    },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {},
+      globalConfig: {
+        critiqueLoop: {
+          delegate: { command: 'must-not-leak' },
+          subagentWaitCeiling: 'PT45M',
+        },
+        issueAuthoring: {
+          adversarialReview: {
+            waitCeiling: 'PT1H',
+            delegate: { command: 'global-review', mode: 'never' },
+          },
+        },
+      },
+    }),
+    {
+      status: 'global',
+      source: 'user-global',
+      delegate: { command: 'global-review', mode: 'never' },
+    },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {},
+      globalConfig: {
+        issueAuthoring: { adversarialReview: { delegate: null } },
+      },
+    }),
+    { status: 'none', source: 'none' },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {},
+      globalConfig: {
+        issueAuthoring: {
+          adversarialReview: {
+            delegate: { command: 'global-review', bogus: 1 },
+          },
+        },
+      },
+    }),
+    { status: 'none', source: 'none' },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({ localConfig: {} }),
+    { status: 'none', source: 'none' },
+  );
 });

@@ -741,9 +741,40 @@
           "type": "string",
           "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$",
           "description": "Pre-existing repository-level authoring journal target (`owner/repo#number`) used as the publication-intent record location for a standalone authoring set with no existing issue or anchor. The issue number must be a positive integer with no leading zero (GitHub issue numbers start at 1). Optional; no default -- when absent, the issue-authoring skill stops with `blocked-by-human` before creating a standalone target rather than guessing a journal."
+        },
+        "adversarialReview": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "waitCeiling": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Positive ISO 8601 duration ceiling for a delegated issue-authoring adversarial draft review. Optional; defaults to `PT20M`. Independent of `critiqueLoop.subagentWaitCeiling`. A user-global document's ceiling is never read."
+            },
+            "delegate": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": ["command"],
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "description": "Shell command the issue-authoring caller runs against the issue draft. Required within this object; must contain a non-whitespace character. This command is trusted executable configuration and can transmit the issue-draft data it receives. It does not read or inherit `critiqueLoop.delegate`."
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": ["fallback", "combined", "on-success", "never"],
+                  "description": "Selects when the native issue-authoring reviewer also runs. `fallback` (default): only when the delegate fails. `combined`: always, without consulting the delegate's outcome. `on-success`: only when the delegate succeeded. `never`: not at all."
+                }
+              },
+              "description": "Dedicated issue-authoring adversarial-review delegate. Optional; a key genuinely absent keeps the native reviewer unless a local runtime inherits a user-global delegate. An explicit JSON `null` disables inheritance without installing a local command. `required` and `properties` apply only when the value is an object."
+            }
+          },
+          "description": "Issue-authoring adversarial draft review. Optional; omitting it keeps the native reviewer and the `PT20M` wait ceiling. Unknown keys are rejected."
         }
       },
-      "description": "Container for issue-authoring guard settings: authoring label, staleness window, heartbeat-coalesce window, and clarification-round bound. Optional; omitting any nested key keeps that key's own distributed default."
+      "description": "Container for issue-authoring guard settings: authoring label, staleness window, heartbeat-coalesce window, clarification-round bound, and the adversarial-review delegate. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "autopilotSuitability": {
       "type": "object",

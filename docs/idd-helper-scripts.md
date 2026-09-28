@@ -413,6 +413,7 @@ outcome path.
 | `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, an unknown argument, or a missing flag value (exit `2`)                                      | a `gh` failure reached during any stage (exit `2`)                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, or `--hear`/`--record-policy` report a schema-invalid transcript (exit `1`) | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`) |
 | `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception                                                                                                                         |
 | `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
+| `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
 | `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                           | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                |
 | `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                               | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)        | —                                                                                                                                           | an unexpected exception                                                                                                                         |
 
@@ -792,6 +793,13 @@ in this preamble, since the fallback differs per helper.
   and it invokes the resolved hook, always exiting `0` regardless of
   the hook's own success or failure (referenced in
   [kurone-kito/idd-skill#2679](https://github.com/kurone-kito/idd-skill/issues/2679))
+- `scripts/idd-issue-authoring-delegate.mjs` for the effective
+  `issueAuthoring.adversarialReview.delegate` verdict (`usable`,
+  `source`, `command`, `mode`, `reason`, and `waitCeiling`). It does
+  not invoke the command or read a branch diff. The configured command
+  is trusted executable configuration and can transmit the issue draft
+  the caller sends it (referenced in
+  [kurone-kito/idd-skill#3599](https://github.com/kurone-kito/idd-skill/issues/3599))
 - `scripts/authoring-owner-provenance.mjs` for the review-fix-loop-cutoff
   auto-release exception's provenance check
   (`skills/issue-authoring/references/contract.md`): computes the sha256
@@ -5386,6 +5394,28 @@ same as `AW4`/`AW5`.
   `parseCritiqueLoopDelegate` in `policy-helpers.mts`) with no
   reimplemented validation rule (referenced in
   [kurone-kito/idd-skill#2329](https://github.com/kurone-kito/idd-skill/issues/2329))
+
+### Effective issue-authoring adversarial review delegate
+
+- Preferred command when helper runtime is enabled:
+  `idd-issue-authoring-delegate [--policy <path>] [--no-user-global]`
+- Source repository equivalent:
+  `node scripts/idd-issue-authoring-delegate.mjs [--policy <path>] [--no-user-global]`
+- Resolves `issueAuthoring.adversarialReview.delegate` independently of
+  `critiqueLoop.delegate`. `waitCeiling` defaults to `PT20M` and does
+  not read `critiqueLoop.subagentWaitCeiling`. A user-global ceiling is
+  ignored.
+- `usable: false` reasons are `repository-local-explicit-disable`,
+  `invalid-repository-local-delegate`, and `not-configured`. A
+  repository-local object, JSON `null`, or malformed value stops
+  resolution there. A user-global fragment applies only when the local
+  delegate is absent. `GITHUB_ACTIONS=true` and `--no-user-global` skip
+  that layer.
+- The helper does not invoke the command and does not read a branch
+  diff. The configured command is trusted executable configuration and
+  can transmit the issue-draft data the caller sends it.
+- Referenced in
+  [kurone-kito/idd-skill#3599](https://github.com/kurone-kito/idd-skill/issues/3599)
 
 ### Effective C-phase critique telemetry hook
 
