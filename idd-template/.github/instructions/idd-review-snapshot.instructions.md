@@ -116,12 +116,11 @@ with the exact `{head-SHA}` from Step 1** — the helper fails closed
 (posts nothing) if it disagrees with the fresh snapshot's live HEAD,
 rather than silently keying the watermark to a moved HEAD; on that
 failure, return to Step 1 and re-snapshot, do not retry Step 2 as-is.
-The manual six-field form (`--type watermark --target pr <pr-number>
-<watermark-fields> --apply`, same six `--agent-id`/`--claim-id`/
-`--head-sha`/`--max-activity-at`/`--total-item-count`/
-`--ci-completed-at` values) stays the fallback, as do `emit-marker
---type review-watermark` (emit-only) and the manual HTTP `POST` below;
-see `docs/idd-helper-scripts.md`):
+The manual six-field form requires helper-free `idd-ci` producer-aware
+proof: use `(checkName, workflowName)`, require all required producers to
+pass, and verify advisory identity/event. Otherwise defer; raw
+`gh pr checks` is insufficient. `emit-marker` and manual `POST` inherit
+this rule; see `docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->

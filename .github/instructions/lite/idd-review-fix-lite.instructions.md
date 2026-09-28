@@ -368,12 +368,12 @@ self-critique and record risk.
    marker already exists; reuse the one with the earliest `createdAt`
    (the helper's `earliestSameHeadAt` already gives you this). Take a
    fresh activity snapshot (same scope as E1 Step 1) and record its
-   highest `updatedAt` as a temporary polling watermark — do not post
-   it as a `review-watermark` comment. If empty, use the `createdAt` of
-   the latest trusted same-claim watermark, or the deferred E1 baseline
-   carried by this verified claim; when that is empty, use the latest
-   trusted same-claim `review-baseline`'s `createdAt`. Never read a
-   marker-shaped comment as that baseline. If none exists, return to E1.
+   highest `updatedAt` as a temporary polling watermark. If newer than
+   the carried deferred E1 activity baseline, return to E1 before setting
+   it, even when non-empty. Never post it. For an empty snapshot, use the
+   latest trusted same-claim watermark `createdAt`, then the deferred E1
+   baseline, then the same-claim `review-baseline` `createdAt`; never use
+   a marker-shaped comment as that baseline. If none exists, return E1.
 8. Poll on the interval from the helper's `pollIntervalMinutes`. Each
    cycle: re-fetch the current head; if it differs from `PR_HEAD_SHA`,
    stop polling and return to `idd-review-snapshot-lite.instructions.md`
@@ -384,9 +384,10 @@ self-critique and record risk.
    JSON, or is missing required fields, stop and ask — do not fall back
    to a manual per-field fetch. If `earliestSameHeadAt` is now empty,
    post a hold comment noting the advisory-wait marker for
-   `PR_HEAD_SHA` disappeared during polling and stop. If `outcome` is
-   now `SATISFIED`, apply step 10 first, then exit polling and continue
-   to E15.
+   `PR_HEAD_SHA` disappeared during polling and stop. Before a terminal
+   result, reapply step 4's first-match table: off-head `SATISFIED` with
+   `attempt` hands off for AW3-S; `cap-exhausted` follows
+   `capExhaustedRoute`. Only then may `SATISFIED` apply step 10 and go E15.
 9. Otherwise keep polling — the helper already folds
    `pendingWindowMinutes`/`settledWindowMinutes` into `outcome` on
    every call, so a stalled or silent advisory bot still ends the loop
