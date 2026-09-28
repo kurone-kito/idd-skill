@@ -571,7 +571,12 @@ function isClaimLockBody(value) {
       typeof marker.claimId === 'string' &&
       typeof marker.branch === 'string' &&
       typeof marker.developmentBranch === 'string' &&
-      typeof marker.releasedClaim === 'boolean')
+      typeof marker.releasedClaim === 'boolean' &&
+      (marker.preserveDir === undefined ||
+        typeof marker.preserveDir === 'string' ||
+        marker.preserveDir === null) &&
+      (marker.preservation === undefined ||
+        typeof marker.preservation === 'string'))
   );
 }
 function readLock(path) {

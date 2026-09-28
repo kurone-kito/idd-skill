@@ -4867,6 +4867,7 @@ test('primary recovery refuses a fresh claim during post-checkout absence confir
 
 test('primary recovery resumes after a post-checkout confirmation failure', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-resume-'));
+  const preserveDir = `${root}-preserve`;
   mkdirSync(join(root, '.git'), { recursive: true });
   let checkoutDone = false;
   let firstAttempt = true;
@@ -4878,6 +4879,9 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
     developmentBranch: 'main',
     releasedClaim: false,
   };
+  let submoduleSyncCalls = 0;
+  let submoduleUpdateCalls = 0;
+  let ensurePreserveDirCalls = 0;
   let lockRemoved = false;
   try {
     const deps = fakeDeps({
@@ -4893,6 +4897,14 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
         },
       ],
       pathExists: (path) => path === root || existsSync(path),
+      ensurePreserveDir: () => {
+        ensurePreserveDirCalls += 1;
+        if (existsSync(preserveDir)) {
+          throw new Error('preserve directory already exists');
+        }
+        mkdirSync(preserveDir);
+        return preserveDir;
+      },
       confirmBlock: () => {
         if (!firstAttempt) {
           return {
@@ -4946,6 +4958,12 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
           checkoutDone = true;
           return { ok: true, status: 0, stdout: '', stderr: '' };
         }
+        if (argv[0] === 'submodule' && argv[1] === 'sync') {
+          submoduleSyncCalls += 1;
+        }
+        if (argv[0] === 'submodule' && argv[1] === 'update') {
+          submoduleUpdateCalls += 1;
+        }
         return cleanRepoRunGit(argv, cwd);
       },
       checkLock: () => ({
@@ -4972,27 +4990,37 @@ test('primary recovery resumes after a post-checkout confirmation failure', () =
         apply: true,
         operatorConfirmedNoLiveSession: true,
         worktree: root,
+        preserveDir,
       }),
       deps,
     );
     assert.equal(firstVerdict.plan.removal?.ran, false);
     assert.match(firstVerdict.result, /same recovered claim\/branch absent/);
+    assert.equal(firstVerdict.preserveDir, preserveDir);
+    assert.equal(ensurePreserveDirCalls, 1);
     assert.notEqual(primaryMarker, null);
+    assert.equal(typeof primaryMarker?.preservation, 'string');
 
     firstAttempt = false;
+    assert.equal(primaryMarker?.preserveDir, preserveDir);
     const resumedVerdict = runLocalWorktreeRecovery(
       baseArgs({
         apply: true,
         operatorConfirmedNoLiveSession: true,
         worktree: root,
+        preserveDir,
       }),
       deps,
     );
     assert.equal(resumedVerdict.step1.outcome, 'blocked-primary-resume');
     assert.equal(resumedVerdict.plan.removal?.ran, true);
     assert.equal(lockRemoved, true);
+    assert.equal(submoduleSyncCalls, 2);
+    assert.equal(submoduleUpdateCalls, 2);
+    assert.equal(ensurePreserveDirCalls, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(preserveDir, { recursive: true, force: true });
   }
 });
 

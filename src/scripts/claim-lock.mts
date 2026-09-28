@@ -217,6 +217,10 @@ export interface PrimaryRecoveryLockMarker {
   branch: string;
   developmentBranch: string;
   releasedClaim: boolean;
+  /** The destination reserved by the first invocation, when any. */
+  preserveDir?: string | null;
+  /** JSON-encoded preservation manifest captured before checkout. */
+  preservation?: string;
 }
 
 export interface ClaimLockBody {
@@ -653,7 +657,12 @@ function isClaimLockBody(value: unknown): value is ClaimLockBody {
       typeof (marker as Record<string, unknown>).branch === 'string' &&
       typeof (marker as Record<string, unknown>).developmentBranch ===
         'string' &&
-      typeof (marker as Record<string, unknown>).releasedClaim === 'boolean')
+      typeof (marker as Record<string, unknown>).releasedClaim === 'boolean' &&
+      ((marker as Record<string, unknown>).preserveDir === undefined ||
+        typeof (marker as Record<string, unknown>).preserveDir === 'string' ||
+        (marker as Record<string, unknown>).preserveDir === null) &&
+      ((marker as Record<string, unknown>).preservation === undefined ||
+        typeof (marker as Record<string, unknown>).preservation === 'string'))
   );
 }
 
