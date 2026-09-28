@@ -3302,6 +3302,16 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
       }
     }
   }
+  const requirePattern =
+    /(?:^|[;\n])\s*(?:const|let|var)\s*\{([\s\S]*?)\}\s*=\s*require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*\)\s*;?/gu;
+  for (const match of text.matchAll(requirePattern)) {
+    for (const specifier of splitTopLevelArguments(match[1] ?? '')) {
+      const alias = /^([\w$]+)\s*:\s*([\w$]+)$/u.exec(specifier.trim());
+      if (alias !== null && knownNames.has(alias[1] ?? '')) {
+        aliases.set(alias[2] ?? '', alias[1] ?? '');
+      }
+    }
+  }
   return aliases;
 }
 

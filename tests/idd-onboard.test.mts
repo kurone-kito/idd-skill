@@ -5227,6 +5227,33 @@ test('checkHeldSchemaDrift masks import aliases in raw template segments', () =>
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift resolves renamed CommonJS scan bindings', () => {
+  for (const [specifier, apiName] of [
+    ['node:fs', 'globSync'],
+    ['fs', 'globSync'],
+    ['node:fs/promises', 'readdir'],
+    ['fs/promises', 'readdir'],
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `const { ${apiName}: find } = require('${specifier}');\nfind('schemas/*.json');\n`;
+    writeDriftManifest(
+      sourceRoot,
+      driftFiles('{ "version": 2 }\n', moduleText),
+    );
+    writeDriftManifest(
+      targetRoot,
+      driftFiles('{ "version": 1 }\n', moduleText),
+    );
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
+});
+
 test('checkHeldSchemaDrift ignores regex literals after generic function declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
