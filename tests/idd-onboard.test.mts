@@ -5267,6 +5267,19 @@ test('checkHeldSchemaDrift ignores regex literals after generic function declara
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after nested generic function declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "function helper<T extends Promise<string>>(): void {} /readdirSync('schemas')/.test(input);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift ignores angle brackets inside generic string types', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

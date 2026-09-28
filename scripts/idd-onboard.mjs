@@ -2180,6 +2180,42 @@ function isFunctionClosingParenthesis(text, index) {
   }
   return false;
 }
+/**
+ * Match the optional TypeScript type-parameter suffix after a function name.
+ * The scanner has already masked strings and comments, but generic
+ * constraints can still contain nested angle brackets and arrow types. A
+ * flat `<[^<>]*>` expression therefore stops too early on a declaration such
+ * as `function helper<T extends Promise<string>>()` and leaves the following
+ * regex literal exposed as executable code.
+ */
+function isBalancedFunctionTypeParameterSuffix(text) {
+  const suffix = text.trimStart();
+  if (suffix.length === 0) {
+    return true;
+  }
+  if (!suffix.startsWith('<')) {
+    return false;
+  }
+  let depth = 0;
+  for (let index = 0; index < suffix.length; index += 1) {
+    const character = suffix[index] ?? '';
+    if (character === '<') {
+      depth += 1;
+      continue;
+    }
+    if (character !== '>' || suffix[index - 1] === '=') {
+      continue;
+    }
+    depth -= 1;
+    if (depth < 0) {
+      return false;
+    }
+    if (depth === 0) {
+      return suffix.slice(index + 1).trim().length === 0;
+    }
+  }
+  return false;
+}
 function isFunctionDeclarationPrefix(text) {
   const trimmed = text.trimEnd();
   for (
@@ -2199,9 +2235,21 @@ function isFunctionDeclarationPrefix(text) {
           if (returnAnnotation !== '' && !returnAnnotation.startsWith(':')) {
             break;
           }
+          const declarationPrefix = trimmed.slice(0, current);
+          let declarationStart;
+          for (const match of declarationPrefix.matchAll(
+            /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?/gu,
+          )) {
+            declarationStart = match;
+          }
+          const declarationIndex = declarationStart?.index;
           if (
-            /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?(?:<[^<>]*>\s*)?$/u.test(
-              trimmed.slice(0, current),
+            declarationStart !== undefined &&
+            declarationIndex !== undefined &&
+            isBalancedFunctionTypeParameterSuffix(
+              declarationPrefix.slice(
+                declarationIndex + declarationStart[0].length,
+              ),
             )
           ) {
             return true;
