@@ -2761,6 +2761,10 @@ function isClassLikeDeclarationPrefix(text: string): boolean {
   );
 }
 
+function isSwitchCaseOpeningPrefix(text: string): boolean {
+  return /(?:^|[{};])\s*(?:case\b[\s\S]*|default)\s*:\s*$/u.test(text);
+}
+
 function isBlockClosingBrace(text: string, index: number): boolean {
   let depth = 0;
   for (let current = index; current >= 0; current -= 1) {
@@ -2784,6 +2788,7 @@ function isBlockClosingBrace(text: string, index: number): boolean {
           /=>\s*$/u.test(openingPrefix) ||
           /(?:^|;)\s*$/u.test(openingPrefix) ||
           /(?:^|[;}])\s*(?:[$\w]+\s*:\s*)+$/u.test(openingPrefix) ||
+          isSwitchCaseOpeningPrefix(openingPrefix) ||
           isClassLikeDeclarationPrefix(openingPrefix)
         );
       }
@@ -4313,7 +4318,14 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
   const questionCaptures: GlobQuestionCapture[] = [];
   const expression = globPatternToRegex(pattern, true, '', questionCaptures);
   try {
-    const match = new RegExp(`^${expression}$`, 'u').exec(targetPath);
+    const regexSource = `^${expression}$`;
+    let match = new RegExp(regexSource, 'u').exec(targetPath);
+    if (match === null && !/\\p\{/u.test(expression)) {
+      // Node's glob implementation counts UTF-16 code units for adjacent
+      // fixed-width wildcards. Retry without Unicode mode so a surrogate
+      // pair can be consumed by two neighboring classes or wildcards.
+      match = new RegExp(regexSource).exec(targetPath);
+    }
     if (match === null) {
       return false;
     }

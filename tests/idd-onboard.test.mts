@@ -4377,6 +4377,19 @@ test('checkHeldSchemaDrift ignores regex literals after labeled blocks', () => {
   assert.deepEqual(result.findings, []);
 });
 
+test('checkHeldSchemaDrift ignores regex literals after switch case blocks', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "switch (kind) { case 1: {} /readdirSync('schemas')/.test(input); }\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after bindingless catch bodies', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5566,6 +5579,26 @@ test('checkHeldSchemaDrift preserves astral ordinary character-class matches', (
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
   const moduleText = "globSync('schemas/[!a]*.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: 'schemas/🙂.json', heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift preserves UTF-16 splitting across adjacent classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/[!a][!a]*.json');\n";
   writeDriftManifest(sourceRoot, {
     'schemas/🙂.json': '{ "version": 2 }\n',
     [DRIFT_MODULE]: moduleText,
