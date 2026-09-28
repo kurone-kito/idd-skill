@@ -232,9 +232,19 @@ below instead.
    For an unborn target, inspect contents and record a baseline only then:
 
    ```sh
-   git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || {
-     git -C <target-repo> status --short --untracked-files=all &&
-     git -C <target-repo> add -A && git -C <target-repo> commit --allow-empty -m "chore: record baseline"; }
+   git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
+     git -C <target-repo> status --short --untracked-files=all
+   ```
+
+   After reviewing the printed paths and confirming that every file should
+   be included in the baseline, stage and commit them. The two steps are
+   intentionally separate: a 2026-09-28 review of PR #3574 found that
+   combining the inspection with `git add -A` committed every untracked file
+   before the operator could review it.
+
+   ```sh
+   git -C <target-repo> add -A
+   git -C <target-repo> commit --allow-empty -m "chore: record baseline"
    ```
 
    Require a clean target:

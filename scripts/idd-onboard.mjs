@@ -3548,6 +3548,15 @@ const POSIX_GLOB_CLASS_PATTERN =
   /^\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]/u;
 const POSIX_GLOB_CLASS_AT_END_PATTERN =
   /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]$/u;
+const POSIX_GLOB_CLASS_ANYWHERE_PATTERN =
+  /\[\[:(?:alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]\]/u;
+function hasPosixGlobClassInSegment(pattern, index) {
+  const segmentStart = pattern.lastIndexOf('/', index) + 1;
+  const segmentEnd = pattern.indexOf('/', index);
+  return POSIX_GLOB_CLASS_ANYWHERE_PATTERN.test(
+    pattern.slice(segmentStart, segmentEnd === -1 ? undefined : segmentEnd),
+  );
+}
 function matchSimpleStarGlob(pattern, targetPath) {
   if (pattern.includes('**') || /[?[\]{}\\]|[+@!?*]\(/u.test(pattern)) {
     return null;
@@ -3724,13 +3733,14 @@ function globPatternToRegex(
       const hasAdjacentPosixClass =
         POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
         POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(questionEnd));
+      const hasPosixClassInSegment = hasPosixGlobClassInSegment(pattern, index);
       questionCaptures.push({
         name: captureName,
         codeUnitCount: questionEnd - index,
         allowsAstralCodePoint:
           questionEnd - index === 1 &&
           ((pattern[questionEnd] === '*' && pattern[questionEnd + 1] !== '(') ||
-            hasAdjacentPosixClass),
+            hasPosixClassInSegment),
         requiresCodePointCount: hasAdjacentPosixClass,
       });
       expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;

@@ -5834,6 +5834,29 @@ test('checkHeldSchemaDrift preserves astral question matches before POSIX classe
   ]);
 });
 
+test('checkHeldSchemaDrift preserves astral questions across literals before POSIX classes', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/?x[[:alpha:]].json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂xa.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂xa.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    {
+      schemaOrFixturePath: 'schemas/🙂xa.json',
+      heldModulePath: DRIFT_MODULE,
+    },
+  ]);
+});
+
 test('checkHeldSchemaDrift counts multiple questions by code point beside POSIX classes', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
