@@ -295,23 +295,20 @@ below instead.
 6. Read
    [Onboarding Reference — Project Tuning](docs/onboarding/project-tuning.md)
    for the judgment calls the CLI does not automate.
-7. Verify the imported result. Pass the same `--profile` used for
-   `--import` in step 3 (if any) — `--verify` resolves
-   `manifestCompleteness` from `--source` and `--profile` together, so
-   omitting a non-default profile here hides a missing or
-   failed-to-copy profile-conditional file.
+7. Verify the imported result. Reuse the `--import` profile from step 3
+   (if any); omitting a non-default profile hides missing
+   profile-conditional files.
 
    ```sh
    node scripts/idd-onboard.mjs --verify \
      --source <idd-skill-clone> --target <target-repo> [--profile <name>] \
-     [--hold <target-path>] \
-     --target-base-ref <pre-import-ref>
+     [--hold <target-path>] [--target-base-ref <pre-import-ref>]
    ```
 
-If any step reports a blocking finding, open the referenced companion
-doc — Step 1B below documents every policy decision in full, and
-[Placeholder Values](docs/onboarding/placeholders.md) documents every
-placeholder — to resolve it, then resume from that step.
+   Use this ref only for Git targets; omit it for non-Git fallback.
+
+For blocking findings, consult the referenced companion doc, resolve the
+issue, then resume from that step.
 
 ## Instructions-only path
 
@@ -708,13 +705,13 @@ error), so an agent can gate on the exit code without parsing prose.
   held module). Missing manifests, placeholders, or helper-load failures
   block; the three advisories do not. Repeat `--hold` for unchanged
   manifest paths; unknown paths are usage errors. `--target-base-ref`
-  defaults to `HEAD`; pass the pre-import ref after import. Unborn targets
-  use fallback; Git failures error.
+  defaults to `HEAD` for Git targets; pass the pre-import ref after import.
+  Unborn targets use fallback; Git failures error.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
     --target <target-repo> [--profile <name>] [--hold <target-path>] \
-    --target-base-ref <pre-import-ref>
+    [--target-base-ref <pre-import-ref>]
   ```
 
 Run `node scripts/idd-onboard.mjs --help` for the full flag reference —
