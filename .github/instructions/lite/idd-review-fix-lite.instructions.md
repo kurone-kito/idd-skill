@@ -316,6 +316,9 @@ self-critique and record risk.
    stop and ask — do not fall back to a manual per-field fetch.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
+   - Off-head `SATISFIED` with `staleRequestRecovery.action ==
+     "attempt"` → stop and hand off to a stronger session for AW3-S; do
+     not continue to E15.
    - `SATISFIED`, `copilotPending` `false`, `copilotPendingCoversHead`
      `false` (settled by elapsed time alone, never proven the request
      reached Copilot, `#2327`): lite has no bounded recovery cycle to

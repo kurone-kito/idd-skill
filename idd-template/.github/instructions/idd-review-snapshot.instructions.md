@@ -76,26 +76,25 @@ Also fetch the **current CI state** for `{head-SHA}`:
 treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
 CI pass exists yet for this HEAD.
 
-**Non-Copilot advisory safety net.** Snapshot/watermark cover these
-bots; F2 `secondaryQuietWindow` waits for `elapsed` after substantive
-activity, not every configured login.
+**Non-Copilot safety:** snapshot/watermark and F2 quiet-window cover
+bot activity.
 
 **CI precondition.** Use the profile-selected AW1
 `advisory-wait-state` command with `--pr {pr-number}`, `--claim-id
 {claim-id}`, `--agent-id {agent-id}`, and
-`--trusted-marker-logins <trusted-logins>`; require
+`--trusted-marker-logins <trusted-logins>`; also run profile-selected
+`ci-wait-state --pr {pr-number}`. Require
 `copilotRecovery.activeClaimProvided: true` and
-`staleRequestRecovery.action`; missing/unbound fails closed. Without
-helper,
-run AW1-AW3 before terminal outcomes. Post after CI. Earlier
+`staleRequestRecovery.action` plus `requiredChecks.status: success` (or
+`no-required-checks` only when every `checks[]` entry is `success`).
+Missing/unbound or pending CI: defer. Without helper, finish AW1-AW3
+before terminal outcomes; post after CI. Earlier
 heads require matching `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head
 `SATISFIED`: `not-applicable` may proceed, `attempt` runs AW3-S, and
 `cap-exhausted` uses cap route.
-While incomplete, run Steps 1/3, E2,
-E3—not F1/F2; use E15/E14, E14 first if both. For empty E3 (or E8
-with zero Accepted PATH A items), run the waits, then return to E1,
-re-snapshot, and post without a new review. CI after a watermark
-forces an E1↔F2 round-trip.
+While incomplete, run Steps 1/3, E2, E3—not F1/F2; use E15/E14
+(E14 first). Empty E3/E8-zero-A: wait, re-snapshot E1, and post
+without a new review. CI after a watermark forces E1↔F2.
 
 **Step 2 — Record the watermark.** Only after the precondition above is
 satisfied, use the `{head-SHA}` stored at the
