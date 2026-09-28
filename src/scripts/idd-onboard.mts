@@ -3143,7 +3143,7 @@ function maskJavaScriptStringContents(text: string): string {
   return result;
 }
 
-function splitTopLevelArguments(text: string): string[] {
+function splitTopLevelArguments(text: string, separator = ','): string[] {
   const argumentsList: string[] = [];
   let start = 0;
   let quote: string | null = null;
@@ -3167,7 +3167,7 @@ function splitTopLevelArguments(text: string): string[] {
       depth += 1;
     } else if (character === ')' || character === ']' || character === '}') {
       depth = Math.max(0, depth - 1);
-    } else if (character === ',' && depth === 0) {
+    } else if (character === separator && depth === 0) {
       argumentsList.push(text.slice(start, index));
       start = index + 1;
     }
@@ -3351,7 +3351,7 @@ function isFunctionValuedExpression(text: string): boolean {
 
 function normalizeComputedDirectoryScanMembers(text: string): string {
   return text.replace(
-    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\()/gu,
+    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?(?:\s*\(|\s*[;,)]|\s*$))/gu,
     (_match, _quote: string, apiName: string) => `.${apiName}`,
   );
 }
@@ -3389,14 +3389,16 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
     /(?:^|[;\n])\s*(?:const|let|var)\s*\{([\s\S]*?)\}\s*=\s*require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*\)\s*;?/gu;
   for (const match of text.matchAll(requirePattern)) {
     for (const specifier of splitTopLevelArguments(match[1] ?? '')) {
-      const alias = /^([\w$]+)\s*:\s*([\w$]+)$/u.exec(specifier.trim());
+      const alias = /^([\w$]+)\s*:\s*([\w$]+)(?:\s*=\s*[\s\S]+)?$/u.exec(
+        specifier.trim(),
+      );
       if (alias !== null && knownNames.has(alias[1] ?? '')) {
         aliases.set(alias[2] ?? '', alias[1] ?? '');
       }
     }
   }
   const directAliasDeclarationPattern =
-    /(?:^|[;\n])\s*(?:const|let|var)\s+([^;\n]+)/gu;
+    /(?:^|[;\n])\s*(?:const|let|var)\s+([^;]+)/gu;
   for (const match of text.matchAll(directAliasDeclarationPattern)) {
     for (const declarator of splitTopLevelArguments(match[1] ?? '')) {
       const equals = findTopLevelCharacter(declarator, '=');
@@ -3413,15 +3415,22 @@ function findDirectoryScanAliases(text: string): Map<string, string> {
       if (!/^[\w$]+$/u.test(aliasName)) {
         continue;
       }
+      const inlineRequireSource =
+        /^require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\1\s*\)\.([\w$]+)$/u.exec(
+          sourceName,
+        );
       const qualifiedSource = /^([\w$]+)\.([\w$]+)$/u.exec(sourceName);
       const apiName = knownNames.has(sourceName)
         ? sourceName
         : (aliases.get(sourceName) ??
-          (qualifiedSource !== null &&
-          namespaceNames.has(qualifiedSource[1] ?? '') &&
-          knownNames.has(qualifiedSource[2] ?? '')
-            ? qualifiedSource[2]
-            : undefined));
+          (inlineRequireSource !== null &&
+          knownNames.has(inlineRequireSource[2] ?? '')
+            ? inlineRequireSource[2]
+            : qualifiedSource !== null &&
+                namespaceNames.has(qualifiedSource[1] ?? '') &&
+                knownNames.has(qualifiedSource[2] ?? '')
+              ? qualifiedSource[2]
+              : undefined));
       if (apiName !== undefined) {
         aliases.set(aliasName, apiName);
       }
@@ -3741,11 +3750,23 @@ function pathExpressionCandidates(text: string): string[] {
       ];
     }
   }
-  const literals = scanStringLiterals(expression);
   const expressionText = maskJavaScriptStringContents(expression);
   if (/\+\s*/u.test(expressionText)) {
-    return literals.length === 0 ? [] : [literals.join('')];
+    const argumentGroups = splitTopLevelArguments(expression, '+')
+      .map((argument) => pathExpressionCandidates(argument))
+      .filter((candidates) => candidates.length > 0);
+    if (argumentGroups.length === 0) {
+      return [];
+    }
+    return argumentGroups.reduce<string[]>(
+      (paths, candidates) =>
+        paths.flatMap((path) =>
+          candidates.map((candidate) => `${path}${candidate}`),
+        ),
+      [''],
+    );
   }
+  const literals = scanStringLiterals(expression);
   if (/\b(?:join|resolve)\s*\(/u.test(expressionText)) {
     const call = /\b(join|resolve)\s*\(/u.exec(expressionText);
     if (call !== null) {

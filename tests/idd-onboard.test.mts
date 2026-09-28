@@ -4086,6 +4086,21 @@ test('checkHeldSchemaDrift preserves conditional path branches before concatenat
   ]);
 });
 
+test('checkHeldSchemaDrift expands conditional paths inside concatenation', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "globSync('schemas/' + (enabled ? '*.json' : '*.yaml'));\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift expands conditional paths inside joins', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();
@@ -5342,6 +5357,21 @@ test('checkHeldSchemaDrift resolves renamed CommonJS scan bindings', () => {
   }
 });
 
+test('checkHeldSchemaDrift resolves defaulted CommonJS scan bindings', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "const { globSync: find = fallback } = require('node:fs');\nfind('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
   for (const declaration of [
     'const find = globSync;',
@@ -5349,6 +5379,8 @@ test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
     'const find: typeof globSync = globSync;',
     'const find = globSync as typeof globSync;',
     'const find = (globSync as typeof globSync);',
+    "const find = require('node:fs').globSync;",
+    'const find =\n  globSync;',
   ]) {
     const sourceRoot = makeFixtureDir();
     const targetRoot = makeFixtureDir();
@@ -5375,6 +5407,7 @@ test('checkHeldSchemaDrift resolves namespace-qualified scan aliases', () => {
     "import * as fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
     "import fs from 'node:fs';\nconst find = fs.globSync;\nfind('schemas/*.json');\n",
     "import fs, { globSync as find } from 'node:fs';\nfind('schemas/*.json');\n",
+    "import * as fs from 'node:fs';\nconst find = fs['globSync'];\nfind('schemas/*.json');\n",
   ]) {
     const sourceRoot = makeFixtureDir();
     const targetRoot = makeFixtureDir();
