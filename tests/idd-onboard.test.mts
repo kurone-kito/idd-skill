@@ -4482,21 +4482,27 @@ test('checkHeldSchemaDrift detects recursive scans of a parent directory', () =>
 });
 
 test('checkHeldSchemaDrift unwraps TypeScript assertions on scan options', () => {
-  const sourceRoot = makeFixtureDir();
-  const targetRoot = makeFixtureDir();
-  const moduleText = "readdirSync('fixtures', { recursive: true } as const);\n";
-  const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
-  const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
-  sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
-  targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
-  writeDriftManifest(sourceRoot, sourceFiles);
-  writeDriftManifest(targetRoot, targetFiles);
-  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
-    hold: [DRIFT_MODULE],
-  });
-  assert.deepEqual(result.findings, [
-    { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
-  ]);
+  for (const recursiveExpression of [
+    'true as const',
+    '(true)',
+    '(true as const)',
+  ]) {
+    const sourceRoot = makeFixtureDir();
+    const targetRoot = makeFixtureDir();
+    const moduleText = `readdirSync('fixtures', { recursive: ${recursiveExpression} });\n`;
+    const sourceFiles = driftFiles('{ "version": 2 }\n', moduleText);
+    const targetFiles = driftFiles('{ "version": 1 }\n', moduleText);
+    sourceFiles[DRIFT_FIXTURE] = '{ "version": 2 }\n';
+    targetFiles[DRIFT_FIXTURE] = '{ "version": 1 }\n';
+    writeDriftManifest(sourceRoot, sourceFiles);
+    writeDriftManifest(targetRoot, targetFiles);
+    const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    });
+    assert.deepEqual(result.findings, [
+      { schemaOrFixturePath: DRIFT_FIXTURE, heldModulePath: DRIFT_MODULE },
+    ]);
+  }
 });
 
 test('checkHeldSchemaDrift treats recursive scans of the repository root as broad', () => {
@@ -5148,6 +5154,48 @@ test('checkHeldSchemaDrift detects generic scan calls with function types', () =
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift detects generic scan calls across line breaks', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "scanDirectory<\nEntry\n>('schemas');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift resolves static directory-scan import aliases', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "import { globSync as find } from 'node:fs';\nfind('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
+test('checkHeldSchemaDrift ignores regex literals after generic function declarations', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "function helper<T>(): void {} /readdirSync('schemas')/.test(input);\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift ignores angle brackets inside generic string types', () => {
@@ -6021,6 +6069,24 @@ test('checkHeldSchemaDrift preserves question runs before optional extglobs', ()
   assert.deepEqual(result.findings, [
     { schemaOrFixturePath: 'schemas/a.json', heldModulePath: DRIFT_MODULE },
   ]);
+});
+
+test('checkHeldSchemaDrift does not widen question globs before extglob stars', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText = "globSync('schemas/?*(a|b).schema.json');\n";
+  writeDriftManifest(sourceRoot, {
+    'schemas/🙂.schema.json': '{ "version": 2 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  writeDriftManifest(targetRoot, {
+    'schemas/🙂.schema.json': '{ "version": 1 }\n',
+    [DRIFT_MODULE]: moduleText,
+  });
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, []);
 });
 
 test('checkHeldSchemaDrift supports brace and extglob directory scans', () => {

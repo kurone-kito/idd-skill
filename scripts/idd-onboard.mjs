@@ -2116,10 +2116,33 @@ function readHeldModule(targetRoot, targetPath) {
  * string alone is not enough to infer a dependency, because modules often
  * mention a directory in comments or diagnostics without reading it.
  */
-const DIRECTORY_SCAN_API_PATTERN =
-  /(?<!['"`])(?<![\p{ID_Continue}$#])(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))(?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?\s*\)?\s*\()/gu;
-const DIRECTORY_SCAN_API_NAME_AT_START =
-  /^(?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries))/u;
+const DIRECTORY_SCAN_API_NAMES = [
+  'readdir',
+  'readdirSync',
+  'opendir',
+  'opendirSync',
+  'glob',
+  'globSync',
+  'walkDir',
+  'walkDirectory',
+  'scanDir',
+  'scanDirectory',
+  'listFiles',
+  'listEntries',
+  'listDirectory',
+  'collectFiles',
+  'collectEntries',
+];
+function createDirectoryScanApiNameAtStart(names) {
+  const alternatives = [...new Set(names)]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join('|');
+  return new RegExp(`^(?:${alternatives})`, 'u');
+}
+const DIRECTORY_SCAN_API_NAME_AT_START = createDirectoryScanApiNameAtStart(
+  DIRECTORY_SCAN_API_NAMES,
+);
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
@@ -2177,7 +2200,7 @@ function isFunctionDeclarationPrefix(text) {
             break;
           }
           if (
-            /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?$/u.test(
+            /(?:^|[;}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?(?:<[^<>]*>\s*)?$/u.test(
               trimmed.slice(0, current),
             )
           ) {
@@ -2277,12 +2300,13 @@ function isRegexLiteralStart(text, index) {
     text.slice(0, previousIndex + 1),
   );
 }
-function maskDirectoryApiNamesInString(text) {
+function maskDirectoryApiNamesInString(
+  text,
+  apiNameAtStart = DIRECTORY_SCAN_API_NAME_AT_START,
+) {
   let result = '';
   for (let index = 0; index < text.length; index += 1) {
-    const apiName = text
-      .slice(index)
-      .match(DIRECTORY_SCAN_API_NAME_AT_START)?.[0];
+    const apiName = text.slice(index).match(apiNameAtStart)?.[0];
     const previous = text[index - 1] ?? '';
     const after = text[index + (apiName?.length ?? 0)] ?? '';
     if (
@@ -2298,7 +2322,10 @@ function maskDirectoryApiNamesInString(text) {
   }
   return result;
 }
-function stripJavaScriptComments(text) {
+function stripJavaScriptComments(
+  text,
+  apiNameAtStart = DIRECTORY_SCAN_API_NAME_AT_START,
+) {
   let scanCode;
   let scanTemplate;
   scanTemplate = (start) => {
@@ -2314,6 +2341,7 @@ function stripJavaScriptComments(text) {
       if (character === '`') {
         result += maskDirectoryApiNamesInString(
           text.slice(literalStart, index),
+          apiNameAtStart,
         );
         result += '`';
         return { text: result, nextIndex: index + 1 };
@@ -2331,7 +2359,10 @@ function stripJavaScriptComments(text) {
       }
       index += 1;
     }
-    result += maskDirectoryApiNamesInString(text.slice(literalStart));
+    result += maskDirectoryApiNamesInString(
+      text.slice(literalStart),
+      apiNameAtStart,
+    );
     return { text: result, nextIndex: text.length };
   };
   scanCode = (start, stopAtClosingBrace) => {
@@ -2359,7 +2390,10 @@ function stripJavaScriptComments(text) {
           }
           end += 1;
         }
-        result += maskDirectoryApiNamesInString(text.slice(index, end));
+        result += maskDirectoryApiNamesInString(
+          text.slice(index, end),
+          apiNameAtStart,
+        );
         index = end;
         continue;
       }
@@ -2644,6 +2678,25 @@ function topLevelOptionPropertyValue(argumentsText, property) {
     property,
   );
 }
+function isStaticTrueExpression(expression) {
+  let candidate = expression.trim();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (
+      candidate.startsWith('(') &&
+      findGlobGroupEnd(candidate, 0, '(', ')') === candidate.length - 1
+    ) {
+      candidate = candidate.slice(1, -1).trim();
+      continue;
+    }
+    const assertion = /^(.*?)\s+(?:as|satisfies)\s+[\s\S]+$/u.exec(candidate);
+    if (assertion !== null) {
+      candidate = assertion[1]?.trim() ?? '';
+      continue;
+    }
+    break;
+  }
+  return candidate === 'true';
+}
 function isFunctionValuedExpression(text) {
   const expression = maskJavaScriptStringContents(text).trim();
   return /=>/u.test(expression) || /^(?:async\s+)?function\b/u.test(expression);
@@ -2654,14 +2707,48 @@ function normalizeComputedDirectoryScanMembers(text) {
     (_match, _quote, apiName) => `.${apiName}`,
   );
 }
+function findDirectoryScanAliases(text) {
+  const aliases = new Map();
+  const knownNames = new Set(DIRECTORY_SCAN_API_NAMES);
+  const importPattern =
+    /(?:^|[;\n])\s*import\s*\{([\s\S]*?)\}\s*from\s*(['"])node:(?:fs|fs\/promises)\2\s*;?/gu;
+  for (const match of text.matchAll(importPattern)) {
+    for (const specifier of splitTopLevelArguments(match[1] ?? '')) {
+      const alias = /^([\w$]+)\s+as\s+([\w$]+)$/u.exec(specifier.trim());
+      if (alias !== null && knownNames.has(alias[1] ?? '')) {
+        aliases.set(alias[2] ?? '', alias[1] ?? '');
+      }
+    }
+  }
+  return aliases;
+}
+function createDirectoryScanApiPattern(names) {
+  const alternatives = [...new Set(names)]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join('|');
+  return new RegExp(
+    `(?<!['"\\x60])(?<![\\p{ID_Continue}$#])(${alternatives})(?=\\s*(?:\\?\\.|!)?\\s*(?:<|\\)|\\())`,
+    'gu',
+  );
+}
 function findDirectoryScanCalls(text) {
   const calls = [];
-  const normalizedText = stripJavaScriptComments(
-    normalizeComputedDirectoryScanMembers(text),
+  const normalizedSource = normalizeComputedDirectoryScanMembers(text);
+  const aliases = findDirectoryScanAliases(
+    stripJavaScriptComments(normalizedSource),
   );
-  for (const match of normalizedText.matchAll(DIRECTORY_SCAN_API_PATTERN)) {
-    const apiName = match[0] ?? '';
-    let openIndex = (match.index ?? 0) + apiName.length;
+  const apiNames = new Set([...DIRECTORY_SCAN_API_NAMES, ...aliases.keys()]);
+  const normalizedText = stripJavaScriptComments(
+    normalizedSource,
+    createDirectoryScanApiNameAtStart(apiNames),
+  );
+  for (const match of normalizedText.matchAll(
+    createDirectoryScanApiPattern(apiNames),
+  )) {
+    const matchedApiName = match[1] ?? '';
+    const apiName = aliases.get(matchedApiName) ?? matchedApiName;
+    let openIndex = (match.index ?? 0) + matchedApiName.length;
     while (true) {
       while (/\s/u.test(normalizedText[openIndex] ?? '')) {
         openIndex += 1;
@@ -3506,7 +3593,9 @@ function globPatternToRegex(
         name: captureName,
         codeUnitCount: questionEnd - index,
         allowsAstralCodePoint:
-          questionEnd - index === 1 && pattern[questionEnd] === '*',
+          questionEnd - index === 1 &&
+          pattern[questionEnd] === '*' &&
+          pattern[questionEnd + 1] !== '(',
       });
       expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]{1,${questionEnd - index}})`;
       index = questionEnd - 1;
@@ -3718,10 +3807,12 @@ function globPatternMatchesPath(
     if (capturesHaveExpectedWidth(unicodeMatch)) {
       return true;
     }
+    // Node's glob implementation counts UTF-16 code units for adjacent
+    // fixed-width wildcards. Retry without Unicode mode so a surrogate
+    // pair can be consumed by two neighboring classes or wildcards. POSIX
+    // classes remain Unicode-only because their translated escapes are not
+    // valid in a non-Unicode regexp.
     if (!/\\p\{/u.test(expression)) {
-      // Node's glob implementation counts UTF-16 code units for adjacent
-      // fixed-width wildcards. Retry without Unicode mode so a surrogate
-      // pair can be consumed by two neighboring classes or wildcards.
       return capturesHaveExpectedWidth(
         new RegExp(regexSource).exec(targetPath),
       );
@@ -3745,7 +3836,8 @@ function moduleScansManifestDirectory(text, targetPath, modulePath) {
       'recursive',
     );
     const recursive =
-      recursiveExpression?.trim() === 'true' ||
+      (recursiveExpression !== null &&
+        isStaticTrueExpression(recursiveExpression)) ||
       /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
     const firstArgument = firstCallArgument(argumentsText);
     const firstCandidates = pathExpressionCandidates(firstArgument).map(
