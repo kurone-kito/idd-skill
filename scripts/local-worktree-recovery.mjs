@@ -66,7 +66,10 @@ import {
   sep,
 } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
-import { checkClaimLock } from './claim-lock.mjs';
+import {
+  checkClaimLock,
+  updatePrimaryRecoveryLockMarker,
+} from './claim-lock.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
 import { readGithubRepoDefaultBranch } from './gh-exec.mjs';
@@ -2728,9 +2731,9 @@ export function runLocalWorktreeRecovery(args, deps) {
   }
   const routing = confirmed.routing;
   const recovered = extractRecoveredClaim(routing);
-  const recoveredClaimId = recovered.claimId;
-  const recoveredBranch = recovered.branch;
-  const recoveredFromReleasedClaim = isReleasedClaimRouting(routing);
+  let recoveredClaimId = recovered.claimId;
+  let recoveredBranch = recovered.branch;
+  let recoveredFromReleasedClaim = isReleasedClaimRouting(routing);
   // A prunable record whose checkout is already absent is represented by the
   // routing helper as an explicit `absent` local-worktree probe, which keeps
   // the overall routing state stale rather than producing the ordinary
@@ -2753,13 +2756,51 @@ export function runLocalWorktreeRecovery(args, deps) {
         normalizeGitWorktreePathForComparison(reportedPath) ===
         targetComparisonPath,
     );
+  let primaryRecoveryResume = false;
+  if (
+    verdict.primaryOrLinked === 'primary' &&
+    !routingReportsTargetPath &&
+    routing.state !== 'local_worktree_occupied'
+  ) {
+    const recoveryLock = deps.checkLock(targetPath);
+    const marker = recoveryLock.holder?.primaryRecovery;
+    const currentBranch = marker
+      ? deps.runGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], targetPath)
+      : null;
+    const routingClaimConflicts =
+      (recovered.claimId !== null && recovered.claimId !== marker?.claimId) ||
+      (recovered.branch !== null && recovered.branch !== marker?.branch);
+    if (
+      marker !== undefined &&
+      marker.worktree === targetPath &&
+      marker.claimId.length > 0 &&
+      marker.branch.length > 0 &&
+      marker.developmentBranch.length > 0 &&
+      isTakeoverEligibleAbsentRouting(routing) &&
+      !routingClaimConflicts &&
+      !routing.reason.endsWith('-local-worktree-unreadable') &&
+      currentBranch?.ok === true &&
+      currentBranch.stdout.trim() === marker.developmentBranch &&
+      lockMatchesRecoveredClaim(
+        recoveryLock,
+        marker.claimId,
+        marker.releasedClaim,
+      )
+    ) {
+      recoveredClaimId = marker.claimId;
+      recoveredBranch = marker.branch;
+      recoveredFromReleasedClaim = isReleasedClaimRouting(routing);
+      primaryRecoveryResume = true;
+    }
+  }
   const routingReportsExplicitAbsence =
     isPrunableShortcutRouting(routing) &&
     routing.evidence?.local_worktree?.status === 'absent' &&
     reportedPaths.length === 0;
   if (
     !routingReportsTargetPath &&
-    !(shortcut.eligible && routingReportsExplicitAbsence)
+    !(shortcut.eligible && routingReportsExplicitAbsence) &&
+    !primaryRecoveryResume
   ) {
     if (
       routing.state === 'local_worktree_occupied' &&
@@ -2782,7 +2823,11 @@ export function runLocalWorktreeRecovery(args, deps) {
     verdict.result = verdict.step1.reason;
     return verdict;
   }
-  if (shortcut.eligible) {
+  if (primaryRecoveryResume) {
+    verdict.step1.outcome = 'blocked-primary-resume';
+    verdict.step1.reason =
+      'resuming primary-worktree cleanup after a completed development-branch checkout';
+  } else if (shortcut.eligible) {
     verdict.step1.outcome = 'blocked-prunable';
     verdict.step1.reason = 'prunable record, absent on disk, unlocked';
     verdict.plan.prunableShortcut = true;
@@ -3020,6 +3065,15 @@ export function runLocalWorktreeRecovery(args, deps) {
       );
     const prunableStillExplicitlyAbsent =
       shortcut.eligible && isTakeoverEligibleAbsentRouting(recheck.routing);
+    const freshRecovered = extractRecoveredClaim(recheck.routing);
+    const freshRecoveredFromReleasedClaim = isReleasedClaimRouting(
+      recheck.routing,
+    );
+    const primaryRecoveryStillEligible =
+      primaryRecoveryResume &&
+      isTakeoverEligibleAbsentRouting(recheck.routing) &&
+      freshRecovered.claimId === recoveredClaimId &&
+      freshRecovered.branch === recoveredBranch;
     let stillEligible;
     let staleReason;
     if (shortcut.eligible) {
@@ -3066,8 +3120,9 @@ export function runLocalWorktreeRecovery(args, deps) {
       // means its true state is unknown, and proceeding to preserve/remove
       // it is unsafe.
       stillEligible =
-        ordinaryStillOccupied &&
-        !recheck.routing.reason.endsWith('-local-worktree-unreadable');
+        (ordinaryStillOccupied &&
+          !recheck.routing.reason.endsWith('-local-worktree-unreadable')) ||
+        primaryRecoveryStillEligible;
       staleReason =
         'the situation changed since step 1 (a live session resumed the claim, a different claim-id now holds the lock, the worktree became unreadable, or the branch no longer reports local_worktree_occupied); stopping';
     }
@@ -3090,10 +3145,9 @@ export function runLocalWorktreeRecovery(args, deps) {
     // would still pass the lock-recheck below, and this session could
     // remove the new claim's worktree while tagging preserved artifacts
     // under the OLD, no-longer-current claim-id.
-    const freshRecovered = extractRecoveredClaim(recheck.routing);
-    const freshRecoveredFromReleasedClaim = isReleasedClaimRouting(
-      recheck.routing,
-    );
+    if (primaryRecoveryStillEligible) {
+      recoveredFromReleasedClaim = freshRecoveredFromReleasedClaim;
+    }
     if (
       freshRecovered.claimId !== recoveredClaimId ||
       freshRecovered.branch !== recoveredBranch ||
@@ -3115,7 +3169,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     // wait to acquire the clone-scoped lock (mirrors step 1's own skip:
     // never re-checked for the prunable-and-absent shortcut, which never
     // checked it in the first place).
-    if (!shortcut.eligible) {
+    if (!shortcut.eligible && !primaryRecoveryResume) {
       const lockRecheck = deps.checkLock(targetPath);
       // Mirrors step 1's own lock-check pass condition exactly: malformed
       // always fails; an active/recovered claim must still have its matching
@@ -3188,7 +3242,7 @@ export function runLocalWorktreeRecovery(args, deps) {
         );
       }
     }
-    if (!shortcut.eligible) {
+    if (!shortcut.eligible && !primaryRecoveryResume) {
       const preserve = planAndMaybePreserve(
         targetPath,
         recoveredBranch ?? '',
@@ -3231,6 +3285,7 @@ export function runLocalWorktreeRecovery(args, deps) {
     // operations themselves can race with unrelated filesystem writers.
     if (
       !shortcut.eligible &&
+      !primaryRecoveryResume &&
       !reverifyPreservationArtifactsFresh(
         {
           stashes: verdict.plan.stashes,
@@ -3531,118 +3586,157 @@ export function runLocalWorktreeRecovery(args, deps) {
       // Re-run the complete identity gate while the clone lock is still held
       // and immediately before checkout, so a failed later confirmation
       // cannot leave the primary worktree switched to the development branch.
-      const preCheckoutConfirm = deps.confirmBlock(cwd);
-      const preCheckoutRouting = preCheckoutConfirm.routing;
-      const preCheckoutRecovered = preCheckoutRouting
-        ? extractRecoveredClaim(preCheckoutRouting)
-        : null;
-      const preCheckoutLegacyReleased =
-        preCheckoutRouting !== null &&
-        isReleasedClaimRouting(preCheckoutRouting);
-      const preCheckoutStillOccupied =
-        preCheckoutConfirm.ok &&
-        preCheckoutRouting !== null &&
-        preCheckoutRouting.state === 'local_worktree_occupied' &&
-        isAcceptedBlockReason(preCheckoutRouting.reason) &&
-        !preCheckoutRouting.reason.endsWith('-local-worktree-unreadable') &&
-        (preCheckoutRouting.evidence?.local_worktree?.paths ?? []).some(
-          (reportedPath) =>
-            normalizeGitWorktreePathForComparison(reportedPath) ===
-            targetComparisonPath,
-        );
-      const preCheckoutClaimMatches =
-        preCheckoutRecovered !== null &&
-        preCheckoutRecovered.claimId === recoveredClaimId &&
-        preCheckoutRecovered.branch === recoveredBranch &&
-        preCheckoutLegacyReleased === recoveredFromReleasedClaim;
-      const preCheckoutLock =
-        preCheckoutStillOccupied && preCheckoutRouting !== null
-          ? deps.checkLock(targetPath)
+      if (!primaryRecoveryResume) {
+        const preCheckoutConfirm = deps.confirmBlock(cwd);
+        const preCheckoutRouting = preCheckoutConfirm.routing;
+        const preCheckoutRecovered = preCheckoutRouting
+          ? extractRecoveredClaim(preCheckoutRouting)
           : null;
-      const preCheckoutLockMatches =
-        preCheckoutLock !== null &&
-        lockMatchesRecoveredClaim(
-          preCheckoutLock,
-          recoveredClaimId,
-          preCheckoutLegacyReleased,
+        const preCheckoutLegacyReleased =
+          preCheckoutRouting !== null &&
+          isReleasedClaimRouting(preCheckoutRouting);
+        const preCheckoutStillOccupied =
+          preCheckoutConfirm.ok &&
+          preCheckoutRouting !== null &&
+          preCheckoutRouting.state === 'local_worktree_occupied' &&
+          isAcceptedBlockReason(preCheckoutRouting.reason) &&
+          !preCheckoutRouting.reason.endsWith('-local-worktree-unreadable') &&
+          (preCheckoutRouting.evidence?.local_worktree?.paths ?? []).some(
+            (reportedPath) =>
+              normalizeGitWorktreePathForComparison(reportedPath) ===
+              targetComparisonPath,
+          );
+        const preCheckoutClaimMatches =
+          preCheckoutRecovered !== null &&
+          preCheckoutRecovered.claimId === recoveredClaimId &&
+          preCheckoutRecovered.branch === recoveredBranch &&
+          preCheckoutLegacyReleased === recoveredFromReleasedClaim;
+        const preCheckoutLock =
+          preCheckoutStillOccupied && preCheckoutRouting !== null
+            ? deps.checkLock(targetPath)
+            : null;
+        const preCheckoutLockMatches =
+          preCheckoutLock !== null &&
+          lockMatchesRecoveredClaim(
+            preCheckoutLock,
+            recoveredClaimId,
+            preCheckoutLegacyReleased,
+          );
+        if (
+          !preCheckoutStillOccupied ||
+          !preCheckoutClaimMatches ||
+          !preCheckoutLockMatches
+        ) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail:
+              'the primary-worktree claim/branch/lock identity changed immediately before checkout; stopping before checkout',
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        const primaryRecoveryMarker = {
+          phase: 'primary-checkout',
+          worktree: targetPath,
+          claimId: recoveredClaimId ?? '',
+          branch: recoveredBranch ?? '',
+          developmentBranch,
+          releasedClaim: recoveredFromReleasedClaim,
+        };
+        const markerUpdated =
+          deps.updatePrimaryRecoveryLockMarker === undefined ||
+          (preCheckoutLock !== null &&
+            deps.updatePrimaryRecoveryLockMarker(
+              targetPath,
+              preCheckoutLock,
+              primaryRecoveryMarker,
+            ));
+        if (!markerUpdated) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail:
+              'could not record the primary-worktree recovery marker before checkout; stopping before checkout',
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        const checkout = deps.runGit(
+          ['checkout', developmentBranch],
+          targetPath,
         );
-      if (
-        !preCheckoutStillOccupied ||
-        !preCheckoutClaimMatches ||
-        !preCheckoutLockMatches
-      ) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail:
-            'the primary-worktree claim/branch/lock identity changed immediately before checkout; stopping before checkout',
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const checkout = deps.runGit(['checkout', developmentBranch], targetPath);
-      if (!checkout.ok) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `checkout ${developmentBranch} failed: ${checkout.stderr}`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const submoduleSync = deps.runGit(
-        ['submodule', 'sync', '--recursive'],
-        targetPath,
-      );
-      if (!submoduleSync.ok) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `submodule sync after checkout ${developmentBranch} failed: ${submoduleSync.stderr}`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const submoduleUpdate = deps.runGit(
-        ['submodule', 'update', '--recursive'],
-        targetPath,
-      );
-      if (!submoduleUpdate.ok) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: `submodule update after checkout ${developmentBranch} failed: ${submoduleUpdate.stderr}`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
-      }
-      const symbolicBranch = deps.runGit(
-        ['symbolic-ref', '--quiet', '--short', 'HEAD'],
-        targetPath,
-      );
-      const actualBranch = symbolicBranch.ok
-        ? symbolicBranch.stdout.trim()
-        : '';
-      if (!symbolicBranch.ok || actualBranch !== developmentBranch) {
-        verdict.plan.removal = {
-          kind: 'primary',
-          developmentBranch,
-          wouldRun: true,
-          ran: false,
-          detail: symbolicBranch.ok
-            ? `checkout ${developmentBranch} landed on ${actualBranch || 'detached HEAD'}, not the configured development branch; stopping`
-            : `checked out ${developmentBranch}, but could not verify the symbolic branch: ${symbolicBranch.stderr}`,
-        };
-        verdict.result = verdict.plan.removal.detail;
-        return verdict;
+        if (!checkout.ok) {
+          const currentLock = deps.checkLock(targetPath);
+          const markerCleared =
+            deps.updatePrimaryRecoveryLockMarker === undefined ||
+            deps.updatePrimaryRecoveryLockMarker(targetPath, currentLock, null);
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: markerCleared
+              ? `checkout ${developmentBranch} failed: ${checkout.stderr}`
+              : `checkout ${developmentBranch} failed and the recovery marker could not be cleared: ${checkout.stderr}`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        const submoduleSync = deps.runGit(
+          ['submodule', 'sync', '--recursive'],
+          targetPath,
+        );
+        if (!submoduleSync.ok) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `submodule sync after checkout ${developmentBranch} failed: ${submoduleSync.stderr}`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        const submoduleUpdate = deps.runGit(
+          ['submodule', 'update', '--recursive'],
+          targetPath,
+        );
+        if (!submoduleUpdate.ok) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: `submodule update after checkout ${developmentBranch} failed: ${submoduleUpdate.stderr}`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
+        const symbolicBranch = deps.runGit(
+          ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+          targetPath,
+        );
+        const actualBranch = symbolicBranch.ok
+          ? symbolicBranch.stdout.trim()
+          : '';
+        if (!symbolicBranch.ok || actualBranch !== developmentBranch) {
+          verdict.plan.removal = {
+            kind: 'primary',
+            developmentBranch,
+            wouldRun: true,
+            ran: false,
+            detail: symbolicBranch.ok
+              ? `checkout ${developmentBranch} landed on ${actualBranch || 'detached HEAD'}, not the configured development branch; stopping`
+              : `checked out ${developmentBranch}, but could not verify the symbolic branch: ${symbolicBranch.stderr}`,
+          };
+          verdict.result = verdict.plan.removal.detail;
+          return verdict;
+        }
       }
       const postCheckoutStatus = deps.runGit(
         [
@@ -5638,6 +5732,8 @@ function createProductionDeps(args) {
     checkLock: (worktreePath) => checkClaimLock(worktreePath),
     removeLockIfMatches: removeClaimLockIfMatchesProduction,
     removeWorktreeIfLockMatches: removeWorktreeIfLockMatchesProduction,
+    updatePrimaryRecoveryLockMarker: (worktreePath, expected, marker) =>
+      updatePrimaryRecoveryLockMarker(worktreePath, expected, marker),
     findWorktreeAdminDir: findWorktreeAdminDirProduction,
     runGit: (argv, cwd) =>
       runLocalGitCommand(

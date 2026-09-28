@@ -21,7 +21,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { recordGeneratedClaimTokens } from '../src/scripts/claim-lock.mts';
+import {
+  type PrimaryRecoveryLockMarker,
+  recordGeneratedClaimTokens,
+} from '../src/scripts/claim-lock.mts';
 import {
   assertRepositoryOverrideMatchesLocal,
   copyPathWithSafeSymlinks,
@@ -4824,6 +4827,137 @@ test('primary recovery refuses a fresh claim during post-checkout absence confir
     assert.equal(lockRemoved, false);
     assert.equal(verdict.plan.removal?.ran, false);
     assert.match(verdict.result, /same recovered claim\/branch absent/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('primary recovery resumes after a post-checkout confirmation failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-primary-resume-'));
+  mkdirSync(join(root, '.git'), { recursive: true });
+  let checkoutDone = false;
+  let firstAttempt = true;
+  let primaryMarker: PrimaryRecoveryLockMarker | null = {
+    phase: 'primary-checkout',
+    worktree: root,
+    claimId: 'claim-x',
+    branch: 'issue/1-task',
+    developmentBranch: 'main',
+    releasedClaim: false,
+  };
+  let lockRemoved = false;
+  try {
+    const deps = fakeDeps({
+      cwd: () => root,
+      listWorktreeRecords: () => [
+        {
+          path: root,
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      pathExists: (path) => path === root || existsSync(path),
+      confirmBlock: () => {
+        if (!firstAttempt) {
+          return {
+            ok: true,
+            routing: {
+              state: 'unclaimed',
+              reason: 'no-active-claim',
+              active_claim: null,
+              evidence: {
+                local_worktree: {
+                  status: 'absent',
+                  paths: [],
+                  reason: null,
+                },
+                released_claim: {
+                  claim_id: 'claim-x',
+                  branch: 'issue/1-task',
+                },
+              },
+            },
+            error: null,
+          };
+        }
+        const postCheckoutFailure = checkoutDone;
+        return {
+          ok: true,
+          routing: {
+            state: postCheckoutFailure
+              ? 'non_inheritable'
+              : 'local_worktree_occupied',
+            reason: postCheckoutFailure
+              ? 'active-claim-non-stale'
+              : 'stale-claim-local-worktree-occupied',
+            active_claim: {
+              claim_id: postCheckoutFailure ? 'claim-y' : 'claim-x',
+              branch: postCheckoutFailure ? 'issue/2-other' : 'issue/1-task',
+            },
+            evidence: {
+              local_worktree: {
+                status: postCheckoutFailure ? 'absent' : 'occupied',
+                paths: postCheckoutFailure ? [] : [root],
+                reason: null,
+              },
+            },
+          },
+          error: null,
+        };
+      },
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'checkout') {
+          checkoutDone = true;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+      checkLock: () => ({
+        path: join(root, '.git/idd-claim.lock'),
+        present: true,
+        holder: {
+          agentId: 'test-agent',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-27T00:00:00Z',
+          ...(primaryMarker === null ? {} : { primaryRecovery: primaryMarker }),
+        },
+      }),
+      updatePrimaryRecoveryLockMarker: (_path, _expected, marker) => {
+        primaryMarker = marker;
+        return true;
+      },
+      removeLockIfMatches: () => {
+        lockRemoved = true;
+        return true;
+      },
+    });
+    const firstVerdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(firstVerdict.plan.removal?.ran, false);
+    assert.match(firstVerdict.result, /same recovered claim\/branch absent/);
+    assert.notEqual(primaryMarker, null);
+
+    firstAttempt = false;
+    const resumedVerdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: root,
+      }),
+      deps,
+    );
+    assert.equal(resumedVerdict.step1.outcome, 'blocked-primary-resume');
+    assert.equal(resumedVerdict.plan.removal?.ran, true);
+    assert.equal(lockRemoved, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

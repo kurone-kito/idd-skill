@@ -550,12 +550,28 @@ export function resolveGeneratedTokensPath(cwd, claimId) {
   );
 }
 function isClaimLockBody(value) {
+  if (
+    !(
+      typeof value === 'object' &&
+      value !== null &&
+      typeof value.agentId === 'string' &&
+      typeof value.claimId === 'string' &&
+      typeof value.acquiredAt === 'string'
+    )
+  ) {
+    return false;
+  }
+  const marker = value.primaryRecovery;
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof value.agentId === 'string' &&
-    typeof value.claimId === 'string' &&
-    typeof value.acquiredAt === 'string'
+    marker === undefined ||
+    (typeof marker === 'object' &&
+      marker !== null &&
+      marker.phase === 'primary-checkout' &&
+      typeof marker.worktree === 'string' &&
+      typeof marker.claimId === 'string' &&
+      typeof marker.branch === 'string' &&
+      typeof marker.developmentBranch === 'string' &&
+      typeof marker.releasedClaim === 'boolean')
   );
 }
 function readLock(path) {
@@ -903,6 +919,43 @@ export function checkClaimLock(worktree) {
     return { path, present: true, malformed: true };
   }
   return { path, present: true, holder: read.lock };
+}
+/**
+ * Add or clear the primary-checkout recovery marker while the caller holds
+ * the clone-scoped mutex. The complete ownership token is compared before
+ * replacing the lock, so a replacement claim cannot inherit or lose the
+ * marker through a stale check-then-write sequence.
+ */
+export function updatePrimaryRecoveryLockMarker(worktree, expected, marker) {
+  const current = checkClaimLock(worktree);
+  if (
+    current.path !== expected.path ||
+    !current.present ||
+    current.malformed ||
+    !expected.present ||
+    expected.malformed ||
+    current.holder?.agentId !== expected.holder?.agentId ||
+    current.holder?.claimId !== expected.holder?.claimId ||
+    current.holder?.acquiredAt !== expected.holder?.acquiredAt ||
+    JSON.stringify(current.holder?.primaryRecovery) !==
+      JSON.stringify(expected.holder?.primaryRecovery)
+  ) {
+    return false;
+  }
+  const body = {
+    agentId: current.holder?.agentId ?? '',
+    claimId: current.holder?.claimId ?? '',
+    acquiredAt: current.holder?.acquiredAt ?? '',
+  };
+  if (marker !== null) {
+    body.primaryRecovery = marker;
+  }
+  try {
+    atomicReplaceFile(current.path, JSON.stringify(body));
+    return true;
+  } catch {
+    return false;
+  }
 }
 function isGeneratedTokensBody(value) {
   if (typeof value !== 'object' || value === null) {

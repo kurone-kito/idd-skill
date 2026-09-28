@@ -210,10 +210,22 @@ import {
  * (surfaced for humans inspecting the file / `--check` output) -- no code
  * path in this module reads it to make a staleness decision.
  */
-interface ClaimLockBody {
+export interface PrimaryRecoveryLockMarker {
+  phase: 'primary-checkout';
+  worktree: string;
+  claimId: string;
+  branch: string;
+  developmentBranch: string;
+  releasedClaim: boolean;
+}
+
+export interface ClaimLockBody {
   agentId: string;
   claimId: string;
   acquiredAt: string;
+  /** Set while primary-worktree recovery has completed checkout but not
+   * final lock cleanup, so a later invocation can resume safely. */
+  primaryRecovery?: PrimaryRecoveryLockMarker;
 }
 
 const CLAIM_LOCK_FILE_NAME = 'idd-claim.lock';
@@ -619,12 +631,29 @@ type LockReadResult =
   | { status: 'present'; lock: ClaimLockBody };
 
 function isClaimLockBody(value: unknown): value is ClaimLockBody {
+  if (
+    !(
+      typeof value === 'object' &&
+      value !== null &&
+      typeof (value as Record<string, unknown>).agentId === 'string' &&
+      typeof (value as Record<string, unknown>).claimId === 'string' &&
+      typeof (value as Record<string, unknown>).acquiredAt === 'string'
+    )
+  ) {
+    return false;
+  }
+  const marker = (value as Record<string, unknown>).primaryRecovery;
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as Record<string, unknown>).agentId === 'string' &&
-    typeof (value as Record<string, unknown>).claimId === 'string' &&
-    typeof (value as Record<string, unknown>).acquiredAt === 'string'
+    marker === undefined ||
+    (typeof marker === 'object' &&
+      marker !== null &&
+      (marker as Record<string, unknown>).phase === 'primary-checkout' &&
+      typeof (marker as Record<string, unknown>).worktree === 'string' &&
+      typeof (marker as Record<string, unknown>).claimId === 'string' &&
+      typeof (marker as Record<string, unknown>).branch === 'string' &&
+      typeof (marker as Record<string, unknown>).developmentBranch ===
+        'string' &&
+      typeof (marker as Record<string, unknown>).releasedClaim === 'boolean')
   );
 }
 
@@ -1036,6 +1065,48 @@ export function checkClaimLock(worktree: string): CheckLockOutcome {
     return { path, present: true, malformed: true };
   }
   return { path, present: true, holder: read.lock };
+}
+
+/**
+ * Add or clear the primary-checkout recovery marker while the caller holds
+ * the clone-scoped mutex. The complete ownership token is compared before
+ * replacing the lock, so a replacement claim cannot inherit or lose the
+ * marker through a stale check-then-write sequence.
+ */
+export function updatePrimaryRecoveryLockMarker(
+  worktree: string,
+  expected: CheckLockOutcome,
+  marker: PrimaryRecoveryLockMarker | null,
+): boolean {
+  const current = checkClaimLock(worktree);
+  if (
+    current.path !== expected.path ||
+    !current.present ||
+    current.malformed ||
+    !expected.present ||
+    expected.malformed ||
+    current.holder?.agentId !== expected.holder?.agentId ||
+    current.holder?.claimId !== expected.holder?.claimId ||
+    current.holder?.acquiredAt !== expected.holder?.acquiredAt ||
+    JSON.stringify(current.holder?.primaryRecovery) !==
+      JSON.stringify(expected.holder?.primaryRecovery)
+  ) {
+    return false;
+  }
+  const body: ClaimLockBody = {
+    agentId: current.holder?.agentId ?? '',
+    claimId: current.holder?.claimId ?? '',
+    acquiredAt: current.holder?.acquiredAt ?? '',
+  };
+  if (marker !== null) {
+    body.primaryRecovery = marker;
+  }
+  try {
+    atomicReplaceFile(current.path, JSON.stringify(body));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

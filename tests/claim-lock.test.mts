@@ -27,6 +27,7 @@ import {
   recordGeneratedClaimTokens,
   resolveClaimLockPath,
   resolveGeneratedTokensPath,
+  updatePrimaryRecoveryLockMarker,
 } from '../src/scripts/claim-lock.mts';
 import {
   acquireCloneLock,
@@ -778,6 +779,61 @@ test('check: reports a malformed lock body as present+malformed, without throwin
     assert.equal(check.present, true);
     assert.equal(check.malformed, true);
     assert.equal(check.holder, undefined);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('primary recovery marker update preserves ownership and rejects a stale lock snapshot', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+    const before = checkClaimLock(fixture.worktree);
+    const marker = {
+      phase: 'primary-checkout' as const,
+      worktree: fixture.worktree,
+      claimId: 'claim-a',
+      branch: 'issue/1-test',
+      developmentBranch: 'main',
+      releasedClaim: false,
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, before, marker),
+      true,
+    );
+    const marked = checkClaimLock(fixture.worktree);
+    assert.ok(marked.holder);
+    assert.deepEqual(marked.holder?.primaryRecovery, marker);
+
+    const stale = {
+      ...marked,
+      holder: {
+        ...marked.holder,
+        acquiredAt: '2026-09-27T00:00:00.000Z',
+      },
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, stale, null),
+      false,
+    );
+    assert.deepEqual(
+      checkClaimLock(fixture.worktree).holder?.primaryRecovery,
+      marker,
+    );
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, marked, null),
+      true,
+    );
+    assert.equal(
+      checkClaimLock(fixture.worktree).holder?.primaryRecovery,
+      undefined,
+    );
   } finally {
     teardown(fixture);
   }
