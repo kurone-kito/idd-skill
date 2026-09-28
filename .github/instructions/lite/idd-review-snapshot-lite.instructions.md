@@ -19,9 +19,10 @@ standard file.
 Only fetch/routes ReviewItems_snapshot; never classify or decide
 Accept/Reject. Non-empty E3 hands off to
 `idd-review-triage.instructions.md` (E4-E8). A deferred Step 2 handoff
-carries E1 Step 1 SHA, `watermark deferred`, and reason; the receiver
-restores or reruns E1 before E8 without that watermark. Never
-branch-sync/F1/F2 from an unverified handoff.
+carries E1 Step 1 SHA, its activity baseline, `watermark deferred`, and
+reason; E14 uses that baseline (or its marker timestamp if empty) only as
+a temporary polling watermark, never a `review-watermark`. Missing
+evidence: rerun E1 before E8. Never branch-sync/F1/F2 unverified.
 
 ## Stop-and-ask conditions
 
@@ -256,11 +257,11 @@ with Step 1's `{head-SHA}` returns to E1 for a fresh snapshot; never route
 stale items into E3/E4.
 
 - **Empty, Step 2 ready** → `idd-pre-merge-lite.instructions.md` (F1);
-  never route to excluded triage.
+  not triage.
 - **Empty, Step 2 deferred** → E15 for CI or E14 for advisory; both:
   E14 first, then E1 before F1/F2.
-- **Non-empty** → stop this session; hand off to
-  `idd-review-triage.instructions.md` (E4).
+- **Non-empty** → stop; hand off to `idd-review-triage.instructions.md`
+  (E4).
 
 ## Cold-start ReviewItems_snapshot reconstruction
 

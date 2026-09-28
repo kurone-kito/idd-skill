@@ -419,8 +419,9 @@ the first request, not the last).
 Take a fresh activity snapshot (E1 Step 1's scope, excluding only
 trusted operational markers) and record its highest `updatedAt` as the
 **temporary polling watermark** — never post it as a `review-watermark`
-comment. If empty, use the latest trusted same-claim `review-watermark`
-comment's `createdAt` instead, or stop and return to E1 if none exists.
+comment. If empty, use the latest trusted same-claim watermark's
+`createdAt`, or the deferred E1 baseline, instead; if neither exists,
+return to E1.
 
 Poll every `POLL_INTERVAL_MINUTES` minutes:
 

@@ -20,8 +20,10 @@ between checks.
 
 After E3, empty → branch-sync unless Step 2 deferred → E15/E14 then E1.
 Non-empty → `idd-review-triage.instructions.md` (E4); a deferred handoff
-carries E1 Step 1 SHA, `watermark deferred`, and reason, or reruns E1
-before E8 when that evidence is missing.
+carries E1 Step 1 SHA, its activity baseline, `watermark deferred`, and
+reason; E14 uses that baseline (or its marker timestamp if empty) only as
+a temporary polling watermark, never a `review-watermark`, or reruns E1
+before E8 when it is missing.
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
