@@ -81,13 +81,13 @@ CI pass exists yet for this HEAD.
 **CI precondition.** Use the profile-selected AW1
 `advisory-wait-state` command with `--pr {pr-number}`, `--claim-id
 {claim-id}`, `--agent-id {agent-id}`, and
-`--trusted-marker-logins <trusted-logins>`; also run profile-selected
-`ci-wait-state --pr {pr-number}`. Require
-`copilotRecovery.activeClaimProvided: true` and
-`staleRequestRecovery.action` plus `requiredChecks.status: success` (or
+`--trusted-marker-logins <trusted-logins>`; also run its
+`ci-wait-state --pr {pr-number}`. Require `outcome: SATISFIED`,
+`copilotRecovery.activeClaimProvided: true`, and
+`staleRequestRecovery.action`, plus `requiredChecks.status: success` (or
 `no-required-checks` only when `checks[]` is non-empty and every entry
 is `success`).
-Missing/unbound/pending: defer. Without helper, finish AW1-AW3; for
+Missing/unbound/non-SATISFIED: defer. Without helper, finish AW1-AW3; for
 CI, follow `idd-ci.instructions.md`'s required-check tables: read
 rulesets/protection, run `gh pr checks {pr-number} --json
 name,state,bucket,startedAt,completedAt,link`, and normalize against
