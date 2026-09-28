@@ -229,14 +229,17 @@ below instead.
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
    3-5; those steps write the template directly (`direct-import` default).
 
-   For an unborn target, inspect and record the baseline before the clean
-   check:
+   For an unborn target, inspect its contents and record an intentional
+   baseline before the clean check. Do not stage files until you have
+   confirmed that the status listing contains only files intended for this
+   onboarding:
 
    ```sh
    git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
-     (git -C <target-repo> status --short && \
-      git -C <target-repo> add -A && \
-      git -C <target-repo> commit --allow-empty -m "chore: record baseline")
+     git -C <target-repo> status --short --untracked-files=all
+   # After confirming the listing is intentional:
+   git -C <target-repo> add -A && \
+     git -C <target-repo> commit --allow-empty -m "chore: record baseline"
    ```
 
    Require a clean target:
