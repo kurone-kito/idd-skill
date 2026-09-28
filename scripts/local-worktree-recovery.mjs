@@ -2906,7 +2906,7 @@ export function runLocalWorktreeRecovery(args, deps) {
       detail:
         verdict.primaryOrLinked === 'primary'
           ? 'would checkout {development-branch} then hand-remove the lock file'
-          : 'would run git worktree remove (retry --force only after a submodule-removal failure)',
+          : 'would run git worktree remove (retry --force only after a submodule-removal failure or a dirty removal failure with a freshly verified unmerged fallback)',
     };
     verdict.result = 'dry-run: no mutation performed';
     return verdict;

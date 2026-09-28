@@ -618,8 +618,9 @@ the helper's dry-run output doesn't make self-explanatory.
    (`idd-merge.instructions.md`). If it fails with `fatal: working
    trees containing submodules cannot be moved or removed`, retry
    `git worktree remove --force <path>` after confirming step 3's
-   preservation already succeeded — the only case `--force` is
-   warranted here, mirroring F4's own retry rule. This also deletes
+   preservation already succeeded — the other allowed case is a dirty
+   removal failure after a fresh, complete unmerged-path fallback copy;
+   generic dirty-removal failures remain a hold. This also deletes
    that worktree's claim lock and generated-tokens record, since both
    live in its own private git-admin directory.
 5. **Re-enter.** Re-run Resume from Step 0. A now-`absent` worktree

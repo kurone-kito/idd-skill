@@ -1007,6 +1007,10 @@ test('default (no --apply) never mutates, and reports the full plan', () => {
   assert.equal(verdict.plan.stashes[0]?.stashed, false);
   assert.ok(verdict.plan.removal?.wouldRun);
   assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(
+    verdict.plan.removal?.detail ?? '',
+    /freshly verified unmerged fallback/,
+  );
 });
 
 test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing even on failure', () => {

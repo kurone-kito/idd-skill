@@ -3436,7 +3436,8 @@ still fails closed:
     destination) against the live repository state (not the earlier, now
     possibly stale, in-memory snapshot) — all while the lock is held,
     immediately before mutating. Then `git worktree remove` (retrying
-    `--force` only after a submodule-removal failure), or, for the
+    `--force` only after a submodule-removal failure or a dirty removal
+    failure with a freshly verified unmerged fallback), or, for the
     primary-worktree branch, cleanup of any interrupted operation
     (`rebase --quit`, `merge --abort`, `cherry-pick --abort`, or
     `bisect reset`) before `checkout {development-branch}`, a bounded retry
@@ -5531,6 +5532,14 @@ reporting `branch_outcome: retained_unmerged` (issue #2331).
   --force` is warranted only for that fatal, and only after leftovers
   are preserved. Revalidate with `--worktree` immediately before the
   retry (`idd-merge.instructions.md`).
+- **Verified unmerged fallback** (step 4, issue `#3536`): an unmerged
+  index can make `stash push` fail even though the working-tree paths
+  were copied and verified outside the worktree. If the first removal
+  then fails only because the worktree is still dirty, the helper may
+  retry with `--force` only after a fresh preservation pass verifies a
+  newly copied, complete unmerged fallback. A generic dirty-removal
+  failure, or an incomplete copy, remains a hold; the dry-run plan
+  states this narrow condition explicitly.
 - **Removed cwd** (step 5, issue `#3189`): a later `node` call fails
   with `ENOENT` on `uv_cwd`, or `gh` / `git` fails with `Unable to
   read current working directory`, and `unclaimed-by` is skipped
