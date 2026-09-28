@@ -51,6 +51,7 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
+  type Stats,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -6520,6 +6521,13 @@ export function copyPathWithSafeSymlinks(
   );
   const sourceRootsReal = sourceRootsAbsolute.map((root) => realpathSync(root));
   const activeDirectories = new Set<string>();
+  const sameSourceMetadata = (before: Stats, after: Stats): boolean =>
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.mode === after.mode &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs;
 
   const ensureDestinationParent = (destination: string): string => {
     const parent = resolve(dirname(destination));
@@ -6659,6 +6667,21 @@ export function copyPathWithSafeSymlinks(
       throw new Error(`unsupported special file in recovery source: ${source}`);
     }
 
+    // A directory can be replaced with a symlink after its own containment
+    // check but before readdirSync. Re-check every regular child here so a
+    // traversal through that replacement cannot copy a file from outside the
+    // declared source roots.
+    const sourceRealBeforeOpen = realpathSync(source);
+    if (
+      !sourceRootsReal.some((root) =>
+        isPathContainedIn(sourceRealBeforeOpen, root),
+      )
+    ) {
+      throw new Error(
+        `source file escaped the declared roots during copy: ${source}`,
+      );
+    }
+
     // Copy into a private, no-follow temporary leaf and atomically rename it
     // into place. A final lstat after copy cannot protect the destination
     // leaf from being replaced with a symlink between the parent check and
@@ -6672,6 +6695,7 @@ export function copyPathWithSafeSymlinks(
     try {
       let sourceFd: number | null = null;
       let temporaryFd: number | null = null;
+      let copiedSourceStat: Stats | null = null;
       try {
         const noFollow = constants.O_NOFOLLOW;
         const nonBlocking = constants.O_NONBLOCK;
@@ -6709,9 +6733,33 @@ export function copyPathWithSafeSymlinks(
             );
           }
         }
+        copiedSourceStat = fstatSync(sourceFd);
       } finally {
         if (temporaryFd !== null) closeSync(temporaryFd);
         if (sourceFd !== null) closeSync(sourceFd);
+      }
+      if (
+        copiedSourceStat === null ||
+        !sameSourceMetadata(sourceStat, copiedSourceStat)
+      ) {
+        throw new Error(`source changed during copy: ${source}`);
+      }
+      const finalSourceStat = lstatSync(source);
+      if (
+        !finalSourceStat.isFile() ||
+        !sameSourceMetadata(sourceStat, finalSourceStat)
+      ) {
+        throw new Error(`source changed during copy: ${source}`);
+      }
+      const sourceRealAfterCopy = realpathSync(source);
+      if (
+        !sourceRootsReal.some((root) =>
+          isPathContainedIn(sourceRealAfterCopy, root),
+        )
+      ) {
+        throw new Error(
+          `source file escaped the declared roots during copy: ${source}`,
+        );
       }
       assertDestinationParentStable(destination, parentReal);
       try {

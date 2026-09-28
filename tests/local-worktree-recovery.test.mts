@@ -221,6 +221,24 @@ test('copyPathWithSafeSymlinks refuses a directory outside declared source roots
   }
 });
 
+test('copyPathWithSafeSymlinks refuses a regular file outside declared source roots', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-file-root-'));
+  const source = join(root, 'source.txt');
+  const declaredRoot = join(root, 'declared');
+  const destination = join(root, 'preserve', 'copy.txt');
+  try {
+    writeFileSync(source, 'outside\n');
+    mkdirSync(declaredRoot);
+    assert.throws(
+      () => copyPathWithSafeSymlinks(source, destination, declaredRoot),
+      /source file escaped the declared roots during copy/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('primary recovery refuses malformed local config before default-branch lookup', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-config-'));
   try {
