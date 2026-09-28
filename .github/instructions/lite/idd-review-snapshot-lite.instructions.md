@@ -58,16 +58,17 @@ GitHub side effect, confirm all of the following:
 
 ### CI-completion precondition (for Step 2)
 
-Run advisory with `--pr`, `--claim-id`, `--agent-id`,
-and `--trusted-marker-logins`, then `ci-wait-state --pr {pr-number}`.
+Run AW1 with `--pr`, `--claim-id`, `--agent-id`,
+`--trusted-marker-logins`, then `ci-wait-state --pr {pr-number}`.
 Require
-`requiredChecks.status: success`; `no-required-checks` only passes with
-non-empty `checks[]` all `success`; `pending`/`failing`/`missing` defer
+`requiredChecks.status: success`; `no-required-checks` only with
+non-empty all-success `checks[]`; `pending`/`failing`/`missing` defer
 Step 2; otherwise stop/ask. Require `outcome: SATISFIED` and
 `copilotRecovery.activeClaimProvided: true`; same-head:
 `lastCopilotCommit == prHeadSha`, off-head needs
 `staleRequestRecovery.action` `not-applicable` or completed AW3-S/cap;
-`attempt` hands off and `hold` defers. Take Steps 1 and 3;
+`attempt`: stop and hand off to full; never E15; `hold` defers. Take
+Steps 1 and 3;
 use E15 for CI, E14 for advisory (E14 first when both pending).
 If incomplete, skip Step 2, wait before branch-sync/F2, then post from
 E1.
