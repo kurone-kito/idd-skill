@@ -5285,6 +5285,21 @@ test('checkHeldSchemaDrift resolves renamed CommonJS scan bindings', () => {
   }
 });
 
+test('checkHeldSchemaDrift resolves direct scan-function aliases', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const moduleText =
+    "import { globSync } from 'node:fs';\nconst find = globSync;\nfind('schemas/*.json');\n";
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  const result = checkHeldSchemaDrift(sourceRoot, targetRoot, {
+    hold: [DRIFT_MODULE],
+  });
+  assert.deepEqual(result.findings, [
+    { schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE },
+  ]);
+});
+
 test('checkHeldSchemaDrift ignores regex literals after generic function declarations', () => {
   const sourceRoot = makeFixtureDir();
   const targetRoot = makeFixtureDir();

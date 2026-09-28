@@ -2782,6 +2782,18 @@ function findDirectoryScanAliases(text) {
       }
     }
   }
+  const directAliasPattern =
+    /(?:^|[;\n])\s*(?:const|let|var)\s+([\w$]+)\s*=\s*([\w$]+)\s*;?/gu;
+  for (const match of text.matchAll(directAliasPattern)) {
+    const aliasName = match[1] ?? '';
+    const sourceName = match[2] ?? '';
+    const apiName = knownNames.has(sourceName)
+      ? sourceName
+      : aliases.get(sourceName);
+    if (apiName !== undefined) {
+      aliases.set(aliasName, apiName);
+    }
+  }
   return aliases;
 }
 function createDirectoryScanApiPattern(names) {
