@@ -248,11 +248,13 @@ Do not infer edit state from the body, `updatedAt`, author, or claim.
 ReviewItems_snapshot is session-local; don't inherit a previous claim's
 critique findings unless persisted as reviewer-visible comments.
 
-After the critique pass, post a new `review-baseline` comment with the
-current HEAD SHA (helper-first: profile-selected post-idd-marker
-`--type baseline --target pr <pr-number> --agent-id <id> --claim-id
-<id> --sha <head-sha> --apply`; `emit-marker --type review-baseline` is
-emit-only; see `docs/idd-helper-scripts.md`):
+Before critique, capture PR HEAD as `{e2-review-head-SHA}` and review
+it. Reread HEAD before posting. If changed, discard the pass and return
+to E1; otherwise post a baseline pinned to it:
+`post-idd-marker --type baseline --target pr <pr-number> --agent-id
+<id> --claim-id <id> --sha {e2-review-head-SHA} --apply` (see
+`docs/idd-helper-scripts.md`). Never record a newer SHA as reviewed;
+if posting cannot preserve identity, return to E1.
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->

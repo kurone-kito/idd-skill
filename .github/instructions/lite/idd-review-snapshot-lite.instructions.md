@@ -232,14 +232,14 @@ author, or claim. ReviewItems_snapshot is session-local — do not inherit
 a previous claim's critique findings unless persisted as reviewer-visible
 comments.
 
-After the critique pass completes, re-read the current PR HEAD SHA —
-`gh pr view {pr-number} --json headRefOid --jq '.headRefOid'` — and
-store it as `{e2-head-SHA}` (it can differ from Step 1's `{head-SHA}` if
-the branch moved during E1/E2; the baseline must record what was
-actually reviewed). Post a new baseline with `{e2-head-SHA}`: `node
+Before the critique pass, capture current PR HEAD as
+`{e2-review-head-SHA}` and review that SHA. Afterward, reread HEAD
+before posting. If it changed, discard the pass and return to E1;
+otherwise post a baseline pinned to the captured SHA: `node
 scripts/post-idd-marker.mjs --type baseline --target pr {pr-number}
---agent-id <id> --claim-id <id> --sha {e2-head-SHA} --apply`, or the
-package-manager equivalent. Rendered body:
+--agent-id <id> --claim-id <id> --sha {e2-review-head-SHA} --apply`, or
+the package-manager equivalent. Never record a newer SHA as reviewed;
+if posting cannot preserve the identity, return to E1. Rendered body:
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->

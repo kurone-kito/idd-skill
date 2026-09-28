@@ -1,12 +1,11 @@
 # IDD — Copilot Advisory-Wait Protocol (Lite)
 
 Lite profile for helper-enabled weak/local models. Same semantics as
-`idd-advisory-wait.instructions.md`, restricted to the
-**E14-caller subset only**. Used by
-`idd-review-fix-lite.instructions.md`'s E14, and (fast-path fields
-only) by `idd-review-snapshot-lite.instructions.md`'s E1
-CI-completion precondition. If the repository is `instructions-only`,
-use the full-size advisory-wait instructions instead of this file.
+`idd-advisory-wait.instructions.md`, for E14 and E1's advisory
+precondition. E1 accepts `lastCopilotCommit == prHeadSha`, terminal
+`SATISFIED`, or phase-specific `CAP_EXHAUSTED`; `hold` is ineligible.
+If the repository is `instructions-only`, use the full-size
+advisory-wait instructions instead.
 
 ## Helper runtime contract
 
@@ -58,7 +57,8 @@ any bot but `advisoryWait.primaryBotLogin`.
 
 Run the Helper-first canonical path below. Once `lastCopilotCommit`
 equals `prHeadSha`, the gate is **SATISFIED** — take the caller's
-`SATISFIED` action; otherwise, continue.
+`SATISFIED` action; otherwise, continue. E1 Step 2 also accepts the
+terminal outcomes above.
 
 ## Helper-first canonical path
 
