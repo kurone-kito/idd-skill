@@ -6274,6 +6274,7 @@ test('an unmerged fallback refuses staged index contents it cannot copy', () => 
 
 test('copies an initialized submodule admin dir for pre-existing stashes or local-only refs', () => {
   const copied: string[] = [];
+  let queriedAllSubmoduleRefs = false;
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
@@ -6286,10 +6287,11 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
         };
       }
       if (cwd === '/repo/linked/submodule' && argv[0] === 'for-each-ref') {
+        queriedAllSubmoduleRefs = argv.includes('refs');
         return {
           ok: true,
           status: 0,
-          stdout: 'refs/tags/private-tag\n',
+          stdout: 'refs/bisect/private-ref\n',
           stderr: '',
         };
       }
@@ -6336,6 +6338,11 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
     verdict.plan.submoduleAdminCopies.length,
     1,
     'pre-existing submodule admin data must be copied before removal',
+  );
+  assert.equal(
+    queriedAllSubmoduleRefs,
+    true,
+    'submodule preservation must inspect every disposable ref namespace',
   );
   assert.equal(verdict.plan.submoduleAdminCopies[0]?.path, 'submodule');
   assert.equal(verdict.plan.submoduleAdminCopies[0]?.copiedTo !== null, true);

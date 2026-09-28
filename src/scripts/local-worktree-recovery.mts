@@ -1597,10 +1597,12 @@ function planAndMaybeBackupRef(
   const ref = `refs/idd-lwr/${branch}`;
   let tipSha: string | null = null;
   let hasUnpushed = false;
+  // A submodule's initialized admin directory is disposable with the linked
+  // worktree, so every ref below `refs/` can be lost with it. Do not whitelist
+  // namespaces here: private refs such as `refs/bisect/*` and recovery refs
+  // are preservation-relevant even when their tips are already remote.
   const refNamespaces =
-    scopeLabel === '.'
-      ? ['refs/worktree', 'refs/bisect']
-      : ['refs/heads', 'refs/tags', 'refs/notes', 'refs/replace'];
+    scopeLabel === '.' ? ['refs/worktree', 'refs/bisect'] : ['refs'];
   const localRefs = runGit(
     ['for-each-ref', '--format=%(refname)', ...refNamespaces],
     scopePath,
