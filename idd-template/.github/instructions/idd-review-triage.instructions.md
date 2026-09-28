@@ -1,17 +1,14 @@
 # IDD — Review Triage Phase (E4–E8)
 
-Read this file after `idd-review-snapshot.instructions.md` (E3) finds
-ReviewItems_snapshot non-empty; a cold E4 entry runs that file's
-Cold-start section first. Covers classifying, scoring, recording
-dispositions, and counting accepted items.
+Read after E3 finds non-empty `ReviewItems_snapshot`; cold E4 runs that
+file's Cold-start first.
 
-Before any E-phase side effect, apply the [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+Before E-phase side effects, apply the [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
-**Skip condition E8**: zero Accepted PATH A → branch-sync below when
-Step 2 was not deferred (its `clean`/`behind-no-conflict` exit applies
-the **Zero-Accepted-PATH-A advisory re-review gate**). Missing deferred
-evidence → E1; otherwise continue to the E14/E15 wait route in
-`idd-review-fix.instructions.md`.
+**Skip E8**: zero Accepted PATH A → branch-sync if Step 2 was not
+deferred (its `clean`/`behind-no-conflict` exit applies the
+**Zero-Accepted-PATH-A advisory re-review gate**). Missing evidence →
+E1; otherwise continue to E14/E15 in `idd-review-fix.instructions.md`.
 
 ## E4 — Classify and score ReviewItems_snapshot
 

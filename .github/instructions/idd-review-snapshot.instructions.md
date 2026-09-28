@@ -81,8 +81,7 @@ Also fetch the **current CI state** for `{head-SHA}`:
 treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
 CI pass exists yet for this HEAD.
 
-**Non-Copilot safety:** snapshot/watermark and F2 quiet-window cover
-bot activity.
+**Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
 **CI precondition.** Use the profile-selected AW1
 `advisory-wait-state` command with `--pr {pr-number}`, `--claim-id
@@ -92,14 +91,17 @@ bot activity.
 `copilotRecovery.activeClaimProvided: true` and
 `staleRequestRecovery.action` plus `requiredChecks.status: success` (or
 `no-required-checks` only when every `checks[]` entry is `success`).
-Missing/unbound or pending CI: defer. Without helper, finish AW1-AW3
-before terminal outcomes; post after CI. Earlier
-heads require matching `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head
-`SATISFIED`: `not-applicable` may proceed, `attempt` runs AW3-S, and
-`cap-exhausted` uses cap route.
-While incomplete, run Steps 1/3, E2, E3—not F1/F2; use E15/E14
-(E14 first). Empty E3/E8-zero-A: wait, re-snapshot E1, and post
-without a new review. CI after a watermark forces E1↔F2.
+Missing/unbound/pending: defer. Without helper, finish AW1-AW3; for
+CI, follow `idd-ci.instructions.md`'s required-check tables: read
+rulesets/protection, run `gh pr checks {pr-number} --json
+name,state,bucket,startedAt,completedAt,link`, and normalize against
+their union including opt-in steps; unreadable/missing policy or
+non-pass defers. Empty output is not `no-required-checks`. Post after
+CI. Earlier heads need `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head
+`SATISFIED` uses `not-applicable`/AW3-S `attempt`/cap route.
+Incomplete: Steps 1/3, E2, E3—not F1/F2; E14 then E15. Empty
+E3/E8-zero-A: wait, re-snapshot E1, post without review; CI after
+watermark forces E1↔F2.
 
 **Step 2 — Record the watermark.** Only after the precondition above is
 satisfied, use the `{head-SHA}` stored at the
