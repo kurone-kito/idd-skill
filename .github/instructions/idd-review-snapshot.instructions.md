@@ -96,8 +96,9 @@ For an earlier advisory head, require
 `LAST_COPILOT_COMMIT == PR_HEAD_SHA`, `SATISFIED`, or
 phase-specific `CAP_EXHAUSTED`. While incomplete, run Steps 1/3, E2,
 E3—not F1/F2; use E15/E14, E14 first if both. For empty E3 (or E8
-with zero Accepted PATH A items), run the waits, then post from E1
-without a new review. CI after a watermark forces an E1↔F2 round-trip.
+with zero Accepted PATH A items), run the waits, then return to E1,
+re-snapshot, and post without a new review. CI after a watermark
+forces an E1↔F2 round-trip.
 
 **Step 2 — Record the watermark.** Only after the precondition above is
 satisfied, use the `{head-SHA}` stored at the

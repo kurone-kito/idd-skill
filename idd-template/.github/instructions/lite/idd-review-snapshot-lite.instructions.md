@@ -132,8 +132,9 @@ The manual six-field fallback — `--type watermark --target pr
 {pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
---apply` — stays available when `--from-pr` cannot run. If incomplete,
-skip Step 2 and use E15/E14 after Step 3; otherwise post Step 2.
+--apply` — stays available when `--from-pr` cannot run. Before using it,
+require `ci-wait-state` (or equivalent) to show all required checks
+pass; otherwise skip Step 2 and use E15/E14 after Step 3.
 
 The rendered body is exactly:
 
