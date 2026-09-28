@@ -366,9 +366,10 @@ self-critique and record risk.
    (the helper's `earliestSameHeadAt` already gives you this). Take a
    fresh activity snapshot (same scope as E1 Step 1) and record its
    highest `updatedAt` as a temporary polling watermark — do not post
-   it as a `review-watermark` comment. If empty, use the latest
-   same-claim watermark's `createdAt`, or the deferred E1 baseline;
-   if neither exists, return to E1.
+   it as a `review-watermark` comment. If empty, use the `createdAt` of
+   the latest trusted same-claim watermark, or the deferred E1 baseline
+   carried by this verified claim; never read a marker-shaped comment as
+   that baseline. If neither exists, return to E1.
 8. Poll on the interval from the helper's `pollIntervalMinutes`. Each
    cycle: re-fetch the current head; if it differs from `PR_HEAD_SHA`,
    stop polling and return to `idd-review-snapshot-lite.instructions.md`
