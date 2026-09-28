@@ -19,6 +19,7 @@ import {
   buildSubIssueLoader,
   buildTrustedAuthorPredicate,
   classifyIssue,
+  coalesceIssueLoader,
   enumerateAllRoadmapsGraph,
   enumerateRoadmapGraph,
   extractKeywordReferences,
@@ -3752,6 +3753,154 @@ test('--all-roadmaps annotates union leaves and fetches each issue once', async 
   assert.equal(byNumber.get(803)?.claimEligible, true);
   // The shared leaf 702 is fetched exactly once even though two roots reach it.
   assert.equal(seen.filter((issueNumber) => issueNumber === 702).length, 1);
+});
+
+test('shared roots and readiness load each issue and sub-issue once (#3584)', async () => {
+  // 701 proves zero native sub-issues, so its sub-issue loader must stay
+  // idle. 702 is reached from both roots and again by readiness.
+  const issues = new Map<number, unknown>([
+    [700, roadmapIssue(700, '- [ ] #701\n- [ ] #702', 'epic-alpha')],
+    [800, roadmapIssue(800, '- [ ] #702\n- [ ] #803', 'epic-beta')],
+    [
+      701,
+      { ...executionIssue(701, 'leaf 701'), sub_issues_summary: { total: 0 } },
+    ],
+    [702, executionIssue(702, 'shared leaf 702')],
+    [803, executionIssue(803, 'leaf 803')],
+  ]);
+  const issueLoads: number[] = [];
+  const subIssueLoads: number[] = [];
+  const commentsByIssue = new Map<number, unknown[]>([
+    [702, [claimComment('agent-a', 'claim-702', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution, seen: commentLoads } = buildClaimState(commentsByIssue);
+
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) => {
+      issueLoads.push(issueNumber);
+      return issues.get(issueNumber) ?? null;
+    },
+    loadSubIssues: async (issueNumber) => {
+      subIssueLoads.push(issueNumber);
+      return [];
+    },
+    claimState: resolution,
+    readiness: readinessResolution(),
+  });
+
+  const unique = (loads: number[]) => [...new Set(loads)].sort((a, b) => a - b);
+  assert.deepEqual(unique(issueLoads), [700, 701, 702, 800, 803]);
+  assert.deepEqual(
+    issueLoads.filter((issueNumber) => issueNumber === 702),
+    [702],
+  );
+  // The zero-summary node is never queried. Every other node is queried once.
+  assert.equal(subIssueLoads.includes(701), false);
+  assert.deepEqual(unique(subIssueLoads), [700, 702, 800, 803]);
+  for (const issueNumber of [700, 702, 800, 803]) {
+    assert.equal(
+      subIssueLoads.filter((loaded) => loaded === issueNumber).length,
+      1,
+    );
+  }
+  // Claim comments stay on their own loader and still run once per leaf.
+  assert.deepEqual(commentLoads, [701, 702, 803]);
+  const shared = report.leaves.find((leaf) => leaf.number === 702);
+  assert.deepEqual(shared?.sourceRoots, [700, 800]);
+  assert.equal(shared?.readiness?.ready, true);
+  assert.equal(shared?.claimEligible, false);
+  assert.equal(shared?.readiness?.startable, false);
+
+  // A later enumeration does not reuse this call's map.
+  issueLoads.length = 0;
+  await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700],
+    loadIssue: async (issueNumber) => {
+      issueLoads.push(issueNumber);
+      return issues.get(issueNumber) ?? null;
+    },
+  });
+  assert.deepEqual(
+    issueLoads.filter((issueNumber) => issueNumber === 702),
+    [702],
+  );
+});
+
+test('a loader rejection is not reused as an empty or ready result (#3584)', async () => {
+  const issues = new Map<number, unknown>([
+    [700, roadmapIssue(700, '- [ ] #702', 'epic-alpha')],
+    [800, roadmapIssue(800, '- [ ] #702', 'epic-beta')],
+    [702, executionIssue(702, 'Blocked by #799')],
+  ]);
+  let issueCalls = 0;
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => [700, 800],
+        loadIssue: async (issueNumber) => {
+          issueCalls += 1;
+          if (issueNumber === 702) {
+            throw new Error('issue loader failed');
+          }
+          return issues.get(issueNumber) ?? null;
+        },
+        loadSubIssues: async () => [],
+      }),
+    /issue loader failed/,
+  );
+  assert.equal(issueCalls, 2);
+
+  // The shared leaf loads, then readiness asks for a dependency the
+  // traversal never saw. That failure must reject the report rather than
+  // become a ready leaf.
+  let dependencyCalls = 0;
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => [700],
+        loadIssue: async (issueNumber) => {
+          if (issueNumber === 799) {
+            dependencyCalls += 1;
+            throw new Error('partial dependency load');
+          }
+          return issues.get(issueNumber) ?? null;
+        },
+        readiness: readinessResolution(),
+      }),
+    /partial dependency load/,
+  );
+  assert.equal(dependencyCalls, 1);
+});
+
+test('coalesceIssueLoader shares one in-flight call and drops a rejection (#3584)', async () => {
+  let calls = 0;
+  let releaseGate: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const load = coalesceIssueLoader(async (issueNumber) => {
+    calls += 1;
+    await gate;
+    if (issueNumber === 1) {
+      throw new Error('boom');
+    }
+    return { issueNumber };
+  });
+
+  const first = load(1);
+  const second = load(1);
+  const other = load(2);
+  releaseGate();
+  await assert.rejects(first, /boom/);
+  await assert.rejects(second, /boom/);
+  assert.deepEqual(await other, { issueNumber: 2 });
+  assert.equal(calls, 2);
+
+  await assert.rejects(load(1), /boom/);
+  assert.equal(calls, 3);
+  assert.deepEqual(await load(2), { issueNumber: 2 });
+  assert.equal(calls, 3);
 });
 
 test('parseClaimStaleAgeMs rejects non-positive and garbage durations', () => {

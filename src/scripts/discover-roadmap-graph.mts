@@ -826,24 +826,64 @@ async function mapPool<Item, Result>(
   return results;
 }
 
+/**
+ * Share one loader's in-flight and fulfilled calls by issue number for a
+ * single enumeration (#3584). Issue loads and sub-issue loads use separate
+ * wrappers, so a result from one never satisfies the other.
+ *
+ * A rejection is removed from the map. Callers that already share that
+ * promise still observe the failure, and a later call invokes the loader
+ * again. The failure is never stored as `null` or any other successful
+ * value. The map lives only as long as the wrapper does.
+ */
+export function coalesceIssueLoader(
+  load: (issueNumber: number) => unknown,
+): (issueNumber: number) => Promise<unknown> {
+  const shared = new Map<number, Promise<unknown>>();
+  return (issueNumber) => {
+    const existing = shared.get(issueNumber);
+    if (existing) {
+      return existing;
+    }
+    let tracked!: Promise<unknown>;
+    tracked = Promise.resolve()
+      .then(() => load(issueNumber))
+      .then(
+        (value) => value,
+        (error: unknown) => {
+          if (shared.get(issueNumber) === tracked) {
+            shared.delete(issueNumber);
+          }
+          throw error;
+        },
+      );
+    shared.set(issueNumber, tracked);
+    return tracked;
+  };
+}
+
 export async function enumerateRoadmapGraph(
   rootIssueNumber: number,
   options: EnumerateRoadmapGraphOptions = {},
 ): Promise<RoadmapGraphReport> {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
   const loadIssueOption = options.loadIssue;
-  const loadSubIssues =
-    typeof options.loadSubIssues === 'function'
-      ? options.loadSubIssues
-      : async () => [];
   const currentRepoRef = normalizeRepoRef(options.owner, options.repo);
 
   if (typeof loadIssueOption !== 'function') {
     throw new Error('enumerateRoadmapGraph requires loadIssue(issueNumber)');
   }
   // Re-bind after the guard so the hoisted helper closures below see the
-  // narrowed function type.
-  const loadIssue = loadIssueOption;
+  // narrowed function type. Coalesce within this call so a single-root
+  // readiness pass reuses traversal loads (#3584). A caller that already
+  // coalesced the same functions (the cross-root union) keeps that outer
+  // map: this inner wrapper delegates a miss to it.
+  const loadIssue = coalesceIssueLoader(loadIssueOption);
+  const loadSubIssues = coalesceIssueLoader(
+    typeof options.loadSubIssues === 'function'
+      ? options.loadSubIssues
+      : async () => [],
+  );
 
   const issueCache = new Map<number, CachedIssue>();
   const nodeRecords = new Map<number, RoadmapNodeRecord>();
@@ -1396,6 +1436,19 @@ export async function enumerateAllRoadmapsGraph(
     await loadOpenRoadmapRoots(),
   );
 
+  // One pair of loader maps for this union call (#3584). Every root and the
+  // readiness pass below share them. Traversal bookkeeping stays inside
+  // each `enumerateRoadmapGraph` call. Omitted loaders stay omitted so a
+  // missing `loadIssue` still fails inside the per-root guard.
+  const sharedLoadIssue =
+    typeof options.loadIssue === 'function'
+      ? coalesceIssueLoader(options.loadIssue)
+      : options.loadIssue;
+  const sharedLoadSubIssues =
+    typeof options.loadSubIssues === 'function'
+      ? coalesceIssueLoader(options.loadSubIssues)
+      : options.loadSubIssues;
+
   const roots: RoadmapUnionRoot[] = [];
   const leafRecords = new Map<number, RoadmapUnionLeaf>();
   // Diagnostics accumulate across every per-root enumeration, deduped on
@@ -1416,8 +1469,8 @@ export async function enumerateAllRoadmapsGraph(
         markerPrefix,
         owner: options.owner,
         repo: options.repo,
-        loadIssue: options.loadIssue,
-        loadSubIssues: options.loadSubIssues,
+        loadIssue: sharedLoadIssue,
+        loadSubIssues: sharedLoadSubIssues,
         // #1136: each per-root enumeration prefetches its own subtree
         // concurrently; thread the same bound through.
         concurrency: options.concurrency,
@@ -1538,15 +1591,17 @@ export async function enumerateAllRoadmapsGraph(
   // single batch call. Runs after the claim loop so `startable` can fold in
   // `claimEligible`. Gated on `options.readiness`, so the default path adds no
   // extra API call and the output shape stays byte-stable.
-  // `options.loadIssue` is required for any enumeration to succeed (each
-  // per-root `enumerateRoadmapGraph` above throws without it), so by here it is
-  // always a function; the typeof guard narrows the optional option type for
-  // the required `annotateReadiness` parameter without an unsafe cast.
-  if (options.readiness && typeof options.loadIssue === 'function') {
+  // `loadIssue` is required for any enumeration to succeed (each per-root
+  // `enumerateRoadmapGraph` above throws without it), so by here the shared
+  // wrapper is a function; the typeof guard narrows the optional option
+  // type for the required `annotateReadiness` parameter without an unsafe
+  // cast. Readiness uses that same wrapper, so it does not reload a node
+  // the traversal already loaded (#3584).
+  if (options.readiness && typeof sharedLoadIssue === 'function') {
     await annotateReadiness(
       leaves,
       options.readiness,
-      options.loadIssue,
+      sharedLoadIssue,
       markerPrefix,
       currentRepoRef,
     );
@@ -1561,7 +1616,7 @@ export async function enumerateAllRoadmapsGraph(
   // Only meaningful when readiness was annotated above; the same gate keeps
   // the flag-absent summary byte-stable (both counts stay absent).
   const readinessAnnotated = Boolean(
-    options.readiness && typeof options.loadIssue === 'function',
+    options.readiness && typeof sharedLoadIssue === 'function',
   );
   const readinessCounts = readinessAnnotated
     ? {
