@@ -3548,6 +3548,22 @@ export function runLocalWorktreeRecovery(
     // prevents a stale same-claim session from reacquiring its lock and
     // writing new work into the target while recovery is preserving it.
     const tag = `idd-lwr ${recoveredClaimId ?? 'legacy'}`;
+    // Reserve an explicit destination before step 3 can create a stash,
+    // backup ref, or copied artifact. `ensurePreserveDir()` is also the
+    // production EEXIST guard for an existing --preserve-dir; deferring it
+    // until the first filesystem copy could leave earlier Git mutations
+    // unreported when that later copy needs the destination (Codex review).
+    let applyPreserveDir: string | null = null;
+    if (args.preserveDir) {
+      try {
+        applyPreserveDir = deps.ensurePreserveDir();
+        verdict.preserveDir = applyPreserveDir;
+      } catch (error) {
+        return recordRemovalFailure(
+          `could not reserve --preserve-dir before preservation: ${errorMessage(error)}`,
+        );
+      }
+    }
     if (!shortcut.eligible) {
       const preserve = planAndMaybePreserve(
         targetPath,
@@ -3555,7 +3571,7 @@ export function runLocalWorktreeRecovery(
         tag,
         true,
         deps,
-        null,
+        applyPreserveDir,
         targetGitDir,
       );
       verdict.preserveDir = preserve.preserveDir;
@@ -4868,7 +4884,7 @@ export function runLocalWorktreeRecovery(
         tag,
         true,
         deps,
-        null,
+        applyPreserveDir,
         targetGitDir,
       );
       incorporatePreservation(latePreserve, true);

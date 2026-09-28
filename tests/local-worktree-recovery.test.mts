@@ -2317,6 +2317,35 @@ test('dry-run rejects an existing explicit preserve directory', () => {
   assert.match(verdict.result, /must name a new directory/);
 });
 
+test('apply reserves an explicit preserve directory before any Git mutation', () => {
+  const mutatingCalls: string[][] = [];
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({
+      apply: true,
+      preserveDir: '/tmp/preserve',
+      operatorConfirmedNoLiveSession: true,
+    }),
+    fakeDeps({
+      ensurePreserveDir: () => {
+        throw new Error('EEXIST: destination already exists');
+      },
+      runGit: (argv) => {
+        if (
+          (argv[0] === 'stash' && argv[1] === 'push') ||
+          argv[0] === 'update-ref'
+        ) {
+          mutatingCalls.push(argv);
+        }
+        return cleanRepoRunGit(argv);
+      },
+    }),
+  );
+  assert.deepEqual(mutatingCalls, []);
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.mutated, false);
+  assert.match(verdict.result, /reserve --preserve-dir before preservation/);
+});
+
 test('dry-run plans a prunable worktree private admin-directory backup without creating it', () => {
   let ensureCalls = 0;
   const deps = fakeDeps({
