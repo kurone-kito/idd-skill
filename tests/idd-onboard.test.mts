@@ -1754,6 +1754,37 @@ test('resolveImportFiles reports a missing vendored helper file via missingSourc
   );
 });
 
+test('checkHeldSchemaDrift rejects path traversal in a degraded held script path', () => {
+  const sourceRoot = makeIncompleteVendoredSourceFixture(
+    'scripts/branch-name.mjs',
+  );
+  const targetRoot = makeFixtureDir();
+  const externalRoot = makeFixtureDir();
+  const externalModule = join(externalRoot, 'other.mjs');
+  writeFileSync(externalModule, "globSync('schemas/*.json');\n");
+  mkdirSync(join(targetRoot, 'schemas'), { recursive: true });
+  writeFileSync(
+    join(sourceRoot, 'schemas', 'policy.schema.json'),
+    '{ "version": 2 }\n',
+  );
+  writeFileSync(
+    join(targetRoot, 'schemas', 'policy.schema.json'),
+    '{ "version": 1 }\n',
+  );
+  const externalRelativePath = relative('/', externalModule).replaceAll(
+    '\\',
+    '/',
+  );
+  const heldPath = `scripts/../../../${externalRelativePath}`;
+  assert.deepEqual(
+    checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      profile: 'vendored-node',
+      hold: [heldPath],
+    }).findings,
+    [],
+  );
+});
+
 test('buildImportPlan --hold excludes the named entry, classifying it "held", while every other entry still imports', () => {
   const sourceRoot = makeImportSourceFixture({
     'a.md': 'alpha\n',
@@ -5798,6 +5829,24 @@ test('checkHeldSchemaDrift bounds ordinary brace alternative expansion', () => {
       hold: [DRIFT_MODULE],
     }).findings,
     [{ schemaOrFixturePath: relativePath, heldModulePath: DRIFT_MODULE }],
+  );
+});
+
+test('checkHeldSchemaDrift does not let brace overflow suppress exclusions', () => {
+  const sourceRoot = makeFixtureDir();
+  const targetRoot = makeFixtureDir();
+  const alternatives = Array.from(
+    { length: 1025 },
+    (_, index) => `item${index}`,
+  ).join(',');
+  const moduleText = `globSync('schemas/*.json', { exclude: ['schemas/{${alternatives}}.json'] });\n`;
+  writeDriftManifest(sourceRoot, driftFiles('{ "version": 2 }\n', moduleText));
+  writeDriftManifest(targetRoot, driftFiles('{ "version": 1 }\n', moduleText));
+  assert.deepEqual(
+    checkHeldSchemaDrift(sourceRoot, targetRoot, {
+      hold: [DRIFT_MODULE],
+    }).findings,
+    [{ schemaOrFixturePath: DRIFT_SCHEMA, heldModulePath: DRIFT_MODULE }],
   );
 });
 

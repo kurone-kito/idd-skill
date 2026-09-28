@@ -2630,7 +2630,10 @@ function listTargetScriptModules(
  * `listTargetScriptModules`.
  */
 function isHeldDistributedScript(targetPath: string): boolean {
-  return /^(?:src\/scripts|scripts)\/.+\.(?:mjs|cjs|mts|js)$/.test(targetPath);
+  return (
+    !targetPath.split(/[\\/]/u).some((segment) => segment === '..') &&
+    /^(?:src\/scripts|scripts)\/.+\.(?:mjs|cjs|mts|js)$/.test(targetPath)
+  );
 }
 
 function readHeldModule(
@@ -4289,7 +4292,11 @@ function globPatternToRegex(
   return expression;
 }
 
-function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
+function globPatternMatchesPath(
+  pattern: string,
+  targetPath: string,
+  { unknownMatches = true }: { unknownMatches?: boolean } = {},
+): boolean {
   if (!isGlobPattern(pattern)) {
     return false;
   }
@@ -4305,7 +4312,7 @@ function globPatternMatchesPath(pattern: string, targetPath: string): boolean {
       MAX_GLOB_BRACE_EXPANSION_DEPTH,
     ) === null
   ) {
-    return true;
+    return unknownMatches;
   }
   if (
     hasCrossSegmentExtglob(pattern) ||
@@ -4466,7 +4473,9 @@ function moduleScansManifestDirectory(
         (candidate) =>
           !exclusions.some(
             (exclusion) =>
-              globPatternMatchesPath(exclusion, normalizedTargetPath) ||
+              globPatternMatchesPath(exclusion, normalizedTargetPath, {
+                unknownMatches: false,
+              }) ||
               exclusion === normalizedTargetPath ||
               (!isGlobPattern(exclusion) &&
                 normalizedTargetPath.startsWith(`${exclusion}/`)),
