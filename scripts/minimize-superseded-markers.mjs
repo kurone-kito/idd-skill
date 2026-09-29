@@ -67,6 +67,10 @@ function loadIddConfig() {
 // in the temporal dead zone when the trigger fires (see
 // discover-readiness-check.mts's / ci-wait-policy.mts's identical note).
 const GH_TIMEOUT_MS = 30_000;
+// GitHub's GraphQL `nodes(ids:)` accepts at most 100 ids per request
+// (#3593). Declared above the CLI trigger for the same TDZ reason as
+// GH_TIMEOUT_MS: runMinimize reads it while that trigger is still running.
+const PROBE_CHUNK_SIZE = 100;
 // #2754 (caught by chatgpt-codex-connector review on PR #2788): same
 // self-containment constraint as the two constants above -- cannot import
 // gh-exec.mts's resolveGhApiHostname, so duplicate the same GHES-hostname
@@ -290,20 +294,16 @@ export function runMinimize({
   };
   const startedAt = Date.now();
   const remaining = () => (deadlineMs ?? 0) - (Date.now() - startedAt);
-  for (const [index, subjectId] of subjectIds.entries()) {
+  const uniqueSubjectIds = dedupeSubjectIds(subjectIds);
+  for (let index = 0; index < uniqueSubjectIds.length; ) {
     // #2754, copilot-pull-request-reviewer review on PR #2788 (round 6):
-    // read `remaining()` exactly ONCE per candidate and reuse that SAME
-    // value for both the skip decision and the timeout passed to
-    // probeSubject -- the entry check and the timeoutMs computation used
-    // to call `remaining()` (i.e. `Date.now()`) separately, a few lines
-    // apart; if the budget expired in that gap, a non-first candidate
-    // could still fall through to probeSubject with `undefined` (the 30s
-    // default) instead of being skipped, silently reopening the exact
-    // "runs for a full untouched GH_TIMEOUT_MS regardless of how little
-    // budget is left" gap round 5 closed for the common case.
+    // read `remaining()` exactly ONCE per probe decision and reuse that
+    // SAME value for both the skip decision and the timeout passed to
+    // probeSubjects. #3593 makes that decision once per chunk of at most
+    // 100 deduplicated ids, not once per id.
     const enteredRemaining = deadlineMs === undefined ? undefined : remaining();
     if (deadlineMs !== undefined && index > 0 && enteredRemaining <= 0) {
-      for (const remainingId of subjectIds.slice(index)) {
+      for (const remainingId of uniqueSubjectIds.slice(index)) {
         report.items.push({
           subjectId: remainingId,
           status: 'skipped',
@@ -311,147 +311,179 @@ export function runMinimize({
         });
       }
       report.counts.deadlineSkipped =
-        (report.counts.deadlineSkipped ?? 0) + (subjectIds.length - index);
+        (report.counts.deadlineSkipped ?? 0) +
+        (uniqueSubjectIds.length - index);
       break;
     }
     // Past the check above, `enteredRemaining` is guaranteed > 0 for every
     // index > 0 -- reused as-is, no second `remaining()` read. Index 0 is
     // exempt from the skip (the pass always attempts at least one
-    // candidate) and can still be non-positive here; falling back to
-    // probeSubject's own default in that one case is deliberate, not a
-    // gap: never pass a non-positive number through (gh-exec.mts and
-    // execFileSync both read `timeout: 0` as "no timeout", the opposite of
-    // "budget already exhausted").
-    const probe = probeSubject(
-      subjectId,
+    // candidate). When that exempt attempt finds the budget already
+    // exhausted, the chunk stays a single id: later ids are not pulled
+    // into a request the caller already asked to stop. A non-positive
+    // remainder is never passed through (gh-exec.mts and execFileSync both
+    // read `timeout: 0` as "no timeout", the opposite of "budget already
+    // exhausted").
+    const chunkLimit =
+      enteredRemaining !== undefined && enteredRemaining <= 0
+        ? 1
+        : PROBE_CHUNK_SIZE;
+    const chunk = uniqueSubjectIds.slice(index, index + chunkLimit);
+    const probes = probeSubjects(
+      chunk,
       enteredRemaining !== undefined && enteredRemaining > 0
         ? enteredRemaining
         : undefined,
     );
-    if (!probe.ok) {
-      report.items.push({ subjectId, status: 'failed', reason: probe.reason });
-      report.counts.failed += 1;
-      continue;
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      const subjectId = chunk[offset];
+      const probe = probes[offset] ?? {
+        ok: false,
+        reason: 'node-missing',
+      };
+      if (!probe.ok) {
+        report.items.push({
+          subjectId,
+          status: 'failed',
+          reason: probe.reason,
+        });
+        report.counts.failed += 1;
+        continue;
+      }
+      const { author, isMinimized, viewerCanMinimize, url, typename } =
+        probe.node;
+      if (!MINIMIZABLE_TYPENAMES.has(String(typename))) {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'skipped',
+          reason: 'unsupported-type',
+        });
+        report.counts.unsupportedType += 1;
+        continue;
+      }
+      if (isMinimized) {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'skipped',
+          reason: 'already-minimized',
+        });
+        report.counts.alreadyMinimized += 1;
+        continue;
+      }
+      if (!viewerCanMinimize) {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'skipped',
+          reason: 'viewer-cannot-minimize',
+        });
+        report.counts.cannotMinimize += 1;
+        continue;
+      }
+      if (!allowUntrusted && !isTrustedAuthor(author, trustedSet)) {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'skipped',
+          reason: 'untrusted-author',
+          author,
+        });
+        report.counts.untrusted += 1;
+        continue;
+      }
+      report.counts.eligible += 1;
+      if (!apply) {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'would-apply',
+          author,
+        });
+        continue;
+      }
+      // Second deadline check, immediately before the mutation call itself
+      // (#2754, chatgpt-codex-connector review on PR #2788): the entry check
+      // above only bounds how many candidates this pass STARTS probing --
+      // once a candidate is already in flight (including the very first,
+      // which the entry check always lets through), its own `probeSubject`
+      // call can still cost up to `GH_TIMEOUT_MS`. Without a check here too,
+      // that candidate would still reach `applyMinimize` and cost up to
+      // ANOTHER full `GH_TIMEOUT_MS`, so a single candidate's own probe+apply
+      // pair -- not just the between-candidates gap -- could blow well past
+      // `deadlineMs` before this pass ever returns. Checked for every index
+      // (including 0): unlike the entry check, this one never needs an
+      // exemption to guarantee forward progress, since the candidate's own
+      // probe has already run either way -- only the MUTATION is skipped.
+      //
+      // #2754, copilot-pull-request-reviewer review on PR #2788 (round 6):
+      // read `remaining()` exactly ONCE here and reuse that SAME value for
+      // both the skip decision and applyMinimize's own timeout -- round 5
+      // read it a second time a few lines below, so a budget that expired in
+      // that gap could still fall through to `undefined` (the 30s default)
+      // instead of being skipped, silently reopening the exact
+      // "applyMinimize costs up to another full GH_TIMEOUT_MS regardless of
+      // budget" gap this check exists to close.
+      const preApplyRemaining =
+        deadlineMs === undefined ? undefined : remaining();
+      if (deadlineMs !== undefined && preApplyRemaining <= 0) {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'skipped',
+          reason: 'deadline-exceeded',
+        });
+        report.counts.deadlineSkipped =
+          (report.counts.deadlineSkipped ?? 0) + 1;
+        continue;
+      }
+      // Past the check above, `preApplyRemaining` is guaranteed > 0 whenever
+      // `deadlineMs` is set (no index exemption here, unlike the probe
+      // check) -- reused as-is, no second `remaining()` read, so this never
+      // risks passing a non-positive timeout.
+      const mutation = applyMinimize(subjectId, classifier, preApplyRemaining);
+      if (mutation.ok) {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'applied',
+          author,
+        });
+        report.counts.applied += 1;
+      } else {
+        report.items.push({
+          subjectId,
+          url,
+          typename,
+          status: 'failed',
+          reason: mutation.reason,
+        });
+        report.counts.failed += 1;
+      }
     }
-    const { author, isMinimized, viewerCanMinimize, url, typename } =
-      probe.node;
-    if (!MINIMIZABLE_TYPENAMES.has(String(typename))) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'skipped',
-        reason: 'unsupported-type',
-      });
-      report.counts.unsupportedType += 1;
-      continue;
-    }
-    if (isMinimized) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'skipped',
-        reason: 'already-minimized',
-      });
-      report.counts.alreadyMinimized += 1;
-      continue;
-    }
-    if (!viewerCanMinimize) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'skipped',
-        reason: 'viewer-cannot-minimize',
-      });
-      report.counts.cannotMinimize += 1;
-      continue;
-    }
-    if (!allowUntrusted && !isTrustedAuthor(author, trustedSet)) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'skipped',
-        reason: 'untrusted-author',
-        author,
-      });
-      report.counts.untrusted += 1;
-      continue;
-    }
-    report.counts.eligible += 1;
-    if (!apply) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'would-apply',
-        author,
-      });
-      continue;
-    }
-    // Second deadline check, immediately before the mutation call itself
-    // (#2754, chatgpt-codex-connector review on PR #2788): the entry check
-    // above only bounds how many candidates this pass STARTS probing --
-    // once a candidate is already in flight (including the very first,
-    // which the entry check always lets through), its own `probeSubject`
-    // call can still cost up to `GH_TIMEOUT_MS`. Without a check here too,
-    // that candidate would still reach `applyMinimize` and cost up to
-    // ANOTHER full `GH_TIMEOUT_MS`, so a single candidate's own probe+apply
-    // pair -- not just the between-candidates gap -- could blow well past
-    // `deadlineMs` before this pass ever returns. Checked for every index
-    // (including 0): unlike the entry check, this one never needs an
-    // exemption to guarantee forward progress, since the candidate's own
-    // probe has already run either way -- only the MUTATION is skipped.
-    //
-    // #2754, copilot-pull-request-reviewer review on PR #2788 (round 6):
-    // read `remaining()` exactly ONCE here and reuse that SAME value for
-    // both the skip decision and applyMinimize's own timeout -- round 5
-    // read it a second time a few lines below, so a budget that expired in
-    // that gap could still fall through to `undefined` (the 30s default)
-    // instead of being skipped, silently reopening the exact
-    // "applyMinimize costs up to another full GH_TIMEOUT_MS regardless of
-    // budget" gap this check exists to close.
-    const preApplyRemaining =
-      deadlineMs === undefined ? undefined : remaining();
-    if (deadlineMs !== undefined && preApplyRemaining <= 0) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'skipped',
-        reason: 'deadline-exceeded',
-      });
-      report.counts.deadlineSkipped = (report.counts.deadlineSkipped ?? 0) + 1;
-      continue;
-    }
-    // Past the check above, `preApplyRemaining` is guaranteed > 0 whenever
-    // `deadlineMs` is set (no index exemption here, unlike the probe
-    // check) -- reused as-is, no second `remaining()` read, so this never
-    // risks passing a non-positive timeout.
-    const mutation = applyMinimize(subjectId, classifier, preApplyRemaining);
-    if (mutation.ok) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'applied',
-        author,
-      });
-      report.counts.applied += 1;
-    } else {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: 'failed',
-        reason: mutation.reason,
-      });
-      report.counts.failed += 1;
-    }
+    index += chunk.length;
   }
   return report;
+}
+function dedupeSubjectIds(subjectIds) {
+  const seen = new Set();
+  const unique = [];
+  for (const subjectId of subjectIds) {
+    if (seen.has(subjectId)) {
+      continue;
+    }
+    seen.add(subjectId);
+    unique.push(subjectId);
+  }
+  return unique;
 }
 // cspell:ignore Wpaqs
 // probeSubject requires a GraphQL global node id (e.g.
@@ -478,6 +510,153 @@ function isUnresolvableRestShapedId(subjectId, errorText) {
   return (
     REST_SHAPED_SUBJECT_ID_PATTERN.test(subjectId) &&
     UNRESOLVABLE_NODE_ID_PATTERN.test(errorText)
+  );
+}
+function chunkFailureResults(subjectIds, errorText, parsedErrors) {
+  const prefix = parsedErrors ? 'gh-graphql-errors' : 'gh-graphql-error';
+  return subjectIds.map((subjectId) => {
+    if (isUnresolvableRestShapedId(subjectId, errorText)) {
+      return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
+    }
+    return { ok: false, reason: `${prefix}: ${errorText.slice(0, 200)}` };
+  });
+}
+function indexScopedErrors(errors) {
+  const byIndex = new Map();
+  const globalMessages = [];
+  for (const error of errors) {
+    const message = String(error.message ?? '');
+    const path = error.path;
+    if (
+      Array.isArray(path) &&
+      path.length >= 2 &&
+      path[0] === 'nodes' &&
+      typeof path[1] === 'number'
+    ) {
+      const previous = byIndex.get(path[1]);
+      byIndex.set(path[1], previous ? `${previous}; ${message}` : message);
+    } else {
+      globalMessages.push(message || 'graphql error');
+    }
+  }
+  if (globalMessages.length > 0) {
+    return { globalText: globalMessages.join('; '), byIndex: null };
+  }
+  return { globalText: '', byIndex };
+}
+function probeResultAt(
+  subjectId,
+  node,
+  indexError,
+  transportFailed,
+  transportText,
+) {
+  if (indexError) {
+    if (isUnresolvableRestShapedId(subjectId, indexError)) {
+      return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
+    }
+    const prefix = transportFailed ? 'gh-graphql-error' : 'gh-graphql-errors';
+    return { ok: false, reason: `${prefix}: ${indexError.slice(0, 200)}` };
+  }
+  if (node == null || String(node.id ?? '') !== subjectId) {
+    if (transportFailed) {
+      if (isUnresolvableRestShapedId(subjectId, transportText)) {
+        return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
+      }
+      return {
+        ok: false,
+        reason: `gh-graphql-error: ${transportText.slice(0, 200)}`,
+      };
+    }
+    return {
+      ok: false,
+      reason: node == null ? 'node-missing' : 'node-id-mismatch',
+    };
+  }
+  return {
+    ok: true,
+    node: {
+      typename: node.__typename,
+      url: node.url,
+      isMinimized: node.isMinimized,
+      viewerCanMinimize: node.viewerCanMinimize,
+      author: node.author?.login,
+    },
+  };
+}
+/**
+ * Probe up to {@link PROBE_CHUNK_SIZE} subject ids in one
+ * `nodes(ids:)` request (#3593). A GraphQL or transport failure is
+ * confined to this chunk: a path-scoped error fails only that index,
+ * and a chunk-level error fails only these ids. A null node, an id
+ * mismatch, or an error never authorizes a mutation. `probeSubject`
+ * stays the single-id `node(id:)` query existing callers already stub.
+ */
+export function probeSubjects(subjectIds, timeoutMs) {
+  if (subjectIds.length === 0) {
+    return [];
+  }
+  const result = runGh(
+    [
+      'api',
+      ...resolveGhHostnameArgs(),
+      'graphql',
+      '-f',
+      `query=query($ids:[ID!]!){
+        nodes(ids:$ids){
+          __typename
+          ... on IssueComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
+          ... on PullRequestReview{id url isMinimized minimizedReason viewerCanMinimize author{login}}
+          ... on PullRequestReviewComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
+        }
+      }`,
+      ...subjectIds.flatMap((subjectId) => ['-f', `ids[]=${subjectId}`]),
+    ],
+    timeoutMs,
+  );
+  const stdout = result.stdout;
+  let parsed;
+  if (stdout) {
+    try {
+      parsed = JSON.parse(stdout);
+    } catch (error) {
+      if (result.ok) {
+        const message = error.message;
+        return subjectIds.map(() => ({
+          ok: false,
+          reason: `gh-graphql-parse: ${message}`,
+        }));
+      }
+    }
+  }
+  const nodes = parsed?.data?.nodes;
+  const errors = Array.isArray(parsed?.errors) ? parsed.errors : [];
+  const scoped = errors.length > 0 ? indexScopedErrors(errors) : null;
+  const canUseNodes =
+    Array.isArray(nodes) && (scoped === null || scoped.byIndex !== null);
+  if (!canUseNodes) {
+    if (!result.ok) {
+      return chunkFailureResults(subjectIds, result.stderr, false);
+    }
+    if (scoped?.byIndex === null) {
+      return chunkFailureResults(subjectIds, scoped.globalText, true);
+    }
+    if (!parsed) {
+      return subjectIds.map(() => ({
+        ok: false,
+        reason: 'gh-graphql-parse: empty response',
+      }));
+    }
+    return subjectIds.map(() => ({ ok: false, reason: 'node-missing' }));
+  }
+  return subjectIds.map((subjectId, index) =>
+    probeResultAt(
+      subjectId,
+      nodes[index],
+      scoped?.byIndex?.get(index),
+      !result.ok,
+      result.ok ? '' : result.stderr,
+    ),
   );
 }
 export function probeSubject(subjectId, timeoutMs) {
@@ -717,7 +896,10 @@ function runGh(argv, timeoutMs = GH_TIMEOUT_MS) {
       // `unknown` above, and TypeScript's strict mode rejects an
       // `unknown`-typed value assigned directly to GhResult's
       // `stderr: string` field. See kurone-kito/idd-skill#2957.
+      // stdout is kept so a non-zero `nodes(ids:)` response can still
+      // yield per-index results (#3593); probeSubject ignores it.
       stderr: String(e.stderr?.toString?.() || e.message || 'unknown error'),
+      stdout: String(e.stdout?.toString?.() || ''),
     };
   }
 }

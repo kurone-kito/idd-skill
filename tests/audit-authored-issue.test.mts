@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { auditAuthoredIssue } from '../src/scripts/audit-authored-issue.mts';
+import {
+  auditAuthoredIssue,
+  readCleanupEvidenceFile,
+} from '../src/scripts/audit-authored-issue.mts';
 import { extractBlockedByRoadmapMarkers } from '../src/scripts/discover-readiness-check.mts';
 import {
   renderAuthoringOwnerMarker,
@@ -4942,5 +4945,168 @@ test('the compiled CLI falls back to a leading "# <title>" body line when --titl
     assert.equal(finding?.result, 'pass');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('cleanup evidence clears a confirmed backlog id without changing the owner trail (#3593)', () => {
+  const older = canonicalOwnerMarkerBody({ mode: 'acquire' });
+  const newer = canonicalOwnerMarkerBody({ mode: 'release' });
+  const comments: {
+    id: string;
+    body: string;
+    author: string;
+    isMinimized?: boolean;
+  }[] = [
+    { id: 'IC_old', body: older, author: 'kurone-kito' },
+    { id: 'IC_new', body: newer, author: 'kurone-kito' },
+  ];
+  const base = {
+    shape: 'orphan' as const,
+    labels: ['status:authoring'],
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    comments,
+  };
+  const without = auditAuthoredIssue(orphanBody(), base);
+  const confirmed = auditAuthoredIssue(orphanBody(), {
+    ...base,
+    cleanupEvidence: {
+      mutations: [
+        { subjectId: 'IC_old', status: 'applied', author: 'kurone-kito' },
+      ],
+    },
+  });
+  const failed = auditAuthoredIssue(orphanBody(), {
+    ...base,
+    cleanupEvidence: {
+      mutations: [
+        {
+          subjectId: 'IC_old',
+          status: 'failed',
+          reason: 'gh-graphql-error: boom',
+        },
+      ],
+    },
+  });
+  const owner = (report: ReturnType<typeof auditAuthoredIssue>) =>
+    report.findings.find(
+      (entry) => entry.id === 'authoring-owner-marker-trail',
+    );
+  const backlog = (report: ReturnType<typeof auditAuthoredIssue>) =>
+    report.findings.find(
+      (entry) => entry.id === 'authoring-marker-minimization-backlog',
+    );
+  assert.equal(owner(without)?.detail, owner(confirmed)?.detail);
+  assert.equal(owner(without)?.result, 'pass');
+  assert.match(backlog(without)?.detail ?? '', /authoring-owner: 1\b/);
+  assert.match(backlog(confirmed)?.detail ?? '', /authoring-owner: 0\b/);
+  assert.match(backlog(failed)?.detail ?? '', /authoring-owner: 1\b/);
+  assert.equal(comments[0]?.isMinimized, undefined);
+});
+
+test('cleanup evidence supplies only the matching repository collection (#3593)', () => {
+  const older = canonicalOwnerMarkerBody({ mode: 'acquire' });
+  const newer = canonicalOwnerMarkerBody({ mode: 'release' });
+  const wrongRepo = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    currentRepo: 'kurone-kito/idd-skill',
+    issueNumber: 9001,
+    cleanupEvidence: {
+      collections: [
+        {
+          owner: 'other',
+          repo: 'idd-skill',
+          issue: 9001,
+          comments: [
+            { id: 'IC_old', body: older },
+            { id: 'IC_new', body: newer },
+          ],
+        },
+      ],
+    },
+  });
+  const matched = auditAuthoredIssue(orphanBody(), {
+    shape: 'orphan',
+    labels: ['status:authoring'],
+    currentRepo: 'Kurone-Kito/IDD-Skill',
+    issueNumber: 9001,
+    cleanupEvidence: {
+      collections: [
+        {
+          owner: 'other',
+          repo: 'idd-skill',
+          issue: 9001,
+          comments: [
+            { id: 'IC_other', body: older },
+            { id: 'IC_other_new', body: newer },
+          ],
+        },
+        {
+          owner: 'kurone-kito',
+          repo: 'idd-skill',
+          issue: 9001,
+          comments: [
+            { id: 'IC_old', body: older, author: 'kurone-kito' },
+            { id: 'IC_new', body: newer, author: 'kurone-kito' },
+          ],
+        },
+      ],
+      mutations: [
+        {
+          subjectId: 'IC_old',
+          status: 'skipped',
+          reason: 'already-minimized',
+        },
+      ],
+    },
+  });
+  const backlogOf = (report: ReturnType<typeof auditAuthoredIssue>) =>
+    report.findings.find(
+      (entry) => entry.id === 'authoring-marker-minimization-backlog',
+    )?.detail ?? '';
+  const ownerOf = (report: ReturnType<typeof auditAuthoredIssue>) =>
+    report.findings.find(
+      (entry) => entry.id === 'authoring-owner-marker-trail',
+    );
+  assert.match(backlogOf(wrongRepo), /not applicable/);
+  assert.match(backlogOf(matched), /authoring-owner: 0\b/);
+  assert.match(ownerOf(matched)?.detail ?? '', /no comment data supplied/);
+});
+
+test('readCleanupEvidenceFile normalizes an author object to its login (#3593)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-cleanup-evidence-'));
+  const path = join(dir, 'evidence.json');
+  try {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        collections: [
+          {
+            owner: 'acme',
+            repo: 'widget',
+            issue: 7,
+            comments: [
+              { id: 'IC_1', body: 'hello', author: { login: 'trusted-bot' } },
+              { id: 'IC_2', body: 'plain', author: 'kept-login' },
+              { id: 'IC_3', body: 'unknown', author: 12 },
+            ],
+          },
+        ],
+        mutations: [
+          {
+            subjectId: 'IC_1',
+            status: 'applied',
+            author: { login: 'trusted-bot' },
+          },
+        ],
+      }),
+    );
+    const evidence = readCleanupEvidenceFile(path);
+    assert.equal(evidence.collections?.[0]?.comments[0]?.author, 'trusted-bot');
+    assert.equal(evidence.collections?.[0]?.comments[1]?.author, 'kept-login');
+    assert.equal(evidence.collections?.[0]?.comments[2]?.author, undefined);
+    assert.equal(evidence.mutations?.[0]?.author, 'trusted-bot');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -2714,13 +2714,25 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
   const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
   const classifierEntry = fValues.find((v) => v.indexOf('classifier=') === 0);
   const id = idEntry ? idEntry.slice('id='.length) : '';
-  fs.appendFileSync(mutationLogFile, JSON.stringify({ id, mutation: Boolean(classifierEntry) }) + '\\n');
+  const ids = fValues.filter((v) => v.indexOf('ids[]=') === 0).map((v) => v.slice('ids[]='.length));
   if (classifierEntry) {
+    fs.appendFileSync(mutationLogFile, JSON.stringify({ id, mutation: true }) + '\\n');
     if (failMutationFor.indexOf(id) !== -1) {
       fail('mutation-error: permission denied');
     }
     out(JSON.stringify({ data: { minimizeComment: { minimizedComment: { __typename: 'IssueComment', isMinimized: true } } } }));
+  } else if (ids.length > 0) {
+    for (const probedId of ids) {
+      fs.appendFileSync(mutationLogFile, JSON.stringify({ id: probedId, mutation: false }) + '\\n');
+    }
+    const nodes = ids.map((probedId) => {
+      const info = probeIndex[probedId];
+      if (!info) return null;
+      return { __typename: 'IssueComment', id: probedId, url: 'https://github.com/o/r/issues/1#issuecomment-' + probedId, isMinimized: info.isMinimized || false, viewerCanMinimize: info.viewerCanMinimize !== false, author: { login: info.author || 'kurone-kito' } };
+    });
+    out(JSON.stringify({ data: { nodes } }));
   } else {
+    fs.appendFileSync(mutationLogFile, JSON.stringify({ id, mutation: false }) + '\\n');
     const info = probeIndex[id];
     if (!info) {
       out(JSON.stringify({ data: { node: null } }));

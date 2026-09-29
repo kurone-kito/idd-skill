@@ -947,6 +947,11 @@ in this preamble, since the fallback differs per helper.
   `advisory-reroll` (advisory-wait AW3-H), or `claimed-by` (claim
   takeover) — after the replacement marker is verified
 
+  In-budget probes are `nodes(ids:)` batches of at most 100 deduplicated
+  ids (#3593). A chunk-level GraphQL error fails only that chunk.
+  Duplicate ids are probed and mutated once. When the deadline is
+  already exhausted, only the first id is probed.
+
   Per-helper trust model: `minimize-superseded-markers` resolves its
   trusted-author gate with the same `flag > env > config` ladder as the
   evidence helpers (the singular `trustedMarkerActorsSource` names the
@@ -978,7 +983,15 @@ in this preamble, since the fallback differs per helper.
   contract previously described in prose at three separate points. Same
   mandatory trusted-author gate as `minimize-superseded-markers` (no
   `--allow-untrusted` escape hatch: this sweep's own "newest"
-  determination depends on the trust filter)
+  determination depends on the trust filter). Repeated targets that
+  name the same repository and issue number, compared
+  case-insensitively, are fetched once. The same number in another
+  repository stays a separate fetch. `--with-cleanup-evidence` adds
+  `cleanupEvidence` for
+  `audit-authored-issue.mjs --cleanup-evidence-file`. Confirmed
+  applied or already-minimized results set `isMinimized`; other
+  outcomes do not. The evidence is not an ownership input. The default
+  report omits the field.
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 - `scripts/disposition-non-review-notices.mjs` for dry-run/apply
