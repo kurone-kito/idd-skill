@@ -569,9 +569,11 @@ no-mutation dispatch still publishes. Bound the delegated command with
 `issueAuthoring.adversarialReview.waitCeiling`
 (default `PT20M`) through the caller's own wait and cleanup. Do not wrap
 the configured command in a timeout utility. The ceiling does not read
-`critiqueLoop.subagentWaitCeiling`. The configured command is trusted
-executable configuration and may transmit the supplied draft and
-evidence packet. The normative checklist and disposition rule live in
+`critiqueLoop.subagentWaitCeiling`, and a user-global ceiling is
+ignored. Use the same caller-side bound for the native reviewer, so a
+hung native pass is not an unbounded substitute. The configured command
+is trusted executable configuration and may transmit the supplied draft
+and evidence packet. The normative checklist and disposition rule live in
 the
 [issue-authoring skill contract](issue-authoring-skill.md#completed-draft-adversarial-review).
 
