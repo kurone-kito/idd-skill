@@ -517,6 +517,64 @@ enumeration, but it still applies targeted readiness checks, the A4
 viability gate, and the A4.5 suitability gate before the normal A5 claim
 safety checks.
 
+### Completed-draft adversarial review
+
+The Intake critique of an emerging interpretation stays in Intake.
+After a roadmap, child, or orphan body is drafted, a separate review
+runs before `audit-authored-issue` and before publication. Review a
+roadmap shell while `## Tracks` may still be empty, then each child,
+then the parent again before saving real child numbers into
+`## Tracks`.
+
+The reviewer receives the exact title and body plus only the user's
+goal, confirmed constraints and design choices, relevant evidence or
+file references, relationship context for a multi-issue set, and the
+issue-authoring critique checklist. That checklist checks the confirmed
+goal, a concrete surface and objective verification, hidden human
+dependencies, true dependency edges, the specificity target range, and
+candidate files used as cues. It does not receive the whole
+conversation or unbounded work instructions.
+
+Resolve `idd-issue-authoring-delegate` when a helper runtime can run
+it. This source repository's equivalent is:
+
+```sh
+node scripts/idd-issue-authoring-delegate.mjs [--policy <path>] [--no-user-global]
+```
+
+The helper does not invoke the command and does not read
+`critiqueLoop.delegate`. If the resolver cannot be run, or `usable` is
+false, keep the agent-native reviewer or a structured self-critique.
+That is not a failed review. When `usable` is true, the modes match the
+C/E delegate:
+
+| mode                 | delegate succeeded           | delegate failed              |
+| -------------------- | ---------------------------- | ---------------------------- |
+| `fallback` (default) | native reviewer does not run | native reviewer runs         |
+| `combined`           | both run                     | both run                     |
+| `on-success`         | both run                     | native reviewer does not run |
+| `never`              | native reviewer does not run | native reviewer does not run |
+
+Union the findings whenever both mechanisms run. After `usable: true`,
+a missing command, non-zero exit, timeout, cancellation, or unreadable
+findings is a failure. A readable empty list is a clean verdict. If no
+mechanism that ran returns a readable list, do not publish: do not
+create an issue, update a body, change a label, or append a marker. An
+existing held issue keeps its label and previous body. A failure is
+never a clean review.
+
+The reviewer returns a findings list only. Prefer a non-context-inheriting
+reviewer. issue #3448 records the observed risk that a context-inheriting
+no-mutation dispatch still publishes. Bound the delegated command with
+`issueAuthoring.adversarialReview.waitCeiling`
+(default `PT20M`) through the caller's own wait and cleanup. Do not wrap
+the configured command in a timeout utility. The ceiling does not read
+`critiqueLoop.subagentWaitCeiling`. The configured command is trusted
+executable configuration and may transmit the supplied draft and
+evidence packet. The normative checklist and disposition rule live in
+the
+[issue-authoring skill contract](issue-authoring-skill.md#completed-draft-adversarial-review).
+
 ## External-signal entry path
 
 The Discover -> Claim -> Work loop above only reads issues already

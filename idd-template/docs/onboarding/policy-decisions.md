@@ -177,7 +177,7 @@ use one native copy plus an explicit manual route unless the operator
 deliberately accepts identical duplicates. The companion helps draft
 IDD-ready issues and roadmaps. By default, it publishes each drafted
 `ready` body directly under the configured authoring label once it
-passes the mechanical pre-publish gate and the critique pass — no
+passes the completed-draft review and then the mechanical pre-publish gate — no
 separate publish approval step — unless the current request explicitly
 asked for a preview instead. Releasing that authoring hold is the
 single boundary within the companion's own workflow that still needs an

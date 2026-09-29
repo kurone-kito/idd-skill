@@ -12,9 +12,17 @@ approval boundary that hands off to IDD execution.
 - Skill drafts issues in the target repository. Each candidate moves
   through the readiness buckets: `deferred` → `ready` or an escalation
   bucket (`needs-decision`, `blocked-by-human`, `out-of-scope`)
-- Before publishing a `ready` body, bundled skill runs the mechanical
-  `audit-authored-issue` gate and the critique pass (both unchanged
-  and still mandatory)
+- Before publishing a `ready` body, bundled skill runs the
+  completed-draft adversarial review and then the mechanical
+  `audit-authored-issue` gate. Both are mandatory. The review is not
+  the Intake critique. Normative packet, modes, failure stop, wait
+  ceiling, and no-mutation boundary:
+  [Completed-draft adversarial review](contract.md#completed-draft-adversarial-review).
+  A failed or unreadable review does not create or update an issue,
+  change a label, or append a marker. The reviewer returns findings
+  only. A roadmap shell may still have an empty `## Tracks` list;
+  review each child before that child is published, and review the
+  parent again before saving real child numbers into `## Tracks`
 - Bundled skill then publishes directly under the configured authoring
   label (`issueAuthoring.authoringLabelName`, defaulting to
   `status:authoring`) — **no prior user approval of the drafted body
@@ -512,8 +520,8 @@ time and report the specific failure (unclear, invalid, duplicate).
 - start the Discover -> Claim -> Work loop implicitly
 - treat bundled references as a replacement for repository execution
   instructions
-- publish a body that has not passed the mechanical
-  `audit-authored-issue` gate and the critique pass
+- publish a body that has not passed the completed-draft adversarial
+  review and then the mechanical `audit-authored-issue` gate
 - remove the authoring label from any issue without an explicit
   release request, except the narrow review-fix-loop-cutoff
   auto-release exception in

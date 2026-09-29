@@ -95,7 +95,8 @@ plus 4 child issues and rewriting a personal gist. On 2026-09-24/25 a
 read-only verification subagent, sent to fact-check two drafted issue
 bodies, executed the full Stage 1 publish protocol instead. Each
 dispatch prompt said not to mutate anything, and each delegate was a
-context-inheriting subagent type.
+context-inheriting subagent type. issue #3448 records those
+incidents.
 
 Clarification must converge. The skill should:
 
@@ -689,6 +690,119 @@ during drafting:
 **Prevention during drafting**: Before publishing an issue, validate that
 it will not fail A4.5 for coherence, safety, or uniqueness. If it would,
 resolve the issue during drafting instead of publishing it.
+
+### Completed-draft adversarial review
+
+This review is distinct from the Intake and Clarification critique.
+That earlier pass reviews the emerging interpretation, before a body
+exists. This pass reviews each completed roadmap, child, or orphan
+draft after drafting and before `audit-authored-issue` and before
+publication.
+
+Review and audit a roadmap shell while its `## Tracks` list may still
+be empty, then publish and acquire that shell. Review and audit each
+child before that child's publication. Writing the real child numbers
+into `## Tracks` revises the roadmap: review that revised body, then
+run the linter again, before saving the edit. Do not hold child
+publication until the parent task list is final.
+
+The reviewer receives the exact candidate title and body, plus only
+this packet:
+
+- the user's goal
+- confirmed constraints and design choices
+- relevant evidence or file references
+- relationship context for a multi-issue set
+- the issue-authoring critique checklist below
+
+The packet does not include the whole conversation or unbounded work
+instructions.
+
+**Issue-authoring critique checklist.**
+
+- the title and body match the confirmed goal and constraints
+- a concrete surface and an objective verification are named
+- acceptance criteria are checkable without a hidden human decision,
+  credential, or subjective approval
+- dependency edges are true blockers, and independent siblings stay in
+  the roadmap task list
+- the draft stays inside the specificity target range documented above
+- candidate files, when present, are cues rather than an edit script
+
+#### Resolver
+
+When a helper runtime can run it, resolve the delegate with
+`idd-issue-authoring-delegate`. In this source repository the
+equivalent is:
+
+```sh
+node scripts/idd-issue-authoring-delegate.mjs [--policy <path>] [--no-user-global]
+```
+
+The helper resolves `issueAuthoring.adversarialReview.delegate`. It
+does not invoke the command, does not read a branch diff, and does not
+read `critiqueLoop.delegate`.
+
+If that resolver cannot be run (`instructions-only`, or the helper is
+not available), use the agent-native reviewer or a structured
+self-critique. A missing resolver is not a delegate failure.
+
+`usable: false` (`not-configured`, `repository-local-explicit-disable`,
+or `invalid-repository-local-delegate`) keeps that same native reviewer
+or structured self-critique. An unusable delegate is not a failed
+review.
+
+When `usable` is true, apply one of four modes. They match the C/E
+critique-delegate modes, for this delegate only. Whenever both
+mechanisms run, union their findings.
+
+| mode                 | delegate succeeded           | delegate failed              |
+| -------------------- | ---------------------------- | ---------------------------- |
+| `fallback` (default) | native reviewer does not run | native reviewer runs         |
+| `combined`           | both run                     | both run                     |
+| `on-success`         | both run                     | native reviewer does not run |
+| `never`              | native reviewer does not run | native reviewer does not run |
+
+Delegate failure applies only after `usable: true`. It means a missing
+command, a non-zero exit, a timeout, cancellation, or findings that
+cannot be read as a list. A readable empty list is a clean verdict. If
+no mechanism that actually ran returns a readable list, stop
+publication. Do not create an issue, do not update a body, do not apply
+or remove a label, and do not append an authoring marker. An issue that
+already exists under the authoring hold keeps that label and its
+previous body. A failure is never a clean review. Remaining held means
+the candidate does not become a released, discoverable issue. It does
+not mean creating a labeled issue to represent the stop.
+
+The reviewer is read-only and review-scoped. It returns a findings list
+only. It must not create or update issues, change labels, or append
+authoring markers. Prefer a non-context-inheriting reviewer.
+issue #3448 records the observed risk: a context-inheriting
+no-mutation dispatch can still publish.
+
+Bound the delegated command with
+`issueAuthoring.adversarialReview.waitCeiling`.
+Use the resolver's `waitCeiling` when resolution ran, otherwise the
+default `PT20M`. Enforce it through the caller's own bounded wait and
+cleanup. Do not wrap the configured command in a timeout utility, the
+same principle as issue #3449. This ceiling does not read
+`critiqueLoop.subagentWaitCeiling`, and a user-global ceiling is
+ignored. Use the same caller-side bound for the native reviewer, so a
+hung native pass is not an unbounded substitute.
+
+The configured command is trusted executable configuration and may
+transmit the supplied draft and evidence packet.
+
+#### Disposition
+
+Record an explicit author disposition for every finding before
+publication. When a disposition changes the title or body, run
+`audit-authored-issue` on the revised text. When that revision changes
+acceptance criteria, candidate files, dependency edges, or roadmap
+task-list or relationship wiring, run this review once more on the
+revised draft before the linter. Wording-only edits do not start
+another review. The body that enters the linter is the reviewed body
+plus those wording-only edits.
 
 ### Mechanical pre-publish gate
 
@@ -1354,8 +1468,9 @@ the label event only for legacy-unowned bootstrap. A competing active marker
 still stops the session.
 
 Publishing under this label needs no separate user approval: once a
-drafted `ready` body passes the mechanical `audit-authored-issue` gate
-and the critique pass, the skill publishes it directly (see
+drafted `ready` body passes the completed-draft adversarial review and
+then the mechanical `audit-authored-issue` gate, the skill publishes it
+directly (see
 [Approval boundary](#approval-boundary) below for the one exception).
 The held issue **is** the draft — in-place body edits, roadmap
 relationship wiring (publish/acquire the roadmap anchor first, then
@@ -2121,8 +2236,11 @@ Validation expectations:
   `authoring-bucket: needs-decision` marker substitutes the configured
   needs-decision label instead (see
   [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
-- passes the `audit-authored-issue` mechanical pre-publish gate for the
-  `orphan` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
+- passes the completed-draft adversarial review and then the
+  `audit-authored-issue` mechanical pre-publish gate for the
+  `orphan` shape (see
+  [Completed-draft adversarial review](#completed-draft-adversarial-review)
+  and [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ### Roadmap issue schema
 
@@ -2169,8 +2287,11 @@ Validation expectations:
   `authoring-bucket: needs-decision` marker substitutes the configured
   needs-decision label instead (see
   [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
-- passes the `audit-authored-issue` mechanical pre-publish gate for the
-  `roadmap` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
+- passes the completed-draft adversarial review and then the
+  `audit-authored-issue` mechanical pre-publish gate for the
+  `roadmap` shape (see
+  [Completed-draft adversarial review](#completed-draft-adversarial-review)
+  and [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ### Sub-issue schema
 
@@ -2211,10 +2332,12 @@ Validation expectations:
   `authoring-bucket: needs-decision` marker substitutes the configured
   needs-decision label instead (see
   [Authoring-bucket marker](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-bucket-marker))
-- passes the `audit-authored-issue` mechanical pre-publish gate using
+- passes the completed-draft adversarial review and then the
+  `audit-authored-issue` mechanical pre-publish gate using
   `--shape child` (the linter's shape enum names this schema `child`,
   matching `contract.md`'s "Child issue under a roadmap"; see
-  [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
+  [Completed-draft adversarial review](#completed-draft-adversarial-review)
+  and [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ## Drafted issue prose language
 
@@ -2269,9 +2392,12 @@ Before reporting or publishing issue drafts, the skill should verify:
   context
 - reuse or extension decisions are recorded when the skill chose not to
   create a new issue
-- each drafted ready body passes the `audit-authored-issue` mechanical
-  pre-publish gate for its declared shape, or the manual fallback when
-  no helper runtime is available (see
+- each drafted ready body passes the completed-draft adversarial
+  review and then the `audit-authored-issue` mechanical pre-publish
+  gate for its declared shape, or the manual fallback when no helper
+  runtime is available (see
+  [Completed-draft adversarial review](#completed-draft-adversarial-review)
+  and
   [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ## Repository-local implementation surface
@@ -2296,8 +2422,9 @@ Issue authoring under the hold and IDD execution are separate
 decisions, but drafting and publishing are not: by default, the skill
 authors and publishes a `ready` issue set directly under the
 configured authoring label (`issueAuthoring.authoringLabelName`,
-default `status:authoring`), gated only by the mechanical
-`audit-authored-issue` check and the critique pass — no prior user
+default `status:authoring`), gated by the completed-draft adversarial
+review and then the mechanical `audit-authored-issue` check — no prior
+user
 approval of the drafted body is required.
 
 The one exception: if the current request asks only for a preview
