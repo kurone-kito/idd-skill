@@ -1251,6 +1251,27 @@ test('policy schema rejects unknown keys inside autopilotSuitability', () => {
   );
 });
 
+test('policy schema accepts githubApi telemetry and rejects a bad record bound', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const accepted = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  accepted.githubApi = {
+    telemetry: { enabled: true, maxRecords: 3, path: '/tmp/x' },
+  };
+  assert.deepEqual(validate(accepted, schema), []);
+
+  const rejected = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  rejected.githubApi = { telemetry: { enabled: true, maxRecords: 0 } };
+  const errors = validate(rejected, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.githubApi.telemetry.maxRecords')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema accepts a discover.legacyRoots array of issue numbers', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

@@ -503,6 +503,9 @@ interface RawConfig {
   };
   localValidationEvidence?: { maxAge?: unknown };
   providerHealth?: { minCorroboratingPrs?: unknown; samplingWindow?: unknown };
+  githubApi?: {
+    telemetry?: { enabled?: unknown; maxRecords?: unknown; path?: unknown };
+  };
   developmentBranch?: unknown;
   provider?: unknown;
 }
@@ -726,6 +729,20 @@ export const POLICY_DEFAULTS = Object.freeze({
     minCorroboratingPrs: 2,
     samplingWindow: 'PT24H',
   }) as Readonly<ProviderHealthPolicy>,
+  // #3585: absent or false leaves the GitHub transport wrappers unchanged.
+  githubApi: Object.freeze({
+    telemetry: Object.freeze({
+      enabled: false,
+      maxRecords: 100,
+      path: null,
+    }),
+  }) as Readonly<{
+    telemetry: Readonly<{
+      enabled: boolean;
+      maxRecords: number;
+      path: string | null;
+    }>;
+  }>,
 });
 
 export function parseProjectCommandRows(text: string): Map<string, string> {
@@ -922,6 +939,20 @@ export function normalizePolicyConfig(config: unknown) {
     c?.providerHealth?.minCorroboratingPrs,
     POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
   );
+  const telemetryPath = c?.githubApi?.telemetry?.path;
+  const githubApi = {
+    telemetry: {
+      enabled: c?.githubApi?.telemetry?.enabled === true,
+      maxRecords: parsePositiveInteger(
+        c?.githubApi?.telemetry?.maxRecords,
+        POLICY_DEFAULTS.githubApi.telemetry.maxRecords,
+      ),
+      path:
+        typeof telemetryPath === 'string' && telemetryPath.trim().length > 0
+          ? telemetryPath.trim()
+          : null,
+    },
+  };
   const providerHealth: ProviderHealthPolicy = {
     minCorroboratingPrs:
       rawMinCorroboratingPrs >= 2
@@ -1168,6 +1199,7 @@ export function normalizePolicyConfig(config: unknown) {
     providerOutage,
     localValidationEvidence,
     providerHealth,
+    githubApi,
   };
 }
 

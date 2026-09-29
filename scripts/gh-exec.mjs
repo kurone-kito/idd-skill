@@ -27,6 +27,12 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import {
+  observeGhFailure,
+  observeGhSuccess,
+  recordRequestObservation,
+  telemetryIsEnabled,
+} from './github-api-observation.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 /**
  * Tag a thrown `gh`-invocation error with a non-enumerable `ghCommand:
@@ -326,6 +332,43 @@ export async function ghTextAsync(args, options = {}) {
     throw tagGhCommandError(error);
   }
 }
+function recordTransportObservation(build) {
+  try {
+    if (!telemetryIsEnabled()) return;
+    recordRequestObservation(build());
+  } catch {
+    // Observation retention must not change the wrapper's own outcome.
+  }
+}
+function statusFromIncluded(raw) {
+  const match = raw.trim().match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/);
+  if (!match) return null;
+  const status = Number.parseInt(match[1], 10);
+  return Number.isInteger(status) ? status : null;
+}
+function tryParseIncludedBody(raw) {
+  if (statusFromIncluded(raw) === null) return null;
+  try {
+    return parseIncludedGhApiResponse(raw);
+  } catch {
+    return null;
+  }
+}
+/**
+ * Parse a `gh api` body when telemetry asked for `--include`. A usable
+ * HTTP envelope is handled by {@link tryParseIncludedBody} first. This
+ * fallback accepts today's plain JSON, then the last section of a
+ * partial envelope, so a header-parse miss cannot turn a successful
+ * body into a new thrown error.
+ */
+function parseObservedGhBody(raw) {
+  try {
+    return JSON.parse(raw.trim() || '{}');
+  } catch {
+    const body = raw.split(/\r?\n\r?\n/).pop() ?? '';
+    return JSON.parse(body.trim() || '{}');
+  }
+}
 function parseIncludedGhApiResponse(raw) {
   const sections = raw.split(/\r?\n\r?\n/);
   const body = sections.pop()?.trim() ?? '';
@@ -380,9 +423,18 @@ export function ghApiJsonWithHeaders(path, options = {}) {
       ...(options.input !== undefined ? { input: options.input } : {}),
     });
   } catch (error) {
+    recordTransportObservation(() => observeGhFailure(error));
     throw tagGhCommandError(error);
   }
-  return parseIncludedGhApiResponse(raw);
+  const parsed = parseIncludedGhApiResponse(raw);
+  recordTransportObservation(() =>
+    observeGhSuccess({
+      status: statusFromIncluded(raw),
+      headers: parsed.headers,
+      data: parsed.data,
+    }),
+  );
+  return parsed;
 }
 /**
  * Resolve the `--hostname` override {@link ghApiJson} / {@link ghGraphql}
@@ -532,6 +584,7 @@ export function combineOwnerRepoFlags(args) {
 export function ghApiJson(path, options = {}) {
   const { paginate = false, extraArgs = [], allowStatuses = [] } = options;
   const hostname = resolveGhApiHostname();
+  const observeHttp = !paginate && telemetryIsEnabled();
   const args = [
     'api',
     path,
@@ -540,6 +593,8 @@ export function ghApiJson(path, options = {}) {
   ];
   if (paginate) {
     args.push('--paginate', '--jq', '.[]');
+  } else if (observeHttp) {
+    args.push('--include');
   }
   const timeout =
     options.timeout ??
@@ -556,21 +611,78 @@ export function ghApiJson(path, options = {}) {
     const failure = error;
     const status = Number(failure?.status ?? -1);
     if (!allowStatuses.includes(status)) {
+      recordTransportObservation(() =>
+        observeGhFailure(error, { paginated: paginate }),
+      );
       throw tagGhCommandError(error);
     }
     const stdout = String(failure?.stdout ?? '');
+    const included = observeHttp ? tryParseIncludedBody(stdout) : null;
+    if (included) {
+      recordTransportObservation(() =>
+        observeGhSuccess({
+          status: statusFromIncluded(stdout),
+          headers: included.headers,
+          data: included.data,
+        }),
+      );
+      return included.data;
+    }
+    if (observeHttp) {
+      // Empty or non-JSON stdout still throws the original gh error.
+      // Only plain JSON, or an envelope whose body is JSON, is recovered.
+      const recoverable =
+        /^\s*[[{]/.test(stdout) || statusFromIncluded(stdout) !== null;
+      if (recoverable) {
+        try {
+          const data = parseObservedGhBody(stdout);
+          recordTransportObservation(() => observeGhSuccess({ data }));
+          return data;
+        } catch {
+          // Fall through to the original failure below.
+        }
+      }
+      recordTransportObservation(() =>
+        observeGhFailure(error, { paginated: paginate }),
+      );
+      throw tagGhCommandError(error);
+    }
     if (!/^\s*[[{]/.test(stdout)) {
+      recordTransportObservation(() =>
+        observeGhFailure(error, { paginated: paginate }),
+      );
       throw tagGhCommandError(error);
     }
     raw = stdout;
   }
   if (paginate) {
-    // parsePaginatedGhNdjson already trims and returns [] on empty input.
-    return parsePaginatedGhNdjson(raw);
+    const data = parsePaginatedGhNdjson(raw);
+    recordTransportObservation(() =>
+      observeGhSuccess({ data, paginated: true }),
+    );
+    return data;
+  }
+  if (observeHttp) {
+    const included = tryParseIncludedBody(raw);
+    if (included) {
+      recordTransportObservation(() =>
+        observeGhSuccess({
+          status: statusFromIncluded(raw),
+          headers: included.headers,
+          data: included.data,
+        }),
+      );
+      return included.data;
+    }
+    const data = parseObservedGhBody(raw);
+    recordTransportObservation(() => observeGhSuccess({ data }));
+    return data;
   }
   // JSON.parse itself ignores surrounding whitespace, so only trim to
   // decide whether the output was empty.
-  return JSON.parse(raw.trim() || '{}');
+  const data = JSON.parse(raw.trim() || '{}');
+  recordTransportObservation(() => observeGhSuccess({ data }));
+  return data;
 }
 /**
  * Run a `gh api graphql` query with variables, returning the parsed JSON
@@ -601,7 +713,18 @@ export function ghGraphql(query, variables) {
     }
     args.push('-f', `${key}=${value}`);
   }
-  return JSON.parse(ghText(args).trim() || '{}');
+  let raw;
+  try {
+    raw = ghText(args);
+  } catch (error) {
+    recordTransportObservation(() => observeGhFailure(error));
+    throw error;
+  }
+  const data = JSON.parse(raw.trim() || '{}');
+  recordTransportObservation(() =>
+    observeGhSuccess({ data, httpObserved: false }),
+  );
+  return data;
 }
 /** #2148: REST `GET /user` failures that may still have a live GraphQL
  * `viewer { login }` — 5xx, timeout, or a killed child. Unclassified

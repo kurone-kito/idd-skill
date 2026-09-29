@@ -293,6 +293,13 @@ interface PolicyConfigFile {
     minCorroboratingPrs?: number;
     samplingWindow?: string;
   };
+  githubApi?: {
+    telemetry?: {
+      enabled?: boolean;
+      maxRecords?: number;
+      path?: string;
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -590,6 +597,7 @@ export const policyConfigKeys = [
   'providerOutage',
   'localValidationEvidence',
   'providerHealth',
+  'githubApi',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder

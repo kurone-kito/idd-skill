@@ -354,6 +354,14 @@ export const POLICY_DEFAULTS = Object.freeze({
     minCorroboratingPrs: 2,
     samplingWindow: 'PT24H',
   }),
+  // #3585: absent or false leaves the GitHub transport wrappers unchanged.
+  githubApi: Object.freeze({
+    telemetry: Object.freeze({
+      enabled: false,
+      maxRecords: 100,
+      path: null,
+    }),
+  }),
 });
 export function parseProjectCommandRows(text) {
   const commands = new Map();
@@ -530,6 +538,20 @@ export function normalizePolicyConfig(config) {
     c?.providerHealth?.minCorroboratingPrs,
     POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
   );
+  const telemetryPath = c?.githubApi?.telemetry?.path;
+  const githubApi = {
+    telemetry: {
+      enabled: c?.githubApi?.telemetry?.enabled === true,
+      maxRecords: parsePositiveInteger(
+        c?.githubApi?.telemetry?.maxRecords,
+        POLICY_DEFAULTS.githubApi.telemetry.maxRecords,
+      ),
+      path:
+        typeof telemetryPath === 'string' && telemetryPath.trim().length > 0
+          ? telemetryPath.trim()
+          : null,
+    },
+  };
   const providerHealth = {
     minCorroboratingPrs:
       rawMinCorroboratingPrs >= 2
@@ -775,6 +797,7 @@ export function normalizePolicyConfig(config) {
     providerOutage,
     localValidationEvidence,
     providerHealth,
+    githubApi,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {

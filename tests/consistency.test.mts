@@ -1003,6 +1003,13 @@ test('policy normalization provides default-safe values and supports aliases', (
       minCorroboratingPrs: 2,
       samplingWindow: 'PT24H',
     },
+    githubApi: {
+      telemetry: {
+        enabled: false,
+        maxRecords: 100,
+        path: null,
+      },
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -1199,6 +1206,13 @@ test('policy normalization provides default-safe values and supports aliases', (
       providerHealth: {
         minCorroboratingPrs: 2,
         samplingWindow: 'PT24H',
+      },
+      githubApi: {
+        telemetry: {
+          enabled: false,
+          maxRecords: 100,
+          path: null,
+        },
       },
     },
   );

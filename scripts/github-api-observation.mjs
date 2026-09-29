@@ -1,0 +1,426 @@
+// idd-generated-from: src/scripts/github-api-observation.mts
+//
+// The scripts/github-api-observation.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
+//
+// Shared request-lifecycle observations for the owned GitHub transport
+// wrappers (issue #3585). Records are allowlisted: a failure's raw
+// stderr, body, token, query, or environment is never copied through.
+// Telemetry defaults off. A read or write failure here must not change
+// the caller's return value or thrown error.
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import {
+  classifyInaccessibleIssueLookup,
+  deriveGhHttpStatus,
+  ghErrorText,
+} from './gh-http-status.mjs';
+import { normalizePolicyConfig } from './policy-helpers.mjs';
+export const OBSERVATION_UNKNOWN = 'unknown';
+export const DEFAULT_GITHUB_API_TELEMETRY_MAX_RECORDS = 100;
+export const DEFAULT_GITHUB_API_TELEMETRY = Object.freeze({
+  enabled: false,
+  maxRecords: DEFAULT_GITHUB_API_TELEMETRY_MAX_RECORDS,
+  path: null,
+});
+const RESOURCE_TOKEN = /^[A-Za-z0-9_.-]{1,64}$/;
+const INTEGER_TOKEN = /^\d{1,12}$/;
+const PRIMARY_WORDING = /API rate limit exceeded/i;
+const SECONDARY_WORDING = /secondary rate limit/i;
+const EMPTY_SIGNALS = Object.freeze({
+  graphqlErrors: false,
+  primaryExhaustion: false,
+  secondaryThrottling: false,
+  accessDenied: false,
+});
+function unknownObservation(counts) {
+  return {
+    status: OBSERVATION_UNKNOWN,
+    resource: OBSERVATION_UNKNOWN,
+    remaining: OBSERVATION_UNKNOWN,
+    reset: OBSERVATION_UNKNOWN,
+    retryAfter: OBSERVATION_UNKNOWN,
+    graphqlCost: OBSERVATION_UNKNOWN,
+    classification: 'unknown',
+    signals: { ...EMPTY_SIGNALS },
+    ...counts,
+  };
+}
+function finiteInteger(value) {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 1_000_000_000_000
+    ? value
+    : null;
+}
+function integerToken(value) {
+  if (!value || !INTEGER_TOKEN.test(value)) return null;
+  return finiteInteger(Number(value));
+}
+function headerValue(headers, name) {
+  if (!headers) return undefined;
+  const direct = headers[name] ?? headers[name.toLowerCase()];
+  if (direct !== undefined) return direct.trim();
+  const found = Object.entries(headers).find(
+    ([key]) => key.toLowerCase() === name,
+  );
+  return found?.[1]?.trim();
+}
+function readHeaderLine(text, name) {
+  const match = text.match(new RegExp(`^${name}:\\s*(\\S+)\\s*$`, 'im'));
+  return match?.[1];
+}
+function graphqlRoot(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value;
+}
+function parseJsonObject(text) {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  try {
+    return JSON.parse(text.slice(start));
+  } catch {
+    return null;
+  }
+}
+function classifyFields(input) {
+  const root =
+    graphqlRoot(input.graphqlBody) ??
+    graphqlRoot(parseJsonObject(input.bodyText));
+  const graphqlErrors = Array.isArray(root?.errors) && root.errors.length > 0;
+  const cost = finiteInteger(root?.extensions?.cost?.actualQueryCost);
+  // A GraphQL throttleStatus remaining of 0 is primary quota evidence.
+  // It is not a secondary-throttling subtype (issue #3585, #3560).
+  const throttleRemaining = finiteInteger(
+    root?.extensions?.cost?.throttleStatus?.remaining,
+  );
+  const primaryExhaustion =
+    input.remaining === 0 ||
+    throttleRemaining === 0 ||
+    PRIMARY_WORDING.test(input.bodyText);
+  const secondaryThrottling = SECONDARY_WORDING.test(input.bodyText);
+  const accessDenied =
+    input.status === 401 ||
+    (input.status === 403 &&
+      classifyInaccessibleIssueLookup({
+        stderr: `(HTTP 403)\n${input.bodyText}`,
+      }) === 'inaccessible');
+  const signals = {
+    graphqlErrors,
+    primaryExhaustion,
+    secondaryThrottling,
+    accessDenied,
+  };
+  const positive = [
+    graphqlErrors,
+    primaryExhaustion,
+    secondaryThrottling,
+    accessDenied,
+  ].filter(Boolean).length;
+  let classification = 'unknown';
+  if (positive > 1) {
+    classification = 'unknown';
+  } else if (graphqlErrors) {
+    classification = 'graphql-errors';
+  } else if (primaryExhaustion) {
+    classification = 'primary-exhaustion';
+  } else if (secondaryThrottling) {
+    classification = 'secondary-throttling';
+  } else if (accessDenied) {
+    classification = 'access-denied';
+  } else if (
+    input.transportSucceeded ||
+    (input.status !== null && input.status >= 200 && input.status < 300)
+  ) {
+    classification = 'ok';
+  }
+  const resource =
+    input.resourceToken && RESOURCE_TOKEN.test(input.resourceToken)
+      ? input.resourceToken
+      : OBSERVATION_UNKNOWN;
+  return {
+    status: input.status === null ? OBSERVATION_UNKNOWN : input.status,
+    resource,
+    remaining: input.remaining === null ? OBSERVATION_UNKNOWN : input.remaining,
+    reset: input.reset === null ? OBSERVATION_UNKNOWN : input.reset,
+    retryAfter:
+      input.retryAfter === null ? OBSERVATION_UNKNOWN : input.retryAfter,
+    graphqlCost: cost === null ? OBSERVATION_UNKNOWN : cost,
+    classification,
+    signals,
+  };
+}
+function fieldsFromResponse(response) {
+  const headers = response.headers;
+  const status =
+    typeof response.status === 'number' && response.status >= 100
+      ? response.status
+      : null;
+  return classifyFields({
+    status,
+    resourceToken: headerValue(headers, 'x-ratelimit-resource'),
+    remaining: integerToken(headerValue(headers, 'x-ratelimit-remaining')),
+    reset: integerToken(headerValue(headers, 'x-ratelimit-reset')),
+    retryAfter: integerToken(headerValue(headers, 'retry-after')),
+    bodyText: response.bodyText ?? '',
+    graphqlBody: response.graphqlBody,
+    transportSucceeded: status !== null && status >= 200 && status < 300,
+  });
+}
+function mergeSignals(parts) {
+  return {
+    graphqlErrors: parts.some((part) => part.graphqlErrors),
+    primaryExhaustion: parts.some((part) => part.primaryExhaustion),
+    secondaryThrottling: parts.some((part) => part.secondaryThrottling),
+    accessDenied: parts.some((part) => part.accessDenied),
+  };
+}
+function classificationFromSignals(signals, transportSucceeded) {
+  const positive = [
+    signals.graphqlErrors,
+    signals.primaryExhaustion,
+    signals.secondaryThrottling,
+    signals.accessDenied,
+  ].filter(Boolean).length;
+  if (positive > 1) return 'unknown';
+  if (signals.graphqlErrors) return 'graphql-errors';
+  if (signals.primaryExhaustion) return 'primary-exhaustion';
+  if (signals.secondaryThrottling) return 'secondary-throttling';
+  if (signals.accessDenied) return 'access-denied';
+  return transportSucceeded ? 'ok' : 'unknown';
+}
+function lastObserved(values) {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (values[index] !== OBSERVATION_UNKNOWN) return values[index];
+  }
+  return OBSERVATION_UNKNOWN;
+}
+/**
+ * Sum injected exchanges. HTTP and page counts are exact only when every
+ * exchange supplies `responses`; otherwise those two fields are
+ * `unknown`. Command invocations and retry attempts stay their own sums.
+ */
+// audit:ignore-dead-export: injected per-response exchanges have no production caller; gh --paginate cannot observe them (issue #3585)
+export function summarizeInjectedExchanges(exchanges) {
+  let commands = 0;
+  let retries = 0;
+  let http = 0;
+  let pages = 0;
+  let httpKnown = true;
+  const fields = [];
+  for (const exchange of exchanges) {
+    commands += finiteInteger(exchange.commandInvocations) ?? 1;
+    retries += finiteInteger(exchange.retryAttempts) ?? 0;
+    if (exchange.responses === undefined) {
+      httpKnown = false;
+      continue;
+    }
+    http += exchange.responses.length;
+    pages += exchange.responses.length;
+    for (const response of exchange.responses) {
+      fields.push(fieldsFromResponse(response));
+    }
+  }
+  if (!httpKnown || fields.length === 0) {
+    return unknownObservation({
+      httpRequestCount: httpKnown ? http : OBSERVATION_UNKNOWN,
+      pageCount: httpKnown ? pages : OBSERVATION_UNKNOWN,
+      commandInvocationCount: commands,
+      retryAttempts: retries,
+    });
+  }
+  const signals = mergeSignals(fields.map((field) => field.signals));
+  const transportSucceeded = fields.every(
+    (field) =>
+      field.classification === 'ok' || field.status === OBSERVATION_UNKNOWN,
+  );
+  return {
+    status: lastObserved(fields.map((field) => field.status)),
+    resource: lastObserved(fields.map((field) => field.resource)),
+    remaining: lastObserved(fields.map((field) => field.remaining)),
+    reset: lastObserved(fields.map((field) => field.reset)),
+    retryAfter: lastObserved(fields.map((field) => field.retryAfter)),
+    graphqlCost: lastObserved(fields.map((field) => field.graphqlCost)),
+    httpRequestCount: http,
+    pageCount: pages,
+    commandInvocationCount: commands,
+    retryAttempts: retries,
+    classification: classificationFromSignals(signals, transportSucceeded),
+    signals,
+  };
+}
+/** Observe one captured failure without retaining its raw text. */
+export function observeGhFailure(error, counts = {}) {
+  const candidate = error;
+  const streamText = [candidate?.stderr, candidate?.stdout]
+    .map((value) => (value == null ? '' : String(value)))
+    .filter((value) => value.length > 0)
+    .join('\n');
+  const scanned = streamText || ghErrorText(error);
+  const fields = classifyFields({
+    status: deriveGhHttpStatus(error),
+    resourceToken: readHeaderLine(scanned, 'x-ratelimit-resource'),
+    remaining: integerToken(readHeaderLine(scanned, 'x-ratelimit-remaining')),
+    reset: integerToken(readHeaderLine(scanned, 'x-ratelimit-reset')),
+    retryAfter: integerToken(readHeaderLine(scanned, 'retry-after')),
+    bodyText: scanned,
+    graphqlBody: parseJsonObject(scanned),
+    transportSucceeded: false,
+  });
+  const paginated = counts.paginated === true;
+  return {
+    ...fields,
+    httpRequestCount: paginated ? OBSERVATION_UNKNOWN : 1,
+    pageCount: paginated ? OBSERVATION_UNKNOWN : 1,
+    commandInvocationCount: counts.commandInvocationCount ?? 1,
+    retryAttempts: counts.retryAttempts ?? 0,
+  };
+}
+/** Observe one successful wrapper result. `data` is not stored. */
+export function observeGhSuccess(input) {
+  let dataText = '';
+  if (input.data !== undefined) {
+    try {
+      dataText = JSON.stringify(input.data);
+    } catch {
+      dataText = '';
+    }
+  }
+  const status = typeof input.status === 'number' ? input.status : null;
+  // A missing status is not treated as HTTP 200. Null still counts as a
+  // successful wrapper exit (GraphQL never sees a status line). An
+  // explicit 4xx/5xx does not.
+  const transportSucceeded = status === null || (status >= 200 && status < 300);
+  const fields = classifyFields({
+    status,
+    resourceToken: headerValue(input.headers, 'x-ratelimit-resource'),
+    remaining: integerToken(
+      headerValue(input.headers, 'x-ratelimit-remaining'),
+    ),
+    reset: integerToken(headerValue(input.headers, 'x-ratelimit-reset')),
+    retryAfter: integerToken(headerValue(input.headers, 'retry-after')),
+    bodyText: dataText,
+    graphqlBody: input.data,
+    transportSucceeded,
+  });
+  const httpKnown = input.paginated !== true && input.httpObserved !== false;
+  return {
+    ...fields,
+    httpRequestCount: httpKnown ? 1 : OBSERVATION_UNKNOWN,
+    pageCount: httpKnown ? 1 : OBSERVATION_UNKNOWN,
+    commandInvocationCount: input.commandInvocationCount ?? 1,
+    retryAttempts: 0,
+  };
+}
+export function defaultGithubApiTelemetryPath() {
+  return join(
+    homedir(),
+    '.local',
+    'state',
+    'idd-skill',
+    'github-api-telemetry.jsonl',
+  );
+}
+/** Copy only the allowlisted observation fields, in a stable order. */
+export function allowlistObservation(observation) {
+  return {
+    status: observation.status,
+    resource: observation.resource,
+    remaining: observation.remaining,
+    reset: observation.reset,
+    retryAfter: observation.retryAfter,
+    httpRequestCount: observation.httpRequestCount,
+    pageCount: observation.pageCount,
+    commandInvocationCount: observation.commandInvocationCount,
+    retryAttempts: observation.retryAttempts,
+    graphqlCost: observation.graphqlCost,
+    classification: observation.classification,
+    signals: {
+      graphqlErrors: observation.signals.graphqlErrors === true,
+      primaryExhaustion: observation.signals.primaryExhaustion === true,
+      secondaryThrottling: observation.signals.secondaryThrottling === true,
+      accessDenied: observation.signals.accessDenied === true,
+    },
+  };
+}
+export function appendRequestObservation(observation, options) {
+  const maxRecords =
+    Number.isInteger(options.maxRecords) && options.maxRecords >= 1
+      ? options.maxRecords
+      : DEFAULT_GITHUB_API_TELEMETRY_MAX_RECORDS;
+  mkdirSync(dirname(options.path), { recursive: true });
+  let existing = '';
+  try {
+    existing = readFileSync(options.path, 'utf8');
+  } catch (error) {
+    const code = error?.code;
+    if (code !== 'ENOENT') throw error;
+  }
+  const lines = existing
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  lines.push(JSON.stringify(allowlistObservation(observation)));
+  const kept = lines.slice(-maxRecords);
+  writeFileSync(options.path, `${kept.join('\n')}\n`, { mode: 0o600 });
+}
+let policyOverride = null;
+let policyCache = null;
+/** Test seam. Pass null to resume reading config. */
+// audit:ignore-dead-export: test seam; production reads config and must not toggle telemetry through process.env (issue #3585)
+export function setGithubApiTelemetryPolicyForTests(policy) {
+  policyOverride = policy;
+  policyCache = null;
+}
+// audit:ignore-dead-export: test seam paired with setGithubApiTelemetryPolicyForTests (issue #3585)
+export function resetGithubApiTelemetryPolicyCacheForTests() {
+  policyCache = null;
+}
+function policyFromConfig(config) {
+  const normalized = normalizePolicyConfig(config);
+  return normalized.githubApi?.telemetry ?? DEFAULT_GITHUB_API_TELEMETRY;
+}
+/** Enabled only when config says so. Any read failure stays disabled. */
+export function readGithubApiTelemetryPolicy(configText) {
+  if (policyOverride) return policyOverride;
+  if (policyCache) return policyCache;
+  if (configText !== undefined) {
+    try {
+      policyCache = policyFromConfig(JSON.parse(configText));
+    } catch {
+      policyCache = DEFAULT_GITHUB_API_TELEMETRY;
+    }
+    return policyCache;
+  }
+  try {
+    const raw = readFileSync('.github/idd/config.json', 'utf8');
+    policyCache = policyFromConfig(JSON.parse(raw));
+  } catch {
+    policyCache = DEFAULT_GITHUB_API_TELEMETRY;
+  }
+  return policyCache;
+}
+export function telemetryIsEnabled() {
+  return readGithubApiTelemetryPolicy().enabled === true;
+}
+/**
+ * Record when telemetry is enabled. IO and parse failures are swallowed
+ * so the transport wrapper's own result is unchanged.
+ */
+export function recordRequestObservation(observation) {
+  try {
+    const policy = readGithubApiTelemetryPolicy();
+    if (!policy.enabled) return;
+    appendRequestObservation(observation, {
+      path: policy.path ?? defaultGithubApiTelemetryPath(),
+      maxRecords: policy.maxRecords,
+    });
+  } catch {
+    // Retention is optional. Never replace the original gh outcome.
+  }
+}
