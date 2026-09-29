@@ -351,8 +351,20 @@ Policy foundation namespaces are available in `.github/idd/config.json`
 for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
 `markerTrust`, `advisoryWait`, `ciWait`, `ciGate`, `discover`, `claim`,
 `critiqueLoop`, `reviewEscalation`, `approvalSignals`,
-`issueAuthoring`, and `labels`. Leaving these keys unset keeps
-distributed behavior.
+`issueAuthoring`, `labels`, and `githubApi`. Leaving these keys unset
+keeps distributed behavior.
+
+`githubApi.telemetry` records local request-lifecycle observations for
+the shared GitHub transport wrappers (issue `#3585`). The default is
+off. While off, command arguments, parsed results, thrown errors, and
+the process exit stay unchanged. While on, each record keeps HTTP
+status, the rate-limit header fields, GraphQL query cost, and separate
+command, retry, and injected page counts. It omits credentials, query
+text, issue and comment bodies, environment dumps, and launcher or
+session names. Retention is a bounded local file with no outbound
+upload. A primary quota signal is never relabeled as secondary
+throttling. This key is not a response cache and not a
+request-admission policy.
 
 For advisory review timing, repositories may now customize
 `advisoryWait.requestCap`, `advisoryWait.pendingWindow`,

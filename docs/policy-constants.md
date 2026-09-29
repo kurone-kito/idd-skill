@@ -81,8 +81,12 @@ unchanged.
 
 `stallRecovery`, `forcedHandoff`, `markerTrust`, `advisoryWait`,
 `ciWait`, `ciGate`, `discover`, `claim`, `critiqueLoop`, `reviewEscalation`,
-`approvalSignals`, `issueAuthoring`, and `autopilotSuitability` are now
-valid top-level policy objects in `.github/idd/config.json`.
+`approvalSignals`, `issueAuthoring`, `autopilotSuitability`, and
+`githubApi` are now valid top-level policy objects in
+`.github/idd/config.json`.
+
+`githubApi.telemetry` is optional and defaults off (issue `#3585`).
+See [Customizing IDD](customization.md#policy-constants).
 
 ## Ownership Defaults
 

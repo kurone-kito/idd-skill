@@ -455,6 +455,31 @@ nothing about masking.
 this finding. See the function's own JSDoc for the same note attached
 directly to its contract.
 
+## GitHub API request observations ({{PROJECT_MARKER_PREFIX}}#3585)
+
+`githubApi.telemetry.enabled` defaults to false. The shared `gh api`
+and `gh api graphql` wrappers then keep their current arguments,
+parsed return values, thrown errors, and process exit. Setting
+`enabled` to true appends allowlisted observations to a local JSON
+Lines file. The default file name is `github-api-telemetry.jsonl`:
+
+```text
+~/.local/state/idd-skill/github-api-telemetry.jsonl
+```
+
+The file mode is `0600`. `maxRecords` defaults to 100 and older lines
+are dropped. The file is not uploaded. Records can include HTTP status,
+`x-ratelimit-resource`, `x-ratelimit-remaining`, `x-ratelimit-reset`,
+`retry-after`, GraphQL `actualQueryCost`, and separate command, retry,
+and injected page counts. They do not include request paths, query
+text, bodies, tokens, environment dumps, or launcher or session names.
+`gh api --paginate` counts as one command invocation; its HTTP and page
+counts stay unknown unless injected per-response records supply them.
+More than one of GraphQL errors, primary exhaustion, secondary
+throttling, and access denial stays `unknown` rather than guessing a
+subtype. A read or write failure in this retention path does not change
+the wrapper result.
+
 ## REST
 
 When a GraphQL-backed `gh` command reports `API rate limit already
