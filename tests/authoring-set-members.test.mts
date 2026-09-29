@@ -658,6 +658,43 @@ test('a minimized marker with minimizedReason null still fails closed', () => {
   assert.deepEqual(result.issues, []);
 });
 
+test('a minimized marker with empty minimizedReason string still fails closed', () => {
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(2689, minimizedMarker(2689), 'kurone-kito', null, 9999, {
+        isMinimized: true,
+        minimizedReason: '',
+      }),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+});
+
+test('a minimized marker with omitted minimizedReason still fails closed', () => {
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(2689, minimizedMarker(2689), 'kurone-kito', null, 9999, {
+        isMinimized: true,
+      }),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+});
+
 test('a non-minimized marker with empty body-sha256 fails closed as unparseable', () => {
   // Without isMinimized=true, the fail-closed path must still fire
   const result = evaluateAuthoringSetMembers({
