@@ -293,6 +293,15 @@ interface PolicyConfigFile {
     minCorroboratingPrs?: number;
     samplingWindow?: string;
   };
+  githubApi?: {
+    readCache?: {
+      enabled?: boolean;
+      maxAge?: string;
+      maxBytes?: number;
+      retention?: string;
+      directory?: string;
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -590,6 +599,7 @@ export const policyConfigKeys = [
   'providerOutage',
   'localValidationEvidence',
   'providerHealth',
+  'githubApi',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
@@ -1274,6 +1284,14 @@ const policyConfigFixture = {
     declarationTarget: 1234,
     maxValidity: 'PT24H',
     maxParkedChanges: 10,
+  },
+  githubApi: {
+    readCache: {
+      enabled: false,
+      maxAge: 'PT5M',
+      maxBytes: 104857600,
+      retention: 'PT24H',
+    },
   },
 } satisfies PolicyConfigFile;
 

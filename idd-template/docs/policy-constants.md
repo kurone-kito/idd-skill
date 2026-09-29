@@ -81,8 +81,9 @@ unchanged.
 
 `stallRecovery`, `forcedHandoff`, `markerTrust`, `advisoryWait`,
 `ciWait`, `ciGate`, `discover`, `claim`, `critiqueLoop`, `reviewEscalation`,
-`approvalSignals`, `issueAuthoring`, and `autopilotSuitability` are now
-valid top-level policy objects in `.github/idd/config.json`.
+`approvalSignals`, `issueAuthoring`, `autopilotSuitability`, and
+`githubApi` are now valid top-level policy objects in
+`.github/idd/config.json`.
 
 ## Ownership Defaults
 
@@ -458,6 +459,20 @@ below, which names an unrelated CI/Actions-service outage-relief policy.
 | -------------------------------------------------------------- | ----------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Corroboration threshold (`providerHealth.minCorroboratingPrs`) | `2`               | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | A single pull request's failure burst always caps the verdict at `degraded`; raise this only if this repository's typical concurrent pull-request volume warrants a wider corroboration window before `unavailable`. |
 | Sampling window (`providerHealth.samplingWindow`)              | `PT24H`           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Bounds how far back the read layer looks for evidence; not itself a gate, and never a merge-readiness or CI-gate input.                                                                                              |
+
+## GitHub API Read Cache Defaults
+
+`githubApi.readCache` stays off unless `enabled` is the literal `true`.
+Turning it on does not connect Discover. The contract is described in
+[`docs/idd-helper-scripts.md`](idd-helper-scripts.md).
+
+| Policy default                               | Distributed value | Owning surface                                        | Onboarding expectation                                                                                                                                |
+| -------------------------------------------- | ----------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read cache (`githubApi.readCache.enabled`)   | `false`           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Leave unset. Only a literal `true` enables host-local reuse of explicitly classified REST reads.                                                      |
+| Hint age (`githubApi.readCache.maxAge`)      | `PT5M`            | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Bounds hint reuse. Independent of retention.                                                                                                          |
+| Stored size (`githubApi.readCache.maxBytes`) | `104857600`       | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Caps stored responses at 100 MiB. A larger configured value falls back to this default.                                                               |
+| Retention (`githubApi.readCache.retention`)  | `PT24H`           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Drops older stored responses. Independent of `maxAge`.                                                                                                |
+| Directory (`githubApi.readCache.directory`)  | Omitted           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Optional absolute override of the per-user OS cache directory. A relative path, filesystem root, workspace, or ancestor of the workspace is not used. |
 
 ## Provider Outage Declaration Defaults
 

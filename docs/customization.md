@@ -351,8 +351,10 @@ Policy foundation namespaces are available in `.github/idd/config.json`
 for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
 `markerTrust`, `advisoryWait`, `ciWait`, `ciGate`, `discover`, `claim`,
 `critiqueLoop`, `reviewEscalation`, `approvalSignals`,
-`issueAuthoring`, and `labels`. Leaving these keys unset keeps
-distributed behavior.
+`issueAuthoring`, `labels`, and `githubApi`. Leaving these keys unset
+keeps distributed behavior. `githubApi.readCache` stays off unless
+`enabled` is true. Turning it on does not connect Discover; the
+helper-script read-cache section describes the contract.
 
 For advisory review timing, repositories may now customize
 `advisoryWait.requestCap`, `advisoryWait.pendingWindow`,

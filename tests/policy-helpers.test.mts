@@ -1632,3 +1632,72 @@ test('resolveEffectiveIssueAuthoringDelegate does not read critiqueLoop.delegate
     { status: 'none', source: 'none' },
   );
 });
+
+test('githubApi.readCache defaults to disabled, PT5M, 100 MiB, and PT24H (#3587)', () => {
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.enabled, false);
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.maxAge, 'PT5M');
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.maxBytes, 104857600);
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.retention, 'PT24H');
+  assert.equal(
+    Object.hasOwn(POLICY_DEFAULTS.githubApi.readCache, 'directory'),
+    false,
+  );
+  assert.deepEqual(normalizePolicyConfig({}).githubApi.readCache, {
+    enabled: false,
+    maxAge: 'PT5M',
+    maxBytes: 104857600,
+    retention: 'PT24H',
+  });
+});
+
+test('githubApi.readCache opts in only for literal true and ignores invalid values (#3587)', () => {
+  assert.equal(
+    normalizePolicyConfig({
+      githubApi: { readCache: { enabled: 'true' } },
+    }).githubApi.readCache.enabled,
+    false,
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      githubApi: {
+        readCache: {
+          enabled: true,
+          maxAge: 'PT1M',
+          maxBytes: 32,
+          retention: 'PT2H',
+          directory: ' /tmp/idd-cache ',
+        },
+      },
+    }).githubApi.readCache,
+    {
+      enabled: true,
+      maxAge: 'PT1M',
+      maxBytes: 32,
+      retention: 'PT2H',
+      directory: '/tmp/idd-cache',
+    },
+  );
+  for (const invalid of [0, -1, 1.5, 104857601, '10', null]) {
+    assert.equal(
+      normalizePolicyConfig({
+        githubApi: { readCache: { maxBytes: invalid } },
+      }).githubApi.readCache.maxBytes,
+      104857600,
+      `expected maxBytes ${JSON.stringify(invalid)} to fail safe`,
+    );
+  }
+  const invalidDuration = normalizePolicyConfig({
+    githubApi: { readCache: { maxAge: 'P0D', retention: 'nope' } },
+  }).githubApi.readCache;
+  assert.equal(invalidDuration.maxAge, 'PT5M');
+  assert.equal(invalidDuration.retention, 'PT24H');
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({
+        githubApi: { readCache: { directory: '   ' } },
+      }).githubApi.readCache,
+      'directory',
+    ),
+    false,
+  );
+});

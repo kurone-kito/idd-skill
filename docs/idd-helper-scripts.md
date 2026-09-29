@@ -1534,6 +1534,51 @@ that do not opt into helper support should still be able to copy the
 Markdown instructions, run the portable shell / `gh` / `jq` procedures,
 and complete the workflow without a Node.js dependency.
 
+## GitHub API read cache
+
+`githubApi.readCache` is an opt-in host-local cache for explicitly
+classified REST reads. The distributed default keeps `enabled` false,
+`maxAge` at `PT5M`, `maxBytes` at 104857600, and `retention` at `PT24H`.
+Leaving the key unset keeps every read live. This repository does not
+enable the cache, and Discover does not use it.
+
+`ghApiJson` consults the cache only when its `readCache` option is set,
+the policy is enabled, and `classification` is `read`. `write`,
+`graphql-mutation`, `ambiguous-write`, and `authority` always call
+GitHub. Modes are `hint`, `conditional`, and `strict-fresh`. Hint reuse
+stops at `maxAge`. Conditional mode sends `If-None-Match` only with a
+complete trusted base; otherwise it performs one real fetch. A second
+304, still without that base, throws instead of being stored.
+`strict-fresh` ignores stored responses and in-flight hint leases, and
+a 304 on that path is an unpersisted miss. Errors, throttles, and
+incomplete collections are not stored. A paginated body accepted only
+because `allowStatuses` tolerated `gh`'s exit status is incomplete and
+is not stored.
+
+The directory is per-user and OS-local: `XDG_CACHE_HOME` or `~/.cache`
+on Linux, `~/Library/Caches` on macOS, and `LOCALAPPDATA` on Windows.
+`directory` may override it. Files stay private to the user. An
+unwritable directory or a loose permission mode degrades to a live read
+and does not return the stored body. Purge deletes only regular entry
+files under that cache. It refuses a filesystem root, the workspace, an
+ancestor of the workspace, and a symlinked cache root. Entries are
+partitioned by API host, a hash of the credential context, repository,
+request shape (including the request body), schema version, and a hash
+of derived inputs. The host is `GH_HOST`, otherwise the host from
+`GITHUB_SERVER_URL`, otherwise the single host from `gh auth status`.
+Several configured hosts and no `GH_HOST` skip the cache. For
+`github.com`, `github.localhost`, and a `ghe.com` subdomain, the
+credential is `GH_TOKEN` or `GITHUB_TOKEN` when set. For a GitHub
+Enterprise Server host it is `GH_ENTERPRISE_TOKEN` or
+`GITHUB_ENTERPRISE_TOKEN` when set. Otherwise it is the token from
+`gh auth token` for that host. A failed lookup stays uncached. A
+caller-supplied `requestShape` does not replace the path, arguments,
+pagination flag, or request body in the cache identity. Raw tokens are
+neither stored nor logged. Nothing promises that the cache is shared across
+computers. Local policy and permission decisions are not cached. The
+single-flight lease outlives that call's `gh` timeout, and a process
+removes only the lease it acquired.
+
 ## Helper Runtime Profiles
 
 When a repository imports the IDD template, helper support should be

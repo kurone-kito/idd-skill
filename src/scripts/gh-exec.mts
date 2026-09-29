@@ -30,6 +30,18 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import {
+  type GithubApiCacheFetchRequest,
+  type GithubApiCacheFetchResult,
+  type GithubApiReadCacheMode,
+  type GithubApiReadCacheRuntimePolicy,
+  type GithubApiReadClassification,
+  readThroughGithubApiCache,
+} from './github-api-read-cache.mts';
+import {
+  normalizePolicyConfig,
+  parseIsoDurationToMs,
+} from './policy-helpers.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 /**
@@ -444,6 +456,34 @@ export interface GhApiJsonOptions {
    * either default.
    */
   timeout?: number;
+  /**
+   * Opt-in host-local read cache. When omitted, `ghApiJson` keeps the
+   * historical uncached `gh api` invocation, including its argv. A
+   * non-read classification or a disabled `githubApi.readCache` policy
+   * also keeps that uncached path and does not create a cache directory.
+   */
+  readCache?: GhApiJsonReadCacheOptions;
+}
+
+/**
+ * Explicit classification for {@link GhApiJsonOptions.readCache}. Only
+ * `read` may be stored or coalesced. The other classifications always
+ * perform a live `gh api` call.
+ */
+export interface GhApiJsonReadCacheOptions {
+  classification: GithubApiReadClassification;
+  mode?: GithubApiReadCacheMode;
+  repository?: string;
+  credentialMaterial?: string;
+  secretMaterial?: readonly string[];
+  requestShape?: unknown;
+  derivedInputs?: unknown;
+  /** Resolved runtime policy. When omitted, `.github/idd/config.json` is read. */
+  policy?: GithubApiReadCacheRuntimePolicy;
+  now?: () => number;
+  leaseTtlMs?: number;
+  workspaceRoot?: string;
+  defaultDirectory?: string;
 }
 
 /** JSON response plus the HTTP headers returned by `gh api --include`. */
@@ -452,12 +492,19 @@ export interface GhApiJsonWithHeadersResult {
   headers: Record<string, string>;
 }
 
-function parseIncludedGhApiResponse(raw: string): GhApiJsonWithHeadersResult {
+interface IncludedGhApiEnvelope extends GhApiJsonWithHeadersResult {
+  status: number;
+}
+
+function parseIncludedGhApiEnvelope(raw: string): IncludedGhApiEnvelope {
   const sections = raw.split(/\r?\n\r?\n/);
   const body = sections.pop()?.trim() ?? '';
   const headerBlock = sections.pop() ?? '';
   const headerLines = headerBlock.split(/\r?\n/);
-  if (!/^HTTP\/\d(?:\.\d)?\s+\d{3}\b/.test(headerLines[0] ?? '')) {
+  const statusMatch = /^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/.exec(
+    headerLines[0] ?? '',
+  );
+  if (!statusMatch) {
     throw new Error('gh api --include returned no HTTP response headers');
   }
   const headers: Record<string, string> = {};
@@ -469,9 +516,15 @@ function parseIncludedGhApiResponse(raw: string): GhApiJsonWithHeadersResult {
       .trim();
   }
   return {
+    status: Number.parseInt(statusMatch[1] ?? '', 10),
     data: JSON.parse(body || '{}'),
     headers,
   };
+}
+
+function parseIncludedGhApiResponse(raw: string): GhApiJsonWithHeadersResult {
+  const parsed = parseIncludedGhApiEnvelope(raw);
+  return { data: parsed.data, headers: parsed.headers };
 }
 
 /**
@@ -667,10 +720,274 @@ export function combineOwnerRepoFlags(args: {
  * of silent degradation there should add a log line at the caller, not
  * revert this change.
  */
+function safeHeaderValue(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (value.length > 512 || /[\r\n]/.test(value)) return undefined;
+  return value;
+}
+
+function responseIsThrottled(
+  status: number,
+  headers: Record<string, string>,
+): boolean {
+  if (status === 429) return true;
+  return status === 403 && headers['x-ratelimit-remaining'] === '0';
+}
+
+function readGhStdout(args: string[]): string | undefined {
+  try {
+    const raw = execFileSync('gh', args, {
+      encoding: 'utf8',
+      timeout: 10_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    return raw.length > 0 ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function activeGhHost(): string | undefined {
+  const raw = readGhStdout(['auth', 'status', '--json', 'hosts']);
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as { hosts?: unknown };
+    if (
+      typeof parsed.hosts !== 'object' ||
+      parsed.hosts === null ||
+      Array.isArray(parsed.hosts)
+    ) {
+      return undefined;
+    }
+    const hosts = Object.keys(parsed.hosts).map((host) => host.toLowerCase());
+    if (hosts.length === 1) return hosts[0];
+    if (hosts.length === 0) return 'github.com';
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveReadCacheHost(): string | undefined {
+  const configured = process.env.GH_HOST?.trim().toLowerCase();
+  if (configured) return configured;
+  return resolveGhApiHostname() ?? activeGhHost();
+}
+
+function usesGithubToken(host: string): boolean {
+  return (
+    host === 'github.com' ||
+    host === 'github.localhost' ||
+    host.endsWith('.ghe.com')
+  );
+}
+
+function defaultCredentialMaterial(host: string): string | undefined {
+  const token = usesGithubToken(host)
+    ? process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim()
+    : process.env.GH_ENTERPRISE_TOKEN?.trim() ||
+      process.env.GITHUB_ENTERPRISE_TOKEN?.trim();
+  if (token) return token;
+  return readGhStdout(['auth', 'token', '--hostname', host]);
+}
+
+function readCacheLeaseTtlMs(
+  options: GhApiJsonOptions,
+  request: GhApiJsonReadCacheOptions,
+): number {
+  if (request.leaseTtlMs !== undefined && request.leaseTtlMs > 0) {
+    return request.leaseTtlMs;
+  }
+  const fetchTimeout =
+    options.timeout ??
+    (options.paginate
+      ? DEFAULT_GH_PAGINATED_TIMEOUT_MS
+      : DEFAULT_GH_TIMEOUT_MS);
+  const bounded =
+    fetchTimeout > 0 ? fetchTimeout : DEFAULT_GH_PAGINATED_TIMEOUT_MS;
+  return bounded + 30_000;
+}
+
+function loadReadCachePolicy(
+  injected: GithubApiReadCacheRuntimePolicy | undefined,
+): GithubApiReadCacheRuntimePolicy {
+  if (injected) {
+    return {
+      enabled: injected.enabled === true,
+      maxAgeMs: injected.maxAgeMs,
+      maxBytes: injected.maxBytes,
+      retentionMs: injected.retentionMs,
+      ...(injected.directory ? { directory: injected.directory } : {}),
+    };
+  }
+  const disabled: GithubApiReadCacheRuntimePolicy = {
+    enabled: false,
+    maxAgeMs: 5 * 60 * 1000,
+    maxBytes: 104857600,
+    retentionMs: 24 * 60 * 60 * 1000,
+  };
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(process.cwd(), '.github/idd/config.json'), 'utf8'),
+    );
+    const normalized = normalizePolicyConfig(raw);
+    const readCache = normalized.githubApi.readCache;
+    const maxAgeMs = parseIsoDurationToMs(readCache.maxAge);
+    const retentionMs = parseIsoDurationToMs(readCache.retention);
+    if (maxAgeMs === null || retentionMs === null) return disabled;
+    return {
+      enabled: readCache.enabled === true,
+      maxAgeMs,
+      maxBytes: readCache.maxBytes,
+      retentionMs,
+      ...(readCache.directory ? { directory: readCache.directory } : {}),
+    };
+  } catch {
+    return disabled;
+  }
+}
+
+function ghApiIncluded(
+  path: string,
+  options: GhApiJsonOptions,
+): IncludedGhApiEnvelope {
+  const hostname = resolveGhApiHostname();
+  const args = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    ...(options.extraArgs ?? []),
+    '--include',
+  ];
+  try {
+    const raw = execFileSync('gh', args, {
+      encoding: 'utf8',
+      timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      ...(options.input !== undefined ? { input: options.input } : {}),
+    });
+    return parseIncludedGhApiEnvelope(raw);
+  } catch (error) {
+    const stdout = String(
+      (error as { stdout?: unknown } | null)?.stdout ?? '',
+    ).trimStart();
+    if (/^HTTP\/\d/.test(stdout)) {
+      try {
+        const parsed = parseIncludedGhApiEnvelope(stdout);
+        const proc = Number((error as { status?: unknown }).status ?? -1);
+        if (
+          parsed.status === 304 ||
+          (options.allowStatuses ?? []).includes(proc)
+        ) {
+          return parsed;
+        }
+      } catch {
+        // Fall through to the uncached failure policy below.
+      }
+    }
+    const failure = error as { status?: unknown; stdout?: unknown } | null;
+    const status = Number(failure?.status ?? -1);
+    if ((options.allowStatuses ?? []).includes(status)) {
+      const text = String(failure?.stdout ?? '');
+      if (/^\s*[[{]/.test(text)) {
+        return { status, data: JSON.parse(text), headers: {} };
+      }
+    }
+    throw tagGhCommandError(error);
+  }
+}
+
+function fetchForReadCache(
+  path: string,
+  options: GhApiJsonOptions,
+  request: GithubApiCacheFetchRequest,
+): GithubApiCacheFetchResult {
+  if (options.paginate) {
+    const executed = executeGhApiJson(path, options);
+    return {
+      status: 200,
+      body: executed.data,
+      incomplete: executed.toleratedFailure,
+    };
+  }
+  const etag = safeHeaderValue(request.etag);
+  const extraArgs = [...(options.extraArgs ?? [])];
+  if (etag) extraArgs.push('-H', `If-None-Match: ${etag}`);
+  const envelope = ghApiIncluded(path, { ...options, extraArgs });
+  return {
+    status: envelope.status,
+    body: envelope.data,
+    etag: safeHeaderValue(envelope.headers.etag),
+    lastModified: safeHeaderValue(envelope.headers['last-modified']),
+    incomplete: false,
+    throttled: responseIsThrottled(envelope.status, envelope.headers),
+  };
+}
+
+function ghApiJsonWithReadCache(
+  path: string,
+  options: GhApiJsonOptions,
+): unknown {
+  const request = options.readCache;
+  if (request?.classification !== 'read') {
+    return ghApiJsonUncached(path, options);
+  }
+  const policy = loadReadCachePolicy(request.policy);
+  if (!policy.enabled) return ghApiJsonUncached(path, options);
+  const host = resolveReadCacheHost();
+  if (host === undefined) return ghApiJsonUncached(path, options);
+  const credentialMaterial =
+    request.credentialMaterial ?? defaultCredentialMaterial(host);
+  if (credentialMaterial === undefined) return ghApiJsonUncached(path, options);
+  const secrets = [
+    ...(request.secretMaterial ?? []),
+    process.env.GH_TOKEN ?? '',
+    process.env.GITHUB_TOKEN ?? '',
+    process.env.GH_ENTERPRISE_TOKEN ?? '',
+    process.env.GITHUB_ENTERPRISE_TOKEN ?? '',
+    credentialMaterial,
+  ];
+  const result = readThroughGithubApiCache({
+    classification: 'read',
+    mode: request.mode,
+    policy,
+    host,
+    repository: request.repository ?? '',
+    credentialMaterial,
+    secretMaterial: secrets,
+    requestShape: {
+      caller: request.requestShape ?? null,
+      path,
+      extraArgs: options.extraArgs ?? [],
+      paginate: options.paginate === true,
+      input: options.input ?? null,
+    },
+    derivedInputs: request.derivedInputs ?? null,
+    paginated: options.paginate === true,
+    fetch: (conditional) => fetchForReadCache(path, options, conditional),
+    now: request.now,
+    leaseTtlMs: readCacheLeaseTtlMs(options, request),
+    workspaceRoot: request.workspaceRoot ?? process.cwd(),
+    cwd: process.cwd(),
+    defaultDirectory: request.defaultDirectory,
+  });
+  return result.body;
+}
+
 export function ghApiJson(
   path: string,
   options: GhApiJsonOptions = {},
 ): unknown {
+  if (options.readCache !== undefined) {
+    return ghApiJsonWithReadCache(path, options);
+  }
+  return ghApiJsonUncached(path, options);
+}
+
+function executeGhApiJson(
+  path: string,
+  options: GhApiJsonOptions = {},
+): { data: unknown; toleratedFailure: boolean } {
   const { paginate = false, extraArgs = [], allowStatuses = [] } = options;
   const hostname = resolveGhApiHostname();
   const args = [
@@ -686,6 +1003,7 @@ export function ghApiJson(
     options.timeout ??
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   let raw: string;
+  let toleratedFailure = false;
   try {
     raw = execFileSync('gh', args, {
       encoding: 'utf8',
@@ -704,14 +1022,22 @@ export function ghApiJson(
       throw tagGhCommandError(error);
     }
     raw = stdout;
+    toleratedFailure = true;
   }
   if (paginate) {
     // parsePaginatedGhNdjson already trims and returns [] on empty input.
-    return parsePaginatedGhNdjson(raw);
+    return { data: parsePaginatedGhNdjson(raw), toleratedFailure };
   }
   // JSON.parse itself ignores surrounding whitespace, so only trim to
   // decide whether the output was empty.
-  return JSON.parse(raw.trim() || '{}');
+  return { data: JSON.parse(raw.trim() || '{}'), toleratedFailure };
+}
+
+function ghApiJsonUncached(
+  path: string,
+  options: GhApiJsonOptions = {},
+): unknown {
+  return executeGhApiJson(path, options).data;
 }
 
 /**
