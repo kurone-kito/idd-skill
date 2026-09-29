@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -27,7 +27,14 @@ import {
   recordGeneratedClaimTokens,
   resolveClaimLockPath,
   resolveGeneratedTokensPath,
+  updatePrimaryRecoveryLockMarker,
 } from '../src/scripts/claim-lock.mts';
+import {
+  acquireCloneLock,
+  type CloneLockHandle,
+  releaseCloneLock,
+  withCloneLock,
+} from '../src/scripts/clone-lock.mts';
 
 // Used only by the token-verified-release test below, to reach the CJS
 // side of the `node:fs` builtin for the same `syncBuiltinESMExports`
@@ -364,6 +371,235 @@ test('acquire: same claim-id re-acquires purely locally (fast path), confirming 
   }
 });
 
+test('acquire: normal acquisition waits for the clone lock held by recovery', async () => {
+  const fixture = setupLinkedWorktree();
+  let cloneLock: CloneLockHandle | null = acquireCloneLock(
+    fixture.primary,
+    'recovery-test',
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      CLI_PATH,
+      '--acquire',
+      '--worktree',
+      fixture.worktree,
+      '--agent-id',
+      'agent-a',
+      '--claim-id',
+      'claim-a',
+    ],
+    { env: fixtureEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let stdout = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  const exited = new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? -1));
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(
+      child.exitCode,
+      null,
+      'normal claim-lock acquisition must wait while recovery holds the clone mutex',
+    );
+    releaseCloneLock(cloneLock);
+    cloneLock = null;
+    assert.equal(await exited, 0);
+    assert.equal(JSON.parse(stdout).mode, 'acquired');
+  } finally {
+    if (cloneLock !== null) releaseCloneLock(cloneLock);
+    if (child.exitCode === null) child.kill();
+    teardown(fixture);
+  }
+});
+
+test('acquire: primary refusal does not wait for a held clone lock', async () => {
+  const fixture = setupLinkedWorktree();
+  let cloneLock: CloneLockHandle | null = acquireCloneLock(
+    fixture.primary,
+    'recovery-test',
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      CLI_PATH,
+      '--acquire',
+      '--worktree',
+      fixture.primary,
+      '--agent-id',
+      'agent-a',
+      '--claim-id',
+      'claim-a',
+    ],
+    { env: fixtureEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let stdout = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  const exited = new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? -1));
+  });
+  try {
+    assert.equal(await exited, 4);
+    assert.equal(JSON.parse(stdout).mode, 'primary-worktree-refused');
+  } finally {
+    if (cloneLock !== null) {
+      releaseCloneLock(cloneLock);
+      cloneLock = null;
+    }
+    if (child.exitCode === null) child.kill();
+    teardown(fixture);
+  }
+});
+
+test('acquire: a claim-lock child reuses the clone lock inherited from --exec', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const exitCode = await withCloneLock(
+      fixture.primary,
+      'outer-recovery',
+      process.execPath,
+      [
+        CLI_PATH,
+        '--acquire',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'agent-a',
+        '--claim-id',
+        'claim-a',
+      ],
+      1_000,
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(checkClaimLock(fixture.worktree).holder?.claimId, 'claim-a');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: refuses a worktree recreated while waiting for the clone lock', async () => {
+  const fixture = setupLinkedWorktree();
+  let cloneLock: CloneLockHandle | null = acquireCloneLock(
+    fixture.primary,
+    'recovery-test',
+  );
+  const sab = new SharedArrayBuffer(4);
+  const ints = new Int32Array(sab);
+  let workerError: Error | null = null;
+  let readyResolve: (() => void) | null = null;
+  let readyReject: ((error: Error) => void) | null = null;
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  const worker = new Worker(
+    `
+      const { parentPort, workerData } = require('node:worker_threads');
+      const childProcess = require('node:child_process');
+      const originalExecFileSync = childProcess.execFileSync;
+      childProcess.execFileSync = (...args) => {
+        const result = originalExecFileSync(...args);
+        const argv = args[1];
+        if (Array.isArray(argv) && argv.includes('--path-format=absolute')) {
+          parentPort.postMessage({ type: 'clone-path-resolved' });
+          Atomics.wait(new Int32Array(workerData.sab), 0, 0);
+        }
+        return result;
+      };
+      require('node:module').syncBuiltinESMExports();
+      import(workerData.moduleUrl).then(({ acquireClaimLock }) => {
+        try {
+          const outcome = acquireClaimLock(
+            workerData.worktree,
+            'agent-a',
+            'claim-a',
+            false,
+          );
+          parentPort.postMessage({ type: 'outcome', outcome });
+          parentPort.close();
+        } catch (error) {
+          parentPort.postMessage({
+            type: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          });
+          process.exitCode = 1;
+          parentPort.close();
+        }
+      }).catch((error) => {
+        parentPort.postMessage({
+          type: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+        process.exitCode = 1;
+        parentPort.close();
+      });
+    `,
+    {
+      eval: true,
+      workerData: {
+        moduleUrl: pathToFileURL(CLI_PATH).href,
+        worktree: fixture.worktree,
+        sab,
+      },
+    },
+  );
+  worker.on('message', (message: { type: string; message?: string }) => {
+    if (message.type === 'clone-path-resolved') {
+      readyResolve?.();
+      return;
+    }
+    if (message.type === 'error') {
+      workerError = new Error(message.message ?? 'claim-lock worker failed');
+      readyReject?.(workerError);
+    }
+  });
+  worker.once('error', (error) => {
+    const normalized =
+      error instanceof Error ? error : new Error(String(error));
+    workerError = normalized;
+    readyReject?.(normalized);
+  });
+  const workerExited = new Promise<number>((resolve) => {
+    worker.once('exit', (code) => resolve(code ?? -1));
+  });
+  try {
+    await ready;
+    git(fixture.primary, ['worktree', 'remove', '--force', fixture.worktree]);
+    git(fixture.primary, [
+      'worktree',
+      'add',
+      fixture.worktree,
+      '-b',
+      'issue/1-replacement',
+      'main',
+    ]);
+    Atomics.store(ints, 0, 1);
+    Atomics.notify(ints, 0);
+    releaseCloneLock(cloneLock);
+    cloneLock = null;
+    const workerExitCode = await workerExited;
+    assert.notEqual(workerExitCode, 0);
+    assert.equal(workerError === null, false);
+    assert.equal(checkClaimLock(fixture.worktree).present, false);
+    const workerErrorMessage = (workerError as Error | null)?.message ?? '';
+    assert.match(
+      workerErrorMessage,
+      /identity changed|could not establish git-admin directory identity/,
+    );
+  } finally {
+    if (cloneLock !== null) releaseCloneLock(cloneLock);
+    if (worker.threadId !== -1) await worker.terminate();
+    teardown(fixture);
+  }
+});
+
 test('acquire: a same-claim-id reacquire performs no destructive write — the lock file is never removed or replaced (regression for the Codex-reported unlink-then-create race)', () => {
   const fixture = setupLinkedWorktree();
   try {
@@ -543,6 +779,143 @@ test('check: reports a malformed lock body as present+malformed, without throwin
     assert.equal(check.present, true);
     assert.equal(check.malformed, true);
     assert.equal(check.holder, undefined);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('primary recovery marker update preserves ownership and rejects a stale lock snapshot', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+    const before = checkClaimLock(fixture.worktree);
+    const marker = {
+      phase: 'primary-checkout' as const,
+      worktree: fixture.worktree,
+      claimId: 'claim-a',
+      branch: 'issue/1-test',
+      developmentBranch: 'main',
+      releasedClaim: false,
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, before, marker),
+      true,
+    );
+    const marked = checkClaimLock(fixture.worktree);
+    assert.ok(marked.holder);
+    assert.deepEqual(marked.holder?.primaryRecovery, marker);
+
+    const stale = {
+      ...marked,
+      holder: {
+        ...marked.holder,
+        acquiredAt: '2026-09-27T00:00:00.000Z',
+      },
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, stale, null),
+      false,
+    );
+    assert.deepEqual(
+      checkClaimLock(fixture.worktree).holder?.primaryRecovery,
+      marker,
+    );
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, marked, null),
+      true,
+    );
+    assert.equal(
+      checkClaimLock(fixture.worktree).holder?.primaryRecovery,
+      undefined,
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('acquire: a primary recovery marker blocks matching-claim reacquire', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(acquired.mode, 'acquired');
+    const before = checkClaimLock(fixture.worktree);
+    const marker = {
+      phase: 'primary-checkout' as const,
+      worktree: fixture.worktree,
+      claimId: 'claim-a',
+      branch: 'issue/1-test',
+      developmentBranch: 'main',
+      releasedClaim: false,
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, before, marker),
+      true,
+    );
+
+    const blocked = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(blocked.mode, 'collision');
+    assert.deepEqual(blocked.holder?.primaryRecovery, marker);
+
+    const marked = checkClaimLock(fixture.worktree);
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, marked, null),
+      true,
+    );
+    const reacquired = acquireClaimLock(
+      fixture.worktree,
+      'agent-a',
+      'claim-a',
+      false,
+    );
+    assert.equal(reacquired.mode, 'acquired');
+    assert.equal(reacquired.reacquired, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('primary recovery marker update reserves an absent legacy lock exclusively', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const before = checkClaimLock(fixture.worktree);
+    const marker = {
+      phase: 'primary-checkout' as const,
+      worktree: fixture.worktree,
+      claimId: '',
+      branch: 'legacy-task',
+      developmentBranch: 'main',
+      releasedClaim: true,
+    };
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, before, marker),
+      true,
+    );
+    const marked = checkClaimLock(fixture.worktree);
+    assert.equal(marked.present, true);
+    assert.equal(marked.holder?.claimId, '');
+    assert.deepEqual(marked.holder?.primaryRecovery, marker);
+    assert.equal(
+      updatePrimaryRecoveryLockMarker(fixture.worktree, marked, null),
+      true,
+    );
+    const cleared = checkClaimLock(fixture.worktree);
+    assert.equal(cleared.present, false);
   } finally {
     teardown(fixture);
   }

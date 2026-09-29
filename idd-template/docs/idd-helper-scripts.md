@@ -343,24 +343,25 @@ other eleven return `0` on success and throw on failure, so they do
 not produce `gate` today. `discover-orphan-filter.mjs` with no
 arguments reaches `gh repo view` and is `transport`, not `usage`.
 
-| Helper                             | `usage`                                                                     | `gate`                                                                                                                  |
-| ---------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                        | none today (no arguments is `transport`)                                                                                |
-| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag | none today                                                                                                              |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag               | none today                                                                                                              |
-| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                    | none today                                                                                                              |
-| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
-| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                         | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens` |
-| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                 |
-| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                  | none today                                                                                                              |
-| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                     | none today                                                                                                              |
-| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                        | none today                                                                                                              |
-| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                     | none today                                                                                                              |
-| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                   | exit `1` when the verdict is not ready, or not closed under `--apply`                                                   |
-| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)           | exit `1` when the audit report did not pass                                                                             |
-| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                  | the helper's own non-zero verdict exit code                                                                             |
-| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                       | none today                                                                                                              |
-| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                        | none today                                                                                                              |
+| Helper                             | `usage`                                                                                | `gate`                                                                                                                                                      |
+| ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                                   | none today (no arguments is `transport`)                                                                                                                    |
+| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag            | none today                                                                                                                                                  |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag                          | none today                                                                                                                                                  |
+| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                               | none today                                                                                                                                                  |
+| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                | none today                                                                                                                                                  |
+| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                    | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
+| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                           | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
+| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                             | none today                                                                                                                                                  |
+| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                                | none today                                                                                                                                                  |
+| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                                   | none today                                                                                                                                                  |
+| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                                | none today                                                                                                                                                  |
+| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                              | exit `1` when the verdict is not ready, or not closed under `--apply`                                                                                       |
+| `local-worktree-recovery.mjs`      | a missing `--issue` or `--worktree`, mismatched `--owner`/`--repo`, or an unknown flag | exit `1` when the verdict is not ready, or when apply-mode recovery did not complete required cleanup, including primary-worktree checkout and lock cleanup |
+| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)                      | exit `1` when the audit report did not pass                                                                                                                 |
+| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                             | the helper's own non-zero verdict exit code                                                                                                                 |
+| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                                  | none today                                                                                                                                                  |
+| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                                   | none today                                                                                                                                                  |
 
 ### Migrated helpers (marker, handoff, provider, and misc batch)
 
@@ -3636,6 +3637,158 @@ still fails closed:
   (see the Orchestrator fan-out variant linked above), rather than
   hand-rolling this lock's protocol.
 
+### Local worktree recovery
+
+- Source repo / vendored-node command:
+
+  ```sh
+  node scripts/local-worktree-recovery.mjs --issue <n> --worktree <path> \
+    [--operator-confirmed-no-live-session] [--apply] \
+    [--agent-id <id>] [--owner <owner> --repo <repo>] [--policy <path>] \
+    [--now <ISO8601>] [--preserve-dir <path>]
+  ```
+
+- Package-manager command: run the profile-selected
+  `idd:local-worktree-recovery` package script. The example uses `npm`;
+  substitute the repository's configured package manager:
+
+  ```sh
+  npm run idd:local-worktree-recovery -- --issue <n> --worktree <path> \
+    [--operator-confirmed-no-live-session] [--apply] \
+    [--agent-id <id>] [--owner <owner> --repo <repo>] [--policy <path>] \
+    [--now <ISO8601>] [--preserve-dir <path>]
+  ```
+
+- Ephemeral-npx command: use the profile-selected
+  `idd:local-worktree-recovery` command from the helper runtime manifest
+  wiring above; the literal invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-local-worktree-recovery --issue <n> --worktree <path> \
+    [--operator-confirmed-no-live-session] [--apply] \
+    [--agent-id <id>] [--owner <owner> --repo <repo>] [--policy <path>] \
+    [--now <ISO8601>] [--preserve-dir <path>]
+  ```
+
+- Consolidates `idd-resume-detail.md`'s §LWR (Local Worktree Recovery)
+  steps 1 ("confirm the block"), 3 ("preserve"), and 4 ("remove") into one
+  invocation, composed from the existing building-block helpers rather
+  than reimplementing their logic:
+  - **Step 1** always spawns the compiled `resume-claim-routing.mjs` CLI
+    first (its own documented `--issue <n>` invocation, never this
+    helper's own `--worktree` — that flag has an unrelated, documented
+    meaning there) for the `local_worktree_occupied` /
+    `stale-claim-*` / `released-claim-*` verdict, exactly as the written
+    procedure's own step 1 does. An `-local-worktree-unreadable` reason
+    (occupancy could not be verified either way) refuses outright, never
+    silently treated the same as a confirmed `-occupied` one — recovering
+    a worktree whose true state is unknown is unsafe. A `git worktree list
+    --porcelain -z` record for `--worktree` that is prunable, absent on
+    disk, not locked, and names the recovered branch (a detached record is
+    never shortcut, since which branch it held can no longer be confirmed
+    once its path is gone) then skips only the worktree-local claim-lock
+    check (`claim-lock.mts`'s `checkClaimLock`, called directly — no
+    subprocess, no network) and goes straight to step 4's removal (nothing
+    to preserve) — the `locked` and branch-matching guards are this
+    implementation's own added margin over the written procedure's own
+    shortcut text, not a literal transcription of it. Otherwise
+    `checkClaimLock` confirms the lock's holder matches the claim-id
+    being recovered. A failed or unparseable `git worktree list` stops
+    here too (never silently read as an empty worktree list, which would
+    misclassify the target's primary-vs-linked kind). `--preserve-dir`,
+    when given, is rejected up front if it resolves inside the target
+    worktree — checked both lexically and via realpath, including the
+    nearest-existing-ancestor realpath for a destination that does not
+    exist yet (so a symlinked ancestor cannot redirect it back inside the
+    target), through the same platform-portable containment check
+    (`path.relative`-based, correct on both `/`- and `\`-separated paths)
+    the cwd guard above uses — a backup destination there would be
+    deleted by the very removal it exists to survive.
+  - **Step 2** (rule out a live session) is never checked mechanically —
+    `claim-lock.mts`'s own header documents why no local process-liveness
+    signal is recorded. `--operator-confirmed-no-live-session` is your own
+    explicit attestation for this step; every mutation refuses without it,
+    regardless of `--apply` or what step 1 finds.
+  - **Step 3** detects an in-progress merge/rebase/cherry-pick/bisect
+    (backing up the pre-operation tip — `orig-head` for rebase, the
+    `BISECT_START` ref's own tip for bisect (never the mid-bisect `HEAD`,
+    which is the commit currently under test), else `HEAD`; an
+    unresolvable tip fails closed rather than falling back to the
+    ordinary unpushed-commit check), then tag-stashes tracked/untracked
+    changes (`idd-lwr <claim-id-or-legacy>`) for the worktree and every
+    dirty submodule, copies out an uninitialized (`-`) submodule's files,
+    and writes `refs/idd-lwr/<branch>` for unpushed commits (worktree- and
+    submodule-scoped). A failed `git status`, `git submodule status`, or
+    unpushed-commit (`git log`/`rev-parse HEAD`) probe fails closed
+    (blocks removal) rather than reading as "clean", "no submodules", or
+    "no unpushed commits". An unmerged-path `stash push` failure (verified
+    by its own error text, not any `stash push` failure) copies out every
+    dirty path in that scope, not only the conflicted subset, and
+    verifies each one landed; any OTHER `stash push` failure (permission,
+    repository-lock contention, etc.) fails closed instead of silently
+    "succeeding" via that copy-out fallback. Ignored files are scanned and
+    copied per scope (the worktree and every initialized submodule, not
+    only the top level, since a submodule's own ignored contents never
+    show up in the top-level scan). A submodule path ending in a
+    parenthesized component (e.g. `lib (foo)`) is never mistaken for one
+    carrying git's own `(describe)` suffix, which only initialized
+    submodules ever emit. Ignored-file, uninitialized-submodule, and
+    unmerged-path copies land under `--preserve-dir` (default: a temp
+    directory, created only when something needs copying). For a linked
+    worktree, top-level local-only refs also cause the private worktree
+    git-admin directory to be copied under `worktree-gitdir/`; a
+    deinitialized submodule's private admin directory is copied under
+    `submodule-gitdir/` when it contains preservation-relevant data. Symlink
+    targets that resolve inside any source being removed are materialized in
+    the backup, while special files are rejected fail-closed instead of
+    being treated as ordinary files. These are preventive safeguards; no
+    observed incident yet.
+  - **Step 4** imports `acquireCloneLock`/`releaseCloneLock`
+    (`clone-lock.mts`) directly — in-process, not the manual
+    `clone-lock.mjs --exec -- bash -c '...'` wrapper the instructions-only
+    procedure requires — and acquires the lock before step-3 preservation,
+    holding it through the fresh re-check (re-running step 1's two checks,
+    including the prunable shortcut's own eligibility), a
+    comparison of the rechecked claim identity (claim-id and branch)
+    against the one step 1 actually recovered, and a fresh re-verification
+    of every step-3 preservation artifact (stash entries, backup refs,
+    and every ignored-file/uninitialized-submodule/unmerged-fallback copy
+    destination) against the live repository state (not the earlier, now
+    possibly stale, in-memory snapshot) — all while the lock is held,
+    immediately before mutating. Then `git worktree remove` (retrying
+    `--force` only after a submodule-removal failure or a dirty removal
+    failure with a freshly verified unmerged fallback), or, for the
+    primary-worktree branch, cleanup of any interrupted operation
+    (`rebase --quit`, `merge --abort`, `cherry-pick --abort`, or
+    `bisect reset`) before `checkout {development-branch}`, a bounded retry
+    of the confirmed-absent re-check (up to three total observations), and a
+    SECOND, final lock re-check run
+    after that checkout (not only the earlier, now possibly stale,
+    pre-checkout one) — deleting only the lock this final check
+    positively observed, and reporting failure (never a silent
+    best-effort no-op) if resolving or deleting it fails.
+- Default mode is dry-run (no mutation): prints exactly what step 1 found
+  and what step 3/4 would do (the full stash/backup-ref/removal plan),
+  without mutating anything. `--apply` performs the mutation, still gated
+  on `--operator-confirmed-no-live-session`. `--now` is accepted only in
+  dry-run mode to make the routing observation reproducible; combining it
+  with `--apply` is rejected so a mutation cannot use a synthetic clock.
+  This is preventive hardening; no observed incident yet.
+- On platforms where Node does not expose the no-follow and nonblocking
+  file-open primitives used by the secure recovery copy (notably Windows),
+  `--apply` refuses before step 3 starts. This prevents stash or recovery-ref
+  mutations from preceding a copy failure; use dry-run for inspection and an
+  environment with the required no-follow and nonblocking support for apply.
+  This guard follows the Copilot review finding in PR `#3550`, comment
+  `#4116259512`.
+- Must be invoked from the primary worktree (or from the primary worktree
+  itself, when that IS `--worktree`) — never from the linked worktree
+  being recovered; refuses immediately otherwise.
+- The written §LWR procedure in `idd-resume-detail.md` stays the canonical
+  spec and the `instructions-only` fallback; this helper's own behavior is
+  tested against it, not the other way around.
+
 ### Canonical branch name
 
 - Source repo / vendored-node command:
@@ -5733,6 +5886,14 @@ reporting `branch_outcome: retained_unmerged` (issue #2331).
   --force` is warranted only for that fatal, and only after leftovers
   are preserved. Revalidate with `--worktree` immediately before the
   retry (`idd-merge.instructions.md`).
+- **Verified unmerged fallback** (step 4, issue `#3536`): an unmerged
+  index can make `stash push` fail even though the working-tree paths
+  were copied and verified outside the worktree. If the first removal
+  then fails only because the worktree is still dirty, the helper may
+  retry with `--force` only after a fresh preservation pass verifies a
+  newly copied, complete unmerged fallback. A generic dirty-removal
+  failure, or an incomplete copy, remains a hold; the dry-run plan
+  states this narrow condition explicitly.
 - **Removed cwd** (step 5, issue `#3189`): a later `node` call fails
   with `ENOENT` on `uv_cwd`, or `gh` / `git` fails with `Unable to
   read current working directory`, and `unclaimed-by` is skipped

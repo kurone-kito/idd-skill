@@ -404,6 +404,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/local-validation-evidence.schema.json'],
   },
   {
+    id: 'local-worktree-recovery',
+    scriptName: 'idd:local-worktree-recovery',
+    binName: 'idd-local-worktree-recovery',
+    entryPath: 'scripts/local-worktree-recovery.mjs',
+    vendoredCommand: 'node scripts/local-worktree-recovery.mjs',
+    description:
+      "Consolidate docs/idd-resume-detail.md's §LWR (Local Worktree Recovery) steps 1 (confirm), 3 (preserve), and 4 (remove) into one invocation.",
+  },
+  {
     id: 'merge-execute',
     scriptName: 'idd:merge-execute',
     binName: 'idd-merge-execute',

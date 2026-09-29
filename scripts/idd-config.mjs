@@ -20,7 +20,8 @@
 // production call site reads this file at most once per process anyway,
 // so memoization had no real payoff to justify that risk.
 //
-// `loadIddConfig()` below only covers the default, no-path case (#1208's
+// `loadIddConfig()` below only covers the default, current-working-directory
+// case (#1208's
 // original scope). #1721 adds `loadPolicyConfig()` beside it for the nine
 // helpers that also accept an explicit `--policy`/`--config` path, with
 // stricter failure semantics (see that function's doc comment).
@@ -46,15 +47,17 @@ import {
 } from './policy-helpers.mjs';
 /**
  * Read and parse `.github/idd/config.json` from the current working
- * directory, returning `null` when the file is missing, unreadable, or
- * not valid JSON — the existing fail-safe every per-helper copy already
- * implements: treat a missing or malformed config the same as "no policy
- * configured". Always re-reads the file; see the module header for why
- * this does not memoize.
+ * directory, returning `null` when the file is missing,
+ * unreadable, or not valid JSON — the existing fail-safe every per-helper
+ * copy already implements: treat a missing or malformed config the same as
+ * "no policy configured". Always re-reads the file; see the module header
+ * for why this does not memoize.
  */
 export function loadIddConfig() {
   try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    return JSON.parse(
+      readFileSync(resolve(process.cwd(), '.github/idd/config.json'), 'utf8'),
+    );
   } catch {
     return null;
   }

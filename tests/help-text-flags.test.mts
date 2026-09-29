@@ -207,6 +207,7 @@ const COVERED_HELPERS = [
   'idd-suggest-untrusted-labelers',
   'live-status-digest',
   'local-validation-evidence',
+  'local-worktree-recovery',
   'merged-pr-feedback-sweep',
   'phase-id-resolver',
   'pre-merge-readiness',
