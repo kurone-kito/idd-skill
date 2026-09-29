@@ -7979,6 +7979,17 @@ test('bin/idd-onboard.mjs --help documents --verify and lists --profile values s
   assert.match(help, /--target-base-ref/);
 });
 
+test('bin/idd-onboard.mjs --help documents that --verify --hold excludes held paths from completeness', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(
+    help,
+    /--hold <target-path>[\s\S]*?Held target paths are excluded from the\s+manifest-completeness missing-target\s+check/,
+  );
+  assert.doesNotMatch(help, /Completeness still requires the file/);
+});
+
 // ---------------------------------------------------------------------------
 // --hear (#2281)
 // ---------------------------------------------------------------------------

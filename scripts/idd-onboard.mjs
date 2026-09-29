@@ -6230,8 +6230,9 @@ function recordPolicyOnlyFlagsPresent(args) {
  * Flags --verify does not accept: every substitute-only override flag (verify
  * never substitutes), plus `--force` and `--dry-run` (verify never writes, so
  * "allow overwriting" and "print the plan without writing" are both
- * meaningless for it). `--hold` is accepted: it does not exclude files from
- * the completeness check, and it feeds the held-schema drift advisory.
+ * meaningless for it). `--hold` is accepted: held target paths are excluded
+ * from the manifest-completeness missing-target check, unheld missing entries
+ * remain blocking, and `--hold` still feeds the held-schema drift advisory.
  */
 function verifyForeignFlagsPresent(args) {
   const present = substituteOnlyFlagsPresent(args);
@@ -6772,11 +6773,13 @@ configuration error.
   --profile <name>                   ${PROFILE_NAMES.join(' | ')}
   --hold <target-path>               name a manifest entry left at its
                                       current target content (repeatable).
-                                      Completeness still requires the file;
-                                      the held-schema drift advisory uses
-                                      the list. A value that matches no
-                                      resolved manifest path is a usage
-                                      error (exit 2).
+                                      Held target paths are excluded from the
+                                      manifest-completeness missing-target
+                                      check, unheld missing entries remain
+                                      blocking, and --hold still feeds the
+                                      held-schema drift advisory. A value that
+                                      matches no resolved manifest path is a
+                                      usage error (exit 2).
   --target-base-ref <ref>            Git ref containing the target's
                                       pre-import tree (default: HEAD for a
                                       Git target; an unborn HEAD and
