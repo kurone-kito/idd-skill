@@ -6729,7 +6729,7 @@ test('a baseline watch newer than the verdict does not skip later collection', (
     [baseInputs({ reviews: [] })],
     baseOptions(),
   );
-  const { sleep, now } = fakeClock();
+  const { sleep, now, sleptMs } = fakeClock();
   deps.watchPendingReview = () => ({
     kind: 'unchanged',
     fingerprint: 'with-review',
@@ -6750,8 +6750,11 @@ test('a baseline watch newer than the verdict does not skip later collection', (
   );
   assert.equal(exitCode, 1);
   assert.equal(verdict?.ready, false);
-  // The no-watch cadence: initial verdict plus both in-budget rechecks.
-  assert.equal(collectCalls(), 3);
+  // Each anchor sees a review the verdict missed, collects once more,
+  // then stops. The 20s budget still sleeps 7.5s, 7.5s, and the
+  // remaining 5s instead of tight-looping on that disagreement.
+  assert.equal(collectCalls(), 6);
+  assert.deepEqual(sleptMs(), [7_500, 7_500, 5_000]);
 });
 
 test('a changed watch does not become the baseline when the fresh verdict missed it', () => {
@@ -6766,7 +6769,7 @@ test('a changed watch does not become the baseline when the fresh verdict missed
     submitted_at: '2026-09-28T00:00:00Z',
     body: 'landed after the verdict',
   };
-  const { sleep, now } = fakeClock();
+  const { sleep, now, sleptMs } = fakeClock();
   let watches = 0;
   deps.watchPendingReview = (_argv, previous) => {
     watches += 1;
@@ -6788,9 +6791,11 @@ test('a changed watch does not become the baseline when the fresh verdict missed
   );
   assert.equal(exitCode, 1);
   assert.equal(verdict?.ready, false);
-  // 40s / 7.5s is six collect calls when nothing is skipped. Adopting the
-  // changed watch as the baseline would skip the middle ticks and stop at 3.
-  assert.equal(collectCalls(), 6);
+  // Adopting the changed watch as the baseline would skip the middle
+  // ticks. Each disagreement collects once more, then waits out the
+  // same 7.5s cadence (five full intervals plus the remaining 2.5s).
+  assert.equal(collectCalls(), 11);
+  assert.deepEqual(sleptMs(), [7_500, 7_500, 7_500, 7_500, 7_500, 2_500]);
 });
 
 test('a GraphQL verdict and a REST watch with the same review still skip', () => {
@@ -6838,6 +6843,147 @@ test('a GraphQL verdict and a REST watch with the same review still skip', () =>
   assert.equal(verdict?.ready, false);
   assert.equal(watches, 4);
   assert.equal(collectCalls(), 2);
+});
+
+test('a GraphQL app login and a REST [bot] login for the same review still skip', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({
+        reviews: [
+          {
+            id: 'PRR_1',
+            author: { login: 'coderabbitai' },
+            submittedAt: '2026-09-28T00:00:00Z',
+            commitId: 'ABC',
+            body: 'note',
+          },
+        ],
+      }),
+    ],
+    baseOptions(),
+  );
+  let watches = 0;
+  deps.watchPendingReview = (_argv, previous) => {
+    watches += 1;
+    return {
+      kind: 'unchanged',
+      fingerprint: previous ?? 'matched',
+      reviews: [
+        {
+          id: 99,
+          user: { login: 'coderabbitai[bot]' },
+          state: 'COMMENTED',
+          commit_id: 'abc',
+          submitted_at: '2026-09-28T00:00:00.000Z',
+          body: 'note',
+        },
+      ],
+    };
+  };
+  const { sleep, now } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.equal(watches, 4);
+  assert.equal(collectCalls(), 2);
+});
+
+test('a watch fingerprint for a different HEAD is not an unchanged baseline', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  const { sleep, now, sleptMs } = fakeClock();
+  let watches = 0;
+  deps.watchPendingReview = () => {
+    watches += 1;
+    return {
+      kind: 'unchanged',
+      fingerprint: JSON.stringify({ headSha: OTHER_SHA, reviews: [] }),
+      reviews: [],
+    };
+  };
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.equal(collectCalls(), 6);
+  assert.equal(watches, 6);
+  assert.deepEqual(sleptMs(), [7_500, 7_500, 5_000]);
+});
+
+test('a review the opening anchor already sees is collected before the first sleep', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] }), baseInputs({ reviews: [copilotReview()] })],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  deps.watchPendingReview = () => ({
+    kind: 'unchanged',
+    fingerprint: 'arrived',
+    reviews: [
+      {
+        user: { login: 'copilot-pull-request-reviewer[bot]' },
+        state: 'COMMENTED',
+        commit_id: HEAD,
+        submitted_at: '2026-09-28T00:00:00Z',
+        body: 'landed',
+      },
+    ],
+  });
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 5_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  assert.equal(exitCode, 0);
+  assert.equal(verdict?.ready, true);
+  assert.equal(collectCalls(), 2);
+  assert.equal(calls(), 0);
+});
+
+test('a collection that finishes after the deadline does not start another watch', () => {
+  let collects = 0;
+  let watches = 0;
+  const clock = fakeClock();
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      collects += 1;
+      if (collects >= 2) clock.sleep(20_000);
+      return {
+        inputs: baseInputs({ reviews: [] }),
+        options: baseOptions(),
+      };
+    },
+    watchPendingReview: () => {
+      watches += 1;
+      if (watches === 1) {
+        return { kind: 'unchanged', fingerprint: 'baseline', reviews: [] };
+      }
+      return { kind: 'changed', fingerprint: 'moved', reviews: [] };
+    },
+  };
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: 20_000,
+      pollIntervalMs: 7_500,
+      sleep: clock.sleep,
+      now: clock.now,
+    },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.equal(collects, 2);
+  assert.equal(watches, 2);
 });
 
 test('a pending-review watch that exhausts the deadline does not start a full collection', () => {
