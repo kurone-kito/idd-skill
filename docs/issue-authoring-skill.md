@@ -2392,10 +2392,12 @@ Before reporting or publishing issue drafts, the skill should verify:
   context
 - reuse or extension decisions are recorded when the skill chose not to
   create a new issue
-- each drafted ready body passes the completed-draft adversarial
-  review and then the `audit-authored-issue` mechanical pre-publish
-  gate for its declared shape, or the manual fallback when no helper
-  runtime is available (see
+- each drafted roadmap, child, or orphan body passes the
+  completed-draft adversarial review and then the
+  `audit-authored-issue` mechanical pre-publish gate for its declared
+  shape, including a body published into `needs-decision` or
+  `blocked-by-human` (`--expect-bucket` for those two buckets), or the
+  manual fallback when no helper runtime is available (see
   [Completed-draft adversarial review](#completed-draft-adversarial-review)
   and
   [Mechanical pre-publish gate](#mechanical-pre-publish-gate))

@@ -350,11 +350,11 @@ needs-decision, blocked-by-human, and out-of-scope.
   so.
 - Run the completed-draft adversarial review, then the
   `audit-authored-issue` linter (or its manual fallback in
-  `instructions-only` installs), against every drafted ready body.
-  Also run the linter against every body newly published into
-  `needs-decision` or `blocked-by-human` with `--expect-bucket`.
-  Resolve every reported failure before publishing. A failed review
-  does not publish.
+  `instructions-only` installs), against every drafted roadmap, child,
+  or orphan body. That includes a body published into
+  `needs-decision` or `blocked-by-human`; pass `--expect-bucket` for
+  those two buckets. Resolve every reported failure before publishing.
+  A failed review does not publish.
 - Name a concrete surface to edit and an objective verification for
   every `ready` candidate; route anything else to `needs-decision` or
   ask instead of guessing (the under-clarification stop rule).
