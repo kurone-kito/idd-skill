@@ -178,6 +178,10 @@ function fieldsFromResponse(response) {
     typeof response.status === 'number' && response.status >= 100
       ? response.status
       : null;
+  // Match observeGhSuccess: scan rate-limit phrases only on an explicit
+  // non-2xx. A 2xx issue title must not become quota exhaustion, and a
+  // missing status is not guessed into a failure scan.
+  const transportSucceeded = status !== null && status >= 200 && status < 300;
   return classifyFields({
     status,
     resourceToken: headerValue(headers, 'x-ratelimit-resource'),
@@ -187,8 +191,8 @@ function fieldsFromResponse(response) {
     bodyText: response.bodyText ?? '',
     graphqlBody: response.graphqlBody,
     interpretGraphql: response.graphqlBody !== undefined,
-    scanWording: true,
-    transportSucceeded: status !== null && status >= 200 && status < 300,
+    scanWording: status !== null && !transportSucceeded,
+    transportSucceeded,
   });
 }
 function mergeSignals(parts) {

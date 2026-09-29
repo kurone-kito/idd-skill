@@ -97,6 +97,61 @@ test('injected exchanges keep exact HTTP, page, command, and retry counts', () =
   assert.equal(separate.classification, 'ok');
 });
 
+test('injected 2xx bodies do not become quota observations', () => {
+  const titled = summarizeInjectedExchanges([
+    {
+      responses: [
+        { status: 200, bodyText: '{"title":"API rate limit exceeded"}' },
+      ],
+    },
+  ]);
+  assert.equal(titled.classification, 'ok');
+  assert.equal(titled.signals.primaryExhaustion, false);
+  assert.equal(titled.signals.secondaryThrottling, false);
+
+  const secondaryPhrase = summarizeInjectedExchanges([
+    { responses: [{ status: 200, bodyText: 'secondary rate limit' }] },
+  ]);
+  assert.equal(secondaryPhrase.classification, 'ok');
+  assert.equal(secondaryPhrase.signals.secondaryThrottling, false);
+
+  const headerStillCounts = summarizeInjectedExchanges([
+    {
+      responses: [
+        {
+          status: 200,
+          headers: { 'x-ratelimit-remaining': '0' },
+          bodyText: 'API rate limit exceeded',
+        },
+      ],
+    },
+  ]);
+  assert.equal(headerStillCounts.classification, 'primary-exhaustion');
+  assert.equal(headerStillCounts.signals.primaryExhaustion, true);
+  assert.equal(headerStillCounts.signals.secondaryThrottling, false);
+
+  const explicitFailure = summarizeInjectedExchanges([
+    {
+      responses: [
+        {
+          status: 403,
+          bodyText: 'You have exceeded a secondary rate limit.',
+        },
+      ],
+    },
+  ]);
+  assert.equal(explicitFailure.classification, 'secondary-throttling');
+  assert.equal(explicitFailure.signals.secondaryThrottling, true);
+  assert.equal(explicitFailure.signals.primaryExhaustion, false);
+
+  const missingStatus = summarizeInjectedExchanges([
+    { responses: [{ bodyText: 'API rate limit exceeded' }] },
+  ]);
+  assert.equal(missingStatus.status, 'unknown');
+  assert.equal(missingStatus.signals.primaryExhaustion, false);
+  assert.equal(missingStatus.classification, 'ok');
+});
+
 test('request signals stay independent and do not guess a subtype', () => {
   const primary = observeGhFailure({
     stderr: 'gh: API rate limit exceeded for user (HTTP 403)',
