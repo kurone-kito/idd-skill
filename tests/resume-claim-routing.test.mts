@@ -2616,6 +2616,22 @@ if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('format-tester\\n');
   process.exit(0);
 }
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => String(arg).includes('databaseId'))) {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+        pullRequest: null,
+      },
+    },
+  }));
+  process.exit(0);
+}
 if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1\\/comments/.test(arg))) {
   process.exit(0);
 }
@@ -2733,6 +2749,32 @@ function linkedPrLookupFailureCliFixture() {
     `const args = process.argv.slice(2);
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('maintainer\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => String(arg).includes('databaseId'))) {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: {
+        repository: {
+          issue: {
+            comments: {
+              nodes: comments.map((row) => ({
+                id: row.node_id,
+                databaseId: row.id,
+                body: row.body,
+                createdAt: row.created_at,
+                updatedAt: row.created_at,
+                lastEditedAt: null,
+                author: { login: row.user.login, __typename: 'User' },
+              })),
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+          pullRequest: null,
+        },
+      },
+    }),
+  )});
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {
@@ -2946,6 +2988,34 @@ function trustedLadderFixture({
 const commentPayloads = ${commentPayloadsJs};
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('viewer-login\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => String(arg).includes('databaseId'))) {
+  const nodes = commentPayloads.map((payload) => {
+    const row = JSON.parse(payload);
+    return {
+      id: row.node_id,
+      databaseId: row.id,
+      body: row.body,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at || row.created_at,
+      lastEditedAt: null,
+      author: { login: row.user.login, __typename: 'User' },
+    };
+  });
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+        pullRequest: null,
+      },
+    },
+  }));
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {

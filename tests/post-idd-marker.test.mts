@@ -1324,10 +1324,41 @@ if (args[0] === 'pr' && args[1] === 'checks') {
 if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statusCheckRollup')) {
   out(${rollup});
 }
+if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('databaseId')) {
+  const raw = ${commentsBody};
+  const trimmed = String(raw).trim();
+  const rows = trimmed === ''
+    ? []
+    : trimmed.startsWith('[')
+      ? JSON.parse(trimmed)
+      : trimmed.split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+  const nodes = rows.map((row, index) => ({
+    id: row.node_id || ('C_rest_' + (index + 1)),
+    databaseId: typeof row.id === 'number' ? row.id : index + 1,
+    body: row.body || '',
+    createdAt: row.created_at || '2026-06-25T10:00:00Z',
+    updatedAt: row.updated_at || row.created_at || '2026-06-25T10:00:00Z',
+    lastEditedAt: null,
+    author: {
+      login: (row.user && row.user.login) || '',
+      __typename: 'User',
+    },
+  }));
+  out(JSON.stringify({
+    data: {
+      repository: {
+        issue: null,
+        pullRequest: {
+          comments: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  }));
+}
 if (args[0] === 'api' && args[1] === 'graphql') {
-  // #3249: the SAME canned response also answers listWorkItemComments's
-  // includeEditState node-lookup query (nodes(ids: ...) { lastEditedAt }),
-  // keyed by the comment's own node_id below -- one literal, two shapes.
   out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } }, nodes: [{ id: 'C_1', lastEditedAt: null }] } }));
 }
 if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');

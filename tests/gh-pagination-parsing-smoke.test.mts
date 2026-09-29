@@ -285,13 +285,9 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
     ],
   ]);
 
-  // #3249: `listWorkItemComments`'s `includeEditState` opt-in (used by
-  // review-activity-snapshot.mjs since this issue) issues a SEPARATE
-  // `nodes(ids: ...) { ... lastEditedAt }` GraphQL call, keyed by each
-  // comment's `node_id` above. `buildStubGh`'s single canned
-  // `graphqlResponse` matches ANY `api graphql` call regardless of query
-  // text, so one literal carries both this query's `data.nodes` shape and
-  // `fetchReviewThreads`'s own `data.repository...reviewThreads` shape.
+  // #3590: `includeEditState` reads `pullRequest.comments` from this
+  // same canned GraphQL payload (one response answers every `api graphql`
+  // call). `reviewThreads` stays on that payload for the thread query.
   const graphqlResponse = JSON.stringify({
     data: {
       repository: {
@@ -299,6 +295,31 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
           reviewThreads: {
             pageInfo: { hasNextPage: false, endCursor: null },
             nodes: [],
+          },
+          // #3590: includeEditState reads this comments connection
+          // instead of REST plus a nodes(ids:) enrichment.
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'C_1',
+                databaseId: 1,
+                body: 'first',
+                createdAt: '2026-07-31T09:00:00Z',
+                updatedAt: '2026-07-31T09:00:00Z',
+                lastEditedAt: null,
+                author: { login: 'commenter-one', __typename: 'User' },
+              },
+              {
+                id: 'C_2',
+                databaseId: 2,
+                body: 'second',
+                createdAt: '2026-07-31T09:30:00Z',
+                updatedAt: '2026-07-31T09:30:00Z',
+                lastEditedAt: null,
+                author: { login: 'commenter-two', __typename: 'User' },
+              },
+            ],
           },
         },
       },
@@ -342,7 +363,7 @@ function claimApprovalGateResponses(timelineBody: string): Map<string, string> {
     [
       JSON.stringify([
         'api',
-        `repos/${REPO_REF}/issues/7/comments`,
+        `repos/${REPO_REF}/issues/7/comments?per_page=100`,
         '--paginate',
         '--jq',
         '.[]',
