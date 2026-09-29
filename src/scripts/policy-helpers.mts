@@ -27,7 +27,7 @@ interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
   deferAfterRounds: number;
-  deferByUrgency: 'off' | 'low' | 'low-and-medium';
+  deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
   subagentWaitCeiling: string;
   delegate?: CritiqueLoopDelegate;
 }
@@ -528,7 +528,12 @@ const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
 const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
 const ADVISORY_CONVERGENCE_SCOPES = new Set(['all-prs', 'idd-claimed']);
 const SELECTION_DESYNC_MODES = new Set(['off', 'session-offset']);
-const DEFER_BY_URGENCY_MODES = new Set(['off', 'low', 'low-and-medium']);
+const DEFER_BY_URGENCY_MODES = new Set([
+  'off',
+  'low',
+  'low-and-medium',
+  'severity-tiered',
+]);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -2000,6 +2005,152 @@ function hasConfiguredCollaboratorMarkerTrust(config: unknown): boolean {
 
 function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
+}
+
+type ReviewSeverityTier = 'low' | 'medium' | 'high';
+type UrgencyScore = 'very-low' | 'low' | 'medium' | 'high';
+type UrgencyDeferBlock =
+  | 'mode-off'
+  | 'path-b'
+  | 'scope-fence'
+  | 'awaiting-maintainer-decision'
+  | 'accepted-mid-fix'
+  | 'adopt-now'
+  | 'above-ceiling'
+  | 'unknown-urgency'
+  | 'matrix';
+
+interface UrgencyDeferInput {
+  mode: CritiqueLoopPolicy['deferByUrgency'];
+  path: 'A' | 'B';
+  e4Severity: ReviewSeverityTier | null;
+  copilotLabel: ReviewSeverityTier | null;
+  urgency: UrgencyScore | null;
+  scopeFence: boolean;
+  awaitingMaintainerDecision: boolean;
+  acceptedMidFix: boolean;
+  adoptNow: boolean;
+}
+
+interface UrgencyDeferDecision {
+  defer: boolean;
+  eligibility: ReviewSeverityTier | null;
+  blockedBy: UrgencyDeferBlock | null;
+}
+
+const SEVERITY_RANK: Record<ReviewSeverityTier, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+
+function knownSeverity(
+  value: ReviewSeverityTier | null,
+): ReviewSeverityTier | null {
+  if (value === 'low' || value === 'medium' || value === 'high') {
+    return value;
+  }
+  return null;
+}
+
+function knownUrgency(value: UrgencyScore | null): UrgencyScore | null {
+  if (
+    value === 'very-low' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function higherSeverity(
+  left: ReviewSeverityTier | null,
+  right: ReviewSeverityTier | null,
+): ReviewSeverityTier | null {
+  if (left === null) {
+    return right;
+  }
+  if (right === null) {
+    return left;
+  }
+  return SEVERITY_RANK[left] >= SEVERITY_RANK[right] ? left : right;
+}
+
+function denyUrgencyDefer(
+  blockedBy: UrgencyDeferBlock,
+  eligibility: ReviewSeverityTier | null = null,
+): UrgencyDeferDecision {
+  return { defer: false, eligibility, blockedBy };
+}
+
+function severityTieredDefers(
+  eligibility: ReviewSeverityTier,
+  urgency: UrgencyScore,
+): boolean {
+  if (eligibility === 'high') {
+    return urgency === 'very-low';
+  }
+  if (eligibility === 'medium') {
+    return urgency !== 'high';
+  }
+  return true;
+}
+
+/**
+ * Pure specification of the E4/E5 urgency-defer matrix. Instruction text
+ * applies it; this module has no production caller. Check order fails
+ * closed toward not deferring. `severity-tiered` ignores `adoptNow` and
+ * treats an unknown E4 tier as Medium before the Copilot floor, which
+ * only raises eligibility. `low` and `low-and-medium` do not.
+ */
+// audit:ignore-dead-export: E4/E5 applies this matrix from instruction text; tests lock every cell and there is no helper caller
+export function decideUrgencyDefer(
+  input: UrgencyDeferInput,
+): UrgencyDeferDecision {
+  if (input.mode === 'off') {
+    return denyUrgencyDefer('mode-off');
+  }
+  if (input.path !== 'A') {
+    return denyUrgencyDefer('path-b');
+  }
+  if (input.scopeFence) {
+    return denyUrgencyDefer('scope-fence');
+  }
+  if (input.awaitingMaintainerDecision) {
+    return denyUrgencyDefer('awaiting-maintainer-decision');
+  }
+  if (input.acceptedMidFix) {
+    return denyUrgencyDefer('accepted-mid-fix');
+  }
+
+  const e4 = knownSeverity(input.e4Severity);
+  const copilot = knownSeverity(input.copilotLabel);
+
+  if (input.mode === 'severity-tiered') {
+    const eligibility = higherSeverity(e4 ?? 'medium', copilot) ?? 'medium';
+    const urgency = knownUrgency(input.urgency);
+    if (urgency === null) {
+      return denyUrgencyDefer('unknown-urgency', eligibility);
+    }
+    if (!severityTieredDefers(eligibility, urgency)) {
+      return denyUrgencyDefer('matrix', eligibility);
+    }
+    return { defer: true, eligibility, blockedBy: null };
+  }
+
+  const eligibility = higherSeverity(e4, copilot);
+  if (eligibility === null || eligibility === 'high') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  if (input.adoptNow) {
+    return denyUrgencyDefer('adopt-now', eligibility);
+  }
+  if (input.mode === 'low' && eligibility !== 'low') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  return { defer: true, eligibility, blockedBy: null };
 }
 
 function hasOwn(value: unknown, key: string): boolean {

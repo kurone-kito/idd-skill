@@ -1519,7 +1519,9 @@ supports these keys:
 - `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `3`)
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
 - `critiqueLoop.deferAfterRounds` (default `12`)
-- `critiqueLoop.deferByUrgency` (default `off`; `low` or `low-and-medium`)
+- `critiqueLoop.deferByUrgency` (default `off`; `low`,
+  `low-and-medium`, or `severity-tiered`). High stays ineligible under
+  `low` and `low-and-medium`.
 - `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`

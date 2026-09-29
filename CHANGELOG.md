@@ -14,6 +14,12 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+### Added
+
+- `critiqueLoop.deferByUrgency` accepts `severity-tiered`, so a PATH A
+  finding can be deferred by an urgency score. High defers only at
+  `very-low`. `low` and `low-and-medium` are unchanged (#3589).
+
 ## [0.13.0] - 2026-09-27
 
 Shared helper execution, authoring-time safety checks, and claim,

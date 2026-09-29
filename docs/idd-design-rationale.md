@@ -1378,9 +1378,10 @@ merges, other-bot fixes) — this trigger does not touch those.
   is low to a bundled follow-up issue, the same way the round-count
   cutoff does, but from round 1.
 - The severity ceiling for this new trigger is Low plus Medium (mode
-  `low-and-medium`); High is never deferred. This supersedes the
-  2026-09-10 Low-only ceiling **for this new trigger only**;
-  `deferAfterRounds` itself stays unchanged and Low-only.
+  `low-and-medium`); High is never deferred under `low` or
+  `low-and-medium`. This supersedes the 2026-09-10 Low-only ceiling
+  **for this new trigger only**; `deferAfterRounds` itself stays
+  unchanged and Low-only.
 - Keep `deferAfterRounds` as an unchanged backstop; the new rule is an
   independent trigger applying from the first E4/E5 pass.
 - Apply to every PATH A actor, not only Copilot, with the agent's E4
@@ -1392,8 +1393,8 @@ merges, other-bot fixes) — this trigger does not touch those.
   keeps new diff surface, and the fresh findings it can attract,
   bounded.
 - Distribute as an opt-in policy key with default `off`; this
-  repository opts in to `low-and-medium` as a local dogfood policy
-  (`AGENTS.md`).
+  repository opts in to `severity-tiered` as a local dogfood policy
+  (`AGENTS.md`). The previous dogfood value was `low-and-medium`.
 - A follow-up filed by either trigger carries the
   `review-fix-loop-cutoff` defer-source marker. The issue-authoring
   skill's Stage 2 narrow auto-release exception releases that hold
@@ -1401,6 +1402,26 @@ merges, other-bot fixes) — this trigger does not touch those.
   release request. Observed 2026-09-25, issues `#3372` and `#3426`:
   both stayed under `status:authoring` until a human asked for
   release, because the phase files stopped at the Stage 1 hold.
+
+#### Severity-tiered urgency (kurone-kito/idd-skill#3589)
+
+`severity-tiered` is a third `deferByUrgency` value. It replaces the
+binary adopt-now allowlist with an ordinal urgency score (`very-low`
+< `low` < `medium` < `high`) beside the E4 severity. High defers only
+at `very-low`. Medium, including unknown severity, defers at
+`very-low`, `low`, or `medium`. Low defers at every scored urgency.
+An unscored urgency does not defer. `low` and `low-and-medium` still
+never defer High, so the hearing bullet above applies to those two
+modes only. This repository moved its dogfood value from
+`low-and-medium` to `severity-tiered`.
+
+PR #3550 and PR #3574 are why that High cell exists. On 2026-09-28
+those pull requests had review submissions on many distinct commits:
+PR #3550 had Copilot on 94, Codex on 79, and CodeRabbit on 4;
+PR #3574 had Copilot on 95, Codex on 82, and CodeRabbit on 4. Those
+counts are re-evaluation waves, not unique findings. Copilot's
+overview on PR #3550 reported no findings on `fcc6e1620` before Codex
+reported three safety findings on that same commit.
 
 ### review-ack worked example
 

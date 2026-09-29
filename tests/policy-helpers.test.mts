@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   clone,
   DEFAULT_PROVIDER,
+  decideUrgencyDefer,
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectDevelopmentBranch,
@@ -266,6 +268,12 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
     }).critiqueLoop.deferByUrgency,
     'low-and-medium',
   );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { deferByUrgency: 'severity-tiered' },
+    }).critiqueLoop.deferByUrgency,
+    'severity-tiered',
+  );
   // Unknown or invalid value falls back to the default.
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 'high' } })
@@ -277,6 +285,233 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
       .deferByUrgency,
     'off',
   );
+});
+
+test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () => {
+  const base = {
+    mode: 'severity-tiered' as const,
+    path: 'A' as const,
+    e4Severity: 'medium' as const,
+    copilotLabel: null,
+    urgency: 'low' as const,
+    scopeFence: false,
+    awaitingMaintainerDecision: false,
+    acceptedMidFix: false,
+    adoptNow: false,
+  };
+  const matrix: Array<
+    ['low' | 'medium' | 'high', 'very-low' | 'low' | 'medium' | 'high', boolean]
+  > = [
+    ['high', 'very-low', true],
+    ['high', 'low', false],
+    ['high', 'medium', false],
+    ['high', 'high', false],
+    ['medium', 'very-low', true],
+    ['medium', 'low', true],
+    ['medium', 'medium', true],
+    ['medium', 'high', false],
+    ['low', 'very-low', true],
+    ['low', 'low', true],
+    ['low', 'medium', true],
+    ['low', 'high', true],
+  ];
+  for (const [e4Severity, urgency, defer] of matrix) {
+    const decision = decideUrgencyDefer({ ...base, e4Severity, urgency });
+    assert.equal(decision.defer, defer, `${e4Severity}/${urgency}`);
+    assert.equal(decision.eligibility, e4Severity);
+    assert.equal(decision.blockedBy, defer ? null : 'matrix');
+  }
+  for (const urgency of ['very-low', 'low', 'medium', 'high'] as const) {
+    const decision = decideUrgencyDefer({
+      ...base,
+      e4Severity: null,
+      urgency,
+    });
+    const defer = urgency !== 'high';
+    assert.equal(decision.defer, defer, `unknown/${urgency}`);
+    assert.equal(decision.eligibility, 'medium');
+    assert.equal(decision.blockedBy, defer ? null : 'matrix');
+  }
+  for (const e4Severity of ['low', 'medium', 'high'] as const) {
+    const decision = decideUrgencyDefer({
+      ...base,
+      e4Severity,
+      urgency: null,
+    });
+    assert.equal(decision.defer, false, `${e4Severity}/unscored`);
+    assert.equal(decision.blockedBy, 'unknown-urgency');
+  }
+  assert.deepEqual(
+    decideUrgencyDefer({ ...base, path: 'B', urgency: 'very-low' }),
+    { defer: false, eligibility: null, blockedBy: 'path-b' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      path: 'B',
+      scopeFence: true,
+      urgency: 'very-low',
+    }),
+    { defer: false, eligibility: null, blockedBy: 'path-b' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({ ...base, scopeFence: true, adoptNow: true }),
+    { defer: false, eligibility: null, blockedBy: 'scope-fence' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      awaitingMaintainerDecision: true,
+      acceptedMidFix: true,
+    }),
+    {
+      defer: false,
+      eligibility: null,
+      blockedBy: 'awaiting-maintainer-decision',
+    },
+  );
+  assert.deepEqual(decideUrgencyDefer({ ...base, acceptedMidFix: true }), {
+    defer: false,
+    eligibility: null,
+    blockedBy: 'accepted-mid-fix',
+  });
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      copilotLabel: 'high',
+      urgency: 'very-low',
+    }).eligibility,
+    'high',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      copilotLabel: 'high',
+      urgency: 'low',
+    }).defer,
+    false,
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'high',
+      copilotLabel: 'low',
+      urgency: 'low',
+    }).eligibility,
+    'high',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: null,
+      copilotLabel: 'low',
+      urgency: 'high',
+    }).eligibility,
+    'medium',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: null,
+      copilotLabel: 'high',
+      urgency: 'very-low',
+    }).eligibility,
+    'high',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      urgency: 'high',
+      adoptNow: true,
+    }).defer,
+    true,
+  );
+  const binary = { ...base, mode: 'low' as const, urgency: null };
+  assert.deepEqual(decideUrgencyDefer({ ...binary, e4Severity: 'high' }), {
+    defer: false,
+    eligibility: 'high',
+    blockedBy: 'above-ceiling',
+  });
+  assert.deepEqual(decideUrgencyDefer({ ...binary, e4Severity: 'low' }), {
+    defer: true,
+    eligibility: 'low',
+    blockedBy: null,
+  });
+  assert.deepEqual(
+    decideUrgencyDefer({ ...binary, e4Severity: 'low', adoptNow: true }),
+    { defer: false, eligibility: 'low', blockedBy: 'adopt-now' },
+  );
+  assert.deepEqual(decideUrgencyDefer({ ...binary, e4Severity: 'medium' }), {
+    defer: false,
+    eligibility: 'medium',
+    blockedBy: 'above-ceiling',
+  });
+  assert.deepEqual(
+    decideUrgencyDefer({ ...binary, e4Severity: null, copilotLabel: null }),
+    { defer: false, eligibility: null, blockedBy: 'above-ceiling' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({ ...binary, e4Severity: null, copilotLabel: 'low' }),
+    { defer: true, eligibility: 'low', blockedBy: null },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'medium',
+    }),
+    { defer: true, eligibility: 'medium', blockedBy: null },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'high',
+      urgency: 'very-low',
+    }),
+    { defer: false, eligibility: 'high', blockedBy: 'above-ceiling' },
+  );
+  assert.deepEqual(decideUrgencyDefer({ ...base, mode: 'off' }), {
+    defer: false,
+    eligibility: null,
+    blockedBy: 'mode-off',
+  });
+});
+
+test('the triage defer section keeps condition (c) and the urgency matrix', () => {
+  const text = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-review-triage.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  ).replace(/\s+/g, ' ');
+  const phrases = [
+    'instead of normal judgment',
+    'defect in shipped behavior — code, helper output, CI result, or instruction text that changes what an agent does',
+    'excluding wording/clarity polish and extra test coverage for already-working behavior',
+    'wording or formatting that does not change behavior',
+    'extra tests, comments, or naming for already-correct behavior',
+    'not a regression of this PR',
+    'Unscored urgency does not defer, including Low',
+    'Urgency is ignored',
+    'null urgency still defers',
+    'unknown severity is not Medium',
+    'counts as Medium',
+    'never PATH B',
+    'Accept forced does not win',
+    'Accept forced still stands',
+    'High never eligible',
+    'every scored urgency',
+    'review-fix-loop-cutoff',
+    '(a)-(c)',
+  ];
+  for (const phrase of phrases) {
+    assert.ok(text.includes(phrase), phrase);
+  }
 });
 
 test('critiqueLoop.subagentWaitCeiling defaults to PT20M and accepts positive durations', () => {
