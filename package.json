@@ -45,6 +45,7 @@
     "idd-force-handoff": "./bin/idd-force-handoff.mjs",
     "idd-forced-handoff-marker": "./bin/idd-forced-handoff-marker.mjs",
     "idd-helper-bundle-manifest": "./bin/idd-helper-bundle-manifest.mjs",
+    "idd-issue-authoring-delegate": "./bin/idd-issue-authoring-delegate.mjs",
     "idd-live-status-digest": "./bin/idd-live-status-digest.mjs",
     "idd-local-validation-evidence": "./bin/idd-local-validation-evidence.mjs",
     "idd-local-worktree-recovery": "./bin/idd-local-worktree-recovery.mjs",

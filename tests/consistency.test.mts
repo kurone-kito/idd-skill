@@ -979,6 +979,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       maxClarificationRounds: 3,
       authoringLabelName: 'status:authoring',
       authoringStaleAge: 'PT4H',
+      adversarialReview: {
+        waitCeiling: 'PT20M',
+      },
     },
     labels: {
       roadmapLabelName: 'roadmap',
@@ -1173,6 +1176,9 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxClarificationRounds: 4,
         authoringLabelName: 'status:drafting',
         authoringStaleAge: 'PT3H',
+        adversarialReview: {
+          waitCeiling: 'PT20M',
+        },
       },
       labels: {
         roadmapLabelName: 'epic',

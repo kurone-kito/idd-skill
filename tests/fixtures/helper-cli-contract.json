@@ -365,6 +365,19 @@
         }
       }
     },
+    "idd-issue-authoring-delegate.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 0,
+          "kind": null
+        }
+      }
+    },
     "idd-live-status-digest.mjs": {
       "migrated": true,
       "runs": {

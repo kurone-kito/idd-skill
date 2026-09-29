@@ -2497,6 +2497,105 @@ test('policy schema rejects issueAuthoring journalIssue with a leading-zero issu
   );
 });
 
+test('policy schema accepts issueAuthoring.adversarialReview delegate and wait ceiling (#3599)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    adversarialReview: {
+      waitCeiling: 'PT20M',
+      delegate: { command: 'draft-review', mode: 'combined' },
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema accepts issueAuthoring.adversarialReview.delegate JSON null (#3599)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    adversarialReview: { delegate: null },
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects an unknown issueAuthoring.adversarialReview key (#3599)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    adversarialReview: { waitCeiling: 'PT20M', unexpectedKey: true },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('$.issueAuthoring.adversarialReview'),
+    ),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects an unknown issueAuthoring.adversarialReview.delegate key (#3599)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    adversarialReview: {
+      delegate: { command: 'draft-review', bogus: 1 },
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('$.issueAuthoring.adversarialReview.delegate'),
+    ),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects an unrecognized issueAuthoring.adversarialReview.delegate.mode (#3599)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    adversarialReview: {
+      delegate: { command: 'draft-review', mode: 'always' },
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('$.issueAuthoring.adversarialReview.delegate.mode'),
+    ),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects a non-positive issueAuthoring.adversarialReview.waitCeiling (#3599)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    adversarialReview: { waitCeiling: 'PT0S' },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) =>
+      error.includes('$.issueAuthoring.adversarialReview.waitCeiling'),
+    ),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema rejects issueAuthoring unexpected extra keys', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

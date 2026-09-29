@@ -42,8 +42,10 @@ import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
+  inspectIssueAuthoringDelegateLayer,
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
+  resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mjs';
 /**
  * Read and parse `.github/idd/config.json` from the current working
@@ -343,11 +345,12 @@ export function resolveUserGlobalConfigPath(options) {
  * Read the operator-global policy file for C1 delegate inheritance.
  *
  * Missing, unreadable, non-JSON, and non-object documents are `absent`
- * (non-fatal). Callers must not merge any key other than
- * `critiqueLoop.delegate` into repository policy — pass the document to
- * {@link resolveEffectiveCritiqueLoopDelegate}, which reads only that
- * fragment. Opt-in to local C1 execution; CI and merge helpers must not
- * call this.
+ * (non-fatal). Callers must not merge this document into repository
+ * policy. {@link resolveEffectiveCritiqueLoopDelegate} reads only
+ * `critiqueLoop.delegate`, and
+ * {@link resolveEffectiveIssueAuthoringDelegate} reads only
+ * `issueAuthoring.adversarialReview.delegate`. Opt-in to local C1 or
+ * issue-authoring resolution; CI and merge helpers must not call this.
  */
 export function loadUserGlobalPolicyDocument(options) {
   const path =
@@ -416,6 +419,32 @@ export function resolveEffectiveCritiqueLoopTelemetryHookFromEnv(options) {
     homedir: options?.homedir,
   });
   return resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig,
+    globalConfig: global.status === 'present' ? global.config : undefined,
+  });
+}
+/**
+ * Opt-in issue-authoring entry: resolve
+ * `issueAuthoring.adversarialReview.delegate` from the repository-local
+ * document plus an optional user-global file (#3599). Does not read
+ * `critiqueLoop.delegate` and does not run as a side effect of
+ * {@link loadIddConfig} or {@link loadPolicyConfig}.
+ */
+export function resolveEffectiveIssueAuthoringDelegateFromEnv(options) {
+  const localConfig =
+    options && Object.hasOwn(options, 'localConfig')
+      ? options.localConfig
+      : loadPolicyConfig(options?.localPolicyPath).config;
+  const local = inspectIssueAuthoringDelegateLayer(localConfig);
+  if (local.status !== 'absent') {
+    return resolveEffectiveIssueAuthoringDelegate({ localConfig });
+  }
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+  return resolveEffectiveIssueAuthoringDelegate({
     localConfig,
     globalConfig: global.status === 'present' ? global.config : undefined,
   });

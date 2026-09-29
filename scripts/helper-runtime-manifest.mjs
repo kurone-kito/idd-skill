@@ -386,6 +386,15 @@ const HELPER_COMMANDS = [
       'Print the canonical helper bundle import plan for each runtime profile.',
   },
   {
+    id: 'issue-authoring-delegate',
+    scriptName: 'idd:issue-authoring-delegate',
+    binName: 'idd-issue-authoring-delegate',
+    entryPath: 'scripts/idd-issue-authoring-delegate.mjs',
+    vendoredCommand: 'node scripts/idd-issue-authoring-delegate.mjs',
+    description:
+      'Resolve the effective issueAuthoring.adversarialReview delegate and repository-local wait ceiling.',
+  },
+  {
     id: 'live-status-digest',
     scriptName: 'idd:live-status-digest',
     binName: 'idd-live-status-digest',

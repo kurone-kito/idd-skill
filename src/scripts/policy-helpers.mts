@@ -151,6 +151,67 @@ export interface EffectiveCritiqueLoopTelemetryHook {
 }
 
 /**
+ * `issueAuthoring.adversarialReview.delegate` (#3599). Same `{ command,
+ * mode }` shape as {@link CritiqueLoopDelegate}, but a separate namespace:
+ * issue drafts are prose, and this delegate must not read or inherit
+ * `critiqueLoop.delegate`.
+ */
+export interface IssueAuthoringDelegate {
+  command: string;
+  mode: 'fallback' | 'combined' | 'on-success' | 'never';
+}
+
+/** Repository-local adversarial-review settings carried on normalized policy. */
+export interface IssueAuthoringAdversarialReviewPolicy {
+  waitCeiling: string;
+  delegate?: IssueAuthoringDelegate;
+}
+
+interface IssueAuthoringPolicy {
+  maxClarificationRounds: number;
+  authoringLabelName: string;
+  authoringStaleAge: string;
+  adversarialReview: IssueAuthoringAdversarialReviewPolicy;
+}
+
+/** How one policy document presents `issueAuthoring.adversarialReview.delegate`. */
+export type IssueAuthoringDelegateLayerStatus =
+  | 'absent'
+  | 'disabled'
+  | 'configured'
+  | 'malformed';
+
+export interface IssueAuthoringDelegateLayer {
+  status: IssueAuthoringDelegateLayerStatus;
+  delegate?: IssueAuthoringDelegate;
+  reason?: string;
+}
+
+/**
+ * Outcome of layered issue-authoring delegate resolution. `local-malformed`
+ * is fail-closed: a bad repository-local delegate must not inherit a
+ * user-global object, and must not fall through to `critiqueLoop.delegate`.
+ */
+export type EffectiveIssueAuthoringDelegateStatus =
+  | 'local'
+  | 'disabled'
+  | 'global'
+  | 'none'
+  | 'local-malformed';
+
+export type IssueAuthoringDelegateSource =
+  | 'repository-local'
+  | 'user-global'
+  | 'none';
+
+export interface EffectiveIssueAuthoringDelegate {
+  status: EffectiveIssueAuthoringDelegateStatus;
+  source: IssueAuthoringDelegateSource;
+  delegate?: IssueAuthoringDelegate;
+  reason?: string;
+}
+
+/**
  * How one policy document presents `developmentBranch` (#2271). `absent`
  * means "no explicit value" -- callers fall back to the repository's live
  * GitHub default branch. `invalid` is fail-closed: a present-but-malformed
@@ -423,6 +484,10 @@ interface RawConfig {
     maxClarificationRounds?: unknown;
     authoringLabelName?: unknown;
     authoringStaleAge?: unknown;
+    adversarialReview?: {
+      waitCeiling?: unknown;
+      delegate?: { command?: unknown; mode?: unknown } | null;
+    };
   };
   labels?: {
     roadmapLabelName?: unknown;
@@ -610,11 +675,17 @@ export const POLICY_DEFAULTS = Object.freeze({
     readyLabelName: 'idd:ready',
     labelFreshnessMode: 'presence-only',
   }),
+  // Cast so the optional `adversarialReview.delegate` key shares one
+  // declared type with normalizePolicyConfig's return. The runtime object
+  // still has no `delegate` key until a repository-local object parses.
   issueAuthoring: Object.freeze({
     maxClarificationRounds: 3,
     authoringLabelName: 'status:authoring',
     authoringStaleAge: 'PT4H',
-  }),
+    adversarialReview: Object.freeze({
+      waitCeiling: 'PT20M',
+    }),
+  }) as Readonly<IssueAuthoringPolicy>,
   // Added in #1272; the discover-roadmap-graph, discover-orphan-filter,
   // discover-readiness-check, idd-roadmap-audit-execute,
   // suitability-triage, and idd-doctor label lookups were wired to this
@@ -1054,20 +1125,7 @@ export function normalizePolicyConfig(config: unknown) {
         POLICY_DEFAULTS.approvalSignals.labelFreshnessMode,
       ),
     },
-    issueAuthoring: {
-      maxClarificationRounds: parsePositiveInteger(
-        c?.issueAuthoring?.maxClarificationRounds,
-        POLICY_DEFAULTS.issueAuthoring.maxClarificationRounds,
-      ),
-      authoringLabelName: parseNonEmptyString(
-        c?.issueAuthoring?.authoringLabelName,
-        POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
-      ),
-      authoringStaleAge: parseDuration(
-        c?.issueAuthoring?.authoringStaleAge,
-        POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
-      ),
-    },
+    issueAuthoring: normalizeIssueAuthoringPolicy(c),
     // Added in #1272 for shape parity with the clone(POLICY_DEFAULTS)
     // early-return branch above (non-object input); wired to the
     // consuming helpers' label lookups in #1273 (see the POLICY_DEFAULTS
@@ -1553,6 +1611,239 @@ export function resolveEffectiveCritiqueLoopDelegate(input: {
   }
 
   const global = inspectCritiqueLoopDelegateLayer(input.globalConfig);
+  if (global.status === 'configured' && global.delegate) {
+    return {
+      status: 'global',
+      source: 'user-global',
+      delegate: global.delegate,
+    };
+  }
+
+  return { status: 'none', source: 'none' };
+}
+
+const ISSUE_AUTHORING_DELEGATE_KEYS = new Set(['waitCeiling', 'delegate']);
+const INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON =
+  'invalid-repository-local-delegate';
+
+/**
+ * Parse `issueAuthoring.adversarialReview.delegate`. Absence is not
+ * defaulted to a command. A non-object, an unknown nested key, or a
+ * missing/whitespace-only `command` normalizes to `undefined`.
+ */
+function parseIssueAuthoringDelegate(
+  value: unknown,
+): IssueAuthoringDelegate | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const candidate = value as { command?: unknown; mode?: unknown };
+  const candidateKeys = Object.keys(candidate);
+  if (candidateKeys.some((key) => key !== 'command' && key !== 'mode')) {
+    return undefined;
+  }
+  if (!Object.hasOwn(candidate, 'command')) {
+    return undefined;
+  }
+
+  const command = parseNonEmptyString(candidate.command, '');
+  if (!command || command.trim() === '') {
+    return undefined;
+  }
+
+  return {
+    command,
+    mode: Object.hasOwn(candidate, 'mode')
+      ? (parseEnum(candidate.mode, CRITIQUE_LOOP_DELEGATE_MODES, 'fallback') as
+          | 'fallback'
+          | 'combined'
+          | 'on-success'
+          | 'never')
+      : 'fallback',
+  };
+}
+
+/**
+ * Read `issueAuthoring.adversarialReview.waitCeiling` from one raw policy
+ * document. Never reads `critiqueLoop.subagentWaitCeiling`. A missing or
+ * non-positive value falls back to `PT20M`. A user-global document is not
+ * consulted: callers pass the repository-local document only.
+ */
+export function resolveIssueAuthoringAdversarialWaitCeiling(
+  config: unknown,
+): string {
+  const fallback = POLICY_DEFAULTS.issueAuthoring.adversarialReview.waitCeiling;
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return fallback;
+  }
+  if (!Object.hasOwn(config, 'issueAuthoring')) {
+    return fallback;
+  }
+  const issueAuthoring = (config as RawConfig).issueAuthoring;
+  if (
+    typeof issueAuthoring !== 'object' ||
+    issueAuthoring === null ||
+    Array.isArray(issueAuthoring) ||
+    !Object.hasOwn(issueAuthoring, 'adversarialReview')
+  ) {
+    return fallback;
+  }
+  const review = issueAuthoring.adversarialReview;
+  if (
+    typeof review !== 'object' ||
+    review === null ||
+    Array.isArray(review) ||
+    !Object.hasOwn(review, 'waitCeiling')
+  ) {
+    return fallback;
+  }
+  return parsePositiveDuration(review.waitCeiling, fallback);
+}
+
+function normalizeIssueAuthoringPolicy(
+  config: RawConfig,
+): IssueAuthoringPolicy {
+  const delegate = parseIssueAuthoringDelegate(
+    config.issueAuthoring?.adversarialReview?.delegate,
+  );
+  const adversarialReview: IssueAuthoringAdversarialReviewPolicy = {
+    waitCeiling: resolveIssueAuthoringAdversarialWaitCeiling(config),
+  };
+  if (delegate) {
+    adversarialReview.delegate = delegate;
+  }
+  return {
+    maxClarificationRounds: parsePositiveInteger(
+      config.issueAuthoring?.maxClarificationRounds,
+      POLICY_DEFAULTS.issueAuthoring.maxClarificationRounds,
+    ),
+    authoringLabelName: parseNonEmptyString(
+      config.issueAuthoring?.authoringLabelName,
+      POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
+    ),
+    authoringStaleAge: parseDuration(
+      config.issueAuthoring?.authoringStaleAge,
+      POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
+    ),
+    adversarialReview,
+  };
+}
+
+/**
+ * Inspect `issueAuthoring.adversarialReview.delegate` without collapsing a
+ * malformed value into "absent". Unknown keys on `adversarialReview` fail
+ * closed so a typo cannot inherit a user-global command. Does not read
+ * `critiqueLoop`.
+ */
+export function inspectIssueAuthoringDelegateLayer(
+  config: unknown,
+): IssueAuthoringDelegateLayer {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+  if (!Object.hasOwn(config, 'issueAuthoring')) {
+    return { status: 'absent' };
+  }
+
+  const issueAuthoring = (config as RawConfig).issueAuthoring;
+  if (
+    typeof issueAuthoring !== 'object' ||
+    issueAuthoring === null ||
+    Array.isArray(issueAuthoring)
+  ) {
+    return {
+      status: 'malformed',
+      reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+  if (!Object.hasOwn(issueAuthoring, 'adversarialReview')) {
+    return { status: 'absent' };
+  }
+
+  const review = issueAuthoring.adversarialReview;
+  if (typeof review !== 'object' || review === null || Array.isArray(review)) {
+    return {
+      status: 'malformed',
+      reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+  if (
+    Object.keys(review).some((key) => !ISSUE_AUTHORING_DELEGATE_KEYS.has(key))
+  ) {
+    return {
+      status: 'malformed',
+      reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+  if (!Object.hasOwn(review, 'delegate')) {
+    return { status: 'absent' };
+  }
+
+  const value = review.delegate;
+  if (value === null) {
+    return { status: 'disabled' };
+  }
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const candidate = value as { mode?: unknown };
+    if (Object.hasOwn(candidate, 'mode')) {
+      const mode = candidate.mode;
+      if (typeof mode !== 'string' || !CRITIQUE_LOOP_DELEGATE_MODES.has(mode)) {
+        return {
+          status: 'malformed',
+          reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+        };
+      }
+    }
+  }
+
+  const parsed = parseIssueAuthoringDelegate(value);
+  if (parsed) {
+    return { status: 'configured', delegate: parsed };
+  }
+  return {
+    status: 'malformed',
+    reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+  };
+}
+
+/**
+ * Resolve the effective issue-authoring delegate from a repository-local
+ * document and an optional user-global document. Pure: callers supply
+ * already-loaded JSON. Never reads the filesystem or `critiqueLoop`.
+ *
+ * Order: local object, local `null` disable, global object, then none.
+ * A malformed local delegate is fail-closed and does not inherit global.
+ * A malformed or disabled global fragment is treated as absent.
+ */
+export function resolveEffectiveIssueAuthoringDelegate(input: {
+  localConfig: unknown;
+  globalConfig?: unknown;
+}): EffectiveIssueAuthoringDelegate {
+  const local = inspectIssueAuthoringDelegateLayer(input.localConfig);
+  if (local.status === 'configured' && local.delegate) {
+    return {
+      status: 'local',
+      source: 'repository-local',
+      delegate: local.delegate,
+    };
+  }
+  if (local.status === 'disabled') {
+    return { status: 'disabled', source: 'repository-local' };
+  }
+  if (local.status === 'malformed') {
+    return {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: local.reason ?? INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+
+  if (input.globalConfig === undefined || input.globalConfig === null) {
+    return { status: 'none', source: 'none' };
+  }
+
+  const global = inspectIssueAuthoringDelegateLayer(input.globalConfig);
   if (global.status === 'configured' && global.delegate) {
     return {
       status: 'global',
