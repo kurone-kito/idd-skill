@@ -12,7 +12,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
 import {
   combineOwnerRepoFlags,
@@ -1055,6 +1056,33 @@ if (!Array.isArray(rows) || rows.length !== 3 || rows[2]?.id !== 3) {
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('gh-exec worker entry exits only for a paginated capture kind (#3597)', async () => {
+  const moduleUrl = pathToFileURL(join(repoRoot(), 'src/scripts/gh-exec.mts'));
+  const exitCode = (workerData: unknown): Promise<number> => {
+    const worker = new Worker(moduleUrl, { execArgv: [], workerData });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        worker.terminate();
+        reject(
+          new Error(`worker stayed alive for ${JSON.stringify(workerData)}`),
+        );
+      }, 5_000);
+      worker.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      worker.once('exit', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+  };
+
+  assert.equal(await exitCode({ kind: 'not-a-capture' }), 0);
+  assert.equal(await exitCode(null), 0);
+  assert.equal(await exitCode({ kind: 'paginated-gh-capture' }), 1);
 });
 
 test('ghApiJson (paginated) fails closed when the stdout pipe errors (#3597)', () => {

@@ -1616,6 +1616,15 @@ export async function withBoundedRetry<T>(
   }
 }
 
-if (!isMainThread && readPaginatedCaptureWorkerData(workerData)) {
+// Only the capture worker entry should run here. Another worker that
+// imports this module has unrelated workerData; exiting would kill it
+// (Copilot review, PR #3605).
+const captureWorkerKind = workerData as { kind?: unknown } | null;
+if (
+  !isMainThread &&
+  captureWorkerKind !== null &&
+  typeof captureWorkerKind === 'object' &&
+  captureWorkerKind.kind === PAGINATED_CAPTURE_KIND
+) {
   runPaginatedCaptureWorker();
 }
