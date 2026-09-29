@@ -1500,11 +1500,12 @@ Issue authoring uses a two-stage contract: drafting and publishing
 happen together under an authoring hold; release from that hold is the
 only approval boundary.
 
-- **Stage 1 — author-and-publish.** Once a drafted `ready` body passes
-  the completed-draft adversarial review (see
+- **Stage 1 — author-and-publish.** Once a drafted roadmap, child, or
+  orphan body passes the completed-draft adversarial review (see
   [Completed-draft adversarial review](#completed-draft-adversarial-review))
   and then the mechanical `audit-authored-issue` gate (see
-  [Mechanical pre-publish gate](#mechanical-pre-publish-gate)), publish
+  [Mechanical pre-publish gate](#mechanical-pre-publish-gate)), including
+  a body published into `needs-decision` or `blocked-by-human`, publish
   it directly under the configured authoring
   label (`issueAuthoring.authoringLabelName`, defaulting to
   `status:authoring`) — no separate user approval of the drafted body

@@ -1468,9 +1468,10 @@ the label event only for legacy-unowned bootstrap. A competing active marker
 still stops the session.
 
 Publishing under this label needs no separate user approval: once a
-drafted `ready` body passes the completed-draft adversarial review and
-then the mechanical `audit-authored-issue` gate, the skill publishes it
-directly (see
+drafted roadmap, child, or orphan body, including one published into
+`needs-decision` or `blocked-by-human`, passes the completed-draft
+adversarial review and then the mechanical `audit-authored-issue` gate,
+the skill publishes it directly (see
 [Approval boundary](#approval-boundary) below for the one exception).
 The held issue **is** the draft — in-place body edits, roadmap
 relationship wiring (publish/acquire the roadmap anchor first, then
