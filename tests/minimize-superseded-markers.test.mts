@@ -1329,3 +1329,34 @@ process.stdout.write(JSON.stringify({ data: { nodes }, errors }));
     restore();
   }
 });
+
+test('runMinimize reports an unsupported node as unsupported-type when its id is selected (#3593)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+const query = args.find((arg) => arg.startsWith('query=')) ?? '';
+const nodesBody = query.split('nodes(ids:$ids){')[1]?.split('... on ')[0] ?? '';
+const selectsId = /\\bid\\b/.test(nodesBody);
+const ids = args.filter((arg) => arg.startsWith('ids[]=')).map((arg) => arg.slice('ids[]='.length));
+const nodes = ids.map((id) => selectsId ? { __typename: 'Issue', id } : { __typename: 'Issue' });
+process.stdout.write(JSON.stringify({ data: { nodes } }));
+`,
+  );
+  try {
+    const report = runMinimize({
+      subjectIds: ['ISSUE_1'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+    });
+    assert.equal(report.items.length, 1);
+    assert.equal(report.items[0]?.status, 'skipped');
+    assert.equal(report.items[0]?.reason, 'unsupported-type');
+    assert.equal(report.items[0]?.typename, 'Issue');
+    assert.equal(report.counts.unsupportedType, 1);
+    assert.equal(report.counts.failed, 0);
+  } finally {
+    restore();
+  }
+});

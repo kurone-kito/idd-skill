@@ -847,6 +847,7 @@ export function probeSubjects(
       `query=query($ids:[ID!]!){
         nodes(ids:$ids){
           __typename
+          id
           ... on IssueComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
           ... on PullRequestReview{id url isMinimized minimizedReason viewerCanMinimize author{login}}
           ... on PullRequestReviewComment{id url isMinimized minimizedReason viewerCanMinimize author{login}}
