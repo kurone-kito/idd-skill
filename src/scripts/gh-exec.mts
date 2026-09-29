@@ -821,7 +821,8 @@ type PaginatedCaptureTestFault =
   | 'stderr'
   | 'stdin'
   | 'proc-unreadable'
-  | 'proc-not-gh';
+  | 'proc-not-gh'
+  | 'proc-gh-path';
 
 function paginatedCaptureTestFault(): PaginatedCaptureTestFault | null {
   const value = process.env[PAGINATED_CAPTURE_TEST_FAULT];
@@ -830,7 +831,8 @@ function paginatedCaptureTestFault(): PaginatedCaptureTestFault | null {
     value === 'stderr' ||
     value === 'stdin' ||
     value === 'proc-unreadable' ||
-    value === 'proc-not-gh'
+    value === 'proc-not-gh' ||
+    value === 'proc-gh-path'
   ) {
     return value;
   }
@@ -839,7 +841,13 @@ function paginatedCaptureTestFault(): PaginatedCaptureTestFault | null {
 
 function paginatedCaptureGraceMs(): number {
   const fault = paginatedCaptureTestFault();
-  if (fault === 'proc-unreadable' || fault === 'proc-not-gh') return 2_000;
+  if (
+    fault === 'proc-unreadable' ||
+    fault === 'proc-not-gh' ||
+    fault === 'proc-gh-path'
+  ) {
+    return 2_000;
+  }
   return PAGINATED_CAPTURE_GRACE_MS;
 }
 
@@ -971,15 +979,18 @@ function armPaginatedCaptureExit(data: PaginatedCaptureWorkerData): void {
 
 /**
  * Command line of `pid`, or null when `/proc` cannot be read.
- * A readable line that does not contain `gh` is a recycled pid and must
- * not be signaled. An unreadable `/proc` (macOS, or Linux without that
- * filesystem) still signals — returning here used to leave `gh` running
- * (Copilot review, PR #3605).
+ * A readable Linux cmdline is NUL-separated argv. Only an argv0 whose
+ * basename is exactly `gh` is this capture's child. An unreadable
+ * `/proc` (macOS, or Linux without that filesystem) still signals —
+ * returning here used to leave `gh` running (Copilot review, PR #3605).
  */
 function paginatedGhCmdline(pid: number): string | null {
   const fault = paginatedCaptureTestFault();
   if (fault === 'proc-unreadable') return null;
-  if (fault === 'proc-not-gh') return 'not-the-cli';
+  if (fault === 'proc-not-gh') {
+    return '/usr/local/bin/ghost-daemon\0github\0ghq';
+  }
+  if (fault === 'proc-gh-path') return '/usr/bin/gh\0api';
   try {
     return readFileSync(`/proc/${pid}/cmdline`).toString('utf8');
   } catch {
@@ -988,15 +999,29 @@ function paginatedGhCmdline(pid: number): string | null {
 }
 
 /**
+ * True when argv0's basename is exactly `gh`. `/proc/<pid>/cmdline` is
+ * NUL-separated argv, so a substring match also hits `ghost-daemon`,
+ * `github`, and `ghq` (Copilot review, PR #3605).
+ */
+function linuxCmdlineArgv0IsGh(cmdline: string): boolean {
+  const nul = cmdline.indexOf('\0');
+  const argv0 = nul === -1 ? cmdline : cmdline.slice(0, nul);
+  const slash = argv0.lastIndexOf('/');
+  const base = slash === -1 ? argv0 : argv0.slice(slash + 1);
+  return base === 'gh';
+}
+
+/**
  * Best-effort stop for a `gh` left behind when the capture worker never
- * reports. The `/proc` identity check is Linux-only. Other platforms, and
- * a Linux host whose `/proc` read fails, still receive SIGTERM.
+ * reports. On Linux, signal only when argv0's basename is `gh`. Other
+ * platforms, and a Linux host whose `/proc` read fails, still receive
+ * SIGTERM.
  */
 function killPaginatedGhChild(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
   if (process.platform === 'linux') {
     const cmdline = paginatedGhCmdline(pid);
-    if (cmdline !== null && !cmdline.includes('gh')) return;
+    if (cmdline !== null && !linuxCmdlineArgv0IsGh(cmdline)) return;
   }
   try {
     process.kill(pid, 'SIGTERM');
@@ -1007,7 +1032,10 @@ function killPaginatedGhChild(pid: number): void {
 
 function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
   const fault = paginatedCaptureTestFault();
-  const procFault = fault === 'proc-unreadable' || fault === 'proc-not-gh';
+  const procFault =
+    fault === 'proc-unreadable' ||
+    fault === 'proc-not-gh' ||
+    fault === 'proc-gh-path';
   const outFd = openSync(data.outPath, 'w');
   let observedBytes = 0;
   let limitExceeded = false;

@@ -1149,7 +1149,7 @@ test('ghApiJson (paginated) still signals gh when /proc cannot be read (#3597)',
   }
 });
 
-test('ghApiJson (paginated) does not signal a pid whose command line is not gh (#3597)', {
+test('ghApiJson (paginated) does not signal ghost-daemon when a later argument contains gh (#3597)', {
   skip: process.platform !== 'linux',
 }, () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
@@ -1169,6 +1169,32 @@ test('ghApiJson (paginated) does not signal a pid whose command line is not gh (
     });
     assert.equal(existsSync(pidPath), true);
     assert.equal(waitForPath(signalPath, 400), false);
+  } finally {
+    stopRecordedPid(pidPath);
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) still signals a /usr/bin/gh argv0 (#3597)', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const pidPath = join(tempRoot, 'pid');
+  const signalPath = join(tempRoot, 'signal');
+  const restore = stubHungGh(pidPath, signalPath);
+  try {
+    withCaptureFault('proc-gh-path', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /paginated gh capture timed out/);
+          return true;
+        },
+      );
+    });
+    assert.equal(waitForPath(signalPath, 2_000), true);
   } finally {
     stopRecordedPid(pidPath);
     restore();
