@@ -9,7 +9,17 @@
 // stderr, body, token, query, or environment is never copied through.
 // Telemetry defaults off. A read or write failure here must not change
 // the caller's return value or thrown error.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -89,21 +99,28 @@ function parseJsonObject(text) {
   }
 }
 function classifyFields(input) {
-  const root =
-    graphqlRoot(input.graphqlBody) ??
-    graphqlRoot(parseJsonObject(input.bodyText));
-  const graphqlErrors = Array.isArray(root?.errors) && root.errors.length > 0;
-  const cost = finiteInteger(root?.extensions?.cost?.actualQueryCost);
+  const root = input.interpretGraphql
+    ? (graphqlRoot(input.graphqlBody) ??
+      graphqlRoot(parseJsonObject(input.bodyText)))
+    : null;
+  const graphqlErrors =
+    input.interpretGraphql &&
+    Array.isArray(root?.errors) &&
+    root.errors.length > 0;
+  const cost = input.interpretGraphql
+    ? finiteInteger(root?.extensions?.cost?.actualQueryCost)
+    : null;
   // A GraphQL throttleStatus remaining of 0 is primary quota evidence.
   // It is not a secondary-throttling subtype (issue #3585, #3560).
-  const throttleRemaining = finiteInteger(
-    root?.extensions?.cost?.throttleStatus?.remaining,
-  );
+  const throttleRemaining = input.interpretGraphql
+    ? finiteInteger(root?.extensions?.cost?.throttleStatus?.remaining)
+    : null;
   const primaryExhaustion =
     input.remaining === 0 ||
     throttleRemaining === 0 ||
-    PRIMARY_WORDING.test(input.bodyText);
-  const secondaryThrottling = SECONDARY_WORDING.test(input.bodyText);
+    (input.scanWording && PRIMARY_WORDING.test(input.bodyText));
+  const secondaryThrottling =
+    input.scanWording && SECONDARY_WORDING.test(input.bodyText);
   const accessDenied =
     input.status === 401 ||
     (input.status === 403 &&
@@ -169,6 +186,8 @@ function fieldsFromResponse(response) {
     retryAfter: integerToken(headerValue(headers, 'retry-after')),
     bodyText: response.bodyText ?? '',
     graphqlBody: response.graphqlBody,
+    interpretGraphql: response.graphqlBody !== undefined,
+    scanWording: true,
     transportSucceeded: status !== null && status >= 200 && status < 300,
   });
 }
@@ -269,7 +288,9 @@ export function observeGhFailure(error, counts = {}) {
     reset: integerToken(readHeaderLine(scanned, 'x-ratelimit-reset')),
     retryAfter: integerToken(readHeaderLine(scanned, 'retry-after')),
     bodyText: scanned,
-    graphqlBody: parseJsonObject(scanned),
+    graphqlBody: counts.graphql === true ? parseJsonObject(scanned) : undefined,
+    interpretGraphql: counts.graphql === true,
+    scanWording: true,
     transportSucceeded: false,
   });
   const paginated = counts.paginated === true;
@@ -305,7 +326,9 @@ export function observeGhSuccess(input) {
     reset: integerToken(headerValue(input.headers, 'x-ratelimit-reset')),
     retryAfter: integerToken(headerValue(input.headers, 'retry-after')),
     bodyText: dataText,
-    graphqlBody: input.data,
+    graphqlBody: input.graphql === true ? input.data : undefined,
+    interpretGraphql: input.graphql === true,
+    scanWording: false,
     transportSucceeded,
   });
   const httpKnown = input.paginated !== true && input.httpObserved !== false;
@@ -348,26 +371,154 @@ export function allowlistObservation(observation) {
     },
   };
 }
+const TELEMETRY_LOCK_WAIT_MS = 2000;
+const TELEMETRY_LOCK_STALE_MS = 10_000;
+const CLASSIFICATIONS = new Set([
+  'ok',
+  'graphql-errors',
+  'primary-exhaustion',
+  'secondary-throttling',
+  'access-denied',
+  'unknown',
+]);
+function storedMaybeNumber(value) {
+  if (value === OBSERVATION_UNKNOWN) return OBSERVATION_UNKNOWN;
+  const parsed = finiteInteger(value);
+  return parsed === null ? OBSERVATION_UNKNOWN : parsed;
+}
+function storedResource(value) {
+  return typeof value === 'string' && RESOURCE_TOKEN.test(value)
+    ? value
+    : OBSERVATION_UNKNOWN;
+}
+function storedClassification(value) {
+  return typeof value === 'string' && CLASSIFICATIONS.has(value)
+    ? value
+    : 'unknown';
+}
+/** Drop anything outside the allowlist, including a pre-existing line. */
+function observationFromStoredLine(line) {
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
+  const record = parsed;
+  const signals =
+    record.signals &&
+    typeof record.signals === 'object' &&
+    !Array.isArray(record.signals)
+      ? record.signals
+      : {};
+  return allowlistObservation({
+    status: storedMaybeNumber(record.status),
+    resource: storedResource(record.resource),
+    remaining: storedMaybeNumber(record.remaining),
+    reset: storedMaybeNumber(record.reset),
+    retryAfter: storedMaybeNumber(record.retryAfter),
+    httpRequestCount: storedMaybeNumber(record.httpRequestCount),
+    pageCount: storedMaybeNumber(record.pageCount),
+    commandInvocationCount: storedMaybeNumber(record.commandInvocationCount),
+    retryAttempts: storedMaybeNumber(record.retryAttempts),
+    graphqlCost: storedMaybeNumber(record.graphqlCost),
+    classification: storedClassification(record.classification),
+    signals: {
+      graphqlErrors: signals.graphqlErrors === true,
+      primaryExhaustion: signals.primaryExhaustion === true,
+      secondaryThrottling: signals.secondaryThrottling === true,
+      accessDenied: signals.accessDenied === true,
+    },
+  });
+}
+function sleepMs(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+/**
+ * Exclusive create of a sibling lock file. A crash leaves the lock;
+ * a stale file is removed and the create is retried. Callers swallow
+ * a timeout so a contended write cannot change the gh result.
+ */
+function withTelemetryFileLock(lockPath, body) {
+  const deadline = Date.now() + TELEMETRY_LOCK_WAIT_MS;
+  let fd;
+  while (fd === undefined) {
+    try {
+      fd = openSync(lockPath, 'wx', 0o600);
+    } catch (error) {
+      const code = error?.code;
+      if (code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > TELEMETRY_LOCK_STALE_MS) {
+          unlinkSync(lockPath);
+          continue;
+        }
+      } catch (statError) {
+        if (statError?.code === 'ENOENT') {
+          continue;
+        }
+        throw statError;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error('github api telemetry lock timed out');
+      }
+      sleepMs(20);
+    }
+  }
+  try {
+    chmodSync(lockPath, 0o600);
+    body();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // The next writer removes a stale lock after TELEMETRY_LOCK_STALE_MS.
+    }
+  }
+}
 export function appendRequestObservation(observation, options) {
   const maxRecords =
     Number.isInteger(options.maxRecords) && options.maxRecords >= 1
       ? options.maxRecords
       : DEFAULT_GITHUB_API_TELEMETRY_MAX_RECORDS;
   mkdirSync(dirname(options.path), { recursive: true });
-  let existing = '';
-  try {
-    existing = readFileSync(options.path, 'utf8');
-  } catch (error) {
-    const code = error?.code;
-    if (code !== 'ENOENT') throw error;
-  }
-  const lines = existing
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  lines.push(JSON.stringify(allowlistObservation(observation)));
-  const kept = lines.slice(-maxRecords);
-  writeFileSync(options.path, `${kept.join('\n')}\n`, { mode: 0o600 });
+  withTelemetryFileLock(`${options.path}.lock`, () => {
+    let existing = '';
+    try {
+      existing = readFileSync(options.path, 'utf8');
+    } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT') throw error;
+    }
+    const lines = existing
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .flatMap((line) => {
+        const retained = observationFromStoredLine(line);
+        return retained === null ? [] : [JSON.stringify(retained)];
+      });
+    lines.push(JSON.stringify(allowlistObservation(observation)));
+    const kept = lines.slice(-maxRecords);
+    const temporary = `${options.path}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${kept.join('\n')}\n`, { mode: 0o600 });
+    chmodSync(temporary, 0o600);
+    try {
+      renameSync(temporary, options.path);
+    } catch (error) {
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // The original file is unchanged when the replace fails.
+      }
+      throw error;
+    }
+    chmodSync(options.path, 0o600);
+  });
 }
 let policyOverride = null;
 let policyCache = null;

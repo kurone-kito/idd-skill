@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -10,6 +12,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import {
   ghApiJson,
@@ -117,6 +120,7 @@ test('request signals stay independent and do not guess a subtype', () => {
 
   const graphqlErrors = observeGhSuccess({
     status: 200,
+    graphql: true,
     data: {
       errors: [{ message: 'nope' }],
       extensions: { cost: { actualQueryCost: 4 } },
@@ -134,6 +138,7 @@ test('request signals stay independent and do not guess a subtype', () => {
         cost: { actualQueryCost: 1, throttleStatus: { remaining: 0 } },
       },
     },
+    graphql: true,
     httpObserved: false,
   });
   assert.equal(graphqlMixed.classification, 'unknown');
@@ -152,6 +157,7 @@ test('request signals stay independent and do not guess a subtype', () => {
         cost: { actualQueryCost: 2, throttleStatus: { remaining: 0 } },
       },
     },
+    graphql: true,
     httpObserved: false,
   });
   assert.equal(graphqlPrimary.classification, 'primary-exhaustion');
@@ -160,10 +166,23 @@ test('request signals stay independent and do not guess a subtype', () => {
 
   const fractionalCost = observeGhSuccess({
     status: 200,
+    graphql: true,
     data: { extensions: { cost: { actualQueryCost: 1.5 } } },
   });
   assert.equal(fractionalCost.graphqlCost, 'unknown');
   assert.equal(fractionalCost.classification, 'ok');
+
+  const restPayload = observeGhSuccess({
+    status: 200,
+    data: {
+      errors: [{ message: 'validation' }],
+      title: 'API rate limit exceeded',
+    },
+  });
+  assert.equal(restPayload.classification, 'ok');
+  assert.equal(restPayload.signals.graphqlErrors, false);
+  assert.equal(restPayload.signals.primaryExhaustion, false);
+  assert.equal(restPayload.graphqlCost, 'unknown');
 
   const headerPrimary = observeGhSuccess({
     status: 200,
@@ -281,8 +300,9 @@ test('retention keeps a bounded allowlisted file', () => {
   const telemetryPath = join(tempRoot, 'telemetry.jsonl');
   try {
     writeFileSync(telemetryPath, '{"token":"ghp_OLDPOISON"}\n', {
-      mode: 0o600,
+      mode: 0o644,
     });
+    chmodSync(telemetryPath, 0o644);
     const poisoned = {
       ...observeGhSuccess({ status: 200, data: { ok: true } }),
       token: 'ghp_NEWPOISON',
@@ -304,6 +324,86 @@ test('retention keeps a bounded allowlisted file', () => {
       kept.map((record) => record.status),
       [200, 201],
     );
+
+    const keptPoisonPath = join(tempRoot, 'kept.jsonl');
+    writeFileSync(keptPoisonPath, '{"token":"ghp_KEPTPOISON"}\n', {
+      mode: 0o644,
+    });
+    chmodSync(keptPoisonPath, 0o644);
+    appendRequestObservation(
+      observeGhSuccess({ status: 202, data: { ok: true } }),
+      { path: keptPoisonPath, maxRecords: 5 },
+    );
+    const keptText = readFileSync(keptPoisonPath, 'utf8');
+    assert.equal(keptText.includes('ghp_KEPTPOISON'), false);
+    assert.equal(keptText.includes('token'), false);
+    const keptLines = keptText
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as RequestObservation);
+    assert.equal(keptLines.length, 2);
+    assert.equal(keptLines[1]?.status, 202);
+    assert.equal((statSync(keptPoisonPath).mode & 0o777) === 0o600, true);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('concurrent appends keep every observation', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-race-'));
+  const telemetryPath = join(tempRoot, 'telemetry.jsonl');
+  const workerPath = join(tempRoot, 'append-observation.mts');
+  const moduleUrl = pathToFileURL(
+    join(import.meta.dirname, '../src/scripts/github-api-observation.mts'),
+  ).href;
+  writeFileSync(
+    workerPath,
+    [
+      `import { appendRequestObservation, observeGhSuccess } from ${JSON.stringify(moduleUrl)};`,
+      'const status = Number(process.env.OBSERVATION_STATUS);',
+      'appendRequestObservation(',
+      '  observeGhSuccess({ status, data: { ok: true } }),',
+      '  { path: process.env.TELEMETRY_PATH ?? "", maxRecords: 10 },',
+      ');',
+      '',
+    ].join('\n'),
+  );
+  const run = (status: number) =>
+    new Promise<number>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        ['--experimental-strip-types', workerPath],
+        {
+          env: {
+            ...process.env,
+            OBSERVATION_STATUS: String(status),
+            TELEMETRY_PATH: telemetryPath,
+          },
+        },
+      );
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) resolve(status);
+        else
+          reject(new Error(stderr || `append child ${status} exited ${code}`));
+      });
+    });
+  try {
+    await Promise.all([run(200), run(201), run(202), run(203)]);
+    const lines = readFileSync(telemetryPath, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as RequestObservation);
+    assert.deepEqual(
+      lines.map((record) => record.status).sort(),
+      [200, 201, 202, 203],
+    );
+    assert.equal((statSync(telemetryPath).mode & 0o777) === 0o600, true);
+    assert.equal(existsSync(`${telemetryPath}.lock`), false);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -395,6 +495,12 @@ if (mode === 'plain-ok') {
 } else if (mode === 'allow') {
   envelope(404, 'x-ratelimit-remaining: 9', '{"message":"missing"}');
   process.exit(1);
+} else if (mode === 'allow-plain') {
+  process.stdout.write('{"message":"missing-plain"}\\n');
+  process.stderr.write('gh: Not Found (HTTP 404)\\n');
+  process.exit(1);
+} else if (mode === 'rest-errors') {
+  envelope(200, 'x-ratelimit-remaining: 8\\nx-ratelimit-resource: core', '{"errors":[{"message":"validation"}],"title":"API rate limit exceeded"}');
 } else if (mode === 'rate') {
   process.stderr.write(${JSON.stringify(`token=${token}\nAPI rate limit exceeded (HTTP 403)\n`)});
   process.exit(1);
@@ -484,6 +590,31 @@ if (mode === 'plain-ok') {
     assert.equal(last.status, 404);
     assert.equal(last.classification, 'unknown');
     assert.equal(last.signals.accessDenied, false);
+
+    setMode('allow-plain');
+    assert.deepEqual(ghApiJson(apiPath, { allowStatuses: [1] }), {
+      message: 'missing-plain',
+    });
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.status, 404);
+    assert.equal(last.classification, 'unknown');
+    assert.equal(last.signals.accessDenied, false);
+
+    setMode('rest-errors');
+    assert.deepEqual(ghApiJson(apiPath), {
+      errors: [{ message: 'validation' }],
+      title: 'API rate limit exceeded',
+    });
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'ok');
+    assert.equal(last.signals.graphqlErrors, false);
+    assert.equal(last.signals.primaryExhaustion, false);
+    assert.equal(
+      readFileSync(telemetryPath, 'utf8').includes('API rate limit exceeded'),
+      false,
+    );
 
     setMode('rate');
     let enabledError: unknown;

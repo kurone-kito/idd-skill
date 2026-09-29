@@ -782,7 +782,9 @@ export function ghApiJson(
       if (recoverable) {
         try {
           const data = parseObservedGhBody(stdout);
-          recordTransportObservation(() => observeGhSuccess({ data }));
+          recordTransportObservation(() =>
+            observeGhFailure(error, { paginated: paginate }),
+          );
           return data;
         } catch {
           // Fall through to the original failure below.
@@ -867,12 +869,14 @@ export function ghGraphql(
   try {
     raw = ghText(args);
   } catch (error) {
-    recordTransportObservation(() => observeGhFailure(error));
+    recordTransportObservation(() =>
+      observeGhFailure(error, { graphql: true }),
+    );
     throw error;
   }
   const data = JSON.parse(raw.trim() || '{}');
   recordTransportObservation(() =>
-    observeGhSuccess({ data, httpObserved: false }),
+    observeGhSuccess({ data, httpObserved: false, graphql: true }),
   );
   return data;
 }
