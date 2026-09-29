@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1135,6 +1141,33 @@ test('ghApiJson (paginated) parses a 1,073,028-byte 300-file body (#3597)', () =
   }
 });
 
+test('ghApiJson (paginated) accepts a body of exactly GH_API_PAGINATED_MAX_BYTES (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'files.ndjson');
+  const prefix = '{"filename":"';
+  const suffix = '"}\n';
+  const padLength =
+    GH_API_PAGINATED_MAX_BYTES -
+    Buffer.byteLength(prefix) -
+    Buffer.byteLength(suffix);
+  assert.ok(padLength > 0);
+  const name = 'e'.repeat(padLength);
+  const body = `${prefix}${name}${suffix}`;
+  assert.equal(Buffer.byteLength(body), GH_API_PAGINATED_MAX_BYTES);
+  writeFileSync(fixturePath, body);
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    const rows = ghApiJson('repos/o/r/pulls/1/files', {
+      paginate: true,
+    }) as { filename?: unknown }[];
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.filename, name);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson (paginated) throws on a body past GH_API_PAGINATED_MAX_BYTES and returns no partial list (#3597)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
   const fixturePath = join(tempRoot, 'files.ndjson');
@@ -1155,6 +1188,140 @@ test('ghApiJson (paginated) throws on a body past GH_API_PAGINATED_MAX_BYTES and
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) stops a runaway writer at the ceiling (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const donePath = join(tempRoot, 'done');
+  const limit = GH_API_PAGINATED_MAX_BYTES;
+  const restore = stubGh(`
+const fs = require('node:fs');
+const chunk = Buffer.alloc(64 * 1024, 0x61);
+const total = ${limit * 4};
+const donePath = ${JSON.stringify(donePath)};
+let written = 0;
+function writeMore() {
+  let ok = true;
+  while (written < total && ok) {
+    const remaining = total - written;
+    const slice =
+      remaining >= chunk.length ? chunk : chunk.subarray(0, remaining);
+    written += slice.length;
+    ok = process.stdout.write(slice);
+  }
+  if (written < total) {
+    process.stdout.once('drain', writeMore);
+    return;
+  }
+  fs.writeFileSync(donePath, 'done');
+}
+process.stdout.on('error', () => process.exit(0));
+writeMore();
+`);
+  try {
+    assert.throws(
+      () =>
+        ghApiJson('repos/o/r/pulls/1/files', {
+          paginate: true,
+          timeout: 10_000,
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof GhPaginatedResponseLimitError);
+        assert.equal(error.limitBytes, limit);
+        assert.ok(error.observedBytes > limit);
+        assert.ok(error.observedBytes < limit + 256 * 1024);
+        assert.equal(Array.isArray(error), false);
+        return true;
+      },
+    );
+    assert.equal(existsSync(donePath), false);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) does not treat a signaled gh as a successful partial list (#3597)', {
+  skip: process.platform === 'win32',
+}, () => {
+  const restore = stubGh(`
+process.stdout.write('{"ok":true}\\n', () => {
+  process.kill(process.pid, 'SIGTERM');
+});
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 5_000 }),
+      (error: unknown) => {
+        assert.ok(!(error instanceof GhPaginatedResponseLimitError));
+        assert.equal(Array.isArray(error), false);
+        const message = error instanceof Error ? error.message : '';
+        assert.match(message, /gh killed by SIGTERM/);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) rethrows a non-zero gh status (#3597)', () => {
+  const restore = stubGh(`
+process.stdout.write(JSON.stringify({ id: 1 }));
+process.exit(3);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true }),
+      (error: unknown) => {
+        assert.ok(!(error instanceof GhPaginatedResponseLimitError));
+        assert.match(
+          error instanceof Error ? error.message : '',
+          /gh command failed/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) honors an allow-listed failure status when the body is JSON-shaped (#3597)', () => {
+  const restore = stubGh(`
+process.stdout.write(JSON.stringify({ id: 1 }));
+process.exit(1);
+`);
+  try {
+    assert.deepEqual(
+      ghApiJson('repos/o/r/issues', { paginate: true, allowStatuses: [1] }),
+      [{ id: 1 }],
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) forwards input to gh stdin (#3597)', () => {
+  const restore = stubGh(`
+const chunks = [];
+process.stdin.on('data', (chunk) => chunks.push(chunk));
+process.stdin.on('end', () => {
+  process.stdout.write(Buffer.concat(chunks));
+});
+`);
+  try {
+    assert.deepEqual(
+      ghApiJson('repos/o/r/issues', {
+        paginate: true,
+        input: '{"id":7}\n',
+        timeout: 5_000,
+      }),
+      [{ id: 7 }],
+    );
+  } finally {
+    restore();
   }
 });
 
