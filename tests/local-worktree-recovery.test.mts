@@ -8395,6 +8395,32 @@ if (args[0] === 'api' && args[1] === 'graphql' && args.some((a) => /nodes\\(ids/
   process.stdout.write(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
   process.exit(0);
 }
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((a) => String(a).includes('databaseId'))) {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: {
+            nodes: [
+              {
+                id: 'IC_1',
+                databaseId: 1,
+                body: "<!-- claimed-by: agent-x " + ${JSON.stringify(options.claimId)} + " supersedes: none " + ${JSON.stringify(options.createdAt)} + " branch: " + ${JSON.stringify(options.branch)} + " -->",
+                createdAt: ${JSON.stringify(options.createdAt)},
+                updatedAt: ${JSON.stringify(options.createdAt)},
+                lastEditedAt: null,
+                author: { login: 'maintainer', __typename: 'User' },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+        pullRequest: null,
+      },
+    },
+  }));
+  process.exit(0);
+}
 if (args[0] === 'api' && args.some((a) => a.includes('/issues/${options.issueNumber}/comments'))) {
   process.stdout.write(commentJson + '\\n');
   process.exit(0);
