@@ -96,6 +96,14 @@ export interface AuthoringOwnerProvenanceComment {
    * comment 5758891385).
    */
   lastEditedAt: string | null;
+  /**
+   * GraphQL `IssueComment.isMinimized`.
+   */
+  isMinimized?: boolean;
+  /**
+   * GraphQL `IssueComment.minimizedReason` (e.g. `outdated`).
+   */
+  minimizedReason?: string | null;
 }
 
 export interface AuthoringOwnerProvenanceInput {
@@ -614,6 +622,8 @@ export function mapGraphqlIssueCommentNode(
     updatedAt?: unknown;
     body?: unknown;
     author?: { login?: unknown } | null;
+    isMinimized?: unknown;
+    minimizedReason?: unknown;
   };
   const databaseId = record.databaseId;
   if (
@@ -673,6 +683,16 @@ export function mapGraphqlIssueCommentNode(
       createdAt,
       updatedAt,
       lastEditedAt,
+      isMinimized:
+        typeof record.isMinimized === 'boolean'
+          ? record.isMinimized
+          : undefined,
+      minimizedReason:
+        typeof record.minimizedReason === 'string'
+          ? record.minimizedReason
+          : record.minimizedReason === null
+            ? null
+            : undefined,
     },
   };
 }
@@ -700,7 +720,7 @@ export function fetchProvenanceCommentsGraphql(
   repository(owner:$owner,name:$repo){
     issue(number:$number){
       comments(first:100,after:$cursor){
-        nodes { databaseId lastEditedAt createdAt updatedAt body author { login } }
+        nodes { databaseId lastEditedAt createdAt updatedAt body author { login } isMinimized minimizedReason }
         pageInfo { hasNextPage endCursor }
       }
     }

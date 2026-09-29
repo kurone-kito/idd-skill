@@ -199,6 +199,15 @@ export function evaluateAuthoringSetMembers(input) {
     if (!looksLikeOwnerMarker(comment.body, input.markerPrefix)) {
       continue;
     }
+    // A trusted marker GitHub has minimized as "outdated" is a
+    // superseded comment -- silently skip it rather than fail closed.
+    if (
+      comment.isMinimized === true &&
+      typeof comment.minimizedReason === 'string' &&
+      comment.minimizedReason.toLowerCase() === 'outdated'
+    ) {
+      continue;
+    }
     const hostRef = `${input.repository.owner}/${input.repository.repo}#${comment.issueNumber}`;
     const locator = `${hostRef}, comment id ${comment.id}`;
     if (comment.lastEditedAt !== null) {
@@ -417,6 +426,8 @@ function runCli() {
       lastEditedAt: comment.lastEditedAt,
       issueNumber,
       id: comment.id,
+      isMinimized: comment.isMinimized,
+      minimizedReason: comment.minimizedReason,
     })),
   );
   const evaluation = evaluateAuthoringSetMembers({

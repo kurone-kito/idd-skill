@@ -1993,6 +1993,11 @@ only approval boundary.
   unparseable trusted comment that still carries the token fails
   closed too. A trusted marker whose target names a different
   issue than the comment's host fails closed as well.
+  **Exception:** a trusted owner marker that GitHub has minimized
+  with `minimizedReason: outdated` (case-insensitive) is silently
+  skipped rather than failing closed; it is a superseded comment
+  that the maintainer or an IDD tool has hidden as stale, and it
+  cannot prove or disprove current membership.
   Any other result is inconclusive and blocks
   this exception the same way. A sibling's marker lives on the
   sibling's own issue and never appears in the marked target's own

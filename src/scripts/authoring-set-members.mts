@@ -84,6 +84,17 @@ export interface SetMemberComment {
    * it -- never used in the membership decision itself.
    */
   id: number;
+  /**
+   * GraphQL `IssueComment.isMinimized`. When `true` together with
+   * `minimizedReason === 'outdated'` (case-insensitive), the comment
+   * is skipped rather than failing closed -- it is treated as a
+   * superseded marker that GitHub has visually hidden.
+   */
+  isMinimized?: boolean;
+  /**
+   * GraphQL `IssueComment.minimizedReason` (e.g. `outdated`).
+   */
+  minimizedReason?: string | null;
 }
 
 export interface SetMemberEvaluation {
@@ -275,6 +286,15 @@ export function evaluateAuthoringSetMembers(input: {
       continue;
     }
     if (!looksLikeOwnerMarker(comment.body, input.markerPrefix)) {
+      continue;
+    }
+    // A trusted marker GitHub has minimized as "outdated" is a
+    // superseded comment -- silently skip it rather than fail closed.
+    if (
+      comment.isMinimized === true &&
+      typeof comment.minimizedReason === 'string' &&
+      comment.minimizedReason.toLowerCase() === 'outdated'
+    ) {
       continue;
     }
     const hostRef = `${input.repository.owner}/${input.repository.repo}#${comment.issueNumber}`;
@@ -521,6 +541,8 @@ function runCli(): HelperCliResult {
       lastEditedAt: comment.lastEditedAt,
       issueNumber,
       id: comment.id,
+      isMinimized: comment.isMinimized,
+      minimizedReason: comment.minimizedReason,
     })),
   );
   const evaluation = evaluateAuthoringSetMembers({

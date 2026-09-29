@@ -41,8 +41,9 @@ function comment(
   authorLogin = 'kurone-kito',
   lastEditedAt: string | null = null,
   id = 1,
+  extra?: Partial<Pick<SetMemberComment, 'isMinimized' | 'minimizedReason'>>,
 ): SetMemberComment {
-  return { authorLogin, body, lastEditedAt, issueNumber, id };
+  return { authorLogin, body, lastEditedAt, issueNumber, id, ...extra };
 }
 
 function page(
@@ -559,4 +560,159 @@ test('CLI: a repeated comments cursor exits non-zero', {
   } finally {
     restore();
   }
+});
+
+// ── isMinimized + outdated tests (issue #3553) ──────────────────────────────
+
+function minimizedMarker(issue: number): string {
+  // Mirrors the observed incident: empty body-sha256, minimized as "outdated".
+  // Comment 5577810398 on closed issue #2689. We craft the raw body directly
+  // because renderAuthoringOwnerMarker validates bodySha256 format.
+  const target = `kurone-kito/idd-skill#${issue}`;
+  return (
+    `<!-- ${PREFIX}-authoring-owner: target=${target}; anchor=${target}; ` +
+    `mode=acquire; owner=9e59701c-d1da-4b07-ba66-1ca3f025cfe5; set=${SET}; ` +
+    `session=3dad4bd4-7bde-40ed-b6da-0b0cf94cdfa9; body-sha256=; ` +
+    `snapshot-sha256=none; supersedes=none -->`
+  );
+}
+
+test('an outdated-minimized trusted marker is skipped rather than failing closed', () => {
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      // The minimized marker (empty body-sha256, isMinimized=true/outdated)
+      comment(2689, minimizedMarker(2689), 'kurone-kito', null, 5577810398, {
+        isMinimized: true,
+        minimizedReason: 'outdated',
+      }),
+      // A fresh, valid marker on a different issue
+      comment(3468, marker(3468)),
+    ],
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.soleMember, true);
+  assert.deepEqual(result.issues, [3468]);
+});
+
+test('minimizedReason match is case-insensitive (Outdated, OUTDATED)', () => {
+  for (const reason of ['Outdated', 'OUTDATED']) {
+    const result = evaluateAuthoringSetMembers({
+      set: SET,
+      markerPrefix: PREFIX,
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+      trustedMarkerLogins: ['kurone-kito'],
+      enumerationComplete: true,
+      comments: [
+        comment(2689, minimizedMarker(2689), 'kurone-kito', null, 1, {
+          isMinimized: true,
+          minimizedReason: reason,
+        }),
+        comment(3468, marker(3468)),
+      ],
+    });
+    assert.equal(result.complete, true, `failed for reason="${reason}"`);
+    assert.equal(result.soleMember, true, `failed for reason="${reason}"`);
+  }
+});
+
+test('a minimized marker with a non-outdated reason still fails closed', () => {
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(2689, minimizedMarker(2689), 'kurone-kito', null, 9999, {
+        isMinimized: true,
+        minimizedReason: 'resolved',
+      }),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+});
+
+test('a minimized marker with minimizedReason null still fails closed', () => {
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(2689, minimizedMarker(2689), 'kurone-kito', null, 9999, {
+        isMinimized: true,
+        minimizedReason: null,
+      }),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+});
+
+test('a non-minimized marker with empty body-sha256 fails closed as unparseable', () => {
+  // Without isMinimized=true, the fail-closed path must still fire
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [comment(2689, minimizedMarker(2689), 'kurone-kito', null, 9999)],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+});
+
+test('a parseable marker minimized as outdated is not a set member', () => {
+  // Even a well-formed, correctly-targeted marker is skipped (not counted)
+  // when it is minimized as outdated -- AC from issue #3553.
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(3468, marker(3468), 'kurone-kito', null, 1, {
+        isMinimized: true,
+        minimizedReason: 'outdated',
+      }),
+    ],
+  });
+  // The only marker was skipped, so there are no members
+  assert.equal(result.complete, true);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+});
+
+test('a parseable minimized-resolved marker counts as a set member (resolved is not outdated)', () => {
+  // minimizedReason=resolved does NOT trigger the skip -- the comment
+  // is still evaluated as a set member if it parses correctly.
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments: [
+      comment(3468, marker(3468), 'kurone-kito', null, 1, {
+        isMinimized: true,
+        minimizedReason: 'resolved',
+      }),
+    ],
+  });
+  // resolved minimization does not skip -- the marker counts normally
+  assert.equal(result.complete, true);
+  assert.equal(result.soleMember, true);
+  assert.deepEqual(result.issues, [3468]);
 });

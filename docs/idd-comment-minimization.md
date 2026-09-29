@@ -625,6 +625,21 @@ Always skip candidates when any of these are true:
 - the comment is non-operational human discussion
 - the comment still participates in an active F2 or F3 gate
 
+## Side-effects on authoring-owner scan
+
+When `authoring-set-members` scans for issue-authoring ownership
+markers, it evaluates every trusted `authoring-owner` comment it
+finds. Minimizing one of these comments as `OUTDATED` (GitHub returns
+the reason in lowercase: `outdated`) causes the scan to **skip** that
+comment rather than failing closed on an unparseable or malformed
+body. The comment is not counted as a set member and does not block
+the evaluation. Any other `minimizedReason`, including `resolved` and
+absent, leaves the ordinary fail-closed behavior in place. Observed
+2026-09-27, issue kurone-kito/idd-skill#3553: a minimized comment
+with an empty `body-sha256` on closed issue #2689 caused
+`authoring-set-members` to fail closed on the Stage 2 release of
+issue #3547.
+
 ## Dry Run Shape
 
 In the idd-skill source repository, the helper is available; start with
