@@ -93,8 +93,12 @@ needs-decision, blocked-by-human, and out-of-scope.
    `issueAuthoring.adversarialReview.waitCeiling`
    (default `PT20M`) using the caller's own wait and cleanup, and do
    not wrap the command in a timeout utility. Dispose of every finding.
-   Review a material revision again before the linter, and audit every
-   revised body before publication. A roadmap shell may be reviewed
+   Review the revised draft again before the linter only when that
+   revision changes acceptance criteria, candidate files, dependency
+   edges, or roadmap task-list or relationship wiring
+   ([Disposition](references/contract.md#disposition)). Wording-only
+   edits do not start another review. Audit every revised body before
+   publication. A roadmap shell may be reviewed
    and published with an empty `## Tracks` list. Review each child
    before publishing it. Review the parent again when real child
    numbers are written into `## Tracks`, then audit that edit before
