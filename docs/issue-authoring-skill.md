@@ -2396,8 +2396,9 @@ Before reporting or publishing issue drafts, the skill should verify:
   completed-draft adversarial review and then the
   `audit-authored-issue` mechanical pre-publish gate for its declared
   shape, including a body published into `needs-decision` or
-  `blocked-by-human` (`--expect-bucket` for those two buckets), or the
-  manual fallback when no helper runtime is available (see
+  `blocked-by-human` (`--expect-bucket` for those two buckets). The
+  review still runs when no helper runtime is available. Only the
+  linter uses its manual fallback in that case (see
   [Completed-draft adversarial review](#completed-draft-adversarial-review)
   and
   [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
