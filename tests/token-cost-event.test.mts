@@ -29,10 +29,14 @@ function tempDir(): string {
 // Stripped from the spawned child's inherited env by default so a CLI
 // test's assertions stay deterministic regardless of whether the real
 // host process (this very test run included) happens to have
-// CLAUDE_CODE_SESSION_ID set. A test exercising the stamping behavior
-// itself passes it back in via runCli's own envOverrides.
+// CLAUDE_CODE_SESSION_ID or CODEX_SESSION_ID set. A test exercising the
+// stamping behavior itself passes it back in via runCli's own envOverrides.
 function stripVendorSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const { CLAUDE_CODE_SESSION_ID: _omit, ...rest } = env;
+  const {
+    CLAUDE_CODE_SESSION_ID: _omitClaude,
+    CODEX_SESSION_ID: _omitCodex,
+    ...rest
+  } = env;
   return rest;
 }
 
@@ -203,9 +207,36 @@ test('buildEvent leaves vendorSessionId unset for a vendor with no known session
   const event = buildEvent(
     { stage: 'work', enter: true, vendor: 'grok' },
     NOW,
-    { CLAUDE_CODE_SESSION_ID: 'sess-abc123' },
+    {
+      CLAUDE_CODE_SESSION_ID: 'sess-abc123',
+      CODEX_SESSION_ID: 'codex-sess-abc123',
+    },
   );
   assert.equal('vendorSessionId' in event, false);
+});
+
+test('buildEvent stamps vendorSessionId from CODEX_SESSION_ID for vendor codex', () => {
+  const event = buildEvent(
+    { stage: 'work', enter: true, vendor: 'codex' },
+    NOW,
+    { CODEX_SESSION_ID: 'codex-sess-abc123' },
+  );
+  assert.equal(event.vendorSessionId, 'codex-sess-abc123');
+});
+
+test('buildEvent leaves vendorSessionId unset for vendor codex when CODEX_SESSION_ID is unset or empty', () => {
+  const unset = buildEvent(
+    { stage: 'work', enter: true, vendor: 'codex' },
+    NOW,
+    {},
+  );
+  const empty = buildEvent(
+    { stage: 'work', enter: true, vendor: 'codex' },
+    NOW,
+    { CODEX_SESSION_ID: '' },
+  );
+  assert.equal('vendorSessionId' in unset, false);
+  assert.equal('vendorSessionId' in empty, false);
 });
 
 test('buildEvent rejects a path-like CLAUDE_CODE_SESSION_ID value rather than stamping it', () => {
@@ -215,6 +246,21 @@ test('buildEvent rejects a path-like CLAUDE_CODE_SESSION_ID value rather than st
     { CLAUDE_CODE_SESSION_ID: '/etc/passwd' },
   );
   assert.equal('vendorSessionId' in event, false);
+});
+
+test('buildEvent rejects a path-like CODEX_SESSION_ID value rather than stamping it', () => {
+  const slash = buildEvent(
+    { stage: 'work', enter: true, vendor: 'codex' },
+    NOW,
+    { CODEX_SESSION_ID: '/tmp/codex-session' },
+  );
+  const backslash = buildEvent(
+    { stage: 'work', enter: true, vendor: 'codex' },
+    NOW,
+    { CODEX_SESSION_ID: 'C:\\sessions\\codex' },
+  );
+  assert.equal('vendorSessionId' in slash, false);
+  assert.equal('vendorSessionId' in backslash, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -497,6 +543,60 @@ test('CLI stamps vendorSessionId from an inherited CLAUDE_CODE_SESSION_ID for --
     assert.equal(result.status, 0, result.stderr);
     const written = JSON.parse(readFileSync(outPath, 'utf8').trim());
     assert.equal(written.vendorSessionId, 'sess-cli-test');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI stamps vendorSessionId from an inherited CODEX_SESSION_ID for --vendor codex', () => {
+  const dir = tempDir();
+  try {
+    const outPath = join(dir, 'events.jsonl');
+    const result = runCli(
+      [
+        '--stage',
+        'work',
+        '--enter',
+        '--vendor',
+        'codex',
+        '--out',
+        outPath,
+        '--now',
+        NOW.toISOString(),
+        '--strict',
+      ],
+      { CODEX_SESSION_ID: 'codex-sess-cli-test' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const written = JSON.parse(readFileSync(outPath, 'utf8').trim());
+    assert.equal(written.vendor, 'codex');
+    assert.equal(written.vendorSessionId, 'codex-sess-cli-test');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI omits vendorSessionId for --vendor codex when CODEX_SESSION_ID is absent', () => {
+  const dir = tempDir();
+  try {
+    const outPath = join(dir, 'events.jsonl');
+    const result = runCli([
+      '--stage',
+      'work',
+      '--enter',
+      '--vendor',
+      'codex',
+      '--out',
+      outPath,
+      '--now',
+      NOW.toISOString(),
+      '--strict',
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const written = JSON.parse(readFileSync(outPath, 'utf8').trim());
+    assert.equal(written.vendor, 'codex');
+    assert.equal(written.schemaVersion, 1);
+    assert.equal('vendorSessionId' in written, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
