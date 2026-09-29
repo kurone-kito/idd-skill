@@ -184,6 +184,23 @@ test('request signals stay independent and do not guess a subtype', () => {
   assert.equal(restPayload.signals.primaryExhaustion, false);
   assert.equal(restPayload.graphqlCost, 'unknown');
 
+  const toleratedSecondary = observeGhSuccess({
+    status: 403,
+    data: {
+      message: 'You have exceeded a secondary rate limit. Please wait.',
+    },
+  });
+  assert.equal(toleratedSecondary.classification, 'secondary-throttling');
+  assert.equal(toleratedSecondary.signals.accessDenied, false);
+  assert.equal(toleratedSecondary.signals.primaryExhaustion, false);
+
+  const toleratedPrimary = observeGhSuccess({
+    status: 403,
+    data: { message: 'API rate limit exceeded for user' },
+  });
+  assert.equal(toleratedPrimary.classification, 'primary-exhaustion');
+  assert.equal(toleratedPrimary.signals.secondaryThrottling, false);
+
   const headerPrimary = observeGhSuccess({
     status: 200,
     headers: { 'x-ratelimit-remaining': '0' },
@@ -499,6 +516,14 @@ if (mode === 'plain-ok') {
   process.stdout.write('{"message":"missing-plain"}\\n');
   process.stderr.write('gh: Not Found (HTTP 404)\\n');
   process.exit(1);
+} else if (mode === 'allow-secondary') {
+  envelope(403, 'x-ratelimit-remaining: 3', '{"message":"You have exceeded a secondary rate limit. Please wait."}');
+  process.exit(1);
+} else if (mode === 'allow-empty') {
+  envelope(404, 'x-ratelimit-remaining: 9', '');
+  process.exit(1);
+} else if (mode === 'empty-ok') {
+  process.stdout.write('');
 } else if (mode === 'rest-errors') {
   envelope(200, 'x-ratelimit-remaining: 8\\nx-ratelimit-resource: core', '{"errors":[{"message":"validation"}],"title":"API rate limit exceeded"}');
 } else if (mode === 'rate') {
@@ -600,6 +625,30 @@ if (mode === 'plain-ok') {
     assert.equal(last.status, 404);
     assert.equal(last.classification, 'unknown');
     assert.equal(last.signals.accessDenied, false);
+
+    setMode('allow-secondary');
+    assert.deepEqual(ghApiJson(apiPath, { allowStatuses: [1] }), {
+      message: 'You have exceeded a secondary rate limit. Please wait.',
+    });
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.status, 403);
+    assert.equal(last.classification, 'secondary-throttling');
+    assert.equal(last.signals.accessDenied, false);
+    assert.equal(last.signals.primaryExhaustion, false);
+
+    setMode('allow-empty');
+    assert.throws(() => ghApiJson(apiPath, { allowStatuses: [1] }));
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.notEqual(last.classification, 'ok');
+
+    setMode('empty-ok');
+    assert.deepEqual(ghApiJson(apiPath), {});
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'ok');
+    assert.equal(last.status, 'unknown');
 
     setMode('rest-errors');
     assert.deepEqual(ghApiJson(apiPath), {

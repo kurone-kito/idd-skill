@@ -481,7 +481,10 @@ export function observeGhSuccess(input: {
   const status = typeof input.status === 'number' ? input.status : null;
   // A missing status is not treated as HTTP 200. Null still counts as a
   // successful wrapper exit (GraphQL never sees a status line). An
-  // explicit 4xx/5xx does not.
+  // explicit 4xx/5xx does not. Rate-limit phrases are scanned only on
+  // that explicit failure status: a 2xx issue title must not become
+  // quota exhaustion, and a tolerated 403/429 must not lose its
+  // secondary or primary wording.
   const transportSucceeded = status === null || (status >= 200 && status < 300);
   const fields = classifyFields({
     status,
@@ -494,7 +497,7 @@ export function observeGhSuccess(input: {
     bodyText: dataText,
     graphqlBody: input.graphql === true ? input.data : undefined,
     interpretGraphql: input.graphql === true,
-    scanWording: false,
+    scanWording: status !== null && !transportSucceeded,
     transportSucceeded,
   });
   const httpKnown = input.paginated !== true && input.httpObserved !== false;

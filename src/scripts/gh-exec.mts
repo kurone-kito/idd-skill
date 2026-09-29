@@ -484,6 +484,29 @@ function tryParseIncludedBody(raw: string): GhApiJsonWithHeadersResult | null {
   }
 }
 
+function includedBodyIsJson(raw: string): boolean {
+  const body = (raw.split(/\r?\n\r?\n/).pop() ?? '').trim();
+  return body.startsWith('{') || body.startsWith('[');
+}
+
+/**
+ * Parse a tolerated failure body without inventing `{}`. Plain JSON is
+ * accepted as-is. An HTTP envelope is accepted only when its body is
+ * itself JSON. Empty and non-JSON stdout throw so the original gh
+ * error is preserved.
+ */
+function parseToleratedGhBody(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return JSON.parse(trimmed);
+  }
+  if (!includedBodyIsJson(raw)) {
+    throw new Error('gh api stdout is not JSON');
+  }
+  const body = (raw.split(/\r?\n\r?\n/).pop() ?? '').trim();
+  return JSON.parse(body);
+}
+
 /**
  * Parse a `gh api` body when telemetry asked for `--include`. A usable
  * HTTP envelope is handled by {@link tryParseIncludedBody} first. This
@@ -764,7 +787,10 @@ export function ghApiJson(
     }
     const stdout = String(failure?.stdout ?? '');
     const included = observeHttp ? tryParseIncludedBody(stdout) : null;
-    if (included) {
+    // An envelope parser turns an empty body into `{}`. That is fine for
+    // a real success, and wrong for a tolerated failure: telemetry must
+    // not turn an empty error body into a returned object.
+    if (included && includedBodyIsJson(stdout)) {
       recordTransportObservation(() =>
         observeGhSuccess({
           status: statusFromIncluded(stdout),
@@ -777,18 +803,14 @@ export function ghApiJson(
     if (observeHttp) {
       // Empty or non-JSON stdout still throws the original gh error.
       // Only plain JSON, or an envelope whose body is JSON, is recovered.
-      const recoverable =
-        /^\s*[[{]/.test(stdout) || statusFromIncluded(stdout) !== null;
-      if (recoverable) {
-        try {
-          const data = parseObservedGhBody(stdout);
-          recordTransportObservation(() =>
-            observeGhFailure(error, { paginated: paginate }),
-          );
-          return data;
-        } catch {
-          // Fall through to the original failure below.
-        }
+      try {
+        const data = parseToleratedGhBody(stdout);
+        recordTransportObservation(() =>
+          observeGhFailure(error, { paginated: paginate }),
+        );
+        return data;
+      } catch {
+        // Fall through to the original failure below.
       }
       recordTransportObservation(() =>
         observeGhFailure(error, { paginated: paginate }),
