@@ -5484,6 +5484,49 @@ test('operation-local refuses newly actionable same-HEAD activity past a stored 
   assert.equal(handled.decision, 'publish');
 });
 
+test('operation-local orders same-HEAD activity by instant, not timestamp text (#3592)', () => {
+  const laterFractional = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      totalItemCount: 2,
+      maxActivityUpdatedAt: '2026-05-11T08:00:00Z',
+    },
+    collectRichActivity: () =>
+      operationLocalSnapshot({
+        totalItemCount: 2,
+        maxActivityUpdatedAt: '2026-05-11T08:00:00.100Z',
+        dispositionEvidence: {
+          missingRegularCommentCount: 1,
+          missingThreadCount: 0,
+          soleCauseAckOnlyPostDisposition: false,
+        },
+      }),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(laterFractional.decision, 'refuse');
+  assert.equal(laterFractional.reasonCode, 'same-head-activity');
+
+  const earlierWholeSecond = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      totalItemCount: 2,
+      maxActivityUpdatedAt: '2026-05-11T08:00:00.900Z',
+    },
+    collectRichActivity: () =>
+      operationLocalSnapshot({
+        totalItemCount: 2,
+        maxActivityUpdatedAt: '2026-05-11T08:00:00Z',
+        dispositionEvidence: {
+          missingRegularCommentCount: 1,
+          missingThreadCount: 0,
+          soleCauseAckOnlyPostDisposition: false,
+        },
+      }),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.notEqual(earlierWholeSecond.reasonCode, 'same-head-activity');
+});
+
 test('operation-local CI agreement failure keeps the capture and does not publish', () => {
   const result = runOperationLocalSnapshotWatermark({
     prNumber: 3592,

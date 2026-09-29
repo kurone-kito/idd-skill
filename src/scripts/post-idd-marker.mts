@@ -39,6 +39,7 @@ import {
   runMinimize,
 } from './minimize-superseded-markers.mts';
 import {
+  compareIsoTimestamps,
   matchCanonicalAuthoringMarkerFamily,
   parseCopilotUnavailableComment,
   parseReviewAckComment,
@@ -629,7 +630,7 @@ function sameHeadActivityAdvanced(
   if (prior.maxActivityUpdatedAt === 'none') {
     return true;
   }
-  return max > prior.maxActivityUpdatedAt;
+  return compareIsoTimestamps(max, prior.maxActivityUpdatedAt) > 0;
 }
 
 /**

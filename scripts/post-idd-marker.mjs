@@ -36,6 +36,7 @@ import {
   runMinimize,
 } from './minimize-superseded-markers.mjs';
 import {
+  compareIsoTimestamps,
   matchCanonicalAuthoringMarkerFamily,
   parseCopilotUnavailableComment,
   parseReviewAckComment,
@@ -504,7 +505,7 @@ function sameHeadActivityAdvanced(snapshot, prior) {
   if (prior.maxActivityUpdatedAt === 'none') {
     return true;
   }
-  return max > prior.maxActivityUpdatedAt;
+  return compareIsoTimestamps(max, prior.maxActivityUpdatedAt) > 0;
 }
 /**
  * Derive watermark fields from one fresh activity capture, then compare a
