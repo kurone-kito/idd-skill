@@ -34,6 +34,7 @@ import {
   viewerLoginFailureIsGraphqlEligible,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
+import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
@@ -1389,6 +1390,20 @@ test('ghApiJson (paginated) accepts a body of exactly GH_API_PAGINATED_MAX_BYTES
   }
 });
 
+test('GhPaginatedResponseLimitError is a tagged gh transport failure (#3597)', () => {
+  const error = new GhPaginatedResponseLimitError(8, 9);
+  assert.equal((error as { ghCommand?: unknown }).ghCommand, true);
+  assert.equal(
+    Object.getOwnPropertyDescriptor(error, 'ghCommand')?.enumerable,
+    false,
+  );
+  assert.equal(classifyHelperError(error).kind, 'transport');
+  assert.equal(
+    classifyHelperError(new Error('changed-files read', { cause: error })).kind,
+    'transport',
+  );
+});
+
 test('ghApiJson (paginated) throws on a body past GH_API_PAGINATED_MAX_BYTES and returns no partial list (#3597)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
   const fixturePath = join(tempRoot, 'files.ndjson');
@@ -1403,6 +1418,11 @@ test('ghApiJson (paginated) throws on a body past GH_API_PAGINATED_MAX_BYTES and
         assert.equal(error.observedBytes, observedBytes);
         assert.equal(error.observedBytes, GH_API_PAGINATED_MAX_BYTES + 1);
         assert.equal(Array.isArray(error), false);
+        assert.equal((error as { ghCommand?: unknown }).ghCommand, true);
+        assert.equal(
+          Object.getOwnPropertyDescriptor(error, 'ghCommand')?.enumerable,
+          false,
+        );
         return true;
       },
     );

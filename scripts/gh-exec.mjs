@@ -143,6 +143,11 @@ export class GhPaginatedResponseLimitError extends Error {
     this.name = 'GhPaginatedResponseLimitError';
     this.limitBytes = limitBytes;
     this.observedBytes = observedBytes;
+    // Both throw sites construct this class, and a caller may wrap it as
+    // Error.cause. classifyHelperError returns kind "internal" unless some
+    // link carries this tag, so an over-limit read would miss transport
+    // recovery (Copilot review on PR #3605, commit 1a0dec65d).
+    tagGhCommandError(this);
   }
 }
 const execFileAsync = promisify(execFile);
