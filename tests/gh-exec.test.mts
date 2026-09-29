@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -10,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   combineOwnerRepoFlags,
@@ -134,6 +137,63 @@ async function withGhHostEnvAsync(
 // callers must invoke it (ideally in a `finally`) even when the assertion throws.
 function stubGh(scriptBody: string): () => void {
   return stubExecutable('gh', scriptBody);
+}
+
+const PAGINATED_CAPTURE_TEST_FAULT = 'IDD_GH_EXEC_TEST_FAULT';
+
+function repoRoot(): string {
+  return fileURLToPath(new URL('..', import.meta.url));
+}
+
+function withCaptureFault(fault: string, run: () => void): void {
+  const previous = process.env[PAGINATED_CAPTURE_TEST_FAULT];
+  process.env[PAGINATED_CAPTURE_TEST_FAULT] = fault;
+  try {
+    run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[PAGINATED_CAPTURE_TEST_FAULT];
+    } else {
+      process.env[PAGINATED_CAPTURE_TEST_FAULT] = previous;
+    }
+  }
+}
+
+function waitForPath(filePath: string, timeoutMs: number): boolean {
+  const started = Date.now();
+  const slot = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() - started < timeoutMs) {
+    if (existsSync(filePath)) return true;
+    Atomics.wait(slot, 0, 0, 50);
+  }
+  return existsSync(filePath);
+}
+
+function stubHungGh(pidPath: string, signalPath: string): () => void {
+  return stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+process.on('SIGTERM', () => {
+  try {
+    fs.writeFileSync(${JSON.stringify(signalPath)}, 'signaled');
+  } catch {
+    // The assertion only cares that the file exists.
+  }
+  process.exit(0);
+});
+setTimeout(() => process.exit(0), 30_000);
+`);
+}
+
+function stopRecordedPid(pidPath: string): void {
+  if (!existsSync(pidPath)) return;
+  const pid = Number(readFileSync(pidPath, 'utf8'));
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // The child already exited.
+  }
 }
 
 test('ghText trims stdout and forwards argv to gh', () => {
@@ -951,6 +1011,167 @@ process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ i
     ]);
   } finally {
     restore();
+  }
+});
+
+test('ghApiJson (paginated) does not inherit Worker-invalid execArgv (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const stubDir = join(tempRoot, 'bin');
+  mkdirSync(stubDir);
+  const bodyPath = join(tempRoot, 'gh.body.js');
+  const stubPath = join(stubDir, 'gh');
+  const runnerPath = join(tempRoot, 'runner.mts');
+  writeFileSync(
+    bodyPath,
+    `process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ id: 3 })].join('\\n'));`,
+  );
+  writeFileSync(
+    stubPath,
+    `#!/bin/sh\nexec "${process.execPath}" "${bodyPath}" "$@"\n`,
+  );
+  chmodSync(stubPath, 0o755);
+  const modulePath = join(repoRoot(), 'src/scripts/gh-exec.mts');
+  writeFileSync(
+    runnerPath,
+    `import { ghApiJson } from ${JSON.stringify(modulePath)};
+const rows = ghApiJson('repos/o/r/issues', { paginate: true });
+if (!Array.isArray(rows) || rows.length !== 3 || rows[2]?.id !== 3) {
+  console.error(JSON.stringify(rows));
+  process.exit(2);
+}
+`,
+  );
+  try {
+    execFileSync(process.execPath, ['--stack-trace-limit=10', runnerPath], {
+      cwd: repoRoot(),
+      env: {
+        ...process.env,
+        PATH: `${stubDir}:${process.env.PATH ?? ''}`,
+      },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) fails closed when the stdout pipe errors (#3597)', () => {
+  const restore = stubGh(`process.stdout.write('{"id":1}\\n');`);
+  try {
+    withCaptureFault('stdout', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 5_000 }),
+        (error: unknown) => {
+          assert.equal(Array.isArray(error), false);
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /stdout pipe failed/);
+          assert.doesNotMatch(message, /gh killed by SIGTERM/);
+          return true;
+        },
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) fails closed when the stderr pipe errors (#3597)', () => {
+  const restore = stubGh(`
+process.stderr.write('warn\\n');
+process.stdout.write('{"id":1}\\n');
+`);
+  try {
+    withCaptureFault('stderr', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 5_000 }),
+        (error: unknown) => {
+          assert.equal(Array.isArray(error), false);
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /stderr pipe failed/);
+          return true;
+        },
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) fails closed when the stdin pipe errors (#3597)', () => {
+  const restore = stubGh(`process.stdout.write('{"id":1}\\n');`);
+  try {
+    withCaptureFault('stdin', () => {
+      assert.throws(
+        () =>
+          ghApiJson('repos/o/r/issues', {
+            paginate: true,
+            input: '{"n":1}\n',
+            timeout: 5_000,
+          }),
+        (error: unknown) => {
+          assert.equal(Array.isArray(error), false);
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /stdin pipe failed/);
+          return true;
+        },
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) still signals gh when /proc cannot be read (#3597)', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const pidPath = join(tempRoot, 'pid');
+  const signalPath = join(tempRoot, 'signal');
+  const restore = stubHungGh(pidPath, signalPath);
+  try {
+    withCaptureFault('proc-unreadable', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /paginated gh capture timed out/);
+          return true;
+        },
+      );
+    });
+    assert.equal(waitForPath(signalPath, 2_000), true);
+  } finally {
+    stopRecordedPid(pidPath);
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) does not signal a pid whose command line is not gh (#3597)', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const pidPath = join(tempRoot, 'pid');
+  const signalPath = join(tempRoot, 'signal');
+  const restore = stubHungGh(pidPath, signalPath);
+  try {
+    withCaptureFault('proc-not-gh', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /paginated gh capture timed out/);
+          return true;
+        },
+      );
+    });
+    assert.equal(existsSync(pidPath), true);
+    assert.equal(waitForPath(signalPath, 400), false);
+  } finally {
+    stopRecordedPid(pidPath);
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
