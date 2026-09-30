@@ -2,14 +2,14 @@
 # -*- mode: sh -*-
 # vim: set ft=sh :
 
-# Fast, commit-safe checks only (biome + dprint + markdownlint). The
-# full suite (typecheck, tests, workshop integrity) runs in CI;
+# Fast, commit-safe checks only (biome + dprint + markdownlint). CI runs
+# the full suite (typecheck, tests, workshop integrity);
 # pre-push-validate adds cspell, mirror-drift, code-span-wrap,
-# build:check, and idd-doctor on top of this hook's checks at push
-# time (post-fix-validate adds the same cspell, mirror-drift, and
-# code-span-wrap trio, but not build:check or idd-doctor). build:check's
-# `git diff` deadlocked here against the in-progress commit's
-# index.lock (see #1007).
+# build:check, typecheck, and idd-doctor on top of this hook's checks at
+# push time (post-fix-validate adds the same cspell, mirror-drift,
+# code-span-wrap, and typecheck checks, but not build:check or
+# idd-doctor). build:check's `git diff` deadlocked here against the
+# in-progress commit's index.lock (see #1007).
 #
 # The IDD worktree guard runs first so a primary-worktree `issue/*` or
 # `roadmap-audit/*` commit fails fast before lint (see #3207).
