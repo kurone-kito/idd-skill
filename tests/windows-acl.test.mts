@@ -470,6 +470,16 @@ test('windows acl parser: duplicate or misplaced sections, extra lines, and bad 
     'dir\r\nD:PAI(A;;FA;;;SY)\r\ntrailing junk\r\n',
     'dir\r\nD:PAI(A;;FA;;;SY)\r\nD:PAI(A;;FA;;;BA)\r\n',
     'dir\r\n',
+    // A blank record between the name and the SDDL, or before the name.
+    'dir\r\n\r\nD:PAI(A;;FA;;;SY)\r\n',
+    '\r\ndir\r\nD:PAI(A;;FA;;;SY)\r\n',
+    // Junk in the owner, group, or SACL section the rule never reads.
+    'dir\r\nO:garbageD:PAI(A;;FA;;;SY)\r\n',
+    'dir\r\nG:D:PAI(A;;FA;;;SY)\r\n',
+    'dir\r\nD:PAI(A;;FA;;;SY)S:junk\r\n',
+    // A truncated section leaves a valid-looking DACL next to it.
+    'dir\r\nD:PAI(A;;FA;;;SY)S:(AU;SAFA;FA;;;WD)(ML;;NW;;;LW\r\n',
+    'dir\r\nD:PAI(A;;FA;;;SY))\r\n',
     // Malformed flags, rights, or object fields around a valid principal.
     'dir\r\nD:(A;not-flags;FA;;;SY)\r\n',
     'dir\r\nD:(A;OI;not-rights;;;SY)\r\n',
@@ -495,4 +505,19 @@ test('windows acl parser: duplicate or misplaced sections, extra lines, and bad 
       ],
     },
   );
+});
+
+test('windows acl parser: only the terminal line ending is tolerated', () => {
+  const expected = {
+    kind: 'entries',
+    entries: [{ sid: 'S-1-5-18', allow: true }],
+  };
+  for (const text of [
+    'dir\r\nD:PAI(A;;FA;;;SY)',
+    'dir\r\nD:PAI(A;;FA;;;SY)\r\n',
+    'dir\nD:PAI(A;;FA;;;SY)\n',
+    'dir\r\nD:PAI(A;;FA;;;SY)\r\n\r\n',
+  ]) {
+    assert.deepEqual(parseIcaclsSave(text), expected, JSON.stringify(text));
+  }
 });

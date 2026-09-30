@@ -185,8 +185,14 @@ function sddlSections(sddl: string): Map<string, string> | null {
   for (let index = 0; index < sddl.length; index += 1) {
     const char = sddl[index] as string;
     if (char === '(') depth += 1;
-    else if (char === ')') depth -= 1;
-    else if (depth === 0 && 'OGDS'.includes(char) && sddl[index + 1] === ':') {
+    else if (char === ')') {
+      depth -= 1;
+      if (depth < 0) return null;
+    } else if (
+      depth === 0 &&
+      'OGDS'.includes(char) &&
+      sddl[index + 1] === ':'
+    ) {
       if (name === null && index !== 0) return null;
       if (!close(index)) return null;
       name = char;
@@ -194,8 +200,31 @@ function sddlSections(sddl: string): Map<string, string> | null {
       index += 1;
     }
   }
+  // A truncated section (`S:(AU;...(ML;;NW;;;LW`) must not leave a valid DACL
+  // standing next to it.
+  if (depth !== 0) return null;
   if (name === null || !close(sddl.length)) return null;
   return sections;
+}
+
+/**
+ * The owner and group sections hold one principal, and the SACL is a list of
+ * ACEs like the DACL. Junk in a section the rule never reads still means the
+ * text is not what `icacls /save` wrote, so it fails closed too.
+ */
+function areOtherSectionsWellFormed(sections: Map<string, string>): boolean {
+  for (const [name, body] of sections) {
+    if (name === 'D') continue;
+    if (name === 'S') {
+      if (splitAces(body) === null) return false;
+    } else {
+      const principal = body.trim().toUpperCase();
+      if (!SID_PATTERN.test(principal) && !/^[A-Z]{2}$/.test(principal)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /**
@@ -211,14 +240,20 @@ export function parseIcaclsSave(
 ): WindowsAclResult {
   // The first line names the directory and is never SDDL, however it looks
   // (`D:\cache` starts like a DACL); the SDDL is the line after it.
-  const lines = text.split(/\r?\n/).filter((line) => line.length > 0);
-  // Exactly the name line and one SDDL line: any further text is not
-  // something `icacls /save` writes for one directory, so it is malformed.
+  const lines = text.split(/\r?\n/);
+  while (lines[lines.length - 1] === '') lines.pop();
+  // Exactly the name line and one SDDL line, with only the terminal line
+  // ending tolerated: a blank or extra record is not something `icacls /save`
+  // writes for one directory, so it is malformed.
   const sddl = lines.length === 2 ? (lines[1] as string) : undefined;
   if (sddl === undefined || !/^[OGDS]:/.test(sddl)) {
     return { kind: 'unreadable' };
   }
-  const dacl = sddlSections(sddl)?.get('D');
+  const sections = sddlSections(sddl);
+  if (sections === null || !areOtherSectionsWellFormed(sections)) {
+    return { kind: 'unreadable' };
+  }
+  const dacl = sections.get('D');
   if (dacl === undefined || dacl.startsWith('NO_ACCESS_CONTROL')) {
     return { kind: 'unreadable' };
   }
