@@ -49,25 +49,61 @@ class CacheStorageError extends Error {
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
-function canonicalJson(value) {
-  if (value === undefined || value === null) return 'null';
-  if (typeof value === 'string' || typeof value === 'boolean') {
-    return JSON.stringify(value);
+class CacheKeyError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'CacheKeyError';
   }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? JSON.stringify(value) : 'null';
+}
+const MAX_KEY_DEPTH = 64;
+/**
+ * Canonical JSON for cache keys. It throws `CacheKeyError` for anything
+ * plain JSON cannot represent unambiguously (a `Date`, `bigint`, `Map`,
+ * `Set`, function, `NaN`, or a cycle), because collapsing those to `null`
+ * or `{}` would let two different requests share one entry and serve the
+ * wrong response. An `undefined` property is omitted, as JSON does.
+ */
+function canonicalJson(value, depth = 0) {
+  if (depth > MAX_KEY_DEPTH) throw new CacheKeyError('key nesting too deep');
+  if (value === undefined || value === null) return 'null';
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return JSON.stringify(value);
+    case 'number':
+      if (!Number.isFinite(value)) {
+        throw new CacheKeyError('non-finite number in cache key');
+      }
+      return JSON.stringify(value);
+    case 'object':
+      break;
+    default:
+      throw new CacheKeyError(`unsupported ${typeof value} in cache key`);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+    return `[${value
+      .map((item) => {
+        if (item === undefined) {
+          throw new CacheKeyError('undefined array item in cache key');
+        }
+        return canonicalJson(item, depth + 1);
+      })
+      .join(',')}]`;
   }
-  if (typeof value === 'object') {
-    const record = value;
-    const keys = Object.keys(record).sort();
-    return `{${keys
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(',')}}`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new CacheKeyError('non-plain object in cache key');
   }
-  return 'null';
+  const record = value;
+  const keys = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort();
+  return `{${keys
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${canonicalJson(record[key], depth + 1)}`,
+    )
+    .join(',')}}`;
 }
 function isBlank(value) {
   return typeof value !== 'string' || value.trim().length === 0;
@@ -503,12 +539,19 @@ function persistable(ctx, result) {
   if (result.status < 200 || result.status >= 300) return false;
   const etag = result.etag ?? '';
   const lastModified = result.lastModified ?? '';
+  let body;
+  try {
+    body = canonicalJson(result.body);
+  } catch (error) {
+    if (error instanceof CacheKeyError) return false;
+    throw error;
+  }
   return !containsSecret(ctx.secrets, [
     ctx.host,
     ctx.repository,
     etag,
     lastModified,
-    canonicalJson(result.body),
+    body,
   ]);
 }
 /**
@@ -987,7 +1030,13 @@ export function readThroughGithubApiCache(input) {
   if (isBlank(input.credentialMaterial) || isBlank(input.host)) {
     return liveResult(input.fetch, 'bypass');
   }
-  const entryId = entryIdFor(input);
+  let entryId;
+  try {
+    entryId = entryIdFor(input);
+  } catch (error) {
+    if (!(error instanceof CacheKeyError)) throw error;
+    return liveResult(input.fetch, 'bypass');
+  }
   let root;
   try {
     root = resolveReadDirectory(input, anchors);

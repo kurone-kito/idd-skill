@@ -172,6 +172,62 @@ test('a blank credential or host bypasses the cache instead of sharing a context
   }
 });
 
+test('a request shape plain JSON cannot represent bypasses the cache', () => {
+  const paths = tempRoot();
+  const cycle: Record<string, unknown> = {};
+  cycle.self = cycle;
+  let fetches = 0;
+  const fetch = () => {
+    fetches += 1;
+    return { status: 200, body: { ok: true } };
+  };
+  const unrepresentable: unknown[] = [
+    new Date(0),
+    1n,
+    new Map([['a', 1]]),
+    new Set([1]),
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    () => 1,
+    Symbol('s'),
+    [undefined],
+    cycle,
+  ];
+  try {
+    for (const requestShape of unrepresentable) {
+      const result = readThrough(paths, fetch, { requestShape });
+      assert.equal(result.cache, 'bypass', String(requestShape));
+    }
+    const derived = readThrough(paths, fetch, {
+      derivedInputs: { at: new Date(0) },
+    });
+    assert.equal(derived.cache, 'bypass');
+    assert.equal(fetches, unrepresentable.length + 1);
+    assert.deepEqual(entryNames(paths.cacheDir), []);
+    // Two different dates must never collapse into one shared entry.
+    const first = readThrough(paths, okBody({ n: 1 }), {
+      requestShape: { since: new Date(1) },
+    });
+    const second = readThrough(paths, okBody({ n: 2 }), {
+      requestShape: { since: new Date(2) },
+    });
+    assert.equal(first.cache, 'bypass');
+    assert.equal(second.cache, 'bypass');
+    assert.deepEqual(second.body, { n: 2 });
+    // Plain JSON still keys deterministically; undefined properties drop.
+    readThrough(paths, okBody({ n: 3 }), {
+      requestShape: { b: [1, { c: null }], a: 'x', u: undefined },
+    });
+    const same = readThrough(paths, okBody({ n: 4 }), {
+      requestShape: { a: 'x', b: [1, { c: null }] },
+    });
+    assert.equal(same.cache, 'hit');
+    assert.deepEqual(same.body, { n: 3 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('non-read classifications and a disabled policy do not touch the cache', () => {
   const paths = tempRoot();
   const classifications: GithubApiReadClassification[] = [
