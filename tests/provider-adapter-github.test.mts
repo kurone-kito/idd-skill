@@ -5437,6 +5437,72 @@ test('listWorkItemSubIssueNodesAsync keeps a GraphQL rate-limit error that arriv
   );
 });
 
+test('a RATE_LIMITED GraphQL error type is kept even when its message has no rate-limit wording (#3598)', async () => {
+  const body = JSON.stringify({
+    errors: [{ type: 'RATE_LIMITED', message: 'Something went wrong.' }],
+  });
+  const comments = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: () => body }),
+  );
+  const commentError = await comments
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(commentError instanceof Error);
+  assertEvidenceKept(commentError, null);
+  assert.equal(
+    classifyDiscoverInterruption(commentError, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+  const subIssues = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghTextAsync: async () => body }),
+  );
+  const subIssueError = await subIssues
+    .listWorkItemSubIssueNodesAsync(700)
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(subIssueError instanceof Error);
+  assertEvidenceKept(subIssueError, null);
+  assert.equal(
+    classifyDiscoverInterruption(subIssueError, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+});
+
+test('GraphQL error evidence never carries response data or bodies (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { issue: { body: 'ISSUE-BODY-SECRET' } } },
+          errors: [
+            { type: 'RATE_LIMITED', message: 'API rate limit exceeded' },
+          ],
+        }),
+    }),
+  );
+  const error = await port
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(error instanceof Error);
+  const carried = error as { stdout?: string; stderr?: string };
+  assert.equal(String(carried.stdout).includes('ISSUE-BODY-SECRET'), false);
+  assert.equal(String(carried.stderr).includes('ISSUE-BODY-SECRET'), false);
+});
+
 test('a traversal failure that is neither a timeout nor a throttle stays unclassified (#3598)', async () => {
   const port = createGithubProviderAdapter(
     'o',

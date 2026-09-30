@@ -198,6 +198,32 @@ function preserveTransportEvidence<T extends Error>(
 }
 
 /**
+ * Evidence for a GraphQL `errors[]` body that arrived with a successful exit
+ * (#3598): the messages as stderr-style text, and the error types only as a
+ * minimal GraphQL body, so the discovery classifier can recognize a
+ * `RATE_LIMITED` type whose message carries no rate-limit wording, without
+ * ever holding the response's `data`.
+ */
+function graphqlErrorEvidence(errors: unknown[]): {
+  stderr: string;
+  stdout: string;
+} {
+  const entries = errors as ({ type?: unknown; message?: unknown } | null)[];
+  return {
+    stderr: entries
+      .map((entry) => String(entry?.message ?? ''))
+      .filter(Boolean)
+      .join('; ')
+      .slice(0, 200),
+    stdout: JSON.stringify({
+      errors: entries.map((entry) =>
+        typeof entry?.type === 'string' ? { type: entry.type } : {},
+      ),
+    }),
+  };
+}
+
+/**
  * #2267: throw when a GraphQL response carries top-level `errors`, so a bad
  * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
  * message instead of being silently read as an empty result -- ported
@@ -616,7 +642,7 @@ function readWorkItemCommentPage(
       new WorkItemCommentReadError(
         `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
       ),
-      { stderr: detail },
+      graphqlErrorEvidence(parsed.errors),
     );
   }
   const repository = parsed.data?.repository;
@@ -3286,10 +3312,10 @@ export function createGithubProviderAdapter(
               // A GraphQL throttle can arrive as a successful response whose
               // `errors` say so; keep the text as stderr-style evidence (the
               // catch below carries it onto the rebuilt error, #3598).
-              const formatted = formatTraversalGraphqlErrors(parsed.errors);
-              throw preserveTransportEvidence(new Error(formatted), {
-                stderr: formatted,
-              });
+              throw preserveTransportEvidence(
+                new Error(formatTraversalGraphqlErrors(parsed.errors)),
+                graphqlErrorEvidence(parsed.errors),
+              );
             }
             return parsed;
           } catch (error) {

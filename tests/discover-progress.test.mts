@@ -184,6 +184,28 @@ test('the tracker keeps state without a writer and survives a broken one', () =>
   });
 });
 
+test('an interruption before any phase still prints an interrupted root-discovery line', () => {
+  const lines: string[] = [];
+  const progress = createDiscoverProgress({
+    write: (line) => lines.push(line),
+    now: fakeClock().now,
+  });
+  progress.interrupted('rate-limit');
+  assert.deepEqual(parseLines(lines), [
+    {
+      helper: 'discover-roadmap-graph',
+      event: 'interrupted',
+      phase: 'root-discovery',
+      unit: 'roots',
+      completed: 0,
+      known: null,
+      leavesKnown: null,
+      elapsedMs: 0,
+      reason: 'rate-limit',
+    },
+  ]);
+});
+
 test('a closed tracker prints nothing further', () => {
   const lines: string[] = [];
   const progress = createDiscoverProgress({

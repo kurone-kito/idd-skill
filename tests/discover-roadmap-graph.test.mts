@@ -42,6 +42,7 @@ import {
 import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import type { LocalWorktreeInspection } from '../src/scripts/local-worktree-occupancy.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { stubExecutable } from './test-utils.mts';
 
 /** Run `body` with `process.stderr.write` captured; return the joined output. */
@@ -4765,6 +4766,31 @@ test('--with-progress: primary quota exhaustion during traversal reads its reset
   assert.equal(result.incomplete.retryAtSource, 'server');
 });
 
+test('--with-progress: a failure while building the options still prints an interrupted line (#3598)', async () => {
+  const tracker = progressTracker(progressClock());
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    () => {
+      throw createLoadControlRefusal({
+        outcome: 'not-dispatched',
+        reason: 'cooldown',
+        retryAt: '2026-10-01T00:05:00Z',
+        retryAtSource: 'server',
+      });
+    },
+    { progress: tracker.progress },
+  );
+  assert.equal(isIncomplete(result), true);
+  if (!isIncomplete(result)) return;
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  assert.equal(result.incomplete.counts.known, null);
+  assert.equal(result.incomplete.retryAt, '2026-10-01T00:05:00.000Z');
+  // Not silent on stderr: exactly one line, and it says what happened.
+  assert.deepEqual(
+    tracker.events().map((event) => [event.event, event.phase, event.reason]),
+    [['interrupted', 'root-discovery', 'rate-limit']],
+  );
+});
+
 test('--with-progress: a timeout in the root search is incomplete, not an empty scan (#3598)', async () => {
   const result = await enumerateAllRoadmapsGraphWithRecovery(
     {
@@ -5091,6 +5117,18 @@ process.exit(1);
     '--with-progress',
     '--no-cache',
   ]);
+  // The lookup failed before any phase began, yet stderr still says so.
+  const events = child.stderr
+    .split('\n')
+    .filter((line) => line.startsWith('{"iddProgress"'))
+    .map((line) => JSON.parse(line).iddProgress);
+  assert.deepEqual(
+    events.map((event: { event: string; phase: string }) => [
+      event.event,
+      event.phase,
+    ]),
+    [['interrupted', 'root-discovery']],
+  );
 });
 
 test('CLI: the rerun arguments name every scope and flag of the invocation (#3598)', () => {
@@ -5143,4 +5181,33 @@ process.exit(1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('CLI: the --help progress and incomplete examples are valid JSON that match the schema (#3598)', () => {
+  const help = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), '--help'],
+    { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  const example = (prefix: string) => {
+    const line = help
+      .split('\n')
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith(prefix));
+    assert.ok(line, `missing help example starting ${prefix}`);
+    return JSON.parse(line);
+  };
+  const progress = example('{"iddProgress"') as {
+    iddProgress: Record<string, unknown>;
+  };
+  assert.equal(progress.iddProgress.helper, 'discover-roadmap-graph');
+  assert.equal(progress.iddProgress.phase, 'claim-state');
+  const incomplete = example('{"mode":"all-roadmaps","status":"incomplete"');
+  assert.deepEqual(
+    validate(
+      incomplete,
+      loadJson('schemas/discover-roadmap-incomplete.schema.json'),
+    ),
+    [],
+  );
 });

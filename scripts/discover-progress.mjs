@@ -119,6 +119,12 @@ export function createDiscoverProgress(options = {}) {
       emit('complete');
     },
     interrupted(reason) {
+      // A failure before the first phase began (the repository lookup that
+      // precedes the scan) is still an interrupted root discovery, so the
+      // operator sees it on stderr too.
+      if (phase === null) {
+        phase = 'root-discovery';
+      }
       emit('interrupted', { reason });
     },
     snapshot() {

@@ -3669,16 +3669,21 @@ function printHelp() {
   --with-progress (opt-in, --all-roadmaps only) prints bounded progress lines
   to stderr, one JSON object per line keyed by iddProgress (stderr can also
   carry plain-text warnings), and turns a rate limit, timeout, or admission
-  deadline into a recovery result instead of a crash. Progress:
-    {"iddProgress":{"helper","event":"start"|"progress"|"complete"|"interrupted","phase":"root-discovery"|"traversal"|"claim-state"|"readiness","unit":"roots"|"leaves","completed":n,"known":n|null,"leavesKnown":n|null,"elapsedMs":n}}
-  Lines carry counts only (never titles, bodies, or error text), phase edges
-  always print, and in-phase updates are limited to one per 2 seconds. A
-  complete report is byte-identical to a run without the flag. An
-  interrupted scan prints, on stdout, an INCOMPLETE result and exits 75:
-    { "mode": "all-roadmaps", "status": "incomplete", "incomplete": { "reason": "rate-limit"|"timeout"|"deadline", "phase": str, "lastCompletedPhase": str|null, "counts": { "unit", "completed", "known", "leavesKnown" }, "retryAt": iso|null, "retryAtSource": "server"|"backoff"|null, "exhausted": false, "recovery": { "safeToRerun": true, "sameArguments": true, "notBefore": iso|null, "arguments": [str] } } }
-  It carries no leaves and no summary: it is NOT an empty or exhausted
-  inventory and grants no claim authority. Rerun the same arguments (see
-  recovery.arguments) after recovery.notBefore.
+  deadline into a recovery result instead of a crash. Example progress line:
+    {"iddProgress":{"helper":"discover-roadmap-graph","event":"progress","phase":"claim-state","unit":"leaves","completed":12,"known":19,"leavesKnown":19,"elapsedMs":8123}}
+  event is start, progress, complete, or interrupted (which adds "reason");
+  phase is root-discovery, traversal, claim-state, or readiness; known is
+  null until the phase knows its size. Lines carry counts only (never
+  titles, bodies, or error text), phase edges always print, and in-phase
+  updates are limited to one per 2 seconds. A complete report is
+  byte-identical to a run without the flag. An interrupted scan prints an
+  INCOMPLETE result on stdout and exits 75, for example:
+    {"mode":"all-roadmaps","status":"incomplete","incomplete":{"reason":"rate-limit","phase":"claim-state","lastCompletedPhase":"traversal","counts":{"unit":"leaves","completed":12,"known":19,"leavesKnown":19},"retryAt":"2026-10-01T03:15:00.000Z","retryAtSource":"server","exhausted":false,"recovery":{"safeToRerun":true,"sameArguments":true,"notBefore":"2026-10-01T03:15:00.000Z","arguments":["--all-roadmaps","--with-progress"]}}}
+  reason is rate-limit, timeout, or deadline; retryAt, retryAtSource, and
+  notBefore are null when no time is known. It carries no leaves and no
+  summary: it is NOT an empty or exhausted inventory and grants no claim
+  authority. Rerun the same arguments (see recovery.arguments) after
+  recovery.notBefore.
 
 Output schema (JSON mode) — --issue single-root report:
   {
