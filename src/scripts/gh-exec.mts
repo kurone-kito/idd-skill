@@ -772,7 +772,7 @@ export function resolveGhApiHostname(
  * to keep the emitted argv unchanged, this names every host so a caller
  * that needs the host itself (the read cache) can use it.
  */
-function serverUrlHost(env: NodeJS.ProcessEnv): string | undefined {
+export function serverUrlHost(env: NodeJS.ProcessEnv): string | undefined {
   const serverUrl = env.GITHUB_SERVER_URL?.trim();
   if (!serverUrl) return undefined;
   const host = serverUrl
@@ -1917,7 +1917,7 @@ function usesGithubToken(host: string): boolean {
   );
 }
 
-function defaultCredentialMaterial(host: string): string | undefined {
+export function defaultCredentialMaterial(host: string): string | undefined {
   const token = usesGithubToken(host)
     ? process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim()
     : process.env.GH_ENTERPRISE_TOKEN?.trim() ||
@@ -1943,7 +1943,7 @@ function readCacheLeaseTtlMs(
   return bounded + 30_000;
 }
 
-function loadReadCachePolicy(
+export function loadReadCachePolicy(
   injected: GithubApiReadCacheRuntimePolicy | undefined,
 ): GithubApiReadCacheRuntimePolicy {
   if (injected) {
