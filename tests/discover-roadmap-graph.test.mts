@@ -33,6 +33,7 @@ import {
   extractTaskListReferences,
   isClaimHeartbeatOverdue,
   isCurrentSessionWorktreeOwner,
+  isTaskListSubIssuePair,
   normalizeConcurrency,
   parseClaimHeartbeatIntervalMs,
   parseClaimStaleAgeMs,
@@ -1420,6 +1421,156 @@ test('does not flag two sources that share a Blocked-by target as a duplicate', 
     2,
   );
   assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('#3668: a task-list entry plus a native sub-issue link for one child is one membership, not a duplicate', async () => {
+  // A1.5's own follow-up linking writes both the task-list entry and the
+  // native sub-issue link for the same child, so every roadmap linked that
+  // way carries the pair. Both edges stay in the graph; only the
+  // diagnostic is skipped.
+  const issues = new Map([
+    [700, roadmapIssue(700, '- [ ] #701', 'membership-roadmap')],
+    [701, executionIssue(701, 'linked both ways')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 700 ? [701] : []),
+  });
+
+  // `edges` is emitted in a sorted order, so compare the relationship set.
+  assert.deepEqual(graph.edges.map((edge) => edge.relationship).sort(), [
+    'sub-issue',
+    'task-list',
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+  assert.equal(graph.summary.duplicateReferenceCount, 0);
+  assert.deepEqual(graph.executionCandidates, [701]);
+});
+
+test('#3668: isTaskListSubIssuePair accepts exactly task-list plus sub-issue on one source and target, in either order', () => {
+  const taskList = { source: 1, target: 2, relationship: 'task-list' };
+  const subIssue = { source: 1, target: 2, relationship: 'sub-issue' };
+  assert.equal(isTaskListSubIssuePair(taskList, subIssue), true);
+  assert.equal(isTaskListSubIssuePair(subIssue, taskList), true);
+
+  // The same relationship twice is the #2799 same-triple case, not this pair.
+  assert.equal(isTaskListSubIssuePair(taskList, taskList), false);
+  assert.equal(isTaskListSubIssuePair(subIssue, subIssue), false);
+  // Every other different-relationship pair stays an ambiguity.
+  for (const other of ['dependency', 'reference', 'closing-keyword']) {
+    const otherEdge = { source: 1, target: 2, relationship: other };
+    assert.equal(isTaskListSubIssuePair(taskList, otherEdge), false);
+    assert.equal(isTaskListSubIssuePair(otherEdge, taskList), false);
+    assert.equal(isTaskListSubIssuePair(subIssue, otherEdge), false);
+    assert.equal(isTaskListSubIssuePair(otherEdge, subIssue), false);
+  }
+  // A different source or target is never one membership.
+  assert.equal(
+    isTaskListSubIssuePair(taskList, { ...subIssue, source: 9 }),
+    false,
+  );
+  assert.equal(
+    isTaskListSubIssuePair(taskList, { ...subIssue, target: 9 }),
+    false,
+  );
+});
+
+test('#3668: a task-list entry plus a Blocked-by line for one child is still a duplicate', async () => {
+  const issues = new Map([
+    [
+      710,
+      roadmapIssue(710, '- [ ] #711\nBlocked by #711', 'ambiguous-roadmap'),
+    ],
+    [711, executionIssue(711, 'listed and blocking')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(710, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 710,
+      target: 711,
+      relationship: 'dependency',
+      evidence: 'Blocked by #711',
+      firstSeenFrom: 710,
+    },
+  ]);
+  assert.equal(graph.summary.duplicateReferenceCount, 1);
+});
+
+test('#3668: two identical task-list lines still collapse (#2799) and stay diagnostic-free beside a sub-issue link', async () => {
+  const issues = new Map([
+    [720, roadmapIssue(720, '- [ ] #721\n- [ ] #721', 'collapse-roadmap')],
+    [721, executionIssue(721, 'listed twice and linked')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(720, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 720 ? [721] : []),
+  });
+
+  // `edges` is emitted in a sorted order, so compare the relationship set.
+  assert.deepEqual(graph.edges.map((edge) => edge.relationship).sort(), [
+    'sub-issue',
+    'task-list',
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('#3668: a third relationship beside the task-list plus sub-issue pair is still reported once', async () => {
+  const issues = new Map([
+    [730, roadmapIssue(730, '- [ ] #731\nRefs #731', 'triple-roadmap')],
+    [731, executionIssue(731, 'listed, referenced and linked')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(730, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 730 ? [731] : []),
+  });
+
+  // `edges` is emitted in a sorted order, so compare the relationship set.
+  assert.deepEqual(graph.edges.map((edge) => edge.relationship).sort(), [
+    'reference',
+    'sub-issue',
+    'task-list',
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 730,
+      target: 731,
+      relationship: 'reference',
+      evidence: 'Refs #731',
+      firstSeenFrom: 730,
+    },
+  ]);
+});
+
+test('#3668: a sub-issue link beside a non-task-list relationship is still reported', async () => {
+  // With no task-list entry the first edge for the pair is the keyword edge,
+  // so the sub-issue link is one more different relationship, not a
+  // membership pair.
+  const issues = new Map([
+    [740, roadmapIssue(740, 'Blocked by #741', 'keyword-first-roadmap')],
+    [741, executionIssue(741, 'blocking and linked')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(740, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 740 ? [741] : []),
+  });
+
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 740,
+      target: 741,
+      relationship: 'sub-issue',
+      evidence: 'GitHub sub-issue #741',
+      firstSeenFrom: 740,
+    },
+  ]);
 });
 
 test('keeps traversing descendants when a shared node is reached through multiple paths', async () => {

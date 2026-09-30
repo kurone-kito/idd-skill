@@ -1119,6 +1119,30 @@ export function coalesceIssueLoader(
   };
 }
 
+/**
+ * True when two edges are the two halves of one membership: the same child
+ * listed in a parent's task list and linked as a native sub-issue of that
+ * same parent (#3668). Both share `source` and `target`, and their
+ * relationships are exactly `task-list` and `sub-issue`, in either order.
+ * A1.5's own follow-up linking writes both, so the pair is one membership,
+ * not a duplicate reference. Any other pair of different relationships on
+ * one source and target (a task-list entry plus `Blocked by`, `Refs`, or a
+ * closing keyword, say) stays an ambiguity the caller must still report.
+ */
+export function isTaskListSubIssuePair(
+  first: Pick<RoadmapGraphEdge, 'source' | 'target' | 'relationship'>,
+  second: Pick<RoadmapGraphEdge, 'source' | 'target' | 'relationship'>,
+): boolean {
+  if (first.source !== second.source || first.target !== second.target) {
+    return false;
+  }
+  return (
+    (first.relationship === 'task-list' &&
+      second.relationship === 'sub-issue') ||
+    (first.relationship === 'sub-issue' && second.relationship === 'task-list')
+  );
+}
+
 export async function enumerateRoadmapGraph(
   rootIssueNumber: number,
   options: EnumerateRoadmapGraphOptions = {},
@@ -1357,7 +1381,10 @@ export async function enumerateRoadmapGraph(
     // another provenance path. A later same-triple mention in this body
     // (prose + standalone `Blocked by #N`, or two identical task-list
     // lines) collapses to the first edge (#2799). A remaining
-    // same-source different-relationship pair is still a duplicate.
+    // same-source different-relationship pair is still a duplicate, except
+    // a task-list entry plus a native sub-issue link for the same child
+    // (#3668): that is one membership, so both edges stay but no
+    // diagnostic is recorded.
     const seenSourceTriples = new Set<string>();
     const firstReferenceBySourceTarget = new Map<string, RoadmapGraphEdge>();
 
@@ -1382,7 +1409,9 @@ export async function enumerateRoadmapGraph(
         const firstReference =
           firstReferenceBySourceTarget.get(sourceTargetKey);
         if (firstReference) {
-          recordDuplicateReference(edge, firstReference);
+          if (!isTaskListSubIssuePair(firstReference, edge)) {
+            recordDuplicateReference(edge, firstReference);
+          }
         } else {
           firstReferenceBySourceTarget.set(sourceTargetKey, edge);
         }
