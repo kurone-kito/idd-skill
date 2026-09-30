@@ -66,6 +66,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--stale-age-ms': { type: 'string' },
   '--trusted-marker-logins': { type: 'string' },
   '--fresh-claim-gate': { type: 'boolean', default: false },
+  '--assert': { type: 'boolean', default: false },
   '--worktree': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
@@ -561,6 +562,15 @@ function runCli() {
       new Error('--issue is required and must be a positive integer'),
     );
   }
+  // #3667: both checks run before any network call.
+  if (args.assert && !args.claimId) {
+    throw markCliUsageError(new Error('--assert requires --claim-id'));
+  }
+  if (args.assert && args.freshClaimGate) {
+    throw markCliUsageError(
+      new Error('--assert cannot be combined with --fresh-claim-gate'),
+    );
+  }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
     process.env.GITHUB_TOKEN = args.ghToken;
@@ -703,7 +713,38 @@ function runCli() {
       : {}),
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  if (args.assert) {
+    const outcome = resolveAssertOutcome(result);
+    if (outcome.exitCode !== 0) {
+      process.stderr.write(`${outcome.message}\n`);
+      return {
+        exitCode: outcome.exitCode,
+        kind: 'gate',
+        message: outcome.message,
+      };
+    }
+  }
   return 0;
+}
+/**
+ * `--assert` exits `0` only for `already_owned` with `keep`; every other
+ * verdict is a gate failure (exit `1`) whose one-line message names `state`,
+ * `action`, `reason` and, on `owner_evidence_required`, the first failed
+ * owner proof (a `disputed` route can also carry owner evidence, but the
+ * proof is not its cause). It never rewrites the stdout JSON.
+ */
+export function resolveAssertOutcome(result) {
+  if (result.state === 'already_owned' && result.action === 'keep') {
+    return { exitCode: 0, message: '' };
+  }
+  const failedProof =
+    result.state === 'owner_evidence_required' && result.evidence.owner_evidence
+      ? firstFailedOwnerProof(result.evidence.owner_evidence)
+      : null;
+  return {
+    exitCode: 1,
+    message: `resume-claim-routing --assert: state=${result.state} action=${result.action} reason=${result.reason}${failedProof === null ? '' : ` first_failed_proof=${failedProof}`}`,
+  };
 }
 function resolveClaimState(events, staleAgeMs, options = {}) {
   const isForcedHandoffEnabled =
@@ -1077,6 +1118,7 @@ function parseArgs(argv) {
       staleAgeMsToken === undefined ? 0 : Number.parseInt(staleAgeMsToken, 10),
     trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
     freshClaimGate: values['fresh-claim-gate'],
+    assert: values.assert,
     worktree: values.worktree ?? '',
     format,
     help,
@@ -1084,7 +1126,7 @@ function parseArgs(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--worktree <path>] [--format json]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--assert] [--worktree <path>] [--format json]
   Deprecated aliases (one release): --token -> --gh-token
 
   --format json       output format (default: json). JSON is the only
@@ -1096,6 +1138,15 @@ function printHelp() {
                       fresh claim owns none yet). Run it on a fresh fetch
                       immediately before the claim write; it re-uses the same
                       resolver so claim-state logic never forks.
+  --assert            exit 0 only when the verdict is state already_owned with
+                      action keep; any other verdict exits non-zero (a gate
+                      failure) and writes one stderr line naming state,
+                      action, reason and, on an owner_evidence_required
+                      verdict, the first failed owner proof. The stdout
+                      JSON is identical with and without the flag.
+                      Requires --claim-id and cannot be combined with
+                      --fresh-claim-gate. Read-only. Without --assert the
+                      helper exits 0 on a stop verdict, so read action.
   --nonce <token>     this session's own recorded activation-nonce (#1522):
                       when --claim-id matches the active claim, also require
                       it to equal the winning trusted <!-- activation-nonce:
@@ -1132,7 +1183,7 @@ warnings / evidence):
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
-  "evidence": {"...": "...", "activation_nonce_winner": "..."|null},
+  "evidence": {"...": "...", "activation_nonce_winner": "..."|null, "owner_evidence": {...}},  // owner_evidence: one field per owner proof, see docs/idd-helper-scripts.md
   "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
 }
 

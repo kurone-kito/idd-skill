@@ -41,6 +41,7 @@ import {
   evaluateResumeClaimRouting as evaluateResumeClaimRoutingImpl,
   fetchOpenLinkedPrReferences,
   loadPolicy,
+  resolveAssertOutcome,
 } from '../src/scripts/resume-claim-routing.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -4811,4 +4812,369 @@ test('a forced-handoff lookup failure override never carries the owner-evidence 
   assert.equal(result.evidence.owner_evidence?.worktree_identity, false);
   assert.deepEqual(ownerEvidenceWarnings(result.warnings), []);
   assert.equal(result.evidence.local_worktree, undefined);
+});
+
+// #3667: --assert turns the routing verdict into an exit status. The stdout
+// JSON is the same with and without the flag; only already_owned / keep
+// exits 0.
+
+test('resolveAssertOutcome exits 0 only for already_owned with keep (#3667)', () => {
+  const none = { owner_evidence: undefined };
+  assert.deepEqual(
+    resolveAssertOutcome({
+      state: 'already_owned',
+      action: 'keep',
+      reason: 'claim-id-match',
+      evidence: none,
+    }),
+    { exitCode: 0, message: '' },
+  );
+  for (const [state, action, reason] of [
+    ['non_inheritable', 'stop', 'active-claim-non-stale'],
+    ['unclaimed', 're_claim', 'no-active-claim'],
+    ['local_worktree_occupied', 'stop', 'stale-claim-local-worktree-occupied'],
+    ['disputed', 'stop', 'activation-nonce-mismatch'],
+    ['stale', 'takeover', 'active-claim-stale'],
+  ]) {
+    const outcome = resolveAssertOutcome({
+      state,
+      action,
+      reason,
+      evidence: none,
+    });
+    assert.equal(outcome.exitCode, 1, state);
+    assert.equal(
+      outcome.message,
+      `resume-claim-routing --assert: state=${state} action=${action} reason=${reason}`,
+    );
+    assert.doesNotMatch(outcome.message, /\n/);
+  }
+});
+
+test('resolveAssertOutcome names the first failed owner proof when the evidence has one (#3667)', () => {
+  const outcome = resolveAssertOutcome({
+    state: 'owner_evidence_required',
+    action: 'stop',
+    reason: 'claim-id-match-without-independent-owner-evidence',
+    evidence: {
+      owner_evidence: {
+        worktree_identity: true,
+        claim_lock_matches: false,
+        generated_tokens_match: null,
+        agent_and_branch_match: null,
+        occupancy_probe: 'occupied',
+        occupancy_paths_match: null,
+      },
+    },
+  });
+  assert.equal(outcome.exitCode, 1);
+  assert.equal(
+    outcome.message,
+    'resume-claim-routing --assert: state=owner_evidence_required action=stop reason=claim-id-match-without-independent-owner-evidence first_failed_proof=claim_lock_matches',
+  );
+});
+
+test('resolveAssertOutcome leaves first_failed_proof off a disputed route that also carries owner evidence (#3667)', () => {
+  const outcome = resolveAssertOutcome({
+    state: 'disputed',
+    action: 'stop',
+    reason: 'activation-nonce-mismatch',
+    evidence: {
+      owner_evidence: {
+        worktree_identity: true,
+        claim_lock_matches: false,
+        generated_tokens_match: null,
+        agent_and_branch_match: null,
+        occupancy_probe: 'occupied',
+        occupancy_paths_match: null,
+      },
+    },
+  });
+  assert.equal(outcome.exitCode, 1);
+  assert.equal(
+    outcome.message,
+    'resume-claim-routing --assert: state=disputed action=stop reason=activation-nonce-mismatch',
+  );
+});
+
+const ASSERT_CLI_CLAIM = {
+  id: 1,
+  node_id: 'IC_assert_claim',
+  body: `<!-- claimed-by: agent-old claim-old supersedes: none 2026-05-12T10:00:00Z branch: ${SUCCESSOR_BRANCH} -->`,
+  created_at: '2026-05-12T10:00:00Z',
+  user: { login: 'maintainer' },
+};
+
+function assertCliFixture(comments: (typeof ASSERT_CLI_CLAIM)[]) {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-resume-claim-routing-assert-'),
+  );
+  const policyPath = join(tempRoot, 'config.json');
+  writeFileSync(
+    policyPath,
+    `${JSON.stringify({ trustedMarkerActors: ['maintainer'] })}\n`,
+  );
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stdout.write('maintainer\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => String(arg).includes('databaseId'))) {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: {
+        repository: {
+          issue: {
+            comments: {
+              nodes: comments.map((row) => ({
+                id: row.node_id,
+                databaseId: row.id,
+                body: row.body,
+                createdAt: row.created_at,
+                updatedAt: row.created_at,
+                lastEditedAt: null,
+                author: { login: row.user.login, __typename: 'User' },
+              })),
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+          pullRequest: null,
+        },
+      },
+    }),
+  )});
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {
+  process.stdout.write(JSON.stringify({ data: { nodes: ${JSON.stringify(
+    comments.map((row) => ({ id: row.node_id, lastEditedAt: null })),
+  )} } }));
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/11\\/comments/.test(arg))) {
+  process.stdout.write(${JSON.stringify(JSON.stringify(comments))});
+  process.exit(0);
+}
+if (args[0] === 'api' && args.some((arg) => /\\/issues\\/11$/.test(arg))) {
+  process.stdout.write(JSON.stringify({
+    number: 11,
+    title: 'assert fixture',
+    state: 'open',
+    html_url: 'https://github.com/o/r/issues/11',
+  }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh call: ' + JSON.stringify(args) + '\\n');
+process.exit(1);
+`,
+  );
+  return {
+    policyPath,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+function runAssertCli(
+  fixture: { policyPath: string },
+  cwd: string,
+  extraArgs: string[],
+  env: NodeJS.ProcessEnv = {},
+) {
+  return spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '11',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--policy',
+      fixture.policyPath,
+      ...extraArgs,
+    ],
+    { cwd, encoding: 'utf8', env: { ...hermeticGitEnv(), ...env } },
+  );
+}
+
+const ASSERT_NON_STALE = ['--now', '2026-05-12T11:00:00Z'];
+const ASSERT_STALE = ['--now', '2026-05-14T11:00:00Z'];
+
+function lastLine(text: string): string {
+  return text.trimEnd().split('\n').at(-1) ?? '';
+}
+
+test('--assert exits 0 for the proven owner and leaves stdout identical to a run without it (#3667)', () => {
+  const fixture = assertCliFixture([ASSERT_CLI_CLAIM]);
+  try {
+    withSuccessorSandbox(({ primary, worktree }) => {
+      const args = [
+        '--claim-id',
+        'claim-old',
+        '--worktree',
+        worktree,
+        ...ASSERT_NON_STALE,
+      ];
+      const plain = runAssertCli(fixture, primary, args);
+      const asserted = runAssertCli(fixture, primary, [...args, '--assert']);
+      assert.equal(plain.status, 0, plain.stderr);
+      assert.equal(asserted.status, 0, asserted.stderr);
+      assert.equal(asserted.stderr, '');
+      assert.equal(asserted.stdout, plain.stdout);
+      const output = JSON.parse(asserted.stdout);
+      assert.equal(output.state, 'already_owned');
+      assert.equal(output.action, 'keep');
+      assert.equal(output.evidence.owner_evidence.occupancy_paths_match, true);
+    });
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--assert exits non-zero with a gate line naming the failed owner proof, stdout unchanged (#3667)', () => {
+  const fixture = assertCliFixture([ASSERT_CLI_CLAIM]);
+  try {
+    withSuccessorSandbox(({ primary }) => {
+      const args = ['--claim-id', 'claim-old', ...ASSERT_NON_STALE];
+      const plain = runAssertCli(fixture, primary, args);
+      const asserted = runAssertCli(fixture, primary, [...args, '--assert']);
+      // Without --assert the helper exits 0 on a stop verdict.
+      assert.equal(plain.status, 0, plain.stderr);
+      assert.equal(asserted.status, 1);
+      assert.equal(asserted.stdout, plain.stdout);
+      const output = JSON.parse(asserted.stdout);
+      assert.equal(output.state, 'owner_evidence_required');
+      assert.equal(output.evidence.owner_evidence.claim_lock_matches, false);
+      assert.equal(
+        asserted.stderr,
+        'resume-claim-routing --assert: state=owner_evidence_required action=stop reason=claim-id-match-without-independent-owner-evidence first_failed_proof=claim_lock_matches\n',
+      );
+    });
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--assert exits non-zero for non_inheritable and for a stale claim with an occupied worktree (#3667)', () => {
+  const fixture = assertCliFixture([ASSERT_CLI_CLAIM]);
+  try {
+    withSuccessorSandbox(({ primary }) => {
+      const live = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-other',
+        '--assert',
+        ...ASSERT_NON_STALE,
+      ]);
+      assert.equal(live.status, 1);
+      assert.equal(
+        live.stderr,
+        'resume-claim-routing --assert: state=non_inheritable action=stop reason=active-claim-non-stale\n',
+      );
+      const stale = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-other',
+        '--assert',
+        ...ASSERT_STALE,
+      ]);
+      assert.equal(stale.status, 1);
+      assert.equal(
+        stale.stderr,
+        'resume-claim-routing --assert: state=local_worktree_occupied action=stop reason=stale-claim-local-worktree-occupied\n',
+      );
+    });
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--assert exits non-zero for an unclaimed issue (#3667)', () => {
+  const fixture = assertCliFixture([]);
+  try {
+    const result = runAssertCli(fixture, REPO_ROOT, [
+      '--claim-id',
+      'claim-old',
+      '--assert',
+      ...ASSERT_NON_STALE,
+    ]);
+    assert.equal(result.status, 1);
+    assert.equal(JSON.parse(result.stdout).state, 'unclaimed');
+    assert.equal(
+      result.stderr,
+      'resume-claim-routing --assert: state=unclaimed action=re_claim reason=legacy-absent\n',
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--assert reports kind gate with the envelope line last under IDD_HELPER_ERROR_ENVELOPE (#3667)', () => {
+  const fixture = assertCliFixture([ASSERT_CLI_CLAIM]);
+  try {
+    withSuccessorSandbox(({ primary }) => {
+      const result = runAssertCli(
+        fixture,
+        primary,
+        ['--claim-id', 'claim-old', '--assert', ...ASSERT_NON_STALE],
+        { IDD_HELPER_ERROR_ENVELOPE: '1' },
+      );
+      assert.equal(result.status, 1);
+      const lines = result.stderr.trimEnd().split('\n');
+      assert.equal(lines.length, 2);
+      assert.match(lines[0], /^resume-claim-routing --assert: state=/);
+      const envelope = JSON.parse(lastLine(result.stderr)).iddHelperError;
+      assert.equal(envelope.kind, 'gate');
+      assert.equal(envelope.exitCode, 1);
+      assert.equal(envelope.helper, 'resume-claim-routing');
+      assert.equal(envelope.message, lines[0]);
+    });
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('--assert without --claim-id, or with --fresh-claim-gate, is a usage error before any gh call (#3667)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-resume-assert-usage-'));
+  const callLog = join(tempRoot, 'gh-called');
+  const restore = stubExecutable(
+    'gh',
+    `require('fs').writeFileSync(${JSON.stringify(callLog)}, 'called');
+process.exit(1);
+`,
+  );
+  try {
+    for (const [extraArgs, message] of [
+      [['--assert'], /--assert requires --claim-id/],
+      [
+        ['--assert', '--claim-id', 'claim-old', '--fresh-claim-gate'],
+        /--assert cannot be combined with --fresh-claim-gate/,
+      ],
+    ] as const) {
+      const result = runAssertCli({ policyPath: devNull }, REPO_ROOT, [
+        ...extraArgs,
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, message);
+      const enveloped = runAssertCli(
+        { policyPath: devNull },
+        REPO_ROOT,
+        [...extraArgs],
+        { IDD_HELPER_ERROR_ENVELOPE: '1' },
+      );
+      assert.equal(
+        JSON.parse(lastLine(enveloped.stderr)).iddHelperError.kind,
+        'usage',
+      );
+    }
+    assert.throws(() => readFileSync(callLog), /ENOENT/);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
