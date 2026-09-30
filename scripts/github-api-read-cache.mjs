@@ -39,6 +39,8 @@ const TEMP_NAME = /^[0-9a-f]{64}\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
 const MAX_CACHE_BYTES = 104857600;
 const DEFAULT_LEASE_TTL_MS = 15_000;
 const POLL_MS = 20;
+/** The shape of a lease token: this module mints hex, and only a safe file-name component is trusted. */
+const LEASE_TOKEN = /^[A-Za-z0-9_-]{1,64}$/;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 class CacheStorageError extends Error {
@@ -530,6 +532,9 @@ function leasePath(ctx) {
  * waiter took over in the meantime.
  */
 function heartbeatPath(ctx, token) {
+  if (!LEASE_TOKEN.test(token)) {
+    throw new CacheStorageError('cache lease token is not a safe file name');
+  }
   return join(ctx.root, 'leases', `${ctx.entryId}.${token}.hb`);
 }
 function trustedRecord(ctx) {
@@ -804,12 +809,18 @@ function readLease(ctx) {
     ) {
       return 'stale';
     }
+    // A token names files (see heartbeatPath), so an unsafe one makes the
+    // whole record untrustworthy rather than being interpolated into a path.
+    if (
+      parsed.token !== undefined &&
+      !(typeof parsed.token === 'string' && LEASE_TOKEN.test(parsed.token))
+    ) {
+      return 'stale';
+    }
     return {
       pid: parsed.pid,
       createdAt: parsed.createdAt,
-      ...(typeof parsed.token === 'string' && parsed.token.length > 0
-        ? { token: parsed.token }
-        : {}),
+      ...(typeof parsed.token === 'string' ? { token: parsed.token } : {}),
     };
   } catch {
     return 'stale';

@@ -2343,3 +2343,42 @@ test('the default heartbeat renews at a fraction of even a short stale threshold
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
+
+test('an unsafe lease token is never turned into a path outside the leases directory', async () => {
+  const paths = tempRoot();
+  try {
+    const seeded = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { report: 'old' } }),
+      { mode: 'strict-fresh' },
+    );
+    unlinkSync(join(paths.cacheDir, 'entries', `${seeded.entryId}.json`));
+    // A file a traversing token would reach from the leases directory, just
+    // outside the cache root (which must hold nothing foreign).
+    const victim = join(paths.cacheDir, '..', 'victim.hb');
+    writeFileSync(victim, '1', { mode: 0o600 });
+    const lease = join(paths.cacheDir, 'leases', `${seeded.entryId}.json`);
+    writeFileSync(
+      lease,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: Date.now(),
+        mode: 'hint',
+        token: '/../../../victim',
+      }),
+      { mode: 0o600 },
+    );
+    let calls = 0;
+    const result = await readThroughAsync(paths, async () => {
+      calls += 1;
+      return { status: 200, body: { report: 'new' } };
+    });
+    // The record is untrustworthy, so it is stale and replaced, not honored.
+    assert.equal(calls, 1);
+    assert.equal(result.cache, 'miss');
+    assert.equal(readFileSync(victim, 'utf8'), '1');
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
