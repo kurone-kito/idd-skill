@@ -320,10 +320,16 @@ export type OperationLocalReasonCode =
   | 'new-head'
   | 'ci-completion'
   | 'ci-read'
+  | 'prior-head'
   | 'same-head-activity';
 
-/** Stored watermark boundary from an earlier, separate operation. */
+/**
+ * Stored watermark boundary from an earlier, separate operation. It bounds
+ * activity only on the HEAD that watermark was recorded for, so the HEAD is
+ * part of the boundary rather than something the caller has to remember.
+ */
 export interface OperationLocalPriorBoundary {
+  headSha: string;
   totalItemCount: number;
   maxActivityUpdatedAt: string;
 }
@@ -713,6 +719,24 @@ export function runOperationLocalSnapshotWatermark(input: {
   }
   if (
     input.priorBoundary &&
+    input.priorBoundary.headSha.toLowerCase() !== liveHeadSha.toLowerCase()
+  ) {
+    return {
+      snapshot,
+      watermarkFields,
+      warnings,
+      decision: 'refuse',
+      reasonCode: 'prior-head',
+      reason:
+        `refusing to post watermark: the stored prior boundary is for HEAD ` +
+        `${input.priorBoundary.headSha}, but PR ${input.prNumber}'s live ` +
+        `HEAD is ${liveHeadSha}. A boundary only bounds same-HEAD activity ` +
+        `on the HEAD it was recorded for; drop --prior-* when no earlier ` +
+        `watermark exists for this HEAD.`,
+    };
+  }
+  if (
+    input.priorBoundary &&
     warnings.length > 0 &&
     sameHeadActivityAdvanced(snapshot, input.priorBoundary)
   ) {
@@ -803,6 +827,7 @@ interface CliArgs {
   expectedHeadSha: string;
   /** `--operation-local`: return the capture and defer the post when CI is incomplete. */
   operationLocal: boolean;
+  priorHeadSha: string;
   priorTotalItemCount: number | null;
   priorMaxActivityAt: string;
   apply: boolean;
@@ -1233,6 +1258,7 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     fromPr: null,
     expectedHeadSha: '',
     operationLocal: false,
+    priorHeadSha: '',
     priorTotalItemCount: null,
     priorMaxActivityAt: '',
     apply: false,
@@ -1281,6 +1307,8 @@ export function parseArgs(rawArgv: string[]): CliArgs {
       args.fromPr = parsePositiveIntToken(value, 'invalid --from-pr number');
     } else if (token === '--expected-head-sha') {
       args.expectedHeadSha = value;
+    } else if (token === '--prior-head-sha') {
+      args.priorHeadSha = value;
     } else if (token === '--prior-total-item-count') {
       args.priorTotalItemCount = parseNonNegativeIntToken(
         value,
@@ -1339,13 +1367,16 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        refusal still exits 1 (HEAD or CI-completion mismatch,
                        unreadable check state, or the --prior-* guard below,
                        which is checked before the defer).
+  --prior-head-sha <sha>
   --prior-total-item-count <n>
   --prior-max-activity-at <iso|none>
-                       --operation-local only, and only together: the stored
-                       boundary of an earlier watermark. Refuses (exit 1) when
-                       the capture still holds undispositioned items and its
-                       activity has advanced past that boundary, so it routes
-                       back to triage instead of being marked handled.
+                       --operation-local only, and only together: the head-SHA,
+                       total-item-count and max-activity fields of an earlier
+                       watermark for the SAME HEAD. Refuses (exit 1) when that
+                       HEAD is not the live HEAD, or when the capture still
+                       holds undispositioned items and its activity has
+                       advanced past the boundary, so it routes back to triage
+                       instead of being marked handled.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
@@ -1990,17 +2021,21 @@ function main(): HelperCliResult {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
-  const hasPriorCount = args.priorTotalItemCount !== null;
-  const hasPriorMax = args.priorMaxActivityAt !== '';
-  if (hasPriorCount !== hasPriorMax) {
+  const priorFlagsPresent = [
+    args.priorHeadSha !== '',
+    args.priorTotalItemCount !== null,
+    args.priorMaxActivityAt !== '',
+  ];
+  const hasAnyPrior = priorFlagsPresent.some(Boolean);
+  if (hasAnyPrior && !priorFlagsPresent.every(Boolean)) {
     const message =
-      '--prior-total-item-count and --prior-max-activity-at must be passed together';
+      '--prior-head-sha, --prior-total-item-count and --prior-max-activity-at must be passed together';
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
-  if ((hasPriorCount || hasPriorMax) && !args.operationLocal) {
+  if (hasAnyPrior && !args.operationLocal) {
     const message =
-      '--prior-total-item-count is only valid with --operation-local';
+      '--prior-head-sha, --prior-total-item-count and --prior-max-activity-at are only valid with --operation-local';
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
@@ -2072,6 +2107,7 @@ function main(): HelperCliResult {
             args.priorTotalItemCount === null
               ? null
               : {
+                  headSha: args.priorHeadSha,
                   totalItemCount: args.priorTotalItemCount,
                   maxActivityUpdatedAt: args.priorMaxActivityAt,
                 },

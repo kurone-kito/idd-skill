@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -566,6 +566,7 @@ test('--help documents --operation-local and its --prior-* flags (#3592)', () =>
   );
   for (const flag of [
     '--operation-local',
+    '--prior-head-sha',
     '--prior-total-item-count',
     '--prior-max-activity-at',
   ]) {
@@ -5475,6 +5476,7 @@ test('operation-local refuses newly actionable same-HEAD activity past a stored 
   const refused = runOperationLocalSnapshotWatermark({
     prNumber: 3592,
     priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
       totalItemCount: 1,
       maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
     },
@@ -5488,6 +5490,7 @@ test('operation-local refuses newly actionable same-HEAD activity past a stored 
   const handled = runOperationLocalSnapshotWatermark({
     prNumber: 3592,
     priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
       totalItemCount: 1,
       maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
     },
@@ -5505,6 +5508,7 @@ test('operation-local orders same-HEAD activity by instant, not timestamp text (
   const laterFractional = runOperationLocalSnapshotWatermark({
     prNumber: 3592,
     priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
       totalItemCount: 2,
       maxActivityUpdatedAt: '2026-05-11T08:00:00Z',
     },
@@ -5526,6 +5530,7 @@ test('operation-local orders same-HEAD activity by instant, not timestamp text (
   const earlierWholeSecond = runOperationLocalSnapshotWatermark({
     prNumber: 3592,
     priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
       totalItemCount: 2,
       maxActivityUpdatedAt: '2026-05-11T08:00:00.900Z',
     },
@@ -5542,6 +5547,192 @@ test('operation-local orders same-HEAD activity by instant, not timestamp text (
     readRequiredCiAgreement: () => passingAgreement(),
   });
   assert.notEqual(earlierWholeSecond.reasonCode, 'same-head-activity');
+});
+
+test('operation-local refuses a prior boundary recorded for a different HEAD (#3592)', () => {
+  const otherHead = 'b'.repeat(40);
+  // This capture has neither more items nor newer activity than the boundary,
+  // which is exactly the case an untied boundary silently let through.
+  const mismatched = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: otherHead,
+      totalItemCount: 5,
+      maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+    },
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(mismatched.decision, 'refuse');
+  assert.equal(mismatched.reasonCode, 'prior-head');
+  assert.match(mismatched.reason ?? '', new RegExp(otherHead));
+
+  const sameHeadOtherCase = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA.toUpperCase(),
+      totalItemCount: 1,
+      maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    },
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(sameHeadOtherCase.decision, 'publish');
+});
+
+const POST_IDD_MARKER_CLI = join(REPO_ROOT, 'scripts/post-idd-marker.mjs');
+
+function runWatermarkCli(extra: string[]): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const result = spawnSync(
+    process.execPath,
+    [
+      POST_IDD_MARKER_CLI,
+      '--type',
+      'watermark',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+      ...extra,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+/** Make the stub `gh` append every argv it sees to `logFile`, one JSON line each. */
+function withGhArgvLog(stub: string, logFile: string): string {
+  return stub.replace(
+    'const args = process.argv.slice(2);',
+    `const args = process.argv.slice(2);\nrequire('node:fs').appendFileSync(${JSON.stringify(logFile)}, JSON.stringify(args) + '\\n');`,
+  );
+}
+
+function ghPostCalls(logFile: string): string[] {
+  return readFileSync(logFile, 'utf8')
+    .split('\n')
+    .filter((line) => line.includes('--input'));
+}
+
+test('--prior-* flags must be passed together and only with --operation-local (#3592)', () => {
+  const partial = runWatermarkCli([
+    '--operation-local',
+    '--prior-total-item-count',
+    '1',
+    '--prior-max-activity-at',
+    'none',
+  ]);
+  assert.equal(partial.status, 1);
+  assert.match(
+    partial.stderr,
+    /--prior-head-sha, --prior-total-item-count and --prior-max-activity-at must be passed together/,
+  );
+
+  const withoutOperationLocal = runWatermarkCli([
+    '--prior-head-sha',
+    SHA,
+    '--prior-total-item-count',
+    '1',
+    '--prior-max-activity-at',
+    'none',
+  ]);
+  assert.equal(withoutOperationLocal.status, 1);
+  assert.match(
+    withoutOperationLocal.stderr,
+    /are only valid with --operation-local/,
+  );
+});
+
+test('--operation-local CLI defers with the capture and never posts while required checks fail (#3592)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-defer-'));
+  const argvLog = join(tempRoot, 'gh-argv.log');
+  const restore = stubExecutable(
+    'gh',
+    withGhArgvLog(
+      watermarkFromPrGhStub(SHA, {
+        rollupNodes: [rollupCheck('lint', 'FAILURE')],
+        rulesBody: REQUIRED_LINT_RULE,
+      }),
+      argvLog,
+    ),
+  );
+  try {
+    for (const apply of [false, true]) {
+      const result = runWatermarkCli([
+        '--operation-local',
+        ...(apply ? ['--apply'] : []),
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.mode, 'dry-run');
+      assert.equal(envelope.type, 'watermark');
+      assert.equal(envelope.target, 'pr');
+      assert.equal(envelope.number, 1200);
+      assert.equal(envelope.operationLocal.decision, 'defer');
+      assert.match(
+        envelope.operationLocal.reason,
+        /required checks are not passing/,
+      );
+      assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
+      assert.equal(envelope.operationLocal.watermarkFields['head-sha'], SHA);
+    }
+    assert.ok(
+      readFileSync(argvLog, 'utf8').length > 0,
+      'the stub must have observed the capture reads',
+    );
+    assert.deepEqual(ghPostCalls(argvLog), [], 'a deferred watermark posts');
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--operation-local CLI refuses a --prior-head-sha for another HEAD with the envelope and never posts (#3592)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-prior-'));
+  const argvLog = join(tempRoot, 'gh-argv.log');
+  const otherHead = 'b'.repeat(40);
+  const restore = stubExecutable(
+    'gh',
+    withGhArgvLog(watermarkFromPrGhStub(SHA), argvLog),
+  );
+  try {
+    const result = runWatermarkCli([
+      '--operation-local',
+      '--prior-head-sha',
+      otherHead,
+      '--prior-total-item-count',
+      '5',
+      '--prior-max-activity-at',
+      '2026-06-25T10:45:00Z',
+      '--apply',
+    ]);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      new RegExp(`stored prior boundary is for HEAD ${otherHead}`),
+    );
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.operationLocal.decision, 'refuse');
+    assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
+    assert.deepEqual(ghPostCalls(argvLog), [], 'a refused watermark posts');
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('operation-local CI agreement failure keeps the capture and does not publish', () => {
