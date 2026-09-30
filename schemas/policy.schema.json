@@ -819,7 +819,7 @@
                   "type": "string",
                   "minLength": 1,
                   "pattern": "\\S",
-                  "description": "Shell command the issue-authoring caller runs against the issue draft. Required within this object; must contain a non-whitespace character. This command is trusted executable configuration and can transmit the issue-draft data it receives. It does not read or inherit `critiqueLoop.delegate`."
+                  "description": "Shell command the issue-authoring caller runs against the issue draft. The caller writes the draft to its stdin as one UTF-8 JSON object (`title`, `body`, and a bounded `packet`) described by `issue-authoring-review-input.schema.json`, then closes stdin. Required within this object; must contain a non-whitespace character. This command is trusted executable configuration and can transmit the issue-draft data it receives. It does not read or inherit `critiqueLoop.delegate`."
                 },
                 "mode": {
                   "type": "string",
