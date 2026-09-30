@@ -178,7 +178,7 @@ test('request signals stay independent and do not guess a subtype', () => {
     graphql: true,
     data: {
       errors: [{ message: 'nope' }],
-      extensions: { cost: { actualQueryCost: 4 } },
+      data: { rateLimit: { cost: 4 } },
     },
   });
   assert.equal(graphqlErrors.classification, 'graphql-errors');
@@ -189,9 +189,7 @@ test('request signals stay independent and do not guess a subtype', () => {
   const graphqlMixed = observeGhSuccess({
     data: {
       errors: [{ message: 'nope' }],
-      extensions: {
-        cost: { actualQueryCost: 1, throttleStatus: { remaining: 0 } },
-      },
+      data: { rateLimit: { cost: 1, remaining: 0 } },
     },
     graphql: true,
     httpObserved: false,
@@ -206,12 +204,7 @@ test('request signals stay independent and do not guess a subtype', () => {
   assert.equal(graphqlMixed.graphqlCost, 1);
 
   const graphqlPrimary = observeGhSuccess({
-    data: {
-      data: { ok: true },
-      extensions: {
-        cost: { actualQueryCost: 2, throttleStatus: { remaining: 0 } },
-      },
-    },
+    data: { data: { ok: true, rateLimit: { cost: 2, remaining: 0 } } },
     graphql: true,
     httpObserved: false,
   });
@@ -222,10 +215,24 @@ test('request signals stay independent and do not guess a subtype', () => {
   const fractionalCost = observeGhSuccess({
     status: 200,
     graphql: true,
-    data: { extensions: { cost: { actualQueryCost: 1.5 } } },
+    data: { data: { rateLimit: { cost: 1.5 } } },
   });
   assert.equal(fractionalCost.graphqlCost, 'unknown');
   assert.equal(fractionalCost.classification, 'ok');
+
+  // GitHub returns cost only as `data.rateLimit` when the query selects it.
+  // A query that does not, or an `extensions` cost envelope GitHub never
+  // sends, leaves cost unknown.
+  const unselectedCost = observeGhSuccess({
+    status: 200,
+    graphql: true,
+    data: {
+      data: { ok: true },
+      extensions: { cost: { actualQueryCost: 9 } },
+    },
+  });
+  assert.equal(unselectedCost.graphqlCost, 'unknown');
+  assert.equal(unselectedCost.classification, 'ok');
 
   const restPayload = observeGhSuccess({
     status: 200,
@@ -301,6 +308,80 @@ test('request signals stay independent and do not guess a subtype', () => {
   assert.equal(looseResource.classification, 'ok');
 });
 
+test('failure counts stay unknown without an observed HTTP status', () => {
+  const spawnError = observeGhFailure({
+    code: 'ENOENT',
+    message: 'spawnSync gh ENOENT',
+  });
+  assert.equal(spawnError.status, 'unknown');
+  assert.equal(spawnError.httpRequestCount, 'unknown');
+  assert.equal(spawnError.pageCount, 'unknown');
+  assert.equal(spawnError.commandInvocationCount, 1);
+
+  const noResponse = observeGhFailure({
+    stderr: 'gh: connection timed out',
+  });
+  assert.equal(noResponse.httpRequestCount, 'unknown');
+  assert.equal(noResponse.pageCount, 'unknown');
+
+  const withStatus = observeGhFailure({ stderr: 'gh: HTTP 404' });
+  assert.equal(withStatus.status, 404);
+  assert.equal(withStatus.httpRequestCount, 1);
+  assert.equal(withStatus.pageCount, 1);
+
+  const graphqlNoStatus = observeGhFailure(
+    { stderr: 'gh: could not reach the server' },
+    { graphql: true },
+  );
+  assert.equal(graphqlNoStatus.httpRequestCount, 'unknown');
+  const graphqlStatus = observeGhFailure(
+    { stderr: 'gh: Bad Gateway (HTTP 502)' },
+    { graphql: true },
+  );
+  assert.equal(graphqlStatus.httpRequestCount, 1);
+
+  const paginated = observeGhFailure(
+    { stderr: 'gh: HTTP 404' },
+    { paginated: true },
+  );
+  assert.equal(paginated.httpRequestCount, 'unknown');
+});
+
+test('failure classification reads the captured streams, not the argv', () => {
+  const argvOnly = observeGhFailure(
+    {
+      stderr: 'gh: Something went wrong',
+      message:
+        'Command failed: gh api graphql -f body=see {"status": 401} (HTTP 401)',
+    },
+    { graphql: true },
+  );
+  assert.equal(argvOnly.status, 'unknown');
+  assert.equal(argvOnly.classification, 'unknown');
+  assert.equal(argvOnly.signals.accessDenied, false);
+  assert.equal(argvOnly.httpRequestCount, 'unknown');
+
+  const messageWording = observeGhFailure({
+    message:
+      'Command failed: gh api -f body=API rate limit exceeded (HTTP 403)',
+  });
+  assert.equal(messageWording.status, 'unknown');
+  assert.equal(messageWording.signals.primaryExhaustion, false);
+});
+
+test('a GraphQL errors body on stdout survives a brace in stderr', () => {
+  const observed = observeGhFailure(
+    {
+      stderr: 'gh: Parse error on "{" at [1, 8]\n',
+      stdout: '{"errors":[{"message":"Parse error"}]}',
+    },
+    { graphql: true },
+  );
+  assert.equal(observed.signals.graphqlErrors, true);
+  assert.equal(observed.classification, 'graphql-errors');
+  assert.equal(JSON.stringify(observed).includes('Parse error'), false);
+});
+
 test('failure observations redact secrets and ignore launcher names', () => {
   const token = 'ghp_SUPERSECRETBODYTOKEN';
   const query = 'private-search-term-zz';
@@ -330,17 +411,32 @@ test('failure observations redact secrets and ignore launcher names', () => {
   assert.equal(observed.retryAfter, 30);
   assert.equal(observed.classification, 'primary-exhaustion');
 
+  // Well-known launcher and multiplexer variables are set as well, so a
+  // future read of any of them would change the record and fail here.
   const launcher = 'IDD_TEST_LAUNCHER_NAME_3585';
   const session = 'IDD_TEST_SESSION_NAME_3585';
-  const previousLauncher = process.env[launcher];
-  const previousSession = process.env[session];
+  const launcherVars = [
+    launcher,
+    session,
+    'TMUX',
+    'TERM_PROGRAM',
+    'TERM_SESSION_ID',
+    'CLAUDE_CODE_SESSION_ID',
+    'CODEX_SESSION_ID',
+  ];
+  const previous = new Map(
+    launcherVars.map((name) => [name, process.env[name]] as const),
+  );
   const failure = { stderr: 'gh: HTTP 404' };
+  const setLauncher = (launcherName: string, sessionName: string): void => {
+    for (const name of launcherVars) {
+      process.env[name] = name === session ? sessionName : launcherName;
+    }
+  };
   try {
-    process.env[launcher] = 'alpha-launcher';
-    process.env[session] = 'session-one';
+    setLauncher('alpha-launcher', 'session-one');
     const first = observeGhFailure(failure);
-    process.env[launcher] = 'beta-launcher';
-    process.env[session] = 'session-two';
+    setLauncher('beta-launcher', 'session-two');
     const second = observeGhFailure(failure);
     assert.deepEqual(first, second);
     const stable = JSON.stringify(first);
@@ -360,10 +456,10 @@ test('failure observations redact secrets and ignore launcher names', () => {
     assert.equal(telemetryPath.includes('alpha-launcher'), false);
     assert.equal(telemetryPath.includes('session-one'), false);
   } finally {
-    if (previousLauncher === undefined) delete process.env[launcher];
-    else process.env[launcher] = previousLauncher;
-    if (previousSession === undefined) delete process.env[session];
-    else process.env[session] = previousSession;
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });
 
@@ -587,29 +683,28 @@ if (mode === 'plain-ok') {
 } else if (mode === 'graphql-errors') {
   process.stdout.write(${JSON.stringify(
     JSON.stringify({
-      data: { [querySecret]: true },
+      data: { [querySecret]: true, rateLimit: { cost: 7, remaining: 4 } },
       errors: [{ message: 'secret-graphql-message-zz' }],
-      extensions: {
-        cost: { actualQueryCost: 7, throttleStatus: { remaining: 4 } },
-      },
     }),
   )});
 } else if (mode === 'graphql-mixed') {
   process.stdout.write(${JSON.stringify(
     JSON.stringify({
+      data: { rateLimit: { cost: 3, remaining: 0 } },
       errors: [{ message: 'secret-graphql-message-zz' }],
-      extensions: {
-        cost: { actualQueryCost: 3, throttleStatus: { remaining: 0 } },
-      },
     }),
   )});
 } else if (mode === 'graphql-primary') {
   process.stdout.write(${JSON.stringify(
     JSON.stringify({
+      data: { ok: true, rateLimit: { cost: 2, remaining: 0 } },
+    }),
+  )});
+} else if (mode === 'graphql-no-cost') {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
       data: { ok: true },
-      extensions: {
-        cost: { actualQueryCost: 2, throttleStatus: { remaining: 0 } },
-      },
+      extensions: { cost: { actualQueryCost: 9 } },
     }),
   )});
 } else if (mode === 'paginate') {
@@ -808,6 +903,13 @@ if (mode === 'plain-ok') {
     assert.equal(last.signals.secondaryThrottling, false);
     assert.equal(last.graphqlCost, 2);
     assert.equal(last.httpRequestCount, 'unknown');
+
+    setMode('graphql-no-cost');
+    ghGraphql(graphqlQuery, {});
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'ok');
+    assert.equal(last.graphqlCost, 'unknown');
 
     setMode('paginate');
     assert.deepEqual(ghApiJson(apiPath, { paginate: true }), [

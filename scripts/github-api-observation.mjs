@@ -25,7 +25,6 @@ import { dirname, join } from 'node:path';
 import {
   classifyInaccessibleIssueLookup,
   deriveGhHttpStatus,
-  ghErrorText,
 } from './gh-http-status.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 export const OBSERVATION_UNKNOWN = 'unknown';
@@ -107,13 +106,14 @@ function classifyFields(input) {
     input.interpretGraphql &&
     Array.isArray(root?.errors) &&
     root.errors.length > 0;
+  // Cost stays unknown unless the query selected `rateLimit { cost }`.
   const cost = input.interpretGraphql
-    ? finiteInteger(root?.extensions?.cost?.actualQueryCost)
+    ? finiteInteger(root?.data?.rateLimit?.cost)
     : null;
-  // A GraphQL throttleStatus remaining of 0 is primary quota evidence.
+  // A selected `rateLimit { remaining }` of 0 is primary quota evidence.
   // It is not a secondary-throttling subtype (issue #3585, #3560).
   const throttleRemaining = input.interpretGraphql
-    ? finiteInteger(root?.extensions?.cost?.throttleStatus?.remaining)
+    ? finiteInteger(root?.data?.rateLimit?.remaining)
     : null;
   const primaryExhaustion =
     input.remaining === 0 ||
@@ -280,28 +280,40 @@ export function summarizeInjectedExchanges(exchanges) {
 /** Observe one captured failure without retaining its raw text. */
 export function observeGhFailure(error, counts = {}) {
   const candidate = error;
-  const streamText = [candidate?.stderr, candidate?.stdout]
-    .map((value) => (value == null ? '' : String(value)))
+  const stderrText = candidate?.stderr == null ? '' : String(candidate.stderr);
+  const stdoutText = candidate?.stdout == null ? '' : String(candidate.stdout);
+  // Only the captured streams are evidence. `error.message` embeds the
+  // full argv (`-f body=...`, `-f query=...`), so request text must not
+  // drive the recorded status or classification.
+  const scanned = [stderrText, stdoutText]
     .filter((value) => value.length > 0)
     .join('\n');
-  const scanned = streamText || ghErrorText(error);
   const fields = classifyFields({
-    status: deriveGhHttpStatus(error),
+    status: deriveGhHttpStatus({ stderr: stderrText, stdout: stdoutText }),
     resourceToken: readHeaderLine(scanned, 'x-ratelimit-resource'),
     remaining: integerToken(readHeaderLine(scanned, 'x-ratelimit-remaining')),
     reset: integerToken(readHeaderLine(scanned, 'x-ratelimit-reset')),
     retryAfter: integerToken(readHeaderLine(scanned, 'retry-after')),
     bodyText: scanned,
-    graphqlBody: counts.graphql === true ? parseJsonObject(scanned) : undefined,
+    // The JSON body is on stdout; gh's own stderr text can hold a `{`.
+    graphqlBody:
+      counts.graphql === true
+        ? (parseJsonObject(stdoutText) ?? parseJsonObject(scanned))
+        : undefined,
     interpretGraphql: counts.graphql === true,
     scanWording: true,
     transportSucceeded: false,
   });
+  // A request is counted only when an HTTP status proves one happened. A
+  // spawn error, a timeout, or an auth failure before any request stays
+  // unknown, the same as a GraphQL success that saw no status.
+  const httpObserved = fields.status !== OBSERVATION_UNKNOWN;
   const paginated = counts.paginated === true;
+  const requestCount = paginated || !httpObserved ? OBSERVATION_UNKNOWN : 1;
   return {
     ...fields,
-    httpRequestCount: paginated ? OBSERVATION_UNKNOWN : 1,
-    pageCount: paginated ? OBSERVATION_UNKNOWN : 1,
+    httpRequestCount: requestCount,
+    pageCount: requestCount,
     commandInvocationCount: counts.commandInvocationCount ?? 1,
     retryAttempts: counts.retryAttempts ?? 0,
   };
