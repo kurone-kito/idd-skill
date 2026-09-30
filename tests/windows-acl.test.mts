@@ -29,8 +29,9 @@ test('windows acl parser: decodes UTF-16LE with and without a BOM, and UTF-8', (
   assert.equal(decodeIcaclsSave(bare), text);
   assert.equal(decodeIcaclsSave(withBom), text);
   assert.equal(decodeIcaclsSave(Buffer.from(text, 'utf8')), text);
-  // The real `icacls /save` output carries no BOM.
-  assert.equal(fixture('private-user-only')[0], 0x43);
+  // The real `icacls /save` output carries no BOM and starts with the
+  // directory's leaf name (`acl-fixture`).
+  assert.equal(fixture('private-user-only')[0], 0x61);
   assert.equal(fixture('private-user-only')[1], 0x00);
 });
 
@@ -455,5 +456,43 @@ test('windows acl rule: a current SID that is not a SID makes the result unreada
       currentSid: ` ${USER_SID.toLowerCase()} `,
     }),
     'private',
+  );
+});
+
+test('windows acl parser: duplicate or misplaced sections, extra lines, and bad ACE fields are unreadable', () => {
+  const unreadable = [
+    // Two D: sections: which one is the DACL is ambiguous.
+    'dir\r\nD:garbageD:PAI(A;;FA;;;SY)\r\n',
+    'dir\r\nD:PAI(A;;FA;;;SY)D:PAI(A;;FA;;;BA)\r\n',
+    // Text before the first section marker.
+    'dir\r\nxD:PAI(A;;FA;;;SY)\r\n',
+    // More than the name line and one SDDL line.
+    'dir\r\nD:PAI(A;;FA;;;SY)\r\ntrailing junk\r\n',
+    'dir\r\nD:PAI(A;;FA;;;SY)\r\nD:PAI(A;;FA;;;BA)\r\n',
+    'dir\r\n',
+    // Malformed flags, rights, or object fields around a valid principal.
+    'dir\r\nD:(A;not-flags;FA;;;SY)\r\n',
+    'dir\r\nD:(A;OI;not-rights;;;SY)\r\n',
+    'dir\r\nD:(A;;FA;bad;;SY)\r\n',
+    'dir\r\nD:(A;;FA;;bad;SY)\r\n',
+    'dir\r\nD:(A;not-flags;not-rights;bad;bad;SY)\r\n',
+    'dir\r\nD:(XA;;FA;;;SY;not-parenthesized)\r\n',
+  ];
+  for (const text of unreadable) {
+    assert.deepEqual(parseIcaclsSave(text), { kind: 'unreadable' }, text);
+  }
+  // The shapes real icacls output has still parse: hex rights, stacked flags,
+  // an object ACE with GUIDs, and owner/group sections before the DACL.
+  assert.deepEqual(
+    parseIcaclsSave(
+      'dir\r\nO:BAG:SYD:PAI(A;OICIID;0x1301bf;;;SY)(OA;OICIIOID;GA;00299570-246d-11d0-a768-00aa006e0529;bf967aba-0de6-11d0-a285-00aa003049e2;BA)\r\n',
+    ),
+    {
+      kind: 'entries',
+      entries: [
+        { sid: 'S-1-5-18', allow: true },
+        { sid: 'S-1-5-32-544', allow: true },
+      ],
+    },
   );
 });

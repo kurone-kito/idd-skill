@@ -91,6 +91,27 @@ function splitAces(dacl) {
   }
   return depth === 0 ? aces : null;
 }
+const GUID_PATTERN =
+  /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
+/**
+ * The fields around the principal must be well formed too, or a line such as
+ * `(A;not-flags;not-rights;bad;bad;SY)` would still read as a SYSTEM allow.
+ * ACE flags are two-letter tokens (`OICIID`), rights a hex or decimal mask or
+ * two-letter tokens (`0x1301bf`, `FA`, `GA`), the two object fields empty or a
+ * GUID, and a callback ACE's seventh field a parenthesized expression.
+ */
+function isWellFormedAceBody(fields) {
+  const flags = (fields[1] ?? '').trim().toUpperCase();
+  const rights = (fields[2] ?? '').trim().toUpperCase();
+  if (!/^(?:[A-Z]{2})*$/.test(flags)) return false;
+  if (!/^(?:0X[0-9A-F]+|\d+|(?:[A-Z]{2})*)$/.test(rights)) return false;
+  for (const guid of [fields[3], fields[4]]) {
+    const value = (guid ?? '').trim().toUpperCase();
+    if (value !== '' && !GUID_PATTERN.test(value)) return false;
+  }
+  if (fields.length === 7) return /^\(.*\)$/s.test((fields[6] ?? '').trim());
+  return true;
+}
 /** Split an ACE body on `;` outside any nested parentheses. */
 function splitAceFields(ace) {
   const fields = [];
@@ -109,24 +130,36 @@ function splitAceFields(ace) {
   fields.push(current);
   return fields;
 }
-/** Cut the SDDL into its `O:`/`G:`/`D:`/`S:` sections at the top level. */
+/**
+ * Cut the SDDL into its `O:`/`G:`/`D:`/`S:` sections at the top level. The
+ * text must start with a section marker, and each marker may appear once: a
+ * repeated marker (`D:junkD:...`) is ambiguous about which DACL is the real
+ * one, so it is malformed rather than resolved by picking the last.
+ */
 function sddlSections(sddl) {
   const sections = new Map();
   let depth = 0;
   let name = null;
   let begin = 0;
+  const close = (end) => {
+    if (name === null) return true;
+    if (sections.has(name)) return false;
+    sections.set(name, sddl.slice(begin, end));
+    return true;
+  };
   for (let index = 0; index < sddl.length; index += 1) {
     const char = sddl[index];
     if (char === '(') depth += 1;
     else if (char === ')') depth -= 1;
     else if (depth === 0 && 'OGDS'.includes(char) && sddl[index + 1] === ':') {
-      if (name !== null) sections.set(name, sddl.slice(begin, index));
+      if (name === null && index !== 0) return null;
+      if (!close(index)) return null;
       name = char;
       begin = index + 2;
       index += 1;
     }
   }
-  if (name !== null) sections.set(name, sddl.slice(begin));
+  if (name === null || !close(sddl.length)) return null;
   return sections;
 }
 /**
@@ -138,11 +171,15 @@ function sddlSections(sddl) {
  */
 export function parseIcaclsSave(text, extraAliases = {}) {
   // The first line names the directory and is never SDDL, however it looks
-  // (`D:\cache` starts like a DACL); the SDDL is the last line after it.
+  // (`D:\cache` starts like a DACL); the SDDL is the line after it.
   const lines = text.split(/\r?\n/).filter((line) => line.length > 0);
-  const sddl = lines.slice(1).findLast((line) => /^[OGDS]:/.test(line));
-  if (sddl === undefined) return { kind: 'unreadable' };
-  const dacl = sddlSections(sddl).get('D');
+  // Exactly the name line and one SDDL line: any further text is not
+  // something `icacls /save` writes for one directory, so it is malformed.
+  const sddl = lines.length === 2 ? lines[1] : undefined;
+  if (sddl === undefined || !/^[OGDS]:/.test(sddl)) {
+    return { kind: 'unreadable' };
+  }
+  const dacl = sddlSections(sddl)?.get('D');
   if (dacl === undefined || dacl.startsWith('NO_ACCESS_CONTROL')) {
     return { kind: 'unreadable' };
   }
@@ -160,6 +197,7 @@ export function parseIcaclsSave(text, extraAliases = {}) {
     if (!SID_PATTERN.test(principal) && !/^[A-Z]{2}$/.test(principal)) {
       return { kind: 'unreadable' };
     }
+    if (!isWellFormedAceBody(fields)) return { kind: 'unreadable' };
     if (type === 'A' || type === 'OA' || type === 'XA') {
       entries.push({ sid: expandAlias(principal, extraAliases), allow: true });
     } else if (type === 'D' || type === 'OD' || type === 'XD') {

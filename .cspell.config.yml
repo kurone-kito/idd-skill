@@ -36,6 +36,8 @@ words:
   - OGDS
   - Igarbage
   - OICI
+  - OICIID
+  - OICIIOID
   - PAIAR
   - pylint
   - pytest

@@ -305,6 +305,7 @@ test('invalidation forgets discover hints only, not other cache entries', async 
       workspaceRoot: fx.workspace,
       cwd: fx.workspace,
       now: () => fx.clock.now,
+      windowsAclReader: fx.deps.windowsAclReader,
       fetch: () => ({ status: 200, body: { n: 1 } }),
     });
     assert.equal(unrelated.cache, 'miss');
@@ -323,6 +324,7 @@ test('invalidation forgets discover hints only, not other cache entries', async 
       workspaceRoot: fx.workspace,
       cwd: fx.workspace,
       now: () => fx.clock.now,
+      windowsAclReader: fx.deps.windowsAclReader,
       fetch: () => {
         throw new Error('the unrelated entry must still be cached');
       },
