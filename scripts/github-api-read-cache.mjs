@@ -141,22 +141,41 @@ function defaultIsPidAlive(pid) {
     return errorCode(error) !== 'ESRCH';
   }
 }
-function defaultCacheDirectory(env, platform) {
-  const home = homedir();
+/**
+ * The per-user default cache directory. The home directory is looked up only
+ * on the branches that need it, and a lookup that throws or returns a
+ * non-string is a `CacheStorageError`, so a read degrades to a live fetch
+ * instead of failing.
+ */
+function defaultCacheDirectory(env, platform, homeDirectory = homedir) {
+  const home = () => {
+    let value;
+    try {
+      value = homeDirectory();
+    } catch (error) {
+      throw new CacheStorageError('cache home directory lookup failed', {
+        cause: error,
+      });
+    }
+    if (typeof value !== 'string') {
+      throw new CacheStorageError('cache home directory is not a string');
+    }
+    return value;
+  };
   if (platform === 'win32') {
-    const base = env.LOCALAPPDATA?.trim() || join(home, 'AppData', 'Local');
+    const base = env.LOCALAPPDATA?.trim() || join(home(), 'AppData', 'Local');
     return join(base, 'idd-skill', 'github-api-read-cache');
   }
   if (platform === 'darwin') {
     return join(
-      home,
+      home(),
       'Library',
       'Caches',
       'idd-skill',
       'github-api-read-cache',
     );
   }
-  const base = env.XDG_CACHE_HOME?.trim() || join(home, '.cache');
+  const base = env.XDG_CACHE_HOME?.trim() || join(home(), '.cache');
   return join(base, 'idd-skill', 'github-api-read-cache');
 }
 function comparePath(path) {
@@ -957,13 +976,15 @@ function strictFresh(ctx) {
   return fromFetch(result, 'miss', ctx.entryId);
 }
 function resolveReadDirectory(input, anchors) {
+  // Lazy, so the home lookup runs only when no earlier candidate was safe.
   const candidates = [
-    input.policy.directory?.trim() ?? '',
-    input.defaultDirectory?.trim() ?? '',
-    defaultCacheDirectory(process.env, process.platform),
+    () => input.policy.directory?.trim() ?? '',
+    () => input.defaultDirectory?.trim() ?? '',
+    () =>
+      defaultCacheDirectory(process.env, process.platform, input.homeDirectory),
   ];
   for (const candidate of candidates) {
-    const root = normalizedRoot(candidate);
+    const root = normalizedRoot(candidate());
     if (root === null) continue;
     if (!isUnsafeDirectory(root, anchors)) return root;
   }
@@ -1043,7 +1064,11 @@ function purgeTarget(input) {
   if (configured.length > 0) return configured;
   const injected = input.defaultDirectory?.trim() ?? '';
   if (injected.length > 0) return injected;
-  return defaultCacheDirectory(process.env, process.platform);
+  return defaultCacheDirectory(
+    process.env,
+    process.platform,
+    input.homeDirectory,
+  );
 }
 function anchorsFor(input) {
   const cwd = input.cwd ?? process.cwd();

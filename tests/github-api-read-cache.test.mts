@@ -1536,6 +1536,135 @@ test('the default directory follows the OS cache home', () => {
   }
 });
 
+/** A policy with no `directory`, so a read resolves the default location. */
+function policyWithoutDirectory(): ReadThroughGithubApiCacheInput['policy'] {
+  return {
+    enabled: true,
+    maxAgeMs: 300_000,
+    maxBytes: 104857600,
+    retentionMs: 86_400_000,
+  };
+}
+
+/**
+ * Run `run` with both per-platform cache-home variables unset, so the
+ * default directory has to ask for the home directory on every platform.
+ */
+function withoutCacheHomeEnv<T>(run: () => T): T {
+  const previousXdg = process.env.XDG_CACHE_HOME;
+  const previousLocal = process.env.LOCALAPPDATA;
+  delete process.env.XDG_CACHE_HOME;
+  delete process.env.LOCALAPPDATA;
+  try {
+    return run();
+  } finally {
+    if (previousXdg === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = previousXdg;
+    if (previousLocal === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocal;
+  }
+}
+
+for (const [name, lookup] of [
+  [
+    'throws',
+    () => {
+      throw new Error('no home');
+    },
+  ],
+  ['returns a non-string', () => undefined as unknown as string],
+] as const) {
+  test(`a home lookup that ${name} degrades a default-directory read to a live fetch`, () => {
+    const paths = tempRoot();
+    try {
+      const result = withoutCacheHomeEnv(() =>
+        readThrough(paths, okBody({ live: true }), {
+          policy: policyWithoutDirectory(),
+          homeDirectory: lookup,
+        }),
+      );
+      assert.equal(result.cache, 'degraded');
+      assert.equal(result.fetched, true);
+      assert.deepEqual(result.body, { live: true });
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('a configured or injected directory never asks for the home directory', () => {
+  const paths = tempRoot();
+  let lookups = 0;
+  const homeDirectory = () => {
+    lookups += 1;
+    throw new Error('the home lookup must not run');
+  };
+  try {
+    const configured = readThrough(paths, okBody({ n: 1 }), {
+      homeDirectory,
+    });
+    assert.equal(configured.cache, 'miss');
+    const injected = readThrough(paths, okBody({ n: 2 }), {
+      policy: policyWithoutDirectory(),
+      defaultDirectory: paths.cacheDir,
+      homeDirectory,
+    });
+    assert.equal(injected.cache, 'hit');
+    assert.equal(lookups, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a purge whose home lookup throws is refused', () => {
+  const paths = tempRoot();
+  try {
+    const purged = withoutCacheHomeEnv(() =>
+      readThrough(paths, okBody({ unused: true }), {
+        operation: 'purge',
+        policy: policyWithoutDirectory(),
+        homeDirectory: () => {
+          throw new Error('no home');
+        },
+      }),
+    );
+    assert.equal(purged.cache, 'refused');
+    assert.equal(purged.removed, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an injected home directory places the default cache under it', () => {
+  const paths = tempRoot();
+  const home = join(paths.root, 'home');
+  mkdirSync(home);
+  const leaf = ['idd-skill', 'github-api-read-cache'];
+  let expected: string;
+  if (process.platform === 'win32') {
+    expected = join(home, 'AppData', 'Local', ...leaf);
+  } else if (process.platform === 'darwin') {
+    expected = join(home, 'Library', 'Caches', ...leaf);
+  } else {
+    expected = join(home, '.cache', ...leaf);
+  }
+  try {
+    const result = withoutCacheHomeEnv(() =>
+      readThrough(paths, okBody({ home: true }), {
+        policy: policyWithoutDirectory(),
+        homeDirectory: () => home,
+      }),
+    );
+    assert.equal(result.cache, 'miss');
+    assert.equal(
+      existsSync(join(expected, 'entries', `${result.entryId}.json`)),
+      true,
+    );
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a dead or future lease is recovered without waiting out the ttl', async () => {
   const paths = tempRoot();
   const child = spawn(process.execPath, ['-e', 'process.exit(0)']);

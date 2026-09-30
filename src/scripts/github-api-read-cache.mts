@@ -118,6 +118,8 @@ export interface ReadThroughGithubApiCacheInput {
   fetch: (request: GithubApiCacheFetchRequest) => GithubApiCacheFetchResult;
   now?: () => number;
   sleep?: (ms: number) => void;
+  /** The home directory lookup; defaults to `os.homedir`. */
+  homeDirectory?: () => string;
   leaseTtlMs?: number;
   isPidAlive?: (pid: number) => boolean;
   pid?: number;
@@ -284,25 +286,45 @@ function defaultIsPidAlive(pid: number): boolean {
   }
 }
 
+/**
+ * The per-user default cache directory. The home directory is looked up only
+ * on the branches that need it, and a lookup that throws or returns a
+ * non-string is a `CacheStorageError`, so a read degrades to a live fetch
+ * instead of failing.
+ */
 function defaultCacheDirectory(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
+  homeDirectory: () => string = homedir,
 ): string {
-  const home = homedir();
+  const home = (): string => {
+    let value: unknown;
+    try {
+      value = homeDirectory();
+    } catch (error) {
+      throw new CacheStorageError('cache home directory lookup failed', {
+        cause: error,
+      });
+    }
+    if (typeof value !== 'string') {
+      throw new CacheStorageError('cache home directory is not a string');
+    }
+    return value;
+  };
   if (platform === 'win32') {
-    const base = env.LOCALAPPDATA?.trim() || join(home, 'AppData', 'Local');
+    const base = env.LOCALAPPDATA?.trim() || join(home(), 'AppData', 'Local');
     return join(base, 'idd-skill', 'github-api-read-cache');
   }
   if (platform === 'darwin') {
     return join(
-      home,
+      home(),
       'Library',
       'Caches',
       'idd-skill',
       'github-api-read-cache',
     );
   }
-  const base = env.XDG_CACHE_HOME?.trim() || join(home, '.cache');
+  const base = env.XDG_CACHE_HOME?.trim() || join(home(), '.cache');
   return join(base, 'idd-skill', 'github-api-read-cache');
 }
 
@@ -1237,13 +1259,15 @@ function resolveReadDirectory(
   input: ReadThroughGithubApiCacheInput,
   anchors: readonly string[],
 ): string {
-  const candidates = [
-    input.policy.directory?.trim() ?? '',
-    input.defaultDirectory?.trim() ?? '',
-    defaultCacheDirectory(process.env, process.platform),
+  // Lazy, so the home lookup runs only when no earlier candidate was safe.
+  const candidates: Array<() => string> = [
+    () => input.policy.directory?.trim() ?? '',
+    () => input.defaultDirectory?.trim() ?? '',
+    () =>
+      defaultCacheDirectory(process.env, process.platform, input.homeDirectory),
   ];
   for (const candidate of candidates) {
-    const root = normalizedRoot(candidate);
+    const root = normalizedRoot(candidate());
     if (root === null) continue;
     if (!isUnsafeDirectory(root, anchors)) return root;
   }
@@ -1330,7 +1354,11 @@ function purgeTarget(input: ReadThroughGithubApiCacheInput): string {
   if (configured.length > 0) return configured;
   const injected = input.defaultDirectory?.trim() ?? '';
   if (injected.length > 0) return injected;
-  return defaultCacheDirectory(process.env, process.platform);
+  return defaultCacheDirectory(
+    process.env,
+    process.platform,
+    input.homeDirectory,
+  );
 }
 
 function anchorsFor(input: ReadThroughGithubApiCacheInput): string[] {
