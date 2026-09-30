@@ -357,10 +357,30 @@ function ensurePrivateDir(ctx, path) {
   ctx.storage.chmod(path, DIR_MODE);
   assertPrivate(ctx.storage, path, 'dir');
 }
+/**
+ * Refuse to adopt a directory this cache did not create: chmod and the
+ * entries/leases layout would otherwise change a foreign directory. An
+ * empty directory, or one holding only this cache's own layout or marker,
+ * is adoptable, which also covers a concurrent cold start.
+ */
+function assertAdoptableRoot(ctx) {
+  const stat = tryLstat(ctx.storage, ctx.root);
+  if (!stat) return;
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new CacheStorageError('cache root is not a real directory');
+  }
+  const ours = new Set([MARKER_NAME, 'entries', 'leases']);
+  for (const name of ctx.storage.readdir(ctx.root)) {
+    if (!ours.has(name)) {
+      throw new CacheStorageError('refusing to adopt a foreign directory');
+    }
+  }
+}
 function prepareRoot(ctx) {
   if (isUnsafeDirectory(ctx.root, ctx.anchors)) {
     throw new CacheStorageError('unsafe cache directory');
   }
+  assertAdoptableRoot(ctx);
   ensurePrivateDir(ctx, ctx.root);
   ensurePrivateDir(ctx, join(ctx.root, 'entries'));
   ensurePrivateDir(ctx, join(ctx.root, 'leases'));

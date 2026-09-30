@@ -745,6 +745,38 @@ test('a dot-dot after a symlink is judged where the OS resolves it', {
   }
 });
 
+test('a non-empty foreign directory is not adopted or chmod-ed', {
+  skip: process.platform === 'win32',
+}, () => {
+  const paths = tempRoot();
+  const foreign = join(paths.root, 'foreign');
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, 'user-file.txt'), 'keep');
+  chmodSync(foreign, 0o755);
+  let fetches = 0;
+  try {
+    const result = readThrough(
+      paths,
+      () => {
+        fetches += 1;
+        return { status: 200, body: { ok: true } };
+      },
+      { policy: policy(foreign) },
+    );
+    assert.equal(result.cache, 'degraded');
+    assert.equal(fetches, 1);
+    assert.equal(statSync(foreign).mode & 0o777, 0o755);
+    assert.deepEqual(readdirSync(foreign), ['user-file.txt']);
+    // An empty directory and this cache's own layout stay adoptable.
+    const first = readThrough(paths, okBody({ ok: 1 }));
+    assert.equal(first.cache, 'miss');
+    const again = readThrough(paths, okBody({ ok: 2 }));
+    assert.equal(again.cache, 'hit');
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a cache path under a dangling symlink is unsafe, not followed', {
   skip: process.platform === 'win32',
 }, () => {
