@@ -726,7 +726,10 @@ instructions.
   credential, or subjective approval
 - dependency edges are true blockers, and independent siblings stay in
   the roadmap task list
-- the draft stays inside the specificity target range documented above
+- the draft stays inside the specificity target range: no hidden
+  assumption that only a top-tier model could infer, and no
+  step-by-step runbook, so a middle-tier cloud model can implement it
+  without drifting
 - candidate files, when present, are cues rather than an edit script
 
 #### Resolver
