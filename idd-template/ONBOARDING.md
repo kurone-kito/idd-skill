@@ -946,10 +946,10 @@ do-not-duplicate-native-roots rule.
 ### Optional companion boundary
 
 The issue-authoring companion drafts or refines IDD-ready issues,
-roadmaps, and sub-issues before execution starts. It does not authorize
-publishing issues, editing GitHub issues, or starting the Discover →
-Claim → Work loop unless the operator explicitly asks for that next
-step.
+roadmaps, and sub-issues before execution starts. It publishes checked
+drafts under the authoring hold unless a preview is requested. Only
+releasing the hold needs an explicit request; Discover skips held
+issues, so no loop starts.
 
 Keep the companion separate from the execution instructions and distinguish
 its source from its installed destination:

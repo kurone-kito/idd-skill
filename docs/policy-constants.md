@@ -470,7 +470,8 @@ below, which names an unrelated CI/Actions-service outage-relief policy.
 ## GitHub API Read Cache Defaults
 
 `githubApi.readCache` stays off unless `enabled` is the literal `true`.
-Turning it on does not connect Discover. The contract is described in
+Turning it on lets Discover serve a short-lived hint of its helper
+output. The contract is described in
 [`docs/idd-helper-scripts.md`](idd-helper-scripts.md).
 
 | Policy default                               | Distributed value | Owning surface                                        | Onboarding expectation                                                                                                                                |

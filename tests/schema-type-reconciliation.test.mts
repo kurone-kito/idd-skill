@@ -116,6 +116,28 @@ interface PhaseGraphDocument {
   nodes: readonly { id: string; next: readonly string[] }[];
 }
 
+/**
+ * Issue-authoring draft-review input shape
+ * (schemas/issue-authoring-review-input.schema.json).
+ *
+ * The payload the issue-authoring caller writes to the configured
+ * `issueAuthoring.adversarialReview.delegate.command`'s stdin. No helper
+ * builds it (the caller composes it and the resolver never invokes the
+ * command), so no runtime module owns a type and it is defined here from
+ * the schema.
+ */
+interface IssueAuthoringReviewInput {
+  title: string;
+  body: string;
+  packet: {
+    goal: string;
+    constraints: readonly string[];
+    evidence: readonly string[];
+    relationships: readonly string[];
+    checklist: readonly string[];
+  };
+}
+
 type ApprovalActorPolicy =
   | 'owners-and-maintainers-only'
   | 'all-write-permission-actors';
@@ -430,6 +452,7 @@ export const discoverRoadmapUnionKeys = [
   'leaves',
   'diagnostics',
   'summary',
+  'cache',
 ] as const satisfies readonly (keyof RoadmapGraphUnionReport)[];
 
 export const iddMergeExecuteKeys = [
@@ -490,6 +513,12 @@ export const phaseGraphKeys = [
   'version',
   'nodes',
 ] as const satisfies readonly (keyof PhaseGraphDocument)[];
+
+export const issueAuthoringReviewInputKeys = [
+  'title',
+  'body',
+  'packet',
+] as const satisfies readonly (keyof IssueAuthoringReviewInput)[];
 
 export const onboardingHearingCatalogKeys = [
   'version',
@@ -720,6 +749,10 @@ const exhaustivenessWitnesses: {
     PhaseGraphDocument,
     (typeof phaseGraphKeys)[number]
   >;
+  issueAuthoringReviewInput: CoversAllKeysOf<
+    IssueAuthoringReviewInput,
+    (typeof issueAuthoringReviewInputKeys)[number]
+  >;
   onboardingHearingCatalog: CoversAllKeysOf<
     OnboardingHearingCatalog,
     (typeof onboardingHearingCatalogKeys)[number]
@@ -759,6 +792,7 @@ const exhaustivenessWitnesses: {
   iddRoadmapAuditExecute: true,
   liveStatusDigest: true,
   phaseGraph: true,
+  issueAuthoringReviewInput: true,
   onboardingHearingCatalog: true,
   onboardingHearingTranscript: true,
   policyConfig: true,
@@ -1043,6 +1077,15 @@ const discoverRoadmapUnionFixture = {
     inaccessibleReferenceCount: 0,
     unresolvedReferenceCount: 0,
   },
+  cache: {
+    mode: 'hint',
+    source: 'hint',
+    ageMs: 60000,
+    maxAgeMs: 300000,
+    complete: true,
+    enumerations: 0,
+    exhaustionRefresh: false,
+  },
 } satisfies RoadmapGraphUnionReport;
 
 const forcedHandoffMarkerFixture = {
@@ -1117,6 +1160,19 @@ const phaseGraphFixture = {
     { id: 'B1', next: [] },
   ],
 } satisfies PhaseGraphDocument;
+
+const issueAuthoringReviewInputFixture = {
+  title:
+    'docs(idd-workflow): document the user-global issue-authoring delegate',
+  body: '## Background\n\nThe guide is inaccurate.\n\n## Acceptance criteria\n\n- The guide names the fragment.',
+  packet: {
+    goal: 'Keep the guide accurate about the user-global file.',
+    constraints: ['Change no source file.'],
+    evidence: ['src/scripts/idd-config.mts'],
+    relationships: [],
+    checklist: ['a concrete surface and an objective verification are named'],
+  },
+} satisfies IssueAuthoringReviewInput;
 
 const onboardingHearingCatalogFixture = {
   version: '1.0.0',
@@ -1793,6 +1849,14 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
       'schemas/phase-graph.json via src/scripts/validate-schemas.mts',
     keys: phaseGraphKeys,
     fixture: phaseGraphFixture,
+  },
+  {
+    schemaFile: 'issue-authoring-review-input.schema.json',
+    exportedType: 'IssueAuthoringReviewInput (test-local; no runtime type)',
+    owningModule:
+      'docs/issue-authoring-skill.md (caller-composed stdin payload)',
+    keys: issueAuthoringReviewInputKeys,
+    fixture: issueAuthoringReviewInputFixture,
   },
   {
     schemaFile: 'onboarding-hearing-catalog.schema.json',

@@ -1012,7 +1012,7 @@ export function resolveGhApiHostname(env = process.env) {
  * to keep the emitted argv unchanged, this names every host so a caller
  * that needs the host itself (the read cache) can use it.
  */
-function serverUrlHost(env) {
+export function serverUrlHost(env) {
   const serverUrl = env.GITHUB_SERVER_URL?.trim();
   if (!serverUrl) return undefined;
   const host = serverUrl
@@ -2053,7 +2053,7 @@ function usesGithubToken(host) {
     host.endsWith('.ghe.com')
   );
 }
-function defaultCredentialMaterial(host) {
+export function defaultCredentialMaterial(host) {
   const token = usesGithubToken(host)
     ? process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim()
     : process.env.GH_ENTERPRISE_TOKEN?.trim() ||
@@ -2083,7 +2083,7 @@ function readCacheLeaseTtlMs(options, request) {
   // The leader may also wait for load-control admission before it spawns.
   return bounded + 30_000 + loadControlWaitBoundMs();
 }
-function loadReadCachePolicy(injected) {
+export function loadReadCachePolicy(injected) {
   if (injected) {
     return {
       enabled: injected.enabled === true,

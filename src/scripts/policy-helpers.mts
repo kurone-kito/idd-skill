@@ -68,7 +68,7 @@ interface ProviderHealthPolicy {
 /**
  * Opt-in host-local GitHub REST read cache (#3587). `directory` is omitted
  * until configured, matching `providerOutage.declarationTarget`. Enabling
- * the cache does not wire Discover.
+ * the cache also lets the Discover helpers serve a short-lived hint (#3588).
  */
 interface GithubApiReadCachePolicy {
   enabled: boolean;

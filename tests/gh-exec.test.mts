@@ -2918,28 +2918,37 @@ test('ghApiJson readCache without an injected policy stays uncached (#3587)', ()
     ),
   );
   try {
-    withGhHostEnv({}, () => {
-      const options = {
-        readCache: {
-          classification: 'read' as const,
-          workspaceRoot: paths.workspace,
-          repository: 'o/r',
-          credentialMaterial: 'credential-sentinel',
-          defaultDirectory: paths.cacheDir,
-        },
-      };
-      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
-      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
-      const recorded = recordedArgs(paths.argsFile);
-      assert.equal(recorded.length, 2);
-      for (const args of recorded) {
-        assert.equal(args.includes('--include'), false);
-      }
-      assert.equal(
-        existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
-        false,
-      );
-    });
+    // The runtime policy comes from the working directory's config; run in
+    // the fixture workspace so this test does not depend on whether the
+    // source repository's own config enables the cache.
+    const originalCwd = process.cwd();
+    process.chdir(paths.workspace);
+    try {
+      withGhHostEnv({}, () => {
+        const options = {
+          readCache: {
+            classification: 'read' as const,
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            credentialMaterial: 'credential-sentinel',
+            defaultDirectory: paths.cacheDir,
+          },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        const recorded = recordedArgs(paths.argsFile);
+        assert.equal(recorded.length, 2);
+        for (const args of recorded) {
+          assert.equal(args.includes('--include'), false);
+        }
+        assert.equal(
+          existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+          false,
+        );
+      });
+    } finally {
+      process.chdir(originalCwd);
+    }
   } finally {
     restore();
     rmSync(paths.root, { recursive: true, force: true });

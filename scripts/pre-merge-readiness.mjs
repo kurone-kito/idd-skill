@@ -1493,19 +1493,23 @@ function escapeForRegex(value) {
  * `<owner>/<repo>#N` for this repository, or a full issue URL for it (#3624).
  * Code regions are deliberately not masked: this repository writes issue
  * references in code spans, and this only proves the PR names the follow-up.
- * A bare `#N` must not be preceded by a word character, `/`, `.` or `-` and
- * must not be followed by a digit, so `#36150` and `other/repo#3615` never
- * match `#3615`. The host is not pinned (the adapter is GHES-aware); a
+ * A bare `#N` must not be preceded by a word character, `/`, `.` or `-`, nor
+ * by `&` or an HTML entity such as `&amp;` (the lookalike `&#3615;` is a
+ * character reference, not an issue reference), and every form must not be
+ * followed by a word character, so `#36150`, `#3615abc` and `other/repo#3615`
+ * never match `#3615`. The host is not pinned (the adapter is GHES-aware); a
  * trailing `#issuecomment-...` is tolerated because nothing follows the digits
- * except a non-digit.
+ * except a non-word character (#3633).
  */
 export function mentionsIssue(text, issueNumber, owner, repo) {
   const slug = `${escapeForRegex(owner)}/${escapeForRegex(repo)}`;
   const patterns = [
-    new RegExp(String.raw`(?<![\w/.-])#${issueNumber}(?!\d)`),
-    new RegExp(String.raw`(?<![\w/.-])${slug}#${issueNumber}(?!\d)`, 'i'),
     new RegExp(
-      String.raw`https?://[^\s/]+/${slug}/issues/${issueNumber}(?!\d)`,
+      String.raw`(?<![\w/.-])(?<!&)(?<!&[A-Za-z][A-Za-z0-9]*;)#${issueNumber}(?!\w)`,
+    ),
+    new RegExp(String.raw`(?<![\w/.-])${slug}#${issueNumber}(?!\w)`, 'i'),
+    new RegExp(
+      String.raw`https?://[^\s/]+/${slug}/issues/${issueNumber}(?!\w)`,
       'i',
     ),
   ];
