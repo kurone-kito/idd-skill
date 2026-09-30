@@ -1355,6 +1355,6 @@ export async function withBoundedRetry(task, options = {}) {
     }
   }
 }
-if (!isMainThread) {
+if (!isMainThread && readPaginatedCaptureWorkerData(workerData)) {
   runPaginatedCaptureWorker();
 }
