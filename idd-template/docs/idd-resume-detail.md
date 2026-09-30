@@ -163,10 +163,14 @@ applies), through the profile-selected claim-lock command:
    primary lets the takeover succeed while routing still returns
    `owner_evidence_required` (preventive; no observed incident yet).
 2. Post the nonce, wait, and confirm the winner, then run the routing call.
-3. `--check --worktree W` again, then `--acquire --takeover --worktree W
-   --agent-id <new_agent_id> --claim-id <new_claim_id>`; confirm the output's
-   `holder.claimId` equals `old_claim_id`. A displaced predecessor that is
-   somehow still running is displaced by definition.
+3. `--check --worktree W` again and branch on the result. A holder equal
+   to `old_claim_id`: `--acquire --takeover --worktree W --agent-id
+   <new_agent_id> --claim-id <new_claim_id>`, then confirm the output's
+   `holder.claimId` equals `old_claim_id`. This session's own claim-id and
+   agent-id: skip the takeover. No lock (`present` is false): the normal
+   `--acquire` with the same flags, no `--takeover`. Any other holder:
+   stop. A displaced predecessor that is somehow still running is
+   displaced by definition.
 4. Re-run the routing call and expect `already_owned`.
 
 The trust basis is the human-gated forced-handoff marker, the nonce winner,
