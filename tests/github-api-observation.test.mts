@@ -9,6 +9,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -646,6 +647,45 @@ test('a path holding foreign content is left untouched', () => {
       JSON.parse(readFileSync(empty, 'utf8').trim()),
       observation,
     );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('a held lock is never taken over, even when it looks old', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-lock-'));
+  const target = join(tempRoot, 'telemetry.jsonl');
+  const lock = `${target}.lock`;
+  const observation = observeGhSuccess({ status: 200, data: { ok: true } });
+  try {
+    appendRequestObservation(observation, { path: target, maxRecords: 5 });
+    const before = readFileSync(target, 'utf8');
+
+    // A lock an hour old may still belong to a paused writer that will
+    // rename its older snapshot, so no other writer removes it.
+    writeFileSync(lock, '4242\n');
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(lock, anHourAgo, anHourAgo);
+    assert.throws(
+      () =>
+        appendRequestObservation(observation, {
+          path: target,
+          maxRecords: 5,
+          lockWaitMs: 60,
+        }),
+      /lock is held/,
+    );
+    assert.equal(readFileSync(lock, 'utf8'), '4242\n');
+    assert.equal(readFileSync(target, 'utf8'), before);
+
+    // Removing the lock by hand restores recording.
+    rmSync(lock);
+    appendRequestObservation(observation, { path: target, maxRecords: 5 });
+    const lines = readFileSync(target, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0);
+    assert.equal(lines.length, 2);
+    assert.equal(existsSync(lock), false);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

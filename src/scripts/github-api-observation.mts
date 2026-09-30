@@ -18,7 +18,6 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -606,7 +605,6 @@ export function allowlistObservation(
 }
 
 const TELEMETRY_LOCK_WAIT_MS = 2000;
-const TELEMETRY_LOCK_STALE_MS = 10_000;
 const CLASSIFICATIONS = new Set<RequestClassification>([
   'ok',
   'graphql-errors',
@@ -706,12 +704,21 @@ function sleepMs(milliseconds: number): void {
 }
 
 /**
- * Exclusive create of a sibling lock file. A crash leaves the lock;
- * a stale file is removed and the create is retried. Callers swallow
- * a timeout so a contended write cannot change the gh result.
+ * Exclusive create of a sibling lock file, held only for the read, temp
+ * write, and rename of one record. No writer ever removes another's lock:
+ * a lock that looks old may belong to a paused writer that would still
+ * rename its older snapshot over a newer file, so taking it over could drop
+ * records. A crash can therefore leave the lock behind, and recording then
+ * stays off until it is deleted by hand (the docs say so). A held lock
+ * times out; callers swallow that so a contended write cannot change the
+ * gh result.
  */
-function withTelemetryFileLock(lockPath: string, body: () => void): void {
-  const deadline = Date.now() + TELEMETRY_LOCK_WAIT_MS;
+function withTelemetryFileLock(
+  lockPath: string,
+  waitMs: number,
+  body: () => void,
+): void {
+  const deadline = Date.now() + waitMs;
   let fd: number | undefined;
   while (fd === undefined) {
     try {
@@ -719,32 +726,20 @@ function withTelemetryFileLock(lockPath: string, body: () => void): void {
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
       if (code !== 'EEXIST') throw error;
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs > TELEMETRY_LOCK_STALE_MS) {
-          unlinkSync(lockPath);
-          continue;
-        }
-      } catch (statError) {
-        if ((statError as { code?: unknown } | null)?.code === 'ENOENT') {
-          continue;
-        }
-        throw statError;
-      }
       if (Date.now() >= deadline) {
-        throw new Error('github api telemetry lock timed out');
+        throw new Error('github api telemetry lock is held');
       }
       sleepMs(20);
     }
   }
   try {
-    chmodSync(lockPath, 0o600);
     body();
   } finally {
     closeSync(fd);
     try {
       unlinkSync(lockPath);
     } catch {
-      // The next writer removes a stale lock after TELEMETRY_LOCK_STALE_MS.
+      // Only this writer holds the lock, so a missing file needs no action.
     }
   }
 }
@@ -780,7 +775,7 @@ function readRetainedLines(path: string): string[] {
 
 export function appendRequestObservation(
   observation: RequestObservation,
-  options: { path: string; maxRecords: number },
+  options: { path: string; maxRecords: number; lockWaitMs?: number },
 ): void {
   const maxRecords =
     Number.isInteger(options.maxRecords) && options.maxRecords >= 1
@@ -790,35 +785,39 @@ export function appendRequestObservation(
   // it; the read is repeated under the lock below.
   readRetainedLines(options.path);
   mkdirSync(dirname(options.path), { recursive: true });
-  withTelemetryFileLock(`${options.path}.lock`, () => {
-    const lines = readRetainedLines(options.path);
-    lines.push(JSON.stringify(allowlistObservation(observation)));
-    const kept = lines.slice(-maxRecords);
-    // An unpredictable name created exclusively (`wx`) and written through
-    // the opened descriptor: a pre-created file or symlink at a guessable
-    // name would otherwise be followed and overwritten.
-    const temporary = join(
-      dirname(options.path),
-      `.${basename(options.path)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
-    );
-    try {
-      const fd = openSync(temporary, 'wx', 0o600);
+  withTelemetryFileLock(
+    `${options.path}.lock`,
+    options.lockWaitMs ?? TELEMETRY_LOCK_WAIT_MS,
+    () => {
+      const lines = readRetainedLines(options.path);
+      lines.push(JSON.stringify(allowlistObservation(observation)));
+      const kept = lines.slice(-maxRecords);
+      // An unpredictable name created exclusively (`wx`) and written through
+      // the opened descriptor: a pre-created file or symlink at a guessable
+      // name would otherwise be followed and overwritten.
+      const temporary = join(
+        dirname(options.path),
+        `.${basename(options.path)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+      );
       try {
-        writeSync(fd, `${kept.join('\n')}\n`);
-      } finally {
-        closeSync(fd);
+        const fd = openSync(temporary, 'wx', 0o600);
+        try {
+          writeSync(fd, `${kept.join('\n')}\n`);
+        } finally {
+          closeSync(fd);
+        }
+        renameSync(temporary, options.path);
+      } catch (error) {
+        try {
+          unlinkSync(temporary);
+        } catch {
+          // The original file is unchanged when the replace fails.
+        }
+        throw error;
       }
-      renameSync(temporary, options.path);
-    } catch (error) {
-      try {
-        unlinkSync(temporary);
-      } catch {
-        // The original file is unchanged when the replace fails.
-      }
-      throw error;
-    }
-    chmodSync(options.path, 0o600);
-  });
+      chmodSync(options.path, 0o600);
+    },
+  );
 }
 
 let policyOverride: GithubApiTelemetryPolicy | null = null;
