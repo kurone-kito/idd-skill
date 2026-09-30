@@ -85,7 +85,8 @@ unchanged.
 `githubApi` are now valid top-level policy objects in
 `.github/idd/config.json`.
 
-`githubApi.telemetry` is optional and defaults off (issue `#3585`).
+`githubApi.telemetry` is optional and defaults off (issue
+`kurone-kito/idd-skill#3585`).
 See [Customizing IDD](customization.md#policy-constants).
 
 ## Ownership Defaults

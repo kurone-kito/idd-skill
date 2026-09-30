@@ -355,9 +355,11 @@ for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
 keeps distributed behavior.
 
 `githubApi.telemetry` records local request-lifecycle observations for
-the shared GitHub transport wrappers (issue `#3585`). The default is
-off. While off, command arguments, parsed results, thrown errors, and
-the process exit stay unchanged. While on, each record keeps HTTP
+the `ghApiJson`, `ghApiJsonWithHeaders`, and `ghGraphql` wrappers (issue
+`kurone-kito/idd-skill#3585`). Requests that helpers make through the
+generic `gh` text runners are not observed. The default is off. While
+off, command arguments, parsed results, thrown errors, and the process
+exit stay unchanged. While on, each record keeps HTTP
 status, the rate-limit header fields, GraphQL query cost when the query
 selects `rateLimit` with `cost`, and separate command, retry, and
 injected page counts. It omits credentials, query text, issue and

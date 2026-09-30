@@ -455,13 +455,16 @@ nothing about masking.
 this finding. See the function's own JSDoc for the same note attached
 directly to its contract.
 
-## GitHub API request observations (idd-skill#3585)
+## GitHub API request observations (kurone-kito/idd-skill#3585)
 
-`githubApi.telemetry.enabled` defaults to false. The shared `gh api`
-and `gh api graphql` wrappers then keep their current arguments,
-parsed return values, thrown errors, and process exit. Setting
-`enabled` to true appends allowlisted observations to a local JSON
-Lines file. The default file name is `github-api-telemetry.jsonl`:
+`githubApi.telemetry.enabled` defaults to false. The `ghApiJson`,
+`ghApiJsonWithHeaders`, and `ghGraphql` wrappers then keep their current
+arguments, parsed return values, thrown errors, and process exit. Only
+those three wrappers record observations: requests made through the
+generic `ghText` and `ghTextUnbounded` runners, including `gh api` calls
+a helper makes that way, are not observed. Setting `enabled` to true
+appends allowlisted observations to a local JSON Lines file. The default
+file name is `github-api-telemetry.jsonl`:
 
 ```text
 ~/.local/state/idd-skill/github-api-telemetry.jsonl
