@@ -808,11 +808,12 @@ transmit the supplied draft and evidence packet.
 Record an explicit author disposition for every finding before
 publication. When a disposition changes the title or body, run
 `audit-authored-issue` on the revised text. When that revision changes
-acceptance criteria, candidate files, dependency edges, or roadmap
-task-list or relationship wiring, run this review once more on the
-revised draft before the linter. Wording-only edits do not start
-another review. The body that enters the linter is the reviewed body
-plus those wording-only edits.
+more than wording, run this review once more on the revised draft
+before the linter. That includes a change to acceptance criteria,
+candidate files, dependency edges, roadmap task-list or relationship
+wiring, scope or the proposed change, or the readiness bucket.
+Wording-only edits do not start another review. The body that enters
+the linter is the reviewed body plus those wording-only edits.
 
 ### Mechanical pre-publish gate
 

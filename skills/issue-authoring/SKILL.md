@@ -93,9 +93,10 @@ needs-decision, blocked-by-human, and out-of-scope.
    `issueAuthoring.adversarialReview.waitCeiling`
    (default `PT20M`) using the caller's own wait and cleanup, and do
    not wrap the command in a timeout utility. Dispose of every finding.
-   Review the revised draft again before the linter only when that
-   revision changes acceptance criteria, candidate files, dependency
-   edges, or roadmap task-list or relationship wiring
+   Review the revised draft again before the linter whenever that
+   revision changes more than wording, including acceptance criteria,
+   candidate files, dependency edges, roadmap task-list or relationship
+   wiring, scope or the proposed change, or the readiness bucket
    ([Disposition](references/contract.md#disposition)). Wording-only
    edits do not start another review. Audit every revised body before
    publication. A roadmap shell may be reviewed
