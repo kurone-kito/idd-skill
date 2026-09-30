@@ -547,6 +547,7 @@ export function runOperationLocalSnapshotWatermark(input) {
       reason:
         `refusing to post watermark: could not read required-check state ` +
         `for PR ${input.prNumber}: ${error.message}`,
+      cause: error,
     };
   }
   const expected = input.expectedHeadSha ?? '';
@@ -1918,7 +1919,13 @@ function main() {
             };
             process.stdout.write(`${JSON.stringify(refused, null, 2)}\n`);
           }
-          return { exitCode: 1, kind: 'gate', message };
+          // A `ci-read` refusal wraps a failed required-check read: classify
+          // the original error as before instead of collapsing it to `gate`.
+          const classified =
+            local.cause === undefined
+              ? { kind: 'gate' }
+              : classifyHelperError(local.cause);
+          return { exitCode: 1, ...classified, message };
         }
         Object.assign(args.fields, local.watermarkFields);
         warnings = local.warnings;

@@ -5795,6 +5795,61 @@ test('--operation-local CLI refuses a --prior-head-sha for another HEAD with the
   }
 });
 
+test('--operation-local keeps a required-CI read failure classified in the error envelope (#3592)', () => {
+  // Before the operation-local refactor a failed required-check read reached
+  // classifyHelperError; folding it into a `ci-read` refusal must not turn a
+  // tagged 503 into a generic gate exit under IDD_HELPER_ERROR_ENVELOPE=1.
+  const failingRollup = watermarkFromPrGhStub(SHA).replace(
+    'const args = process.argv.slice(2);',
+    `const args = process.argv.slice(2);\nif (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statusCheckRollup')) { process.stderr.write('gh: Service Unavailable (HTTP 503)'); process.exit(1); }`,
+  );
+  const restore = stubExecutable('gh', failingRollup);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        POST_IDD_MARKER_CLI,
+        '--type',
+        'watermark',
+        '--from-pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'claude-02f8159e',
+        '--claim-id',
+        'claim-1134-02f8159e',
+        '--operation-local',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, IDD_HELPER_ERROR_ENVELOPE: '1' },
+      },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    // The capture is still returned on stdout as a refusal ...
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.operationLocal.decision, 'refuse');
+    assert.match(
+      envelope.operationLocal.reason,
+      /could not read required-check state/,
+    );
+    // ... while the stderr error envelope keeps the underlying classification.
+    const line = result.stderr
+      .split('\n')
+      .find((candidate) => candidate.includes('iddHelperError'));
+    assert.ok(line, `no error envelope on stderr: ${result.stderr}`);
+    const error = JSON.parse(line).iddHelperError;
+    assert.equal(error.kind, 'transport');
+    assert.equal(error.httpStatus, 503);
+  } finally {
+    restore();
+  }
+});
+
 test('operation-local CI agreement failure keeps the capture and does not publish', () => {
   const result = runOperationLocalSnapshotWatermark({
     prNumber: 3592,
