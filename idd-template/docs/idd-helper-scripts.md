@@ -1669,15 +1669,21 @@ one's are never seen), or another tool using the same account, and it
 claims no global rate-limit guarantee. The effective concurrency across
 repositories is the largest `maxConcurrent` any of them configures.
 
-State is scoped by a hash of the API host and the credential the request
-would use, so separate hosts and separate credentials never share
-admission or cooldown, and no raw credential is written. The credential is
-the same one the read cache resolves, looked up once per process and host
-with `gh auth token` (never `gh auth status`, so resolving it makes no API
-request; an async caller's first lookup does not block the event loop). A
-request whose host or credential cannot be verified runs
-uncoordinated instead of borrowing another scope, and so does a state
-directory that cannot be used. Nothing is refused for a coordination
+State is scoped by a hash of the API host and the credential the request would
+use, so separate hosts and separate credentials never share admission or
+cooldown, and no raw credential is written. The host is the one the request
+names (`--hostname`, the `HOST` of a `HOST/OWNER/REPO` repo flag, `GH_HOST`,
+or an Actions `GITHUB_SERVER_URL`), else `gh`'s own default: the single host
+in its configuration, or github.com when none is configured. With several
+configured hosts, `gh api` falls to github.com as `gh` does, but a
+higher-level subcommand takes its host from the git remote, which is not
+visible here, so it runs uncoordinated. The credential is the same one the
+read cache resolves, looked up once per process and host with `gh auth token`
+(never `gh auth status`, so resolving it makes no API request; an async
+caller's first lookup does not block the event loop, and a burst of first
+calls shares one lookup). A request whose host or credential cannot be
+verified runs uncoordinated instead of borrowing another scope, and so does a
+state directory that cannot be used. Nothing is refused for a coordination
 fault, only for evidence.
 
 ### Which requests are admitted

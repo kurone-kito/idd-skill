@@ -19,7 +19,10 @@ export interface GhRequestDescription {
   classification: GhRequestClassification;
   /** Absent for a `gh` subcommand: its underlying endpoint is not visible. */
   resource?: GhRequestResource;
-  /** The `--hostname` the argv names, lower-cased, when present. */
+  /**
+   * The host the argv names, lower-cased, when present: `--hostname` for
+   * `gh api`, the `HOST` of a `HOST/OWNER/REPO` `-R` or `--repo` otherwise.
+   */
   host?: string;
 }
 
@@ -207,6 +210,26 @@ function apiDescription(args: readonly string[]): GhRequestDescription {
   return { classification: 'write', resource, ...base };
 }
 
+/**
+ * The host a `HOST/OWNER/REPO` value of `-R` or `--repo` names, lower-cased.
+ * A bare `OWNER/REPO` names no host: it resolves against the default one.
+ */
+function repoFlagHost(args: readonly string[]): string | undefined {
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    let value: string | undefined;
+    if (arg === '-R' || arg === '--repo') value = args[index + 1];
+    else if (arg.startsWith('--repo=')) value = arg.slice('--repo='.length);
+    else if (arg.startsWith('-R') && arg.length > 2) {
+      value = arg.startsWith('-R=') ? arg.slice(3) : arg.slice(2);
+    }
+    if (value === undefined) continue;
+    const segments = value.split('/');
+    if (segments.length >= 3 && segments[0]) return segments[0].toLowerCase();
+  }
+  return undefined;
+}
+
 /** Describe one `gh` argument vector. Never throws. */
 export function describeGhRequest(
   args: readonly string[],
@@ -214,12 +237,14 @@ export function describeGhRequest(
   const group = args[0];
   if (group === 'api') return apiDescription(args);
   const verb = args[1];
+  const host = repoFlagHost(args);
+  const base = host ? { host } : {};
   if (
     group !== undefined &&
     verb !== undefined &&
     READ_ONLY_SUBCOMMANDS[group]?.has(verb)
   ) {
-    return { classification: 'read' };
+    return { classification: 'read', ...base };
   }
-  return { classification: 'unclassified' };
+  return { classification: 'unclassified', ...base };
 }

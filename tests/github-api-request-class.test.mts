@@ -215,3 +215,28 @@ test('describeGhRequest never throws on a hostile or truncated argv', () => {
     'unclassified',
   );
 });
+
+test('describeGhRequest reads the host of a HOST/OWNER/REPO repo flag, never a bare OWNER/REPO', () => {
+  for (const args of [
+    ['issue', 'list', '-R', 'GHE.example.com/o/r'],
+    ['issue', 'list', '--repo', 'ghe.example.com/o/r'],
+    ['issue', 'list', '--repo=ghe.example.com/o/r'],
+    ['pr', 'view', '1', '-R=ghe.example.com/o/r'],
+  ]) {
+    assert.deepEqual(
+      describeGhRequest(args),
+      { classification: 'read', host: 'ghe.example.com' },
+      args.join(' '),
+    );
+  }
+  assert.deepEqual(describeGhRequest(['issue', 'list', '-R', 'o/r']), {
+    classification: 'read',
+  });
+  assert.deepEqual(
+    describeGhRequest(['pr', 'merge', '1', '-R', 'h.example.com/o/r']),
+    {
+      classification: 'unclassified',
+      host: 'h.example.com',
+    },
+  );
+});

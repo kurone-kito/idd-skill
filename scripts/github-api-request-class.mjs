@@ -172,17 +172,38 @@ function apiDescription(args) {
   }
   return { classification: 'write', resource, ...base };
 }
+/**
+ * The host a `HOST/OWNER/REPO` value of `-R` or `--repo` names, lower-cased.
+ * A bare `OWNER/REPO` names no host: it resolves against the default one.
+ */
+function repoFlagHost(args) {
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    let value;
+    if (arg === '-R' || arg === '--repo') value = args[index + 1];
+    else if (arg.startsWith('--repo=')) value = arg.slice('--repo='.length);
+    else if (arg.startsWith('-R') && arg.length > 2) {
+      value = arg.startsWith('-R=') ? arg.slice(3) : arg.slice(2);
+    }
+    if (value === undefined) continue;
+    const segments = value.split('/');
+    if (segments.length >= 3 && segments[0]) return segments[0].toLowerCase();
+  }
+  return undefined;
+}
 /** Describe one `gh` argument vector. Never throws. */
 export function describeGhRequest(args) {
   const group = args[0];
   if (group === 'api') return apiDescription(args);
   const verb = args[1];
+  const host = repoFlagHost(args);
+  const base = host ? { host } : {};
   if (
     group !== undefined &&
     verb !== undefined &&
     READ_ONLY_SUBCOMMANDS[group]?.has(verb)
   ) {
-    return { classification: 'read' };
+    return { classification: 'read', ...base };
   }
-  return { classification: 'unclassified' };
+  return { classification: 'unclassified', ...base };
 }

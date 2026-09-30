@@ -29,7 +29,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -238,6 +238,7 @@ let loadControlPolicyCache: {
   policy: GithubApiLoadControlRuntimePolicy;
 } | null = null;
 const loadControlIdentityMemo = new Map<string, LoadControlIdentity | null>();
+const ghConfiguredHostsMemo = new Map<string, string[] | null>();
 /** First lookups still running, so a burst of async callers shares one spawn. */
 const loadControlIdentityInflight = new Map<
   string,
@@ -253,6 +254,7 @@ export function setGithubApiLoadControlForTests(
   loadControlPolicyCache = null;
   loadControlIdentityMemo.clear();
   loadControlIdentityInflight.clear();
+  ghConfiguredHostsMemo.clear();
 }
 
 /**
@@ -297,16 +299,70 @@ function loadLoadControlPolicy(): GithubApiLoadControlRuntimePolicy {
  * never `gh auth status`, so resolving an identity makes no API request.
  * `null` means unverified: the request runs uncoordinated.
  */
-function loadControlIdentityInputs(hostHint: string | undefined): {
+/**
+ * The hosts the local `gh` configuration lists (`hosts.yml` in `gh`'s config
+ * directory), lower-cased. No file means none. Read once per path; `null`
+ * for a file that exists but cannot be read.
+ */
+function configuredGhHosts(env: NodeJS.ProcessEnv): string[] | null {
+  const directory =
+    env.GH_CONFIG_DIR?.trim() ||
+    (process.platform === 'win32'
+      ? join(
+          env.APPDATA?.trim() || join(homedir(), 'AppData', 'Roaming'),
+          'GitHub CLI',
+        )
+      : join(env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config'), 'gh'));
+  const path = join(directory, 'hosts.yml');
+  if (ghConfiguredHostsMemo.has(path)) {
+    return ghConfiguredHostsMemo.get(path) ?? null;
+  }
+  let hosts: string[] | null;
+  try {
+    hosts = [
+      ...readFileSync(path, 'utf8').matchAll(/^([A-Za-z0-9][\w.-]*):/gm),
+    ].map((match) => match[1].toLowerCase());
+  } catch (error) {
+    hosts = (error as { code?: unknown } | null)?.code === 'ENOENT' ? [] : null;
+  }
+  ghConfiguredHostsMemo.set(path, hosts);
+  return hosts;
+}
+
+/**
+ * The host a request will reach, or null when it cannot be told without
+ * guessing. An explicit host (`--hostname`, a `HOST/OWNER/REPO` `-R`,
+ * `GH_HOST`, or an Actions `GITHUB_SERVER_URL`) always wins. Otherwise `gh
+ * api` uses its own default: the one host in `gh`'s configuration, else
+ * github.com. A higher-level subcommand takes its host from the repository's
+ * git remote, which is not visible here, so with several configured hosts
+ * it stays unresolved instead of borrowing github.com's scope.
+ */
+function resolveLoadControlHost(
+  hostHint: string | undefined,
+  apiCall: boolean,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  const explicit =
+    hostHint || env.GH_HOST?.trim().toLowerCase() || serverUrlHost(env);
+  if (explicit) return explicit;
+  const hosts = configuredGhHosts(env);
+  if (hosts === null) return null;
+  if (hosts.length === 0) return 'github.com';
+  if (hosts.length === 1) return hosts[0];
+  return apiCall ? 'github.com' : null;
+}
+
+function loadControlIdentityInputs(
+  hostHint: string | undefined,
+  apiCall: boolean,
+): {
   host: string;
   key: string;
-} {
+} | null {
   const env = process.env;
-  const host =
-    hostHint ||
-    env.GH_HOST?.trim().toLowerCase() ||
-    serverUrlHost(env) ||
-    'github.com';
+  const host = resolveLoadControlHost(hostHint, apiCall, env);
+  if (host === null) return null;
   const key = createHash('sha256')
     .update(
       [
@@ -334,11 +390,14 @@ function verifiedIdentity(
 
 function loadControlIdentity(
   hostHint: string | undefined,
+  apiCall: boolean,
 ): LoadControlIdentity | null {
   if (loadControlOverride && 'identity' in loadControlOverride) {
     return loadControlOverride.identity ?? null;
   }
-  const { host, key } = loadControlIdentityInputs(hostHint);
+  const inputs = loadControlIdentityInputs(hostHint, apiCall);
+  if (inputs === null) return null;
+  const { host, key } = inputs;
   if (loadControlIdentityMemo.has(key)) {
     return loadControlIdentityMemo.get(key) ?? null;
   }
@@ -355,11 +414,14 @@ function loadControlIdentity(
  */
 async function loadControlIdentityAsync(
   hostHint: string | undefined,
+  apiCall: boolean,
 ): Promise<LoadControlIdentity | null> {
   if (loadControlOverride && 'identity' in loadControlOverride) {
     return loadControlOverride.identity ?? null;
   }
-  const { host, key } = loadControlIdentityInputs(hostHint);
+  const inputs = loadControlIdentityInputs(hostHint, apiCall);
+  if (inputs === null) return null;
+  const { host, key } = inputs;
   if (loadControlIdentityMemo.has(key)) {
     return loadControlIdentityMemo.get(key) ?? null;
   }
@@ -410,7 +472,7 @@ function loadControlCall(
   try {
     return completeLoadControlCall(
       begun,
-      loadControlIdentity(begun.description.host),
+      loadControlIdentity(begun.description.host, begun.apiCall),
       options,
       paginated,
     );
@@ -430,7 +492,7 @@ async function loadControlCallAsync(
   try {
     return completeLoadControlCall(
       begun,
-      await loadControlIdentityAsync(begun.description.host),
+      await loadControlIdentityAsync(begun.description.host, begun.apiCall),
       options,
       paginated,
     );
@@ -443,11 +505,16 @@ async function loadControlCallAsync(
 function beginLoadControlCall(args: readonly string[]): {
   policy: GithubApiLoadControlRuntimePolicy;
   description: ReturnType<typeof describeGhRequest>;
+  apiCall: boolean;
 } | null {
   const policy = loadLoadControlPolicy();
   if (!policy.enabled) return null;
   try {
-    return { policy, description: describeGhRequest(args) };
+    return {
+      policy,
+      description: describeGhRequest(args),
+      apiCall: args[0] === 'api',
+    };
   } catch {
     return null;
   }
@@ -554,7 +621,7 @@ function execGhSync(
 ): string | Buffer {
   const gate = openLoadControlGateSync(call);
   try {
-    return execFileSync(
+    const output = execFileSync(
       'gh',
       args,
       gate === null
@@ -568,6 +635,7 @@ function execGhSync(
             ),
           },
     );
+    return output;
   } catch (error) {
     gate?.recordFailure(
       failureEvidence(error, call.prepared?.request.paginated === true),

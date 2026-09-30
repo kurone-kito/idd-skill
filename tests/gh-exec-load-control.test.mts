@@ -140,10 +140,13 @@ function fixture(): Fixture {
     IDD_STUB_LOG: process.env.IDD_STUB_LOG,
     IDD_STUB_MODE: process.env.IDD_STUB_MODE,
     IDD_STUB_FAIL_AUTH: process.env.IDD_STUB_FAIL_AUTH,
+    GH_CONFIG_DIR: process.env.GH_CONFIG_DIR,
   };
   process.env.IDD_STUB_LOG = log;
   process.env.IDD_STUB_MODE = modeFile;
   delete process.env.IDD_STUB_FAIL_AUTH;
+  // Hermetic: never read the developer's own gh configuration.
+  process.env.GH_CONFIG_DIR = join(root, 'gh-config');
   const clock = { wall: T0, mono: 0 };
   const self: Fixture = {
     root,
@@ -705,6 +708,103 @@ test('identity comes from the environment token, or one memoized gh auth token l
       else process.env[key] = value;
     }
   }
+});
+
+function withCleanHostEnv(run: () => void): void {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+    'GH_HOST',
+    'GITHUB_SERVER_URL',
+  ]) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+  try {
+    run();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+test('the host comes from the one configured gh host, and an ambiguous one stays uncoordinated', () => {
+  const f = fixture();
+  withCleanHostEnv(() => {
+    const config = process.env.GH_CONFIG_DIR as string;
+    mkdirSync(config, { recursive: true });
+    // Exactly one configured host: gh itself would use it.
+    writeFileSync(
+      join(config, 'hosts.yml'),
+      'ghe.example.com:\n    user: octocat\n    git_protocol: https\n',
+    );
+    f.enableResolving();
+    assert.equal(ghText(['api', 'user']), '{"ok":true}');
+    assert.equal(ghText(['issue', 'list', '--repo', 'o/r']), '{"ok":true}');
+    assert.deepEqual(
+      f.calls().filter((call) => call[0] === 'auth'),
+      [['auth', 'token', '--hostname', 'ghe.example.com']],
+    );
+    assert.deepEqual(readdirSync(f.state), [
+      loadControlScopeName({
+        host: 'ghe.example.com',
+        credentialMaterial: 'token-for-ghe.example.com',
+      }),
+    ]);
+
+    // Several configured hosts and no GH_HOST: `gh api` falls to github.com,
+    // but a higher-level command takes its host from the git remote, which is
+    // not visible here, so it must not borrow github.com's scope.
+    setGithubApiLoadControlForTests(null);
+    rmSync(f.state, { recursive: true, force: true });
+    writeFileSync(
+      join(config, 'hosts.yml'),
+      'github.com:\n    user: a\nghe.example.com:\n    user: b\n',
+    );
+    f.enableResolving();
+    assert.equal(ghText(['issue', 'list', '--repo', 'o/r']), '{"ok":true}');
+    assert.equal(
+      existsSync(f.state),
+      false,
+      'the ambiguous command ran uncoordinated',
+    );
+    assert.equal(ghText(['api', 'user']), '{"ok":true}');
+    assert.deepEqual(readdirSync(f.state), [
+      loadControlScopeName({
+        host: 'github.com',
+        credentialMaterial: 'token-for-github.com',
+      }),
+    ]);
+    // An explicit host in the repo flag is honored even then.
+    ghText(['issue', 'list', '-R', 'ghe.example.com/o/r']);
+    assert.ok(
+      readdirSync(f.state).includes(
+        loadControlScopeName({
+          host: 'ghe.example.com',
+          credentialMaterial: 'token-for-ghe.example.com',
+        }),
+      ),
+    );
+  });
+});
+
+test('no gh configuration at all means github.com', () => {
+  const f = fixture();
+  withCleanHostEnv(() => {
+    f.enableResolving();
+    assert.equal(ghText(['issue', 'list', '--repo', 'o/r']), '{"ok":true}');
+    assert.deepEqual(readdirSync(f.state), [
+      loadControlScopeName({
+        host: 'github.com',
+        credentialMaterial: 'token-for-github.com',
+      }),
+    ]);
+  });
 });
 
 test('a failed identity lookup runs uncoordinated and is not retried on every call', () => {
