@@ -175,11 +175,11 @@ shaped-parse-error handling does not intercept and replace outright,
 so this is the one path where the added frame would otherwise be
 directly visible. Discarding `main`'s return value entirely instead of
 calling `applyHelperCliOutcomeWhenDisabled` would be a different
-regression: none of the six first-batch helpers currently returns
-non-zero (each only ever `return`s `0` or throws), but the
-`HelperCliResult` contract itself anticipates one that does, and a
-future helper relying on that would silently exit `0` on its own
-`gate` verdict otherwise.
+regression: five of the six first-batch helpers only ever `return` `0`
+or throw (`resume-claim-routing.mjs` returns a non-zero `gate` outcome
+under `--assert`), and the `HelperCliResult` contract itself
+anticipates one that does, so a helper relying on that would silently
+exit `0` on its own `gate` verdict otherwise.
 
 **Known residual limitation (async helpers whose CLI body was inline
 top-level await).** `discover-readiness-check.mjs`,
@@ -295,17 +295,18 @@ batches (see the per-batch sections that follow); none remain on the
 old raw, unshaped crash-on-failure behavior. For the six first-batch
 helpers, `exitCode` is `0` on success (including `--help`, which
 exits `0` before `runHelperCli` ever sees an outcome) and `1` on any
-failure; none of the six currently returns a non-zero exit code as
-its own verdict, so none of them produces `kind: "gate"` today.
+failure; five of the six never return a non-zero exit code as their own
+verdict, so they produce no `kind: "gate"`. `resume-claim-routing.mjs`
+does under `--assert` (see its `gate` cell).
 
-| Helper                           | `usage`                                                              | `not-found` / `transport`                                                                                                                | `internal`              |
-| -------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | an unexpected exception |
-| `resume-claim-routing.mjs`       | missing/invalid `--issue`, or an unknown flag                        | a `gh` failure resolving claim state                                                                                                     | an unexpected exception |
-| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                        | a `gh` failure resolving comment/marker history                                                                                          | an unexpected exception |
-| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                     | a `gh` failure resolving issue state                                                                                                     | an unexpected exception |
-| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                     | a `gh` failure resolving issue state                                                                                                     | an unexpected exception |
-| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                           | a `gh` failure resolving CI state                                                                                                        | an unexpected exception |
+| Helper                           | `usage`                                                                                                              | `not-found` / `transport`                                                                                                                | `gate`                                                      | `internal`              |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
+| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                 | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                           | an unexpected exception |
+| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, or `--assert` with `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep` | an unexpected exception |
+| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                        | a `gh` failure resolving comment/marker history                                                                                          | —                                                           | an unexpected exception |
+| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                     | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
+| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                     | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
+| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                           | a `gh` failure resolving CI state                                                                                                        | —                                                           | an unexpected exception |
 
 ### Migrated helpers (review and merge batch)
 
@@ -4579,7 +4580,8 @@ still fails closed:
   helper adds `evidence.local_worktree` with `{status, paths, reason}`.
   `occupied` and `unreadable` are fail-closed stop states; an owner resume or
   authorized forced handoff must be verified before reusing the worktree
-  (#3141).
+  (#3141). An `owner_evidence_required` verdict carries the same field: the
+  probe that blocked the owner (kurone-kito/idd-skill#3667).
 - `owner_evidence_required` (kurone-kito/idd-skill#3272): when `--claim-id`
   matches the active claim but a local worktree probe for the claimed branch
   did not come back `absent` and no independent owner evidence proves this
@@ -4589,6 +4591,39 @@ still fails closed:
   distinct from `non_inheritable`: it means "the claim-id matches, but
   ownership is unproven", not "a live competitor holds this claim" — a
   genuine later competing claim still routes to `disputed` unchanged.
+- `evidence.owner_evidence` (kurone-kito/idd-skill#3667): one field per owner
+  proof, in evaluation order: `worktree_identity`, `claim_lock_matches`,
+  `generated_tokens_match`, `agent_and_branch_match` (booleans),
+  `occupancy_probe` (`absent`, `occupied` or `unreadable`) and
+  `occupancy_paths_match` (boolean). It is emitted whenever `--claim-id`
+  matches the active claim and the occupancy probe is not `absent`,
+  including a `disputed` nonce route. The four booleans short-circuit: the
+  first `false` makes every later boolean `null` (not evaluated).
+  `occupancy_probe` is always the observed status, never `null`, and
+  `occupancy_paths_match` is `null` unless all four booleans are `true` and
+  the probe is `occupied`. On an `owner_evidence_required` verdict the helper
+  also pushes one `warnings[]` line, `owner evidence required: first failed
+  proof is <field>` (with the probe status appended for `occupancy_probe`).
+- Optional `--assert` (kurone-kito/idd-skill#3667): turn the verdict into an
+  exit status for a script that gates a mutation on it. The stdout JSON is
+  identical with and without the flag. The exit status is `0` only when
+  `state` is `already_owned` and `action` is `keep`; any other verdict exits
+  `1` (classified `kind: "gate"` under `IDD_HELPER_ERROR_ENVELOPE=1`) and
+  writes one stderr line naming `state`, `action`, `reason` and, on an
+  `owner_evidence_required` verdict, `first_failed_proof`. When no local
+  worktree occupies the claimed branch (the probe is `absent`) the owner
+  proofs are skipped, so `already_owned` rests on the claim-id alone, plus
+  the activation nonce when `--nonce` is passed and a winner marker
+  exists. It requires `--claim-id` and is rejected together with
+  `--fresh-claim-gate`, both as usage errors raised before any `gh` call.
+  It only reads: it never acquires
+  or touches `claim-lock`. Without `--assert` the helper exits `0` on `stop`,
+  so a caller must read `action`. Observed 2026-09-30 in `kurone-kito/dotfiles`
+  (issue `dotfiles#523`, PR `dotfiles#531`): three sessions wrote their own
+  gate, one piped it through `tail -1` and hid its failing status, and one
+  shell without `set -e` went on into worktree removal after a failed check.
+  Keep the command's own exit status, for example
+  `... --assert >/dev/null || return 2`, and never pipe it.
 - Optional `--worktree <path>` (kurone-kito/idd-skill#3272): when
   `--claim-id` matches the active claim, read the independent owner-evidence
   proof (the claim lock, the generated-tokens record, and the current
