@@ -5273,9 +5273,10 @@ function assertEvidenceKept(error: unknown, expectedCode: string | null) {
     assert.equal(carried.code, expectedCode);
     assert.equal(carried.killed, true);
   }
-  // Non-enumerable: an uncaught error still prints exactly as before.
-  assert.equal(Object.keys(error as object).includes('code'), false);
-  assert.equal(Object.keys(error as object).includes('killed'), false);
+  // Non-enumerable: an uncaught error never prints the captured streams.
+  for (const key of ['code', 'killed', 'stderr', 'stdout']) {
+    assert.equal(Object.keys(error as object).includes(key), false, key);
+  }
   assert.equal((error as { cause?: unknown }).cause, undefined);
 }
 

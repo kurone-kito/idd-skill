@@ -1937,8 +1937,21 @@ function wrapTraversalGhFailure(error, args) {
     ghErrorText(error).trim() ||
     `gh ${args.join(' ')} failed with no diagnostic output`;
   const wrapped = new Error(summary);
-  wrapped.stderr = stderr;
-  wrapped.stdout = stdout;
+  // Kept verbatim and separate from the message for the classifier, but
+  // hidden like every other rebuilt error (#3598): an uncaught error no
+  // longer prints the captured streams a second time, and the message
+  // already carries the stderr text.
+  for (const [key, value] of [
+    ['stderr', stderr],
+    ['stdout', stdout],
+  ]) {
+    Object.defineProperty(wrapped, key, {
+      value,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
   throw preserveTransportEvidence(wrapped, error);
 }
 // #1449: explicit above the promisified execFile's 1 MiB default, applied

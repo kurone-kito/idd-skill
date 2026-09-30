@@ -2378,12 +2378,22 @@ function wrapTraversalGhFailure(error: unknown, args: string[]): string {
   const summary =
     ghErrorText(error).trim() ||
     `gh ${args.join(' ')} failed with no diagnostic output`;
-  const wrapped = new Error(summary) as Error & {
-    stderr?: string;
-    stdout?: string;
-  };
-  wrapped.stderr = stderr;
-  wrapped.stdout = stdout;
+  const wrapped = new Error(summary);
+  // Kept verbatim and separate from the message for the classifier, but
+  // hidden like every other rebuilt error (#3598): an uncaught error no
+  // longer prints the captured streams a second time, and the message
+  // already carries the stderr text.
+  for (const [key, value] of [
+    ['stderr', stderr],
+    ['stdout', stdout],
+  ] as const) {
+    Object.defineProperty(wrapped, key, {
+      value,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
   throw preserveTransportEvidence(wrapped, error);
 }
 
