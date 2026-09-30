@@ -881,13 +881,14 @@ function releaseLease(ctx) {
  * Whether a waiter may reclaim `lease`. An `'unparseable'` lease is only
  * reclaimable once the waiter has seen it that way for the settle window
  * (`since` is when it first did). The window is capped at half the lease
- * ttl so a short ttl still reclaims a leftover empty file before its wait
- * ends.
+ * ttl so a short ttl still reclaims a leftover empty file by the end of its
+ * wait. The cap stays fractional: a ttl of 1 ms still needs a positive
+ * window, so the first sight of an empty lease is never reclaimed.
  */
 function isReclaimable(ctx, lease, since) {
   if (lease === 'stale') return true;
   if (lease === 'unparseable') {
-    const settle = Math.min(LEASE_SETTLE_MS, Math.floor(ctx.leaseTtlMs / 2));
+    const settle = Math.min(LEASE_SETTLE_MS, ctx.leaseTtlMs / 2);
     return since !== null && ctx.now() - since >= settle;
   }
   return leaseIsStale(ctx, lease);

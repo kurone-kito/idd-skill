@@ -1849,6 +1849,29 @@ test('a leftover empty lease is reclaimed under a ttl shorter than the settle wi
   }
 });
 
+test('an empty lease is not reclaimed on first sight even under a 1 ms ttl', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    writeFileSync(lease, '');
+    const clock = steppedClock(1);
+    const present: boolean[] = [];
+    const result = readThrough(paths, okBody({ n: 7 }), {
+      now: clock.now,
+      sleep: (ms) => {
+        present.push(existsSync(lease));
+        clock.sleep(ms);
+      },
+      leaseTtlMs: 1,
+    });
+    assert.deepEqual(present, [true]);
+    assert.equal(result.cache, 'miss');
+    assert.equal(result.fetched, true);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 for (const [name, content] of [
   ['a record with a non-numeric pid', '{"pid":"x","createdAt":1}'],
   ['a JSON null', 'null'],
