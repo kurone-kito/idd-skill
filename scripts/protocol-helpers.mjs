@@ -8652,6 +8652,26 @@ function isPreMergeReviewSatisfied(reviewerStates) {
   return String(selfApproval.status ?? '') === 'clear';
 }
 /**
+ * True when a deferred-follow-up evidence item carries the four fields the
+ * schema requires (#3633): a positive integer `number` and `origin`, and
+ * boolean `heldByAuthoringLabel` and `reconciled`. `Number.isInteger` does not
+ * coerce, so a string `12` fails.
+ */
+function isWellFormedDeferFollowUpItem(entry) {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    return false;
+  }
+  const item = entry;
+  return (
+    Number.isInteger(item.number) &&
+    item.number > 0 &&
+    Number.isInteger(item.origin) &&
+    item.origin > 0 &&
+    typeof item.heldByAuthoringLabel === 'boolean' &&
+    typeof item.reconciled === 'boolean'
+  );
+}
+/**
  * Roll up the F2/F3 merge gates from a pre-merge-readiness report into the
  * ordered blocker list. This is the single source of the merge-gate AND:
  * `buildPreMergeReadinessSummary` embeds `{ ready, blockers }` computed from it,
@@ -9266,25 +9286,34 @@ export function computePreMergeReadinessBlockers(report) {
   // filing an issue) that this pull request never names. Tested with
   // `!== undefined`, like `closingSet` above, so only a genuinely absent key
   // (an unmigrated caller or unit fixture) skips the gate; a present `null`, a
-  // non-boolean `checked`, a non-array `items`, or a verified section that
-  // does not carry `unverifiedReason: null` (the schema's invariant) is
-  // malformed evidence and fails closed to the unverified gate rather than
-  // reading as zero follow-ups.
+  // non-boolean `checked`, a non-array `items`, a verified section that does
+  // not carry `unverifiedReason: null` (the schema's invariant), or any item
+  // missing a required field (#3633) is malformed evidence and fails closed to
+  // the unverified gate rather than reading as zero follow-ups.
   if (report.deferFollowUps !== undefined) {
     const deferFollowUps = preMergeAsRecord(report.deferFollowUps);
     const items = Array.isArray(deferFollowUps.items)
       ? deferFollowUps.items
       : null;
+    const malformedItemIndex =
+      items === null
+        ? -1
+        : items.findIndex((entry) => !isWellFormedDeferFollowUpItem(entry));
     if (
       deferFollowUps.checked !== true ||
       deferFollowUps.unverifiedReason !== null ||
-      items === null
+      items === null ||
+      malformedItemIndex >= 0
     ) {
       const reason =
         typeof deferFollowUps.unverifiedReason === 'string' &&
         deferFollowUps.unverifiedReason
           ? deferFollowUps.unverifiedReason
-          : 'the deferred follow-up evidence is missing or malformed';
+          : malformedItemIndex >= 0 &&
+              deferFollowUps.checked === true &&
+              deferFollowUps.unverifiedReason === null
+            ? `evidence items[${malformedItemIndex}] is malformed: it needs a positive integer number and origin and boolean heldByAuthoringLabel and reconciled`
+            : 'the deferred follow-up evidence is missing or malformed';
       blockers.push({
         gate: 'deferred-followup-unverified',
         detail: `deferred follow-up evidence is unverified (${reason}); this fails closed and never reads as zero follow-ups. A transient failure such as a rate limit usually clears on the next invocation; a persistent one needs its cause fixed`,
