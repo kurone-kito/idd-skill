@@ -1611,8 +1611,9 @@ stored entry for the same context; 401, 403, 429, and 5xx leave it.
 The directory is per-user and OS-local: `XDG_CACHE_HOME` or `~/.cache`
 on Linux, `~/Library/Caches` on macOS, and `LOCALAPPDATA` on Windows.
 `directory` may override it. Files stay private to the user. An
-unwritable directory or a loose permission mode degrades to a live read
-and does not return the stored body. Purge deletes only regular entry
+unwritable directory, a loose permission mode, or a home directory that
+cannot be resolved degrades to a live read and does not return the stored
+body. Purge deletes only regular entry
 files, and orphaned temp files whose writer has exited, under that
 cache; without `directory` it targets the default location. The cache
 refuses a filesystem root, the workspace, an ancestor of the workspace,
@@ -1635,7 +1636,10 @@ the cache. Raw tokens are
 neither stored nor logged. Nothing promises that the cache is shared across
 computers. Local policy and permission decisions are not cached. The
 single-flight lease outlives that call's `gh` timeout, and a process
-removes only the lease it acquired.
+removes only the lease it acquired. A conditional read that runs its own
+fetch still sends one request, even when GitHub answers 304. A lease
+waiter polls local files for up to the lease TTL (the `gh` timeout plus
+30 seconds) before it falls back to a live read.
 
 ## Helper Runtime Profiles
 
