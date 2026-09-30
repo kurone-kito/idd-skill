@@ -270,11 +270,12 @@ loop instead of returning to this D1 rebase path.
    - An extra entry usually means an unrelated `#M` sits next to a
      keyword elsewhere in the body — separate them.
    - A missing entry whose keyword matches step 3's regex for that
-     number is GitHub's async registration (`kurone-kito/idd-skill#3632`):
-     do not edit the body, toggle draft, or close and reopen; go on to D4
-     and poll `gh pr view {pr-number} --json closingIssuesReferences`. If
-     the keyword is absent, or the entry is still missing 4 hours after
-     the PR's `createdAt`, apply step 4's path.
+     number, on a PR under 4 hours old (`createdAt`), is GitHub's async
+     registration (`kurone-kito/idd-skill#3632`): do not edit the body,
+     toggle draft, or close and reopen; go on to D4 and poll `gh pr view
+     {pr-number} --json closingIssuesReferences`. Otherwise (keyword
+     absent, or still missing at 4 hours) apply step 4's path,
+     re-placing the keyword line.
    - Repeat once after any edit. If it still fails (pending registration
      excepted), stop and post a hold note citing the PR URL.
 6. A commit message closing keyword counts too: never place one next
@@ -299,9 +300,8 @@ its handoff point with no one left to act on the result.
 `headRefOid` against that recorded value. If it differs, someone pushed
 to this branch while waiting — stop per the condition above rather than
 proceeding to E1 on results for a HEAD this session never validated. Do
-not resume this wait on its own initiative: a fresh D4 entry over the
-new HEAD is a decision for whoever resolves the stop, not an automatic
-continuation.
+not resume this wait on its own: a fresh D4 entry over the new HEAD is
+for whoever resolves the stop.
 
 **Duplicate check instances**: the state helper's `checks[]` array can
 hold more than one entry for the same `checkName` — a rerun leaves the
