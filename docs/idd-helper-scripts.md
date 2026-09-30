@@ -486,7 +486,9 @@ observed; a spawn error, a timeout, a failure before any response, and a
 GraphQL success leave both counts unknown. Each write replaces the
 retention file through a temporary file, and a `path` whose existing file
 holds anything other than these records is not modified and nothing is
-recorded.
+recorded. A configured `path` must be absolute or start with `~/`, which
+is the home directory; any other value keeps telemetry off, so a relative
+path cannot put the file into the working tree.
 More than one of GraphQL errors, primary exhaustion, secondary
 throttling, and access denial stays `unknown` rather than guessing a
 subtype. A read or write failure in this retention path does not change

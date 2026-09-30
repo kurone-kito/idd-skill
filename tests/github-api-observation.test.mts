@@ -26,7 +26,9 @@ import {
   observeGhSuccess,
   type RequestObservation,
   readGithubApiTelemetryPolicy,
+  recordRequestObservation,
   resetGithubApiTelemetryPolicyCacheForTests,
+  resolveGithubApiTelemetryPath,
   setGithubApiTelemetryPolicyForTests,
   summarizeInjectedExchanges,
 } from '../src/scripts/github-api-observation.mts';
@@ -678,6 +680,64 @@ test('githubApi telemetry defaults off and trims an enabled path', () => {
   assert.equal(ignored.githubApi.telemetry.enabled, false);
   assert.equal(ignored.githubApi.telemetry.maxRecords, 100);
   assert.equal(ignored.githubApi.telemetry.path, null);
+});
+
+test('a configured telemetry path is expanded or rejected', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-path-'));
+  const relative = 'idd-relative-telemetry-3585.jsonl';
+  const strayFiles = [
+    join(process.cwd(), relative),
+    join(process.cwd(), `${relative}.lock`),
+  ];
+  try {
+    assert.equal(
+      resolveGithubApiTelemetryPath(null),
+      defaultGithubApiTelemetryPath(),
+    );
+    assert.equal(
+      resolveGithubApiTelemetryPath('~/state/x.jsonl'),
+      join(homedir(), 'state', 'x.jsonl'),
+    );
+    const absolute = join(tempRoot, 'x.jsonl');
+    assert.equal(resolveGithubApiTelemetryPath(absolute), absolute);
+    for (const rejected of [
+      'x.jsonl',
+      './x.jsonl',
+      '../x.jsonl',
+      '~',
+      '~other/x.jsonl',
+      'state/~/x.jsonl',
+    ]) {
+      assert.equal(resolveGithubApiTelemetryPath(rejected), null, rejected);
+    }
+
+    // A rejected path records nothing, not even a file in the working tree.
+    setGithubApiTelemetryPolicyForTests({
+      enabled: true,
+      maxRecords: 5,
+      path: relative,
+    });
+    recordRequestObservation(
+      observeGhSuccess({ status: 200, data: { ok: true } }),
+    );
+    for (const stray of strayFiles) assert.equal(existsSync(stray), false);
+
+    // An absolute path in the same policy still records.
+    setGithubApiTelemetryPolicyForTests({
+      enabled: true,
+      maxRecords: 5,
+      path: absolute,
+    });
+    recordRequestObservation(
+      observeGhSuccess({ status: 200, data: { ok: true } }),
+    );
+    assert.equal(existsSync(absolute), true);
+  } finally {
+    for (const stray of strayFiles) rmSync(stray, { force: true });
+    setGithubApiTelemetryPolicyForTests(null);
+    resetGithubApiTelemetryPolicyCacheForTests();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('opt-in telemetry does not change gh results or error classification', () => {

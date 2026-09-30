@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import {
   classifyInaccessibleIssueLookup,
   deriveGhHttpStatus,
@@ -368,6 +368,21 @@ export function defaultGithubApiTelemetryPath() {
     'github-api-telemetry.jsonl',
   );
 }
+/**
+ * Resolve the configured retention path. A leading `~/` is the home
+ * directory, which Node does not expand. Any other non-absolute path would
+ * resolve against the current directory, normally the repository checkout,
+ * and put the file and its lock in the working tree, so it resolves to
+ * null and telemetry stays off. A null configuration uses the default.
+ */
+// audit:ignore-dead-export: reached in production through recordRequestObservation; exported so its cases are unit-tested (issue #3585)
+export function resolveGithubApiTelemetryPath(configured) {
+  if (configured === null) return defaultGithubApiTelemetryPath();
+  const expanded = configured.startsWith('~/')
+    ? join(homedir(), configured.slice(2))
+    : configured;
+  return isAbsolute(expanded) ? expanded : null;
+}
 /** Copy only the allowlisted observation fields, in a stable order. */
 export function allowlistObservation(observation) {
   return {
@@ -629,8 +644,10 @@ export function recordRequestObservation(observation) {
   try {
     const policy = readGithubApiTelemetryPolicy();
     if (!policy.enabled) return;
+    const path = resolveGithubApiTelemetryPath(policy.path);
+    if (path === null) return;
     appendRequestObservation(observation, {
-      path: policy.path ?? defaultGithubApiTelemetryPath(),
+      path,
       maxRecords: policy.maxRecords,
     });
   } catch {
