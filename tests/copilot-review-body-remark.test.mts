@@ -172,6 +172,8 @@ test('the remark paragraph stops at any line that opens another block (#3672)', 
   for (const next of [
     '### Next section',
     '---',
+    '===',
+    '--',
     '***',
     '___',
     '* * *',
@@ -186,6 +188,10 @@ test('the remark paragraph stops at any line that opens another block (#3672)', 
     '<summary>x</summary>',
     '<div>',
     '<table>',
+    '<section>',
+    '<article>',
+    '<dl>',
+    '<figure>',
     '<!-- comment -->',
     // The v2 overview metadata that follows a remark; CommonMark would fold
     // these into the paragraph, but they are never the remark.
@@ -236,6 +242,53 @@ test('a wrapped remark line that only looks like a block opener stays text (#367
       '### Needs a closer look\n\n<code>foo</code> is wrong.\n\nlater',
     ),
     '<code>foo</code> is wrong.',
+  );
+});
+
+test('an indented code block under the heading is not a remark (#3672)', () => {
+  // #3688 review: four spaces or a tab make an indented code block.
+  for (const body of [
+    '### Needs a closer look\n\n    indented code block\n\nafter',
+    '### Needs a closer look\n\n\tTab indented code\n\nafter',
+    '### Needs a closer look\n\n \tSpace then tab\n\nafter',
+    '### Needs a closer look\n\n   \tThree spaces then tab\n\nafter',
+  ]) {
+    assert.equal(extractCopilotReviewBodyRemark(body), null, body);
+  }
+  // A later line of a real paragraph may be indented (lazy continuation), and
+  // up to three leading spaces still open an ordinary paragraph.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\n   The remark\n    continues here.\n\nafter',
+    ),
+    'The remark continues here.',
+  );
+});
+
+test('a label on an ATX heading line reads only that line (#3672)', () => {
+  // A heading is one line, so the next line is a new paragraph.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### \u{1F535} Needs a closer look: Check timeout\nThis is other text.',
+    ),
+    'Check timeout',
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look: Check timeout ###\n\nother',
+    ),
+    'Check timeout',
+  );
+});
+
+test('a label inside a blockquote is not read (#3672)', () => {
+  // #3688 review: quote continuation lines would need a container model, and
+  // no real body puts the label in a quote, so it is left unmatched.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '> Needs a closer look: Check the timeout\n> during reads.',
+    ),
+    null,
   );
 });
 

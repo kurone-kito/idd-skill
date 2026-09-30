@@ -22,7 +22,10 @@
 // doc comments (`resolveLatestCopilotReviewClause`, review-clause.mts) for
 // the full incident history.
 
-import { stripMarkdownCodeRegions } from './markdown-code.mts';
+import {
+  MARKDOWN_HTML_BLOCK_START_PATTERN,
+  stripMarkdownCodeRegions,
+} from './markdown-code.mts';
 
 /**
  * Recognized Copilot review-body shapes (#3258). `overview-v2` is the
@@ -256,32 +259,41 @@ const REMARK_HEADING_PATTERN =
 
 /** Inline form, line-anchored: `🔵 Needs a closer look: text`, optionally
  * behind up to three leading spaces and a run of heading, bullet (`-`,
- * `*`, `+`), quote, or emphasis characters, for example
+ * `*`, `+`), or emphasis characters, for example
  * `**Needs a closer look:** text`. Four or more leading spaces (an indented
- * code block) never match. Matches the label and its separator only; the
- * remark text is whatever follows on the line, and a label with no same-line
- * text is not a remark. */
+ * code block) never match, and neither does a label inside a blockquote
+ * (no real body puts one there, and supporting quote continuation lines
+ * would need a container model this reader deliberately does not have).
+ * Matches the label and its separator only; the remark text is whatever
+ * follows on the line, and a label with no same-line text is not a remark. */
 const REMARK_INLINE_LABEL_PATTERN =
-  /^ {0,3}(?:[>#*_+-][ \t>#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?[ \t]*/iu;
+  /^ {0,3}(?:[#*_+-][ \t#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?[ \t]*/iu;
 
 const HAS_TEXT_PATTERN = /[\p{L}\p{N}]/u;
+/** Indented code: four columns of indent, where a tab reaches the next
+ * multiple of four (so `  \t` and ` \t` qualify too). */
+const INDENTED_CODE_LINE_PATTERN = /^(?: {4}| {0,3}\t)/u;
+const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
 
 /** A stripped line that opens a block other than a plain paragraph line, so
  * the remark paragraph must not read on into it: an ATX heading, a thematic
  * break, a blockquote, a bullet or an ordered item starting at 1 (the only
- * ones CommonMark lets interrupt a paragraph), a block-level HTML tag or
- * comment (an inline tag such as `<code>` stays paragraph text), or one of
+ * ones CommonMark lets interrupt a paragraph), an HTML block start from
+ * `markdown-code.mts`'s CommonMark block-tag list (an inline tag such as
+ * `<code>` stays paragraph text), or one of
  * the two bold overview-metadata labels Copilot's v2 overview puts after
  * the remark (`**Review effort:**`, `**Findings:**`).
  * CommonMark would fold the metadata labels into the paragraph as lazy
  * continuation text; every real body separates them with a blank line, and
  * a body that does not must still not report them as the remark. */
 const NEW_BLOCK_LINE_PATTERNS: readonly RegExp[] = [
-  /^ {0,3}#{1,6}(?:[ \t]|$)/u,
+  ATX_HEADING_LINE_PATTERN,
+  // A setext underline ends the paragraph it underlines.
+  /^ {0,3}(?:=+|-{1,2})[ \t]*$/u,
   /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/u,
   /^ {0,3}>/u,
   /^ {0,3}(?:[-+*]|1[.)])(?:[ \t]|$)/u,
-  /^ {0,3}<(?:\/?(?:details|summary|div|p|pre|hr|blockquote|table|thead|tbody|tfoot|tr|td|th|ul|ol|li|h[1-6])(?:[ \t>/]|$)|!|\?)/iu,
+  MARKDOWN_HTML_BLOCK_START_PATTERN,
   /^ {0,3}\*\*(?:review effort|findings):\*\*/iu,
 ];
 
@@ -302,12 +314,15 @@ function startsNewBlock(stripped: string): boolean {
 /** Reads one paragraph from the ORIGINAL lines, starting at `start` (the
  * first line's text begins at column `firstLineOffset`). Lines are trimmed
  * and joined with one space, so a wrapped remark reads as Markdown renders
- * it. Returns `null` when the paragraph is empty. */
+ * it. `singleLine` reads only the first line, for a label that sits on an
+ * ATX heading line (a heading is one line; its optional closing `#` run is
+ * dropped). Returns `null` when the paragraph is empty. */
 function readRemarkParagraph(
   original: readonly string[],
   stripped: readonly string[],
   start: number,
   firstLineOffset: number,
+  singleLine = false,
 ): string | null {
   const parts: string[] = [];
   for (let index = start; index < original.length; index += 1) {
@@ -323,7 +338,10 @@ function readRemarkParagraph(
       .slice(index === start ? firstLineOffset : 0)
       .trim();
     if (text !== '') {
-      parts.push(text);
+      parts.push(singleLine ? text.replace(/[ \t]+#+[ \t]*$/u, '') : text);
+    }
+    if (singleLine) {
+      break;
     }
   }
   return parts.length === 0 ? null : parts.join(' ');
@@ -381,9 +399,12 @@ export function extractCopilotReviewBodyRemark(
         first += 1;
       }
       const firstStripped = stripped[first] ?? '';
+      // A first block indented four spaces or a tab is an indented code block
+      // (#3688 review), not prose; later lines of a paragraph may be indented.
       if (
         first < original.length &&
         firstStripped !== '' &&
+        !INDENTED_CODE_LINE_PATTERN.test(original[first] ?? '') &&
         !startsNewBlock(firstStripped)
       ) {
         remark = readRemarkParagraph(original, stripped, first, 0);
@@ -402,6 +423,7 @@ export function extractCopilotReviewBodyRemark(
           stripped,
           index,
           label[0].length,
+          ATX_HEADING_LINE_PATTERN.test(line),
         );
       }
     }
