@@ -244,7 +244,10 @@ every CLI failure before it becomes raw crash text, so an extracted
   of the same run may have been sent). Only an error that is itself
   the refusal carries it: a failure that merely wraps a refused
   reconciliation read (an earlier write may have landed) does not. Every
-  other envelope is unchanged.
+  other envelope is unchanged, except that an incomplete
+  `discover-roadmap-graph.mjs --with-progress` scan (exit `75`) is
+  `transport` with `httpStatus: null` and carries only `retryAt`, when
+  known, never `notDispatched`.
 - `gate` -- the helper completed and its verdict is the non-zero
   exit.
 - `internal` -- an unexpected exception none of the above classifies,
@@ -353,11 +356,15 @@ completed audit that did not pass and exit `2` for argument errors
 other eleven return `0` on success and throw on failure, so they do
 not produce `gate` today. `discover-orphan-filter.mjs` with no
 arguments reaches `gh repo view` and is `transport`, not `usage`.
+`discover-roadmap-graph.mjs --all-roadmaps --with-progress` also exits
+`75` after printing an incomplete result (see
+[Discover Roadmap Graph Contract](#discover-roadmap-graph-contract));
+that is `transport`, carrying `retryAt` when known, never `gate`.
 
 | Helper                             | `usage`                                                                                | `gate`                                                                                                                                                      |
 | ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                                   | none today (no arguments is `transport`)                                                                                                                    |
-| `discover-roadmap-graph.mjs`       | a missing `--issue`, combining it with `--all-roadmaps`, or an unknown flag            | none today                                                                                                                                                  |
+| `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                      | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
 | `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag                          | none today                                                                                                                                                  |
 | `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                               | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                | none today                                                                                                                                                  |
@@ -1406,6 +1413,71 @@ default below is unchanged.
     at the same effective value — scored work always sorts first at a tie.
     The score is an advisory ranking hint only; it never replaces the
     A4.5 suitability gate or the A5 claim safety checks.
+- **Progress and interruption recovery (`--with-progress`, #3598)**: an
+  opt-in flag for the annotated union scan (`--all-roadmaps` with
+  `--with-claim-state` and/or `--with-readiness`), which can make many
+  per-issue reads and stay silent for minutes. It is a usage error without
+  `--all-roadmaps`, and it never changes a complete report.
+  - **Progress (stderr).** One JSON object per line, keyed by `iddProgress`
+    (stderr can also carry plain-text warnings, so filter on that key):
+
+    ```json
+    {"iddProgress":{"helper":"discover-roadmap-graph","event":"progress","phase":"claim-state","unit":"leaves","completed":12,"known":19,"leavesKnown":19,"elapsedMs":8123}}
+    ```
+
+    An `interrupted` line adds `reason`. `event` is `start`, `progress`,
+    `complete`, or `interrupted`. `phase` is `root-discovery`, `traversal`
+    (unit `roots`), `claim-state` (unit `leaves`), or `readiness` (unit
+    `leaves`, one batch that reports only its edges). Phase edges always
+    print and in-phase updates print at most once every two seconds, so
+    output is bounded by the number of phases and the elapsed time, never by
+    the number of requests. `known` is `null` until a phase knows its own
+    size (never `0` for "unknown"); `leavesKnown` counts discovered
+    candidates, not claimable ones. A line holds only enums and integers:
+    never a title, body, comment, token, or error text. Progress is
+    event-driven, so a single blocked request prints nothing until it
+    returns; a warm hint hit or a coalesced follower runs no scan and prints
+    none.
+  - **Incomplete result (stdout, exit `75`).** When a rate limit, a request
+    timeout, or a load-control admission deadline interrupts the scan, the
+    helper prints this instead of a report and exits `75` (sysexits
+    `EX_TEMPFAIL`; see the error envelope above for how it is reported):
+
+    ```json
+    {"mode":"all-roadmaps","status":"incomplete","incomplete":{"reason":"rate-limit","phase":"claim-state","lastCompletedPhase":"traversal","counts":{"unit":"leaves","completed":12,"known":19,"leavesKnown":19},"retryAt":"2026-10-01T03:15:00.000Z","retryAtSource":"server","exhausted":false,"recovery":{"safeToRerun":true,"sameArguments":true,"notBefore":"2026-10-01T03:15:00.000Z","arguments":["--all-roadmaps","--with-progress"]}}}
+    ```
+
+    An additive `cache` object can follow (its `complete` is `false`).
+    `arguments` is optional. `reason` is
+    `rate-limit` (a real throttle, or a load-control cooldown refusal even
+    when its wait deadline expired), `timeout`, or `deadline` (the
+    admission wait expired while another local process held every slot).
+    `retryAt` and `notBefore` come from the admission refusal, or from a
+    failure's `retry-after` or primary reset header when it exposes one
+    (capped at one hour), and are `null` otherwise. Any other failure
+    (authentication, a 5xx, a network error that `gh` itself reports, a
+    missing issue, a defect) still throws as it always did, and without the
+    flag nothing changes. The result has no `roots`, `leaves`, or `summary`,
+    and `schemas/discover-roadmap-incomplete.schema.json` (not the union
+    schema) describes it. A run killed from outside (a wrapper's
+    `timeout`, SIGTERM, or Ctrl-C) prints no result at all.
+  - **Incomplete is not exhausted.** A complete scan that found nothing
+    exits `0` with the normal report, no `status`, and `leaves: []`. An
+    incomplete result exits `75`, has `status: "incomplete"` and
+    `exhausted: false`, and carries no rows, so a partial list can never be
+    used as an exhausted inventory, as claimable candidates, or as claim
+    authority. Test the exit status and `status` first:
+    `jq '.leaves | length'` prints `0` for a result with no `leaves` key.
+  - **Safe rerun.** The scan is read-only, so rerun the same full scan with
+    `incomplete.recovery.arguments` (the same scope and flags), not before
+    `notBefore`. Do not resume from the counts or reuse any earlier row. When
+    `notBefore` is `null`, wait for the quota window to reset (`rate-limit`),
+    for the other local session to finish (`deadline`), or until the stalled
+    `gh` call or network is healthy (`timeout`), then rerun. With `githubApi.loadControl`
+    enabled, a rerun that is too early is refused with a precise `retryAt`
+    before any request is spent. The A3-A5 gates and the claim post stay
+    live and authoritative. The hint cache never stores an incomplete
+    result.
 - **Legacy roots (`discover.legacyRoots`, #1315)**: a repository that
   adopted IDD after already running an ad-hoc "umbrella issue"
   convention may have legacy roots that predate both the `roadmap`
@@ -1443,10 +1515,11 @@ default below is unchanged.
 - **Runtime / read timing**: the helper is **long-running** on large
   roadmaps — it issues many sequential API calls and emits the whole graph
   in a single final stdout write, with no progress line or completion
-  sentinel. Redirect stdout to a file and wait for process exit before
-  parsing; a zero-byte or partial read from a still-running (or
-  just-finished) helper means **"still running," not** an A2 enumeration
-  failure.
+  sentinel unless `--with-progress` is passed (its `iddProgress` lines go to
+  stderr; see the `--with-progress` bullet above). Redirect stdout to a file
+  and wait for process exit before parsing; a zero-byte or partial read from
+  a still-running (or just-finished) helper means **"still running," not** an
+  A2 enumeration failure.
 
 ### Discover Readiness Sweep (`--swarm-floor`)
 

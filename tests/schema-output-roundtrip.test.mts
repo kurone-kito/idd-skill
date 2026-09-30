@@ -8,14 +8,17 @@ import {
   computeAdvisoryConvergenceVerdict,
 } from '../src/scripts/advisory-convergence.mts';
 import { classifyBranchConflictState } from '../src/scripts/branch-conflict-state.mts';
+import { createDiscoverProgress } from '../src/scripts/discover-progress.mts';
 import {
   enumerateAllRoadmapsGraph,
+  enumerateAllRoadmapsGraphWithRecovery,
   type RoadmapGraphReport,
 } from '../src/scripts/discover-roadmap-graph.mts';
 import {
   buildDispositionPlan,
   type NoticeComment,
 } from '../src/scripts/disposition-non-review-notices.mts';
+import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import {
   type MergeExecuteDeps,
   runMergeExecute,
@@ -145,6 +148,12 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
     schema: 'discover-roadmap-union.schema.json',
     status: 'covered',
     builder: 'enumerateAllRoadmapsGraph (discover-roadmap-graph.mts)',
+  },
+  {
+    schema: 'discover-roadmap-incomplete.schema.json',
+    status: 'covered',
+    builder:
+      'enumerateAllRoadmapsGraphWithRecovery (discover-roadmap-graph.mts)',
   },
   {
     schema: 'disposition-non-review-notices.schema.json',
@@ -561,6 +570,61 @@ test('discover-roadmap-union: enumerateAllRoadmapsGraph output validates against
   assertRoundtrip(
     report,
     loadJson('schemas/discover-roadmap-union.schema.json'),
+  );
+});
+
+test('discover-roadmap-incomplete: an interrupted scan result validates against schema', async () => {
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (issueNumber: number) =>
+        issueNumber === 700
+          ? {
+              number: 700,
+              title: 'roadmap 700',
+              state: 'open',
+              body: '<!-- idd-skill-roadmap-id: epic -->\n- [ ] #701',
+              labels: [{ name: 'roadmap' }],
+            }
+          : {
+              number: 701,
+              title: 'issue 701',
+              state: 'open',
+              body: 'task 701',
+              labels: [],
+            },
+      claimState: {
+        loadComments: async () => {
+          throw createLoadControlRefusal({
+            outcome: 'deadline-expired',
+            reason: 'cooldown',
+            retryAt: '2026-10-01T03:15:00.000Z',
+            retryAtSource: 'server',
+          });
+        },
+        isTrustedAuthor: () => true,
+        staleAgeMs: 86_400_000,
+        heartbeatIntervalMs: 43_200_000,
+        nowIso: '2026-10-01T00:00:00.000Z',
+        currentClaimId: '',
+        currentSessionAgentId: null,
+        currentSessionWorktreePath: null,
+        currentSessionBranch: null,
+        currentSessionOwnsClaimEvidence: false,
+      },
+    },
+    {
+      progress: createDiscoverProgress(),
+      rerunArguments: [
+        '--all-roadmaps',
+        '--with-claim-state',
+        '--with-progress',
+      ],
+    },
+  );
+  assertRoundtrip(
+    result,
+    loadJson('schemas/discover-roadmap-incomplete.schema.json'),
   );
 });
 

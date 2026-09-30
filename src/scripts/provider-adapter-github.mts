@@ -161,6 +161,69 @@ function toProviderError(error: unknown): Error & ProviderError {
 }
 
 /**
+ * Copy the failure evidence a caller may need to classify a rebuilt error
+ * (#3598): the failed process's own `stderr`/`stdout` text, its `code`, and
+ * its `killed` flag. A wrapper here rebuilds the error as a plain `Error`
+ * from a message, which would drop the timeout and rate-limit evidence the
+ * discovery recovery path reads. Each value is defined as an own,
+ * non-enumerable property (never as `cause`, which would change how Node
+ * prints an uncaught error), only when the original carries a value of the
+ * expected type and the wrapper does not already hold one.
+ */
+function preserveTransportEvidence<T extends Error>(
+  wrapper: T,
+  original: unknown,
+): T {
+  const source = original as Record<string, unknown> | null;
+  const evidence: Record<string, unknown> = {};
+  for (const key of ['stderr', 'stdout', 'code'] as const) {
+    if (typeof source?.[key] === 'string') {
+      evidence[key] = source[key];
+    }
+  }
+  if (typeof source?.killed === 'boolean') {
+    evidence.killed = source.killed;
+  }
+  for (const [key, value] of Object.entries(evidence)) {
+    if (!Object.hasOwn(wrapper, key)) {
+      Object.defineProperty(wrapper, key, {
+        value,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  return wrapper;
+}
+
+/**
+ * Evidence for a GraphQL `errors[]` body that arrived with a successful exit
+ * (#3598): the messages as stderr-style text, and the error types only as a
+ * minimal GraphQL body, so the discovery classifier can recognize a
+ * `RATE_LIMITED` type whose message carries no rate-limit wording, without
+ * ever holding the response's `data`.
+ */
+function graphqlErrorEvidence(errors: unknown[]): {
+  stderr: string;
+  stdout: string;
+} {
+  const entries = errors as ({ type?: unknown; message?: unknown } | null)[];
+  return {
+    stderr: entries
+      .map((entry) => String(entry?.message ?? ''))
+      .filter(Boolean)
+      .join('; ')
+      .slice(0, 200),
+    stdout: JSON.stringify({
+      errors: entries.map((entry) =>
+        typeof entry?.type === 'string' ? { type: entry.type } : {},
+      ),
+    }),
+  };
+}
+
+/**
  * #2267: throw when a GraphQL response carries top-level `errors`, so a bad
  * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
  * message instead of being silently read as an empty result -- ported
@@ -534,9 +597,12 @@ function readWorkItemCommentPage(
       throw unresolvedWorkItemSideError(side, number);
     }
     const detail = error instanceof Error ? error.message : String(error);
-    throw new WorkItemCommentReadError(
-      `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
-      true,
+    throw preserveTransportEvidence(
+      new WorkItemCommentReadError(
+        `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
+        true,
+      ),
+      error,
     );
   }
   let parsed: {
@@ -569,8 +635,14 @@ function readWorkItemCommentPage(
     ) {
       throw unresolvedWorkItemSideError(side, number);
     }
-    throw new WorkItemCommentReadError(
-      `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
+    // A GraphQL throttle can arrive as a successful response whose `errors`
+    // say so. Keep those messages as stderr-style evidence so the discovery
+    // recovery path can still tell a rate limit from a defect (#3598).
+    throw preserveTransportEvidence(
+      new WorkItemCommentReadError(
+        `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
+      ),
+      graphqlErrorEvidence(parsed.errors),
     );
   }
   const repository = parsed.data?.repository;
@@ -2332,13 +2404,23 @@ function wrapTraversalGhFailure(error: unknown, args: string[]): string {
   const summary =
     ghErrorText(error).trim() ||
     `gh ${args.join(' ')} failed with no diagnostic output`;
-  const wrapped = new Error(summary) as Error & {
-    stderr?: string;
-    stdout?: string;
-  };
-  wrapped.stderr = stderr;
-  wrapped.stdout = stdout;
-  throw wrapped;
+  const wrapped = new Error(summary);
+  // Kept verbatim and separate from the message for the classifier, but
+  // hidden like every other rebuilt error (#3598): an uncaught error no
+  // longer prints the captured streams a second time, and the message
+  // already carries the stderr text.
+  for (const [key, value] of [
+    ['stderr', stderr],
+    ['stdout', stdout],
+  ] as const) {
+    Object.defineProperty(wrapped, key, {
+      value,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  throw preserveTransportEvidence(wrapped, error);
 }
 
 // #1449: explicit above the promisified execFile's 1 MiB default, applied
@@ -3227,7 +3309,13 @@ export function createGithubProviderAdapter(
               errors?: unknown;
             };
             if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
-              throw new Error(formatTraversalGraphqlErrors(parsed.errors));
+              // A GraphQL throttle can arrive as a successful response whose
+              // `errors` say so; keep the text as stderr-style evidence (the
+              // catch below carries it onto the rebuilt error, #3598).
+              throw preserveTransportEvidence(
+                new Error(formatTraversalGraphqlErrors(parsed.errors)),
+                graphqlErrorEvidence(parsed.errors),
+              );
             }
             return parsed;
           } catch (error) {
@@ -3236,7 +3324,10 @@ export function createGithubProviderAdapter(
               (error as { stderr?: unknown } | null)?.stderr ?? '',
             ).trim();
             const detail = stderr || (error as Error).message;
-            throw new Error(`gh api graphql failed: ${detail}`);
+            throw preserveTransportEvidence(
+              new Error(`gh api graphql failed: ${detail}`),
+              error,
+            );
           }
         })) as {
           data?: {

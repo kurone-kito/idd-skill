@@ -77,7 +77,11 @@ export interface IddHelperErrorEnvelope {
      * so nothing was sent. Absent otherwise, so existing output is unchanged.
      */
     notDispatched?: true;
-    /** When known, the ISO time the refused request may next be admitted. */
+    /**
+     * When known, the ISO time the refused request may next be admitted, or
+     * (an incomplete `discover-roadmap-graph --with-progress` scan, #3598,
+     * which never sets `notDispatched`) the earliest time to rerun it.
+     */
     retryAt?: string;
   };
 }

@@ -21,8 +21,10 @@ import {
   readDiscoverHint,
 } from '../src/scripts/discover-hint-cache.mts';
 import { hasEligibleOrphan } from '../src/scripts/discover-orphan-filter.mts';
+import { createDiscoverProgress } from '../src/scripts/discover-progress.mts';
 import {
   enumerateAllRoadmapsGraph,
+  enumerateAllRoadmapsGraphWithRecovery,
   hasStartableCandidate,
   type RoadmapGraphUnionReport,
   warnOnSearchResultCap,
@@ -129,6 +131,67 @@ function withoutCache(report: RoadmapGraphUnionReport) {
   const { cache: _cache, ...rest } = report;
   return rest;
 }
+
+test('an interrupted --with-progress scan is never stored, so the next run recomputes (#3598)', async () => {
+  const fx = fixture();
+  const t = tracker([
+    [700, roadmap(700, '- [ ] #701', 'epic-alpha')],
+    [701, leaf(701, 5)],
+  ]);
+  let interruptedRuns = 0;
+  const timedOut = () =>
+    enumerateAllRoadmapsGraphWithRecovery(
+      {
+        loadOpenRoadmapRoots: async () => {
+          interruptedRuns += 1;
+          throw Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' });
+        },
+      },
+      { progress: createDiscoverProgress() },
+    );
+  const complete = () =>
+    enumerateAllRoadmapsGraphWithRecovery(
+      {
+        loadOpenRoadmapRoots: async () => [700],
+        loadIssue: async (number) => {
+          t.loads.push(number);
+          return t.issues.get(number) ?? null;
+        },
+      },
+      { progress: createDiscoverProgress() },
+    );
+  const readWith = (
+    compute: () => Promise<RoadmapGraphUnionReport | { status: string }>,
+  ) =>
+    readDiscoverHint({
+      helper: 'discover-roadmap-graph',
+      args: { allRoadmaps: true },
+      policy: { floor: 3 },
+      compute,
+      hasCandidate: hasStartableCandidate,
+      deps: fx.deps,
+    });
+  try {
+    const first = await readWith(timedOut);
+    const second = await readWith(timedOut);
+    // Both runs went to the network: the interrupted result was not stored.
+    assert.equal(interruptedRuns, 2);
+    for (const run of [first, second]) {
+      assert.equal((run.report as { status?: string }).status, 'incomplete');
+      assert.equal(run.cache?.complete, false);
+      assert.equal(run.cache?.source, 'live');
+    }
+    // The fixture does store a complete scan, so the check above is not vacuous.
+    const stored = await readWith(complete);
+    assert.equal(stored.cache?.complete, true);
+    const loadsAfterStore = t.loads.length;
+    const warm = await readWith(complete);
+    assert.equal(warm.cache?.source, 'hint');
+    assert.equal(t.loads.length, loadsAfterStore);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
 
 test('a warm union repeat makes zero loader reads and keeps ranking and provenance', async () => {
   const fx = fixture();
