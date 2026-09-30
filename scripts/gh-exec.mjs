@@ -736,10 +736,15 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  * #3605).
  */
 const PAGINATED_KILL_ESCALATION_MS = 2_000;
-/** Shared flag: index 0 is completion, index 1 is the `gh` pid. */
+/**
+ * Shared flag: index 0 is completion, index 1 is the `gh` pid, index 2 is
+ * set once the worker has armed its exit hook (see
+ * {@link markPaginatedCaptureStarted}).
+ */
 const CAPTURE_SLOT_DONE = 0;
 const CAPTURE_SLOT_PID = 1;
-const CAPTURE_FLAG_BYTES = 8;
+const CAPTURE_SLOT_STARTED = 2;
+const CAPTURE_FLAG_BYTES = 12;
 /**
  * Exact tokens only. Tests set this so a stream error or a stuck-worker
  * kill decision can be forced. Any other value, including unset, leaves
@@ -753,6 +758,7 @@ function paginatedCaptureTestFault() {
     value === 'stderr' ||
     value === 'stdin' ||
     value === 'worker-crash' ||
+    value === 'worker-init-fail' ||
     value === 'proc-unreadable' ||
     value === 'proc-not-gh' ||
     value === 'proc-gh-path'
@@ -766,7 +772,8 @@ function paginatedCaptureGraceMs() {
   if (
     fault === 'proc-unreadable' ||
     fault === 'proc-not-gh' ||
-    fault === 'proc-gh-path'
+    fault === 'proc-gh-path' ||
+    fault === 'worker-init-fail'
   ) {
     return 2_000;
   }
@@ -1190,9 +1197,25 @@ function startPaginatedCapture(data) {
     setTimeout(finish, 0);
   });
 }
+/**
+ * Tell the parent this worker got as far as arming its exit hook, so any
+ * later death is reported through the done flag. A parent that waits with
+ * no timeout uses it to tell a worker that failed while starting up,
+ * before it could set the done flag, from one that is still working.
+ */
+function markPaginatedCaptureStarted(data) {
+  const view = new Int32Array(data.flag);
+  Atomics.store(view, CAPTURE_SLOT_STARTED, 1);
+  Atomics.notify(view, CAPTURE_SLOT_STARTED, 1);
+}
 function runPaginatedCaptureWorker() {
+  // Test fault: die during start-up, before the exit hook exists.
+  if (paginatedCaptureTestFault() === 'worker-init-fail') process.exit(1);
   const data = readPaginatedCaptureWorkerData(workerData);
-  if (data) armPaginatedCaptureExit(data);
+  if (data) {
+    armPaginatedCaptureExit(data);
+    markPaginatedCaptureStarted(data);
+  }
   try {
     if (!data) {
       throw new Error('paginated gh capture worker data was unusable');
@@ -1416,6 +1439,19 @@ function readPaginatedGhApi(args, options) {
         options.timeout + paginatedCaptureGraceMs(),
       );
     } else {
+      // No timeout was requested, so the wait for completion below has no
+      // end. A worker that fails while starting up never reaches its exit
+      // hook, and this blocked thread cannot see its 'error' event, so
+      // bound that one phase (Copilot review, PR #3605).
+      Atomics.wait(view, CAPTURE_SLOT_STARTED, 0, paginatedCaptureGraceMs());
+      if (
+        Atomics.load(view, CAPTURE_SLOT_STARTED) === 0 &&
+        Atomics.load(view, CAPTURE_SLOT_DONE) === 0
+      ) {
+        throw tagGhCommandError(
+          new Error('paginated gh capture worker did not start'),
+        );
+      }
       Atomics.wait(view, CAPTURE_SLOT_DONE, 0);
     }
     if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0) {

@@ -1354,6 +1354,23 @@ test('ghApiJson (paginated) parses rows whose newlines fall on read boundaries a
   }
 });
 
+test('ghApiJson (paginated) with no timeout fails instead of hanging when the capture worker never starts (#3597)', () => {
+  // timeout 0 means "no timeout", so the parent's wait for completion has
+  // no end; a worker that dies before arming its exit hook must not turn
+  // that into an unbounded hang.
+  withCaptureFault('worker-init-fail', () => {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 0 }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : '';
+        assert.match(message, /capture worker did not start/);
+        assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
+        return true;
+      },
+    );
+  });
+});
+
 test('ghApiJson (paginated) throws a tagged gh failure for an allow-listed status with a non-JSON body (#3597)', () => {
   const restore = stubGh(`
 const fs = require('node:fs');
