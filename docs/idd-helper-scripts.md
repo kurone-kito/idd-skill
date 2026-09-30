@@ -234,6 +234,17 @@ every CLI failure before it becomes raw crash text, so an extracted
   killed child, a failed spawn, or a failure with no derivable status
   (`httpStatus: null`). A caller that must tell an auth/permission
   failure from an outage reads `httpStatus`.
+  A request that host-local load control refused before starting any
+  `gh` process (see [GitHub API load control](#github-api-load-control))
+  is also `transport` with `httpStatus: null`, and only then the envelope
+  carries two more optional fields: `"notDispatched":true`, and
+  `"retryAt":"<ISO time>"` when the end of the cooldown is known. A
+  consumer reads `notDispatched` to tell that the failing request was not
+  sent from a transport failure that may have landed (an earlier request
+  of the same run may have been sent). Only an error that is itself
+  the refusal carries it: a failure that merely wraps a refused
+  reconciliation read (an earlier write may have landed) does not. Every
+  other envelope is unchanged.
 - `gate` -- the helper completed and its verdict is the non-zero
   exit.
 - `internal` -- an unexpected exception none of the above classifies,
@@ -1636,6 +1647,138 @@ neither stored nor logged. Nothing promises that the cache is shared across
 computers. Local policy and permission decisions are not cached. The
 single-flight lease outlives that call's `gh` timeout, and a process
 removes only the lease it acquired.
+
+## GitHub API load control
+
+`githubApi.loadControl` is an opt-in, host-local admission and cooldown
+layer for the `gh` requests the helpers make (issue
+`kurone-kito/idd-skill#3586`). The distributed default keeps `enabled`
+false, `maxConcurrent` at `1`, and `maxWait` at `PT30S`. While it is off
+the wrappers behave exactly as before: no new argument, no state
+directory, no extra process, and no change to a result or an error.
+This repository does not enable it yet.
+
+The state lives in one per-user directory: `XDG_STATE_HOME` or
+`~/.local/state` on Linux and macOS, `LOCALAPPDATA` on Windows, under
+`idd-skill/github-api-load-control`. Every process of the same operating
+system user, in any repository or worktree that enables the policy,
+reads and writes the same files. It is a single-machine control. It does
+not coordinate separate computers, a container with its own hostname or
+process namespace (leases are kept per hostname and namespace, so another
+one's are never seen), or another tool using the same account, and it
+claims no global rate-limit guarantee. The effective concurrency across
+repositories is the largest `maxConcurrent` any of them configures.
+
+State is scoped by a hash of the API host and the credential the request
+would use, so separate hosts and separate credentials never share
+admission or cooldown, and no raw credential is written. The credential is
+the same one the read cache resolves, looked up once per process and host
+with `gh auth token` (never `gh auth status`, so resolving it makes no API
+request; an async caller's first lookup does not block the event loop). A
+request whose host or credential cannot be verified runs
+uncoordinated instead of borrowing another scope, and so does a state
+directory that cannot be used. Nothing is refused for a coordination
+fault, only for evidence.
+
+### Which requests are admitted
+
+Admission covers the shared wrappers in `gh-exec`: `ghText`,
+`ghTextUnbounded`, `ghTextAsync`, `ghApiJson`, `ghApiJsonWithHeaders`,
+`ghGraphql`, and the read-cache fetch. Each real `gh` process is gated
+once. It does not cover a standalone or ad hoc `gh` command an agent
+types, the direct `gh api` call in `minimize-superseded-markers`, or the
+`gh auth` lookups that find the credential. Those keep running whatever
+the cooldown says.
+
+Each request is classified from its arguments alone, and only a verified
+shape is a read. A `gh api` GET or HEAD without a body (query fields do not
+change that), a GraphQL query free of `mutation` and `subscription`, and
+a short list of read-only subcommands are reads. An explicit non-GET
+method, fields or `--input` with no method, and a GraphQL mutation are
+writes. Anything else is unclassified: an unknown option, a body on a
+GET, a query read from a file, or a subcommand off the list. The
+classifier never infers a quota cost and `rate_limit` is never polled.
+
+### Admission and refusal
+
+`maxConcurrent` (1 to 8, otherwise 1) bounds requests running at once.
+Serial is the default.
+
+- A read waits for a slot, and for a cooldown, at most as long as its
+  `admissionDeadlineMs` option (default `maxWait`, at most ten minutes).
+  An explicit `timeout` is the caller's whole budget: the wait may use at
+  most half of it and the spawn gets the remainder. Async callers wait on
+  a timer, so a request already running in the same process keeps
+  completing and releasing its slot. A synchronous caller that finds only
+  this process's own async lease in the way rides on it (one request
+  over the bound) instead of waiting for a release that its blocked event
+  loop could not run. Waiters are unordered pollers bounded by their
+  deadline, not a queue. A known cooldown end beyond the deadline refuses
+  at once without sleeping.
+- A write or unclassified request is admitted now or refused. It is never
+  queued, never delayed, and never retried by this layer, and delayed
+  dispatch is not implemented, so a refused write is only sent if the
+  caller reruns its own gates and issues a new request.
+
+A refused request throws before any `gh` process starts. The error is
+tagged as a `gh` command failure and carries two non-enumerable
+properties: `notDispatched: true` and `loadControl` (`outcome`
+`not-dispatched` or `deadline-expired`, `reason` `busy` or `cooldown`,
+`retryAt` with `retryAtSource` when a cooldown end is known, and
+`holderPid` for a full slot). Treat it as "nothing was sent".
+`postWorkItemComment` rethrows a refusal on its first attempt without a
+duplicate re-read or retry. After an earlier ambiguous failure it stops
+posting and runs only its existing final duplicate check, and the error it
+then throws is the earlier failure, never a claim that nothing was sent.
+The disposition apply loop and the live-status digest repair writes skip
+their reconciliation for a refusal, and the traversal and comment reads
+rethrow it instead of rebuilding a retryable error. No new automatic
+mutation retry exists. `withBoundedRetry` never retries a refusal, while a
+real throttle failure is still retried, now through the same gate.
+`safeGhText` still returns an empty string for any failure, a refusal
+included, as its callers already treat an empty result as unresolved.
+A write that meets a throttle starts a cooldown that its own recovery read
+must then wait out. When the cooldown outlasts that read's deadline the
+read is refused, and the caller reports the write as not verified instead
+of retrying it.
+
+A slot is a small lease file. A lease is freed by its holder, or when its
+process is gone (a dead pid, a zombie, or on Linux a pid whose start time
+changed), and never because it is old. A crash therefore clears itself
+on the next request. A request that runs with `timeout: 0` holds its
+lease for as long as it runs. If a stall ever needs clearing by hand,
+stop the sessions and delete the state directory.
+
+### Cooldown
+
+A failed request is read through the request observations (issue
+`#3585`) plus one more check. It is a throttle when it reads as a
+secondary limit, is an HTTP 429, carries a `retry-after`, has a GraphQL
+`RATE_LIMITED` error, or says `API rate limit already exceeded` (issue
+`#3560`). A per-resource primary cooldown starts only for a reading of
+`remaining: 0` with its resource, or for explicit primary wording on a
+request that names its own resource, and it never blocks another
+resource or a request that names none. Every other throttle, including
+one nothing can attribute, is shared by REST and GraphQL and by every
+resource.
+
+A server `retry-after`, or a primary reset, is honored up to one hour. Without
+timing the cooldown is 60 seconds, doubling per consecutive throttle up to 15
+minutes, and restarting once the previous throttle is more than 30 minutes
+old. Alternating REST and GraphQL climbs the same ladder instead of restarting
+it. A throttle inside an active cooldown extends it without escalating.
+Concurrent recorders write separate files and the longest wins. The remaining
+time follows the operating system's uptime where it is a real monotonic clock
+(Linux, Windows), and is bounded by the cooldown's own length elsewhere, so a
+wall-clock step never stretches a cooldown. Only a failed request records
+anything.
+
+`retry-after` and reset headers are visible only on `gh api --include`
+paths: a non-paginated `ghApiJson`, `ghApiJsonWithHeaders`, and the
+read-cache fetch. Enabling load control adds `--include` to a
+non-paginated `ghApiJson`, the same additive mode as
+`githubApi.telemetry`. The generic `ghText` and `ghTextAsync` runners
+cannot add it, so they fall back to the 60-second backoff.
 
 ## Helper Runtime Profiles
 
