@@ -111,16 +111,71 @@ function sanitizedGitEnvironment() {
   delete env.GIT_OBJECT_DIRECTORY;
   return env;
 }
+/** Pause before the single retry of a spurious `git rev-parse` exit. */
+const SPURIOUS_GIT_EXIT_RETRY_PAUSE_MS = 25;
+/**
+ * `true` only for the one shape a spurious spawn failure took on native
+ * Windows CI: `status` exactly `1` and a whitespace-only `stderr` string. A
+ * real failure of a read-only `git rev-parse` query prints a `fatal:`
+ * diagnostic (a removed worktree or broken gitfile exits `128`), so every
+ * other shape fails closed: any other or a null/missing `status` (signal,
+ * spawn error, timeout), any non-whitespace `stderr`, and a missing or
+ * non-string `stderr` (for example a Buffer from a spawn made without an
+ * `encoding`), which cannot be shown to be empty.
+ */
+function isSpuriousGitExit(error) {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const { status, stderr } = error;
+  return status === 1 && typeof stderr === 'string' && stderr.trim() === '';
+}
+/**
+ * Run a read-only `git rev-parse` query (`run`) and retry it exactly once,
+ * after one fixed {@link SPURIOUS_GIT_EXIT_RETRY_PAUSE_MS} pause, when its
+ * first attempt fails with a spurious exit ({@link isSpuriousGitExit}). The
+ * retry's own result is the one used -- whatever stdout the failed attempt
+ * carried is discarded, because a spurious exit can still have printed a
+ * wrong or partial answer -- and a second failure throws the retry's own
+ * error unchanged. Every other failure throws its original error at once.
+ *
+ * Observed 2026-09-30 (kurone-kito/idd-skill#3664, Windows runs
+ * `36722864806` and `36736676813`): up to 16 acquirer threads each
+ * spawning `git` made one `rev-parse` exit `1` with empty stderr (once
+ * with the correct path still on stdout), failing the same-claim-id race
+ * probe. Only `git rev-parse` queries are safe to retry blindly, because
+ * they are read-only; never wrap a mutating git call in this.
+ */
+export function retryOnSpuriousGitExit(run) {
+  try {
+    return run();
+  } catch (error) {
+    if (!isSpuriousGitExit(error)) {
+      throw error;
+    }
+  }
+  sleepSync(SPURIOUS_GIT_EXIT_RETRY_PAUSE_MS);
+  return run();
+}
 /**
  * Resolve the lock file's path inside the clone's *shared* git-admin
  * directory (`--git-common-dir`, not `--absolute-git-dir`) so every
- * worktree of the same clone resolves to the identical path.
+ * worktree of the same clone resolves to the identical path. The spawn is
+ * retried once on a spurious exit ({@link retryOnSpuriousGitExit}).
  */
 export function resolveCloneLockPath(repoPath) {
-  const gitCommonDir = execFileSync(
-    'git',
-    ['-C', repoPath, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-    { encoding: 'utf8', env: sanitizedGitEnvironment() },
+  const gitCommonDir = retryOnSpuriousGitExit(() =>
+    execFileSync(
+      'git',
+      [
+        '-C',
+        repoPath,
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-common-dir',
+      ],
+      { encoding: 'utf8', env: sanitizedGitEnvironment() },
+    ),
   ).trim();
   return join(gitCommonDir, CLONE_LOCK_FILE_NAME);
 }
