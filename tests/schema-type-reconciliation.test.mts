@@ -478,6 +478,7 @@ export const iddMergeExecuteKeys = [
   'mergeResult',
   'adminFallbackUsed',
   'localHeadDrift',
+  'postFailureState',
 ] as const satisfies readonly (keyof IddMergeExecuteVerdict)[];
 
 export const iddRoadmapAuditExecuteKeys = [

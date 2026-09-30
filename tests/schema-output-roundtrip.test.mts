@@ -749,6 +749,79 @@ test('idd-merge-execute: a non-null localHeadDrift verdict validates against sch
   assertRoundtrip(verdict, loadJson('schemas/idd-merge-execute.schema.json'));
 });
 
+test('idd-merge-execute: a verdict with and without postFailureState validates against schema (#3681)', () => {
+  const HEAD = '1111111111111111111111111111111111111111';
+  const report: Record<string, unknown> = {
+    prHeadSha: HEAD,
+    reviewCurrency: { comparisonRoute: 'proceed', comparisonReason: 'match' },
+    threads: { actionableCount: 0 },
+    advisoryWait: { f3Outcome: 'SATISFIED' },
+    ci: {
+      status: 'success',
+      requiredChecksPassing: true,
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'all-passing',
+    },
+    reviewerStates: {
+      requiredApprovalsSatisfied: true,
+      codeownerApprovalSatisfied: true,
+      codeownerSelfApproval: { status: 'not_applicable' },
+    },
+    claim: { matchesExpectedClaim: true, reason: 'match' },
+    dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
+  };
+  const deps: MergeExecuteDeps = {
+    collect: () => report,
+    fetchHeadSha: () => HEAD,
+    fetchMergeState: () => ({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN',
+    }),
+    mergePr: () => {
+      throw new Error('merge transport closed');
+    },
+    mergePrAdmin: () => 'Merged PR (admin).',
+    resolveSoloCodeownerAdminFallbackMode: () => 'auto-admin-retry',
+    getLocalHeadState: () => ({ branch: null, headSha: null }),
+    fetchHeadRefName: () => '',
+  };
+  const schema = loadJson('schemas/idd-merge-execute.schema.json');
+  const args = [
+    '--pr',
+    '994',
+    '--claim-issue',
+    '309',
+    '--claim-id',
+    'c-1',
+    '--apply',
+  ];
+
+  // No fetchPrOutcome dep: the failed verdict carries no postFailureState.
+  const without = runMergeExecute(args, deps).verdict;
+  assert.equal('postFailureState' in without, false);
+  assertRoundtrip(without, schema);
+
+  // A merged read-back and a never-merged (null mergedAt) read-back.
+  for (const mergedAt of ['2026-10-01T03:04:05Z', null]) {
+    const { verdict } = runMergeExecute(args, {
+      ...deps,
+      fetchPrOutcome: () => ({
+        state: mergedAt ? 'MERGED' : 'OPEN',
+        mergedAt,
+        headRefOid: HEAD,
+      }),
+    });
+    assert.ok(verdict.postFailureState);
+    assertRoundtrip(verdict, schema);
+  }
+});
+
 test('idd-roadmap-audit-execute: runRoadmapAuditExecute output validates against schema', async () => {
   const ROADMAP = 995;
   const report: RoadmapGraphReport = {
