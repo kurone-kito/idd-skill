@@ -1511,10 +1511,11 @@ default below is unchanged.
 - **Runtime / read timing**: the helper is **long-running** on large
   roadmaps — it issues many sequential API calls and emits the whole graph
   in a single final stdout write, with no progress line or completion
-  sentinel. Redirect stdout to a file and wait for process exit before
-  parsing; a zero-byte or partial read from a still-running (or
-  just-finished) helper means **"still running," not** an A2 enumeration
-  failure.
+  sentinel unless `--with-progress` is passed (its `iddProgress` lines go to
+  stderr; see the `--with-progress` bullet above). Redirect stdout to a file
+  and wait for process exit before parsing; a zero-byte or partial read from
+  a still-running (or just-finished) helper means **"still running," not** an
+  A2 enumeration failure.
 
 ### Discover Readiness Sweep (`--swarm-floor`)
 
