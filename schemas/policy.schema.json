@@ -576,6 +576,27 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "telemetry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Opt in to local request-lifecycle observations for the ghApiJson, ghApiJsonWithHeaders, and ghGraphql wrappers; the generic ghText, ghTextUnbounded, and ghTextAsync runners are not observed. Optional; defaults to false, which leaves argv, parsed results, thrown errors, and exit status unchanged."
+            },
+            "maxRecords": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum JSON lines retained in the local telemetry file. Optional; defaults to 100. Older lines are dropped. No outbound upload."
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Local JSONL file for retained observations. Optional; when enabled and omitted, the file is ~/.local/state/idd-skill/github-api-telemetry.jsonl. A configured path must be absolute or start with ~/ (the home directory); any other non-blank value keeps telemetry off, and a blank value counts as unset and uses the default file. The file is not created while telemetry is disabled. A file that already holds anything other than these records is left untouched and nothing is recorded."
+            }
+          },
+          "description": "Local-only retention for safe request-cost observations. Defaults off. Records omit credentials, request and query text, issue and comment bodies, and environment dumps."
+        },
         "readCache": {
           "type": "object",
           "additionalProperties": false,
@@ -608,7 +629,7 @@
           "description": "Host-local read cache for explicitly classified REST reads. Optional; omitting it keeps every read live."
         }
       },
-      "description": "Opt-in GitHub API read-cache policy. Optional; omitting it keeps live reads. This does not wire Discover."
+      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations and `readCache` opts in to the host-local REST read cache. Optional; omitting the container keeps telemetry disabled and every read live. Neither key wires Discover or admits requests."
     },
     "discover": {
       "type": "object",

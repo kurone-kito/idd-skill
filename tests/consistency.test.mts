@@ -1004,6 +1004,11 @@ test('policy normalization provides default-safe values and supports aliases', (
       samplingWindow: 'PT24H',
     },
     githubApi: {
+      telemetry: {
+        enabled: false,
+        maxRecords: 100,
+        path: null,
+      },
       readCache: {
         enabled: false,
         maxAge: 'PT5M',
@@ -1209,6 +1214,11 @@ test('policy normalization provides default-safe values and supports aliases', (
         samplingWindow: 'PT24H',
       },
       githubApi: {
+        telemetry: {
+          enabled: false,
+          maxRecords: 100,
+          path: null,
+        },
         readCache: {
           enabled: false,
           maxAge: 'PT5M',

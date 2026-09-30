@@ -356,6 +356,24 @@ keeps distributed behavior. `githubApi.readCache` stays off unless
 `enabled` is true. Turning it on does not connect Discover; the
 helper-script read-cache section describes the contract.
 
+`githubApi.telemetry` records local request-lifecycle observations for
+the `ghApiJson`, `ghApiJsonWithHeaders`, and `ghGraphql` wrappers (issue
+`kurone-kito/idd-skill#3585`). Requests that helpers make through the
+generic `gh` text runners are not observed, and neither is a
+single-request fetch through the read cache (a cache hit makes no
+request, and a paginated cache miss is observed like any paginated
+call). The default is off. While off, command arguments, parsed
+results, thrown errors, and the process exit stay unchanged. While on,
+each record keeps HTTP
+status, the rate-limit header fields, GraphQL query cost when the query
+selects `rateLimit` with `cost`, and separate command, retry, and
+injected page counts. It omits credentials, query text, issue and
+comment bodies, environment dumps, and launcher or session names.
+Retention is a bounded local file with no outbound upload, and a `path`
+that holds anything other than these records is left untouched. A
+primary quota signal is never relabeled as secondary throttling. This
+key is not a response cache and not a request-admission policy.
+
 For advisory review timing, repositories may now customize
 `advisoryWait.requestCap`, `advisoryWait.pendingWindow`,
 `advisoryWait.settledWindow`, and `advisoryWait.pollInterval` in

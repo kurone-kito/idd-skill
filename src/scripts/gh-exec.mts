@@ -31,6 +31,13 @@ import { promisify } from 'node:util';
 
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import {
+  observeGhFailure,
+  observeGhSuccess,
+  type RequestObservation,
+  recordRequestObservation,
+  telemetryIsEnabled,
+} from './github-api-observation.mts';
+import {
   type GithubApiCacheFetchRequest,
   type GithubApiCacheFetchResult,
   type GithubApiReadCacheMode,
@@ -458,9 +465,11 @@ export interface GhApiJsonOptions {
   timeout?: number;
   /**
    * Opt-in host-local read cache. When omitted, `ghApiJson` keeps the
-   * historical uncached `gh api` invocation, including its argv. A
-   * non-read classification or a disabled `githubApi.readCache` policy
-   * also keeps that uncached path and does not create a cache directory.
+   * historical uncached `gh api` invocation, including its argv (except
+   * that opt-in `githubApi.telemetry` adds `--include` to a non-paginated
+   * call). A non-read classification or a disabled `githubApi.readCache`
+   * policy also keeps that uncached path and does not create a cache
+   * directory.
    */
   readCache?: GhApiJsonReadCacheOptions;
 }
@@ -490,6 +499,83 @@ export interface GhApiJsonReadCacheOptions {
 export interface GhApiJsonWithHeadersResult {
   data: unknown;
   headers: Record<string, string>;
+}
+
+/**
+ * The failure evidence to record for an observation. A paginated call's
+ * stdout is partial page data, not an error body, so only its stderr counts
+ * as evidence; a scan of the pages could read a title or comment quoting a
+ * rate-limit message as a real signal. Every other call keeps the whole
+ * captured error, whose stdout carries the failure body.
+ */
+function failureEvidence(error: unknown, paginated: boolean): unknown {
+  return paginated
+    ? { stderr: (error as { stderr?: unknown } | null)?.stderr }
+    : error;
+}
+
+function recordTransportObservation(build: () => RequestObservation): void {
+  try {
+    if (!telemetryIsEnabled()) return;
+    recordRequestObservation(build());
+  } catch {
+    // Observation retention must not change the wrapper's own outcome.
+  }
+}
+
+function statusFromIncluded(raw: string): number | null {
+  const match = raw.trim().match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/);
+  if (!match) return null;
+  const status = Number.parseInt(match[1], 10);
+  return Number.isInteger(status) ? status : null;
+}
+
+function tryParseIncludedBody(raw: string): GhApiJsonWithHeadersResult | null {
+  if (statusFromIncluded(raw) === null) return null;
+  try {
+    return parseIncludedGhApiResponse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function includedBodyIsJson(raw: string): boolean {
+  const body = (raw.split(/\r?\n\r?\n/).pop() ?? '').trim();
+  return body.startsWith('{') || body.startsWith('[');
+}
+
+/**
+ * Parse a tolerated failure body without inventing `{}`. Plain JSON is
+ * accepted as-is. An HTTP envelope is accepted only when its body is
+ * itself JSON. Empty and non-JSON stdout throw so the original gh
+ * error is preserved.
+ */
+function parseToleratedGhBody(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return JSON.parse(trimmed);
+  }
+  if (!includedBodyIsJson(raw)) {
+    throw new Error('gh api stdout is not JSON');
+  }
+  const body = (raw.split(/\r?\n\r?\n/).pop() ?? '').trim();
+  return JSON.parse(body);
+}
+
+/**
+ * Parse a `gh api` body when telemetry asked for `--include`. A usable
+ * HTTP envelope is handled by {@link tryParseIncludedBody} first. This
+ * fallback accepts today's plain JSON, then the last section of a
+ * partial envelope, so a header-parse miss cannot turn a successful
+ * body into a new thrown error.
+ */
+function parseObservedGhBody(raw: string): unknown {
+  try {
+    return JSON.parse(raw.trim() || '{}');
+  } catch {
+    const body = raw.split(/\r?\n\r?\n/).pop() ?? '';
+    return JSON.parse(body.trim() || '{}');
+  }
 }
 
 interface IncludedGhApiEnvelope extends GhApiJsonWithHeadersResult {
@@ -563,9 +649,18 @@ export function ghApiJsonWithHeaders(
       ...(options.input !== undefined ? { input: options.input } : {}),
     });
   } catch (error) {
+    recordTransportObservation(() => observeGhFailure(error));
     throw tagGhCommandError(error);
   }
-  return parseIncludedGhApiResponse(raw);
+  const parsed = parseIncludedGhApiEnvelope(raw);
+  recordTransportObservation(() =>
+    observeGhSuccess({
+      status: parsed.status,
+      headers: parsed.headers,
+      data: parsed.data,
+    }),
+  );
+  return { data: parsed.data, headers: parsed.headers };
 }
 
 /**
@@ -1049,6 +1144,7 @@ function executeGhApiJson(
 ): { data: unknown; toleratedFailure: boolean } {
   const { paginate = false, extraArgs = [], allowStatuses = [] } = options;
   const hostname = resolveGhApiHostname() ?? explicitCacheHostname(cacheHost);
+  const observeHttp = !paginate && telemetryIsEnabled();
   const args = [
     'api',
     path,
@@ -1057,12 +1153,19 @@ function executeGhApiJson(
   ];
   if (paginate) {
     args.push('--paginate', '--jq', '.[]');
+  } else if (observeHttp) {
+    args.push('--include');
   }
   const timeout =
     options.timeout ??
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   let raw: string;
   let toleratedFailure = false;
+  // Set when an allow-listed non-zero exit is tolerated below, so the
+  // paginated result records the original failure, not a clean success.
+  // Only stderr is kept: the tolerated stdout is page data, not an error
+  // body, so it must not be scanned for rate-limit wording.
+  let toleratedEvidence: { stderr: unknown } | null = null;
   try {
     raw = execFileSync('gh', args, {
       encoding: 'utf8',
@@ -1074,22 +1177,91 @@ function executeGhApiJson(
     const failure = error as { status?: unknown; stdout?: unknown } | null;
     const status = Number(failure?.status ?? -1);
     if (!allowStatuses.includes(status)) {
+      recordTransportObservation(() =>
+        observeGhFailure(failureEvidence(error, paginate), {
+          paginated: paginate,
+        }),
+      );
       throw tagGhCommandError(error);
     }
+    toleratedFailure = true;
+    toleratedEvidence = {
+      stderr: (error as { stderr?: unknown } | null)?.stderr,
+    };
     const stdout = String(failure?.stdout ?? '');
+    const included = observeHttp ? tryParseIncludedBody(stdout) : null;
+    // An envelope parser turns an empty body into `{}`. That is fine for
+    // a real success, and wrong for a tolerated failure: telemetry must
+    // not turn an empty error body into a returned object.
+    if (included && includedBodyIsJson(stdout)) {
+      recordTransportObservation(() =>
+        observeGhSuccess({
+          status: statusFromIncluded(stdout),
+          headers: included.headers,
+          data: included.data,
+        }),
+      );
+      return { data: included.data, toleratedFailure };
+    }
+    if (observeHttp) {
+      // Empty or non-JSON stdout still throws the original gh error.
+      // Only plain JSON, or an envelope whose body is JSON, is recovered.
+      try {
+        const data = parseToleratedGhBody(stdout);
+        recordTransportObservation(() =>
+          observeGhFailure(error, { paginated: paginate }),
+        );
+        return { data, toleratedFailure };
+      } catch {
+        // Fall through to the original failure below.
+      }
+      recordTransportObservation(() =>
+        observeGhFailure(error, { paginated: paginate }),
+      );
+      throw tagGhCommandError(error);
+    }
     if (!/^\s*[[{]/.test(stdout)) {
+      recordTransportObservation(() =>
+        observeGhFailure(failureEvidence(error, paginate), {
+          paginated: paginate,
+        }),
+      );
       throw tagGhCommandError(error);
     }
     raw = stdout;
-    toleratedFailure = true;
   }
   if (paginate) {
     // parsePaginatedGhNdjson already trims and returns [] on empty input.
-    return { data: parsePaginatedGhNdjson(raw), toleratedFailure };
+    const data = parsePaginatedGhNdjson(raw);
+    const tolerated = toleratedEvidence;
+    recordTransportObservation(() =>
+      tolerated
+        ? observeGhFailure(tolerated, { paginated: true })
+        : observeGhSuccess({ data, paginated: true }),
+    );
+    return { data, toleratedFailure };
+  }
+  if (observeHttp) {
+    const included = tryParseIncludedBody(raw);
+    if (included) {
+      recordTransportObservation(() =>
+        observeGhSuccess({
+          status: statusFromIncluded(raw),
+          headers: included.headers,
+          data: included.data,
+        }),
+      );
+      return { data: included.data, toleratedFailure };
+    }
+    const data = parseObservedGhBody(raw);
+    recordTransportObservation(() => observeGhSuccess({ data }));
+    return { data, toleratedFailure };
   }
   // JSON.parse itself ignores surrounding whitespace, so only trim to
   // decide whether the output was empty.
-  return { data: JSON.parse(raw.trim() || '{}'), toleratedFailure };
+  const data = JSON.parse(raw.trim() || '{}');
+  recordTransportObservation(() => observeGhSuccess({ data }));
+  return { data, toleratedFailure };
 }
 
 function ghApiJsonUncached(
@@ -1131,7 +1303,20 @@ export function ghGraphql(
     }
     args.push('-f', `${key}=${value}`);
   }
-  return JSON.parse(ghText(args).trim() || '{}');
+  let raw: string;
+  try {
+    raw = ghText(args);
+  } catch (error) {
+    recordTransportObservation(() =>
+      observeGhFailure(error, { graphql: true }),
+    );
+    throw error;
+  }
+  const data = JSON.parse(raw.trim() || '{}');
+  recordTransportObservation(() =>
+    observeGhSuccess({ data, httpObserved: false, graphql: true }),
+  );
+  return data;
 }
 
 /** #2148: REST `GET /user` failures that may still have a live GraphQL
