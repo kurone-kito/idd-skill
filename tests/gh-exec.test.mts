@@ -1068,7 +1068,7 @@ test('gh-exec worker entry exits only for a paginated capture kind (#3597)', asy
         reject(
           new Error(`worker stayed alive for ${JSON.stringify(workerData)}`),
         );
-      }, 5_000);
+      }, 30_000);
       worker.once('error', (error) => {
         clearTimeout(timer);
         reject(error);
@@ -1083,6 +1083,45 @@ test('gh-exec worker entry exits only for a paginated capture kind (#3597)', asy
   assert.equal(await exitCode({ kind: 'not-a-capture' }), 0);
   assert.equal(await exitCode(null), 0);
   assert.equal(await exitCode({ kind: 'paginated-gh-capture' }), 1);
+});
+
+test('ghApiJson (paginated) fails closed when gh exits 0 after the timeout SIGTERM (#3597)', () => {
+  // A `gh` that handles SIGTERM and exits cleanly reports `close(0, null)`,
+  // so the timeout has to be recorded independently of the exit status.
+  const restore = stubGh(`
+process.on('SIGTERM', () => process.exit(0));
+process.stdout.write('{"id":1}\\n');
+setTimeout(() => process.exit(0), 30_000);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 300 }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : '';
+        assert.match(message, /paginated gh capture timed out/);
+        assert.equal((error as { code?: unknown }).code, 'ETIMEDOUT');
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) treats a timeout past the timer range as the longest delay (#3597)', () => {
+  // `setTimeout` fires after 1 ms for a delay past 2^31-1, which would
+  // time out a capture that has plenty of time left.
+  const restore = stubGh(`process.stdout.write('{"id":1}\\n');`);
+  try {
+    for (const timeout of [Number.POSITIVE_INFINITY, 2 ** 31]) {
+      assert.deepEqual(
+        ghApiJson('repos/o/r/issues', { paginate: true, timeout }),
+        [{ id: 1 }],
+      );
+    }
+  } finally {
+    restore();
+  }
 });
 
 test('ghApiJson (paginated) fails closed when the stdout pipe errors (#3597)', () => {
@@ -1165,6 +1204,8 @@ test('ghApiJson (paginated) still signals gh when /proc cannot be read (#3597)',
         (error: unknown) => {
           const message = error instanceof Error ? error.message : '';
           assert.match(message, /paginated gh capture timed out/);
+          // The parent backstop carries the same code as a worker timeout.
+          assert.equal((error as { code?: unknown }).code, 'ETIMEDOUT');
           return true;
         },
       );

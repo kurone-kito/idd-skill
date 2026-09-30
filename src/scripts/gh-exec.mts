@@ -781,6 +781,9 @@ const PAGINATED_STDERR_CAP_BYTES = 1024 * 1024;
 
 const PAGINATED_CAPTURE_KIND = 'paginated-gh-capture';
 
+/** Largest delay `setTimeout` honors; a longer one fires after 1 ms. */
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
 /** Shared flag: index 0 is completion, index 1 is the `gh` pid. */
 const CAPTURE_SLOT_DONE = 0;
 const CAPTURE_SLOT_PID = 1;
@@ -800,6 +803,7 @@ interface PaginatedCaptureWorkerData {
 
 interface PaginatedCaptureStatus {
   limitExceeded: boolean;
+  timedOut: boolean;
   observedBytes: number;
   status: number | null;
   signal: string | null;
@@ -903,6 +907,7 @@ function publishPaginatedCapture(
 ): void {
   const payload: PaginatedCaptureStatus = {
     limitExceeded: report.limitExceeded,
+    timedOut: report.timedOut,
     observedBytes: report.observedBytes,
     status: report.status,
     signal: report.signal,
@@ -920,6 +925,7 @@ function publishPaginatedCapture(
         data.statusPath,
         JSON.stringify({
           limitExceeded: false,
+          timedOut: false,
           observedBytes: report.observedBytes,
           status: null,
           signal: null,
@@ -954,6 +960,7 @@ function armPaginatedCaptureExit(data: PaginatedCaptureWorkerData): void {
           data.statusPath,
           JSON.stringify({
             limitExceeded: false,
+            timedOut: false,
             observedBytes: 0,
             status: null,
             signal: null,
@@ -1039,6 +1046,11 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
   const outFd = openSync(data.outPath, 'w');
   let observedBytes = 0;
   let limitExceeded = false;
+  let timedOut = false;
+  let timeoutTimer: NodeJS.Timeout | undefined;
+  const stopTimeout = (): void => {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+  };
   let finished = false;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
@@ -1051,6 +1063,7 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
   const finish = (): void => {
     if (finished) return;
     finished = true;
+    stopTimeout();
     try {
       closeSync(outFd);
     } catch {
@@ -1058,6 +1071,7 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
     }
     publishPaginatedCapture(data, {
       limitExceeded,
+      timedOut,
       observedBytes,
       status: exitCode,
       signal: exitSignal,
@@ -1074,12 +1088,6 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
     child = spawn('gh', data.args, {
       windowsHide: true,
       stdio: [data.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-      // A proc-fault test leaves `gh` running so the parent's stuck-worker
-      // backstop is what signals it. Node's own spawn timeout would signal
-      // first and hide that decision.
-      ...(!procFault && data.timeout > 0
-        ? { timeout: data.timeout, killSignal: 'SIGTERM' as const }
-        : {}),
     });
   } catch (error) {
     spawnError = error instanceof Error ? error : new Error(String(error));
@@ -1097,16 +1105,44 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
   if (procFault && typeof child.pid === 'number' && child.pid > 0) {
     return;
   }
+  // The timeout is enforced here, not through spawn's `timeout` option:
+  // that option only sends SIGTERM and records nothing, so a `gh` that
+  // handles SIGTERM and exits 0 would close as a clean success carrying
+  // a partial NDJSON body (Copilot review, PR #3605). A proc-fault test
+  // (returned above) leaves `gh` running so the parent's stuck-worker
+  // backstop is what signals it.
+  if (data.timeout > 0) {
+    // `setTimeout` clamps a delay past 2^31-1 ms (and `Infinity`) to 1 ms,
+    // which would time out every capture.
+    timeoutTimer = setTimeout(
+      () => {
+        timedOut = true;
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // The child already exited.
+        }
+      },
+      Math.min(data.timeout, MAX_TIMER_DELAY_MS),
+    );
+  }
 
-  const noteStreamError = (error: unknown): void => {
-    if (!streamError) {
-      streamError = error instanceof Error ? error : new Error(String(error));
-    }
+  // A kill for the byte limit, a write failure, or a pipe error stops the
+  // timeout timer first: once the capture has its own failure recorded, a
+  // slow-to-die `gh` must not have that failure reported as a timeout.
+  const killChild = (): void => {
+    stopTimeout();
     try {
       child.kill();
     } catch {
       // The child already exited.
     }
+  };
+  const noteStreamError = (error: unknown): void => {
+    if (!streamError) {
+      streamError = error instanceof Error ? error : new Error(String(error));
+    }
+    killChild();
     setTimeout(finish, 0);
   };
   const armStreamFault = (
@@ -1128,14 +1164,14 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
       if (next > data.limitBytes) {
         limitExceeded = true;
         observedBytes = next;
-        child.kill();
+        killChild();
         return;
       }
       writeAllSync(outFd, chunk);
       observedBytes = next;
     } catch (error) {
       spawnError = error instanceof Error ? error : new Error(String(error));
-      child.kill();
+      killChild();
     }
     armStreamFault(child.stdout, 'stdout');
   });
@@ -1161,11 +1197,15 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
   // are both recorded before the status file is published.
   child.once('error', (error: Error) => {
     spawnError = error;
+    stopTimeout();
     setTimeout(finish, 0);
   });
   child.once('close', (code, signal) => {
     exitCode = code;
     exitSignal = signal;
+    // `finish` runs a turn later; a timer expiring in between must not
+    // mark a capture that already closed as timed out.
+    stopTimeout();
     setTimeout(finish, 0);
   });
 }
@@ -1182,6 +1222,7 @@ function runPaginatedCaptureWorker(): void {
     if (data) {
       publishPaginatedCapture(data, {
         limitExceeded: false,
+        timedOut: false,
         observedBytes: 0,
         status: null,
         signal: null,
@@ -1220,6 +1261,7 @@ function readPaginatedCaptureStatus(filePath: string): PaginatedCaptureStatus {
   }
   return {
     limitExceeded: record.limitExceeded === true,
+    timedOut: record.timedOut === true,
     observedBytes: record.observedBytes,
     status: typeof record.status === 'number' ? record.status : null,
     signal:
@@ -1256,6 +1298,15 @@ function paginatedSpawnError(status: PaginatedCaptureStatus): Error {
   return tagGhCommandError(error);
 }
 
+function paginatedTimeoutError(message: string): Error {
+  const error = new Error(message);
+  Object.defineProperty(error, 'code', {
+    value: 'ETIMEDOUT',
+    enumerable: false,
+  });
+  return tagGhCommandError(error);
+}
+
 function paginatedStreamError(status: PaginatedCaptureStatus): Error {
   const error = new Error(
     status.streamErrorMessage ?? 'paginated gh capture stream failed',
@@ -1278,7 +1329,9 @@ function paginatedStreamError(status: PaginatedCaptureStatus): Error {
  * failure even when the bytes already written are valid JSON: a null
  * exit status must not look like success (Copilot review, PR #3605).
  * A stdout, stderr, or stdin pipe error is likewise a failure even when
- * `gh` exits 0, so a partial NDJSON prefix is not returned. A non-zero
+ * `gh` exits 0, so a partial NDJSON prefix is not returned. So is a
+ * timeout: the worker records that it signaled `gh`, because a `gh`
+ * that handles SIGTERM can still exit 0 (Copilot review, PR #3605). A non-zero
  * exit still honors `allowStatuses` when the captured body is JSON-shaped
  * and under the ceiling.
  */
@@ -1328,7 +1381,7 @@ function readPaginatedGhApi(
       Atomics.wait(view, CAPTURE_SLOT_DONE, 0);
     }
     if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0) {
-      throw tagGhCommandError(new Error('paginated gh capture timed out'));
+      throw paginatedTimeoutError('paginated gh capture timed out');
     }
     const capture = readPaginatedCaptureStatus(statusPath);
     const stderr = existsSync(errPath) ? readFileSync(errPath, 'utf8') : '';
@@ -1336,6 +1389,18 @@ function readPaginatedGhApi(
       throw new GhPaginatedResponseLimitError(
         GH_API_PAGINATED_MAX_BYTES,
         capture.observedBytes,
+      );
+    }
+    // Even a clean exit after the timeout's SIGTERM is a failure: the
+    // body may be a partial NDJSON prefix. Checked before the spawn and
+    // pipe errors because, once the worker has signaled `gh` for the
+    // timeout, those are usually consequences of that signal (an EPIPE on
+    // stdin must not hide the timeout). A failure that lands after the
+    // timer fired still reports the timeout, which fails closed. A
+    // worker-initiated kill for any other reason stops the timer first.
+    if (capture.timedOut) {
+      throw paginatedTimeoutError(
+        `paginated gh capture timed out after ${options.timeout}ms`,
       );
     }
     if (capture.spawnErrorMessage) {
