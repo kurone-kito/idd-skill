@@ -15632,6 +15632,11 @@ test('mentionsIssue: a bare #N, a code-span #N, a same-repository qualified refe
     'https://github.com/o/r/issues/3615',
     'https://ghe.example.com/o/r/issues/3615#issuecomment-99',
     'https://GITHUB.com/O/R/issues/3615',
+    '#3615/3616',
+    '#3615;',
+    '#3615,',
+    '[#3615]',
+    'AT&T #3615',
   ]) {
     assert.equal(mentionsIssue(text, 3615, 'o', 'r'), true, text);
   }
@@ -15650,6 +15655,23 @@ test('mentionsIssue: a longer number, another repository, or an unrelated token 
     'https://github.com/o/r/issues/36150',
     'https://github.com/o/r/pull/3615',
     '',
+  ]) {
+    assert.equal(mentionsIssue(text, 3615, 'o', 'r'), false, text);
+  }
+});
+
+// #3633: prose that merely resembles an issue reference is not one on GitHub,
+// so it must not clear the gate: a trailing word character, an HTML character
+// reference, and the same lookalikes for the qualified and URL forms.
+test('mentionsIssue: a trailing word character or an HTML entity before the # is a lookalike, not a mention', () => {
+  for (const text of [
+    '#3615abc',
+    '#3615_',
+    '&#3615;',
+    '&amp;#3615;',
+    '&nbsp;#3615',
+    'o/r#3615abc',
+    'https://github.com/o/r/issues/3615abc',
   ]) {
     assert.equal(mentionsIssue(text, 3615, 'o', 'r'), false, text);
   }
