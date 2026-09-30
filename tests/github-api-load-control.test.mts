@@ -1597,13 +1597,15 @@ test('a pre-existing state directory that others can access is tightened to owne
     const scope = scopeDir(h);
     const slots = slotsDir(h);
     const cooldown = join(scope, 'cooldown');
+    // The state root itself, not only its children, was group/world open.
+    chmodSync(h.dir, 0o777);
     for (const path of [scope, slots, cooldown]) {
       mkdirSync(path, { recursive: true });
       chmodSync(path, 0o777);
     }
     const gate = admitRead(h);
     gate.release();
-    for (const path of [scope, slots, cooldown]) {
+    for (const path of [h.dir, scope, slots, cooldown]) {
       assert.equal(statSync(path).mode & 0o077, 0, `${path} is owner-only`);
     }
   } finally {

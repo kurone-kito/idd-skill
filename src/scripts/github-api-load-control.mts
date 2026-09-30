@@ -285,14 +285,37 @@ function storageFailure(message: string, cause?: unknown): never {
   throw new LoadControlStorageError(message, { cause });
 }
 
+/**
+ * Require that this user owns `path` and that no one else can use it. A
+ * directory that already existed may be group- or world-accessible, which
+ * would let another local user forge or delete a lease or a cooldown.
+ * Tighten it to owner-only; a chmod that fails means it cannot be made
+ * private, so the request runs uncoordinated. A filesystem that accepts the
+ * call but stores no modes (a Windows mount under WSL) enforces none, so its
+ * reported mode is not evidence of anything. Windows keeps its own ACL model.
+ */
+function requireOwnedAndPrivate(
+  path: string,
+  stat: { uid: number; mode: number },
+): void {
+  if (process.platform === 'win32') return;
+  if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+    storageFailure('load control directory belongs to another user');
+  }
+  if ((stat.mode & 0o077) !== 0) chmodSync(path, DIR_MODE);
+}
+
 function ensureRoot(path: string): void {
   try {
     mkdirSync(path, { recursive: true, mode: DIR_MODE });
     // The root may legitimately be reached through a symlink (a relocated
-    // state directory); only its own children are held to the strict check.
-    if (!statSync(path).isDirectory()) {
+    // state directory), so its target is what is inspected. Its children are
+    // additionally required to be real directories.
+    const stat = statSync(path);
+    if (!stat.isDirectory()) {
       storageFailure('load control root is not a directory');
     }
+    requireOwnedAndPrivate(path, stat);
   } catch (error) {
     if (error instanceof LoadControlStorageError) throw error;
     storageFailure('load control directory is unavailable', error);
@@ -306,21 +329,7 @@ function ensureOwnDirectory(path: string): void {
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       storageFailure('load control path is not a real directory');
     }
-    if (process.platform !== 'win32') {
-      if (
-        typeof process.getuid === 'function' &&
-        stat.uid !== process.getuid()
-      ) {
-        storageFailure('load control directory belongs to another user');
-      }
-      // A directory that already existed may be group- or world-accessible,
-      // which would let another local user forge a lease or a cooldown.
-      // Tighten it to owner-only; a chmod that fails means it cannot be
-      // made private, so the request runs uncoordinated. A filesystem that
-      // accepts the call but stores no modes (a Windows mount under WSL)
-      // enforces none, so its reported mode is not evidence of anything.
-      if ((stat.mode & 0o077) !== 0) chmodSync(path, DIR_MODE);
-    }
+    requireOwnedAndPrivate(path, stat);
   } catch (error) {
     if (error instanceof LoadControlStorageError) throw error;
     storageFailure('load control directory is unavailable', error);
