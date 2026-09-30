@@ -39,6 +39,7 @@ const TEMP_NAME = /^[0-9a-f]{64}\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
 const MAX_CACHE_BYTES = 104857600;
 const DEFAULT_LEASE_TTL_MS = 15_000;
 const POLL_MS = 20;
+const LEASE_SETTLE_MS = 100;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
@@ -1014,7 +1015,19 @@ interface LeaseRecord {
   token?: string;
 }
 
-function readLease(ctx: CacheContext): LeaseRecord | null | 'stale' {
+/**
+ * What `readLease` found. `'stale'` is a lease that can never be live (a
+ * symlink, a non-file, or a record of the wrong shape). `'unparseable'` is
+ * an empty file or one whose JSON does not parse: a leader creates its
+ * lease file before it writes the payload, so a live leader's lease reads
+ * that way for a moment and must not be reclaimed at once. A symlink is
+ * never unlinked, so a read that meets one degrades to a live fetch until
+ * someone removes it.
+ */
+type LeaseRead = LeaseRecord | null | 'stale' | 'unparseable';
+type LeaseFound = Exclude<LeaseRead, null>;
+
+function readLease(ctx: CacheContext): LeaseRead {
   const path = leasePath(ctx);
   const stat = tryLstat(ctx.storage, path);
   if (!stat) return null;
@@ -1027,28 +1040,24 @@ function readLease(ctx: CacheContext): LeaseRecord | null | 'stale' {
     if (error instanceof CacheStorageError) throw error;
     throw new CacheStorageError('cache lease read failed', { cause: error });
   }
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(text) as {
-      pid?: unknown;
-      createdAt?: unknown;
-      token?: unknown;
-    };
-    if (
-      typeof parsed.pid !== 'number' ||
-      typeof parsed.createdAt !== 'number'
-    ) {
-      return 'stale';
-    }
-    return {
-      pid: parsed.pid,
-      createdAt: parsed.createdAt,
-      ...(typeof parsed.token === 'string' && parsed.token.length > 0
-        ? { token: parsed.token }
-        : {}),
-    };
+    parsed = JSON.parse(text);
   } catch {
-    return 'stale';
+    return 'unparseable';
   }
+  if (parsed === null || typeof parsed !== 'object') return 'stale';
+  const { pid, createdAt, token } = parsed as {
+    pid?: unknown;
+    createdAt?: unknown;
+    token?: unknown;
+  };
+  if (typeof pid !== 'number' || typeof createdAt !== 'number') return 'stale';
+  return {
+    pid,
+    createdAt,
+    ...(typeof token === 'string' && token.length > 0 ? { token } : {}),
+  };
 }
 
 function leaseMatches(current: LeaseRecord, observed: LeaseRecord): boolean {
@@ -1060,18 +1069,16 @@ function leaseMatches(current: LeaseRecord, observed: LeaseRecord): boolean {
   );
 }
 
-function discardObservedLease(
-  ctx: CacheContext,
-  observed: LeaseRecord | 'stale',
-): void {
+function discardObservedLease(ctx: CacheContext, observed: LeaseFound): void {
   const current = readLease(ctx);
-  if (observed === 'stale') {
-    if (current === 'stale') safeUnlink(ctx.storage, leasePath(ctx));
+  if (observed === 'stale' || observed === 'unparseable') {
+    if (current === observed) safeUnlink(ctx.storage, leasePath(ctx));
     return;
   }
   if (
     current !== null &&
     current !== 'stale' &&
+    current !== 'unparseable' &&
     leaseMatches(current, observed)
   ) {
     safeUnlink(ctx.storage, leasePath(ctx));
@@ -1115,9 +1122,46 @@ function releaseLease(ctx: CacheContext): void {
   }
 }
 
+/**
+ * Whether a waiter may reclaim `lease`. An `'unparseable'` lease is only
+ * reclaimable once the waiter has seen it that way for the settle window
+ * (`since` is when it first did). The window is capped at half the lease
+ * ttl so a short ttl still reclaims a leftover empty file before its wait
+ * ends.
+ */
+function isReclaimable(
+  ctx: CacheContext,
+  lease: LeaseFound,
+  since: number | null,
+): boolean {
+  if (lease === 'stale') return true;
+  if (lease === 'unparseable') {
+    const settle = Math.min(LEASE_SETTLE_MS, Math.floor(ctx.leaseTtlMs / 2));
+    return since !== null && ctx.now() - since >= settle;
+  }
+  return leaseIsStale(ctx, lease);
+}
+
+function unparseableSince(
+  ctx: CacheContext,
+  lease: LeaseFound,
+  previous: number | null,
+): number | null {
+  return lease === 'unparseable' ? (previous ?? ctx.now()) : null;
+}
+
 function waitForLeader(ctx: CacheContext): StoredRecord | null {
-  const started = Date.now();
-  while (Date.now() - started < ctx.leaseTtlMs) {
+  const started = ctx.now();
+  const pollMs = Math.min(POLL_MS, ctx.leaseTtlMs);
+  // The injected clock ends the wait. The poll count bounds it too, so a
+  // clock that never advances cannot spin a real `sleep` past the ttl.
+  const maxPolls = Math.ceil(ctx.leaseTtlMs / pollMs) + 1;
+  let since: number | null = null;
+  for (
+    let polls = 0;
+    polls < maxPolls && ctx.now() - started < ctx.leaseTtlMs;
+    polls += 1
+  ) {
     if (ctx.mode === 'hint') {
       const fresh = freshRecord(ctx);
       if (fresh) return fresh;
@@ -1126,17 +1170,18 @@ function waitForLeader(ctx: CacheContext): StoredRecord | null {
     if (lease === null) {
       return ctx.mode === 'hint' ? freshRecord(ctx) : trustedRecord(ctx);
     }
-    if (lease === 'stale' || leaseIsStale(ctx, lease)) {
+    since = unparseableSince(ctx, lease, since);
+    if (isReclaimable(ctx, lease, since)) {
       discardObservedLease(ctx, lease);
       return null;
     }
-    ctx.sleep(Math.min(POLL_MS, ctx.leaseTtlMs));
+    ctx.sleep(pollMs);
   }
   const lease = readLease(ctx);
   if (lease === null) {
     return ctx.mode === 'hint' ? freshRecord(ctx) : trustedRecord(ctx);
   }
-  if (lease === 'stale' || leaseIsStale(ctx, lease)) {
+  if (isReclaimable(ctx, lease, unparseableSince(ctx, lease, since))) {
     discardObservedLease(ctx, lease);
   }
   return null;

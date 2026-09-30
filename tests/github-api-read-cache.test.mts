@@ -1628,6 +1628,220 @@ test('hint waits out a live foreign lease before fetching', async () => {
   }
 });
 
+/**
+ * Create the cache layout, drop the stored entry, and return the lease path
+ * the next read for the same request contends for.
+ */
+function primeLease(paths: { cacheDir: string; workspace: string }): string {
+  const first = readThrough(paths, okBody({ primed: true }));
+  unlinkSync(join(paths.cacheDir, 'entries', `${first.entryId}.json`));
+  return join(paths.cacheDir, 'leases', `${first.entryId}.json`);
+}
+
+/** A fake clock that moves only when `sleep` is called. */
+function steppedClock(step: number) {
+  const start = Date.now();
+  let current = start;
+  const sleeps: number[] = [];
+  return {
+    start,
+    sleeps,
+    now: () => current,
+    sleep: (ms: number) => {
+      sleeps.push(ms);
+      current += step;
+    },
+  };
+}
+
+function countDateNow<T>(run: () => T): { value: T; calls: number } {
+  const real = Date.now;
+  let calls = 0;
+  Date.now = () => {
+    calls += 1;
+    return real();
+  };
+  try {
+    const value = run();
+    return { value, calls };
+  } finally {
+    Date.now = real;
+  }
+}
+
+for (const [name, content] of [
+  ['an empty', ''],
+  ['a truncated', '{"pid":12'],
+] as const) {
+  test(`${name} lease file is kept until it has stayed unparseable for the settle window`, () => {
+    const paths = tempRoot();
+    try {
+      const lease = primeLease(paths);
+      writeFileSync(lease, content);
+      const clock = steppedClock(25);
+      const present: boolean[] = [];
+      const result = readThrough(paths, okBody({ n: 1 }), {
+        now: clock.now,
+        sleep: (ms) => {
+          present.push(existsSync(lease));
+          clock.sleep(ms);
+        },
+      });
+      // 100 ms of injected time at 25 ms per sleep: four waits, then reclaim.
+      assert.deepEqual(present, [true, true, true, true]);
+      assert.equal(result.cache, 'miss');
+      assert.equal(result.fetched, true);
+      assert.deepEqual(result.body, { n: 1 });
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('a leftover empty lease is reclaimed under a ttl shorter than the settle window', () => {
+  const paths = tempRoot();
+  try {
+    writeFileSync(primeLease(paths), '');
+    const clock = steppedClock(25);
+    const result = readThrough(paths, okBody({ n: 2 }), {
+      now: clock.now,
+      sleep: clock.sleep,
+      leaseTtlMs: 50,
+    });
+    assert.equal(clock.sleeps.length, 1);
+    assert.equal(result.cache, 'miss');
+    assert.equal(result.fetched, true);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+for (const [name, content] of [
+  ['a record with a non-numeric pid', '{"pid":"x","createdAt":1}'],
+  ['a JSON null', 'null'],
+  ['a JSON array', '[]'],
+  ['an empty object', '{}'],
+] as const) {
+  test(`${name} as a lease is reclaimed without waiting`, () => {
+    const paths = tempRoot();
+    try {
+      writeFileSync(primeLease(paths), content);
+      const clock = steppedClock(25);
+      const result = readThrough(paths, okBody({ n: 3 }), {
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+      assert.deepEqual(clock.sleeps, []);
+      assert.equal(result.cache, 'miss');
+      assert.equal(result.fetched, true);
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('a symlink lease is neither followed nor waited on', {
+  skip: process.platform === 'win32',
+}, () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    const target = join(paths.root, 'nowhere');
+    symlinkSync(target, lease);
+    const clock = steppedClock(25);
+    const result = readThrough(paths, okBody({ n: 4 }), {
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+    assert.deepEqual(clock.sleeps, []);
+    assert.equal(result.cache, 'degraded');
+    assert.equal(result.fetched, true);
+    assert.equal(lstatSync(lease).isSymbolicLink(), true);
+    assert.equal(existsSync(target), false);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an empty lease that becomes a live record mid-wait is left in place', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    writeFileSync(lease, '');
+    const clock = steppedClock(100);
+    const live = JSON.stringify({
+      pid: 4242,
+      createdAt: clock.start,
+      mode: 'hint',
+    });
+    const result = readThrough(paths, okBody({ n: 5 }), {
+      now: clock.now,
+      sleep: (ms) => {
+        if (clock.sleeps.length === 0) writeFileSync(lease, live);
+        clock.sleep(ms);
+      },
+      leaseTtlMs: 1_000,
+      isPidAlive: () => true,
+    });
+    assert.equal(clock.sleeps.length, 10);
+    assert.equal(result.cache, 'degraded');
+    assert.equal(readFileSync(lease, 'utf8'), live);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a lease wait is bounded even when the injected clock never advances', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    const frozen = Date.now();
+    const sleeps: number[] = [];
+    writeFileSync(
+      lease,
+      JSON.stringify({ pid: 4242, createdAt: frozen, mode: 'hint' }),
+    );
+    const result = readThrough(paths, okBody({ n: 6 }), {
+      now: () => frozen,
+      sleep: (ms) => {
+        sleeps.push(ms);
+      },
+      leaseTtlMs: 100,
+      isPidAlive: () => true,
+    });
+    assert.ok(sleeps.length >= 1 && sleeps.length <= 10);
+    assert.equal(result.cache, 'degraded');
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a lease wait follows the injected clock and never reads Date.now', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    const clock = steppedClock(100);
+    writeFileSync(
+      lease,
+      JSON.stringify({ pid: 4242, createdAt: clock.start, mode: 'hint' }),
+    );
+    const { value: result, calls } = countDateNow(() =>
+      readThrough(paths, okBody({ live: true }), {
+        now: clock.now,
+        sleep: clock.sleep,
+        leaseTtlMs: 1_000,
+        isPidAlive: () => true,
+      }),
+    );
+    assert.equal(clock.sleeps.length, 10);
+    assert.equal(calls, 0);
+    assert.equal(result.cache, 'degraded');
+    assert.deepEqual(result.body, { live: true });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('two processes coalesce a cold hint read onto one fetch', async () => {
   const paths = tempRoot();
   const leaderCount = join(paths.root, 'leader-count');

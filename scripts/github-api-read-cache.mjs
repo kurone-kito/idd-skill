@@ -38,6 +38,7 @@ const TEMP_NAME = /^[0-9a-f]{64}\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
 const MAX_CACHE_BYTES = 104857600;
 const DEFAULT_LEASE_TTL_MS = 15_000;
 const POLL_MS = 20;
+const LEASE_SETTLE_MS = 100;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 class CacheStorageError extends Error {
@@ -785,24 +786,20 @@ function readLease(ctx) {
     if (error instanceof CacheStorageError) throw error;
     throw new CacheStorageError('cache lease read failed', { cause: error });
   }
+  let parsed;
   try {
-    const parsed = JSON.parse(text);
-    if (
-      typeof parsed.pid !== 'number' ||
-      typeof parsed.createdAt !== 'number'
-    ) {
-      return 'stale';
-    }
-    return {
-      pid: parsed.pid,
-      createdAt: parsed.createdAt,
-      ...(typeof parsed.token === 'string' && parsed.token.length > 0
-        ? { token: parsed.token }
-        : {}),
-    };
+    parsed = JSON.parse(text);
   } catch {
-    return 'stale';
+    return 'unparseable';
   }
+  if (parsed === null || typeof parsed !== 'object') return 'stale';
+  const { pid, createdAt, token } = parsed;
+  if (typeof pid !== 'number' || typeof createdAt !== 'number') return 'stale';
+  return {
+    pid,
+    createdAt,
+    ...(typeof token === 'string' && token.length > 0 ? { token } : {}),
+  };
 }
 function leaseMatches(current, observed) {
   if (observed.token !== undefined || current.token !== undefined) {
@@ -814,13 +811,14 @@ function leaseMatches(current, observed) {
 }
 function discardObservedLease(ctx, observed) {
   const current = readLease(ctx);
-  if (observed === 'stale') {
-    if (current === 'stale') safeUnlink(ctx.storage, leasePath(ctx));
+  if (observed === 'stale' || observed === 'unparseable') {
+    if (current === observed) safeUnlink(ctx.storage, leasePath(ctx));
     return;
   }
   if (
     current !== null &&
     current !== 'stale' &&
+    current !== 'unparseable' &&
     leaseMatches(current, observed)
   ) {
     safeUnlink(ctx.storage, leasePath(ctx));
@@ -860,9 +858,36 @@ function releaseLease(ctx) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
 }
+/**
+ * Whether a waiter may reclaim `lease`. An `'unparseable'` lease is only
+ * reclaimable once the waiter has seen it that way for the settle window
+ * (`since` is when it first did). The window is capped at half the lease
+ * ttl so a short ttl still reclaims a leftover empty file before its wait
+ * ends.
+ */
+function isReclaimable(ctx, lease, since) {
+  if (lease === 'stale') return true;
+  if (lease === 'unparseable') {
+    const settle = Math.min(LEASE_SETTLE_MS, Math.floor(ctx.leaseTtlMs / 2));
+    return since !== null && ctx.now() - since >= settle;
+  }
+  return leaseIsStale(ctx, lease);
+}
+function unparseableSince(ctx, lease, previous) {
+  return lease === 'unparseable' ? (previous ?? ctx.now()) : null;
+}
 function waitForLeader(ctx) {
-  const started = Date.now();
-  while (Date.now() - started < ctx.leaseTtlMs) {
+  const started = ctx.now();
+  const pollMs = Math.min(POLL_MS, ctx.leaseTtlMs);
+  // The injected clock ends the wait. The poll count bounds it too, so a
+  // clock that never advances cannot spin a real `sleep` past the ttl.
+  const maxPolls = Math.ceil(ctx.leaseTtlMs / pollMs) + 1;
+  let since = null;
+  for (
+    let polls = 0;
+    polls < maxPolls && ctx.now() - started < ctx.leaseTtlMs;
+    polls += 1
+  ) {
     if (ctx.mode === 'hint') {
       const fresh = freshRecord(ctx);
       if (fresh) return fresh;
@@ -871,17 +896,18 @@ function waitForLeader(ctx) {
     if (lease === null) {
       return ctx.mode === 'hint' ? freshRecord(ctx) : trustedRecord(ctx);
     }
-    if (lease === 'stale' || leaseIsStale(ctx, lease)) {
+    since = unparseableSince(ctx, lease, since);
+    if (isReclaimable(ctx, lease, since)) {
       discardObservedLease(ctx, lease);
       return null;
     }
-    ctx.sleep(Math.min(POLL_MS, ctx.leaseTtlMs));
+    ctx.sleep(pollMs);
   }
   const lease = readLease(ctx);
   if (lease === null) {
     return ctx.mode === 'hint' ? freshRecord(ctx) : trustedRecord(ctx);
   }
-  if (lease === 'stale' || leaseIsStale(ctx, lease)) {
+  if (isReclaimable(ctx, lease, unparseableSince(ctx, lease, since))) {
     discardObservedLease(ctx, lease);
   }
   return null;
