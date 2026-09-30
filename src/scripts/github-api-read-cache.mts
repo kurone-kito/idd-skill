@@ -747,6 +747,15 @@ function leasePath(ctx: CacheContext): string {
   return join(ctx.root, 'leases', `${ctx.entryId}.json`);
 }
 
+/**
+ * A leader's heartbeat lives in its own file, keyed by the lease token, so
+ * renewing never rewrites (and so can never overwrite) a lease record that a
+ * waiter took over in the meantime.
+ */
+function heartbeatPath(ctx: CacheContext, token: string): string {
+  return join(ctx.root, 'leases', `${ctx.entryId}.${token}.hb`);
+}
+
 function trustedRecord(ctx: CacheContext): StoredRecord | null {
   const record = readRecord(ctx, entryPath(ctx));
   if (!record) return null;
@@ -1095,12 +1104,27 @@ function discardObservedLease(
     leaseMatches(current, observed)
   ) {
     safeUnlink(ctx.storage, leasePath(ctx));
+    if (observed.token) {
+      safeUnlink(ctx.storage, heartbeatPath(ctx, observed.token));
+    }
+  }
+}
+
+/** When the lease's leader last renewed it, or `0` if it never did. */
+function heartbeatAt(ctx: CacheContext, lease: LeaseRecord): number {
+  if (!lease.token) return 0;
+  try {
+    const seen = Number(ctx.storage.readFile(heartbeatPath(ctx, lease.token)));
+    return Number.isFinite(seen) && seen <= ctx.now() ? seen : 0;
+  } catch {
+    return 0;
   }
 }
 
 function leaseIsStale(ctx: CacheContext, lease: LeaseRecord): boolean {
   if (lease.createdAt > ctx.now()) return true;
-  if (ctx.now() - lease.createdAt > ctx.leaseTtlMs) return true;
+  const lastSeen = Math.max(lease.createdAt, heartbeatAt(ctx, lease));
+  if (ctx.now() - lastSeen > ctx.leaseTtlMs) return true;
   return !ctx.isPidAlive(lease.pid);
 }
 
@@ -1130,34 +1154,26 @@ function releaseLease(ctx: CacheContext): void {
   if (!held) return;
   try {
     discardObservedLease(ctx, held);
+    // Also covers a lease that was taken over while this leader ran.
+    if (held.token) safeUnlink(ctx.storage, heartbeatPath(ctx, held.token));
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
 }
 
 /**
- * Refresh the age of the lease this context holds, so a live leader that
- * computes for longer than the stale threshold is not mistaken for a dead one.
- * Best effort: a failed renewal only lets the lease age out as before.
+ * Record that the lease this context holds is still being served, so a live
+ * leader that computes for longer than the stale threshold is not mistaken
+ * for a dead one. The heartbeat is a file of its own (see
+ * {@link heartbeatPath}); the lease record is never rewritten, so a renewal
+ * cannot clobber a lease a waiter has since taken over. Best effort: a failed
+ * renewal only lets the lease age out as before.
  */
 function renewLease(ctx: CacheContext): void {
   const held = ctx.heldLease;
-  if (!held) return;
+  if (!held?.token) return;
   try {
-    const current = readLease(ctx);
-    if (current === null || current === 'stale') return;
-    if (!leaseMatches(current, held)) return;
-    const createdAt = ctx.now();
-    ctx.storage.writeAtomic(
-      leasePath(ctx),
-      JSON.stringify({
-        pid: held.pid,
-        createdAt,
-        mode: ctx.mode,
-        ...(held.token ? { token: held.token } : {}),
-      }),
-    );
-    ctx.heldLease = { ...held, createdAt };
+    ctx.storage.writeAtomic(heartbeatPath(ctx, held.token), String(ctx.now()));
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }

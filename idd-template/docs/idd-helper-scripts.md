@@ -1734,15 +1734,16 @@ speed-up, never a gate.
   coalesce onto one enumeration through the same single-flight lease as the
   read cache, and a hint is stale for every reader at the same moment (aged
   from the start of its enumeration), so a stale hint sends one reader to
-  recompute rather than a herd.
-  Unlike a single request, a Discover enumeration can run for a long time,
-  so a waiter polls a live leader for up to two minutes and does not take
-  the lease from a live process. A live leader renews its lease while it
-  computes, so an enumeration longer than the ten-minute stale threshold
-  keeps it; a lease that stops being renewed for that long is stale (for
-  example a crashed leader whose process id was reused). A dead leader is
-  detected within one poll. An incomplete result is not stored, so its
-  waiters then compute for themselves.
+  recompute rather than a herd. Unlike a single request, a Discover
+  enumeration can run for a long time, so a waiter polls a live leader for
+  up to two minutes and does not take the lease from a live process. A live
+  leader renews its lease while it computes, through a heartbeat file of its
+  own so a renewal never rewrites a lease another process has taken over,
+  and an enumeration longer than the ten-minute stale threshold keeps it; a
+  lease that stops being renewed for that long is stale (for example a
+  crashed leader whose process id was reused). A dead leader is detected
+  within one poll. An incomplete result is not stored, so its waiters then
+  compute for themselves.
 - **Scope note.** The GitHub adapter's own requests are not individually
   cached; the hint sits above them, so a warm run skips the adapter
   entirely. Hints are keyed by worktree, so sessions in different worktrees

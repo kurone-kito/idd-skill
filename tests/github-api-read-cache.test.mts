@@ -2213,7 +2213,9 @@ async function longLeaderScenario(renew: boolean) {
         startLeaseHeartbeat: () => () => {},
       },
     );
-    const leaseStillHeld = leaseNames(paths.cacheDir).length === 1;
+    const leaseStillHeld =
+      leaseNames(paths.cacheDir).filter((name) => name.endsWith('.json'))
+        .length === 1;
     gate.resolve({ status: 200, body: { report: 'leader' } });
     await leader;
     return { waiter, waiterCalls, leaseStillHeld, stopped };
@@ -2234,4 +2236,48 @@ test('without a heartbeat the same async lease ages out and is taken over', asyn
   const stolen = await longLeaderScenario(false);
   assert.equal(stolen.waiter.cache, 'miss');
   assert.equal(stolen.waiterCalls, 1);
+});
+
+test("a stale leader's heartbeat never overwrites a lease taken over since", async () => {
+  const paths = tempRoot();
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let heartbeat: (() => void) | null = null;
+  try {
+    const leader = readThroughAsync(paths, () => gate.promise, {
+      startLeaseHeartbeat: (fn) => {
+        heartbeat = fn;
+        return () => {};
+      },
+    });
+    const leases = join(paths.cacheDir, 'leases');
+    const leaseFile = readdirSync(leases).find((name) =>
+      name.endsWith('.json'),
+    ) as string;
+    // A waiter judged the leader dead and took the lease over.
+    const takeover = JSON.stringify({
+      pid: process.pid,
+      createdAt: Date.now(),
+      mode: 'hint',
+      token: 'takeover-token',
+    });
+    writeFileSync(join(leases, leaseFile), takeover, { mode: 0o600 });
+    // The old leader's heartbeat fires late.
+    (heartbeat as (() => void) | null)?.();
+    assert.equal(readFileSync(join(leases, leaseFile), 'utf8'), takeover);
+    assert.equal(
+      readdirSync(leases).filter((name) => name.endsWith('.hb')).length,
+      1,
+    );
+    gate.resolve({ status: 200, body: { report: 'late' } });
+    await leader;
+    // Releasing removes the old leader's own heartbeat and leaves the new
+    // leader's lease alone.
+    assert.equal(readFileSync(join(leases, leaseFile), 'utf8'), takeover);
+    assert.equal(
+      readdirSync(leases).filter((name) => name.endsWith('.hb')).length,
+      0,
+    );
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
 });
