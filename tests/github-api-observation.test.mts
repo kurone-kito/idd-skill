@@ -467,9 +467,14 @@ test('retention keeps a bounded allowlisted file', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-'));
   const telemetryPath = join(tempRoot, 'telemetry.jsonl');
   try {
-    writeFileSync(telemetryPath, '{"token":"ghp_OLDPOISON"}\n', {
-      mode: 0o644,
-    });
+    writeFileSync(
+      telemetryPath,
+      `${JSON.stringify({
+        ...observeGhSuccess({ status: 199, data: { ok: true } }),
+        token: 'ghp_OLDPOISON',
+      })}\n`,
+      { mode: 0o644 },
+    );
     chmodSync(telemetryPath, 0o644);
     const poisoned = {
       ...observeGhSuccess({ status: 200, data: { ok: true } }),
@@ -494,9 +499,14 @@ test('retention keeps a bounded allowlisted file', () => {
     );
 
     const keptPoisonPath = join(tempRoot, 'kept.jsonl');
-    writeFileSync(keptPoisonPath, '{"token":"ghp_KEPTPOISON"}\n', {
-      mode: 0o644,
-    });
+    writeFileSync(
+      keptPoisonPath,
+      `${JSON.stringify({
+        ...observeGhSuccess({ status: 201, data: { ok: true } }),
+        token: 'ghp_KEPTPOISON',
+      })}\n`,
+      { mode: 0o644 },
+    );
     chmodSync(keptPoisonPath, 0o644);
     appendRequestObservation(
       observeGhSuccess({ status: 202, data: { ok: true } }),
@@ -512,6 +522,43 @@ test('retention keeps a bounded allowlisted file', () => {
     assert.equal(keptLines.length, 2);
     assert.equal(keptLines[1]?.status, 202);
     assert.equal((statSync(keptPoisonPath).mode & 0o777) === 0o600, true);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('a path holding foreign content is left untouched', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-foreign-'));
+  const observation = observeGhSuccess({ status: 200, data: { ok: true } });
+  try {
+    const foreignBodies = [
+      '[user]\n\tname = someone\n',
+      '{"token":"ghp_FOREIGN"}\n',
+      `${JSON.stringify(observation)}\nnot a record\n`,
+    ];
+    for (const [index, content] of foreignBodies.entries()) {
+      const target = join(tempRoot, `foreign-${index}.jsonl`);
+      writeFileSync(target, content, { mode: 0o644 });
+      assert.throws(() =>
+        appendRequestObservation(observation, { path: target, maxRecords: 5 }),
+      );
+      assert.equal(readFileSync(target, 'utf8'), content);
+      assert.equal(existsSync(`${target}.lock`), false);
+    }
+
+    const missing = join(tempRoot, 'new.jsonl');
+    appendRequestObservation(observation, { path: missing, maxRecords: 5 });
+    assert.deepEqual(
+      JSON.parse(readFileSync(missing, 'utf8').trim()),
+      observation,
+    );
+    const empty = join(tempRoot, 'empty.jsonl');
+    writeFileSync(empty, '\n\n');
+    appendRequestObservation(observation, { path: empty, maxRecords: 5 });
+    assert.deepEqual(
+      JSON.parse(readFileSync(empty, 'utf8').trim()),
+      observation,
+    );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

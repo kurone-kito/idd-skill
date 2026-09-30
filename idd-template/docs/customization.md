@@ -362,9 +362,10 @@ status, the rate-limit header fields, GraphQL query cost when the query
 selects `rateLimit` with `cost`, and separate command, retry, and
 injected page counts. It omits credentials, query text, issue and
 comment bodies, environment dumps, and launcher or session names.
-Retention is a bounded local file with no outbound upload. A primary
-quota signal is never relabeled as secondary throttling. This key is not
-a response cache and not a request-admission policy.
+Retention is a bounded local file with no outbound upload, and a `path`
+that holds anything other than these records is left untouched. A
+primary quota signal is never relabeled as secondary throttling. This
+key is not a response cache and not a request-admission policy.
 
 For advisory review timing, repositories may now customize
 `advisoryWait.requestCap`, `advisoryWait.pendingWindow`,

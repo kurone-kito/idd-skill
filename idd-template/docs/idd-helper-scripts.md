@@ -479,7 +479,9 @@ dumps, or launcher or session names. `gh api --paginate` counts as one
 command invocation; its HTTP and page counts stay unknown unless injected
 per-response records supply them. A failed call counts one HTTP request
 only when an HTTP status was observed; a spawn error, a timeout, or a
-failure before any response leaves both counts unknown.
+failure before any response leaves both counts unknown. The retention file
+is rewritten in place, so a `path` that already holds anything other than
+these records is left untouched and nothing is recorded.
 More than one of GraphQL errors, primary exhaustion, secondary
 throttling, and access denial stays `unknown` rather than guessing a
 subtype. A read or write failure in this retention path does not change

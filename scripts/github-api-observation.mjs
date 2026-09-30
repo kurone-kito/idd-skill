@@ -415,7 +415,13 @@ function storedClassification(value) {
     ? value
     : 'unknown';
 }
-/** Drop anything outside the allowlist, including a pre-existing line. */
+/**
+ * Re-read one retained line as an allowlisted observation, dropping any
+ * field outside the allowlist. Returns null when the line is not one of
+ * this module's own records (invalid JSON, or an object without a known
+ * `classification` and a `signals` object), so a caller can tell a foreign
+ * file from a retained one.
+ */
 function observationFromStoredLine(line) {
   let parsed;
   try {
@@ -427,12 +433,16 @@ function observationFromStoredLine(line) {
     return null;
   }
   const record = parsed;
-  const signals =
-    record.signals &&
-    typeof record.signals === 'object' &&
-    !Array.isArray(record.signals)
-      ? record.signals
-      : {};
+  if (
+    typeof record.classification !== 'string' ||
+    !CLASSIFICATIONS.has(record.classification) ||
+    !record.signals ||
+    typeof record.signals !== 'object' ||
+    Array.isArray(record.signals)
+  ) {
+    return null;
+  }
+  const signals = record.signals;
   return allowlistObservation({
     status: storedMaybeNumber(record.status),
     resource: storedResource(record.resource),
@@ -513,14 +523,21 @@ export function appendRequestObservation(observation, options) {
       const code = error?.code;
       if (code !== 'ENOENT') throw error;
     }
-    const lines = existing
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .flatMap((line) => {
-        const retained = observationFromStoredLine(line);
-        return retained === null ? [] : [JSON.stringify(retained)];
-      });
+    const lines = [];
+    for (const raw of existing.split('\n')) {
+      const line = raw.trim();
+      if (line.length === 0) continue;
+      const retained = observationFromStoredLine(line);
+      // The rewrite below replaces the whole file, so a file holding
+      // anything but this module's own records (a misdirected `path`) is
+      // left untouched rather than rewritten.
+      if (retained === null) {
+        throw new Error(
+          'github api telemetry path holds content that is not a retained observation',
+        );
+      }
+      lines.push(JSON.stringify(retained));
+    }
     lines.push(JSON.stringify(allowlistObservation(observation)));
     const kept = lines.slice(-maxRecords);
     const temporary = `${options.path}.${process.pid}.tmp`;
