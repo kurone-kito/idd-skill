@@ -420,12 +420,11 @@ never clears by polling: follow its `detail`.
   condition in `idd-review-triage.instructions.md`'s "Disposition-evidence
   parity (advisory-only)" paragraph), autopilot may deterministically
   override `return-to-e1` and proceed on the current HEAD SHA. Distinct
-  from the `reviewCurrency` carve-out above (that covers E1-snapshot
-  staleness; this covers disposition evidence on already-resolved
-  threads) and applied by the agent, not `pre-merge-readiness`'s own
-  rollup. The signal never changes `route` itself; any other blocking
-  cause makes it `false`, and the gate still routes to E1/E4. Fails
-  closed: an unusable check makes this condition unmet.
+  from the `reviewCurrency` carve-out above (E1-snapshot staleness) and
+  applied by the agent, not `pre-merge-readiness`'s own rollup. The
+  signal never changes `route` itself; any other blocking cause makes it
+  `false`, and the gate still routes to E1/E4. Fails closed: an unusable
+  check makes this condition unmet.
 - **Closing-set and impact-checklist re-verification**:
   `closingSet`/`closing-set` evidences this section's re-run of
   D3.5 steps 6-7 only; re-derive D3.7 below locally.
@@ -442,17 +441,18 @@ never clears by polling: follow its `detail`.
   6-7 (the `closingIssuesReferences` set comparison and the
   commit-message closing-keyword scan) and D3.7 (the
   IDD-impact-checklist re-derivation) against that HEAD. Skip D3.5
-  steps 6-7 under the same non-default-`{development-branch}`
-  exemption D3.5 itself carries. On a mismatch: for a closing-set
-  drift, apply D3.5 step 6's own remediation (reusing step 4's
-  edit-and-recheck mechanism for a missing entry); for a stray
+  steps 6-7 under D3.5's own non-default-`{development-branch}`
+  exemption. On a mismatch: for a closing-set drift, apply D3.5 step
+  6's own remediation, except a missing entry it classes as pending
+  registration (`kurone-kito/idd-skill#3632`), which is no drift: keep
+  polling the `closing-set` blocker, no repair or hold; for a stray
   commit-message match, apply D3.5 step 7's own remediation (amend or
   rebase); for a checklist drift, apply D3.7's own mismatch handling.
   If the fix amended or rebased a commit (changing HEAD), return to
-  this list's first condition instead of only repeating this one — the
-  new HEAD invalidates the conditions already checked above. Otherwise,
-  repeat this condition once. If it still fails, post a hold note and
-  stop — do not proceed to F3.
+  this list's first condition instead of only repeating it — the new
+  HEAD invalidates the checks above. Otherwise, repeat this condition
+  once. If it still fails (pending registration excepted), post a hold
+  note and stop — do not proceed to F3.
 
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the digest after recording the blocking evidence and before
