@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -2379,6 +2379,286 @@ test('an unsafe lease token is never turned into a path outside the leases direc
     assert.equal(readFileSync(victim, 'utf8'), '1');
     assert.equal(leaseNames(paths.cacheDir).length, 0);
   } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+// ---- Windows ACL privacy check for a configured directory (#3623) ----
+// Titles start with "windows acl" so the Windows CI job can select them by an
+// ASCII pattern; the fake-reader tests run on every operating system.
+
+const ACL_USER_SID = 'S-1-5-21-1000000001-2000000002-3000000003-1001';
+
+function aclEntries(...sids: string[]) {
+  return {
+    kind: 'entries' as const,
+    entries: sids.map((sid) => ({ sid, allow: true })),
+    currentSid: ACL_USER_SID,
+  };
+}
+
+function aclReader(result: unknown) {
+  const calls: string[] = [];
+  return {
+    calls,
+    read: (directory: string) => {
+      calls.push(directory);
+      if (result instanceof Error) throw result;
+      return result as ReturnType<
+        NonNullable<ReadThroughGithubApiCacheInput['windowsAclReader']>
+      >;
+    },
+  };
+}
+
+test('windows acl: a user-only ACL on a configured directory is cached', () => {
+  const paths = tempRoot();
+  const reader = aclReader(
+    aclEntries(ACL_USER_SID, 'S-1-5-18', 'S-1-5-32-544'),
+  );
+  let fetches = 0;
+  const fetch = () => {
+    fetches += 1;
+    return { status: 200, body: { n: fetches } };
+  };
+  try {
+    const first = readThrough(paths, fetch, {
+      platform: 'win32',
+      windowsAclReader: reader.read,
+    });
+    const second = readThrough(paths, fetch, {
+      platform: 'win32',
+      windowsAclReader: reader.read,
+    });
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+    assert.equal(fetches, 1);
+    // The verdict is read fresh on every cache read, never remembered.
+    assert.equal(reader.calls.length, 2);
+    assert.equal(entryNames(paths.cacheDir).length, 1);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('windows acl: a permissive, unreadable, throwing, or malformed reader falls back to a live read and stores nothing', () => {
+  const cases: [string, unknown][] = [
+    ['everyone', aclEntries(ACL_USER_SID, 'S-1-1-0')],
+    ['users', aclEntries('S-1-5-32-545')],
+    ['authenticated users', aclEntries('S-1-5-11')],
+    ['unknown principal', aclEntries('S-1-5-21-9-9-9-1002')],
+    ['unreadable', { kind: 'unreadable' }],
+    ['throwing', new Error('icacls exploded')],
+    ['malformed', { kind: 'entries', entries: 'nope' }],
+    ['no current user', { ...aclEntries(ACL_USER_SID), currentSid: undefined }],
+  ];
+  for (const [label, result] of cases) {
+    const paths = tempRoot();
+    const reader = aclReader(result);
+    let fetches = 0;
+    const fetch = () => {
+      fetches += 1;
+      return { status: 200, body: { n: fetches } };
+    };
+    try {
+      const first = readThrough(paths, fetch, {
+        platform: 'win32',
+        windowsAclReader: reader.read,
+      });
+      const second = readThrough(paths, fetch, {
+        platform: 'win32',
+        windowsAclReader: reader.read,
+      });
+      assert.equal(first.cache, 'degraded', label);
+      assert.equal(second.cache, 'degraded', label);
+      assert.equal(fetches, 2, label);
+      // A refusal leaves only the empty root: no marker, entries, or leases.
+      assert.deepEqual(readdirSync(paths.cacheDir), [], label);
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('windows acl: the default per-user location is trusted and performs no ACL read', () => {
+  const paths = tempRoot();
+  const reader = aclReader(aclEntries('S-1-1-0'));
+  const saved = {
+    xdg: process.env.XDG_CACHE_HOME,
+    local: process.env.LOCALAPPDATA,
+  };
+  process.env.XDG_CACHE_HOME = paths.cacheDir;
+  process.env.LOCALAPPDATA = paths.cacheDir;
+  try {
+    const noDirectory = {
+      enabled: true,
+      maxAgeMs: 300_000,
+      maxBytes: 104857600,
+      retentionMs: 86_400_000,
+    };
+    let fetches = 0;
+    const fetch = () => {
+      fetches += 1;
+      return { status: 200, body: { n: fetches } };
+    };
+    const options = {
+      platform: 'win32' as const,
+      windowsAclReader: reader.read,
+      policy: noDirectory,
+    };
+    const first = readThrough(paths, fetch, options);
+    const second = readThrough(paths, fetch, options);
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+    assert.equal(reader.calls.length, 0);
+  } finally {
+    if (saved.xdg === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = saved.xdg;
+    if (saved.local === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = saved.local;
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('windows acl: an injected default directory is checked like a configured one', () => {
+  const paths = tempRoot();
+  const reader = aclReader(aclEntries('S-1-1-0'));
+  try {
+    const result = readThrough(paths, okBody({ n: 1 }), {
+      platform: 'win32',
+      windowsAclReader: reader.read,
+      policy: policy(''),
+      defaultDirectory: paths.cacheDir,
+    });
+    assert.equal(result.cache, 'degraded');
+    assert.equal(reader.calls.length, 1);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('windows acl: another platform is never ACL-checked', () => {
+  const paths = tempRoot();
+  const reader = aclReader(aclEntries('S-1-1-0'));
+  try {
+    const first = readThrough(paths, okBody({ n: 1 }), {
+      platform: 'linux',
+      windowsAclReader: reader.read,
+    });
+    const second = readThrough(paths, okBody({ n: 2 }), {
+      platform: 'linux',
+      windowsAclReader: reader.read,
+    });
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+    assert.equal(reader.calls.length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('windows acl: the async twin caches a private ACL and degrades on a permissive one', async () => {
+  const paths = tempRoot();
+  const privateReader = aclReader(aclEntries(ACL_USER_SID));
+  const permissiveReader = aclReader(aclEntries('S-1-1-0'));
+  const fetch = async () => ({ status: 200, body: { report: 'r' } });
+  try {
+    const first = await readThroughAsync(paths, fetch, {
+      platform: 'win32',
+      windowsAclReader: privateReader.read,
+    });
+    const second = await readThroughAsync(paths, fetch, {
+      platform: 'win32',
+      windowsAclReader: privateReader.read,
+    });
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+    const refused = tempRoot();
+    try {
+      const degraded = await readThroughAsync(refused, fetch, {
+        platform: 'win32',
+        windowsAclReader: permissiveReader.read,
+      });
+      assert.equal(degraded.cache, 'degraded');
+      assert.deepEqual(readdirSync(refused.cacheDir), []);
+    } finally {
+      rmSync(refused.root, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+// The two real-directory tests prove the real `whoami`/`icacls` reader on the
+// Windows runner; they are skipped everywhere else.
+function windowsUserSid(): string {
+  return execFileSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  ).trim();
+}
+
+function icacls(directory: string, ...args: string[]): void {
+  execFileSync('icacls.exe', [directory, ...args], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+}
+
+test('windows acl real directory: a user-only directory is accepted', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const paths = tempRoot();
+  try {
+    icacls(
+      paths.cacheDir,
+      '/inheritance:r',
+      '/grant:r',
+      `*${windowsUserSid()}:(OI)(CI)F`,
+    );
+    const first = readThrough(paths, okBody({ n: 1 }));
+    const second = readThrough(paths, okBody({ n: 2 }));
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+  } finally {
+    try {
+      icacls(paths.cacheDir, '/reset', '/t', '/q');
+    } catch {
+      // Best effort: the directory is removed next either way.
+    }
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('windows acl real directory: a directory readable by Everyone is refused', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const paths = tempRoot();
+  try {
+    icacls(
+      paths.cacheDir,
+      '/inheritance:r',
+      '/grant:r',
+      `*${windowsUserSid()}:(OI)(CI)F`,
+    );
+    const accepted = readThrough(paths, okBody({ n: 1 }));
+    assert.equal(accepted.cache, 'miss');
+    icacls(paths.cacheDir, '/grant', '*S-1-1-0:(R)');
+    const refused = readThrough(paths, okBody({ n: 2 }));
+    assert.equal(refused.cache, 'degraded');
+    assert.deepEqual(refused.body, { n: 2 });
+  } finally {
+    try {
+      icacls(paths.cacheDir, '/reset', '/t', '/q');
+    } catch {
+      // Best effort: the directory is removed next either way.
+    }
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
