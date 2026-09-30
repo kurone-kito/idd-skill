@@ -477,11 +477,13 @@ selects `rateLimit` with `cost`, because GitHub returns it as a field of
 do not include request paths, query text, bodies, tokens, environment
 dumps, or launcher or session names. `gh api --paginate` counts as one
 command invocation; its HTTP and page counts stay unknown unless injected
-per-response records supply them. A failed call counts one HTTP request
-only when an HTTP status was observed; a spawn error, a timeout, or a
-failure before any response leaves both counts unknown. The retention file
-is rewritten in place, so a `path` that already holds anything other than
-these records is left untouched and nothing is recorded.
+per-response records supply them. A successful REST call counts one HTTP
+request, and a failed call counts one only when an HTTP status was
+observed; a spawn error, a timeout, a failure before any response, and a
+GraphQL success leave both counts unknown. Each write replaces the
+retention file through a temporary file, and a `path` whose existing file
+holds anything other than these records is not modified and nothing is
+recorded.
 More than one of GraphQL errors, primary exhaustion, secondary
 throttling, and access denial stays `unknown` rather than guessing a
 subtype. A read or write failure in this retention path does not change

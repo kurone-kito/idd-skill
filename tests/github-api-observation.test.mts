@@ -531,20 +531,53 @@ test('a path holding foreign content is left untouched', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-foreign-'));
   const observation = observeGhSuccess({ status: 200, data: { ok: true } });
   try {
+    const withoutKey = (key: keyof RequestObservation): string => {
+      const copy: Record<string, unknown> = { ...observation };
+      delete copy[key];
+      return JSON.stringify(copy);
+    };
     const foreignBodies = [
       '[user]\n\tname = someone\n',
       '{"token":"ghp_FOREIGN"}\n',
       `${JSON.stringify(observation)}\nnot a record\n`,
+      // Another tool's JSONL that only shares two field names.
+      '{"classification":"ok","signals":{},"note":"x"}\n',
+      // A record missing one of this module's own fields is not ours.
+      `${withoutKey('signals')}\n`,
+      `${withoutKey('classification')}\n`,
+      `${withoutKey('retryAttempts')}\n`,
+      `${JSON.stringify({ ...observation, signals: 'no' })}\n`,
     ];
     for (const [index, content] of foreignBodies.entries()) {
       const target = join(tempRoot, `foreign-${index}.jsonl`);
       writeFileSync(target, content, { mode: 0o644 });
-      assert.throws(() =>
-        appendRequestObservation(observation, { path: target, maxRecords: 5 }),
+      assert.throws(
+        () =>
+          appendRequestObservation(observation, {
+            path: target,
+            maxRecords: 5,
+          }),
+        /not a retained observation/,
       );
       assert.equal(readFileSync(target, 'utf8'), content);
       assert.equal(existsSync(`${target}.lock`), false);
     }
+
+    // A newer version's unknown classification is still this module's
+    // record: it reads back as `unknown` and does not block writing.
+    const newer = join(tempRoot, 'newer.jsonl');
+    writeFileSync(
+      newer,
+      `${JSON.stringify({ ...observation, classification: 'timeout-v2', extra: 'x' })}\n`,
+    );
+    appendRequestObservation(observation, { path: newer, maxRecords: 5 });
+    const newerRecords = readFileSync(newer, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(newerRecords.length, 2);
+    assert.equal(newerRecords[0]?.classification, 'unknown');
+    assert.equal('extra' in (newerRecords[0] ?? {}), false);
 
     const missing = join(tempRoot, 'new.jsonl');
     appendRequestObservation(observation, { path: missing, maxRecords: 5 });

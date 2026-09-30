@@ -585,12 +585,30 @@ function storedClassification(value: unknown): RequestClassification {
     : 'unknown';
 }
 
+/** Every field a record written by this module carries. */
+const RECORD_KEYS = [
+  'status',
+  'resource',
+  'remaining',
+  'reset',
+  'retryAfter',
+  'httpRequestCount',
+  'pageCount',
+  'commandInvocationCount',
+  'retryAttempts',
+  'graphqlCost',
+  'classification',
+  'signals',
+] as const;
+
 /**
  * Re-read one retained line as an allowlisted observation, dropping any
  * field outside the allowlist. Returns null when the line is not one of
- * this module's own records (invalid JSON, or an object without a known
- * `classification` and a `signals` object), so a caller can tell a foreign
- * file from a retained one.
+ * this module's own records, so a caller can tell a foreign file from a
+ * retained one. A record is recognized by carrying every field this module
+ * writes (and an object `signals`), not by the vocabulary of one field: a
+ * newer version's unknown `classification` still reads back as `unknown`,
+ * while another tool's JSON object is not mistaken for a record.
  */
 function observationFromStoredLine(line: string): RequestObservation | null {
   let parsed: unknown;
@@ -604,8 +622,7 @@ function observationFromStoredLine(line: string): RequestObservation | null {
   }
   const record = parsed as Record<string, unknown>;
   if (
-    typeof record.classification !== 'string' ||
-    !CLASSIFICATIONS.has(record.classification as RequestClassification) ||
+    !RECORD_KEYS.every((key) => Object.hasOwn(record, key)) ||
     !record.signals ||
     typeof record.signals !== 'object' ||
     Array.isArray(record.signals)
@@ -682,6 +699,35 @@ function withTelemetryFileLock(lockPath: string, body: () => void): void {
   }
 }
 
+/**
+ * Read the retained lines of a telemetry file, re-serialized through the
+ * allowlist. A missing file has none. The rewrite replaces the whole file,
+ * so a file holding anything but this module's own records (a misdirected
+ * `path`) is refused instead of rewritten.
+ */
+function readRetainedLines(path: string): string[] {
+  let existing = '';
+  try {
+    existing = readFileSync(path, 'utf8');
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code !== 'ENOENT') throw error;
+  }
+  const lines: string[] = [];
+  for (const raw of existing.split('\n')) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const retained = observationFromStoredLine(line);
+    if (retained === null) {
+      throw new Error(
+        'github api telemetry path holds content that is not a retained observation',
+      );
+    }
+    lines.push(JSON.stringify(retained));
+  }
+  return lines;
+}
+
 export function appendRequestObservation(
   observation: RequestObservation,
   options: { path: string; maxRecords: number },
@@ -690,30 +736,12 @@ export function appendRequestObservation(
     Number.isInteger(options.maxRecords) && options.maxRecords >= 1
       ? options.maxRecords
       : DEFAULT_GITHUB_API_TELEMETRY_MAX_RECORDS;
+  // Refuse a foreign file before a sibling lock file is created next to
+  // it; the read is repeated under the lock below.
+  readRetainedLines(options.path);
   mkdirSync(dirname(options.path), { recursive: true });
   withTelemetryFileLock(`${options.path}.lock`, () => {
-    let existing = '';
-    try {
-      existing = readFileSync(options.path, 'utf8');
-    } catch (error) {
-      const code = (error as { code?: unknown } | null)?.code;
-      if (code !== 'ENOENT') throw error;
-    }
-    const lines: string[] = [];
-    for (const raw of existing.split('\n')) {
-      const line = raw.trim();
-      if (line.length === 0) continue;
-      const retained = observationFromStoredLine(line);
-      // The rewrite below replaces the whole file, so a file holding
-      // anything but this module's own records (a misdirected `path`) is
-      // left untouched rather than rewritten.
-      if (retained === null) {
-        throw new Error(
-          'github api telemetry path holds content that is not a retained observation',
-        );
-      }
-      lines.push(JSON.stringify(retained));
-    }
+    const lines = readRetainedLines(options.path);
     lines.push(JSON.stringify(allowlistObservation(observation)));
     const kept = lines.slice(-maxRecords);
     const temporary = `${options.path}.${process.pid}.tmp`;
