@@ -523,11 +523,17 @@ test('an unidentified caller bypasses the cache rather than guessing a key', asy
   const noRemote = fixture({ originUrl: () => undefined });
   const { compute, calls } = counter([{ leaves: [1] }]);
   try {
+    // Without a cache flag the run reports nothing: output stays identical.
     const a = await readDiscoverHint(request(noCredential, compute));
     const b = await readDiscoverHint(request(noRemote, compute));
-    assert.equal(a.cache?.mode, 'bypass');
-    assert.equal(b.cache?.mode, 'bypass');
-    assert.equal(calls(), 2);
+    assert.equal('cache' in a, false);
+    assert.equal('cache' in b, false);
+    // A cache flag asks about the run, so the bypass is reported.
+    const flagged = await readDiscoverHint(
+      request(noCredential, compute, { refreshCache: true }),
+    );
+    assert.equal(flagged.cache?.mode, 'bypass');
+    assert.equal(calls(), 3);
     assert.equal(existsSync(join(noCredential.cacheDir, 'entries')), false);
     assert.equal(existsSync(join(noRemote.cacheDir, 'entries')), false);
   } finally {

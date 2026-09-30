@@ -416,9 +416,9 @@ async function readOnce<T>(
  * Produce a Discover helper's report through the hint cache.
  *
  * - `noCache`: compute live, touch nothing (`mode: "off"`).
- * - feature off or identity unresolved: compute live (`mode: "bypass"`, and
- *   the `cache` object is omitted entirely when no cache flag was passed
- *   and the feature is off, keeping today's output byte-identical).
+ * - feature off, identity unresolved, or storage degraded: compute live
+ *   (`mode: "bypass"` only when `--refresh-cache` asked; otherwise the
+ *   `cache` object is omitted, keeping today's output byte-identical).
  * - `refreshCache`: recompute strict-fresh and store (`mode: "refresh"`).
  * - otherwise a hint read; a *hit that shows no startable candidate* triggers
  *   exactly one strict-fresh recompute (`exhaustionRefresh: true`) before the
@@ -432,9 +432,6 @@ export async function readDiscoverHint<T>(
   const flagged = request.noCache === true || request.refreshCache === true;
   const policy = deps.policy ?? loadReadCachePolicy(undefined);
   const active = policy.enabled === true;
-  // Identity resolution spawns local processes, so it is skipped entirely
-  // while the feature is off.
-  const config = active ? resolveConfig(request, { ...deps, policy }) : null;
 
   if (request.noCache === true) {
     const live = await computeTracked(request.compute);
@@ -443,39 +440,16 @@ export async function readDiscoverHint<T>(
       cache: meta('off', 'live', 0, 0, live.reasons.length === 0, 1, false),
     };
   }
-  if (!active || config === null) {
-    const live = await computeTracked(request.compute);
-    if (!active && !flagged) return { report: live.report };
-    return {
-      report: live.report,
-      cache: meta(
-        'bypass',
-        'live',
-        0,
-        active ? policy.maxAgeMs : 0,
-        live.reasons.length === 0,
-        1,
-        false,
-      ),
-    };
-  }
+  // Identity resolution spawns local processes, so it is skipped entirely
+  // while the feature is off.
+  const config = active ? resolveConfig(request, { ...deps, policy }) : null;
+  // A run the cache did not take part in (feature off, caller unidentified,
+  // or storage degraded) reports nothing unless a cache flag asked about it,
+  // so its output stays byte-identical to the uncached helper.
+  if (config === null) return bypassed(request, policy, flagged);
 
   const generation = readGeneration(config, deps);
-  if (generation === null) {
-    const live = await computeTracked(request.compute);
-    return {
-      report: live.report,
-      cache: meta(
-        'bypass',
-        'live',
-        0,
-        policy.maxAgeMs,
-        live.reasons.length === 0,
-        1,
-        false,
-      ),
-    };
-  }
+  if (generation === null) return bypassed(request, policy, flagged);
 
   const first = await readOnce(
     request,
@@ -516,6 +490,27 @@ export async function readDiscoverHint<T>(
       policy.maxAgeMs,
       first.complete,
       first.enumerations,
+      false,
+    ),
+  };
+}
+
+async function bypassed<T>(
+  request: DiscoverHintRequest<T>,
+  policy: GithubApiReadCacheRuntimePolicy,
+  flagged: boolean,
+): Promise<DiscoverHintResult<T>> {
+  const live = await computeTracked(request.compute);
+  if (!flagged) return { report: live.report };
+  return {
+    report: live.report,
+    cache: meta(
+      'bypass',
+      'live',
+      0,
+      policy.enabled === true ? policy.maxAgeMs : 0,
+      live.reasons.length === 0,
+      1,
       false,
     ),
   };

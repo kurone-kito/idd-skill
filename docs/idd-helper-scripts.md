@@ -1672,7 +1672,8 @@ supported: the hint is an optional speed-up, never a gate.
   an explicit `--owner`/`--repo`, else the `origin` remote; the host from
   `GH_HOST`, then `GITHUB_SERVER_URL`, then the remote (never `gh auth
   status`); the credential from the read cache's local lookup. An
-  unidentified caller bypasses the cache (`cache.mode` `bypass`).
+  unidentified caller bypasses the cache and, unless a cache flag was
+  passed, reports nothing (`cache.mode` `bypass` appears only with a flag).
 - **Controls.** `--no-cache` computes live, reads and stores nothing, and
   reports `cache.mode` `off`. `--refresh-cache` recomputes, stores the
   result, and reports `refresh`. `--purge-cache` removes every cached body
