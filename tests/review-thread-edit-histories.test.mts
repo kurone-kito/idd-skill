@@ -199,6 +199,43 @@ test('the snapshot makes one batched fetch for the candidates and none without o
   assert.deepEqual(quiet.requestedReviewThreadCommentEditHistoryIds ?? [], []);
 });
 
+test('the snapshot fetches every candidate in one batched call', () => {
+  const fx = fixture();
+  const threads = fx.reviewThreadsWithComments?.[1];
+  assert.ok(threads);
+  const [first] = threads;
+  assert.ok(first);
+  // A second thread with its own disposition and an in-place bot edit after it.
+  threads.push({
+    id: 'RT_second',
+    isResolved: true,
+    comments: [
+      {
+        id: 'PRRC_root_2',
+        body: findingBody(FINDING, 'reply'),
+        createdAt: '2026-09-30T09:40:00Z',
+        updatedAt: '2026-09-30T12:10:00Z',
+        authorLogin: BOT,
+        pullRequestReviewId: null,
+        lastEditedAt: '2026-09-30T12:10:00Z',
+      },
+      {
+        id: 'PRRC_disposition_2',
+        body: '**Accepted** — done.',
+        createdAt: '2026-09-30T12:05:00Z',
+        updatedAt: '2026-09-30T12:05:00Z',
+        authorLogin: 'kurone-kito',
+        pullRequestReviewId: null,
+        lastEditedAt: null,
+      },
+    ],
+  });
+  snapshotFlag(fx);
+  assert.deepEqual(fx.requestedReviewThreadCommentEditHistoryIds, [
+    ['PRRC_root', 'PRRC_root_2'],
+  ]);
+});
+
 test('a failed edit-history fetch keeps updatedAt dating in the snapshot and does not throw', () => {
   const fx = fixture();
   fx.reviewThreadCommentUserContentEdits = history(FINDING);
