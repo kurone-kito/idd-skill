@@ -1119,6 +1119,26 @@ if (mode === 'plain-ok') {
       extensions: { cost: { actualQueryCost: 9 } },
     }),
   )});
+} else if (mode === 'graphql-remaining') {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: { ok: true, rateLimit: { cost: 5, remaining: 4321 } },
+    }),
+  )});
+} else if (mode === 'graphql-throttled') {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: null,
+      errors: [
+        {
+          type: 'RATE_LIMITED',
+          message: 'API rate limit already exceeded for user ID 1.',
+        },
+      ],
+    }),
+  )});
+  process.stderr.write('gh: API rate limit already exceeded for user ID 1.\\n');
+  process.exit(1);
 } else if (mode === 'allow-paginated') {
   process.stdout.write('{"partial":1}\\n');
   process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n');
@@ -1324,6 +1344,9 @@ if (mode === 'plain-ok') {
     assert.ok(last);
     assert.equal(last.classification, 'graphql-errors');
     assert.equal(last.graphqlCost, 7);
+    // #3619: with no header, the selected `rateLimit { remaining }` of the
+    // response envelope is what the record keeps.
+    assert.equal(last.remaining, 4);
     assert.equal(last.status, 'unknown');
     assert.equal(last.httpRequestCount, 'unknown');
     assert.equal(last.pageCount, 'unknown');
@@ -1368,6 +1391,30 @@ if (mode === 'plain-ok') {
     assert.ok(last);
     assert.equal(last.classification, 'ok');
     assert.equal(last.graphqlCost, 'unknown');
+    // A query that did not select `rateLimit { remaining }` leaves it unknown.
+    assert.equal(last.remaining, 'unknown');
+
+    // #3619: through the real wrapper, a response envelope that selects
+    // `rateLimit { remaining }` records it, and a real gh failure carrying
+    // only the `RATE_LIMITED` throttle error records `graphql-throttled`.
+    setMode('graphql-remaining');
+    ghGraphql(graphqlQuery, {});
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'ok');
+    assert.equal(last.remaining, 4321);
+    assert.equal(last.graphqlCost, 5);
+
+    setMode('graphql-throttled');
+    assert.throws(() => ghGraphql(graphqlQuery, {}));
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'graphql-throttled');
+    assert.equal(last.signals.graphqlErrors, true);
+    assert.equal(last.signals.primaryExhaustion, false);
+    assert.equal(last.signals.secondaryThrottling, false);
+    assert.equal(last.status, 'unknown');
+    assert.equal(last.httpRequestCount, 'unknown');
 
     setMode('allow-paginated');
     assert.deepEqual(
