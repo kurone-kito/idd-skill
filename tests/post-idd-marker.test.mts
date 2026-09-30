@@ -5657,6 +5657,32 @@ test('--prior-* flags must be passed together and only with --operation-local (#
   );
 });
 
+test('the operationLocal envelope schema requires every view field, including reason (#3592)', () => {
+  const view = {
+    decision: 'publish',
+    reason: null,
+    snapshot: {},
+    watermarkFields: null,
+    warnings: [],
+  };
+  const envelope = {
+    mode: 'dry-run',
+    type: 'watermark',
+    target: 'pr',
+    number: 1200,
+    operationLocal: view,
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+  for (const field of Object.keys(view)) {
+    const { [field]: _omitted, ...rest } = view;
+    assert.notDeepEqual(
+      validate({ ...envelope, operationLocal: rest }, schema),
+      [],
+      `operationLocal without ${field} must not validate`,
+    );
+  }
+});
+
 test('--operation-local CLI defers with the capture and never posts while required checks fail (#3592)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-defer-'));
   const argvLog = join(tempRoot, 'gh-argv.log');

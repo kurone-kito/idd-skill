@@ -63,7 +63,13 @@
       "type": "object",
       "description": "Present for --operation-local. watermarkFields describe snapshot from the same capture. A saved snapshot is not an input.",
       "additionalProperties": false,
-      "required": ["decision", "snapshot", "watermarkFields", "warnings"],
+      "required": [
+        "decision",
+        "reason",
+        "snapshot",
+        "watermarkFields",
+        "warnings"
+      ],
       "properties": {
         "decision": {
           "type": "string",
