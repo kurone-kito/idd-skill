@@ -12,11 +12,12 @@ approval boundary that hands off to IDD execution.
 - Skill drafts issues in the target repository. Each candidate moves
   through the readiness buckets: `deferred` → `ready` or an escalation
   bucket (`needs-decision`, `blocked-by-human`, `out-of-scope`)
-- Before publishing a `ready` body, bundled skill runs the
-  completed-draft adversarial review and then the mechanical
-  `audit-authored-issue` gate. Both are mandatory. The review is not
-  the Intake critique. Normative packet, modes, failure stop, wait
-  ceiling, and no-mutation boundary:
+- Before publishing a `ready`, `needs-decision`, or
+  `blocked-by-human` body, bundled skill runs the completed-draft
+  adversarial review and then the mechanical `audit-authored-issue`
+  gate. Both are mandatory. The review is not the Intake critique.
+  Normative packet, modes, failure stop, wait ceiling, and no-mutation
+  boundary:
   [Completed-draft adversarial review](contract.md#completed-draft-adversarial-review).
   A failed or unreadable review does not create or update an issue,
   change a label, or append a marker. The reviewer returns findings
