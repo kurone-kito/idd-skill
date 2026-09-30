@@ -1579,11 +1579,21 @@ test('a rate-limit error inside a successful GraphQL response starts the shared 
   }
 });
 
-test('a pre-existing state directory that others can access is tightened to owner-only before use', {
-  skip: process.platform === 'win32',
-}, () => {
+test('a pre-existing state directory that others can access is tightened to owner-only before use', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows has its own ACL model');
+    return;
+  }
   const h = harness();
   try {
+    // A filesystem that stores no modes cannot demonstrate the tightening.
+    const probe = join(h.dir, 'mode-probe');
+    mkdirSync(probe);
+    chmodSync(probe, 0o700);
+    if ((statSync(probe).mode & 0o077) !== 0) {
+      t.skip('this filesystem does not store POSIX modes');
+      return;
+    }
     const scope = scopeDir(h);
     const slots = slotsDir(h);
     const cooldown = join(scope, 'cooldown');

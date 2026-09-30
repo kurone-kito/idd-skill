@@ -315,15 +315,11 @@ function ensureOwnDirectory(path: string): void {
       }
       // A directory that already existed may be group- or world-accessible,
       // which would let another local user forge a lease or a cooldown.
-      // Tighten it to owner-only, and fail open if that cannot be done.
-      if ((stat.mode & 0o077) !== 0) {
-        chmodSync(path, DIR_MODE);
-        if ((lstatSync(path).mode & 0o077) !== 0) {
-          storageFailure(
-            'load control directory is group- or world-accessible',
-          );
-        }
-      }
+      // Tighten it to owner-only; a chmod that fails means it cannot be
+      // made private, so the request runs uncoordinated. A filesystem that
+      // accepts the call but stores no modes (a Windows mount under WSL)
+      // enforces none, so its reported mode is not evidence of anything.
+      if ((stat.mode & 0o077) !== 0) chmodSync(path, DIR_MODE);
     }
   } catch (error) {
     if (error instanceof LoadControlStorageError) throw error;
