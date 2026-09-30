@@ -37,6 +37,17 @@ const SCHEMA_VERSION = 1;
 const MARKER_NAME = '.idd-github-api-read-cache';
 const ENTRY_NAME = /^[0-9a-f]{64}\.json$/;
 const TEMP_NAME = /^[0-9a-f]{64}\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
+/** The record of the last full sweep, kept in the cache root. */
+const SWEEP_NAME = 'sweep.json';
+/** An atomic write of that record that a crash left behind. */
+const SWEEP_TEMP_NAME = /^sweep\.json\.\d+\.[0-9a-f]{12}\.tmp$/;
+/**
+ * How long a cache use may go without a full, parsing sweep. Shortened to
+ * `retentionMs` when retention is shorter, so expired entries leave the
+ * disk about as fast as they expire. Documented in the read-cache section
+ * of `docs/idd-helper-scripts.md`.
+ */
+const SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_CACHE_BYTES = 104857600;
 const DEFAULT_LEASE_TTL_MS = 15_000;
 const POLL_MS = 20;
@@ -432,11 +443,17 @@ function assertAdoptableRoot(ctx) {
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new CacheStorageError('cache root is not a real directory');
   }
+  const names = ctx.storage.readdir(ctx.root);
+  // The sweep record, and a temp file of it, are this cache's own only beside
+  // its marker (which is always written before the first record), so a
+  // foreign directory that merely holds a file of that name is not adopted.
+  const hasMarker = names.includes(MARKER_NAME);
   const ours = new Set([MARKER_NAME, 'entries', 'leases']);
-  for (const name of ctx.storage.readdir(ctx.root)) {
-    if (!ours.has(name)) {
-      throw new CacheStorageError('refusing to adopt a foreign directory');
-    }
+  if (hasMarker) ours.add(SWEEP_NAME);
+  for (const name of names) {
+    if (ours.has(name)) continue;
+    if (hasMarker && SWEEP_TEMP_NAME.test(name)) continue;
+    throw new CacheStorageError('refusing to adopt a foreign directory');
   }
 }
 /**
@@ -667,9 +684,22 @@ function publish(ctx, result, startedAt) {
     safeUnlink(ctx.storage, destination);
     throw error;
   }
-  evict(ctx);
+  enforceSizeBound(ctx);
 }
+/**
+ * The full sweep: parse every stored entry, drop corrupt, wrong-version,
+ * loose-mode, oversized, and expired ones and the temp files of dead
+ * writers, then drop the oldest entries beyond `maxBytes`. It reads every
+ * entry, so it does not run on every cache use: see {@link sweepIfDue} and
+ * {@link enforceSizeBound}.
+ */
 function evict(ctx) {
+  sweepEntries(ctx);
+  // Only a sweep that ran to the end counts: a storage failure leaves the
+  // flag unset, so the due-check after the read may still try once more.
+  ctx.fullSweepRan = true;
+}
+function sweepEntries(ctx) {
   const entriesDir = join(ctx.root, 'entries');
   const stat = tryLstat(ctx.storage, entriesDir);
   if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return;
@@ -719,6 +749,154 @@ function evict(ctx) {
     total -= file.size;
   }
 }
+/**
+ * The cheap pass after a write: remove the temp files of dead writers, total
+ * the entry sizes with `lstat` without reading or parsing any entry, and run
+ * the full sweep only when the total exceeds `maxBytes`. The size bound
+ * therefore still holds right after every write, at the cost of one
+ * `lstat` per entry instead of one read and parse per entry.
+ */
+function enforceSizeBound(ctx) {
+  const entriesDir = join(ctx.root, 'entries');
+  const stat = tryLstat(ctx.storage, entriesDir);
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return;
+  let names;
+  try {
+    names = ctx.storage.readdir(entriesDir);
+  } catch (error) {
+    throw new CacheStorageError('cache readdir failed', { cause: error });
+  }
+  let total = 0;
+  for (const name of names) {
+    const writer = tempWriterPid(name);
+    if (writer !== null) {
+      if (!ctx.isPidAlive(writer)) {
+        safeUnlink(ctx.storage, join(entriesDir, name));
+      }
+      continue;
+    }
+    if (!ENTRY_NAME.test(name)) continue;
+    const fileStat = tryLstat(ctx.storage, join(entriesDir, name));
+    if (!fileStat || fileStat.isSymbolicLink() || !fileStat.isFile()) continue;
+    total += fileStat.size;
+  }
+  if (total <= ctx.maxBytes) return;
+  // Leave the sweep record alone: it schedules the interval and lowered-bounds
+  // sweeps, and rewriting it here would undo the recorded minimum.
+  evict(ctx);
+}
+function sweepRecordPath(ctx) {
+  return join(ctx.root, SWEEP_NAME);
+}
+function isPositiveNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+/**
+ * The record of the last full sweep, or null when there is no usable one: a
+ * missing file, a symlink, a non-file, a loose mode, malformed content, or a
+ * `sweptAt` in the future all mean "no sweep yet". Any other storage error
+ * propagates, so a record that cannot be read never causes a sweep.
+ */
+function readSweepRecord(ctx) {
+  const path = sweepRecordPath(ctx);
+  const stat = tryLstat(ctx.storage, path);
+  if (!stat || stat.isSymbolicLink() || !stat.isFile()) return null;
+  if (!isPrivateStat(stat)) return null;
+  let text;
+  try {
+    text = ctx.storage.readFile(path);
+  } catch (error) {
+    if (isEnoent(error)) return null;
+    if (error instanceof CacheStorageError) throw error;
+    throw new CacheStorageError('cache sweep record read failed', {
+      cause: error,
+    });
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const { sweptAt, maxBytes, retentionMs, claim } = parsed;
+  if (
+    typeof sweptAt !== 'number' ||
+    !Number.isFinite(sweptAt) ||
+    sweptAt < 0 ||
+    sweptAt > ctx.now() ||
+    !isPositiveNumber(maxBytes) ||
+    !isPositiveNumber(retentionMs)
+  ) {
+    return null;
+  }
+  return {
+    sweptAt,
+    maxBytes,
+    retentionMs,
+    ...(typeof claim === 'string' ? { claim } : {}),
+  };
+}
+/** Writes the record and returns the random claim it carries. */
+function writeSweepRecord(ctx, maxBytes, retentionMs) {
+  const claim = randomBytes(8).toString('hex');
+  const record = {
+    sweptAt: ctx.now(),
+    maxBytes,
+    retentionMs,
+    claim,
+  };
+  ctx.storage.writeAtomic(sweepRecordPath(ctx), JSON.stringify(record));
+  return claim;
+}
+/**
+ * Run the full sweep when one is due, after a cache use has produced its
+ * result (so it never changes that result) and whether or not the response
+ * could be stored. Due means: no usable record, `maxBytes` or `retentionMs`
+ * lowered below the recorded values, or `min(SWEEP_INTERVAL_MS, retentionMs)`
+ * elapsed since the last sweep. Otherwise the check costs one `lstat` and
+ * one small read of the record and touches no entry.
+ *
+ * The record is written before the sweep (claim first), and a failed write
+ * skips the sweep, so an unwritable record cannot make every use an O(total)
+ * sweep, and a sweep that aborts midway waits for the next interval. A sweep
+ * triggered only by lowered bounds records the component-wise minimum of the
+ * recorded and current bounds, so two policies sharing one directory settle
+ * instead of lowering each other's record on every use; any other trigger
+ * records the current bounds. A storage failure is swallowed: eviction is
+ * best effort.
+ */
+function sweepIfDue(ctx) {
+  try {
+    const record = readSweepRecord(ctx);
+    const lowered =
+      record !== null &&
+      (ctx.maxBytes < record.maxBytes || ctx.retentionMs < record.retentionMs);
+    const elapsed =
+      record !== null &&
+      ctx.now() - record.sweptAt >=
+        Math.min(SWEEP_INTERVAL_MS, ctx.retentionMs);
+    if (record !== null && !lowered && !elapsed) return;
+    const loweredOnly = record !== null && lowered && !elapsed;
+    const claim = writeSweepRecord(
+      ctx,
+      loweredOnly ? Math.min(record.maxBytes, ctx.maxBytes) : ctx.maxBytes,
+      loweredOnly
+        ? Math.min(record.retentionMs, ctx.retentionMs)
+        : ctx.retentionMs,
+    );
+    // The write is not exclusive: a process that read the same due state can
+    // overwrite it. Read the record back and let only the process whose claim
+    // survived sweep, which narrows a burst of simultaneous users to (almost
+    // always) one sweep. A loser skips; the survivor's sweep covers it.
+    if (readSweepRecord(ctx)?.claim !== claim) return;
+    // A write in this use may already have run the full sweep (its total went
+    // past `maxBytes`); the record above still claims the due state.
+    if (!ctx.fullSweepRan) evict(ctx);
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+  }
+}
 function refreshBase(ctx, base, result, startedAt) {
   const destination = entryPath(ctx);
   // Skip when the entry was superseded, purged, or evicted while the
@@ -760,7 +938,7 @@ function refreshBase(ctx, base, result, startedAt) {
   // turn a valid 304 into a second live fetch, as publish's callers also
   // treat storage failures as non-fatal.
   try {
-    evict(ctx);
+    enforceSizeBound(ctx);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
@@ -1116,8 +1294,14 @@ function anchorsFor(input) {
 }
 function executeCached(ctx) {
   prepareRoot(ctx);
-  if (ctx.mode === 'strict-fresh') return strictFresh(ctx);
-  return coalesce(ctx);
+  try {
+    if (ctx.mode === 'strict-fresh') return strictFresh(ctx);
+    return coalesce(ctx);
+  } finally {
+    // After prepareRoot, so a refused root gets no record or sweep, and after
+    // the read, so a sweep never changes what the read returns.
+    sweepIfDue(ctx);
+  }
 }
 /**
  * Decide whether a read may touch the cache and, when it may, build its
@@ -1186,6 +1370,7 @@ function prepareRead(input, fetch, sleep) {
       platform: input.platform ?? process.platform,
       aclReader:
         input.windowsAclReader ?? ((directory) => readWindowsAcl(directory)),
+      fullSweepRan: false,
     },
   };
 }
@@ -1370,18 +1555,23 @@ export async function readThroughGithubApiCacheAsync(input) {
   ctx.ageBasis = 'started';
   try {
     prepareRoot(ctx);
-    if (input.mode === 'strict-fresh')
-      return await strictFreshAsync(ctx, fetch);
-    return await coalesceAsync(
-      ctx,
-      fetch,
-      sleep ?? sleepAsync,
-      positiveMs(
-        leaseMaxWaitMs ?? DEFAULT_ASYNC_MAX_WAIT_MS,
-        DEFAULT_ASYNC_MAX_WAIT_MS,
-      ),
-      startLeaseHeartbeat ?? defaultLeaseHeartbeat(ctx),
-    );
+    try {
+      if (input.mode === 'strict-fresh')
+        return await strictFreshAsync(ctx, fetch);
+      return await coalesceAsync(
+        ctx,
+        fetch,
+        sleep ?? sleepAsync,
+        positiveMs(
+          leaseMaxWaitMs ?? DEFAULT_ASYNC_MAX_WAIT_MS,
+          DEFAULT_ASYNC_MAX_WAIT_MS,
+        ),
+        startLeaseHeartbeat ?? defaultLeaseHeartbeat(ctx),
+      );
+    } finally {
+      // The same best-effort due-check as the sync path, after the read.
+      sweepIfDue(ctx);
+    }
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
     return liveResultAsync(fetch, 'degraded', ctx.entryId);

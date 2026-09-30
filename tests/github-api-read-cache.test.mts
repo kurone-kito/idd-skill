@@ -1887,6 +1887,639 @@ test('purge refuses a symlinked cache root', () => {
   }
 });
 
+// Cheap eviction on every cache use (#3627). The full, parsing sweep is
+// recorded in `sweep.json`; these tests use one injected clock throughout,
+// because mixing a real and an injected clock in one root makes every use due.
+
+const SWEEP_FILE = 'sweep.json';
+const SWEEP_INTERVAL_MS = 600_000;
+
+function entryPathOf(cacheDir: string, entryId: string | undefined): string {
+  return join(cacheDir, 'entries', `${entryId}.json`);
+}
+
+function sweepRecordOf(cacheDir: string): {
+  sweptAt: number;
+  maxBytes: number;
+  retentionMs: number;
+} {
+  return JSON.parse(readFileSync(join(cacheDir, SWEEP_FILE), 'utf8'));
+}
+
+function storedRecordText(storedAt: number, body: unknown = { planted: 1 }) {
+  return JSON.stringify({
+    schemaVersion: 1,
+    storedAt,
+    startedAt: storedAt,
+    status: 200,
+    body,
+    complete: true,
+  });
+}
+
+/** Seeds `count` same-sized entries, oldest first, on the caller's clock. */
+function seedEntries(
+  paths: { cacheDir: string; workspace: string },
+  clock: { now: number },
+  count: number,
+): string[] {
+  const ids: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    clock.now += 10;
+    const seeded = readThrough(paths, okBody({ pad: 'x'.repeat(400), index }), {
+      requestShape: { path: `/seed/${index}` },
+      now: () => clock.now,
+    });
+    ids.push(String(seeded.entryId));
+  }
+  return ids;
+}
+
+function countingStorage() {
+  const calls = {
+    readFile: [] as string[],
+    lstat: [] as string[],
+    readdir: [] as string[],
+  };
+  return {
+    calls,
+    storage: {
+      readFile(path: string): string {
+        calls.readFile.push(path);
+        return readFileSync(path, 'utf8');
+      },
+      lstat(path: string) {
+        calls.lstat.push(path);
+        return lstatSync(path);
+      },
+      readdir(path: string): string[] {
+        calls.readdir.push(path);
+        return readdirSync(path);
+      },
+    },
+    reset() {
+      calls.readFile.length = 0;
+      calls.lstat.length = 0;
+      calls.readdir.length = 0;
+    },
+  };
+}
+
+test('a read whose response is not stored still removes entries beyond a lowered maxBytes (#3627)', () => {
+  const notStored: Record<string, () => GithubApiCacheFetchResult> = {
+    error: () => ({ status: 500, body: { message: 'boom' } }),
+    throttle: () => ({
+      status: 429,
+      body: { message: 'slow' },
+      throttled: true,
+    }),
+    oversized: () => ({ status: 200, body: { data: 'x'.repeat(20_000) } }),
+  };
+  for (const [kind, response] of Object.entries(notStored)) {
+    const paths = tempRoot();
+    const clock = { now: 1_000_000 };
+    try {
+      const ids = seedEntries(paths, clock, 3);
+      const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+      // Two entries no longer fit, so only the newest may stay.
+      clock.now += 10;
+      const result = readThrough(paths, response, {
+        requestShape: { path: '/not-stored' },
+        policy: policy(paths.cacheDir, { maxBytes: Math.floor(size * 1.5) }),
+        now: () => clock.now,
+      });
+      assert.equal(result.fetched, true, kind);
+      assert.deepEqual(
+        entryNames(paths.cacheDir),
+        [`${ids[2]}.json`],
+        `${kind}: expected only the newest seeded entry to remain`,
+      );
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('a read that throws still removes entries beyond a lowered maxBytes (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  try {
+    const ids = seedEntries(paths, clock, 2);
+    const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+    clock.now += 10;
+    assert.throws(
+      () =>
+        readThrough(
+          paths,
+          () => {
+            throw new Error('fetch failed');
+          },
+          {
+            requestShape: { path: '/throws' },
+            policy: policy(paths.cacheDir, {
+              maxBytes: Math.floor(size * 1.5),
+            }),
+            now: () => clock.now,
+          },
+        ),
+      /fetch failed/,
+    );
+    assert.deepEqual(entryNames(paths.cacheDir), [`${ids[1]}.json`]);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a read whose response is not stored still removes entries beyond a lowered retention (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000_000 };
+  try {
+    const ids = seedEntries(paths, clock, 2);
+    // Two hours old: inside the default 24 h retention, outside a 1 h one.
+    const old = join(paths.cacheDir, 'entries', `${'a'.repeat(64)}.json`);
+    writeFileSync(old, storedRecordText(clock.now - 7_200_000), {
+      mode: 0o600,
+    });
+    // Only five seconds later, far inside min(ten minutes, 1 h): nothing but
+    // the lowered retention can make the sweep due.
+    clock.now += 5_000;
+    const result = readThrough(
+      paths,
+      () => ({ status: 500, body: { message: 'boom' } }),
+      {
+        requestShape: { path: '/not-stored' },
+        policy: policy(paths.cacheDir, { retentionMs: 3_600_000 }),
+        now: () => clock.now,
+      },
+    );
+    assert.equal(result.fetched, true);
+    assert.equal(existsSync(old), false);
+    assert.deepEqual(
+      entryNames(paths.cacheDir),
+      ids.map((id) => `${id}.json`).sort(),
+    );
+    assert.equal(sweepRecordOf(paths.cacheDir).retentionMs, 3_600_000);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a write that already ran the full sweep is not swept again by the due-check (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  const counter = countingStorage();
+  try {
+    const ids = seedEntries(paths, clock, 3);
+    const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+    // Lowering maxBytes makes the sweep due, and the new entry pushes the
+    // total past the bound, so the write's own size pass runs the full sweep.
+    // The due-check that follows must record its claim without parsing every
+    // entry a second time.
+    clock.now += 10;
+    counter.reset();
+    const result = readThrough(paths, okBody({ pad: 'x'.repeat(400) }), {
+      requestShape: { path: '/new-key' },
+      policy: policy(paths.cacheDir, { maxBytes: Math.floor(size * 2.5) }),
+      now: () => clock.now,
+      storage: counter.storage,
+    });
+    assert.equal(result.cache, 'miss');
+    assert.equal(entryNames(paths.cacheDir).length, 2);
+    for (const id of ids) {
+      const reads = counter.calls.readFile.filter(
+        (path) => path === entryPathOf(paths.cacheDir, id),
+      );
+      assert.equal(reads.length <= 1, true, `${id} was parsed more than once`);
+    }
+    assert.equal(
+      counter.calls.readdir.filter((path) => path.endsWith(`${sep}entries`))
+        .length,
+      2,
+    );
+    assert.equal(
+      sweepRecordOf(paths.cacheDir).maxBytes,
+      Math.floor(size * 2.5),
+    );
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a size-triggered sweep that fails does not stop the due-check from sweeping (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  try {
+    const ids = seedEntries(paths, clock, 3);
+    const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+    let listings = 0;
+    clock.now += 10;
+    // The write's size pass lists the entries (1st), its full sweep lists them
+    // again and fails (2nd); the due-check then sweeps successfully (3rd).
+    const result = readThrough(paths, okBody({ pad: 'x'.repeat(400) }), {
+      requestShape: { path: '/new-key' },
+      policy: policy(paths.cacheDir, { maxBytes: Math.floor(size * 2.5) }),
+      now: () => clock.now,
+      storage: {
+        readdir(path: string): string[] {
+          if (path.endsWith(`${sep}entries`)) {
+            listings += 1;
+            if (listings === 2) {
+              throw Object.assign(new Error('EIO'), { code: 'EIO' });
+            }
+          }
+          return readdirSync(path);
+        },
+      },
+    });
+    assert.equal(result.cache, 'miss');
+    assert.equal(listings, 3);
+    assert.equal(entryNames(paths.cacheDir).length, 2);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('only the process whose sweep claim survives runs the full sweep (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  const counter = countingStorage();
+  const expired = join(paths.cacheDir, 'entries', `${'a'.repeat(64)}.json`);
+  try {
+    seedEntries(paths, clock, 1);
+    const recordPath = join(paths.cacheDir, SWEEP_FILE);
+    unlinkSync(recordPath);
+    writeFileSync(expired, storedRecordText(clock.now - 90_000_000), {
+      mode: 0o600,
+    });
+    const use = (storage: ReadThroughGithubApiCacheInput['storage']) => {
+      clock.now += 10;
+      return readThrough(paths, okBody({ never: 'fetched' }), {
+        requestShape: { path: '/seed/0' },
+        now: () => clock.now,
+        storage,
+      });
+    };
+
+    // A competing process overwrote the record between this one's write and
+    // its read-back: this one must not sweep.
+    counter.reset();
+    const lostClaim: ReadThroughGithubApiCacheInput['storage'] = {
+      ...counter.storage,
+      readFile(path: string): string {
+        if (path.endsWith(SWEEP_FILE)) {
+          return JSON.stringify({
+            sweptAt: clock.now,
+            maxBytes: 104857600,
+            retentionMs: 86_400_000,
+            claim: 'someone-else',
+          });
+        }
+        return readFileSync(path, 'utf8');
+      },
+    };
+    assert.equal(use(lostClaim).cache, 'hit');
+    assert.equal(existsSync(expired), true);
+    assert.equal(
+      counter.calls.readdir.some((path) => path.endsWith(`${sep}entries`)),
+      false,
+    );
+
+    // With the record intact, the survivor of the claim sweeps.
+    unlinkSync(recordPath);
+    assert.equal(use(undefined).cache, 'hit');
+    assert.equal(existsSync(expired), false);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('within bounds and inside the sweep interval, a hit or publish reads no unrelated entry (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  const counter = countingStorage();
+  try {
+    const ids = seedEntries(paths, clock, 3);
+    const recordPath = join(paths.cacheDir, SWEEP_FILE);
+    assert.equal(existsSync(recordPath), true);
+
+    // A hit reads its own entry and the small sweep record, nothing else:
+    // no other entry is read or inspected and no entry is listed.
+    clock.now += 10;
+    counter.reset();
+    const hit = readThrough(paths, okBody({ never: 'fetched' }), {
+      requestShape: { path: '/seed/0' },
+      now: () => clock.now,
+      storage: counter.storage,
+    });
+    assert.equal(hit.cache, 'hit');
+    assert.deepEqual(
+      [...counter.calls.readFile].sort(),
+      [entryPathOf(paths.cacheDir, ids[0]), recordPath].sort(),
+    );
+    const others = [ids[1], ids[2]].map((id) =>
+      entryPathOf(paths.cacheDir, id),
+    );
+    for (const other of others) {
+      assert.equal(counter.calls.lstat.includes(other), false);
+    }
+    assert.equal(
+      counter.calls.readdir.some((path) => path.endsWith(`${sep}entries`)),
+      false,
+    );
+
+    // A publish of a new key reads no entry: only its own lease and the
+    // sweep record. It totals the other entries' sizes with `lstat` (that is
+    // its whole cost), but none is read or parsed.
+    clock.now += 10;
+    counter.reset();
+    const miss = readThrough(paths, okBody({ fresh: true }), {
+      requestShape: { path: '/new-key' },
+      now: () => clock.now,
+      storage: counter.storage,
+    });
+    assert.equal(miss.cache, 'miss');
+    assert.equal(counter.calls.readFile.includes(recordPath), true);
+    assert.equal(
+      counter.calls.readFile.some((path) =>
+        path.includes(`${sep}entries${sep}`),
+      ),
+      false,
+    );
+    for (const id of ids) {
+      const path = entryPathOf(paths.cacheDir, id);
+      assert.equal(counter.calls.readFile.includes(path), false);
+      assert.equal(counter.calls.lstat.includes(path), true);
+    }
+    assert.equal(entryNames(paths.cacheDir).length, 4);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a full sweep still drops expired, corrupt, wrong-version, and loose-mode entries, once per interval (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 50_000_000 };
+  const entries = join(paths.cacheDir, 'entries');
+  const stale = {
+    expired: `${'a'.repeat(64)}.json`,
+    corrupt: `${'b'.repeat(64)}.json`,
+    wrongVersion: `${'c'.repeat(64)}.json`,
+    loose: `${'d'.repeat(64)}.json`,
+  };
+  const plant = () => {
+    mkdirSync(entries, { recursive: true });
+    writeFileSync(
+      join(entries, stale.expired),
+      storedRecordText(clock.now - 90_000_000),
+      { mode: 0o600 },
+    );
+    writeFileSync(join(entries, stale.corrupt), '{not json', { mode: 0o600 });
+    writeFileSync(
+      join(entries, stale.wrongVersion),
+      storedRecordText(clock.now - 10).replace(
+        '"schemaVersion":1',
+        '"schemaVersion":0',
+      ),
+      { mode: 0o600 },
+    );
+    if (process.platform !== 'win32') {
+      writeFileSync(join(entries, stale.loose), storedRecordText(clock.now), {
+        mode: 0o600,
+      });
+      chmodSync(join(entries, stale.loose), 0o644);
+    }
+  };
+  const remaining = () =>
+    readdirSync(entries).filter((name) => Object.values(stale).includes(name));
+  const use = (key: string) =>
+    readThrough(paths, okBody({ key }), {
+      requestShape: { path: key },
+      now: () => clock.now,
+    });
+  try {
+    // No sweep record yet: the first use sweeps.
+    plant();
+    use('/one');
+    assert.deepEqual(remaining(), []);
+    assert.equal(sweepRecordOf(paths.cacheDir).sweptAt, clock.now);
+
+    // Inside the interval the planted entries are left alone.
+    plant();
+    clock.now += 1_000;
+    use('/two');
+    assert.equal(remaining().length > 0, true);
+
+    // Once the interval has passed, the next use sweeps again.
+    clock.now += SWEEP_INTERVAL_MS;
+    use('/three');
+    assert.deepEqual(remaining(), []);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a missing, corrupt, or future-dated sweep record makes the next use sweep (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 50_000_000 };
+  const entries = join(paths.cacheDir, 'entries');
+  const expired = join(entries, `${'a'.repeat(64)}.json`);
+  const plantExpired = () =>
+    writeFileSync(expired, storedRecordText(clock.now - 90_000_000), {
+      mode: 0o600,
+    });
+  try {
+    seedEntries(paths, clock, 1);
+    const recordPath = join(paths.cacheDir, SWEEP_FILE);
+    const variants: Record<string, () => void> = {
+      corrupt: () => writeFileSync(recordPath, '{oops', { mode: 0o600 }),
+      wrongShape: () =>
+        writeFileSync(recordPath, JSON.stringify({ sweptAt: 'soon' }), {
+          mode: 0o600,
+        }),
+      futureDated: () =>
+        writeFileSync(
+          recordPath,
+          JSON.stringify({
+            sweptAt: clock.now + 1_000_000,
+            maxBytes: 104857600,
+            retentionMs: 86_400_000,
+          }),
+          { mode: 0o600 },
+        ),
+      missing: () => unlinkSync(recordPath),
+    };
+    for (const [name, damage] of Object.entries(variants)) {
+      damage();
+      plantExpired();
+      clock.now += 10;
+      readThrough(paths, okBody({ never: 'fetched' }), {
+        requestShape: { path: '/seed/0' },
+        now: () => clock.now,
+      });
+      assert.equal(existsSync(expired), false, name);
+      assert.equal(sweepRecordOf(paths.cacheDir).sweptAt, clock.now, name);
+    }
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a storage failure while sweeping never fails or changes the read, and never repeats per use (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  const entries = join(paths.cacheDir, 'entries');
+  const expired = join(entries, `${'a'.repeat(64)}.json`);
+  const counter = countingStorage();
+  try {
+    seedEntries(paths, clock, 1);
+    const recordPath = join(paths.cacheDir, SWEEP_FILE);
+    const use = (storage: ReadThroughGithubApiCacheInput['storage']) => {
+      clock.now += 10;
+      return readThrough(paths, okBody({ never: 'fetched' }), {
+        requestShape: { path: '/seed/0' },
+        now: () => clock.now,
+        storage,
+      });
+    };
+
+    // The record cannot be written: the sweep is skipped, the read is a
+    // normal hit, and the sweep is not retried on every use.
+    unlinkSync(recordPath);
+    writeFileSync(expired, storedRecordText(clock.now - 90_000_000), {
+      mode: 0o600,
+    });
+    const failWrite: ReadThroughGithubApiCacheInput['storage'] = {
+      ...counter.storage,
+      writeAtomic(destination: string): void {
+        if (destination.endsWith(SWEEP_FILE)) {
+          throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+        }
+        throw new Error('unexpected write');
+      },
+    };
+    counter.reset();
+    for (let index = 0; index < 3; index += 1) {
+      assert.equal(use(failWrite).cache, 'hit');
+    }
+    assert.equal(existsSync(expired), true);
+    assert.equal(
+      counter.calls.readdir.some((path) => path.endsWith(`${sep}entries`)),
+      false,
+    );
+
+    // A record that cannot be read (not ENOENT) also skips the sweep.
+    writeFileSync(recordPath, '{}', { mode: 0o600 });
+    const failRead: ReadThroughGithubApiCacheInput['storage'] = {
+      readFile(path: string): string {
+        if (path.endsWith(SWEEP_FILE)) {
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        }
+        return readFileSync(path, 'utf8');
+      },
+    };
+    assert.equal(use(failRead).cache, 'hit');
+    assert.equal(existsSync(expired), true);
+
+    // With the storage healthy again, the same state sweeps.
+    assert.equal(use(undefined).cache, 'hit');
+    assert.equal(existsSync(expired), false);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('two policies that share a directory settle after one sweep each (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  const counter = countingStorage();
+  const loose = policy(paths.cacheDir, {
+    maxBytes: 10_000_000,
+    retentionMs: 3_600_000,
+  });
+  const tight = policy(paths.cacheDir, {
+    maxBytes: 100_000,
+    retentionMs: 86_400_000,
+  });
+  const use = (which: typeof loose) => {
+    clock.now += 10;
+    return readThrough(paths, okBody({ shared: true }), {
+      policy: which,
+      now: () => clock.now,
+      storage: counter.storage,
+    });
+  };
+  try {
+    use(loose);
+    use(tight);
+    counter.reset();
+    // Each policy is lower than the other in one dimension; the record keeps
+    // the component-wise minimum, so neither sweeps again inside the interval.
+    for (const which of [loose, tight, loose, tight]) {
+      assert.equal(use(which).cache, 'hit');
+    }
+    assert.equal(
+      counter.calls.readdir.some((path) => path.endsWith(`${sep}entries`)),
+      false,
+    );
+    assert.equal(sweepRecordOf(paths.cacheDir).maxBytes, 100_000);
+    assert.equal(sweepRecordOf(paths.cacheDir).retentionMs, 3_600_000);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a cache root that holds a sweep record beside its marker is adopted, a foreign one is not (#3627)', () => {
+  const paths = tempRoot();
+  try {
+    writeFileSync(join(paths.cacheDir, MARKER), 'idd-github-api-read-cache\n', {
+      mode: 0o600,
+    });
+    writeFileSync(join(paths.cacheDir, SWEEP_FILE), '{}', { mode: 0o600 });
+    writeFileSync(
+      join(paths.cacheDir, `${SWEEP_FILE}.4242.0123456789ab.tmp`),
+      'left by a crashed writer',
+      { mode: 0o600 },
+    );
+    const adopted = readThrough(paths, okBody({ adopted: true }));
+    assert.equal(adopted.cache, 'miss');
+    assert.equal(entryNames(paths.cacheDir).length, 1);
+
+    // A directory that only holds a file named like the record, without the
+    // cache's marker, is someone else's and is neither adopted nor changed.
+    const foreign = tempRoot();
+    try {
+      writeFileSync(join(foreign.cacheDir, SWEEP_FILE), 'mine');
+      writeFileSync(join(foreign.cacheDir, 'user-file.txt'), 'mine');
+      const refused = readThrough(foreign, okBody({ refused: true }));
+      assert.equal(refused.cache, 'degraded');
+      assert.deepEqual(readdirSync(foreign.cacheDir).sort(), [
+        SWEEP_FILE,
+        'user-file.txt',
+      ]);
+      assert.equal(
+        readFileSync(join(foreign.cacheDir, SWEEP_FILE), 'utf8'),
+        'mine',
+      );
+    } finally {
+      rmSync(foreign.root, { recursive: true, force: true });
+    }
+    const loneSweep = tempRoot();
+    try {
+      writeFileSync(join(loneSweep.cacheDir, SWEEP_FILE), 'mine');
+      const refused = readThrough(loneSweep, okBody({ refused: true }));
+      assert.equal(refused.cache, 'degraded');
+      assert.equal(
+        readFileSync(join(loneSweep.cacheDir, SWEEP_FILE), 'utf8'),
+        'mine',
+      );
+    } finally {
+      rmSync(loneSweep.root, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 function readThroughAsync(
   paths: { cacheDir: string; workspace: string },
   fetch: ReadThroughGithubApiCacheAsyncInput['fetch'],
@@ -2689,6 +3322,33 @@ test('windows acl real directory: a directory readable by Everyone is refused', 
     } catch {
       // Best effort: the directory is removed next either way.
     }
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async read whose report is not stored still removes entries beyond a lowered maxBytes (#3627)', async () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  try {
+    const ids = seedEntries(paths, clock, 2);
+    const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+    clock.now += 10;
+    const result = await readThroughAsync(
+      paths,
+      async () => ({
+        status: 200,
+        body: { report: 'partial' },
+        incomplete: true,
+      }),
+      {
+        requestShape: { unit: 'not-stored' },
+        policy: policy(paths.cacheDir, { maxBytes: Math.floor(size * 1.5) }),
+        now: () => clock.now,
+      },
+    );
+    assert.equal(result.fetched, true);
+    assert.deepEqual(entryNames(paths.cacheDir), [`${ids[1]}.json`]);
+  } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
