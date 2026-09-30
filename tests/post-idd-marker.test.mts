@@ -5568,6 +5568,148 @@ test('operation-local refuses newly actionable same-HEAD activity past a stored 
   assert.equal(handled.decision, 'publish');
 });
 
+// #3622: a review whose only findings sit in its body (for example
+// CodeRabbit's "outside the diff" blocks) advances the capture's item count
+// and latest activity, but never shows up in `dispositionEvidence`, so the
+// guard used to stay silent for it.
+const EMBEDDED_BOUNDARY = {
+  headSha: OPERATION_LOCAL_SHA,
+  totalItemCount: 1,
+  maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+};
+
+function snapshotWithEmbeddedFindings(
+  embeddedFindings: unknown,
+  overrides: Record<string, unknown> = {},
+) {
+  return operationLocalSnapshot({
+    totalItemCount: 2,
+    maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+    embeddedFindings,
+    ...overrides,
+  });
+}
+
+test('operation-local refuses a review that arrived after the boundary and carries only uncovered body findings (#3622)', () => {
+  const refused = runOperationLocalSnapshotWatermark({
+    prNumber: 3622,
+    priorBoundary: EMBEDDED_BOUNDARY,
+    collectRichActivity: () =>
+      snapshotWithEmbeddedFindings([
+        { reviewId: 'PRR_new', embeddedFindingCount: 2, uncoveredCount: 2 },
+      ]),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(refused.decision, 'refuse');
+  assert.equal(refused.reasonCode, 'same-head-activity');
+  assert.deepEqual(refused.warnings, [
+    '2 review-body findings have no thread of their own, so the boundary ' +
+      'guard cannot treat those reviews as handled.',
+  ]);
+});
+
+test('operation-local publishes when the body findings are covered, absent, or older than the boundary (#3622)', () => {
+  for (const [label, embeddedFindings, overrides] of [
+    [
+      'covered by a thread',
+      [{ reviewId: 'PRR_new', embeddedFindingCount: 2, uncoveredCount: 0 }],
+      {},
+    ],
+    ['none reported', [], {}],
+    ['field absent', undefined, {}],
+    ['malformed field', 'not-an-array', {}],
+    [
+      'no activity past the boundary',
+      [{ reviewId: 'PRR_old', embeddedFindingCount: 1, uncoveredCount: 1 }],
+      { totalItemCount: 1, maxActivityUpdatedAt: '2026-06-25T10:30:00Z' },
+    ],
+  ] as const) {
+    const result = runOperationLocalSnapshotWatermark({
+      prNumber: 3622,
+      priorBoundary: EMBEDDED_BOUNDARY,
+      collectRichActivity: () =>
+        snapshotWithEmbeddedFindings(embeddedFindings, { ...overrides }),
+      readRequiredCiAgreement: () => passingAgreement(),
+    });
+    assert.equal(result.decision, 'publish', label);
+  }
+});
+
+test('operation-local does not refuse uncovered body findings without a stored boundary (#3622)', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3622,
+    collectRichActivity: () =>
+      snapshotWithEmbeddedFindings([
+        { reviewId: 'PRR_new', embeddedFindingCount: 1, uncoveredCount: 1 },
+      ]),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(result.decision, 'publish');
+  // Body findings only ever show up in a refusal's warnings, so a standalone
+  // --from-pr and an --operation-local run without a boundary print what they
+  // printed before.
+  assert.deepEqual(result.warnings, []);
+});
+
+test('describeUnaddressedActivity ignores review-body findings, which only a refusal reports (#3622)', () => {
+  assert.deepEqual(
+    describeUnaddressedActivity({
+      embeddedFindings: [
+        { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+      ],
+    }),
+    [],
+  );
+});
+
+test('a refusal reports the summed uncovered body findings next to the undispositioned-item warning (#3622)', () => {
+  const refuse = (snapshot: Record<string, unknown>) =>
+    runOperationLocalSnapshotWatermark({
+      prNumber: 3622,
+      priorBoundary: EMBEDDED_BOUNDARY,
+      collectRichActivity: () => snapshotWithEmbeddedFindings([], snapshot),
+      readRequiredCiAgreement: () => passingAgreement(),
+    });
+  const many = refuse({
+    embeddedFindings: [
+      { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+      { reviewId: 'PRR_b', embeddedFindingCount: 3, uncoveredCount: 0 },
+      { reviewId: 'PRR_c', embeddedFindingCount: 2, uncoveredCount: 2 },
+      null,
+      { reviewId: 'PRR_d', uncoveredCount: -4 },
+      { reviewId: 'PRR_e', uncoveredCount: 'x' },
+    ],
+  });
+  assert.equal(many.decision, 'refuse');
+  assert.deepEqual(many.warnings, [
+    '3 review-body findings have no thread of their own, so the boundary ' +
+      'guard cannot treat those reviews as handled.',
+  ]);
+  const one = refuse({
+    embeddedFindings: [
+      { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+    ],
+  });
+  assert.deepEqual(one.warnings, [
+    '1 review-body finding has no thread of its own, so the boundary guard ' +
+      'cannot treat that review as handled.',
+  ]);
+  const both = refuse({
+    dispositionEvidence: {
+      missingRegularCommentCount: 1,
+      missingThreadCount: 0,
+      soleCauseAckOnlyPostDisposition: false,
+    },
+    embeddedFindings: [
+      { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+    ],
+  });
+  assert.equal(both.decision, 'refuse');
+  assert.equal(both.warnings.length, 2);
+  assert.match(both.warnings[0], /^1 comment has no disposition evidence/);
+  assert.match(both.warnings[1], /^1 review-body finding has no thread/);
+});
+
 test('operation-local orders same-HEAD activity by instant, not timestamp text (#3592)', () => {
   const laterFractional = runOperationLocalSnapshotWatermark({
     prNumber: 3592,

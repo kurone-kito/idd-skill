@@ -629,6 +629,42 @@ export function describeUnaddressedActivity(snapshot: unknown): string[] {
   ];
 }
 
+/**
+ * Findings a review carries only in its body, with no thread of their own
+ * (for example CodeRabbit's "outside the diff" blocks), as the snapshot's
+ * `embeddedFindings[].uncoveredCount` reports them (#3622). They advance the
+ * capture's item count and latest activity like a comment does, but they
+ * never show up in `dispositionEvidence`, so the boundary guard reads them
+ * separately. A thread is the only thing that covers a finding, so the count
+ * stays above zero after a plain-comment disposition; it is therefore not part
+ * of the `warnings` a standalone `--from-pr` prints, only of a refusal's.
+ */
+function countUncoveredEmbeddedFindings(snapshot: unknown): number {
+  const findings = (snapshot as { embeddedFindings?: unknown } | null)
+    ?.embeddedFindings;
+  if (!Array.isArray(findings)) return 0;
+  let total = 0;
+  for (const entry of findings) {
+    const uncovered = Number(
+      (entry as { uncoveredCount?: unknown } | null)?.uncoveredCount ?? 0,
+    );
+    if (Number.isInteger(uncovered) && uncovered > 0) total += uncovered;
+  }
+  return total;
+}
+
+function describeUncoveredEmbeddedFindings(snapshot: unknown): string[] {
+  const count = countUncoveredEmbeddedFindings(snapshot);
+  if (count === 0) return [];
+  return [
+    count === 1
+      ? '1 review-body finding has no thread of its own, so the boundary ' +
+        'guard cannot treat that review as handled.'
+      : `${count} review-body findings have no thread of their own, so the ` +
+        'boundary guard cannot treat those reviews as handled.',
+  ];
+}
+
 function sameHeadActivityAdvanced(
   snapshot: unknown,
   prior: OperationLocalPriorBoundary,
@@ -747,13 +783,13 @@ export function runOperationLocalSnapshotWatermark(input: {
   }
   if (
     input.priorBoundary &&
-    warnings.length > 0 &&
+    (warnings.length > 0 || countUncoveredEmbeddedFindings(snapshot) > 0) &&
     sameHeadActivityAdvanced(snapshot, input.priorBoundary)
   ) {
     return {
       snapshot,
       watermarkFields,
-      warnings,
+      warnings: [...warnings, ...describeUncoveredEmbeddedFindings(snapshot)],
       decision: 'refuse',
       reasonCode: 'same-head-activity',
       reason:
