@@ -1439,6 +1439,55 @@ merge step retain that human as the backstop the autonomous path lacks. A
 repository that reaches this same conclusion independently should record
 it here rather than re-litigating it on every structural audit.
 
+### F4 checks that the closing set is closed before it releases the claim
+
+F4 step 1 closes the closing set's issues explicitly only when
+`{development-branch}` is not the default branch. For the default branch
+it relies on GitHub closing each linked issue at merge, and step 7 used
+to post `unclaimed-by` without checking that GitHub had done so
+(observed 2026-09-30).
+
+Of the nine pull requests merged that day, each with a `Closes #N` line
+in its body, four closed their issue within 2 s of the merge
+(kurone-kito/idd-skill#3604, kurone-kito/idd-skill#3614,
+kurone-kito/idd-skill#3612, kurone-kito/idd-skill#3613) and five did
+not. An IDD session closed each of the five by hand with a
+`Merged via #N` comment, 135 to 481 s after the merge:
+kurone-kito/idd-skill#3624 (PR kurone-kito/idd-skill#3632, 135 s),
+kurone-kito/idd-skill#3617 (PR kurone-kito/idd-skill#3618, 189 s),
+kurone-kito/idd-skill#3592 (PR kurone-kito/idd-skill#3603, 193 s),
+kurone-kito/idd-skill#3597 (PR kurone-kito/idd-skill#3605, 462 s) and
+kurone-kito/idd-skill#3585 (PR kurone-kito/idd-skill#3610, 481 s). The
+day before, all nine pull requests with closing references that merged
+closed their issue within 2 s. No late auto-close was observed for the
+five, and the cause is not established: the current
+`closingIssuesReferences` of every one of the nine lists its issue, and
+the bodies show no difference. One unconfirmed lead, from the sessions'
+own notes and not visible on GitHub: for kurone-kito/idd-skill#3632 the
+reference registered only about two hours after the PR was created and
+shortly before the merge, and for kurone-kito/idd-skill#3618 about a
+minute after a body edit; whether the other three registered late is not
+known.
+
+Each session improvised the same repair at a different point of its run
+(for kurone-kito/idd-skill#3597 and kurone-kito/idd-skill#3624 after
+`unclaimed-by`; for kurone-kito/idd-skill#3617,
+kurone-kito/idd-skill#3592 and kurone-kito/idd-skill#3585 before it),
+because nothing in F4 asked for it. Step 7 now reads each closing-set
+issue's state once, closes an open one as step 1 does, and holds without
+posting `unclaimed-by` when the read or the close fails, right before it
+releases the claim. The check lives in step 7 and not step 1 because
+step 1 is skipped on a resume for a default branch while step 7 runs on
+every resume that still holds the claim, and running last also gives
+GitHub's own auto-close time to fire first. It is a single read, never a
+wait or a poll. The digest upsert stays first, so a failed close leaves
+the digest at `F4 complete` with the claim held; a resume re-runs steps
+4-7, where the upsert reports `noop` and the check runs again. The
+exposure is small (an open, unclaimed, already-merged issue is mostly
+caught by A4.5's supersession signals; the one documented window is
+about three minutes, for kurone-kito/idd-skill#3597), so the rule rests
+on the repeated hand repairs, not on the window.
+
 ## Instruction delivery
 
 ### Skill-based on-demand delivery of phase instructions: no-go (2026-07-16)

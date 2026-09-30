@@ -490,8 +490,12 @@ are dropped. The file is not uploaded. Records can include HTTP status,
 `retry-after`, GraphQL query cost, and separate command, retry, and
 injected page counts. GraphQL cost is recorded only when the query itself
 selects `rateLimit` with `cost`, because GitHub returns it as a field of
-`data` and not in any response envelope; otherwise it stays unknown. They
-do not include request paths, query text, bodies, tokens, environment
+`data` and not in any response envelope; otherwise it stays unknown. The
+remaining count comes from the `x-ratelimit-remaining` header; when no
+header supplies it, a GraphQL query that selects `rateLimit` with
+`remaining` supplies it instead, and a header value wins even when the two
+disagree. Otherwise it stays unknown.
+Records do not include request paths, query text, bodies, tokens, environment
 dumps, or launcher or session names. `gh api --paginate` counts as one
 command invocation; its HTTP and page counts stay unknown unless injected
 per-response records supply them. A successful REST call counts one HTTP
@@ -520,8 +524,17 @@ record is also skipped, silently, when another writer holds the lock for
 the whole short wait.
 More than one of GraphQL errors, primary exhaustion, secondary
 throttling, and access denial stays `unknown` rather than guessing a
-subtype. A read or write failure in this retention path does not change
-the wrapper result.
+subtype. A GraphQL response whose `errors` are all throttle-shaped (each
+entry has the type `RATE_LIMITED` or a message with the wording `already
+exceeded`, as in `API rate limit already exceeded for user ID <n>`) and
+that matches neither the primary nor the secondary wording records as
+`graphql-throttled` instead of `graphql-errors`. It says the call was
+throttled without naming a subtype, because that wording can be GitHub's
+secondary limit while the hourly quota is healthy (observed 2026-09-27,
+issue `kurone-kito/idd-skill#3560`; see the REST section below). A reader
+that predates the value reads such a retained record back as `unknown`. A
+read or write failure in this retention path does not change the wrapper
+result.
 
 ## REST
 
