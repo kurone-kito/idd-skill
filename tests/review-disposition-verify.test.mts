@@ -210,6 +210,94 @@ test('checkPathAItem: Rejected — regular_comment with non-null threadResolved 
   );
 });
 
+// #3669: E6 and E7 require a rejection reply only for reviewer-sourced PATH A
+// items. A `critique_finding` comes from the session's own critique pass and
+// has no reviewer to reply to.
+test('checkPathAItem: Rejected critique_finding — no reply required (#3669)', () => {
+  const result = checkPathAItem({
+    id: 'a-cf1',
+    path: 'A',
+    type: 'critique_finding',
+    decision: 'rejected',
+    markerReply: null,
+    threadResolved: null,
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.decisionRecorded, true);
+  assert.equal(result.checks.markerPresent, null);
+  assert.equal(result.checks.markerMatchesDecision, null);
+  assert.equal(result.checks.threadResolutionCorrect, true);
+  assert.deepEqual(result.issues, []);
+});
+
+test('checkPathAItem: Rejected critique_finding — a supplied reply is not checked (#3669)', () => {
+  const result = checkPathAItem({
+    id: 'a-cf2',
+    path: 'A',
+    type: 'critique_finding',
+    decision: 'rejected',
+    markerReply: '**Rejected** — a Low finding, recorded in the PR follow-ups',
+    threadResolved: null,
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.markerPresent, null);
+});
+
+test('checkPathAItem: Rejected critique_finding — non-null threadResolved still fails (#3669)', () => {
+  const result = checkPathAItem({
+    id: 'a-cf3',
+    path: 'A',
+    type: 'critique_finding',
+    decision: 'rejected',
+    markerReply: null,
+    threadResolved: true,
+  });
+  assert.equal(result.passed, false);
+  assert.ok(
+    result.issues.some((msg) => msg.includes('non-null threadResolved')),
+  );
+});
+
+test('checkPathAItem: Rejected reviewer-sourced types still require the reply (#3669)', () => {
+  for (const type of [
+    'review_thread',
+    'regular_comment',
+    'changes_requested',
+  ]) {
+    const result = checkPathAItem({
+      id: `a-rs-${type}`,
+      path: 'A',
+      type,
+      decision: 'rejected',
+      markerReply: null,
+      threadResolved: type === 'review_thread' ? true : null,
+    });
+    assert.equal(result.passed, false, `${type} must still fail`);
+    assert.equal(result.checks.markerPresent, false);
+    assert.ok(
+      result.issues.includes(
+        'PATH A Rejected item is missing the required `**Rejected** — {reason}` marker reply.',
+      ),
+      `${type} must keep the existing message`,
+    );
+  }
+});
+
+// Unchanged by #3669 (its change is limited to the rejected branch); pinned so
+// a later edit to the rejected branch cannot silently loosen the AMD one.
+test('checkPathAItem: AMD critique_finding — the marker is still required (#3669)', () => {
+  const result = checkPathAItem({
+    id: 'a-cf4',
+    path: 'A',
+    type: 'critique_finding',
+    decision: 'awaiting_maintainer',
+    markerReply: null,
+    threadResolved: null,
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.markerPresent, false);
+});
+
 test('checkPathAItem: AMD — proper reply + unresolved thread → pass', () => {
   const result = checkPathAItem({
     id: 'a8',
@@ -557,4 +645,11 @@ test('CLI: --help prints usage and exits 0', () => {
     output,
     /node scripts\/review-disposition-verify\.mjs --items '<json>' \[--help\]/,
   );
+});
+
+test('CLI: --help says a rejected critique_finding needs no marker reply (#3669)', () => {
+  const output = runCli(['--help']);
+  assert.match(output, /rejected critique_finding/);
+  assert.match(output, /needs no marker reply/);
+  assert.match(output, /review_thread, regular_comment,\s+changes_requested/);
 });

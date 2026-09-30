@@ -2486,6 +2486,12 @@ The adopted helper boundaries are intentionally narrow:
   PATH B items must have review threads resolved
 - PATH A Accepted items pass without a marker (reply is handled in
   review-fix, not triage)
+- a PATH A Rejected item of `type: "critique_finding"` needs no marker
+  reply (its `markerPresent` and `markerMatchesDecision` checks are
+  `null`): it comes from the session's own critique pass, so there is no
+  reviewer to reply to; every reviewer-sourced type (`review_thread`,
+  `regular_comment`, `changes_requested`) still requires the
+  `**Rejected** — {reason}` reply
 - written E7 rules in `idd-review-triage.instructions.md` remain
   authoritative; this helper only reduces command-copy variance when
   confirming marker presence before triage exits
@@ -5397,9 +5403,11 @@ reflexively as any other CLI option.
   inspect the verdict, then `--apply` to execute the bound merge.
 - Command: `node scripts/idd-merge-execute.mjs --pr <pr-number>
   --claim-issue <issue-number> --claim-id <claim-id>` plus the same
-  optional flags as `pre-merge-readiness` (`--agent-id`, `--owner`,
-  `--repo`, `--trusted-marker-logins`, `--advisory-bot-logins`); add
-  `--apply` to merge.
+  optional flags as `pre-merge-readiness` (`--agent-id`, `--nonce`,
+  `--owner`, `--repo`, `--trusted-marker-logins`, `--advisory-bot-logins`,
+  `--idd-agent-logins`); add `--apply` to merge. Pass `--nonce` whenever
+  this session recorded an activation nonce: omitting it silently skips
+  the merge-time nonce comparison.
 - **Required claim binding (`#3252`).** `--claim-id` (or the deprecated
   `--expected-claim-id` alias) is required unless `--claimless` is also
   given — the same "no-issue PR" exemption `pre-merge-readiness` itself

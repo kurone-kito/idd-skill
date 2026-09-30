@@ -779,6 +779,11 @@ and emit (default) or post (--apply) the canonical E6 disposition: a marker-firs
 \`**Accepted** — {bot} summary walkthrough …\` per current summary (re-dispositioned
 per HEAD). Idempotent and fail-closed.
 
+A CodeRabbit summary the gate already classifies as resolved ("No actionable
+comments were generated") is skipped with reason
+\`summary-resolved-no-actionable-comments\` and receives no reply. The written
+E6 rule stays authoritative for every other summary.
+
   --pr <number>                  PR number (required)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)

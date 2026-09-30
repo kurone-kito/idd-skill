@@ -1275,7 +1275,8 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> --claim-id <claim-id> [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
+  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> --claim-id <claim-id> [--agent-id <agent-id>] [--nonce <token>] [--closing-issues <n>[,<n>...]] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
+  node scripts/idd-merge-execute.mjs --pr <number> --claimless [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
 
   Every flag except --apply is forwarded verbatim to the read-only
   pre-merge-readiness collector, so the full collector flag surface is
@@ -1283,9 +1284,15 @@ function printHelp(): void {
   --expected-claim-id / --expected-agent-id aliases. --owner and --repo
   must be passed together or not at all.
 
+  --nonce <token> is this session's own recorded activation nonce (#1522).
+  Pass it whenever one was recorded: omitting it, or leaving it empty,
+  silently skips the merge-time activation-nonce comparison. --claimless
+  and --closing-issues keep their pre-merge-readiness meaning (see that
+  helper's --help).
+
   #3252 required claim binding: --claim-id (or the deprecated
   --expected-claim-id alias) is required unless --claimless is also
-  given (only valid for a PR with no closingIssuesReferences) -- checked
+  given (see pre-merge-readiness --help for when it is valid) -- checked
   here, before this helper ever collects readiness evidence or merges,
   since the collector's own claim gate only checks whether a SUPPLIED
   claim-id matches the active claim, never whether one was supplied.
