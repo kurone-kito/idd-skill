@@ -1977,10 +1977,10 @@ function readGhStdout(args: string[]): string | undefined {
  * `GH_HOST` and `GITHUB_SERVER_URL` values in effect, so a change to either
  * re-resolves.
  *
- * Only a lookup that reports exactly one non-empty host is stored. A failed
+ * Only a lookup that reports exactly one non-blank host is stored. A failed
  * call, empty output, unparseable or non-object JSON, an empty `hosts`
- * object, several hosts and an empty host name are returned as they always
- * were and are retried on the next call.
+ * object, several hosts and an empty or whitespace-only host name are
+ * returned as they always were and are retried on the next call.
  *
  * Accepted residual: a `github.com` result is not pinned to the request (see
  * {@link explicitCacheHostname}). If the sole logged-in host changes while
@@ -2021,7 +2021,7 @@ function activeGhHost(): string | undefined {
     const hosts = Object.keys(parsed.hosts).map((host) => host.toLowerCase());
     if (hosts.length === 1) {
       const host = hosts[0];
-      if (host) ghAuthHostMemo = { key, host };
+      if (host?.trim()) ghAuthHostMemo = { key, host };
       return host;
     }
     if (hosts.length === 0) return 'github.com';
