@@ -219,9 +219,8 @@ either order); just the roadmap path for `roadmap`.
 **Helper flags (optional).** Both helpers accept `--with-claim-state`. A
 `cache.source: hint` only ranks: the pick must pass live A3–A5. If they
 reject it, rerun once with `--refresh-cache` before any no-work/parked/held
-call (the helper already refreshes an empty hint once); an incomplete
-refresh (`cache.complete: false`) is unknown/recovery. See
-`docs/idd-helper-scripts.md`.
+call. `cache.complete: false` is unknown/recovery; on `status: incomplete`,
+rerun the same arguments after `notBefore`. See `docs/idd-helper-scripts.md`.
 
 ## A1 — Find the roadmap
 

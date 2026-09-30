@@ -41,6 +41,22 @@ discipline and has no tag.
   finding can be deferred by an urgency score. High defers only at
   `very-low`. `low` and `low-and-medium` are unchanged, except that in
   those two modes an unassessed E4 tier never defers (#3589).
+- `discover-roadmap-graph --all-roadmaps` gains an opt-in `--with-progress`
+  (#3598). It prints bounded JSON progress lines on stderr (phase plus
+  completed and known counts) while an annotated scan runs. When a rate
+  limit, a timeout, or an admission deadline interrupts the scan, stdout
+  carries an `incomplete` result instead of a crash and the exit code is
+  `75`. The result names the phase, the counts, the retry time when the
+  admission contract or the failure headers give one, and the same
+  arguments to rerun. It has no leaves or summary, so it is never read as
+  candidates or as exhaustion, and the hint cache never stores it. A
+  complete report is unchanged, and so is a run without the flag.
+
+### Fixed
+
+- A failed fetch in the roadmap traversal's concurrent crawl now stops the
+  other workers from starting new items, so an interrupted scan no longer
+  keeps sending requests into a throttled API (#3598).
 
 ## [0.13.0] - 2026-09-27
 
