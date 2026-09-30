@@ -1788,6 +1788,64 @@ function resolveCurrentSessionWorktreeIdentity(cwdOverride) {
   }
 }
 /**
+ * Run the worktree identity, claim lock and generated-tokens proofs in
+ * order, stopping at the first failure. Each stage has its own `try/catch`
+ * and fails closed, so a throw stays attributable to its stage.
+ */
+function resolveStagedSessionClaimEvidence(claimId, worktreePath) {
+  let cwd;
+  try {
+    cwd = worktreePath ?? process.cwd();
+  } catch {
+    // Fail closed: a deleted cwd makes `process.cwd()` throw.
+    return {
+      identity: null,
+      lockMatches: null,
+      tokensMatch: null,
+      evidence: null,
+    };
+  }
+  const identity = resolveCurrentSessionWorktreeIdentity(cwd);
+  if (identity === null) {
+    return { identity, lockMatches: null, tokensMatch: null, evidence: null };
+  }
+  let lockHolderAgentId = '';
+  try {
+    const lock = checkClaimLock(cwd);
+    const holder = lock.holder;
+    if (
+      lock.present &&
+      !lock.malformed &&
+      holder !== undefined &&
+      holder.claimId === claimId &&
+      holder.agentId
+    ) {
+      lockHolderAgentId = holder.agentId;
+    }
+  } catch {
+    lockHolderAgentId = '';
+  }
+  if (!lockHolderAgentId) {
+    return { identity, lockMatches: false, tokensMatch: null, evidence: null };
+  }
+  let tokensMatch = false;
+  try {
+    const tokens = readGeneratedClaimTokens(cwd, claimId);
+    tokensMatch =
+      tokens.status === 'present' &&
+      tokens.record.claimId === claimId &&
+      tokens.record.agentId === lockHolderAgentId;
+  } catch {
+    tokensMatch = false;
+  }
+  return {
+    identity,
+    lockMatches: true,
+    tokensMatch,
+    evidence: tokensMatch ? { ...identity, agentId: lockHolderAgentId } : null,
+  };
+}
+/**
  * `worktreePath` (kurone-kito/idd-skill#3272): when given, every read below
  * (the claim lock, the generated-tokens record, and Git's own worktree-root /
  * branch identification) targets that path instead of `process.cwd()`. This
@@ -1798,32 +1856,23 @@ function resolveCurrentSessionWorktreeIdentity(cwdOverride) {
  * prior `process.cwd()`-only behavior exactly.
  */
 export function resolveCurrentSessionClaimEvidence(claimId, worktreePath) {
-  try {
-    const cwd = worktreePath ?? process.cwd();
-    const worktree = resolveCurrentSessionWorktreeIdentity(cwd);
-    if (worktree === null) {
-      return null;
-    }
-    const lock = checkClaimLock(cwd);
-    const holder = lock.holder;
-    if (
-      !lock.present ||
-      lock.malformed ||
-      holder === undefined ||
-      holder.claimId !== claimId ||
-      !holder.agentId
-    ) {
-      return null;
-    }
-    const tokens = readGeneratedClaimTokens(cwd, claimId);
-    return tokens.status === 'present' &&
-      tokens.record.claimId === claimId &&
-      tokens.record.agentId === holder.agentId
-      ? { ...worktree, agentId: holder.agentId }
-      : null;
-  } catch {
-    return null;
-  }
+  return resolveStagedSessionClaimEvidence(claimId, worktreePath).evidence;
+}
+/** True when every occupied path for the claimed branch is `currentPath`. */
+function occupiedPathsAreCurrentWorktree(paths, currentPath) {
+  return (
+    paths.length > 0 &&
+    paths.every((path) => {
+      if (path === currentPath) {
+        return true;
+      }
+      try {
+        return realpathSync(path) === currentPath;
+      } catch {
+        return false;
+      }
+    })
+  );
 }
 /**
  * Prove that the owner-resume exception refers to this session's own
@@ -1849,19 +1898,73 @@ export function isCurrentSessionWorktreeOwner(
   ) {
     return false;
   }
-  return (
-    localWorktree.paths.length > 0 &&
-    localWorktree.paths.every((path) => {
-      if (path === currentPath) {
-        return true;
-      }
-      try {
-        return realpathSync(path) === currentPath;
-      } catch {
-        return false;
-      }
-    })
-  );
+  return occupiedPathsAreCurrentWorktree(localWorktree.paths, currentPath);
+}
+/**
+ * Evaluate whether this session owns `claim`, and report which proof failed.
+ * `owner` is the same verdict the boolean pair
+ * {@link resolveCurrentSessionClaimEvidence} plus
+ * {@link isCurrentSessionWorktreeOwner} gives; `evidence` adds the per-proof
+ * breakdown. `worktreePath` has the same meaning as there.
+ */
+export function evaluateCurrentSessionOwnerEvidence(
+  claim,
+  localWorktree,
+  worktreePath,
+) {
+  const staged = resolveStagedSessionClaimEvidence(claim.claimId, worktreePath);
+  const evidence = staged.evidence;
+  const agentAndBranchMatch =
+    evidence === null
+      ? null
+      : evidence.agentId === claim.agentId &&
+        evidence.branchName === claim.branch;
+  const pathsMatch =
+    evidence !== null &&
+    agentAndBranchMatch === true &&
+    localWorktree.status === 'occupied'
+      ? isCurrentSessionWorktreeOwner(
+          evidence.worktreePath,
+          evidence.branchName,
+          claim.branch,
+          localWorktree,
+        )
+      : null;
+  return {
+    owner: pathsMatch === true,
+    evidence: {
+      worktree_identity: staged.identity !== null,
+      claim_lock_matches: staged.lockMatches,
+      generated_tokens_match: staged.tokensMatch,
+      agent_and_branch_match: agentAndBranchMatch,
+      occupancy_probe: localWorktree.status,
+      occupancy_paths_match: pathsMatch,
+    },
+  };
+}
+/**
+ * The first proof that failed, in evaluation order, or `null` when every
+ * proof passed. The four booleans are scanned first, then a non-`occupied`
+ * probe, then a `false` path match.
+ */
+export function firstFailedOwnerProof(evidence) {
+  const booleans = [
+    'worktree_identity',
+    'claim_lock_matches',
+    'generated_tokens_match',
+    'agent_and_branch_match',
+  ];
+  for (const name of booleans) {
+    if (evidence[name] === false) {
+      return name;
+    }
+  }
+  if (evidence.occupancy_probe !== 'occupied') {
+    return 'occupancy_probe';
+  }
+  return evidence.occupancy_paths_match === false
+    ? 'occupancy_paths_match'
+    : null;
 }
 function normalizeWorktreeBranchName(branchName) {
   const value = String(branchName ?? '').trim();

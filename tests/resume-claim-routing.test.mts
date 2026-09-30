@@ -5,23 +5,30 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   acquireClaimLock,
   checkClaimLock,
+  readGeneratedClaimTokens,
   recordGeneratedClaimTokens,
 } from '../src/scripts/claim-lock.mts';
 import {
+  evaluateCurrentSessionOwnerEvidence,
+  firstFailedOwnerProof,
   isCurrentSessionWorktreeOwner,
   resolveCurrentSessionClaimEvidence,
 } from '../src/scripts/discover-roadmap-graph.mts';
-import { inspectLocalWorktreeBranch } from '../src/scripts/local-worktree-occupancy.mts';
+import {
+  inspectLocalWorktreeBranch,
+  type LocalWorktreeInspection,
+} from '../src/scripts/local-worktree-occupancy.mts';
 import {
   DEFAULT_STALE_AGE_MS,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
@@ -4191,29 +4198,41 @@ test('a takeover after recording the identity against another worktree still sto
   });
 });
 
+/**
+ * Leave the sandbox worktree in a real conflicting rebase: the same new file
+ * with different content on main and on the claimed branch. (A plain `git
+ * checkout --detach` would make the probe report the branch absent, which
+ * routes already_owned.)
+ */
+function leaveWorktreeMidRebase(sandbox: {
+  primary: string;
+  worktree: string;
+  env: NodeJS.ProcessEnv;
+}): void {
+  const { primary, worktree, env } = sandbox;
+  writeFileSync(join(primary, 'conflict.txt'), 'main\n');
+  gitIn(primary, ['add', 'conflict.txt'], env);
+  gitIn(primary, ['commit', '--quiet', '-m', 'main side'], env);
+  writeFileSync(join(worktree, 'conflict.txt'), 'branch\n');
+  gitIn(worktree, ['add', 'conflict.txt'], env);
+  gitIn(worktree, ['commit', '--quiet', '-m', 'branch side'], env);
+  assert.throws(() => gitIn(worktree, ['rebase', 'main'], env));
+  const rebaseState = gitIn(
+    worktree,
+    ['rev-parse', '--git-path', 'rebase-merge'],
+    env,
+  ).trim();
+  assert.equal(
+    readdirSync(resolve(worktree, rebaseState)).length > 0,
+    true,
+    'expected the conflicting rebase to be left in progress',
+  );
+}
+
 test('a takeover of a worktree the dead predecessor left mid-rebase still stops with owner_evidence_required (#3645)', () => {
   withSuccessorSandbox((sandbox) => {
-    const { primary, worktree, env } = sandbox;
-    // A real conflicting rebase: the same new file with different content on
-    // main and on the claimed branch. (A plain `git checkout --detach` would
-    // make the probe report the branch absent, which routes already_owned.)
-    writeFileSync(join(primary, 'conflict.txt'), 'main\n');
-    gitIn(primary, ['add', 'conflict.txt'], env);
-    gitIn(primary, ['commit', '--quiet', '-m', 'main side'], env);
-    writeFileSync(join(worktree, 'conflict.txt'), 'branch\n');
-    gitIn(worktree, ['add', 'conflict.txt'], env);
-    gitIn(worktree, ['commit', '--quiet', '-m', 'branch side'], env);
-    assert.throws(() => gitIn(worktree, ['rebase', 'main'], env));
-    const rebaseState = gitIn(
-      worktree,
-      ['rev-parse', '--git-path', 'rebase-merge'],
-      env,
-    ).trim();
-    assert.equal(
-      readdirSync(resolve(worktree, rebaseState)).length > 0,
-      true,
-      'expected the conflicting rebase to be left in progress',
-    );
+    const { primary, worktree } = sandbox;
+    leaveWorktreeMidRebase(sandbox);
 
     // The real probe still reports the branch occupied by this worktree (it
     // reads the rebase metadata); it is the detached HEAD that leaves the
@@ -4235,4 +4254,312 @@ test('a takeover of a worktree the dead predecessor left mid-rebase still stops 
     );
     assertSuccessorStop(routeAsSuccessor(sandbox));
   });
+});
+
+// #3667: the owner proof, broken down by proof. `evaluateCurrentSessionOwnerEvidence`
+// reports which of the six proofs failed while its `owner` verdict stays the
+// one the boolean pair (`resolveCurrentSessionClaimEvidence` plus
+// `isCurrentSessionWorktreeOwner`) gives.
+
+const OWNER_PROOF_ORDER = [
+  'worktree_identity',
+  'claim_lock_matches',
+  'generated_tokens_match',
+  'agent_and_branch_match',
+  'occupancy_probe',
+  'occupancy_paths_match',
+];
+
+const SUCCESSOR_CLAIM = {
+  claimId: 'claim-new',
+  agentId: 'agent-new',
+  branch: SUCCESSOR_BRANCH,
+};
+
+/**
+ * The owner check as it ran before #3667, inlined as the oracle: one
+ * fail-closed chain over worktree identity, claim lock and generated tokens,
+ * then the same agent-id / branch / probe comparison the CLI made. It does
+ * not call the staged function it is compared against.
+ */
+function booleanOwnerVerdict(
+  claim: typeof SUCCESSOR_CLAIM,
+  probe: LocalWorktreeInspection,
+  worktree: string,
+): boolean {
+  try {
+    const env = hermeticGitEnv();
+    const git = (args: string[]) =>
+      execFileSync('git', ['-C', worktree, ...args], {
+        encoding: 'utf8',
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).replace(/\n$/, '');
+    const worktreePath = realpathSync(git(['rev-parse', '--show-toplevel']));
+    const branchName = git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    const lock = checkClaimLock(worktree);
+    const holder = lock.holder;
+    if (
+      !worktreePath ||
+      !branchName ||
+      !lock.present ||
+      lock.malformed ||
+      holder === undefined ||
+      holder.claimId !== claim.claimId ||
+      !holder.agentId
+    ) {
+      return false;
+    }
+    const tokens = readGeneratedClaimTokens(worktree, claim.claimId);
+    if (
+      !(
+        tokens.status === 'present' &&
+        tokens.record.claimId === claim.claimId &&
+        tokens.record.agentId === holder.agentId
+      ) ||
+      holder.agentId !== claim.agentId ||
+      branchName !== claim.branch
+    ) {
+      return false;
+    }
+    return isCurrentSessionWorktreeOwner(
+      worktreePath,
+      branchName,
+      claim.branch,
+      probe,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function ownerEvidenceFor(
+  sandbox: { primary: string; worktree: string },
+  probe?: LocalWorktreeInspection,
+  claim: typeof SUCCESSOR_CLAIM = SUCCESSOR_CLAIM,
+) {
+  const real = inspectLocalWorktreeBranch(SUCCESSOR_BRANCH, sandbox.primary);
+  const check = evaluateCurrentSessionOwnerEvidence(
+    claim,
+    probe ?? real,
+    sandbox.worktree,
+  );
+  assert.equal(
+    check.owner,
+    booleanOwnerVerdict(claim, probe ?? real, sandbox.worktree),
+    'owner must match the boolean pair it replaces',
+  );
+  assert.deepEqual(Object.keys(check.evidence), OWNER_PROOF_ORDER);
+  return check;
+}
+
+test('owner evidence names a lock held by another claim-id and leaves later booleans null (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    const { owner, evidence } = ownerEvidenceFor(sandbox);
+    assert.equal(owner, false);
+    assert.deepEqual(evidence, {
+      worktree_identity: true,
+      claim_lock_matches: false,
+      generated_tokens_match: null,
+      agent_and_branch_match: null,
+      occupancy_probe: 'occupied',
+      occupancy_paths_match: null,
+    });
+    assert.equal(firstFailedOwnerProof(evidence), 'claim_lock_matches');
+  });
+});
+
+test('owner evidence names a missing generated-tokens record once the lock matches (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const { owner, evidence } = ownerEvidenceFor(sandbox);
+    assert.equal(owner, false);
+    assert.deepEqual(evidence, {
+      worktree_identity: true,
+      claim_lock_matches: true,
+      generated_tokens_match: false,
+      agent_and_branch_match: null,
+      occupancy_probe: 'occupied',
+      occupancy_paths_match: null,
+    });
+    assert.equal(firstFailedOwnerProof(evidence), 'generated_tokens_match');
+  });
+});
+
+test('owner evidence names an agent-id or branch mismatch after the lock and tokens match (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordGeneratedClaimTokens(sandbox.worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    for (const claim of [
+      { ...SUCCESSOR_CLAIM, agentId: 'agent-someone-else' },
+      { ...SUCCESSOR_CLAIM, branch: 'issue/99-other' },
+    ]) {
+      const { owner, evidence } = ownerEvidenceFor(sandbox, undefined, claim);
+      assert.equal(owner, false);
+      assert.equal(evidence.claim_lock_matches, true);
+      assert.equal(evidence.generated_tokens_match, true);
+      assert.equal(evidence.agent_and_branch_match, false);
+      assert.equal(evidence.occupancy_paths_match, null);
+      assert.equal(firstFailedOwnerProof(evidence), 'agent_and_branch_match');
+    }
+  });
+});
+
+test('owner evidence is all-true with no failed proof for the real owner (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordGeneratedClaimTokens(sandbox.worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const { owner, evidence } = ownerEvidenceFor(sandbox);
+    assert.equal(owner, true);
+    assert.deepEqual(evidence, {
+      worktree_identity: true,
+      claim_lock_matches: true,
+      generated_tokens_match: true,
+      agent_and_branch_match: true,
+      occupancy_probe: 'occupied',
+      occupancy_paths_match: true,
+    });
+    assert.equal(firstFailedOwnerProof(evidence), null);
+  });
+});
+
+test('owner evidence names no resolvable worktree identity for a mid-rebase worktree (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    leaveWorktreeMidRebase(sandbox);
+    recordGeneratedClaimTokens(sandbox.worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const { owner, evidence } = ownerEvidenceFor(sandbox);
+    assert.equal(owner, false);
+    assert.deepEqual(evidence, {
+      worktree_identity: false,
+      claim_lock_matches: null,
+      generated_tokens_match: null,
+      agent_and_branch_match: null,
+      occupancy_probe: 'occupied',
+      occupancy_paths_match: null,
+    });
+    assert.equal(firstFailedOwnerProof(evidence), 'worktree_identity');
+  });
+});
+
+test('owner evidence keeps an unreadable probe and never compares its paths (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordGeneratedClaimTokens(sandbox.worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const { owner, evidence } = ownerEvidenceFor(sandbox, {
+      status: 'unreadable',
+      paths: [sandbox.worktree],
+      reason: 'ambiguous detached-operation metadata',
+    });
+    assert.equal(owner, false);
+    assert.deepEqual(evidence, {
+      worktree_identity: true,
+      claim_lock_matches: true,
+      generated_tokens_match: true,
+      agent_and_branch_match: true,
+      occupancy_probe: 'unreadable',
+      occupancy_paths_match: null,
+    });
+    assert.equal(firstFailedOwnerProof(evidence), 'occupancy_probe');
+  });
+});
+
+test('owner evidence names an occupied probe whose path is another worktree (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordGeneratedClaimTokens(sandbox.worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const { owner, evidence } = ownerEvidenceFor(sandbox, {
+      status: 'occupied',
+      paths: [sandbox.worktree, join(tmpdir(), 'idd-some-other-worktree')],
+      reason: null,
+    });
+    assert.equal(owner, false);
+    assert.equal(evidence.occupancy_probe, 'occupied');
+    assert.equal(evidence.occupancy_paths_match, false);
+    assert.equal(firstFailedOwnerProof(evidence), 'occupancy_paths_match');
+  });
+});
+
+test('owner evidence reports a probe that is absent without evaluating its paths (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordGeneratedClaimTokens(sandbox.worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const { owner, evidence } = ownerEvidenceFor(sandbox, {
+      status: 'absent',
+      paths: [],
+      reason: null,
+    });
+    assert.equal(owner, false);
+    assert.equal(evidence.occupancy_probe, 'absent');
+    assert.equal(evidence.occupancy_paths_match, null);
+    assert.equal(firstFailedOwnerProof(evidence), 'occupancy_probe');
+  });
+});
+
+test('the owner proof fails closed when the current directory no longer exists (#3667)', {
+  skip: process.platform === 'win32',
+}, () => {
+  // `process.cwd()` throws once the directory is deleted; the old single
+  // `try` around the whole chain turned that into "no evidence".
+  const dir = mkdtempSync(join(tmpdir(), 'idd-deleted-cwd-'));
+  const moduleUrl = pathToFileURL(
+    join(REPO_ROOT, 'src/scripts/discover-roadmap-graph.mts'),
+  ).href;
+  const script = `
+    import { rmSync } from 'node:fs';
+    import {
+      evaluateCurrentSessionOwnerEvidence,
+      resolveCurrentSessionClaimEvidence,
+    } from ${JSON.stringify(moduleUrl)};
+    process.chdir(${JSON.stringify(dir)});
+    rmSync(${JSON.stringify(dir)}, { recursive: true });
+    let cwdThrew = false;
+    try { process.cwd(); } catch { cwdThrew = true; }
+    const claim = { claimId: 'claim-x', agentId: 'agent-x', branch: 'issue/1-x' };
+    process.stdout.write(JSON.stringify({
+      cwdThrew,
+      evidence: resolveCurrentSessionClaimEvidence('claim-x'),
+      check: evaluateCurrentSessionOwnerEvidence(claim, { status: 'occupied', paths: [], reason: null }),
+    }));
+  `;
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', script],
+      { encoding: 'utf8', env: hermeticGitEnv() },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.cwdThrew, true);
+    assert.equal(output.evidence, null);
+    assert.equal(output.check.owner, false);
+    assert.equal(output.check.evidence.worktree_identity, false);
+    assert.equal(output.check.evidence.claim_lock_matches, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
