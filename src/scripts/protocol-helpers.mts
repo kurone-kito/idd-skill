@@ -5923,6 +5923,21 @@ function parseCompletedAt(value: string | null | undefined): number | null {
   return isCompletedCiTimestamp(timestamp) ? Date.parse(timestamp) : null;
 }
 
+/** Check-run states that mean a run is still queued or running. */
+const CI_PENDING_STATES: ReadonlySet<string> = new Set([
+  'QUEUED',
+  'IN_PROGRESS',
+  'WAITING',
+]);
+
+/** Check-run states `classifyCiChecks` counts as passing. */
+const CI_PASSING_STATES: ReadonlySet<string> = new Set([
+  'SUCCESS',
+  'SKIPPED',
+  'NEUTRAL',
+  'NOT_APPLICABLE',
+]);
+
 /**
  * Failure-family *conclusion* states that must win a same-instant
  * tie-break and classify as a genuine `classifyCiChecks` failure (#1688).
@@ -6267,22 +6282,12 @@ export function classifyCiChecks(checks: CheckLike[]) {
     return { status: 'failed', failed, discardedNonPassingInstances };
   }
 
-  const pending = deduped.filter((check) => {
-    return (
-      check.state === 'QUEUED' ||
-      check.state === 'IN_PROGRESS' ||
-      check.state === 'WAITING'
-    );
-  });
+  const pending = deduped.filter((check) => CI_PENDING_STATES.has(check.state));
   if (pending.length > 0) {
     return { status: 'pending', pending, discardedNonPassingInstances };
   }
 
-  const passing = deduped.filter((check) => {
-    return ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
-      check.state,
-    );
-  });
+  const passing = deduped.filter((check) => CI_PASSING_STATES.has(check.state));
 
   return {
     status: passing.length === deduped.length ? 'success' : 'unknown',
@@ -9619,24 +9624,53 @@ function classifyPresentRuns(
     check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
   );
   const classification = classifyCiChecks(effective);
-  const failedChecks =
-    classification.status === 'failed' ? (classification.failed ?? []) : [];
-  const unknownChecks =
-    classification.status === 'unknown' ? (classification.unknown ?? []) : [];
-  // An identity-unresolved name and an independently failed run are two
-  // separate causes of `some-failing`; report both.
-  const blocking = new Set<string>(identityBlockedNames);
-  for (const check of failedChecks) {
-    blocking.add(String(check.name ?? ''));
+  const conclusion = presentRunConclusion(
+    classification,
+    identityBlockedNames.length > 0,
+  );
+  if (conclusion !== 'some-failing') {
+    return { conclusion, blockingNames: [] };
   }
-  for (const check of unknownChecks) {
-    if (check.state !== 'CANCELLED') {
+  // An identity-unresolved name, a genuine failure, and an unrecognized state
+  // are separate causes of `some-failing`; report each. `classifyCiChecks`
+  // stops at its failed or pending bucket and exposes nothing past it, so an
+  // unrecognized state beside either is derived directly from the same
+  // per-producer de-duplication (it keeps blocking once the failure clears).
+  const blocking = new Set<string>(identityBlockedNames);
+  if (classification.status === 'failed') {
+    for (const check of classification.failed ?? []) {
+      blocking.add(String(check.name ?? ''));
+    }
+  }
+  const latestPerProducer = selectLatestCheckPerName(
+    effective.map((check) => ({
+      ...check,
+      state: String(check.state ?? '').toUpperCase(),
+    })),
+  );
+  for (const check of latestPerProducer) {
+    if (
+      !CI_FAILURE_CONCLUSION_STATES.has(check.state) &&
+      !CI_PENDING_STATES.has(check.state) &&
+      !CI_PASSING_STATES.has(check.state) &&
+      check.state !== 'CANCELLED'
+    ) {
       blocking.add(String(check.name ?? ''));
     }
   }
   blocking.delete('');
-  const blockingNames = [...blocking].sort();
-  if (identityBlockedNames.length > 0) {
+  return { conclusion, blockingNames: [...blocking].sort() };
+}
+
+/**
+ * The present-run conclusion for one classification (the part of
+ * {@link classifyPresentRuns} F2 consults).
+ */
+function presentRunConclusion(
+  classification: ReturnType<typeof classifyCiChecks>,
+  identityBlocked: boolean,
+): string {
+  if (identityBlocked) {
     // `'some-failing'`, not `'pending'`: the `#2714` comment below maps a
     // lone CANCELLED-with-no-successor instance to `'pending'` because
     // that shape is a plausible rerun-in-progress candidate that can
@@ -9647,13 +9681,13 @@ function classifyPresentRuns(
     // follows the conservative `'some-failing'` default every other
     // genuinely unrecognized-state `unknown` cause already gets, not the
     // narrower CANCELLED carve-out.
-    return { conclusion: 'some-failing', blockingNames };
+    return 'some-failing';
   }
   if (classification.status === 'success') {
-    return { conclusion: 'all-passing', blockingNames: [] };
+    return 'all-passing';
   }
   if (classification.status === 'pending') {
-    return { conclusion: 'pending', blockingNames: [] };
+    return 'pending';
   }
   // #2714: a lone CANCELLED instance with no same-producer successor to
   // dedup against lands in classifyCiChecks's residual `unknown` bucket --
@@ -9668,11 +9702,11 @@ function classifyPresentRuns(
   // 'some-failing', the conservative default.
   if (
     classification.status === 'unknown' &&
-    unknownChecks.every((check) => check.state === 'CANCELLED')
+    (classification.unknown ?? []).every((check) => check.state === 'CANCELLED')
   ) {
-    return { conclusion: 'pending', blockingNames: [] };
+    return 'pending';
   }
-  return { conclusion: 'some-failing', blockingNames };
+  return 'some-failing';
 }
 
 // Conclusion over *all* present check runs (waiver-covered runs count as

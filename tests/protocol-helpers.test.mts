@@ -4992,6 +4992,80 @@ test('listBlockingPresentRunNames is non-empty exactly when the present-run conc
       names: ['b'],
     },
     {
+      label: 'an unrecognized state beside a failure is named too',
+      checks: [presentRun('a', 'FAILURE'), presentRun('b', 'MYSTERY')],
+      conclusion: 'some-failing',
+      names: ['a', 'b'],
+    },
+    {
+      label: 'failure, unrecognized, cancelled and passing runs together',
+      checks: [
+        presentRun('a', 'CANCELLED'),
+        presentRun('b', 'MYSTERY'),
+        presentRun('c', 'TIMED_OUT'),
+        presentRun('d', 'SUCCESS'),
+      ],
+      conclusion: 'some-failing',
+      names: ['b', 'c'],
+    },
+    {
+      label: 'a superseded failure does not block, but a live failure does',
+      checks: [
+        {
+          ...presentRun('a', 'FAILURE'),
+          completedAt: '2026-06-25T10:00:00Z',
+        },
+        {
+          ...presentRun('a', 'SUCCESS'),
+          completedAt: '2026-06-25T11:00:00Z',
+        },
+        presentRun('b', 'MYSTERY'),
+        presentRun('c', 'TIMED_OUT'),
+      ],
+      conclusion: 'some-failing',
+      names: ['b', 'c'],
+    },
+    {
+      label: 'failure, pending and unrecognized runs together',
+      checks: [
+        presentRun('a', 'FAILURE'),
+        presentRun('b', 'QUEUED'),
+        presentRun('c', 'MYSTERY'),
+      ],
+      conclusion: 'some-failing',
+      names: ['a', 'c'],
+    },
+    {
+      label: 'identity-unresolved name beside pending and unrecognized runs',
+      checks: [
+        presentRun('a', 'SUCCESS'),
+        presentRun('b', 'IN_PROGRESS'),
+        presentRun('c', 'MYSTERY'),
+      ],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a', 'c'],
+    },
+    {
+      label: 'pending beside an unrecognized state names nothing',
+      checks: [presentRun('a', 'QUEUED'), presentRun('b', 'MYSTERY')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label:
+        'the same name failing in one workflow and unrecognized in another',
+      checks: [
+        presentRun('a', 'FAILURE'),
+        {
+          ...presentRun('a', 'MYSTERY'),
+          workflowPath: '.github/workflows/other.yml',
+        },
+      ],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
       label: 'a waiver-covered failure',
       checks: [presentRun('a', 'FAILURE', true), presentRun('b', 'SUCCESS')],
       conclusion: 'all-passing',
