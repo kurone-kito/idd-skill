@@ -93,18 +93,74 @@ function splitAces(dacl) {
 }
 const GUID_PATTERN =
   /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
+/** SDDL ACE flag tokens (`OICIID` is `OI` + `CI` + `ID`). */
+const ACE_FLAG_TOKENS = new Set([
+  'CI',
+  'CR',
+  'FA',
+  'ID',
+  'IO',
+  'NP',
+  'OI',
+  'SA',
+  'TP',
+]);
+/** SDDL access-right tokens: generic, standard, file, registry, DS, label. */
+const ACE_RIGHT_TOKENS = new Set([
+  'CC',
+  'CR',
+  'DC',
+  'DT',
+  'FA',
+  'FR',
+  'FW',
+  'FX',
+  'GA',
+  'GR',
+  'GW',
+  'GX',
+  'KA',
+  'KR',
+  'KW',
+  'KX',
+  'LC',
+  'LO',
+  'NR',
+  'NW',
+  'NX',
+  'RC',
+  'RP',
+  'SD',
+  'SW',
+  'WD',
+  'WO',
+  'WP',
+]);
+function isTokenString(value, known) {
+  if (value.length % 2 !== 0) return false;
+  for (let index = 0; index < value.length; index += 2) {
+    if (!known.has(value.slice(index, index + 2))) return false;
+  }
+  return true;
+}
 /**
  * The fields around the principal must be well formed too, or a line such as
- * `(A;not-flags;not-rights;bad;bad;SY)` would still read as a SYSTEM allow.
- * ACE flags are two-letter tokens (`OICIID`), rights a hex or decimal mask or
- * two-letter tokens (`0x1301bf`, `FA`, `GA`), the two object fields empty or a
- * GUID, and a callback ACE's seventh field a parenthesized expression.
+ * `(A;ZZ;not-rights;bad;bad;SY)` would still read as a SYSTEM allow. ACE flags
+ * and rights are strings of known two-letter tokens (`OICIID`, `FA`, `GA`), a
+ * rights field may instead be a hex or decimal mask (`0x1301bf`), the two
+ * object fields are empty or a GUID, and a seventh field is a parenthesized
+ * expression. An unknown token fails closed, at worst costing a cache use.
  */
 function isWellFormedAceBody(fields) {
   const flags = (fields[1] ?? '').trim().toUpperCase();
   const rights = (fields[2] ?? '').trim().toUpperCase();
-  if (!/^(?:[A-Z]{2})*$/.test(flags)) return false;
-  if (!/^(?:0X[0-9A-F]+|\d+|(?:[A-Z]{2})*)$/.test(rights)) return false;
+  if (!isTokenString(flags, ACE_FLAG_TOKENS)) return false;
+  if (
+    !/^(?:0X[0-9A-F]+|\d+)$/.test(rights) &&
+    !isTokenString(rights, ACE_RIGHT_TOKENS)
+  ) {
+    return false;
+  }
   for (const guid of [fields[3], fields[4]]) {
     const value = (guid ?? '').trim().toUpperCase();
     if (value !== '' && !GUID_PATTERN.test(value)) return false;
@@ -171,6 +227,18 @@ function sddlSections(sddl) {
   if (name === null || !close(sddl.length)) return null;
   return sections;
 }
+/** A SACL ACE (audit, alarm, mandatory label, resource attribute, scoped policy). */
+function isWellFormedSaclAce(ace) {
+  const fields = splitAceFields(ace);
+  const type = (fields[0] ?? '').trim().toUpperCase();
+  if (!['AU', 'AL', 'OU', 'ML', 'RA', 'SP', 'XU'].includes(type)) return false;
+  if (fields.length !== 6 && fields.length !== 7) return false;
+  const principal = (fields[5] ?? '').trim().toUpperCase();
+  if (!SID_PATTERN.test(principal) && !/^[A-Z]{2}$/.test(principal)) {
+    return false;
+  }
+  return isWellFormedAceBody(fields);
+}
 /**
  * The owner and group sections hold one principal, and the SACL is a list of
  * ACEs like the DACL. Junk in a section the rule never reads still means the
@@ -180,7 +248,8 @@ function areOtherSectionsWellFormed(sections) {
   for (const [name, body] of sections) {
     if (name === 'D') continue;
     if (name === 'S') {
-      if (splitAces(body) === null) return false;
+      const aces = splitAces(body);
+      if (aces === null || !aces.every(isWellFormedSaclAce)) return false;
     } else {
       const principal = body.trim().toUpperCase();
       if (!SID_PATTERN.test(principal) && !/^[A-Z]{2}$/.test(principal)) {
@@ -202,10 +271,11 @@ export function parseIcaclsSave(text, extraAliases = {}) {
   // (`D:\cache` starts like a DACL); the SDDL is the line after it.
   const lines = text.split(/\r?\n/);
   while (lines[lines.length - 1] === '') lines.pop();
-  // Exactly the name line and one SDDL line, with only the terminal line
-  // ending tolerated: a blank or extra record is not something `icacls /save`
-  // writes for one directory, so it is malformed.
-  const sddl = lines.length === 2 ? lines[1] : undefined;
+  // Exactly a non-empty name line and one SDDL line, with only the terminal
+  // line ending tolerated: a blank or extra record is not something
+  // `icacls /save` writes for one directory, so it is malformed.
+  const sddl =
+    lines.length === 2 && lines[0].trim() !== '' ? lines[1] : undefined;
   if (sddl === undefined || !/^[OGDS]:/.test(sddl)) {
     return { kind: 'unreadable' };
   }

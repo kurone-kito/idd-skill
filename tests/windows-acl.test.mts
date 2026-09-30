@@ -477,6 +477,18 @@ test('windows acl parser: duplicate or misplaced sections, extra lines, and bad 
     'dir\r\nO:garbageD:PAI(A;;FA;;;SY)\r\n',
     'dir\r\nG:D:PAI(A;;FA;;;SY)\r\n',
     'dir\r\nD:PAI(A;;FA;;;SY)S:junk\r\n',
+    // An empty or blank name record.
+    '\r\nD:PAI(A;;FA;;;SY)\r\n',
+    '   \r\nD:PAI(A;;FA;;;SY)\r\n',
+    // Unknown two-letter flag or right tokens, odd lengths, mixed junk.
+    'dir\r\nD:(A;ZZ;ZZ;;;SY)\r\n',
+    'dir\r\nD:(A;OIC;FA;;;SY)\r\n',
+    'dir\r\nD:(A;OI;FAZ;;;SY)\r\n',
+    'dir\r\nD:(A;OI;0xZZ;;;SY)\r\n',
+    // A SACL whose ACE bodies are not ACEs.
+    'dir\r\nD:PAI(A;;FA;;;SY)S:(garbage)\r\n',
+    'dir\r\nD:PAI(A;;FA;;;SY)S:(AU;ZZ;FA;;;WD)\r\n',
+    'dir\r\nD:PAI(A;;FA;;;SY)S:(A;;FA;;;WD)\r\n',
     // A truncated section leaves a valid-looking DACL next to it.
     'dir\r\nD:PAI(A;;FA;;;SY)S:(AU;SAFA;FA;;;WD)(ML;;NW;;;LW\r\n',
     'dir\r\nD:PAI(A;;FA;;;SY))\r\n',
@@ -491,6 +503,13 @@ test('windows acl parser: duplicate or misplaced sections, extra lines, and bad 
   for (const text of unreadable) {
     assert.deepEqual(parseIcaclsSave(text), { kind: 'unreadable' }, text);
   }
+  // A well-formed SACL (mandatory label, audit) beside the DACL still parses.
+  assert.equal(
+    parseIcaclsSave(
+      'dir\r\nD:PAI(A;;FA;;;SY)S:AI(ML;;NW;;;LW)(AU;SAFA;FA;;;WD)\r\n',
+    ).kind,
+    'entries',
+  );
   // The shapes real icacls output has still parse: hex rights, stacked flags,
   // an object ACE with GUIDs, and owner/group sections before the DACL.
   assert.deepEqual(
