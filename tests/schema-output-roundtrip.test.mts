@@ -108,6 +108,16 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
       'parseClaimComment (marker-helpers.mts, re-exported by protocol-helpers.mts)',
   },
   {
+    schema: 'issue-authoring-review-input.schema.json',
+    status: 'uncovered',
+    reason:
+      'issue-authoring-review-input.schema.json is the stdin payload the ' +
+      'issue-authoring caller composes for the configured draft-review ' +
+      'delegate, not a helper stdout envelope -- no helper builds it and ' +
+      'the resolver never invokes the command, so fixture coverage lives ' +
+      'in discoverSchemaCases / scripts/validate-schemas.mjs.',
+  },
+  {
     schema: 'token-cost-event.schema.json',
     status: 'uncovered',
     reason:

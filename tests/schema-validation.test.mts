@@ -1277,6 +1277,38 @@ test('policy schema accepts githubApi telemetry and rejects a bad record bound',
   );
 });
 
+// #3626: the schema, `normalizePolicyConfig` and the helper docs give one
+// answer for a blank telemetry path: it counts as unset and uses the default
+// file, so the schema must not reject the empty string that the normalizer
+// and the docs accept.
+for (const [label, blank] of [
+  ['an empty string', ''],
+  ['a whitespace-only string', '   '],
+  ['a tab and newline', '\t\n'],
+] as const) {
+  test(`policy schema accepts ${label} as a githubApi.telemetry.path`, () => {
+    const schema = loadJson('schemas/policy.schema.json');
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.githubApi = { telemetry: { enabled: true, path: blank } };
+    assert.deepEqual(validate(instance, schema), []);
+  });
+}
+
+test('policy schema still rejects a non-string githubApi.telemetry.path', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.githubApi = { telemetry: { enabled: true, path: 5 } };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.githubApi.telemetry.path')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema accepts a discover.legacyRoots array of issue numbers', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

@@ -1,0 +1,12 @@
+{
+  "title": "docs(idd-workflow): document the user-global issue-authoring delegate",
+  "body": "## Background\n\nThe workflow guide no longer describes the user-global file correctly.",
+  "packet": {
+    "goal": "Keep the guide accurate about which fragments the user-global file can supply.",
+    "constraints": [],
+    "evidence": [],
+    "relationships": [],
+    "checklist": [],
+    "conversation": "the whole conversation must never be sent"
+  }
+}

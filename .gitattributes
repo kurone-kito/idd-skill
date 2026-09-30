@@ -41,6 +41,7 @@ scripts/consistency-helpers.mjs linguist-generated=true
 scripts/copilot-review-body.mjs linguist-generated=true
 scripts/copilot-review-wave-audit.mjs linguist-generated=true
 scripts/dependency-grammar.mjs linguist-generated=true
+scripts/discover-hint-cache.mjs linguist-generated=true
 scripts/discover-orphan-filter.mjs linguist-generated=true
 scripts/discover-readiness-check.mjs linguist-generated=true
 scripts/discover-roadmap-graph.mjs linguist-generated=true

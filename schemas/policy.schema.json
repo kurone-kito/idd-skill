@@ -591,8 +591,7 @@
             },
             "path": {
               "type": "string",
-              "minLength": 1,
-              "description": "Local JSONL file for retained observations. Optional; when enabled and omitted, the file is ~/.local/state/idd-skill/github-api-telemetry.jsonl. A configured path must be absolute or start with ~/ (the home directory); any other non-blank value keeps telemetry off, and a blank value counts as unset and uses the default file. The file is not created while telemetry is disabled. A file that already holds anything other than these records is left untouched and nothing is recorded."
+              "description": "Local JSONL file for retained observations. Optional; when enabled and omitted, the file is ~/.local/state/idd-skill/github-api-telemetry.jsonl. A configured path must be absolute or start with ~/ (the home directory); any other non-blank value keeps telemetry off, and a blank value (an empty string or only whitespace) counts as unset and uses the default file. The file is not created while telemetry is disabled. A file that already holds anything other than these records is left untouched and nothing is recorded."
             }
           },
           "description": "Local-only retention for safe request-cost observations. Defaults off. Records omit credentials, request and query text, issue and comment bodies, and environment dumps."
@@ -603,7 +602,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Opt in to the host-local GitHub REST read cache. Optional; defaults to false. Only a literal true enables it. Enabling this key does not connect Discover."
+              "description": "Opt in to the host-local GitHub REST read cache. Optional; defaults to false. Only a literal true enables it. Enabling it also lets Discover helpers serve a short-lived hint; a hint only ranks and never replaces a live gate."
             },
             "maxAge": {
               "type": "string",
@@ -629,7 +628,7 @@
           "description": "Host-local read cache for explicitly classified REST reads. Optional; omitting it keeps every read live."
         }
       },
-      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations and `readCache` opts in to the host-local REST read cache. Optional; omitting the container keeps telemetry disabled and every read live. Neither key wires Discover or admits requests."
+      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations and `readCache` opts in to the host-local REST read cache. Optional; omitting the container keeps telemetry disabled and every read live. `telemetry` does not wire Discover; an enabled `readCache` lets Discover helpers serve a hint."
     },
     "discover": {
       "type": "object",
@@ -819,7 +818,7 @@
                   "type": "string",
                   "minLength": 1,
                   "pattern": "\\S",
-                  "description": "Shell command the issue-authoring caller runs against the issue draft. Required within this object; must contain a non-whitespace character. This command is trusted executable configuration and can transmit the issue-draft data it receives. It does not read or inherit `critiqueLoop.delegate`."
+                  "description": "Shell command the issue-authoring caller runs against the issue draft. The caller writes the draft to its stdin as one UTF-8 JSON object (`title`, `body`, and a bounded `packet`) described by `issue-authoring-review-input.schema.json`, then closes stdin. Required within this object; must contain a non-whitespace character. This command is trusted executable configuration and can transmit the issue-draft data it receives. It does not read or inherit `critiqueLoop.delegate`."
                 },
                 "mode": {
                   "type": "string",
