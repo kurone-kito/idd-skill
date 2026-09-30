@@ -671,11 +671,11 @@
         },
         {
           "from": "| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |",
-          "to": "| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/*.test.mts && pnpm run build:check && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |"
+          "to": "| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && node --test tests/*.test.mts && pnpm run build:check && pnpm run typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |"
         },
         {
           "from": "| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |",
-          "to": "| **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs` |"
+          "to": "| **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm run typecheck` |"
         },
         {
           "from": "| **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |",
@@ -684,6 +684,10 @@
         {
           "from": "use `npx <tool>` if Node.js and `npx` are available",
           "to": "use `npx <tool>` only when `npx` is available"
+        },
+        {
+          "from": "run the corresponding commands.\n**Adapt this section for other projects.**",
+          "to": "run the corresponding commands."
         }
       ]
     },
