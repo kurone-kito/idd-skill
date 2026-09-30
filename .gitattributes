@@ -126,6 +126,7 @@ scripts/validate-schemas.mjs linguist-generated=true
 scripts/verify-import-mirror.mjs linguist-generated=true
 scripts/verify-install-deps.mjs linguist-generated=true
 scripts/verify-workshop-integrity.mjs linguist-generated=true
+scripts/windows-acl.mjs linguist-generated=true
 idd-template/scripts/minimize-superseded-markers.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true
@@ -148,3 +149,6 @@ pnpm-lock.yaml linguist-vendored
 .gitmessage export-ignore
 .husky/** export-ignore
 .imgbotconfig export-ignore
+
+# UTF-16LE fixtures captured from real `icacls /save` output (SIDs sanitized).
+tests/fixtures/windows-acl/*.sddl binary

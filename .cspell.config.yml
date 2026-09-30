@@ -19,7 +19,11 @@ version: '0.2'
 ignorePaths:
   - tests/fixtures/issue-body-corpus/**
   - tests/fixtures/bot-comment-corpus/**
+  # #3623: real `icacls /save` output (UTF-16LE), quoted as captured; the SDDL
+  # flag tokens in it are not this repository's own prose.
+  - tests/fixtures/windows-acl/**
 words:
+  - DACL
   - desync
   - desynced
   - idd
@@ -29,11 +33,14 @@ words:
   - kurone
   - ONNX
   - octocat
+  - OGDS
   - pylint
   - pytest
   - pyproject
   - qwen
   - requir
+  - SAFA
+  - SDDL
   - TOCTOU
   - tsfile
   - undispositioned
