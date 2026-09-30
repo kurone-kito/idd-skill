@@ -22,6 +22,7 @@ import {
   resolveActiveClaimForWriteGate,
   resolveLatestReviewWatermark,
   resolvePresentRunConclusion,
+  STALE_THREAD_DISPOSITION_HINT,
   summarizeAdvisoryWaitMarkers,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
@@ -5030,4 +5031,20 @@ test('listBlockingPresentRunNames is non-empty exactly when the present-run conc
       `${scenario.label}: names are non-empty exactly when some-failing`,
     );
   }
+});
+
+test('STALE_THREAD_DISPOSITION_HINT names the reply that clears a thread and stays wording-safe (#3670)', () => {
+  // The wording the gate rules support: a NEW marker-first reply, after the
+  // newest non-disposition comment; a plain-prose reply or an edited
+  // disposition does not count.
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /NEW marker-first/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /\*\*Accepted\*\*/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /\*\*Rejected\*\*/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /newest non-disposition comment/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /plain-prose reply/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /edited disposition/);
+  // A repeating no-new-content advisory-bot reply needs a hold, not a reply.
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /post a hold comment/);
+  // A single line, so it reads cleanly in the JSON output.
+  assert.equal(STALE_THREAD_DISPOSITION_HINT.includes('\n'), false);
 });

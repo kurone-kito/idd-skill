@@ -36,6 +36,7 @@ import {
   parseProviderOutageParkComment,
   renderLocalValidationEvidenceComment,
   renderProviderOutageParkComment,
+  summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { applyResolveReviewThread } from '../src/scripts/resolve-review-thread.mts';
 import { evaluateQuietWindow } from '../src/scripts/stalled-session-quiet-check.mts';
@@ -929,6 +930,65 @@ test('pre-merge-readiness: buildPreMergeReadinessSummary output validates agains
     fixture.input as never,
     fixture.options as never,
   );
+  assertRoundtrip(summary, loadJson('schemas/pre-merge-readiness.schema.json'));
+});
+
+test('pre-merge-readiness: a stale-thread dispositionEvidence entry with a hint round-trips the schema (#3670)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json') as {
+    input: Record<string, unknown>;
+    options: Record<string, unknown>;
+  };
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(
+        fixture.input as never,
+        {
+          ...fixture.options,
+          includeDispositionEvidence: true,
+        } as never,
+      ),
+    ),
+  ) as { dispositionEvidence: unknown };
+  // A resolved thread whose last marker-first reply is followed by a plain-
+  // prose correction: reported stale, with the optional next-step hint.
+  summary.dispositionEvidence = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-stale',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Accepted** — fixed in abc1234',
+                lastEditedAt: null,
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T01:00:00Z',
+                body: 'Correction: the fix is actually in def5678.',
+                lastEditedAt: null,
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+  const entry = (
+    summary.dispositionEvidence as { missingThreads: { hint?: string }[] }
+  ).missingThreads[0];
+  assert.equal(typeof entry.hint, 'string');
   assertRoundtrip(summary, loadJson('schemas/pre-merge-readiness.schema.json'));
 });
 

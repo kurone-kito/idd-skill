@@ -62,6 +62,7 @@ import {
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
+  STALE_THREAD_DISPOSITION_HINT,
   selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
   summarizeAdvisoryWaitMarkers,
@@ -213,6 +214,42 @@ test('pre-merge readiness optionally emits disposition evidence', () => {
   assert.equal(summary.dispositionEvidence?.route, 'proceed');
   assert.equal(summary.dispositionEvidence?.blockingCount, 0);
   assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('the readiness schema accepts the optional missingThreads hint and still rejects unknown keys (#3670)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        includeDispositionEvidence: true,
+      }),
+    ),
+  );
+  const stale = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread3670({ correction: true })] },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+  // A real stale-thread summary, with the hint, validates.
+  summary.dispositionEvidence = JSON.parse(JSON.stringify(stale));
+  assert.equal(
+    summary.dispositionEvidence.missingThreads[0].hint,
+    STALE_THREAD_DISPOSITION_HINT,
+  );
+  assert.deepEqual(validate(summary, readinessSchema), []);
+
+  // The hint is optional: the same entry without it still validates.
+  const withoutHint = JSON.parse(JSON.stringify(summary));
+  delete withoutHint.dispositionEvidence.missingThreads[0].hint;
+  assert.deepEqual(validate(withoutHint, readinessSchema), []);
+
+  // The hint is a string, and the entry still rejects an unknown key.
+  const badType = JSON.parse(JSON.stringify(summary));
+  badType.dispositionEvidence.missingThreads[0].hint = 42;
+  assert.ok(validate(badType, readinessSchema).length > 0);
+  const unknownKey = JSON.parse(JSON.stringify(summary));
+  unknownKey.dispositionEvidence.missingThreads[0].nextStep = 'post a reply';
+  assert.ok(validate(unknownKey, readinessSchema).length > 0);
 });
 
 test('pre-merge readiness always carries waiverEvidence and the schema requires it', () => {
@@ -3576,6 +3613,234 @@ test('disposition evidence still blocks a resolved thread reopened after the bou
 
   assert.equal(summary.route, 'return-to-e1');
   assert.equal(summary.missingThreads[0].reason, 'missing-fresh-disposition');
+});
+
+// #3670: a plain-prose correction after a marker-first reply is feedback, not a
+// disposition, so it re-opens the thread -- and the entry now says what clears
+// it. Fixtures carry `lastEditedAt: null` on every IDD reply: an absent field
+// reads as an unknown edit state and the reply would not count at all.
+function thread3670(options: {
+  correction?: boolean;
+  replyAfterCorrection?: boolean;
+}) {
+  const nodes: Record<string, unknown>[] = [
+    {
+      author: { login: 'reviewer-a' },
+      createdAt: '2026-05-12T00:00:00Z',
+      body: 'please reconsider this',
+    },
+    {
+      author: { login: 'idd-bot' },
+      createdAt: '2026-05-12T00:30:00Z',
+      body: '**Accepted** — fixed in abc1234',
+      lastEditedAt: null,
+    },
+  ];
+  if (options.correction) {
+    nodes.push({
+      author: { login: 'idd-bot' },
+      createdAt: '2026-05-12T01:00:00Z',
+      body: 'Correction: the fix is actually in def5678, not abc1234.',
+      lastEditedAt: null,
+    });
+  }
+  if (options.replyAfterCorrection) {
+    nodes.push({
+      author: { login: 'idd-bot' },
+      createdAt: '2026-05-12T01:30:00Z',
+      body: '**Accepted** — fixed in def5678 (correcting the earlier SHA)',
+      lastEditedAt: null,
+    });
+  }
+  return {
+    id: 'thread-3670',
+    isResolved: true,
+    comments: { pageInfo: { hasNextPage: false }, nodes },
+  };
+}
+
+test('a plain-prose correction after a marker-first reply reports missing-fresh-disposition with a hint, and a new marker-first reply clears it (#3670)', () => {
+  const summarize = (thread: ReturnType<typeof thread3670>) =>
+    summarizeDispositionEvidenceForGate(
+      { comments: [], threads: [thread] },
+      { iddAgentLogins: ['idd-bot'] },
+    );
+
+  // Control: the marker-first reply alone satisfies the thread.
+  const control = summarize(thread3670({}));
+  assert.equal(control.route, 'proceed');
+  assert.equal(control.missingThreadCount, 0);
+
+  const stale = summarize(thread3670({ correction: true }));
+  assert.equal(stale.route, 'return-to-e1');
+  assert.equal(stale.missingThreadCount, 1);
+  const entry = stale.missingThreads[0];
+  assert.equal(entry.reason, 'missing-fresh-disposition');
+  assert.equal(entry.ackOnlyPostDisposition, false);
+  assert.equal(entry.hint, STALE_THREAD_DISPOSITION_HINT);
+  assert.match(entry.hint ?? '', /NEW marker-first/);
+  assert.match(entry.hint ?? '', /plain-prose reply/);
+
+  // A new marker-first reply after the correction clears it.
+  const cleared = summarize(
+    thread3670({ correction: true, replyAfterCorrection: true }),
+  );
+  assert.equal(cleared.route, 'proceed');
+  assert.equal(cleared.missingThreadCount, 0);
+});
+
+test('the stale-disposition hint also covers an advisory-bot thread whose newest reply is not a recognized ack (#3670)', () => {
+  // A no-new-content bot reply in an unrecognized shape is not ack-only, so the
+  // entry still blocks and carries the hint -- which sends a repeating such
+  // reply to a hold comment rather than another disposition.
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-bot',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'Consider handling the empty case here.',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Accepted** — fixed in abc1234',
+                lastEditedAt: null,
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T01:00:00Z',
+                body: 'Verified the change against the diff; looks good to me.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+  assert.equal(summary.route, 'return-to-e1');
+  const entry = summary.missingThreads[0];
+  assert.equal(entry.reason, 'missing-fresh-disposition');
+  assert.equal(entry.ackOnlyPostDisposition, false);
+  assert.equal(entry.hint, STALE_THREAD_DISPOSITION_HINT);
+  assert.match(entry.hint ?? '', /post a hold comment/);
+});
+
+test('the stale-disposition hint covers an unresolved thread and skips incomplete and ack-only entries (#3670)', () => {
+  // An unresolved thread that never got a disposition.
+  const unresolved = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-unresolved',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+  assert.equal(
+    unresolved.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+  assert.equal(
+    unresolved.missingThreads[0].hint,
+    STALE_THREAD_DISPOSITION_HINT,
+  );
+
+  // An incomplete comment page cannot say what to post, so it gets no hint.
+  const incomplete = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-incomplete',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: true },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+  assert.equal(
+    incomplete.missingThreads[0].reason,
+    'incomplete-thread-comments',
+  );
+  assert.equal(Object.hasOwn(incomplete.missingThreads[0], 'hint'), false);
+
+  // An ack-only entry follows the courtesy-ack convergence rule (a
+  // no-new-content advisory-bot reply needs a hold, not a re-posted
+  // disposition), so a hint to post a new reply must not appear on it.
+  const ackOnly = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-ack',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+                lastEditedAt: null,
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+  assert.equal(ackOnly.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(Object.hasOwn(ackOnly.missingThreads[0], 'hint'), false);
 });
 
 test('disposition evidence flags an ack-only-post-disposition resolved thread without changing the route (#978)', () => {

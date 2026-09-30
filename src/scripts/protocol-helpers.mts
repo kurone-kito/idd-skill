@@ -716,6 +716,16 @@ export interface DispositionEvidenceSummary {
     // purpose, for the (non-advisory-bot, or unbounded-fetch-scope) cases
     // that verification never covers.
     inPlaceEditOnly: boolean;
+    // Diagnostic-only next step (#3670), present only for
+    // `missing-fresh-disposition` / `unresolved-without-fresh-disposition`
+    // and only when `ackOnlyPostDisposition` is false: an ack-only entry
+    // follows the courtesy-ack convergence rule instead (a no-new-content
+    // advisory-bot reply needs a hold, not a re-posted disposition), so this
+    // hint must never steer it into that loop. Names the exact reply that
+    // clears the entry, so an agent does not have to source-dive
+    // `hasFreshDisposition` to learn that a plain-prose correction counts as
+    // feedback. Never changes `route`, `reason`, or any count above.
+    hint?: string;
   }[];
 }
 
@@ -5211,6 +5221,24 @@ export const EDITED_AFTER_DISPOSITION_HINT =
   'now predates the edit and no longer counts; post a fresh disposition ' +
   'reply in the non-review-notice shape';
 
+// #3670 diagnostic-only hint text for `missingThreads[].hint`, single-sourced
+// like the hints above: a thread is cleared only by an unedited, marker-first
+// IDD disposition newer than its latest non-disposition comment, so the fix is
+// a new reply, and a plain-prose correction re-opens the thread instead of
+// replacing the earlier disposition. Worded to hold for a thread that never got
+// a reply and for an edited disposition too, and to send a repeating
+// no-new-content advisory-bot reply to a hold (the #3324 rule) rather than
+// another reply. Never consumed by any routing
+// decision -- see the `hint` field's own doc comment on
+// `DispositionEvidenceSummary`.
+export const STALE_THREAD_DISPOSITION_HINT =
+  'post a NEW marker-first "**Accepted**" or "**Rejected**" reply after the ' +
+  'newest non-disposition comment on this thread; a plain-prose reply (a ' +
+  'correction counts as feedback) or an edited disposition is not a ' +
+  'disposition and does not clear it. If that newest comment is a ' +
+  'no-new-content advisory-bot reply that reappears after every reply, post ' +
+  'a hold comment instead of another reply';
+
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
@@ -8715,6 +8743,10 @@ export function summarizeDispositionEvidenceForGate(
           : 'unresolved-without-fresh-disposition',
         ackOnlyPostDisposition: classification.ackOnlyPostDisposition,
         inPlaceEditOnly: classification.inPlaceEditOnly,
+        // #3670: never on an ack-only entry -- see the field's doc comment.
+        ...(classification.ackOnlyPostDisposition
+          ? {}
+          : { hint: STALE_THREAD_DISPOSITION_HINT }),
       };
     })
     .filter(Boolean) as DispositionEvidenceSummary['missingThreads'];
