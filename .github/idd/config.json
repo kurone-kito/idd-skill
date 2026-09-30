@@ -60,6 +60,11 @@
   "worktreeGuard": {
     "enabled": true
   },
+  "githubApi": {
+    "readCache": {
+      "enabled": true
+    }
+  },
   "ciGate": {
     "trustEmptyProtectionReads": true,
     "externalChecks": {

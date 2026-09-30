@@ -44,6 +44,8 @@ function makeCommonOpts(overrides: RunHandoffOptions = {}): RunHandoffOptions {
         'https://github.com/kurone-kito/idd-skill/issues/497#issuecomment-test',
       body,
     }),
+    // Hermetic by default: never touch a host cache from a unit test (#3588).
+    invalidateHints: () => {},
     ...overrides,
   };
 }
@@ -572,4 +574,42 @@ test('runHandoff closes the prompt even when a later step throws before its own 
     true,
     'ask.close should run even when a later step throws',
   );
+});
+
+test('runHandoff drops the Discover hints after every successful post, injected poster or not', async () => {
+  const responses = ['497', '', 'y'];
+  let callIndex = 0;
+  const calls: { owner?: string; repo?: string }[][] = [];
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      invalidateHints: (identities) => {
+        calls.push([...identities]);
+      },
+    }),
+  );
+  assert.equal(result.posted, true);
+  assert.ok(calls.length >= 1);
+  // Both the resolved pair and the explicit `repo` identity are named.
+  for (const identities of calls) {
+    for (const identity of identities) {
+      assert.deepEqual(identity, { owner: 'kurone-kito', repo: 'idd-skill' });
+    }
+  }
+});
+
+test('runHandoff leaves the Discover hints alone when the operator aborts', async () => {
+  const responses = ['497', '', 'n'];
+  let callIndex = 0;
+  let invalidations = 0;
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      invalidateHints: () => {
+        invalidations += 1;
+      },
+    }),
+  );
+  assert.equal(result.posted, false);
+  assert.equal(invalidations, 0);
 });

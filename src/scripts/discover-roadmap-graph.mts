@@ -22,6 +22,12 @@ import {
   hasDependencyReferenceListStart,
 } from './dependency-grammar.mts';
 import {
+  type DiscoverCacheMeta,
+  noteDiscoveryIncomplete,
+  purgeDiscoverHints,
+  readDiscoverHint,
+} from './discover-hint-cache.mts';
+import {
   buildRoadmapMarkerResolver,
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mts';
@@ -391,6 +397,11 @@ export interface RoadmapGraphReport {
     unresolvedReferenceCount: number;
     maxDepth: number;
   };
+  /**
+   * Additive hint-cache provenance (kurone-kito/idd-skill#3588); see
+   * {@link RoadmapGraphUnionReport.cache}. Emitted for `--issue` runs too.
+   */
+  cache?: DiscoverCacheMeta;
 }
 
 /** One ranked open execution leaf in the cross-roadmap union report. */
@@ -482,6 +493,12 @@ export interface RoadmapGraphUnionReport {
     inaccessibleReferenceCount: number;
     unresolvedReferenceCount: number;
   };
+  /**
+   * Additive hint-cache provenance (kurone-kito/idd-skill#3588). Present only
+   * when the cache feature is active or a cache flag was passed; absent
+   * otherwise so the default output stays byte-stable.
+   */
+  cache?: DiscoverCacheMeta;
 }
 
 interface NormalizedIssue {
@@ -683,6 +700,12 @@ interface ParsedArgs {
   currentClaimId: string;
   /** `--concurrency <n>` prefetch bound; `0` (unset) → normalized default. */
   concurrency: number;
+  /** `--no-cache`: compute live and neither read nor write a hint. */
+  noCache: boolean;
+  /** `--refresh-cache`: recompute strict-fresh and store the result. */
+  refreshCache: boolean;
+  /** `--purge-cache`: purge the host-local read cache and exit. */
+  purgeCache: boolean;
   help: boolean;
 }
 
@@ -690,6 +713,15 @@ type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
 
 async function main(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
+  // `--purge-cache` is a standalone maintenance action: it needs no scope
+  // flag and never enumerates, so it short-circuits ahead of the usage checks.
+  if (args.purgeCache) {
+    const purged = purgeDiscoverHints();
+    process.stdout.write(
+      `${JSON.stringify({ cache: { mode: 'purge', ...purged } }, null, 2)}\n`,
+    );
+    return 0;
+  }
   const hasIssue = Number.isInteger(args.issue) && args.issue > 0;
   // --issue and --all-roadmaps are mutually exclusive: exactly one route
   // must be selected. The single-root --issue contract (required when
@@ -704,19 +736,99 @@ async function main(): Promise<HelperCliResult> {
       new Error('missing required --issue <number> (or pass --all-roadmaps)'),
     );
   }
+  if (args.noCache && args.refreshCache) {
+    throw markCliUsageError(
+      new Error('--no-cache cannot be combined with --refresh-cache'),
+    );
+  }
 
+  const policy = loadPolicy(args.policy) as LoadedPolicy;
+
+  // The whole report is the cached unit (#3588): a warm hint skips every
+  // discovery read, including the repository lookup inside `produceReport`.
+  // The hint only ranks; the selected candidate's live A3-A5 gates and the
+  // claim post never read from it.
+  const { report, cache } = await readDiscoverHint<GraphReport>({
+    helper: 'discover-roadmap-graph',
+    owner: args.owner,
+    repo: args.repo,
+    args: {
+      issue: args.issue,
+      allRoadmaps: args.allRoadmaps,
+      withClaimState: args.withClaimState,
+      withReadiness: args.withReadiness,
+      currentClaimId: args.currentClaimId,
+    },
+    policy,
+    noCache: args.noCache,
+    refreshCache: args.refreshCache,
+    compute: () => produceReport(args, policy),
+    hasCandidate: hasStartableCandidate,
+  });
+
+  process.stdout.write(
+    `${JSON.stringify(cache ? { ...report, cache } : report, null, 2)}\n`,
+  );
+  return 0;
+}
+
+type GraphReport = RoadmapGraphReport | RoadmapGraphUnionReport;
+
+type LoadedPolicy = {
+  markerPrefix?: unknown;
+  autopilotSuitability?: { floor?: unknown };
+  claimTiming?: { staleAge?: unknown };
+  trustedMarkerActors?: unknown;
+  discover?: { legacyRoots?: unknown; milestoneScope?: unknown };
+};
+
+/**
+ * Whether a graph report still lists a candidate worth trying, so a cached
+ * report that answers "no" earns exactly one strict-fresh recompute before
+ * exhaustion is believed. Prefers the strongest annotation present:
+ * `readiness.startable`, then `claimEligible`, then bare leaf presence.
+ */
+export function hasStartableCandidate(report: unknown): boolean {
+  const record = report as {
+    leaves?: unknown;
+    nodes?: unknown;
+    executionCandidates?: unknown;
+  } | null;
+  let entries: {
+    readiness?: { startable?: boolean };
+    claimEligible?: boolean;
+  }[];
+  if (Array.isArray(record?.leaves)) {
+    entries = record.leaves;
+  } else if (
+    Array.isArray(record?.nodes) &&
+    Array.isArray(record?.executionCandidates)
+  ) {
+    const candidates = new Set<unknown>(record.executionCandidates);
+    entries = record.nodes.filter((node: { number?: unknown }) =>
+      candidates.has(node.number),
+    );
+  } else {
+    return false;
+  }
+  if (entries.some((entry) => entry.readiness !== undefined)) {
+    return entries.some((entry) => entry.readiness?.startable === true);
+  }
+  if (entries.some((entry) => entry.claimEligible !== undefined)) {
+    return entries.some((entry) => entry.claimEligible !== false);
+  }
+  return entries.length > 0;
+}
+
+async function produceReport(
+  args: ParsedArgs,
+  policy: LoadedPolicy,
+): Promise<GraphReport> {
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
-  const policy = loadPolicy(args.policy) as {
-    markerPrefix?: unknown;
-    autopilotSuitability?: { floor?: unknown };
-    claimTiming?: { staleAge?: unknown };
-    trustedMarkerActors?: unknown;
-    discover?: { legacyRoots?: unknown; milestoneScope?: unknown };
-  };
 
   // The claim-state annotation is strictly opt-in: only when --with-claim-state
   // is passed do we build the comment loader (the sole new GitHub API surface)
@@ -766,8 +878,7 @@ async function main(): Promise<HelperCliResult> {
         concurrency: args.concurrency,
       });
 
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  return 0;
+  return report;
 }
 
 if (import.meta.main) {
@@ -1501,6 +1612,9 @@ export async function enumerateAllRoadmapsGraph(
       process.stderr.write(
         `discover-roadmap-graph: --all-roadmaps root #${rootNumber} could not be enumerated (${reason}); skipping — root discovery may be incomplete.\n`,
       );
+      // A skipped root is a partial inventory: never cache it, never let it
+      // stand as proof of exhaustion (#3588).
+      noteDiscoveryIncomplete(`root-skipped:#${rootNumber}`);
       continue;
     }
 
@@ -3170,6 +3284,9 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     withReadiness: false,
     currentClaimId: '',
     concurrency: 0,
+    noCache: false,
+    refreshCache: false,
+    purgeCache: false,
     help: false,
   };
 
@@ -3206,6 +3323,18 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     }
     if (token === '--with-readiness') {
       parsed.withReadiness = true;
+      continue;
+    }
+    if (token === '--no-cache') {
+      parsed.noCache = true;
+      continue;
+    }
+    if (token === '--refresh-cache') {
+      parsed.refreshCache = true;
+      continue;
+    }
+    if (token === '--purge-cache') {
+      parsed.purgeCache = true;
       continue;
     }
     if (token === '--concurrency') {
@@ -3245,8 +3374,9 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>]
-  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>]
+  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>] [--no-cache | --refresh-cache]
+  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>] [--no-cache | --refresh-cache]
+  node scripts/discover-roadmap-graph.mjs --purge-cache
 
   --issue and --all-roadmaps are mutually exclusive; exactly one is required.
 
@@ -3256,6 +3386,19 @@ function printHelp() {
   --all-roadmaps enumerates open execution leaves across every open roadmap
   root (the union), each tagged with its sourceRoots and ranked by
   autopilotSuitability (descending, tie-broken by ascending issue number).
+
+  Hint cache (opt-in via githubApi.readCache.enabled; off by default): the
+  whole report is cached as a short-lived HINT and an unchanged repeat inside
+  githubApi.readCache.maxAge (default PT5M) makes no discovery request. A hint
+  only ranks candidates: the selected candidate's live A3-A5 gates and the
+  claim post never read from it. --no-cache computes live and stores nothing;
+  --refresh-cache recomputes and stores; --purge-cache removes every cached
+  body from the host-local read cache and exits. When the cache is active or a
+  cache flag is passed, the report gains an additive "cache" object:
+    "cache": { "mode": "hint"|"refresh"|"off"|"bypass", "source": "hint"|"live", "ageMs": n, "maxAgeMs": n, "complete": bool, "enumerations": n, "exhaustionRefresh": bool }
+  A hint that lists no startable candidate is recomputed once (exhaustionRefresh
+  true). complete:false (a capped search or skipped root) is never stored and
+  never proves exhaustion.
 
   --with-claim-state (opt-in) annotates each OPEN execution leaf with active-
   claim eligibility: it fetches that issue's comments and resolves the active
@@ -3650,6 +3793,8 @@ export function warnOnSearchResultCap(
     process.stderr.write(
       `discover-roadmap-graph: --all-roadmaps root search hit the ${GH_SEARCH_RESULT_CAP}-result cap (${searchKind}); root discovery may be incomplete on this scale.\n`,
     );
+    // A capped search may be truncated: never cache it (#3588).
+    noteDiscoveryIncomplete(`root-search-cap:${searchKind}`);
   }
 }
 

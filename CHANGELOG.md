@@ -16,6 +16,16 @@ discipline and has no tag.
 
 ### Added
 
+- `discover-roadmap-graph` and `discover-orphan-filter` can serve their whole
+  output from a short-lived hint when `githubApi.readCache.enabled` is true,
+  so an unchanged repeat within `maxAge` starts no discovery request (#3588).
+  A hint only ranks: the selected candidate's live A3-A5 gates, the claim
+  post, and roadmap-closure authority never read from it. Both helpers gain
+  `--no-cache`, `--refresh-cache`, and `--purge-cache` plus an additive
+  optional `cache` object; a hint with no startable candidate is recomputed
+  once before exhaustion is believed, an incomplete read is never stored, and
+  claim, unclaim, merge, and closure helpers drop the hints. The distributed
+  default stays off.
 - `pre-merge-readiness` reports `deferFollowUps`, and F3 now blocks on
   `deferred-followup-unreconciled` when an open follow-up deferred from the
   pull request's origin issue is never named on the pull request, and on

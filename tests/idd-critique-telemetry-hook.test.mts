@@ -10,8 +10,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Writable } from 'node:stream';
 import { test } from 'node:test';
-import { setTimeout as delay } from 'node:timers/promises';
+import {
+  setTimeout as delay,
+  setImmediate as nextTurn,
+} from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -426,6 +430,80 @@ async function waitForNonEmptyFile(
     await delay(50);
   }
   return readFileSync(path, 'utf8').trim();
+}
+
+/** Stub-hook source that records its own pid in `pidPath`, then captures
+ * its whole stdin and writes it to `receivedPath` once stdin ends (a single
+ * write of the full buffer). */
+function captureStdinStubSource(receivedPath: string, pidPath: string): string {
+  return `const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
+  process.exit(0);
+});
+`;
+}
+
+/** Polls by content until the file at `path` holds exactly `expected`, so a
+ * read that lands while the stub is still mid-write can never be compared
+ * (kurone-kito/idd-skill#3630: the old first-non-blank-poll read could see
+ * a partly written 500KB file under load). A file longer than `expected` is
+ * returned at once so the caller's assertion shows the mismatch. If the
+ * file is still short at the deadline, this throws a failure that says so,
+ * rather than returning the short content for a confusing equality diff. */
+async function waitForReceivedPayload(
+  path: string,
+  expected: string,
+  timeoutMs: number,
+): Promise<string> {
+  const expectedBytes = Buffer.from(expected);
+  const deadline = Date.now() + timeoutMs;
+  let last: Buffer | undefined;
+  while (true) {
+    try {
+      last = readFileSync(path);
+      if (last.equals(expectedBytes) || last.length > expectedBytes.length) {
+        return last.toString('utf8');
+      }
+    } catch {
+      // Not written yet; keep polling.
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
+    await delay(50);
+  }
+  if (last?.length === expectedBytes.length) {
+    // Same length but different content: let the caller's assertion show it.
+    return last.toString('utf8');
+  }
+  throw new Error(
+    `received file stayed short: got ${last?.length ?? 0} of ${expectedBytes.length} bytes at ${path} after ${timeoutMs}ms`,
+  );
+}
+
+/** Best-effort wait for the capture stub hook whose pid file is `pidPath` to
+ * have exited, so that the `restore()` that follows can remove the directory
+ * holding its executable (NTFS refuses to delete a running image, and
+ * `restore()` only retries for about half a second). Each of its two phases
+ * (the pid file appearing, then the process exiting) is bounded by
+ * `timeoutMs`; a timeout in either is silent and `restore()` then runs anyway.
+ * A stub that never started, or is already gone, has nothing to wait for. */
+async function waitForStubHookExit(
+  pidPath: string,
+  timeoutMs: number,
+): Promise<void> {
+  try {
+    const pid = Number(await waitForNonEmptyFile(pidPath, timeoutMs));
+    if (Number.isInteger(pid) && pid > 0) {
+      await waitUntilProcessGone(pid, timeoutMs);
+    }
+  } catch {
+    // The pid file never appeared: the stub did not start.
+  }
 }
 
 /** Identifies the backup watchdog's own spawn call among every spawnFn
@@ -1945,6 +2023,87 @@ test("invokeCritiqueTelemetryHook's onWatchdogArmed waits for the watchdog's own
   }
 });
 
+test('invokeCritiqueTelemetryHook signals payload delivery only after the last byte of a 500,000-character-scale payload was written (kurone-kito/idd-skill#3630)', async () => {
+  // Deterministic counterpart to the process-level large-payload test:
+  // instead of racing a real pipe and real scheduling, the fake child's
+  // stdin accepts the payload one 64 KiB slice at a time, only when this
+  // test releases a slice, and holds the write callback until the last one.
+  // `onPayloadDelivered` must not fire before that point (a regression
+  // that signalled delivery right after `end()` would fail here) and must
+  // fire exactly once after it.
+  const SLICE_BYTES = 64 * 1024;
+  const bigPayload = { ...samplePayload(), padding: 'x'.repeat(500_000) };
+  const expected = JSON.stringify(bigPayload);
+  const sliceCount = Math.ceil(Buffer.byteLength(expected) / SLICE_BYTES);
+  assert.ok(sliceCount >= 2, 'expected the payload to need several slices');
+
+  const accepted: Buffer[] = [];
+  let pending: { chunk: Buffer; offset: number; done: () => void } | undefined;
+  const stdin = new Writable({
+    highWaterMark: SLICE_BYTES,
+    write(chunk: Buffer, _encoding, callback) {
+      pending = { chunk, offset: 0, done: callback };
+    },
+  });
+  // Hands the next slice to the fake pipe; completes the pending write
+  // (`callback`) only with the last one. Returns whether that was the last.
+  const releaseNextSlice = (): boolean => {
+    assert.ok(pending, 'expected a chunk waiting on the fake pipe');
+    const { chunk, offset, done } = pending;
+    const slice = chunk.subarray(offset, offset + SLICE_BYTES);
+    accepted.push(slice);
+    pending.offset = offset + slice.length;
+    if (pending.offset < chunk.length) {
+      return false;
+    }
+    pending = undefined;
+    done();
+    return true;
+  };
+
+  const fakeChild = new EventEmitter() as unknown as ReturnType<typeof spawn>;
+  Object.assign(fakeChild, { stdin, kill: () => true, unref: () => {} });
+  // No `pid`, so no backup watchdog is spawned; this spawn is the only one.
+  const spawnFn: typeof spawn = (() => fakeChild) as unknown as typeof spawn;
+
+  let deliveredCount = 0;
+  const result = invokeCritiqueTelemetryHook('idd-fake-hook', bigPayload, {
+    spawnFn,
+    platform: 'linux',
+    timeoutMs: 60_000,
+    onPayloadDelivered: () => {
+      deliveredCount += 1;
+    },
+  });
+
+  for (let slice = 1; slice <= sliceCount; slice += 1) {
+    await nextTurn();
+    assert.equal(
+      deliveredCount,
+      0,
+      `expected no delivery signal before slice ${slice} of ${sliceCount} was written`,
+    );
+    assert.equal(releaseNextSlice(), slice === sliceCount);
+  }
+  await nextTurn();
+  assert.equal(
+    deliveredCount,
+    1,
+    'expected exactly one delivery signal once the last slice was written',
+  );
+  assert.equal(
+    Buffer.concat(accepted).toString('utf8'),
+    expected,
+    'expected every byte of the payload to reach the fake pipe',
+  );
+
+  // Let the fake hook "exit" so the returned promise settles and clears
+  // the timeout timer.
+  fakeChild.emit('exit', 0);
+  assert.deepEqual(await result, { attempted: true, ok: true });
+  assert.equal(deliveredCount, 1);
+});
+
 test('invokeCritiqueTelemetryHook falls back to the default timeout for a non-finite timeoutMs (#2685 review, Copilot)', async () => {
   // `?? DEFAULT_INVOKE_TIMEOUT_MS` alone only substitutes for
   // `null`/`undefined` -- a caller-supplied `NaN` would otherwise pass
@@ -2164,15 +2323,29 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
   }
 });
 
-test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', async () => {
+/** The CLI's own payload-delivery bound, `PAYLOAD_DELIVERY_TIMEOUT_MS` in
+ * `src/scripts/idd-critique-telemetry-hook.mts`. That constant is private,
+ * so the process-level tests mirror its value as a literal. */
+const CLI_DELIVERY_BOUND_MS = 1_000;
+
+/** How long the process-level payload tests wait for a stub hook to write
+ * its received file (it starts a node process, so it can be slow under load). */
+const RECEIVED_FILE_TIMEOUT_MS = 15_000;
+
+/** How many times the large-payload test retries an attempt whose CLI took
+ * at least {@link CLI_DELIVERY_BOUND_MS} before it gives up and skips. */
+const LARGE_PAYLOAD_MAX_ATTEMPTS = 5;
+
+test('CLI --invoke waits for a large payload to fully reach the hook before exiting (#2685 review, CodeRabbit)', async (t) => {
   // win32 (kurone-kito/idd-skill#2910): this test used to be skipped on
   // win32 -- the production spawn shape it exercises, `shell: true` +
   // `detached: true` + piped stdin, never delivered ANY stdin payload to
   // the target command on native Windows, at any size. #2910's fix
   // (a `shell: false` `node.exe` relay hop on win32 only, see
   // `WIN32_RELAY_SCRIPT`) resolves the underlying defect, so this test
-  // now runs for real on every platform, exercising the fixed,
-  // unmocked `invokeCritiqueTelemetryHook` spawn path end to end.
+  // now runs for real on every platform (unless every attempt below is
+  // inconclusive and it skips), exercising the fixed, unmocked
+  // `invokeCritiqueTelemetryHook` spawn path end to end.
   // Regression fixture: `runInvoke` used to fire `invokeCritiqueTelemetryHook`
   // and call `process.exit(0)` right after, without waiting for the stdin
   // write to the hook's pipe to actually finish -- fine for a small
@@ -2180,67 +2353,99 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
   // well over the OS pipe buffer (64KB on Linux) cannot land in one write
   // and needs the child to keep draining it across several event-loop
   // ticks; exiting mid-write would truncate what the hook receives.
-  const sandbox = mkdtempSync(
-    join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-large-payload-'),
-  );
-  const receivedPath = join(sandbox, 'received.json');
-  const restore = stubExecutable(
-    'idd-telemetry-hook-capture-stdin',
-    `const fs = require('fs');
-const chunks = [];
-process.stdin.on('data', (c) => chunks.push(c));
-process.stdin.on('end', () => {
-  fs.writeFileSync(${JSON.stringify(receivedPath)}, Buffer.concat(chunks));
-  process.exit(0);
-});
-`,
-  );
-  try {
-    const policyPath = join(sandbox, 'config.json');
-    writeFileSync(
-      policyPath,
-      JSON.stringify({
-        critiqueLoop: {
-          telemetryHook: {
-            command: stayAliveCommand('idd-telemetry-hook-capture-stdin'),
+  //
+  // kurone-kito/idd-skill#3630: `--invoke` deliberately stops waiting for
+  // the stdin handoff after `CLI_DELIVERY_BOUND_MS`, so under heavy load
+  // the CLI can exit on that bound with only part of the payload delivered
+  // -- which says nothing about the wait wiring. An attempt is therefore
+  // conclusive only when the externally measured wall-clock time of the
+  // whole CLI process stays strictly under that bound (the bound timer
+  // starts after node startup, so a faster exit is caused by delivery
+  // completing, or by an error path that the byte-exact assertion below
+  // catches). Anything slower is retried in a fresh sandbox, and the test
+  // skips when every attempt was inconclusive. The deterministic coverage
+  // of the same wiring is the `invokeCritiqueTelemetryHook` backpressure
+  // test above.
+  const bigPayload = { ...samplePayload(), padding: 'x'.repeat(500_000) };
+  const expected = JSON.stringify(bigPayload);
+  const elapsedTimes: number[] = [];
+  for (let attempt = 1; attempt <= LARGE_PAYLOAD_MAX_ATTEMPTS; attempt += 1) {
+    // Fresh sandbox, received-file path and stub name per attempt, so a
+    // straggler hook left by an earlier attempt can never satisfy or
+    // corrupt this attempt's read.
+    const sandbox = mkdtempSync(
+      join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-large-payload-'),
+    );
+    const receivedPath = join(sandbox, 'received.json');
+    const pidPath = join(sandbox, 'pid');
+    const stubName = `idd-telemetry-hook-capture-stdin-large-${attempt}`;
+    const restore = stubExecutable(
+      stubName,
+      captureStdinStubSource(receivedPath, pidPath),
+    );
+    try {
+      const policyPath = join(sandbox, 'config.json');
+      writeFileSync(
+        policyPath,
+        JSON.stringify({
+          critiqueLoop: {
+            telemetryHook: { command: stayAliveCommand(stubName) },
           },
-        },
-      }),
-    );
-    const bigPayload = { ...samplePayload(), padding: 'x'.repeat(500_000) };
-    const expected = JSON.stringify(bigPayload);
-    const startedAt = Date.now();
-    const { stdout } = runCli(
-      ['--policy', policyPath, '--invoke'],
-      undefined,
-      expected,
-    );
-    const elapsedMs = Date.now() - startedAt;
-    assert.equal(stdout, '');
-    // Generous vs. PAYLOAD_DELIVERY_TIMEOUT_MS's 1s bound -- proves the CLI
-    // still returns promptly rather than waiting for the hook process
-    // itself (which, unlike the hanging-hook test above, actually does
-    // exit quickly here, but this test is about the write completing, not
-    // about the hook's own runtime).
-    assert.ok(
-      elapsedMs < 5_000,
-      `expected --invoke to return promptly even for a large payload, took ${elapsedMs}ms`,
-    );
-
-    const received = await waitForNonEmptyFile(receivedPath, 5_000);
-    assert.equal(
-      received,
-      expected,
-      'expected the hook to receive the full, untruncated payload',
-    );
-  } finally {
-    restore();
+        }),
+      );
+      const startedAt = performance.now();
+      const { stdout } = runCli(
+        ['--policy', policyPath, '--invoke'],
+        undefined,
+        expected,
+      );
+      const elapsedMs = performance.now() - startedAt;
+      elapsedTimes.push(Math.round(elapsedMs));
+      assert.equal(stdout, '');
+      // Generous vs. the 1s delivery bound -- proves the CLI still returns
+      // promptly rather than waiting for the hook process itself (which,
+      // unlike the hanging-hook test above, actually does exit quickly
+      // here, but this test is about the write completing, not about the
+      // hook's own runtime).
+      assert.ok(
+        elapsedMs < 5_000,
+        `expected --invoke to return promptly even for a large payload, took ${Math.round(elapsedMs)}ms`,
+      );
+      if (elapsedMs >= CLI_DELIVERY_BOUND_MS) {
+        continue;
+      }
+      t.diagnostic(
+        `attempt ${attempt} of ${LARGE_PAYLOAD_MAX_ATTEMPTS} was conclusive (CLI took ${Math.round(elapsedMs)}ms)`,
+      );
+      const received = await waitForReceivedPayload(
+        receivedPath,
+        expected,
+        RECEIVED_FILE_TIMEOUT_MS,
+      );
+      assert.equal(
+        received,
+        expected,
+        'expected the hook to receive the full, untruncated payload',
+      );
+      return;
+    } finally {
+      // Whether the attempt was conclusive, inconclusive or failed, let its
+      // hook exit before `restore()` removes the directory holding its
+      // executable (a retry would otherwise race a still-running straggler).
+      await waitForStubHookExit(pidPath, RECEIVED_FILE_TIMEOUT_MS);
+      restore();
+    }
   }
+  t.skip(
+    `every attempt took at least ${CLI_DELIVERY_BOUND_MS}ms (${elapsedTimes.join(', ')}ms, including node startup and the watchdog spawn wait), so none can show whether the wait wiring delivered the payload`,
+  );
 });
 
 test('CLI --invoke waits for a small payload to fully reach the hook before exiting on win32 (kurone-kito/idd-skill#2910)', {
-  // The large-payload test above already covers win32 for a payload well
-  // over the OS pipe buffer; #2910's own reproduction found the defect
+  // The large-payload test above covers win32 for a payload well over the
+  // OS pipe buffer whenever one of its attempts is conclusive (it skips when
+  // every attempt is inconclusive; the backpressure test above still covers
+  // the delivery wiring then); #2910's own reproduction found the defect
   // was size-independent (0B and every size up to 500KB+ all failed
   // identically), so this test closes the acceptance criterion's other
   // explicit half -- a small (well under 1KB), single-write payload --
@@ -2291,6 +2496,60 @@ process.stdin.on('end', () => {
       'expected the hook to receive the full, untruncated small payload',
     );
   } finally {
+    restore();
+  }
+});
+
+test('CLI --invoke delivers a production-sized payload to a real hook byte for byte on every platform (kurone-kito/idd-skill#3630)', async () => {
+  // Unlike the win32-only small-payload test above, this one never skips:
+  // the payload the hook receives in production is a small JSON object
+  // (241 bytes for a realistic one), so this is the test that exercises
+  // the real `--invoke` spawn path at the size it actually runs at, on
+  // every platform.
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-production-'),
+  );
+  const receivedPath = join(sandbox, 'received.json');
+  const pidPath = join(sandbox, 'pid');
+  const stubName = 'idd-telemetry-hook-capture-stdin-production';
+  const restore = stubExecutable(
+    stubName,
+    captureStdinStubSource(receivedPath, pidPath),
+  );
+  try {
+    const policyPath = join(sandbox, 'config.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        critiqueLoop: {
+          telemetryHook: { command: stayAliveCommand(stubName) },
+        },
+      }),
+    );
+    const expected = JSON.stringify(samplePayload());
+    assert.ok(
+      Buffer.byteLength(expected) <= 2_048,
+      `expected a production-sized payload of at most 2 KiB, got ${Buffer.byteLength(expected)} bytes`,
+    );
+    const { stdout } = runCli(
+      ['--policy', policyPath, '--invoke'],
+      undefined,
+      expected,
+    );
+    assert.equal(stdout, '');
+
+    const received = await waitForReceivedPayload(
+      receivedPath,
+      expected,
+      RECEIVED_FILE_TIMEOUT_MS,
+    );
+    assert.equal(
+      received,
+      expected,
+      'expected the hook to receive the full, untruncated production-sized payload',
+    );
+  } finally {
+    await waitForStubHookExit(pidPath, RECEIVED_FILE_TIMEOUT_MS);
     restore();
   }
 });

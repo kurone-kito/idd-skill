@@ -24,6 +24,7 @@ import {
   requiredCiHeadAgreementFromSummary,
 } from './ci-wait-state.mts';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mts';
+import { invalidateDiscoverHints } from './discover-hint-cache.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -2705,6 +2706,17 @@ function main(): HelperCliResult {
   const repo = args.repo || applyCurrentRepo?.repo || '';
 
   const posted = postMarker(owner, repo, number, body);
+  if (args.type === 'claim' || args.type === 'unclaim') {
+    // A claim or unclaim changes what a cached Discover hint may list, so
+    // drop the hints (best effort; #3588). Other marker types leave claim
+    // state alone and must not flush the shared cache.
+    // The pair the marker actually posted to, and the explicit arguments
+    // (or `origin`) that Discover keys its hints on.
+    invalidateDiscoverHints([
+      { owner, repo },
+      { owner: args.owner, repo: args.repo },
+    ]);
+  }
   if (isHideAtPostTimeMarkerType(args.type)) {
     hideSupersededPostTimeMarkers(
       args.type,

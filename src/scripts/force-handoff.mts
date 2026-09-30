@@ -14,6 +14,7 @@ import {
   readForcedHandoffMode,
   resolveTrustedCollaboratorMarkerLogins,
 } from './collaborator-permission.mts';
+import { invalidateDiscoverHints } from './discover-hint-cache.mts';
 import { planHandoff } from './forced-handoff-marker.mts';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
@@ -85,6 +86,14 @@ interface RunHandoffOptions {
     body: string,
   ) => Promise<PostedCommentPayload> | PostedCommentPayload;
   mode?: string;
+  /**
+   * Drops the cached Discover hints after a handoff comment posts (#3588).
+   * Defaults to the real best-effort invalidation; tests inject a no-op or a
+   * spy so they never touch a host cache.
+   */
+  invalidateHints?: (
+    identities: readonly { owner?: string; repo?: string }[],
+  ) => void;
   /** Sink for the plan-preview / result output; defaults to stdout. Tests
    * inject this to capture and assert on printed output (e.g. the
    * same-successor warning) without touching the real stdout stream. */
@@ -127,6 +136,7 @@ export async function runHandoff(
     fetchIssueComments,
     fetchLinkedPrs,
     postComment,
+    invalidateHints = invalidateDiscoverHints,
     mode,
     write = (chunk: string) => {
       process.stdout.write(chunk);
@@ -314,6 +324,11 @@ export async function runHandoff(
             '-f',
             `body=${releaseBody}`,
           ]) as PostedCommentPayload);
+      // A released claim changes what a cached Discover hint may list (#3588).
+      invalidateHints([
+        { owner, repo: name },
+        repo ? { owner, repo: name } : {},
+      ]);
       const releaseUrl = String(
         releaseResult.html_url ?? releaseResult.url ?? '',
       );
@@ -378,6 +393,9 @@ export async function runHandoff(
           `body=${plan.markerBody}`,
         ]) as PostedCommentPayload);
 
+    // A forced handoff changes claim ownership, so drop cached Discover hints
+    // (best effort; #3588).
+    invalidateHints([{ owner, repo: name }, repo ? { owner, repo: name } : {}]);
     const commentUrl = String(result.html_url ?? result.url ?? '');
     write(
       [
