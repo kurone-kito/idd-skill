@@ -18,8 +18,8 @@ discipline and has no tag.
 
 - `critiqueLoop.deferByUrgency` accepts `severity-tiered`, so a PATH A
   finding can be deferred by an urgency score. High defers only at
-  `very-low`. `low` and `low-and-medium` are unchanged, except that an
-  unassessed E4 tier never defers (#3589).
+  `very-low`. `low` and `low-and-medium` are unchanged, except that in
+  those two modes an unassessed E4 tier never defers (#3589).
 
 ## [0.13.0] - 2026-09-27
 
