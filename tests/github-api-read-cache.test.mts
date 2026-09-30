@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -701,6 +701,42 @@ test('a definitive 404 or 410 invalidates the stored 200, other failures keep it
   }
 });
 
+test('a 404 seen after a failed 304 refresh still drops the stored 200', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  const clock = () => now;
+  try {
+    readThrough(paths, okBody({ v: 1 }, '"v1"'), { now: clock });
+    assert.equal(entryNames(paths.cacheDir).length, 1);
+    now += 10;
+    let calls = 0;
+    const result = readThrough(
+      paths,
+      () => {
+        calls += 1;
+        return calls === 1
+          ? { status: 304, body: null, etag: '"v1"' }
+          : { status: 404, body: { gone: true } };
+      },
+      {
+        mode: 'conditional',
+        now: clock,
+        storage: {
+          writeAtomic(): void {
+            throw Object.assign(new Error('read-only'), { code: 'EACCES' });
+          },
+        },
+      },
+    );
+    assert.equal(result.cache, 'degraded');
+    assert.equal(result.status, 404);
+    assert.equal(calls, 2);
+    assert.deepEqual(entryNames(paths.cacheDir), []);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('an older in-flight 404 does not remove a newer stored entry', () => {
   const paths = tempRoot();
   let now = 1_000_000;
@@ -1206,7 +1242,7 @@ test('a non-empty foreign directory is not adopted or chmod-ed', {
 
 test('a component a concurrent cold start creates is retried, not treated as dangling', () => {
   const enoent = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
-  const target = join(sep, 'cache-root', 'new-cache');
+  const target = resolve(sep, 'cache-root', 'new-cache');
   let realpathCalls = 0;
   // The first realpath misses, then a peer creates the directory before
   // the lstat: a real directory, so the second realpath succeeds.
@@ -1244,7 +1280,7 @@ test('a component a concurrent cold start creates is retried, not treated as dan
   );
   assert.ok(spins > 1 && spins < 32);
   // A genuinely missing suffix is appended to the nearest existing ancestor.
-  const existingRoot = join(sep, 'exists');
+  const existingRoot = resolve(sep, 'exists');
   assert.equal(
     resolveCanonicalPath(join(existingRoot, 'a', 'b'), {
       realpathSync(path: string): string {

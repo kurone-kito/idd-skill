@@ -1553,8 +1553,8 @@ complete trusted base; otherwise it performs one real fetch. A second
 a 304 on that path is an unpersisted miss. Errors, throttles, and
 incomplete collections are not stored. A paginated body accepted only
 because `allowStatuses` tolerated `gh`'s exit status is incomplete and
-is not stored. A 404 or 410 removes the stored entry for the same
-context; 401, 403, 429, and 5xx leave it.
+is not stored. A 404 or 410 on a single-request read removes the
+stored entry for the same context; 401, 403, 429, and 5xx leave it.
 
 The directory is per-user and OS-local: `XDG_CACHE_HOME` or `~/.cache`
 on Linux, `~/Library/Caches` on macOS, and `LOCALAPPDATA` on Windows.

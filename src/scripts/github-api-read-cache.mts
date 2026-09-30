@@ -955,6 +955,7 @@ function leaderFetch(ctx: CacheContext): ReadThroughGithubApiCacheResult {
       } catch (error) {
         if (!(error instanceof CacheStorageError)) throw error;
         const live = ctx.fetch({});
+        invalidateOnMissing(ctx, live, startedAt, false);
         try {
           publish(ctx, live, startedAt, false);
         } catch (publishError) {
