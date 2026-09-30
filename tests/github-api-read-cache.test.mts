@@ -1924,6 +1924,7 @@ test('an async hint read stores a report and the next read is a hit', async () =
     assert.equal(first.cache, 'miss');
     assert.equal(second.cache, 'hit');
     assert.equal(second.fetched, false);
+    assert.equal(second.coalesced, undefined);
     assert.deepEqual(second.body, { report: 'r' });
     assert.equal(leaseNames(paths.cacheDir).length, 0);
   } finally {
@@ -1950,6 +1951,9 @@ test('two concurrent in-process async reads coalesce onto one fetch', async () =
     assert.equal(calls, 1);
     assert.equal(led.cache, 'miss');
     assert.equal(waited.cache, 'hit');
+    // Only the waiter is served a peer's just-finished computation.
+    assert.equal(waited.coalesced, true);
+    assert.equal(led.coalesced, undefined);
     assert.deepEqual(waited.body, { report: 'shared' });
     assert.equal(leaseNames(paths.cacheDir).length, 0);
   } finally {

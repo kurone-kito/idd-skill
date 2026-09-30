@@ -19,7 +19,6 @@ import { stripLeadingArgumentSeparator } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
 import { extractDependencyReferences } from './dependency-grammar.mjs';
 import {
-  noteDiscoveryIncomplete,
   purgeDiscoverHints,
   readDiscoverHint,
 } from './discover-hint-cache.mjs';
@@ -1142,11 +1141,6 @@ async function produceOutput(args, policy) {
     },
     ...result,
   };
-  // An unresolvable reference is a read that could not complete, so the
-  // inventory is partial: never cache it, never let it prove exhaustion.
-  if (result.unresolvable.length > 0) {
-    noteDiscoveryIncomplete(`unresolvable:${result.unresolvable.length}`);
-  }
   return output;
 }
 // Excluded from the #1446 cli-args.mts wrapper: --current-claim-id below
@@ -1264,8 +1258,6 @@ from the host-local read cache and exits. When the cache is active or a cache
 flag is passed, the output gains an additive "cache" object:
   "cache": {"mode": "hint|refresh|off|bypass", "source": "hint|live", "ageMs": 0, "maxAgeMs": 0, "complete": true, "enumerations": 0, "exhaustionRefresh": false}
 An output with no eligible orphan is recomputed once (exhaustionRefresh true).
-complete:false (any unresolvable reference) is never stored and never proves
-exhaustion.
 
 Output schema:
 {

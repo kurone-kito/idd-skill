@@ -1200,7 +1200,7 @@ async function coalesceAsync(ctx, fetch, sleep, maxWaitMs) {
     }
   }
   const waited = await waitForLeaderAsync(ctx, maxWaitMs, sleep);
-  if (waited) return hitResult(waited, ctx.entryId);
+  if (waited) return { ...hitResult(waited, ctx.entryId), coalesced: true };
   if (tryAcquire(ctx)) {
     try {
       return await leaderFetchAsync(ctx, fetch);

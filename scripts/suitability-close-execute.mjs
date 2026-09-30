@@ -468,11 +468,11 @@ function createProductionDeps(args) {
       port.closeWorkItem(issueNumber, 'completed');
       // A closed issue changes what a cached Discover hint may list, so drop
       // the hints (best effort; #3588).
-      invalidateDiscoverHints({ owner, repo });
+      invalidateDiscoverHints({ owner: args.owner, repo: args.repo });
     },
     releaseClaim: (issueNumber, fields) => {
       port.postWorkItemComment(issueNumber, renderUnclaimedByMarker(fields));
-      invalidateDiscoverHints({ owner, repo });
+      invalidateDiscoverHints({ owner: args.owner, repo: args.repo });
     },
     now: () => args.now || new Date().toISOString(),
     staleAgeMs,

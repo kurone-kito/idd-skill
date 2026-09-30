@@ -4,7 +4,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -539,5 +541,171 @@ test('an unidentified caller bypasses the cache rather than guessing a key', asy
   } finally {
     rmSync(noCredential.root, { recursive: true, force: true });
     rmSync(noRemote.root, { recursive: true, force: true });
+  }
+});
+
+test('per-session IDD plumbing does not split hints but trust variables do', async () => {
+  const fx = fixture();
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    await readDiscoverHint(request(fx, compute));
+    const sameAnswer = await readDiscoverHint(
+      request(fx, compute, {
+        deps: {
+          ...fx.deps,
+          env: {
+            IDD_CLONE_LOCK_TOKEN: 'another-session',
+            IDD_HELPER_ERROR_ENVELOPE: '1',
+          },
+        },
+      }),
+    );
+    assert.equal(sameAnswer.cache?.source, 'hint');
+    const trustChanged = await readDiscoverHint(
+      request(fx, compute, {
+        deps: { ...fx.deps, env: { IDD_TRUST_COLLABORATOR_MARKERS: 'true' } },
+      }),
+    );
+    assert.equal(trustChanged.cache?.source, 'live');
+    assert.equal(calls(), 2);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('overlapping computations keep their completeness signals apart', async () => {
+  const fx = fixture();
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((done) => {
+    releaseFirst = done;
+  });
+  let releaseSecond!: () => void;
+  const secondGate = new Promise<void>((done) => {
+    releaseSecond = done;
+  });
+  const incomplete = async (): Promise<Report> => {
+    await firstGate;
+    noteDiscoveryIncomplete('a capped search');
+    return { leaves: [1] };
+  };
+  const complete = async (): Promise<Report> => {
+    await secondGate;
+    return { leaves: [2] };
+  };
+  try {
+    // Different args keep the two reads from coalescing onto one lease.
+    const a = readDiscoverHint(request(fx, incomplete, { args: { n: 'a' } }));
+    const b = readDiscoverHint(request(fx, complete, { args: { n: 'b' } }));
+    releaseFirst();
+    const resultA = await a;
+    releaseSecond();
+    const resultB = await b;
+    assert.equal(resultA.cache?.complete, false);
+    assert.equal(resultB.cache?.complete, true);
+    const warm = await readDiscoverHint(
+      request(fx, complete, { args: { n: 'b' } }),
+    );
+    assert.equal(warm.cache?.source, 'hint');
+    const notStored = await readDiscoverHint(
+      request(fx, incomplete, { args: { n: 'a' } }),
+    );
+    assert.equal(notStored.cache?.source, 'live');
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent exhausted sessions coalesce and owe no refresh to a peer's fresh result", async () => {
+  const fx = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  let calls = 0;
+  const compute = async (): Promise<Report> => {
+    calls += 1;
+    await gate;
+    return { leaves: [] };
+  };
+  try {
+    const all = [1, 2, 3].map(() => readDiscoverHint(request(fx, compute)));
+    release();
+    const results = await Promise.all(all);
+    assert.equal(calls, 1);
+    for (const result of results) {
+      assert.equal(result.cache?.exhaustionRefresh, false);
+    }
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('a hint is aged from the start of its enumeration, not its publication', async () => {
+  const fx = fixture();
+  let calls = 0;
+  const compute = async (): Promise<Report> => {
+    calls += 1;
+    // The enumeration itself outlives the freshness window.
+    fx.clock.now += 400_000;
+    return { leaves: [calls] };
+  };
+  try {
+    const first = await readDiscoverHint(request(fx, compute));
+    assert.deepEqual(first.report.leaves, [1]);
+    const second = await readDiscoverHint(request(fx, compute));
+    assert.equal(calls, 2);
+    assert.deepEqual(second.report.leaves, [2]);
+    assert.equal(second.cache?.source, 'live');
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('a stored body this layer did not write is replaced, not served', async () => {
+  const fx = fixture();
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    await readDiscoverHint(request(fx, compute));
+    const entries = join(fx.cacheDir, 'entries');
+    for (const name of readdirSync(entries)) {
+      const path = join(entries, name);
+      const record = JSON.parse(readFileSync(path, 'utf8'));
+      if (typeof record.body === 'object' && record.body !== null) {
+        record.body = { unexpected: true };
+        writeFileSync(path, JSON.stringify(record), { mode: 0o600 });
+      }
+    }
+    const repaired = await readDiscoverHint(request(fx, compute));
+    assert.equal(calls(), 2);
+    assert.equal(repaired.cache?.source, 'live');
+    const warm = await readDiscoverHint(request(fx, compute));
+    assert.equal(warm.cache?.source, 'hint');
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('an invalidation names the repository it was given and no other', async () => {
+  const fx = fixture();
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    await readDiscoverHint(request(fx, compute));
+    // A different explicit repository leaves this repository's hints alone.
+    assert.equal(
+      invalidateDiscoverHints({ owner: 'someone', repo: 'else' }, fx.deps),
+      true,
+    );
+    const still = await readDiscoverHint(request(fx, compute));
+    assert.equal(still.cache?.source, 'hint');
+    // The same repository in a different case is the same identity.
+    assert.equal(
+      invalidateDiscoverHints({ owner: 'O', repo: 'R' }, fx.deps),
+      true,
+    );
+    const dropped = await readDiscoverHint(request(fx, compute));
+    assert.equal(dropped.cache?.source, 'live');
+    assert.equal(calls(), 2);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
   }
 });

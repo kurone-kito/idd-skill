@@ -140,6 +140,11 @@ export interface ReadThroughGithubApiCacheResult {
   fetched: boolean;
   entryId?: string;
   removed?: number;
+  /**
+   * Async twin only: this hit was produced by a concurrent leader while the
+   * call waited, so it is as fresh as a live computation would have been.
+   */
+  coalesced?: boolean;
 }
 
 interface StoredRecord {
@@ -1532,7 +1537,7 @@ async function coalesceAsync(
     }
   }
   const waited = await waitForLeaderAsync(ctx, maxWaitMs, sleep);
-  if (waited) return hitResult(waited, ctx.entryId);
+  if (waited) return { ...hitResult(waited, ctx.entryId), coalesced: true };
   if (tryAcquire(ctx)) {
     try {
       return await leaderFetchAsync(ctx, fetch);

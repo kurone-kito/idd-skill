@@ -637,7 +637,7 @@ test('CLI orphan filter: an empty cached inventory is refreshed once, never beli
   }
 });
 
-test('CLI orphan filter: an unresolvable reference is reported incomplete and never stored', () => {
+test('CLI orphan filter: an unresolvable reference keeps its A3 meaning and does not mark the report incomplete', () => {
   const issue = `${JSON.stringify({
     number: 5,
     title: 'needs 900',
@@ -652,11 +652,13 @@ test('CLI orphan filter: an unresolvable reference is reported incomplete and ne
     assert.equal(first.status, 0, first.stderr);
     const firstReport = JSON.parse(first.stdout);
     assert.equal(firstReport.counts.unresolvable, 1);
-    assert.equal(firstReport.cache.complete, false);
-    const base = ghCalls(fx);
+    assert.equal(firstReport.cache.complete, true);
+    // Nothing eligible remains, so the stored hint is refreshed once rather
+    // than believed.
     const second = runCli(fx, [], ORPHAN_SCRIPT);
-    assert.equal(JSON.parse(second.stdout).cache.source, 'live');
-    assert.ok(ghCalls(fx) > base);
+    const secondReport = JSON.parse(second.stdout);
+    assert.equal(secondReport.cache.exhaustionRefresh, true);
+    assert.equal(secondReport.counts.unresolvable, 1);
   } finally {
     fx.restore();
     rmSync(fx.root, { recursive: true, force: true });
@@ -812,4 +814,82 @@ test('every mutating helper path invalidates the discover hints', () => {
       `${name} should call invalidateDiscoverHints ${count} time(s)`,
     );
   }
+});
+
+test('a warm union repeat serves claim-state annotations without a comment read', async () => {
+  const fx = fixture();
+  const t = tracker([
+    [700, roadmap(700, '- [ ] #701', 'epic-alpha')],
+    [701, leaf(701, 5)],
+  ]);
+  let commentReads = 0;
+  const claimState = {
+    loadComments: () => {
+      commentReads += 1;
+      return [];
+    },
+    isTrustedAuthor: () => true,
+    staleAgeMs: 24 * 60 * 60 * 1000,
+    heartbeatIntervalMs: 12 * 60 * 60 * 1000,
+    nowIso: '2026-09-30T00:00:00Z',
+    currentClaimId: '',
+    currentSessionAgentId: null,
+    currentSessionWorktreePath: null,
+    currentSessionBranch: null,
+    currentSessionOwnsClaimEvidence: false,
+  };
+  const compute = () =>
+    enumerateAllRoadmapsGraph({
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (number) => t.issues.get(number) ?? null,
+      claimState,
+    });
+  try {
+    const cold = await read(fx, compute);
+    assert.equal(commentReads, 1);
+    assert.equal(cold.report.leaves[0]?.claimEligible, true);
+    const warm = await read(fx, compute);
+    assert.equal(commentReads, 1);
+    assert.equal(warm.cache?.source, 'hint');
+    assert.equal(warm.report.leaves[0]?.claimEligible, true);
+    assert.deepEqual(warm.report.leaves[0]?.activeClaim, {
+      present: false,
+      stale: false,
+      claimId: null,
+      agentId: null,
+      heartbeatOverdue: false,
+    });
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+// Static guard: the hint is a ranking aid only. The two Discover
+// enumeration helpers are its sole readers, and no gate module imports the
+// hint layer, so a live A3-A5 check cannot be served from it.
+test('only the two Discover enumeration helpers read the hint layer', () => {
+  const scriptsDir = join(REPO_ROOT, 'src', 'scripts');
+  const readers: string[] = [];
+  const importers: string[] = [];
+  for (const name of readdirSync(scriptsDir)) {
+    if (!name.endsWith('.mts') || name === 'discover-hint-cache.mts') continue;
+    const source = readFileSync(join(scriptsDir, name), 'utf8');
+    if (/\breadDiscoverHint\b/.test(source)) readers.push(name);
+    if (source.includes("from './discover-hint-cache.mts'")) {
+      importers.push(name);
+    }
+  }
+  assert.deepEqual(readers.sort(), [
+    'discover-orphan-filter.mts',
+    'discover-roadmap-graph.mts',
+  ]);
+  assert.deepEqual(importers.sort(), [
+    'discover-orphan-filter.mts',
+    'discover-roadmap-graph.mts',
+    'force-handoff.mts',
+    'idd-merge-execute.mts',
+    'idd-roadmap-audit-execute.mts',
+    'post-idd-marker.mts',
+    'suitability-close-execute.mts',
+  ]);
 });

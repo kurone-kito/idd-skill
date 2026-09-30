@@ -242,7 +242,10 @@ const defaultDeps = {
     ).mergeChangeRequestAtRepo(owner, repo, prNumber, headSha);
     // A merge closes issues, so drop cached Discover hints (best effort;
     // #3588).
-    invalidateDiscoverHints({ owner, repo });
+    // Only an explicit repository names the identity Discover keyed on; the
+    // resolved pair can differ from `origin` (for example a fork whose `gh`
+    // default repository is upstream).
+    invalidateDiscoverHints(repoRef ? { owner, repo } : {});
     return merged;
   },
   mergePrAdmin: (prNumber, headSha, repoRef) => {
@@ -251,7 +254,10 @@ const defaultDeps = {
       owner,
       repo,
     ).mergeChangeRequestAdminAtRepo(owner, repo, prNumber, headSha);
-    invalidateDiscoverHints({ owner, repo });
+    // Only an explicit repository names the identity Discover keyed on; the
+    // resolved pair can differ from `origin` (for example a fork whose `gh`
+    // default repository is upstream).
+    invalidateDiscoverHints(repoRef ? { owner, repo } : {});
     return merged;
   },
   // #3252: always a trusted-ref remote read, scoped to `repoRef` when set

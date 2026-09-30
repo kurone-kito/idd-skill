@@ -1762,11 +1762,11 @@ function createProductionDeps(
       port.closeWorkItem(issueNumber, 'completed');
       // A closed roadmap changes the cached union, so drop Discover hints
       // (best effort; #3588).
-      invalidateDiscoverHints({ owner, repo });
+      invalidateDiscoverHints({ owner: args.owner, repo: args.repo });
     },
     releaseClaim: (issueNumber, fields) => {
       port.postWorkItemComment(issueNumber, renderUnclaimedByMarker(fields));
-      invalidateDiscoverHints({ owner, repo });
+      invalidateDiscoverHints({ owner: args.owner, repo: args.repo });
     },
     // Honor a caller-supplied --now (deterministic staleness + release
     // timestamps for tests / replays); fall back to the wall clock.

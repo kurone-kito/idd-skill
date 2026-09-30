@@ -13,6 +13,7 @@
 // feature is off or the caller has no usable identity, every function here
 // degrades to the uncached behavior.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -122,27 +123,25 @@ interface StoredHint {
 }
 
 // Completeness collector. The two helper code paths that today only warn on
-// stderr (search-result cap, skipped root) and the orphan filter's
-// unresolvable candidates also record a reason here, so a partial read is
-// never stored and never reported as a complete inventory.
-let activeIncompleteReasons: string[] | null = null;
+// stderr (search-result cap, skipped root) also record a reason here, so a
+// partial read is never stored and never reported as a complete inventory.
+const incompleteReasons = new AsyncLocalStorage<string[]>();
 
-/** Record that the current Discover computation is not a complete read. */
+/**
+ * Record that the current Discover computation is not a complete read. The
+ * reason lands on the computation this call runs inside, so overlapping
+ * computations in one process never see each other's signals.
+ */
 export function noteDiscoveryIncomplete(reason: string): void {
-  activeIncompleteReasons?.push(reason);
+  incompleteReasons.getStore()?.push(reason);
 }
 
 async function computeTracked<T>(
   compute: () => Promise<T>,
 ): Promise<{ report: T; reasons: string[] }> {
-  const previous = activeIncompleteReasons;
   const reasons: string[] = [];
-  activeIncompleteReasons = reasons;
-  try {
-    return { report: await compute(), reasons };
-  } finally {
-    activeIncompleteReasons = previous;
-  }
+  const report = await incompleteReasons.run(reasons, compute);
+  return { report, reasons };
 }
 
 interface RemoteIdentity {
@@ -309,11 +308,22 @@ function isStoredHint(value: unknown): value is StoredHint {
   return typeof record.generatedAt === 'number' && 'report' in record;
 }
 
-function idFlags(env: NodeJS.ProcessEnv): Record<string, string> {
+/**
+ * Trust-related variables that can change what a helper reports. Per-session
+ * plumbing (`IDD_CLONE_LOCK_*`, `IDD_HELPER_ERROR_ENVELOPE`, ...) is left out
+ * on purpose: it differs between sessions without changing the answer and
+ * would split every session's hints.
+ */
+const HINT_ENV_NAMES = [
+  'IDD_ADVISORY_BOT_LOGINS',
+  'IDD_AGENT_LOGINS',
+  'IDD_TRUST_COLLABORATOR_MARKERS',
+  'IDD_TRUSTED_MARKER_ACTORS',
+] as const;
+
+function hintEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const flags: Record<string, string> = {};
-  for (const name of Object.keys(env).sort()) {
-    if (name.startsWith('IDD_')) flags[name] = env[name] ?? '';
-  }
+  for (const name of HINT_ENV_NAMES) flags[name] = env[name] ?? '';
   return flags;
 }
 
@@ -328,7 +338,7 @@ function hintKeyInputs(
     formatVersion: HINT_FORMAT_VERSION,
     args: request.args,
     policy: request.policy,
-    env: idFlags(env),
+    env: hintEnv(env),
     worktree: safeRealpath(config.cwd),
     generation,
   };
@@ -340,6 +350,8 @@ interface HintRead<T> {
   ageMs: number;
   complete: boolean;
   enumerations: number;
+  /** A concurrent leader computed this report while the call waited. */
+  coalesced: boolean;
 }
 
 async function readOnce<T>(
@@ -357,43 +369,53 @@ async function readOnce<T>(
   let enumerations = 0;
   const fetch = async (): Promise<GithubApiCacheFetchResult> => {
     enumerations += 1;
+    // Stamped at the start: the hint is no fresher than the moment its
+    // enumeration began, however long the enumeration then ran.
+    const generatedAt = now();
     const tracked = await computeTracked(request.compute);
     box.tracked = tracked;
     return {
       status: 200,
       body: {
-        generatedAt: now(),
+        generatedAt,
         report: toPlainJson(tracked.report),
       } satisfies StoredHint,
       incomplete: tracked.reasons.length > 0,
     };
   };
-  let derived: unknown;
-  try {
-    derived = hintKeyInputs(request, config, generation, env);
-  } catch {
-    derived = null;
-  }
   const result = await readThroughGithubApiCacheAsync({
     ...baseInput(config, deps),
     mode,
     policy: config.policy,
     requestShape: { unit: HINT_UNIT },
-    derivedInputs: derived,
+    derivedInputs: hintKeyInputs(request, config, generation, env),
     fetch,
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
     ...(deps.leaseMaxWaitMs ? { leaseMaxWaitMs: deps.leaseMaxWaitMs } : {}),
   });
-  const served = result.cache === 'hit' && isStoredHint(result.body);
-  if (served) {
-    const stored = result.body as StoredHint;
-    return {
-      report: stored.report as T,
-      source: 'hint',
-      ageMs: Math.max(0, now() - stored.generatedAt),
-      complete: true,
-      enumerations,
-    };
+  if (result.cache === 'hit' && isStoredHint(result.body)) {
+    const stored = result.body;
+    const ageMs = Math.max(0, now() - stored.generatedAt);
+    const coalesced = result.coalesced === true;
+    // The cache judges freshness from when a record was stored; a hint is
+    // only as fresh as its enumeration's start, so a hit that is older than
+    // that (other than one a peer just finished for this very call) is
+    // recomputed rather than served.
+    if (coalesced || ageMs <= config.policy.maxAgeMs) {
+      return {
+        report: stored.report as T,
+        source: 'hint',
+        ageMs,
+        complete: true,
+        enumerations,
+        coalesced,
+      };
+    }
+    return readOnce(request, config, generation, 'strict-fresh');
+  }
+  // A hit with a body this layer did not write is replaced, not served.
+  if (result.cache === 'hit') {
+    return readOnce(request, config, generation, 'strict-fresh');
   }
   // A miss, degraded read, or bypass all computed live; when the injected
   // fetch never ran (should not happen) fall back to computing directly so
@@ -409,6 +431,7 @@ async function readOnce<T>(
     ageMs: 0,
     complete: live.reasons.length === 0,
     enumerations,
+    coalesced: false,
   };
 }
 
@@ -459,6 +482,7 @@ export async function readDiscoverHint<T>(
   );
   if (
     first.source === 'hint' &&
+    !first.coalesced &&
     request.refreshCache !== true &&
     !request.hasCandidate(first.report)
   ) {
