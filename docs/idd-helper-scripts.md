@@ -5737,8 +5737,11 @@ same as `AW4`/`AW5`.
   that layer. See
   [User-global issue-authoring delegate default](idd-workflow.md#user-global-issue-authoring-delegate-default).
 - The helper does not invoke the command and does not read a branch
-  diff. The configured command is trusted executable configuration and
-  can transmit the issue-draft data the caller sends it.
+  diff. The caller sends the draft to the command on stdin as one JSON
+  object (`title`, `body`, and a bounded `packet`) described by the
+  [issue-authoring review input schema][issue-authoring-review-input-schema].
+  The configured command is trusted executable configuration and can
+  transmit the issue-draft data the caller sends it.
 - Referenced in
   [kurone-kito/idd-skill#3599](https://github.com/kurone-kito/idd-skill/issues/3599)
 
@@ -6480,6 +6483,7 @@ replace the written decision tables.
 [disposition-non-review-notices-schema]: https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json
 [forced-handoff-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/forced-handoff-marker.schema.json
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
+[issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json
 [local-validation-evidence-schema]: https://kurone-kito.github.io/idd-skill/schemas/local-validation-evidence.schema.json
 [post-idd-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/post-idd-marker.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json

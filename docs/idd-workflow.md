@@ -579,8 +579,10 @@ the configured command in a timeout utility. The ceiling does not read
 ignored. Use the same caller-side bound for the native reviewer, so a
 hung native pass is not an unbounded substitute. The configured command
 is trusted executable configuration and may transmit the supplied draft
-and evidence packet. The normative checklist and disposition rule live in
-the
+and evidence packet. The caller sends the draft to the command on stdin as
+one JSON object (`title`, `body`, and a bounded `packet`), described by the
+[issue-authoring review input schema][issue-authoring-review-input-schema].
+The normative checklist and disposition rule live in the
 [issue-authoring skill contract](issue-authoring-skill.md#completed-draft-adversarial-review).
 
 ### User-global issue-authoring delegate default
@@ -1803,3 +1805,5 @@ function is not evidence for any of them. The gap class was observed on
 [kurone-kito/idd-skill#2330](https://github.com/kurone-kito/idd-skill/pull/2330),
 where a correct extraction still took seven advisory rounds, five of
 them this one shape.
+
+[issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json

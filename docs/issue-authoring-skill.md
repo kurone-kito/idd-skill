@@ -800,6 +800,29 @@ same principle as issue #3449. This ceiling does not read
 ignored. Use the same caller-side bound for the native reviewer, so a
 hung native pass is not an unbounded substitute.
 
+**Input.** The caller runs the resolved `command` as a shell command with
+its working directory set to the root of the repository checkout the draft
+is being authored for. It passes no extra argv and no file path, writes
+exactly one UTF-8 JSON object to the command's stdin, and closes stdin. The
+object has three fields: `title` (string, the exact candidate title), `body`
+(string, the exact candidate body), and `packet` (object). `packet` has five
+fields: `goal` (string), `constraints` (array of strings: confirmed
+constraints and design choices), `evidence` (array of strings: evidence or
+file references, where a file reference is a repository-relative path),
+`relationships` (array of strings: relationship context for a multi-issue
+set, empty for a single issue), and `checklist` (array of strings: the
+issue-authoring critique checklist items). All eight fields are required,
+`title`, `body`, `goal`, and every array item are non-empty strings, an array
+itself may be empty, and no other field is allowed at either level. The packet
+stays the bounded set defined above: it never carries the whole conversation
+or unbounded work instructions. The shape is published as the
+[issue-authoring review input schema][issue-authoring-review-input-schema].
+
+**Output.** The command writes free-form findings to stdout, read the same way
+a subagent's critique response is read; no machine-readable output schema is
+introduced. The failure meaning, the mode table, the wait ceiling, and the
+no-mutation boundary above are unchanged.
+
 The configured command is trusted executable configuration and may
 transmit the supplied draft and evidence packet.
 
@@ -2484,3 +2507,5 @@ This document does not define:
 
 Those details should stay in the implementation layer so this document
 can remain the stable contract and schema reference.
+
+[issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json

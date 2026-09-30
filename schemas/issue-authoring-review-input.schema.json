@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json",
+  "title": "Issue-Authoring Draft Review Input",
+  "description": "The one UTF-8 JSON object the issue-authoring caller writes to the stdin of the configured `issueAuthoring.adversarialReview.delegate.command`, then closes stdin. The command runs with its working directory at the root of the repository checkout the draft is being authored for and receives no extra argv and no file path. No helper builds this payload: the caller composes it, and the resolver (`idd-issue-authoring-delegate`) never invokes the command.",
+  "type": "object",
+  "required": ["title", "body", "packet"],
+  "additionalProperties": false,
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The exact candidate issue title."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The exact candidate issue body."
+    },
+    "packet": {
+      "type": "object",
+      "required": ["goal", "constraints", "evidence", "relationships", "checklist"],
+      "additionalProperties": false,
+      "description": "The bounded review packet. It never carries the whole conversation or unbounded work instructions.",
+      "properties": {
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The user's goal."
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Confirmed constraints and design choices. May be empty."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Relevant evidence or file references; a file reference is a repository-relative path. May be empty."
+        },
+        "relationships": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Relationship context for a multi-issue set; empty for a single issue."
+        },
+        "checklist": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "The issue-authoring critique checklist items the reviewer applies. May be empty."
+        }
+      }
+    }
+  }
+}
