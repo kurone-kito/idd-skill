@@ -1657,6 +1657,32 @@ computers. Local policy and permission decisions are not cached. The
 single-flight lease outlives that call's `gh` timeout, and a process
 removes only the lease it acquired.
 
+Eviction runs on every cache use without reading every entry. A full
+sweep parses each stored entry, drops the corrupt, wrong-version,
+loose-mode, oversized, and expired ones and the temp files of exited
+writers, and then drops the oldest beyond `maxBytes`. It runs after a
+cache use when no usable record of the last sweep exists, when `maxBytes`
+or `retention` is lower than at the last sweep, or when a fixed `PT10M`
+(or `retention`, when that is shorter) has passed since it. The time and
+bounds of the last sweep are kept in `sweep.json` in the cache root,
+which the cache adopts only beside its own marker; a record that is
+missing, malformed, loose, or dated in the future counts as no sweep
+yet. A crash can leave a temp file of that record behind, a few bytes
+that are never cleaned up. The check runs after the read, whether or not
+the response could be stored (an error, a throttle, an oversized body, or
+a thrown failure), and costs one small read of that record: a hit reads
+only the entry it serves. After each write, a cheap pass reads no entry
+either: it removes the temp files of exited writers, totals the entry
+sizes with `lstat`, and starts a full sweep only when the total exceeds
+`maxBytes`. Once a cache use happens, an expired entry is therefore
+removed within one interval, and it is never served after `retention`. A
+record that cannot be written or read skips the sweep instead of
+repeating it on every use. A sweep that only lowered bounds triggered
+records the lower of each bound, so two policies that share one
+directory settle instead of triggering each other's sweep; any other
+sweep records the current bounds (the `kurone-kito/idd-skill#3613`
+review, issue `kurone-kito/idd-skill#3627`).
+
 ### Discover hint cache
 
 `discover-roadmap-graph` and `discover-orphan-filter` can serve their whole
