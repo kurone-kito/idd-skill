@@ -437,6 +437,7 @@ export function resolveHelperActiveClaim(
       trustedMarkerLogins: [...trustedLogins],
       forcedHandoffEnabled: true,
       expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+      prFirstCommitAt: options.prFirstCommitAt ?? null,
       isAuthorizedForcedHandoff:
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff

@@ -7,16 +7,23 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildOrphanClaimState,
   classifyIssue,
   extractBlockedByReferences,
   fetchOpenIssues,
   filterOrphanIssues,
   getOrphanFirstPolicy,
+  loadPolicy,
+  resolveClaimStateNow,
 } from '../src/scripts/discover-orphan-filter.mts';
 import { classifyIssue as classifyGraphIssue } from '../src/scripts/discover-roadmap-graph.mts';
+import {
+  NOW_FLAG_USAGE_MESSAGE,
+  renderForcedHandoffComment,
+} from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
-import { stubExecutable } from './test-utils.mts';
+import { spawnHelperBinWithEnvelope, stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const existingFooPath = resolve(process.cwd(), 'src/scripts/foo.mts');
@@ -2209,6 +2216,206 @@ test('CLI path fails when the default-path config exists but is malformed (not s
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #3675: the forced-handoff mode reaches the claim-state annotation through
+// loadPolicy and buildOrphanClaimState, so a handoff successor is reported.
+// ---------------------------------------------------------------------------
+
+function loadPolicyFromConfig(config: unknown) {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-orphan-filter-fh-policy-'));
+  try {
+    const policyPath = join(tempRoot, 'policy.json');
+    writeFileSync(policyPath, JSON.stringify(config));
+    return loadPolicy(policyPath);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+test('loadPolicy carries the normalized forced-handoff mode (#3675)', () => {
+  assert.equal(
+    loadPolicyFromConfig({ forcedHandoff: { mode: 'human-gated' } })
+      .forcedHandoff.mode,
+    'human-gated',
+  );
+  assert.equal(
+    loadPolicyFromConfig({ forcedHandoffMode: 'human-gated' }).forcedHandoff
+      .mode,
+    'human-gated',
+  );
+  assert.equal(loadPolicyFromConfig({}).forcedHandoff.mode, 'disabled');
+});
+
+test('a human-gated policy makes the annotation follow a handoff successor (#3675)', async () => {
+  const handoffAt = '2026-06-25T10:00:00Z';
+  const comments = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', '2026-06-24T09:00:00Z'),
+        {
+          body: renderForcedHandoffComment({
+            oldAgentId: 'agent-a',
+            oldClaimId: 'claim-701',
+            newAgentId: 'agent-b',
+            newClaimId: 'claim-701-new',
+            branch: 'issue/701-task',
+            forcedBy: 'kurone-kito',
+            reason: 'operator-approved-recovery',
+            timestamp: handoffAt,
+            contextScope: 'issue-only',
+          }),
+          createdAt: handoffAt,
+          author: { login: 'kurone-kito' },
+          lastEditedAt: null,
+        },
+      ],
+    ],
+  ]);
+  const { resolution: base } = buildClaimState(comments);
+
+  for (const [config, expectedClaimId, expectedStale] of [
+    [{ forcedHandoff: { mode: 'human-gated' } }, 'claim-701-new', false],
+    [{}, 'claim-701', true],
+  ] as const) {
+    const policy = loadPolicyFromConfig(config);
+    const resolution = {
+      ...buildOrphanClaimState(createFakeProviderAdapter({}), policy, ''),
+      // Keep the wired mode; replace only the network, clock, and local
+      // worktree inputs.
+      loadComments: base.loadComments,
+      isTrustedAuthor: base.isTrustedAuthor,
+      nowIso: CLAIM_NOW,
+      inspectLocalWorktree: () => ({
+        status: 'absent' as const,
+        paths: [],
+        reason: null,
+      }),
+    };
+
+    const result = await filterOrphanIssues(claimOrphanIssues(), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      claimState: resolution,
+    });
+
+    const orphan701 = new Map(result.orphans.map((o) => [o.number, o])).get(
+      701,
+    );
+    assert.equal(orphan701?.activeClaim?.claimId, expectedClaimId);
+    assert.equal(orphan701?.activeClaim?.stale, expectedStale);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #3675: --now sets the claim-state annotation's clock.
+// ---------------------------------------------------------------------------
+
+test('resolveClaimStateNow returns the normalized clock only with --with-claim-state (#3675)', () => {
+  assert.equal(
+    resolveClaimStateNow({
+      withClaimState: true,
+      now: '2026-06-25T21:00:00+09:00',
+    }),
+    '2026-06-25T12:00:00Z',
+  );
+  // Not used without the annotation, and never validated there.
+  assert.equal(
+    resolveClaimStateNow({ withClaimState: false, now: 'not a date' }),
+    undefined,
+  );
+  // An empty value is "not provided".
+  assert.equal(
+    resolveClaimStateNow({ withClaimState: true, now: '' }),
+    undefined,
+  );
+});
+
+test('resolveClaimStateNow rejects a malformed --now as a usage error (#3675)', () => {
+  for (const now of ['Sep 27 2026', '2026-09-27', '2026-02-30T00:00:00Z']) {
+    assert.throws(() => resolveClaimStateNow({ withClaimState: true, now }), {
+      message: NOW_FLAG_USAGE_MESSAGE,
+    });
+  }
+});
+
+test('--now moves stale for the claim annotation (#3675)', async () => {
+  const comments = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', '2026-06-24T12:00:00Z')]],
+  ]);
+  const { resolution: base } = buildClaimState(comments);
+  const policy = loadPolicyFromConfig({});
+
+  for (const [now, expectedStale] of [
+    ['2026-06-25T11:00:00Z', false],
+    ['2026-06-25T13:00:00Z', true],
+  ] as const) {
+    const claimState = buildOrphanClaimState(
+      createFakeProviderAdapter({}),
+      policy,
+      '',
+      resolveClaimStateNow({ withClaimState: true, now }),
+    );
+    assert.equal(claimState.nowIso, now);
+
+    const result = await filterOrphanIssues(claimOrphanIssues(), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      claimState: {
+        ...claimState,
+        loadComments: base.loadComments,
+        isTrustedAuthor: base.isTrustedAuthor,
+        inspectLocalWorktree: () => ({
+          status: 'absent' as const,
+          paths: [],
+          reason: null,
+        }),
+      },
+    });
+
+    const orphan701 = new Map(result.orphans.map((o) => [o.number, o])).get(
+      701,
+    );
+    assert.equal(orphan701?.activeClaim?.stale, expectedStale, now);
+  }
+});
+
+test('CLI: a malformed or missing --now is a usage error before any gh call (#3675)', () => {
+  // Every gh invocation fails loudly, so a pass proves the check ran before
+  // the repository lookup or any read.
+  const restore = stubExecutable(
+    'gh',
+    `process.stderr.write("unexpected gh invocation: " + process.argv.slice(2).join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  try {
+    for (const [args, message] of [
+      [
+        ['--with-claim-state', '--now', 'Sep 27 2026'],
+        /--now must be an ISO 8601 date-time/u,
+      ],
+      // A flag in the value position is not swallowed as the clock.
+      [['--now', '--with-claim-state'], /missing value for argument: --now/u],
+      [['--with-claim-state', '--now'], /missing value for argument: --now/u],
+    ] as const) {
+      const result = spawnHelperBinWithEnvelope(
+        'idd-discover-orphan-filter.mjs',
+        args,
+      );
+      const label = `${args.join(' ')}: ${JSON.stringify(result)}`;
+      assert.equal(result.status, 1, label);
+      assert.match(result.stderr, message, label);
+      assert.doesNotMatch(result.stderr, /unexpected gh invocation/u, label);
+      // The helper's usage-error shape, like an invalid --pr.
+      assert.equal(result.envelope?.kind, 'usage', label);
+      assert.equal(result.envelope?.exitCode, 1, label);
+    }
+  } finally {
+    restore();
   }
 });
 

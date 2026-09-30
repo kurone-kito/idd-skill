@@ -17,6 +17,7 @@ import {
   isDiscoverIncompleteResult as isIncomplete,
 } from '../src/scripts/discover-progress.mts';
 import {
+  annotateLeafClaimState,
   buildClaimStateResolution,
   buildCommentLoader,
   buildIssueLoader,
@@ -41,6 +42,7 @@ import {
 } from '../src/scripts/discover-roadmap-graph.mts';
 import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import type { LocalWorktreeInspection } from '../src/scripts/local-worktree-occupancy.mts';
+import { renderForcedHandoffComment } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -2940,6 +2942,8 @@ function buildClaimState(
     staleAgeMs = CLAIM_STALE_AGE_MS,
     heartbeatIntervalMs = CLAIM_HEARTBEAT_INTERVAL_MS,
     inspectLocalWorktree,
+    nowIso = CLAIM_NOW,
+    forcedHandoffEnabled,
   }: {
     currentClaimId?: string;
     currentSessionAgentId?: string | null;
@@ -2950,6 +2954,8 @@ function buildClaimState(
     staleAgeMs?: number;
     heartbeatIntervalMs?: number;
     inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
+    nowIso?: string;
+    forcedHandoffEnabled?: boolean;
   } = {},
 ) {
   const trusted = new Set(trustedActors.map((value) => value.toLowerCase()));
@@ -2971,13 +2977,14 @@ function buildClaimState(
         trusted.has(String(login ?? '').toLowerCase()),
       staleAgeMs,
       heartbeatIntervalMs,
-      nowIso: CLAIM_NOW,
+      nowIso,
       currentClaimId,
       currentSessionAgentId,
       currentSessionWorktreePath,
       currentSessionBranch,
       currentSessionOwnsClaimEvidence,
       inspectLocalWorktree,
+      ...(forcedHandoffEnabled === undefined ? {} : { forcedHandoffEnabled }),
     },
   };
 }
@@ -4086,6 +4093,260 @@ test('heartbeatOverdue:false when a later trusted heartbeat repost refreshes the
     heartbeatOverdue: false,
   });
   assert.equal(leaf701?.claimEligible, false);
+});
+
+// ---------------------------------------------------------------------------
+// Forced-handoff successor in the claim annotation (#3675). The replay thread
+// is the reporter's: a claim at 2026-09-29T16:42Z, then an issue-only handoff
+// by a trusted author at 2026-09-30T03:40:26Z.
+// ---------------------------------------------------------------------------
+
+const HANDOFF_ORIGINAL_CLAIM_AT = '2026-09-29T16:42:00Z';
+const HANDOFF_AT = '2026-09-30T03:40:26Z';
+const HANDOFF_NOW_EARLY = '2026-09-30T09:20:00Z';
+const HANDOFF_NOW_LATE = '2026-09-30T17:00:00Z';
+
+function handoffComment({
+  oldAgentId = 'agent-old',
+  oldClaimId = 'claim-old',
+  newAgentId = 'agent-new',
+  newClaimId = 'claim-new',
+  branch = 'issue/700-task',
+  forcedBy = 'kurone-kito',
+  author = 'kurone-kito',
+  createdAt = HANDOFF_AT,
+  lastEditedAt = null,
+}: {
+  oldAgentId?: string;
+  oldClaimId?: string;
+  newAgentId?: string;
+  newClaimId?: string;
+  branch?: string;
+  forcedBy?: string;
+  author?: string;
+  createdAt?: string;
+  lastEditedAt?: string | null;
+} = {}) {
+  return {
+    body: renderForcedHandoffComment({
+      oldAgentId,
+      oldClaimId,
+      newAgentId,
+      newClaimId,
+      branch,
+      forcedBy,
+      reason: 'operator-approved-recovery',
+      timestamp: createdAt,
+      contextScope: 'issue-only',
+    }),
+    createdAt,
+    author: { login: author },
+    lastEditedAt,
+  };
+}
+
+function handoffThread(...extra: unknown[]) {
+  return new Map<number, unknown[]>([
+    [
+      700,
+      [
+        claimComment('agent-old', 'claim-old', HANDOFF_ORIGINAL_CLAIM_AT),
+        ...extra,
+      ],
+    ],
+  ]);
+}
+
+test('a forced-handoff successor is reported with its own clocks at 09:20Z (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_EARLY,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-new',
+    agentId: 'agent-new',
+    heartbeatOverdue: false,
+  });
+  assert.equal(annotated.claimEligible, false);
+});
+
+test('a forced-handoff successor is heartbeat-overdue but not stale at 17:00Z (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_LATE,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-new',
+    agentId: 'agent-new',
+    heartbeatOverdue: true,
+  });
+  assert.equal(annotated.claimEligible, false);
+});
+
+test('without the forced-handoff mode the annotation keeps the displaced claim (#3675)', async () => {
+  for (const forcedHandoffEnabled of [undefined, false]) {
+    const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+      forcedHandoffEnabled,
+      nowIso: HANDOFF_NOW_LATE,
+    });
+
+    const annotated = await annotateLeafClaimState(700, resolution);
+
+    // 16:42Z -> 17:00Z next day is 24h18m: stale, and so takeover-eligible.
+    assert.deepEqual(annotated.activeClaim, {
+      present: true,
+      stale: true,
+      claimId: 'claim-old',
+      agentId: 'agent-old',
+      heartbeatOverdue: true,
+    });
+    assert.equal(annotated.claimEligible, true);
+  }
+});
+
+test('a handoff by an untrusted author is ignored even with the mode enabled (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment({ author: 'mallory' })),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.claimId, 'claim-old');
+  assert.equal(annotated.activeClaim.agentId, 'agent-old');
+});
+
+test('a thread with no handoff is unchanged with the mode enabled (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_EARLY,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-old',
+    agentId: 'agent-old',
+    heartbeatOverdue: true,
+  });
+});
+
+test('a handoff naming another claim, agent, or branch is ignored (#3675)', async () => {
+  for (const mismatch of [
+    { oldClaimId: 'claim-other' },
+    { oldAgentId: 'agent-other' },
+    { branch: 'issue/999-other' },
+  ]) {
+    const { resolution } = buildClaimState(
+      handoffThread(handoffComment(mismatch)),
+      { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+    );
+
+    const annotated = await annotateLeafClaimState(700, resolution);
+
+    assert.equal(annotated.activeClaim.claimId, 'claim-old');
+  }
+});
+
+test('an edited handoff marker is dropped (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment({ lastEditedAt: '2026-09-30T05:00:00Z' })),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.claimId, 'claim-old');
+});
+
+test('a handoff whose forced-by differs from its author is still followed (#3675)', async () => {
+  // The annotation is the lenient soft signal: authorization is not checked
+  // here, so the author/forced-by binding Resume routing applies stays off.
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment({ forcedBy: 'someone-else' })),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.claimId, 'claim-new');
+});
+
+test('a successor heartbeat after the handoff advances both clocks (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(
+      handoffComment(),
+      claimComment('agent-new', 'claim-new', '2026-09-30T20:00:00Z'),
+    ),
+    { forcedHandoffEnabled: true, nowIso: '2026-10-01T00:00:00Z' },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  // Without the heartbeat the handoff would be 20h20m old: overdue.
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-new',
+    agentId: 'agent-new',
+    heartbeatOverdue: false,
+  });
+});
+
+test('releasing the successor leaves the issue unclaimed (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment(), {
+      body: '<!-- unclaimed-by: agent-new claim-new 2026-09-30T08:00:00Z -->',
+      createdAt: '2026-09-30T08:00:00Z',
+      author: { login: 'kurone-kito' },
+      lastEditedAt: null,
+    }),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.present, false);
+  assert.equal(annotated.claimEligible, true);
+});
+
+test('the successor claim is owned by the session that adopted it (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_EARLY,
+    currentClaimId: 'claim-new',
+    currentSessionAgentId: 'agent-new',
+    currentSessionOwnsClaimEvidence: true,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.ownedByCurrentSession, true);
+});
+
+test('buildClaimStateResolution maps the forced-handoff mode to forcedHandoffEnabled (#3675)', () => {
+  const port = createFakeProviderAdapter({});
+  const enabled = (policy: Record<string, unknown>) =>
+    buildClaimStateResolution(port, policy, '').forcedHandoffEnabled;
+
+  assert.equal(enabled({ forcedHandoff: { mode: 'human-gated' } }), true);
+  assert.equal(enabled({ forcedHandoffMode: 'human-gated' }), true);
+  assert.equal(enabled({ 'forced-handoff': { mode: 'human-gated' } }), true);
+  assert.equal(enabled({}), false);
+  assert.equal(enabled({ forcedHandoff: { mode: 'disabled' } }), false);
+  assert.equal(enabled({ forcedHandoff: { mode: 'bogus' } }), false);
 });
 
 test('parseClaimHeartbeatIntervalMs rejects non-positive and garbage durations', () => {

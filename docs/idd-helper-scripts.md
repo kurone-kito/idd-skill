@@ -363,7 +363,7 @@ that is `transport`, carrying `retryAt` when known, never `gate`.
 
 | Helper                             | `usage`                                                                                | `gate`                                                                                                                                                      |
 | ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `discover-orphan-filter.mjs`       | an unknown flag or an invalid `--pr`                                                   | none today (no arguments is `transport`)                                                                                                                    |
+| `discover-orphan-filter.mjs`       | an unknown flag, an invalid `--pr`, a bare `--now`, or a malformed claim-state `--now` | none today (no arguments is `transport`)                                                                                                                    |
 | `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                      | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
 | `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag                          | none today                                                                                                                                                  |
 | `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                               | none today                                                                                                                                                  |
@@ -1382,16 +1382,21 @@ default below is unchanged.
     eligibility is unknown and treated as non-blocking). `authoringHeld`
     reports label **presence** only — `--with-readiness` does not compute the
     stale-authoring warning (it would cost a discarded per-leaf timeline fetch
-    and does not change startability). `--with-claim-state` itself is not
-    fully forced-handoff-aware — it intentionally excludes forced-handoff and
-    legacy active-claim takeover rules as a best-effort **soft signal**, but
-    retains a branch released by either new-format or legacy markers for
-    local-worktree collision protection; a discovery-time survey
-    across many candidates must either loop the single-issue
-    `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate or
-    apply `idd-claim.instructions.md`'s full parsing rules manually to catch
-    a more-recent forced-handoff transfer. Both annotations are **soft**
-    discovery hints — the A3/A4/A4.5/A5 gates remain authoritative.
+    and does not change startability). `--with-claim-state` itself is a
+    best-effort **soft signal** that may over- or under-report. With
+    `forcedHandoff.mode: "human-gated"` it follows a forced-handoff transfer
+    posted by a trusted marker author without checking the handoff's
+    authorization (no permission lookup, no linked-PR check), so the leaf
+    carries the successor's ids and clocks; before `#3675` it kept the
+    displaced claim's and advertised a taken-over issue as claimable
+    (observed 2026-09-30 in a private downstream repository). It still
+    excludes legacy active-claim takeover rules, but retains a branch
+    released by either new-format or legacy markers for local-worktree
+    collision protection; the authoritative per-candidate check stays the
+    single-issue `resume-claim-routing.mjs --fresh-claim-gate` resolver,
+    which also applies the handoff authorization and PR rules. Both
+    annotations are **soft** discovery hints — the A3/A4/A4.5/A5 gates
+    remain authoritative.
   - `diagnostics`: same four buckets as single-root mode, deduped across
     every per-root enumeration.
   - `summary`: `{ rootCount: number, leafCount: number,`
@@ -2644,6 +2649,11 @@ default `instructions-only` profile keep using the written shell /
     the linked issue's active claim, the current PR HEAD SHA, the live
     check state, waivable-selector coverage, and maintainer/admin
     authority
+  - the linked issue's claim honors a forced handoff whatever
+    `forcedHandoff.mode` says, so a successor's `--claim-id` resolves,
+    including an `issue-only` handoff posted before the PR's first commit
+    (`#3675`; the PR commits are read only when the issue carries a
+    handoff marker, and an unreadable list keeps rejecting it)
   - non-interactive apply is refused unless `--yes` is provided after a
     prior dry-run review; interactive TTY runs may confirm with `y/N`
   - the helper fails closed when authority cannot distinguish owner,
