@@ -1,0 +1,564 @@
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import {
+  type DiscoverHintDeps,
+  invalidateDiscoverHints,
+  readDiscoverHint,
+} from '../src/scripts/discover-hint-cache.mts';
+import {
+  enumerateAllRoadmapsGraph,
+  hasStartableCandidate,
+  type RoadmapGraphUnionReport,
+  warnOnSearchResultCap,
+} from '../src/scripts/discover-roadmap-graph.mts';
+import { stubExecutable } from './test-utils.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+// ---- in-process: the cached unit is the whole enumerated union report ----
+
+function roadmap(number: number, body: string, markerId: string) {
+  return {
+    number,
+    title: `roadmap ${number}`,
+    state: 'open',
+    body: `${body}\n<!-- idd-skill-roadmap-id: ${markerId} -->`,
+    labels: [{ name: 'roadmap' }],
+  };
+}
+
+function leaf(number: number, score: number, state = 'open') {
+  return {
+    number,
+    title: `task ${number}`,
+    state,
+    body: `task ${number}\n<!-- idd-skill-autopilot-suitability: ${score} -->`,
+    labels: [],
+  };
+}
+
+interface Tracker {
+  issues: Map<number, unknown>;
+  loads: number[];
+}
+
+function tracker(issues: [number, unknown][]): Tracker {
+  return { issues: new Map(issues), loads: [] };
+}
+
+function unionCompute(t: Tracker, roots: number[]) {
+  return () =>
+    enumerateAllRoadmapsGraph({
+      loadOpenRoadmapRoots: async () => roots,
+      loadIssue: async (number) => {
+        t.loads.push(number);
+        return t.issues.get(number) ?? null;
+      },
+    });
+}
+
+interface Fixture {
+  root: string;
+  deps: DiscoverHintDeps;
+}
+
+function fixture(): Fixture {
+  const root = mkdtempSync(join(tmpdir(), 'idd-hint-integration-'));
+  const cacheDir = join(root, 'cache');
+  const workspace = join(root, 'workspace');
+  mkdirSync(cacheDir);
+  mkdirSync(workspace);
+  return {
+    root,
+    deps: {
+      env: {},
+      cwd: workspace,
+      policy: {
+        enabled: true,
+        maxAgeMs: 300_000,
+        maxBytes: 104857600,
+        retentionMs: 86_400_000,
+        directory: cacheDir,
+      },
+      originUrl: () => 'https://github.com/o/r.git',
+      credential: () => 'integration-token',
+    },
+  };
+}
+
+function read(
+  fx: Fixture,
+  compute: () => Promise<RoadmapGraphUnionReport>,
+  extra: { refreshCache?: boolean; noCache?: boolean } = {},
+) {
+  return readDiscoverHint<RoadmapGraphUnionReport>({
+    helper: 'discover-roadmap-graph',
+    args: { allRoadmaps: true },
+    policy: { floor: 3 },
+    compute,
+    hasCandidate: hasStartableCandidate,
+    deps: fx.deps,
+    ...extra,
+  });
+}
+
+function withoutCache(report: RoadmapGraphUnionReport) {
+  const { cache: _cache, ...rest } = report;
+  return rest;
+}
+
+test('a warm union repeat makes zero loader reads and keeps ranking and provenance', async () => {
+  const fx = fixture();
+  const t = tracker([
+    [700, roadmap(700, '- [ ] #701\n- [ ] #702', 'epic-alpha')],
+    [800, roadmap(800, '- [ ] #702\n- [ ] #803', 'epic-beta')],
+    [701, leaf(701, 5)],
+    [702, leaf(702, 2)],
+    [803, leaf(803, 4)],
+  ]);
+  try {
+    const cold = await read(fx, unionCompute(t, [700, 800]));
+    const coldReads = t.loads.length;
+    assert.ok(coldReads > 0);
+    const warm = await read(fx, unionCompute(t, [700, 800]));
+    assert.equal(t.loads.length, coldReads);
+    assert.equal(warm.cache?.source, 'hint');
+    assert.equal(warm.cache?.enumerations, 0);
+    assert.deepEqual(warm.report, cold.report);
+    assert.deepEqual(
+      warm.report.leaves.map((entry) => entry.number),
+      [701, 803, 702],
+    );
+    assert.deepEqual(
+      warm.report.leaves.find((entry) => entry.number === 702)?.sourceRoots,
+      [700, 800],
+    );
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('cached exhaustion refreshes once and finds a newly opened leaf', async () => {
+  const fx = fixture();
+  const t = tracker([[700, roadmap(700, '- [ ] #701', 'epic-alpha')]]);
+  try {
+    const cold = await read(fx, unionCompute(t, [700]));
+    assert.equal(cold.report.leaves.length, 0);
+    // A leaf is opened after the empty inventory was cached.
+    t.issues.set(700, roadmap(700, '- [ ] #701\n- [ ] #999', 'epic-alpha'));
+    t.issues.set(999, leaf(999, 4));
+    const refreshed = await read(fx, unionCompute(t, [700]));
+    assert.equal(refreshed.cache?.exhaustionRefresh, true);
+    assert.deepEqual(
+      refreshed.report.leaves.map((entry) => entry.number),
+      [999],
+    );
+    const warm = await read(fx, unionCompute(t, [700]));
+    assert.equal(warm.cache?.source, 'hint');
+    assert.equal(warm.cache?.exhaustionRefresh, false);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('a stale hint is superseded by an invalidation or an explicit refresh', async () => {
+  const fx = fixture();
+  const t = tracker([
+    [700, roadmap(700, '- [ ] #701\n- [ ] #702', 'epic-alpha')],
+    [701, leaf(701, 5)],
+    [702, leaf(702, 4)],
+  ]);
+  try {
+    await read(fx, unionCompute(t, [700]));
+    // #701 is closed elsewhere; the hint still lists it until refreshed.
+    t.issues.set(701, leaf(701, 5, 'closed'));
+    const stale = await read(fx, unionCompute(t, [700]));
+    assert.deepEqual(
+      stale.report.leaves.map((entry) => entry.number),
+      [701, 702],
+    );
+    assert.equal(invalidateDiscoverHints({}, fx.deps), true);
+    const fresh = await read(fx, unionCompute(t, [700]));
+    assert.equal(fresh.cache?.source, 'live');
+    assert.deepEqual(
+      fresh.report.leaves.map((entry) => entry.number),
+      [702],
+    );
+    t.issues.set(702, leaf(702, 4, 'closed'));
+    const refreshed = await read(fx, unionCompute(t, [700]), {
+      refreshCache: true,
+    });
+    assert.equal(refreshed.report.leaves.length, 0);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+function captureStderr(): { restore: () => string } {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  return {
+    restore: () => {
+      process.stderr.write = original;
+      return chunks.join('');
+    },
+  };
+}
+
+test('a capped root search is reported incomplete and never stored', async () => {
+  const fx = fixture();
+  const t = tracker([
+    [700, roadmap(700, '- [ ] #701', 'epic-alpha')],
+    [701, leaf(701, 5)],
+  ]);
+  const compute = async () => {
+    warnOnSearchResultCap(
+      Array.from({ length: 1000 }, () => ({})),
+      'body-marker',
+    );
+    return unionCompute(t, [700])();
+  };
+  const captured = captureStderr();
+  try {
+    const first = await read(fx, compute);
+    const second = await read(fx, compute);
+    const stderr = captured.restore();
+    assert.match(stderr, /root search hit the 1000-result cap/);
+    assert.equal(first.cache?.complete, false);
+    assert.equal(second.cache?.complete, false);
+    assert.equal(second.cache?.source, 'live');
+  } finally {
+    captured.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('a skipped unusable root is reported incomplete and never stored', async () => {
+  const fx = fixture();
+  const t = tracker([
+    [700, roadmap(700, '- [ ] #701', 'epic-alpha')],
+    [701, leaf(701, 5)],
+  ]);
+  // Root 999 does not exist: the union skips it with a warning.
+  const captured = captureStderr();
+  try {
+    const first = await read(fx, unionCompute(t, [700, 999]));
+    const second = await read(fx, unionCompute(t, [700, 999]));
+    const stderr = captured.restore();
+    assert.match(stderr, /root #999 could not be enumerated/);
+    assert.equal(first.cache?.complete, false);
+    assert.equal(second.cache?.source, 'live');
+    assert.deepEqual(
+      second.report.leaves.map((entry) => entry.number),
+      [701],
+    );
+  } finally {
+    captured.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('startable-candidate detection prefers readiness, then claim state, then presence', () => {
+  assert.equal(hasStartableCandidate({ leaves: [] }), false);
+  assert.equal(hasStartableCandidate({ leaves: [{ number: 1 }] }), true);
+  assert.equal(
+    hasStartableCandidate({ leaves: [{ number: 1, claimEligible: false }] }),
+    false,
+  );
+  assert.equal(
+    hasStartableCandidate({
+      leaves: [
+        { number: 1, claimEligible: false },
+        { number: 2, claimEligible: true },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    hasStartableCandidate({
+      leaves: [
+        { number: 1, claimEligible: true, readiness: { startable: false } },
+      ],
+    }),
+    false,
+  );
+  assert.equal(
+    hasStartableCandidate({
+      leaves: [
+        { number: 1, readiness: { startable: false } },
+        { number: 2, readiness: { startable: true } },
+      ],
+    }),
+    true,
+  );
+  // Single-root shape: only nodes listed as execution candidates count.
+  assert.equal(
+    hasStartableCandidate({
+      nodes: [{ number: 700 }, { number: 701 }],
+      executionCandidates: [701],
+    }),
+    true,
+  );
+  assert.equal(
+    hasStartableCandidate({
+      nodes: [{ number: 700 }],
+      executionCandidates: [],
+    }),
+    false,
+  );
+  assert.equal(hasStartableCandidate(null), false);
+});
+
+// ---- CLI: the generated helper, a stubbed gh, a real local git origin ----
+
+const GH_STUB = (logPath: string) => `
+const { appendFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n");
+if (args[0] === "repo" && args[1] === "view") {
+  const jq = args[args.indexOf("--jq") + 1];
+  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "repos/kurone-kito/idd-skill/issues/700") {
+  process.stdout.write(JSON.stringify({ number: 700, title: "roadmap 700", state: "open", body: "<!-- idd-skill-roadmap-id: root-roadmap -->", labels: [{ name: "roadmap" }] }));
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "repos/kurone-kito/idd-skill/issues/701") {
+  process.stdout.write(JSON.stringify({ number: 701, title: "issue 701", state: "open", body: "", labels: [] }));
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  const numberArg = args.find((entry) => entry.startsWith("number="));
+  const n = Number.parseInt(String(numberArg ?? "").slice("number=".length), 10);
+  process.stdout.write(JSON.stringify({ data: { repository: { issue: { subIssues: { nodes: n === 700 ? [{ number: 701 }] : [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`;
+
+interface CliFixture {
+  root: string;
+  workspace: string;
+  cacheDir: string;
+  log: string;
+  restore: () => void;
+}
+
+function cliFixture(enabled: boolean): CliFixture {
+  const root = mkdtempSync(join(tmpdir(), 'idd-hint-cli-'));
+  const workspace = join(root, 'workspace');
+  const cacheDir = join(root, 'cache');
+  mkdirSync(join(workspace, '.github', 'idd'), { recursive: true });
+  mkdirSync(cacheDir);
+  execFileSync('git', ['init', '-q', workspace]);
+  execFileSync(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/kurone-kito/idd-skill.git'],
+    { cwd: workspace },
+  );
+  writeFileSync(
+    join(workspace, '.github', 'idd', 'config.json'),
+    JSON.stringify(
+      enabled
+        ? { githubApi: { readCache: { enabled: true, directory: cacheDir } } }
+        : {},
+    ),
+  );
+  const log = join(root, 'gh.log');
+  writeFileSync(log, '');
+  return {
+    root,
+    workspace,
+    cacheDir,
+    log,
+    restore: stubExecutable('gh', GH_STUB(log)),
+  };
+}
+
+function runCli(fx: CliFixture, args: string[]) {
+  return spawnSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), ...args],
+    {
+      cwd: fx.workspace,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GH_TOKEN: 'cli-token',
+        GH_HOST: 'github.com',
+        HOME: fx.root,
+        XDG_CACHE_HOME: join(fx.root, 'xdg'),
+      },
+    },
+  );
+}
+
+function ghCalls(fx: CliFixture): number {
+  return readFileSync(fx.log, 'utf8').split('\n').filter(Boolean).length;
+}
+
+test('CLI: a warm repeat spawns no gh process and reports the hint', () => {
+  const fx = cliFixture(true);
+  try {
+    const cold = runCli(fx, ['--issue', '700']);
+    assert.equal(cold.status, 0, cold.stderr);
+    const coldReport = JSON.parse(cold.stdout);
+    assert.equal(coldReport.cache.mode, 'hint');
+    assert.equal(coldReport.cache.source, 'live');
+    assert.equal(coldReport.cache.enumerations, 1);
+    const callsAfterCold = ghCalls(fx);
+    assert.ok(callsAfterCold > 0);
+    const warm = runCli(fx, ['--issue', '700']);
+    assert.equal(warm.status, 0, warm.stderr);
+    const warmReport = JSON.parse(warm.stdout);
+    assert.equal(ghCalls(fx), callsAfterCold);
+    assert.equal(warmReport.cache.source, 'hint');
+    assert.equal(warmReport.cache.enumerations, 0);
+    assert.deepEqual(warmReport.executionCandidates, [701]);
+    const { cache: _a, ...coldRest } = coldReport;
+    const { cache: _b, ...warmRest } = warmReport;
+    assert.deepEqual(warmRest, coldRest);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --no-cache and --refresh-cache always enumerate live', () => {
+  const fx = cliFixture(true);
+  try {
+    runCli(fx, ['--issue', '700']);
+    const base = ghCalls(fx);
+    const off = runCli(fx, ['--issue', '700', '--no-cache']);
+    assert.equal(off.status, 0, off.stderr);
+    assert.equal(JSON.parse(off.stdout).cache.mode, 'off');
+    const afterOff = ghCalls(fx);
+    assert.ok(afterOff > base);
+    const refreshed = runCli(fx, ['--issue', '700', '--refresh-cache']);
+    assert.equal(refreshed.status, 0, refreshed.stderr);
+    const refreshedReport = JSON.parse(refreshed.stdout);
+    assert.equal(refreshedReport.cache.mode, 'refresh');
+    assert.equal(refreshedReport.cache.source, 'live');
+    assert.ok(ghCalls(fx) > afterOff);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --no-cache with --refresh-cache is a usage error', () => {
+  const fx = cliFixture(true);
+  try {
+    const result = runCli(fx, [
+      '--issue',
+      '700',
+      '--no-cache',
+      '--refresh-cache',
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /--no-cache cannot be combined with --refresh-cache/,
+    );
+    assert.equal(ghCalls(fx), 0);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --purge-cache needs no scope flag and empties the cache', () => {
+  const fx = cliFixture(true);
+  try {
+    runCli(fx, ['--issue', '700']);
+    assert.ok(
+      readdirSync(join(fx.cacheDir, 'entries')).some((name) =>
+        name.endsWith('.json'),
+      ),
+    );
+    const purged = runCli(fx, ['--purge-cache']);
+    assert.equal(purged.status, 0, purged.stderr);
+    const parsed = JSON.parse(purged.stdout);
+    assert.equal(parsed.cache.mode, 'purge');
+    assert.equal(parsed.cache.cache, 'purged');
+    assert.ok(parsed.cache.removed >= 1);
+    const before = ghCalls(fx);
+    const next = runCli(fx, ['--issue', '700']);
+    assert.equal(JSON.parse(next.stdout).cache.source, 'live');
+    assert.ok(ghCalls(fx) > before);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI: with the feature off the output has no cache object and nothing is cached', () => {
+  const fx = cliFixture(false);
+  try {
+    const first = runCli(fx, ['--issue', '700']);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal('cache' in JSON.parse(first.stdout), false);
+    const base = ghCalls(fx);
+    runCli(fx, ['--issue', '700']);
+    assert.ok(ghCalls(fx) > base);
+    assert.equal(existsSync(join(fx.root, 'xdg')), false);
+    assert.equal(readdirSync(fx.cacheDir).length, 0);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI: a usage error is unchanged and never touches the cache', () => {
+  const fx = cliFixture(true);
+  try {
+    const result = runCli(fx, []);
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /missing required --issue/,
+    );
+    assert.equal(readdirSync(fx.cacheDir).length, 0);
+    appendFileSync(fx.log, '');
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('the union report shape gains only the optional cache object', async () => {
+  const fx = fixture();
+  const t = tracker([
+    [700, roadmap(700, '- [ ] #701', 'epic-alpha')],
+    [701, leaf(701, 5)],
+  ]);
+  try {
+    const live = await read(fx, unionCompute(t, [700]), { noCache: true });
+    const plain = await unionCompute(t, [700])();
+    assert.deepEqual(withoutCache(live.report), withoutCache(plain));
+    assert.equal(live.cache?.mode, 'off');
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
