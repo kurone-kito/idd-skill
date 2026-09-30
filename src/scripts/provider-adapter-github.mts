@@ -71,6 +71,26 @@ import type {
 } from './provider-port.mts';
 
 /**
+ * GitHub's search API returns at most 1000 results for a single query, so a
+ * search that returns this many hits may be truncated. Callers pass it as
+ * `searchOpenWorkItems`'s `limit` and treat a result of this length as
+ * incomplete (`discover-roadmap-graph.mts`'s root loader warns on it;
+ * `pre-merge-readiness.mts`'s deferred-follow-up check fails closed on it,
+ * #3624). Exported so both read the same value instead of two literals.
+ */
+export const GH_SEARCH_RESULT_CAP = 1000;
+
+/**
+ * Output buffer for a strict `searchOpenWorkItems` (#3624). `execFileSync`'s
+ * 1 MiB default is far too small for a search that returns every open marked
+ * issue's body repository-wide: an overflow would make the strict search
+ * throw on every invocation and stall every merge with an unverified gate.
+ * 64 MiB covers the 1000-result cap at the largest issue body GitHub allows;
+ * anything larger still throws and reads as unverified, never as zero hits.
+ */
+const STRICT_SEARCH_MAX_BUFFER = 64 * 1024 * 1024;
+
+/**
  * `--hostname` args to splice into a hand-built `['api', 'graphql', ...]`
  * array right after `'graphql'`, matching `gh-exec.mts`'s `ghGraphql`/
  * `ghApiJson` (#1962) -- this file's raw GraphQL call sites build their own
@@ -3264,6 +3284,7 @@ export function createGithubProviderAdapter(
       matchBody?: string;
       fields: string[];
       limit: number;
+      strict?: boolean;
     }): unknown[] {
       const args = [
         'search',
@@ -3283,7 +3304,27 @@ export function createGithubProviderAdapter(
       if (query.matchBody) {
         args.push('--match', 'body', query.matchBody);
       }
-      const raw = deps.ghText(args, GH_TEXT_LOOP_OPTIONS).trim();
+      const raw = deps
+        .ghText(
+          args,
+          query.strict
+            ? { ...GH_TEXT_LOOP_OPTIONS, maxBuffer: STRICT_SEARCH_MAX_BUFFER }
+            : GH_TEXT_LOOP_OPTIONS,
+        )
+        .trim();
+      if (query.strict) {
+        // #3624: a strict caller must not read a failed search as zero hits.
+        // `gh search issues --json` prints `[]` for a genuinely empty result,
+        // so empty output, `null`, or any non-array value is a failure shape.
+        if (!raw || raw === 'null') {
+          throw new Error('gh search issues returned no JSON array');
+        }
+        const strictParsed: unknown = JSON.parse(raw);
+        if (!Array.isArray(strictParsed)) {
+          throw new Error('gh search issues returned a non-array response');
+        }
+        return strictParsed;
+      }
       const parsed = raw && raw !== 'null' ? JSON.parse(raw) : [];
       return Array.isArray(parsed) ? parsed : [];
     },
@@ -3452,7 +3493,7 @@ export function createGithubProviderAdapter(
         '-R',
         `${owner}/${repo}`,
         '--json',
-        'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences',
+        'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,body',
       ]);
       const parsed = JSON.parse(raw) as {
         headRefOid?: unknown;
@@ -3464,6 +3505,7 @@ export function createGithubProviderAdapter(
         mergeable?: unknown;
         mergeStateStatus?: unknown;
         closingIssuesReferences?: unknown;
+        body?: unknown;
       };
       return {
         headSha: String(parsed.headRefOid ?? ''),
@@ -3476,6 +3518,7 @@ export function createGithubProviderAdapter(
         mergeable: String(parsed.mergeable ?? ''),
         mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
         closingIssuesReferences: parsed.closingIssuesReferences,
+        body: String(parsed.body ?? ''),
       };
     },
 

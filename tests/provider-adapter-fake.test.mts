@@ -446,3 +446,68 @@ test('getWorkItem checks workItemErrors before workItems when a number appears i
       error.message === 'fixture author error',
   );
 });
+
+// #3624: the deferred-follow-up check asserts how many enumeration and
+// readiness-snapshot reads a collection made, and that a failing search is
+// distinguishable from an empty one, so the fake records exactly those two
+// reads and can be told to throw from the search.
+test('searchOpenWorkItems returns the fixture and records each call with its query in readCalls', () => {
+  const fixture = { searchResults: [{ number: 5 }] };
+  const port = createFakeProviderAdapter(fixture);
+  const query = {
+    matchBody: 'idd-skill-authoring-defer-source',
+    fields: ['number', 'body'],
+    limit: 1000,
+    strict: true,
+  };
+  assert.deepEqual(port.searchOpenWorkItems(query), [{ number: 5 }]);
+  assert.deepEqual(port.searchOpenWorkItems(query), [{ number: 5 }]);
+  assert.deepEqual((fixture as { readCalls?: unknown[] }).readCalls, [
+    { method: 'searchOpenWorkItems', args: [query] },
+    { method: 'searchOpenWorkItems', args: [query] },
+  ]);
+});
+
+test('searchOpenWorkItems throws the configured error instead of returning the fixture, and still records the call', () => {
+  const fixture = {
+    searchResults: [{ number: 5 }],
+    searchOpenWorkItemsError: 'rate limit exceeded',
+  };
+  const port = createFakeProviderAdapter(fixture);
+  assert.throws(
+    () => port.searchOpenWorkItems({ fields: ['number'], limit: 1000 }),
+    /rate limit exceeded/,
+  );
+  assert.equal((fixture as { readCalls?: unknown[] }).readCalls?.length, 1);
+});
+
+test('getChangeRequestReadinessSnapshot records the read, and returns an optional body untouched', () => {
+  const fixture = {
+    changeRequestReadinessSnapshots: {
+      42: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/42',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [],
+        body: 'Closes #7',
+      },
+    },
+  };
+  const port = createFakeProviderAdapter(fixture);
+  assert.equal(port.getChangeRequestReadinessSnapshot(42).body, 'Closes #7');
+  assert.deepEqual((fixture as { readCalls?: unknown[] }).readCalls, [
+    { method: 'getChangeRequestReadinessSnapshot', args: [42] },
+  ]);
+});
+
+test('no other read is recorded, so readCalls stays absent until a search or snapshot read', () => {
+  const fixture = { workItems: {} };
+  const port = createFakeProviderAdapter(fixture);
+  port.listOpenWorkItems();
+  assert.equal((fixture as { readCalls?: unknown[] }).readCalls, undefined);
+});

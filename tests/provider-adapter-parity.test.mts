@@ -663,6 +663,7 @@ test('getChangeRequestReadinessSnapshot: GitHub and fake adapters agree on the n
           mergeable: 'MERGEABLE',
           mergeStateStatus: 'CLEAN',
           closingIssuesReferences: [{ number: 7 }],
+          body: 'Closes #7',
         }),
     }),
   );
@@ -678,6 +679,7 @@ test('getChangeRequestReadinessSnapshot: GitHub and fake adapters agree on the n
         mergeable: 'MERGEABLE',
         mergeStateStatus: 'CLEAN',
         closingIssuesReferences: [{ number: 7 }],
+        body: 'Closes #7',
       },
     },
   });
