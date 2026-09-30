@@ -236,9 +236,18 @@ fi
 BOT_REST_LOGIN_BARE=${BOT_REST_LOGIN%\[bot\]}
 export BOT_REST_LOGIN_BARE
 claim_revalidate() {
-  # Resolve this to the profile-selected shared claim gate, including the
-  # worktree lock, active claim id, activation nonce, and branch/cwd check.
-  <profile-selected-claim-revalidation-command> || return 2
+  # Run from the issue worktree. The profile-selected resume-claim-routing
+  # command (source repo / vendored-node: `node scripts/resume-claim-routing.mjs`;
+  # package-manager / ephemeral-npx: resolve from `docs/idd-helper-scripts.md`)
+  # with `--assert` exits non-zero on any verdict except already_owned/keep.
+  # That proves the claim id (and the activation nonce when --nonce is given
+  # and a winner marker exists) and, when a worktree occupies the claimed
+  # branch, its lock, generated tokens and cwd. With no worktree on that
+  # branch it proves the claim id (and nonce) only.
+  # Never pipe it: a pipe hides its exit status. Its stderr line names the
+  # verdict and, on owner_evidence_required, the failed proof.
+  <profile-selected-resume-claim-routing-command> --issue {issue-number} \
+    --claim-id {claim-id} --nonce {nonce} --assert >/dev/null || return 2
   LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || return 2
   [ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || {
     echo "PR HEAD moved; restart from E1" >&2
@@ -473,7 +482,8 @@ directly — no command block needed here.
 
 ```sh
 revalidate_head() {
-  <profile-selected-claim-revalidation-command> || return 2
+  <profile-selected-resume-claim-routing-command> --issue {issue-number} \
+    --claim-id {claim-id} --nonce {nonce} --assert >/dev/null || return 2
   LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || return 2
   [ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || {
     echo "PR HEAD moved; restart from E1" >&2

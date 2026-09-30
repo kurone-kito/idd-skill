@@ -306,12 +306,11 @@ export function isHelperErrorEnvelopeEnabled(env = process.env) {
  * handing its return value to THIS function afterward (never to
  * `main`/`runCli` itself), is the only way to both avoid that added
  * frame AND still correctly apply a future helper's non-zero-return
- * `gate` verdict -- none of the six first-batch helpers currently
- * returns non-zero (each only ever `return`s `0` or throws), but the
- * `HelperCliResult` contract itself anticipates one that does, and
- * silently discarding a returned outcome instead of ever calling this
- * function would silently regress that case to a false "exit 0" the
- * moment a future edit added one.
+ * `gate` verdict -- five of the six first-batch helpers only ever
+ * `return` `0` or throw, but `resume-claim-routing.mts` returns a
+ * non-zero `gate` outcome under `--assert`, and silently discarding a
+ * returned outcome instead of ever calling this function would regress
+ * that case to a false "exit 0".
  *
  * Required call-site pattern (see any of the six first-batch migrated
  * helpers' own `if (import.meta.main)` trigger for a worked example):

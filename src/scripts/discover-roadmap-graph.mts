@@ -2613,6 +2613,80 @@ function resolveCurrentSessionWorktreeIdentity(cwdOverride?: string): {
 }
 
 /**
+ * The staged result of {@link resolveStagedSessionClaimEvidence}: each field
+ * is the outcome of one proof, and is `null` when an earlier proof failed so
+ * a later one was never evaluated.
+ */
+interface StagedSessionClaimEvidence {
+  identity: { worktreePath: string; branchName: string } | null;
+  lockMatches: boolean | null;
+  tokensMatch: boolean | null;
+  evidence: CurrentSessionClaimEvidence | null;
+}
+
+/**
+ * Run the worktree identity, claim lock and generated-tokens proofs in
+ * order, stopping at the first failure. Each stage has its own `try/catch`
+ * and fails closed, so a throw stays attributable to its stage.
+ */
+function resolveStagedSessionClaimEvidence(
+  claimId: string,
+  worktreePath?: string,
+): StagedSessionClaimEvidence {
+  let cwd: string;
+  try {
+    cwd = worktreePath ?? process.cwd();
+  } catch {
+    // Fail closed: a deleted cwd makes `process.cwd()` throw.
+    return {
+      identity: null,
+      lockMatches: null,
+      tokensMatch: null,
+      evidence: null,
+    };
+  }
+  const identity = resolveCurrentSessionWorktreeIdentity(cwd);
+  if (identity === null) {
+    return { identity, lockMatches: null, tokensMatch: null, evidence: null };
+  }
+  let lockHolderAgentId = '';
+  try {
+    const lock = checkClaimLock(cwd);
+    const holder = lock.holder;
+    if (
+      lock.present &&
+      !lock.malformed &&
+      holder !== undefined &&
+      holder.claimId === claimId &&
+      holder.agentId
+    ) {
+      lockHolderAgentId = holder.agentId;
+    }
+  } catch {
+    lockHolderAgentId = '';
+  }
+  if (!lockHolderAgentId) {
+    return { identity, lockMatches: false, tokensMatch: null, evidence: null };
+  }
+  let tokensMatch = false;
+  try {
+    const tokens = readGeneratedClaimTokens(cwd, claimId);
+    tokensMatch =
+      tokens.status === 'present' &&
+      tokens.record.claimId === claimId &&
+      tokens.record.agentId === lockHolderAgentId;
+  } catch {
+    tokensMatch = false;
+  }
+  return {
+    identity,
+    lockMatches: true,
+    tokensMatch,
+    evidence: tokensMatch ? { ...identity, agentId: lockHolderAgentId } : null,
+  };
+}
+
+/**
  * `worktreePath` (kurone-kito/idd-skill#3272): when given, every read below
  * (the claim lock, the generated-tokens record, and Git's own worktree-root /
  * branch identification) targets that path instead of `process.cwd()`. This
@@ -2626,32 +2700,27 @@ export function resolveCurrentSessionClaimEvidence(
   claimId: string,
   worktreePath?: string,
 ): CurrentSessionClaimEvidence | null {
-  try {
-    const cwd = worktreePath ?? process.cwd();
-    const worktree = resolveCurrentSessionWorktreeIdentity(cwd);
-    if (worktree === null) {
-      return null;
-    }
-    const lock = checkClaimLock(cwd);
-    const holder = lock.holder;
-    if (
-      !lock.present ||
-      lock.malformed ||
-      holder === undefined ||
-      holder.claimId !== claimId ||
-      !holder.agentId
-    ) {
-      return null;
-    }
-    const tokens = readGeneratedClaimTokens(cwd, claimId);
-    return tokens.status === 'present' &&
-      tokens.record.claimId === claimId &&
-      tokens.record.agentId === holder.agentId
-      ? { ...worktree, agentId: holder.agentId }
-      : null;
-  } catch {
-    return null;
-  }
+  return resolveStagedSessionClaimEvidence(claimId, worktreePath).evidence;
+}
+
+/** True when every occupied path for the claimed branch is `currentPath`. */
+function occupiedPathsAreCurrentWorktree(
+  paths: string[],
+  currentPath: string,
+): boolean {
+  return (
+    paths.length > 0 &&
+    paths.every((path) => {
+      if (path === currentPath) {
+        return true;
+      }
+      try {
+        return realpathSync(path) === currentPath;
+      } catch {
+        return false;
+      }
+    })
+  );
 }
 
 /**
@@ -2678,19 +2747,108 @@ export function isCurrentSessionWorktreeOwner(
   ) {
     return false;
   }
-  return (
-    localWorktree.paths.length > 0 &&
-    localWorktree.paths.every((path) => {
-      if (path === currentPath) {
-        return true;
-      }
-      try {
-        return realpathSync(path) === currentPath;
-      } catch {
-        return false;
-      }
-    })
-  );
+  return occupiedPathsAreCurrentWorktree(localWorktree.paths, currentPath);
+}
+
+/** The six owner proofs, in the order they are evaluated and reported. */
+export type OwnerProofName =
+  | 'worktree_identity'
+  | 'claim_lock_matches'
+  | 'generated_tokens_match'
+  | 'agent_and_branch_match'
+  | 'occupancy_probe'
+  | 'occupancy_paths_match';
+
+/**
+ * One field per owner proof, in evaluation order. The four booleans
+ * short-circuit: the first `false` makes every later boolean `null` (not
+ * evaluated). `occupancy_probe` is always the observed probe status, never
+ * `null`. `occupancy_paths_match` is `null` unless all four booleans are
+ * `true` and the probe is `occupied`.
+ */
+export interface CurrentSessionOwnerEvidence {
+  worktree_identity: boolean;
+  claim_lock_matches: boolean | null;
+  generated_tokens_match: boolean | null;
+  agent_and_branch_match: boolean | null;
+  occupancy_probe: LocalWorktreeInspection['status'];
+  occupancy_paths_match: boolean | null;
+}
+
+/** The owner verdict together with the proof-by-proof evidence behind it. */
+export interface CurrentSessionOwnerCheck {
+  owner: boolean;
+  evidence: CurrentSessionOwnerEvidence;
+}
+
+/**
+ * Evaluate whether this session owns `claim`, and report which proof failed.
+ * `owner` is the same verdict the boolean pair
+ * {@link resolveCurrentSessionClaimEvidence} plus
+ * {@link isCurrentSessionWorktreeOwner} gives; `evidence` adds the per-proof
+ * breakdown. `worktreePath` has the same meaning as there.
+ */
+export function evaluateCurrentSessionOwnerEvidence(
+  claim: { claimId: string; agentId: string; branch: string },
+  localWorktree: LocalWorktreeInspection,
+  worktreePath?: string,
+): CurrentSessionOwnerCheck {
+  const staged = resolveStagedSessionClaimEvidence(claim.claimId, worktreePath);
+  const evidence = staged.evidence;
+  const agentAndBranchMatch =
+    evidence === null
+      ? null
+      : evidence.agentId === claim.agentId &&
+        evidence.branchName === claim.branch;
+  const pathsMatch =
+    evidence !== null &&
+    agentAndBranchMatch === true &&
+    localWorktree.status === 'occupied'
+      ? isCurrentSessionWorktreeOwner(
+          evidence.worktreePath,
+          evidence.branchName,
+          claim.branch,
+          localWorktree,
+        )
+      : null;
+  return {
+    owner: pathsMatch === true,
+    evidence: {
+      worktree_identity: staged.identity !== null,
+      claim_lock_matches: staged.lockMatches,
+      generated_tokens_match: staged.tokensMatch,
+      agent_and_branch_match: agentAndBranchMatch,
+      occupancy_probe: localWorktree.status,
+      occupancy_paths_match: pathsMatch,
+    },
+  };
+}
+
+/**
+ * The first proof that failed, in evaluation order, or `null` when every
+ * proof passed. The four booleans are scanned first, then a non-`occupied`
+ * probe, then a `false` path match.
+ */
+export function firstFailedOwnerProof(
+  evidence: CurrentSessionOwnerEvidence,
+): OwnerProofName | null {
+  const booleans = [
+    'worktree_identity',
+    'claim_lock_matches',
+    'generated_tokens_match',
+    'agent_and_branch_match',
+  ] as const;
+  for (const name of booleans) {
+    if (evidence[name] === false) {
+      return name;
+    }
+  }
+  if (evidence.occupancy_probe !== 'occupied') {
+    return 'occupancy_probe';
+  }
+  return evidence.occupancy_paths_match === false
+    ? 'occupancy_paths_match'
+    : null;
 }
 
 function normalizeWorktreeBranchName(branchName: string | null): string | null {
