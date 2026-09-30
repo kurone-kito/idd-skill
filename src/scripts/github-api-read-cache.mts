@@ -214,14 +214,16 @@ function canonicalJson(value: unknown, depth = 0): string {
       throw new CacheKeyError(`unsupported ${typeof value} in cache key`);
   }
   if (Array.isArray(value)) {
-    return `[${value
-      .map((item) => {
-        if (item === undefined) {
-          throw new CacheKeyError('undefined array item in cache key');
-        }
-        return canonicalJson(item, depth + 1);
-      })
-      .join(',')}]`;
+    // Iterate by index: map() skips holes, so a sparse array would encode
+    // like a shorter one and two different shapes would share an entry.
+    const items: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value) || value[index] === undefined) {
+        throw new CacheKeyError('missing or undefined array item in cache key');
+      }
+      items.push(canonicalJson(value[index], depth + 1));
+    }
+    return `[${items.join(',')}]`;
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {

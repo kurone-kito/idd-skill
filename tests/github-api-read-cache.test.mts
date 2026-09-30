@@ -192,6 +192,8 @@ test('a request shape plain JSON cannot represent bypasses the cache', () => {
     () => 1,
     Symbol('s'),
     [undefined],
+    new Array(1),
+    Object.assign(new Array(3), { 0: 1, 2: 2 }),
     cycle,
   ];
   try {
