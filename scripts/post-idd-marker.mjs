@@ -30,6 +30,7 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
+import { isValidIsoTimestamp } from './marker-helpers.mjs';
 import {
   isTrustedAuthor,
   resolveTrustedActors,
@@ -1777,6 +1778,19 @@ function main() {
   if (hasAnyPrior && !args.operationLocal) {
     const message =
       '--prior-head-sha, --prior-total-item-count and --prior-max-activity-at are only valid with --operation-local';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
+  if (
+    hasAnyPrior &&
+    args.priorMaxActivityAt !== 'none' &&
+    !isValidIsoTimestamp(args.priorMaxActivityAt)
+  ) {
+    // Same predicate compareIsoTimestamps uses, so a value is accepted only
+    // if it orders as an instant; anything else would read as a confusing
+    // "newly actionable activity" refusal instead of a bad argument.
+    const message =
+      '--prior-max-activity-at must be none or a canonical UTC timestamp such as 2026-06-25T10:30:00Z';
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }

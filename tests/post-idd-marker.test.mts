@@ -5657,6 +5657,29 @@ test('--prior-* flags must be passed together and only with --operation-local (#
   );
 });
 
+test('--prior-max-activity-at accepts only none or a canonical UTC timestamp (#3592)', () => {
+  // Validation runs before any network call, so no `gh` stub is needed: a bad
+  // value must be a usage error, not a confusing "newly actionable activity"
+  // refusal produced by an unordered comparison.
+  for (const bad of ['zzz', '2026-06-25', '2026-06-25T19:44:00+09:00']) {
+    const result = runWatermarkCli([
+      '--operation-local',
+      '--prior-head-sha',
+      SHA,
+      '--prior-total-item-count',
+      '1',
+      '--prior-max-activity-at',
+      bad,
+    ]);
+    assert.equal(result.status, 1, `expected exit 1 for ${bad}`);
+    assert.match(
+      result.stderr,
+      /--prior-max-activity-at must be none or a canonical UTC timestamp/,
+    );
+    assert.equal(result.stdout, '');
+  }
+});
+
 test('the operationLocal envelope schema requires every view field, including reason (#3592)', () => {
   const view = {
     decision: 'publish',
@@ -5736,24 +5759,27 @@ test('--operation-local CLI refuses a --prior-head-sha for another HEAD with the
     withGhArgvLog(watermarkFromPrGhStub(SHA), argvLog),
   );
   try {
-    const result = runWatermarkCli([
-      '--operation-local',
-      '--prior-head-sha',
-      otherHead,
-      '--prior-total-item-count',
-      '5',
-      '--prior-max-activity-at',
-      '2026-06-25T10:45:00Z',
-      '--apply',
-    ]);
-    assert.equal(result.status, 1);
-    assert.match(
-      result.stderr,
-      new RegExp(`stored prior boundary is for HEAD ${otherHead}`),
-    );
-    const envelope = JSON.parse(result.stdout);
-    assert.equal(envelope.operationLocal.decision, 'refuse');
-    assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
+    // `none` and a canonical timestamp are both valid boundary values.
+    for (const priorMax of ['2026-06-25T10:45:00Z', 'none']) {
+      const result = runWatermarkCli([
+        '--operation-local',
+        '--prior-head-sha',
+        otherHead,
+        '--prior-total-item-count',
+        '5',
+        '--prior-max-activity-at',
+        priorMax,
+        '--apply',
+      ]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        new RegExp(`stored prior boundary is for HEAD ${otherHead}`),
+      );
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.operationLocal.decision, 'refuse');
+      assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
+    }
     assert.deepEqual(ghPostCalls(argvLog), [], 'a refused watermark posts');
   } finally {
     restore();
