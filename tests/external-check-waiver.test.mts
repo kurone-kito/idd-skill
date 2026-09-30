@@ -15,6 +15,7 @@ import {
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
   collectValidWaiverComments,
+  createPrFirstCommitAtReader,
   deriveGhApiStatusFromError,
   findReusableWaiverComment,
   parseArgs,
@@ -2070,12 +2071,18 @@ function runHandoffLinkedIssueScenario({
   permission = 'admin',
   withHandoff = true,
   prNumber = 99,
+  resolutions = 1,
+  shareReader = false,
 }: {
   /** PR commit dates (first-commit candidates), or `fail` to make the read fail. */
   commits: string[] | 'fail';
   permission?: string;
   withHandoff?: boolean;
   prNumber?: number;
+  /** How many times to resolve the linked-issue candidates for the PR. */
+  resolutions?: number;
+  /** Pass one shared first-commit reader to every resolution. */
+  shareReader?: boolean;
 }) {
   const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-handoff-'));
   const logPath = join(dir, 'gh.log');
@@ -2154,19 +2161,28 @@ process.exit(1);
   Object.assign(process.env, env);
   const restore = stubExecutable('gh', stubGhScript);
   try {
-    const [candidate] = resolveLinkedIssueCandidates({
-      owner: 'acme',
-      repo: 'widgets',
-      rawConfig: {},
-      viewerLogin: 'kurone-kito',
-      baseRefName: 'main',
-      linkedIssues: [{ number: 11, url: 'https://example.test/11' }],
-      issueNumber: 0,
-      expectedClaimId: '',
-      headRefName: HANDOFF_BRANCH,
-      enforceBranchMatch: true,
-      prNumber,
-    });
+    const readPrFirstCommitAt = shareReader
+      ? createPrFirstCommitAtReader('acme', 'widgets', prNumber)
+      : undefined;
+    let candidate:
+      | ReturnType<typeof resolveLinkedIssueCandidates>[number]
+      | undefined;
+    for (let round = 0; round < resolutions; round += 1) {
+      [candidate] = resolveLinkedIssueCandidates({
+        owner: 'acme',
+        repo: 'widgets',
+        rawConfig: {},
+        viewerLogin: 'kurone-kito',
+        baseRefName: 'main',
+        linkedIssues: [{ number: 11, url: 'https://example.test/11' }],
+        issueNumber: 0,
+        expectedClaimId: '',
+        headRefName: HANDOFF_BRANCH,
+        enforceBranchMatch: true,
+        prNumber,
+        ...(readPrFirstCommitAt ? { readPrFirstCommitAt } : {}),
+      });
+    }
     const lines = readFileSync(logPath, 'utf8')
       .split('\n')
       .filter((line) => line.length > 0);
@@ -2232,6 +2248,24 @@ test('resolveLinkedIssueCandidates reads no PR commits unless a handoff marker i
 
   assert.equal(result.claimId, 'claim-old');
   assert.equal(result.commitReads, 0);
+});
+
+test('resolveLinkedIssueCandidates resolutions sharing a reader read the PR commits once (#3675)', () => {
+  const shared = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T04:10:00Z'],
+    resolutions: 2,
+    shareReader: true,
+  });
+  assert.equal(shared.claimId, 'claim-new');
+  assert.equal(shared.commitReads, 1);
+
+  // Without a shared reader each resolution still reads for itself.
+  const separate = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T04:10:00Z'],
+    resolutions: 2,
+  });
+  assert.equal(separate.claimId, 'claim-new');
+  assert.equal(separate.commitReads, 2);
 });
 
 test('resolveLinkedIssueCandidates accepts an issue-scoped handoff without a PR and reads no commits (#3675)', () => {
