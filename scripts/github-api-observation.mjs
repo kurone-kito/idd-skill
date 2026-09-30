@@ -669,11 +669,17 @@ export function readGithubApiTelemetryPolicy(configText) {
  * instead of building observations that would be dropped.
  */
 export function telemetryIsEnabled() {
-  const policy = readGithubApiTelemetryPolicy();
-  return (
-    policy.enabled === true &&
-    resolveGithubApiTelemetryPath(policy.path) !== null
-  );
+  try {
+    const policy = readGithubApiTelemetryPolicy();
+    return (
+      policy.enabled === true &&
+      resolveGithubApiTelemetryPath(policy.path) !== null
+    );
+  } catch {
+    // Resolving the path can fail (no home directory); the gate must not
+    // throw out of a wrapper, so telemetry stays off.
+    return false;
+  }
 }
 /**
  * Record when telemetry is enabled. IO and parse failures are swallowed
