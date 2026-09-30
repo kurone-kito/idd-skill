@@ -141,21 +141,27 @@ not a live forced-handoff claim. Apply this only when all of these hold:
 
 The recommended order (it differed between the sessions that hit the stop;
 treat it as recommended, not observed): adopt the marker's agent-id and
-claim-id; record the claim identity against `W`; post this session's own
-activation nonce, wait, and confirm the winner; run the four-flag routing
-call once and read `fresh_claim_gate.verdict` and `winning_claim_id`; check
-the lock holder; take the lock over; re-run routing. Run every
+claim-id; check the lock holder; record the claim identity against `W`; post
+this session's own activation nonce, wait, and confirm the winner; run the
+four-flag routing call once and read `fresh_claim_gate.verdict` and
+`winning_claim_id`; check the lock holder again; take the lock over; re-run
+routing. Run every
 `claim-lock` call with `W` as the current directory and with `--worktree W`
 (every mode accepts it, and the cwd rule in `docs/idd-helper-scripts.md`
 applies), through the profile-selected claim-lock command:
 
-1. `--record-tokens --worktree W --agent-id <new_agent_id> --claim-id
-   <new_claim_id> --nonce <nonce>`. The target is `W`, not the primary
-   checkout that `idd-claim.instructions.md` names for a fresh claim:
-   recording in the primary lets the takeover succeed while routing still
-   returns `owner_evidence_required` (preventive; no observed incident yet).
+1. `--check --worktree W` and require the holder condition above (the
+   holder is `old_claim_id`, this session's own claim-id and agent-id, or
+   no lock exists); only then `--record-tokens --worktree W --agent-id
+   <new_agent_id> --claim-id <new_claim_id> --nonce <nonce>`. That call
+   overwrites the record keyed by the claim-id without a holder check, so
+   run before the check it would replace another session's token record.
+   The target is `W`, not the primary checkout that
+   `idd-claim.instructions.md` names for a fresh claim: recording in the
+   primary lets the takeover succeed while routing still returns
+   `owner_evidence_required` (preventive; no observed incident yet).
 2. Post the nonce, wait, and confirm the winner, then run the routing call.
-3. `--check --worktree W`, then `--acquire --takeover --worktree W
+3. `--check --worktree W` again, then `--acquire --takeover --worktree W
    --agent-id <new_agent_id> --claim-id <new_claim_id>`; confirm the output's
    `holder.claimId` equals `old_claim_id`. A displaced predecessor that is
    somehow still running is displaced by definition.
