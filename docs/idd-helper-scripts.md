@@ -1628,7 +1628,8 @@ govern `ghApiJson` reads that opt in.
 `ghApiJson` consults the cache only when its `readCache` option is set,
 the policy is enabled, and `classification` is `read`. `write`,
 `graphql-mutation`, `ambiguous-write`, and `authority` always call
-GitHub. Modes are `hint`, `conditional`, and `strict-fresh`. Hint reuse
+GitHub, and so does a read whose `extraArgs` name a non-GET `--method`
+or `-X`. Modes are `hint`, `conditional`, and `strict-fresh`. Hint reuse
 stops at `maxAge`. Conditional mode sends `If-None-Match` only with a
 complete trusted base; otherwise it performs one real fetch. A second
 304, still without that base, throws instead of being stored.
@@ -1653,7 +1654,9 @@ partitioned by API host, a hash of the credential context, repository,
 request shape (including the request body), schema version, and a hash
 of derived inputs. The host is `GH_HOST`, otherwise the host from
 `GITHUB_SERVER_URL`, otherwise the single host from `gh auth status`.
-Several configured hosts and no `GH_HOST` skip the cache. For
+A process remembers that single host, and asks `gh` again after a
+failed, empty, or ambiguous answer; the credential is read on every
+call. Several configured hosts and no `GH_HOST` skip the cache. For
 `github.com`, `github.localhost`, and a `ghe.com` subdomain, the
 credential is `GH_TOKEN` or `GITHUB_TOKEN` when set. For a GitHub
 Enterprise Server host it is `GH_ENTERPRISE_TOKEN` or
@@ -1667,6 +1670,32 @@ neither stored nor logged. Nothing promises that the cache is shared across
 computers. Local policy and permission decisions are not cached. The
 single-flight lease outlives that call's `gh` timeout, and a process
 removes only the lease it acquired.
+
+Eviction runs on every cache use without reading every entry. A full
+sweep parses each stored entry, drops the corrupt, wrong-version,
+loose-mode, oversized, and expired ones and the temp files of exited
+writers, and then drops the oldest beyond `maxBytes`. It runs after a
+cache use when no usable record of the last sweep exists, when `maxBytes`
+or `retention` is lower than at the last sweep, or when a fixed `PT10M`
+(or `retention`, when that is shorter) has passed since it. The time and
+bounds of the last sweep are kept in `sweep.json` in the cache root,
+which the cache adopts only beside its own marker; a record that is
+missing, malformed, loose, or dated in the future counts as no sweep
+yet. A crash can leave a temp file of that record behind, a few bytes
+that are never cleaned up. The check runs after the read, whether or not
+the response could be stored (an error, a throttle, an oversized body, or
+a thrown failure), and costs one small read of that record: a hit reads
+only the entry it serves. After each write, a cheap pass reads no entry
+either: it removes the temp files of exited writers, totals the entry
+sizes with `lstat`, and starts a full sweep only when the total exceeds
+`maxBytes`. Once a cache use happens, an expired entry is therefore
+removed within one interval, and it is never served after `retention`. A
+record that cannot be written or read skips the sweep instead of
+repeating it on every use. A sweep that only lowered bounds triggered
+records the lower of each bound, so two policies that share one
+directory settle instead of triggering each other's sweep; any other
+sweep records the current bounds (the `kurone-kito/idd-skill#3613`
+review, issue `kurone-kito/idd-skill#3627`).
 
 ### Discover hint cache
 
@@ -5503,14 +5532,18 @@ reflexively as any other CLI option.
   Anything else — a substantive text change, a deleted or `null`
   revision, an incomplete `userContentEdits` page (`totalCount` above
   what was fetched), a non-bot editor, or a failed fetch — keeps
-  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch this
-  needs runs ONLY in the two merge-gate collectors —
-  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's own
-  required-check collector — and only for advisory-bot thread comments
-  whose `lastEditedAt` postdates their thread's latest IDD disposition;
-  every other consumer (`review-activity-snapshot.mjs`, the merged-PR
-  feedback sweep, `audit-pr-cleanup.mjs`) never fetches it, so an edited
-  comment keeps `updatedAt` dating there, unchanged.
+  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch
+  this needs runs in the two merge-gate collectors —
+  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's
+  own required-check collector — and in `review-activity-snapshot.mjs`
+  (so the one-command watermark path reports the same disposition
+  evidence as the merge gate, kurone-kito/idd-skill#3655); it covers
+  only advisory-bot thread comments whose `lastEditedAt` postdates
+  their thread's latest IDD disposition, in one batched call when
+  there is at least one such comment and none otherwise. Every other
+  consumer (the merged-PR feedback sweep, `audit-pr-cleanup.mjs`)
+  never fetches it, so an edited comment keeps `updatedAt` dating
+  there, unchanged.
   `missingThreads[].inPlaceEditOnly` / `soleCauseInPlaceEditOnly` stay a
   separate, coarser, revision-content-blind heuristic
   (`classifyThreadAckOnlyPostDisposition`), unaffected by this dating

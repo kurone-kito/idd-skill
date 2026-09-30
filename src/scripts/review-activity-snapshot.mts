@@ -32,6 +32,7 @@ import type {
   ProviderPort,
   ProviderReviewThreadWithComments,
 } from './provider-port.mts';
+import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mts';
 
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
 interface GhAuthorPayload {
@@ -114,6 +115,7 @@ export type ReviewActivityCollectors = Pick<
   | 'listReviews'
   | 'listWorkItemComments'
   | 'listChangeRequestReviewThreadsWithComments'
+  | 'getReviewThreadCommentUserContentEdits'
 >;
 
 /**
@@ -163,7 +165,19 @@ export function collectReviewActivitySnapshot(input: {
     input.prNumber,
   );
   const normalizedComments = comments.map(normalizeComment);
-  const normalizedThreads = threads.map(normalizeThread);
+  // #3655: the same bounded second pass the merge gate runs (#3269), so a
+  // cosmetic in-place edit of an advisory-bot thread comment is dated by
+  // content activity here too and both collectors report the same
+  // `dispositionEvidence`. The disposition-author logins are the trusted set
+  // this collector hands the summarizers below.
+  const normalizedThreads = enrichThreadsWithBotEditHistories(
+    input.port,
+    threads.map(normalizeThread),
+    {
+      dispositionAuthorLogins: activityTrustedMarkerLogins,
+      advisoryBotLogins,
+    },
+  );
   const summary = buildActivitySnapshotSummary(
     {
       comments: normalizedComments,
@@ -399,6 +413,8 @@ export function normalizeThread(thread: ProviderReviewThreadWithComments) {
     comments: {
       pageInfo: { hasNextPage: false },
       nodes: thread.comments.map((comment) => ({
+        // #3655: the bounded edit-history pass names candidates by id.
+        id: comment.id,
         author: { login: comment.authorLogin },
         body: comment.body,
         createdAt: comment.createdAt,
