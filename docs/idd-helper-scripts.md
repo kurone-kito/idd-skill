@@ -1674,17 +1674,19 @@ speed-up, never a gate.
   credential context, and a generation token. Any difference is a miss, so a
   trust, approval, label, floor, or claim-timing change never reuses an old
   hint. Repository and host resolve without a network call: an explicit
-  `--owner`/`--repo`, else the `origin` remote (compared case-insensitively);
-  the host from `GH_HOST`, then `GITHUB_SERVER_URL`, then the remote (never
-  `gh auth status`); the credential from the read cache's local lookup. An
-  unidentified caller bypasses the cache and, unless a cache flag was
-  passed, reports nothing (`cache.mode` `bypass` appears only with a flag).
-  So does a half-given identity (`--owner` without `--repo`, or the
-  reverse): the helper fills the missing half from `gh repo view`, which the
-  hint layer never calls, so it could not name what was enumerated.
-  A clone whose `origin` differs from `gh`'s default repository (for example
-  a fork) keys hints by `origin`; pass the same `--owner`/`--repo` to every
-  helper there so hints and invalidation agree.
+  `--owner`/`--repo` (a complete pair needs no `origin`), else the `origin`
+  remote (compared case-insensitively); the host from `GH_HOST`, then
+  `GITHUB_SERVER_URL`, then the remote, then `github.com` for a complete
+  explicit pair (never `gh auth status`; an unauthenticated guess fails the
+  credential lookup and bypasses the cache); the credential from the read
+  cache's local lookup. An unidentified caller bypasses the cache and,
+  unless a cache flag was passed, reports nothing (`cache.mode` `bypass`
+  appears only with a flag). So does a half-given identity (`--owner`
+  without `--repo`, or the reverse): the helper fills the missing half from
+  `gh repo view`, which the hint layer never calls, so it could not name
+  what was enumerated. A clone whose `origin` differs from `gh`'s default
+  repository (for example a fork) keys hints by `origin`; pass the same
+  `--owner`/`--repo` to every helper there so hints and invalidation agree.
 - **Controls.** `--no-cache` computes live, reads and stores nothing, and
   reports `cache.mode` `off`. `--refresh-cache` recomputes, stores the
   result, and reports `refresh`. `--purge-cache` removes every cached body
@@ -1735,10 +1737,12 @@ speed-up, never a gate.
   recompute rather than a herd.
   Unlike a single request, a Discover enumeration can run for a long time,
   so a waiter polls a live leader for up to two minutes and does not take
-  the lease from a live process (a lease older than ten minutes is treated
-  as stale in case a process id was reused); a dead leader is detected
-  within one poll. An incomplete result is not stored, so its waiters then
-  compute for themselves.
+  the lease from a live process. A live leader renews its lease while it
+  computes, so an enumeration longer than the ten-minute stale threshold
+  keeps it; a lease that stops being renewed for that long is stale (for
+  example a crashed leader whose process id was reused). A dead leader is
+  detected within one poll. An incomplete result is not stored, so its
+  waiters then compute for themselves.
 - **Scope note.** The GitHub adapter's own requests are not individually
   cached; the hint sits above them, so a warm run skips the adapter
   entirely. Hints are keyed by worktree, so sessions in different worktrees

@@ -397,6 +397,11 @@ export interface RoadmapGraphReport {
     unresolvedReferenceCount: number;
     maxDepth: number;
   };
+  /**
+   * Additive hint-cache provenance (kurone-kito/idd-skill#3588); see
+   * {@link RoadmapGraphUnionReport.cache}. Emitted for `--issue` runs too.
+   */
+  cache?: DiscoverCacheMeta;
 }
 
 /** One ranked open execution leaf in the cross-roadmap union report. */

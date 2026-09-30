@@ -863,6 +863,33 @@ function releaseLease(ctx) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
 }
+/**
+ * Refresh the age of the lease this context holds, so a live leader that
+ * computes for longer than the stale threshold is not mistaken for a dead one.
+ * Best effort: a failed renewal only lets the lease age out as before.
+ */
+function renewLease(ctx) {
+  const held = ctx.heldLease;
+  if (!held) return;
+  try {
+    const current = readLease(ctx);
+    if (current === null || current === 'stale') return;
+    if (!leaseMatches(current, held)) return;
+    const createdAt = ctx.now();
+    ctx.storage.writeAtomic(
+      leasePath(ctx),
+      JSON.stringify({
+        pid: held.pid,
+        createdAt,
+        mode: ctx.mode,
+        ...(held.token ? { token: held.token } : {}),
+      }),
+    );
+    ctx.heldLease = { ...held, createdAt };
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+  }
+}
 function waitForLeader(ctx) {
   const started = Date.now();
   while (Date.now() - started < ctx.leaseTtlMs) {
@@ -1147,7 +1174,11 @@ export function readThroughGithubApiCache(input) {
 }
 /** Longest an async waiter polls a live leader before computing itself. */
 const DEFAULT_ASYNC_MAX_WAIT_MS = 120_000;
-/** Hard age past which even a live-looking async lease is treated as stale. */
+/**
+ * Age past which a lease that was not renewed is treated as stale even if its
+ * pid looks alive (a crashed leader whose pid was reused). A live leader
+ * renews its lease while it computes, so a long enumeration keeps it.
+ */
 const DEFAULT_ASYNC_LEASE_TTL_MS = 600_000;
 function sleepAsync(ms) {
   return new Promise((done) => setTimeout(done, ms));
@@ -1194,25 +1225,32 @@ async function waitForLeaderAsync(ctx, maxWaitMs, sleep) {
     await sleep(POLL_MS);
   }
 }
-async function coalesceAsync(ctx, fetch, sleep, maxWaitMs) {
+function defaultLeaseHeartbeat(ctx) {
+  return (renew) => {
+    const timer = setInterval(
+      renew,
+      Math.max(1_000, Math.floor(ctx.leaseTtlMs / 4)),
+    );
+    timer.unref?.();
+    return () => clearInterval(timer);
+  };
+}
+async function leadAsync(ctx, fetch, startHeartbeat) {
+  const stopHeartbeat = startHeartbeat(() => renewLease(ctx));
+  try {
+    return await leaderFetchAsync(ctx, fetch);
+  } finally {
+    stopHeartbeat();
+    releaseLease(ctx);
+  }
+}
+async function coalesceAsync(ctx, fetch, sleep, maxWaitMs, startHeartbeat) {
   const fresh = freshRecord(ctx);
   if (fresh) return hitResult(fresh, ctx.entryId);
-  if (tryAcquire(ctx)) {
-    try {
-      return await leaderFetchAsync(ctx, fetch);
-    } finally {
-      releaseLease(ctx);
-    }
-  }
+  if (tryAcquire(ctx)) return leadAsync(ctx, fetch, startHeartbeat);
   const waited = await waitForLeaderAsync(ctx, maxWaitMs, sleep);
   if (waited) return { ...hitResult(waited, ctx.entryId), coalesced: true };
-  if (tryAcquire(ctx)) {
-    try {
-      return await leaderFetchAsync(ctx, fetch);
-    } finally {
-      releaseLease(ctx);
-    }
-  }
+  if (tryAcquire(ctx)) return leadAsync(ctx, fetch, startHeartbeat);
   return liveResultAsync(fetch, 'degraded', ctx.entryId);
 }
 async function strictFreshAsync(ctx, fetch) {
@@ -1241,7 +1279,7 @@ async function strictFreshAsync(ctx, fetch) {
  * failures propagate after any lease is released and are never stored.
  */
 export async function readThroughGithubApiCacheAsync(input) {
-  const { fetch, sleep, leaseMaxWaitMs, ...rest } = input;
+  const { fetch, sleep, leaseMaxWaitMs, startLeaseHeartbeat, ...rest } = input;
   const prepared = prepareRead(
     {
       ...rest,
@@ -1272,6 +1310,7 @@ export async function readThroughGithubApiCacheAsync(input) {
         leaseMaxWaitMs ?? DEFAULT_ASYNC_MAX_WAIT_MS,
         DEFAULT_ASYNC_MAX_WAIT_MS,
       ),
+      startLeaseHeartbeat ?? defaultLeaseHeartbeat(ctx),
     );
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;

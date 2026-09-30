@@ -234,13 +234,20 @@ function resolveConfig(
   const cwd = deps.cwd ?? process.cwd();
   const policy = deps.policy ?? loadReadCachePolicy(undefined);
   if (!policy.enabled) return null;
-  const remoteUrl = (deps.originUrl ?? (() => defaultOriginUrl(cwd)))();
+  // A complete explicit pair names the repository without `origin`, so the
+  // remote is probed only when it is still needed: for the repository itself,
+  // or for a host that neither `GH_HOST` nor `GITHUB_SERVER_URL` names.
+  const explicit = Boolean(request.owner && request.repo);
+  const envHost = env.GH_HOST?.trim().toLowerCase() || serverUrlHost(env) || '';
+  const remoteUrl =
+    explicit && envHost !== ''
+      ? undefined
+      : (deps.originUrl ?? (() => defaultOriginUrl(cwd)))();
   const remote = remoteUrl ? parseRemoteUrl(remoteUrl) : null;
-  const host =
-    env.GH_HOST?.trim().toLowerCase() ||
-    serverUrlHost(env) ||
-    remote?.host ||
-    '';
+  // With an explicit pair and no host signal at all, `gh`'s default host is
+  // `github.com`; an unauthenticated one fails the credential lookup below
+  // and bypasses the cache, so a wrong guess never keys a hint.
+  const host = envHost || remote?.host || (explicit ? 'github.com' : '');
   if (host === '') return null;
   // GitHub owner and repository names are case-insensitive, so a mutation
   // helper's resolved name and Discover's origin-derived name must agree.

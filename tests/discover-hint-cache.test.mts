@@ -841,3 +841,65 @@ test('an invalidation by one credential drops the hints of every credential', as
     rmSync(fx.root, { recursive: true, force: true });
   }
 });
+
+test('an explicit complete pair is identified without probing origin when a host is named', async () => {
+  const fx = fixture();
+  let probes = 0;
+  const deps: DiscoverHintDeps = {
+    ...fx.deps,
+    env: { GH_HOST: 'ghe.example.com' },
+    originUrl: () => {
+      probes += 1;
+      return 'https://github.com/o/r.git';
+    },
+  };
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y', deps }),
+    );
+    const warm = await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y', deps }),
+    );
+    assert.equal(warm.cache?.source, 'hint');
+    assert.equal(calls(), 1);
+    assert.equal(probes, 0);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('an explicit pair with no origin and no host signal falls back to github.com', async () => {
+  const fx = fixture({ originUrl: () => undefined });
+  const hosts: string[] = [];
+  const deps: DiscoverHintDeps = {
+    ...fx.deps,
+    credential: (host) => {
+      hosts.push(host);
+      return host === 'github.com' ? 'github-token' : undefined;
+    },
+  };
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y', deps }),
+    );
+    const warm = await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y', deps }),
+    );
+    assert.equal(warm.cache?.source, 'hint');
+    assert.equal(calls(), 1);
+    assert.ok(hosts.every((host) => host === 'github.com'));
+    // Without an unauthenticated default host the lookup fails and bypasses.
+    const unauthenticated: DiscoverHintDeps = {
+      ...fx.deps,
+      credential: () => undefined,
+    };
+    const bypassed = await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y', deps: unauthenticated }),
+    );
+    assert.equal('cache' in bypassed, false);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});

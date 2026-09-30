@@ -2168,3 +2168,70 @@ test('an async hint ages from the start of its fetch, the sync read from its sto
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
+
+/**
+ * A leader whose fetch outlives the stale threshold, and a second caller that
+ * arrives once that threshold has passed since the lease was created. The
+ * clock, the poll sleep, and the heartbeat are all injected, so the timeline
+ * is exact.
+ */
+async function longLeaderScenario(renew: boolean) {
+  const paths = tempRoot();
+  const clock = { now: 1_800_000_000_000 };
+  const now = () => clock.now;
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let heartbeat: (() => void) | null = null;
+  let stopped = 0;
+  try {
+    const leader = readThroughAsync(paths, () => gate.promise, {
+      now,
+      leaseTtlMs: 1_000,
+      startLeaseHeartbeat: (fn) => {
+        heartbeat = fn;
+        return () => {
+          stopped += 1;
+        };
+      },
+    });
+    clock.now += 800;
+    if (renew) (heartbeat as (() => void) | null)?.();
+    clock.now += 800;
+    let waiterCalls = 0;
+    const waiter = await readThroughAsync(
+      paths,
+      async () => {
+        waiterCalls += 1;
+        return { status: 200, body: { report: 'waiter' } };
+      },
+      {
+        now,
+        leaseTtlMs: 1_000,
+        leaseMaxWaitMs: 100,
+        sleep: async (ms) => {
+          clock.now += ms;
+        },
+        startLeaseHeartbeat: () => () => {},
+      },
+    );
+    const leaseStillHeld = leaseNames(paths.cacheDir).length === 1;
+    gate.resolve({ status: 200, body: { report: 'leader' } });
+    await leader;
+    return { waiter, waiterCalls, leaseStillHeld, stopped };
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+}
+
+test('a live async leader renews its lease and is not stolen from past the stale threshold', async () => {
+  const kept = await longLeaderScenario(true);
+  assert.equal(kept.waiter.cache, 'degraded');
+  assert.equal(kept.waiterCalls, 1);
+  assert.equal(kept.leaseStillHeld, true);
+  assert.equal(kept.stopped, 1);
+});
+
+test('without a heartbeat the same async lease ages out and is taken over', async () => {
+  const stolen = await longLeaderScenario(false);
+  assert.equal(stolen.waiter.cache, 'miss');
+  assert.equal(stolen.waiterCalls, 1);
+});
