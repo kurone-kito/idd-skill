@@ -900,6 +900,10 @@ if (mode === 'plain-ok') {
   )});
   process.stderr.write('gh: Could not resolve\\n');
   process.exit(1);
+} else if (mode === 'rate-envelope') {
+  envelope(403, 'x-ratelimit-remaining: 0\\nx-ratelimit-resource: core\\nx-ratelimit-reset: 1700000200', '{"message":"API rate limit exceeded"}');
+  process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n');
+  process.exit(1);
 } else if (mode === 'graphql-no-cost') {
   process.stdout.write(${JSON.stringify(
     JSON.stringify({
@@ -1060,6 +1064,17 @@ if (mode === 'plain-ok') {
       ),
       true,
     );
+    // A non-tolerated REST failure keeps its stdout envelope, so the rate
+    // limit headers printed there are captured next to the stderr status.
+    setMode('rate-envelope');
+    assert.throws(() => ghApiJson(apiPath));
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.status, 403);
+    assert.equal(last.remaining, 0);
+    assert.equal(last.resource, 'core');
+    assert.equal(last.reset, 1700000200);
+    assert.equal(last.classification, 'primary-exhaustion');
     const linesBeforeDisabled = readRecords().length;
 
     setGithubApiTelemetryPolicyForTests({
