@@ -1111,7 +1111,8 @@ request or is no longer needed. Any author counts, because this proves the
 pull request names the follow-up, not that the choice was right. A trusted
 IDD-operational comment is the exception: the live status digest lists the
 open blockers, this gate's own follow-up number included, so counting it would
-let the digest entry for the blocker clear the blocker.
+let the digest entry for the blocker clear the blocker (preventive; no
+observed incident yet).
 
 Rejected alternatives:
 
