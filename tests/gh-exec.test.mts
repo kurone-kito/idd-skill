@@ -1344,20 +1344,23 @@ test('ghApiJson (paginated) parses rows whose newlines fall on read boundaries a
   }
 });
 
-test('ghApiJson (paginated) with no timeout fails instead of hanging when the capture worker never starts (#3597)', () => {
-  // timeout 0 means "no timeout", so the parent's wait for completion has
-  // no end; a worker that dies before arming its exit hook must not turn
-  // that into an unbounded hang.
+test('ghApiJson (paginated) fails instead of hanging when the capture worker never starts (#3597)', () => {
+  // The parent blocks on the worker's flags, so a worker that dies before
+  // arming its exit hook must not leave the call waiting: forever for no
+  // timeout (0, or one too large to be finite), and for the whole timeout
+  // otherwise.
   withCaptureFault('worker-init-fail', () => {
-    assert.throws(
-      () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 0 }),
-      (error: unknown) => {
-        const message = error instanceof Error ? error.message : '';
-        assert.match(message, /capture worker did not start/);
-        assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
-        return true;
-      },
-    );
+    for (const timeout of [0, 30_000, Number.POSITIVE_INFINITY]) {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /capture worker did not start/);
+          assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
+          return true;
+        },
+      );
+    }
   });
 });
 

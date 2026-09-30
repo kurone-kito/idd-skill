@@ -772,11 +772,12 @@ function paginatedCaptureGraceMs() {
   if (
     fault === 'proc-unreadable' ||
     fault === 'proc-not-gh' ||
-    fault === 'proc-gh-path' ||
-    fault === 'worker-init-fail'
+    fault === 'proc-gh-path'
   ) {
     return 2_000;
   }
+  // No worker will ever start under this fault, so a short window is enough.
+  if (fault === 'worker-init-fail') return 1_000;
   return PAGINATED_CAPTURE_GRACE_MS;
 }
 function writeAllSync(fd, buffer) {
@@ -1431,6 +1432,21 @@ function readPaginatedGhApi(args, options) {
     // dispatched while Atomics.wait is blocking it. The listener only
     // keeps that event from crashing the parent after the wait returns.
     worker.on('error', () => {});
+    // Bound the start-up first, whatever the timeout. A worker that fails
+    // while starting up never reaches its exit hook, and this blocked
+    // thread cannot see its 'error' event, so without this a call with no
+    // timeout (0, or a timeout too large to be finite) would wait forever
+    // and any other would wait out its whole timeout (Copilot review, PR
+    // #3605). A worker that starts normally passes this in milliseconds.
+    Atomics.wait(view, CAPTURE_SLOT_STARTED, 0, paginatedCaptureGraceMs());
+    if (
+      Atomics.load(view, CAPTURE_SLOT_STARTED) === 0 &&
+      Atomics.load(view, CAPTURE_SLOT_DONE) === 0
+    ) {
+      throw tagGhCommandError(
+        new Error('paginated gh capture worker did not start'),
+      );
+    }
     if (options.timeout > 0) {
       Atomics.wait(
         view,
@@ -1439,19 +1455,6 @@ function readPaginatedGhApi(args, options) {
         options.timeout + paginatedCaptureGraceMs(),
       );
     } else {
-      // No timeout was requested, so the wait for completion below has no
-      // end. A worker that fails while starting up never reaches its exit
-      // hook, and this blocked thread cannot see its 'error' event, so
-      // bound that one phase (Copilot review, PR #3605).
-      Atomics.wait(view, CAPTURE_SLOT_STARTED, 0, paginatedCaptureGraceMs());
-      if (
-        Atomics.load(view, CAPTURE_SLOT_STARTED) === 0 &&
-        Atomics.load(view, CAPTURE_SLOT_DONE) === 0
-      ) {
-        throw tagGhCommandError(
-          new Error('paginated gh capture worker did not start'),
-        );
-      }
       Atomics.wait(view, CAPTURE_SLOT_DONE, 0);
     }
     if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0) {
