@@ -492,7 +492,8 @@ holds anything other than these records is not modified and nothing is
 recorded. A configured `path` must be absolute or start with `~/`, which
 is the home directory, followed by a file name; any other non-blank value
 keeps telemetry off, so a relative path cannot put the file into the
-working tree. A blank `path` counts as unset and uses the default file.
+working tree. A blank `path`, an empty string or only whitespace, counts
+as unset and uses the default file, and the policy schema accepts it.
 Writers take a sibling `<path>.lock` file for the moment of a write, and no
 writer removes another's lock. A writer killed mid-write can leave that
 file, and a temporary `.tmp` file, behind. While an orphaned lock exists,

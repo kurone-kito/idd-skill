@@ -873,6 +873,24 @@ test('githubApi telemetry defaults off and trims an enabled path', () => {
   assert.equal(ignored.githubApi.telemetry.path, null);
 });
 
+// #3626: the empty string and a whitespace-only path both count as unset (the
+// schema accepts them and the default file is used), and an enabled policy
+// keeps its other settings.
+for (const [label, blank] of [
+  ['an empty string', ''],
+  ['a whitespace-only string', '   '],
+  ['a tab and newline', '\t\n'],
+] as const) {
+  test(`normalizePolicyConfig treats ${label} as an unset telemetry path`, () => {
+    const policy = normalizePolicyConfig({
+      githubApi: { telemetry: { enabled: true, maxRecords: 7, path: blank } },
+    });
+    assert.equal(policy.githubApi.telemetry.enabled, true);
+    assert.equal(policy.githubApi.telemetry.maxRecords, 7);
+    assert.equal(policy.githubApi.telemetry.path, null);
+  });
+}
+
 test('a configured telemetry path is expanded or rejected', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-path-'));
   const relative = 'idd-relative-telemetry-3585.jsonl';
