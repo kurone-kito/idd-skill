@@ -783,6 +783,11 @@ interface PaginatedCaptureWorkerData {
 interface PaginatedCaptureStatus {
   limitExceeded: boolean;
   timedOut: boolean;
+  /**
+   * The worker exited without publishing its own status, so `gh` may still
+   * be running and the parent has to stop it.
+   */
+  workerLost: boolean;
   observedBytes: number;
   status: number | null;
   signal: string | null;
@@ -803,6 +808,7 @@ type PaginatedCaptureTestFault =
   | 'stdout'
   | 'stderr'
   | 'stdin'
+  | 'worker-crash'
   | 'proc-unreadable'
   | 'proc-not-gh'
   | 'proc-gh-path';
@@ -813,6 +819,7 @@ function paginatedCaptureTestFault(): PaginatedCaptureTestFault | null {
     value === 'stdout' ||
     value === 'stderr' ||
     value === 'stdin' ||
+    value === 'worker-crash' ||
     value === 'proc-unreadable' ||
     value === 'proc-not-gh' ||
     value === 'proc-gh-path'
@@ -882,11 +889,12 @@ function readPaginatedCaptureWorkerData(
 
 function publishPaginatedCapture(
   data: PaginatedCaptureWorkerData,
-  report: PaginatedCaptureStatus & { stderr: string },
+  report: Omit<PaginatedCaptureStatus, 'workerLost'> & { stderr: string },
 ): void {
   const payload: PaginatedCaptureStatus = {
     limitExceeded: report.limitExceeded,
     timedOut: report.timedOut,
+    workerLost: false,
     observedBytes: report.observedBytes,
     status: report.status,
     signal: report.signal,
@@ -905,6 +913,7 @@ function publishPaginatedCapture(
         JSON.stringify({
           limitExceeded: false,
           timedOut: false,
+          workerLost: false,
           observedBytes: report.observedBytes,
           status: null,
           signal: null,
@@ -940,6 +949,7 @@ function armPaginatedCaptureExit(data: PaginatedCaptureWorkerData): void {
           JSON.stringify({
             limitExceeded: false,
             timedOut: false,
+            workerLost: true,
             observedBytes: 0,
             status: null,
             signal: null,
@@ -976,7 +986,10 @@ function paginatedGhCmdline(pid: number): string | null {
   if (fault === 'proc-not-gh') {
     return '/usr/local/bin/ghost-daemon\0github\0ghq';
   }
-  if (fault === 'proc-gh-path') return '/usr/bin/gh\0api';
+  // A worker-crash test stubs `gh` with a script whose real argv0 is node.
+  if (fault === 'proc-gh-path' || fault === 'worker-crash') {
+    return '/usr/bin/gh\0api';
+  }
   try {
     return readFileSync(`/proc/${pid}/cmdline`).toString('utf8');
   } catch {
@@ -998,22 +1011,75 @@ function linuxCmdlineArgv0IsGh(cmdline: string): boolean {
 }
 
 /**
+ * Signal `pid` only when it is this capture's `gh`. On Linux that means
+ * argv0's basename is exactly `gh`; other platforms, and a Linux host
+ * whose `/proc` read fails, still signal. Checked again before each
+ * signal so a pid recycled during the escalation wait is never hit.
+ */
+function signalPaginatedGhChild(
+  pid: number,
+  signal: 'SIGTERM' | 'SIGKILL',
+): boolean {
+  if (process.platform === 'linux') {
+    const cmdline = paginatedGhCmdline(pid);
+    if (cmdline !== null && !linuxCmdlineArgv0IsGh(cmdline)) return false;
+  }
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch {
+    // The child already exited.
+    return false;
+  }
+}
+
+/**
  * Best-effort stop for a `gh` left behind when the capture worker never
- * reports. On Linux, signal only when argv0's basename is `gh`. Other
- * platforms, and a Linux host whose `/proc` read fails, still receive
- * SIGTERM.
+ * reports or is lost. Sends SIGTERM, waits up to
+ * {@link PAGINATED_KILL_ESCALATION_MS} for it to exit, then SIGKILL, so a
+ * `gh` that ignores SIGTERM cannot outlive a call that has already
+ * thrown. The worker's own SIGKILL escalation cannot run once the worker
+ * is terminated or gone (Copilot review, PR #3605). A `gh` that exited
+ * but was never reaped still answers `kill(pid, 0)`; on Linux that zombie
+ * is recognized from `/proc`, elsewhere the wait can run its full length.
+ * This is a failure path only.
  */
 function killPaginatedGhChild(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
-  if (process.platform === 'linux') {
-    const cmdline = paginatedGhCmdline(pid);
-    if (cmdline !== null && !linuxCmdlineArgv0IsGh(cmdline)) return;
+  if (!signalPaginatedGhChild(pid, 'SIGTERM')) return;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + PAGINATED_KILL_ESCALATION_MS;
+  while (Date.now() < deadline) {
+    if (!paginatedGhIsRunning(pid)) return;
+    Atomics.wait(pause, 0, 0, 25);
   }
+  signalPaginatedGhChild(pid, 'SIGKILL');
+}
+
+/**
+ * Whether `pid` is still a running process. `kill(pid, 0)` also succeeds
+ * for a zombie, and a `gh` whose capture worker is gone is never reaped,
+ * so on Linux a zombie or dead state counts as stopped.
+ */
+function paginatedGhIsRunning(pid: number): boolean {
   try {
-    process.kill(pid, 'SIGTERM');
+    process.kill(pid, 0);
   } catch {
-    // The child already exited.
+    return false;
   }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const state = stat.slice(
+        stat.lastIndexOf(')') + 2,
+        stat.lastIndexOf(')') + 3,
+      );
+      if (state === 'Z' || state === 'X') return false;
+    } catch {
+      // No readable /proc entry: keep the kill(pid, 0) answer.
+    }
+  }
+  return true;
 }
 
 function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
@@ -1137,6 +1203,17 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
     }
     killChild();
   };
+  // Test fault: kill the worker with an uncaught error once `gh` has
+  // produced output (so it is certainly running), which leaves the worker's
+  // exit hook to report a lost worker.
+  let crashed = false;
+  const armWorkerCrash = (): void => {
+    if (fault !== 'worker-crash' || crashed) return;
+    crashed = true;
+    setTimeout(() => {
+      throw new Error('paginated gh capture worker crash fault');
+    }, 0);
+  };
   const armStreamFault = (
     stream: { destroy: (error?: Error) => void } | null,
     token: 'stdout' | 'stderr' | 'stdin',
@@ -1161,6 +1238,7 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
       }
       writeAllSync(outFd, chunk);
       observedBytes = next;
+      armWorkerCrash();
     } catch (error) {
       spawnError = error instanceof Error ? error : new Error(String(error));
       killChild();
@@ -1258,6 +1336,7 @@ function readPaginatedCaptureStatus(filePath: string): PaginatedCaptureStatus {
   return {
     limitExceeded: record.limitExceeded === true,
     timedOut: record.timedOut === true,
+    workerLost: record.workerLost === true,
     observedBytes: record.observedBytes,
     status: typeof record.status === 'number' ? record.status : null,
     signal:
@@ -1401,6 +1480,7 @@ function readPaginatedGhApi(
   const flag = new SharedArrayBuffer(CAPTURE_FLAG_BYTES);
   const view = new Int32Array(flag);
   let worker: Worker | undefined;
+  let workerLost = false;
   try {
     try {
       worker = new Worker(new URL(import.meta.url), {
@@ -1446,7 +1526,12 @@ function readPaginatedGhApi(
     if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0) {
       throw paginatedTimeoutError('paginated gh capture timed out');
     }
+    // Until the status has been read, assume the worker was lost: an
+    // unreadable status (its exit hook could not write one) must not leave
+    // a running `gh` behind either.
+    workerLost = true;
     const capture = readPaginatedCaptureStatus(statusPath);
+    workerLost = capture.workerLost;
     const stderr = existsSync(errPath) ? readFileSync(errPath, 'utf8') : '';
     if (capture.limitExceeded) {
       throw new GhPaginatedResponseLimitError(
@@ -1502,7 +1587,9 @@ function readPaginatedGhApi(
     }
     return parsed.items;
   } finally {
-    if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0) {
+    // The done flag alone does not prove `gh` stopped: a worker that died
+    // before publishing sets it through its exit hook (`workerLost`).
+    if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0 || workerLost) {
       killPaginatedGhChild(Atomics.load(view, CAPTURE_SLOT_PID));
     }
     void worker?.terminate();

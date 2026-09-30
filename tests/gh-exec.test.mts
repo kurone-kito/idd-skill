@@ -1112,9 +1112,20 @@ setTimeout(() => process.exit(0), 30_000);
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+  // `kill(pid, 0)` also succeeds for a zombie: a gh whose capture worker
+  // is gone is killed but never reaped.
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const state = stat.slice(
+      stat.lastIndexOf(')') + 2,
+      stat.lastIndexOf(')') + 3,
+    );
+    return state !== 'Z' && state !== 'X';
+  } catch {
+    return true;
   }
 }
 
@@ -1129,15 +1140,32 @@ setTimeout(() => process.exit(0), 60_000);
 `);
 }
 
-function assertRecordedPidStopped(pidPath: string): void {
+/**
+ * The recorded gh must be gone. A parent that sends SIGKILL returns as
+ * soon as the signal is queued and the kernel tears the process down a
+ * moment later, so callers on that path poll for a short while; the worker
+ * paths wait for the `close` event and are stopped already.
+ */
+function assertRecordedPidStopped(pidPath: string, waitMs = 0): void {
   assert.equal(existsSync(pidPath), true);
   const pid = Number(readFileSync(pidPath, 'utf8'));
   assert.equal(Number.isInteger(pid) && pid > 0, true);
+  const slot = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + waitMs;
+  while (processIsAlive(pid) && Date.now() < deadline) {
+    Atomics.wait(slot, 0, 0, 25);
+  }
   assert.equal(processIsAlive(pid), false, `gh ${pid} outlived the capture`);
 }
 
 const SIGKILL_ESCALATION_SKIP = {
   skip: process.platform === 'win32',
+};
+
+// The parent-path tests need to see a killed, never-reaped gh as stopped.
+// That is only possible through `/proc`, so they run on Linux alone.
+const PARENT_STOP_SKIP = {
+  skip: process.platform !== 'linux',
 };
 
 test(
@@ -1224,6 +1252,68 @@ for (let i = 0; i < 10; i += 1) process.stdout.write(chunk);`,
         },
       );
       assertRecordedPidStopped(pidPath);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM when the parent backstop fires (#3597)',
+  PARENT_STOP_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(pidPath, '');
+    try {
+      // The proc fault leaves gh running, so the parent's stuck-worker
+      // backstop is the only thing that can stop it.
+      withCaptureFault('proc-unreadable', () => {
+        assert.throws(
+          () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : '';
+            assert.match(message, /paginated gh capture timed out/);
+            return true;
+          },
+        );
+      });
+      assertRecordedPidStopped(pidPath, 3_000);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM when the capture worker is lost (#3597)',
+  PARENT_STOP_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `process.stdout.write('{"id":1}\\n');`,
+    );
+    try {
+      // The worker dies from an uncaught error while gh runs; its exit
+      // hook then sets the done flag without a real result.
+      withCaptureFault('worker-crash', () => {
+        assert.throws(
+          () =>
+            ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : '';
+            assert.match(message, /worker exited before reporting status/);
+            return true;
+          },
+        );
+      });
+      assertRecordedPidStopped(pidPath, 3_000);
     } finally {
       stopRecordedPid(pidPath);
       restore();
