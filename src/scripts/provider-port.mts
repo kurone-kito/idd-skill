@@ -179,6 +179,18 @@ export interface ProviderChangeRequestState {
   mergeStateStatus: string;
 }
 
+/** A change request's terminal-state evidence (`state`, `mergedAt`,
+ * `headRefOid`) -- what `idd-merge-execute.mts` reads back after a failed
+ * merge command to tell "merged server-side" from "did not happen". */
+export interface ProviderChangeRequestOutcome {
+  /** The provider's state word, upper-cased (`OPEN`, `CLOSED`, `MERGED`). */
+  state: string;
+  /** ISO timestamp of the merge, or `null` when it has not been merged. */
+  mergedAt: string | null;
+  /** Head commit SHA, or `''` when the provider returned none. */
+  headRefOid: string;
+}
+
 export interface ProviderRequiredCheck {
   name: string;
   state: string;
@@ -1119,6 +1131,17 @@ export interface ProviderPort {
     repo: string,
     number: number,
   ): ProviderChangeRequestState | null;
+
+  /** change-requests, cross-repo. `pr view -R {owner}/{repo} --json
+   * state,mergedAt,headRefOid`, `null` on a 404 -- the post-failure
+   * read-back `idd-merge-execute.mts` makes after a failed merge command
+   * (#3681). Every other failure throws, like
+   * {@link ProviderPort.getChangeRequestAtRepo}. */
+  getChangeRequestOutcomeAtRepo(
+    owner: string,
+    repo: string,
+    number: number,
+  ): ProviderChangeRequestOutcome | null;
 
   /** change-requests, cross-repo, write. `pr merge -R {owner}/{repo}
    * --merge --match-head-commit {headSha}`. */
