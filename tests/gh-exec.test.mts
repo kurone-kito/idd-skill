@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -1020,20 +1019,13 @@ process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ i
 
 test('ghApiJson (paginated) does not inherit Worker-invalid execArgv (#3597)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
-  const stubDir = join(tempRoot, 'bin');
-  mkdirSync(stubDir);
-  const bodyPath = join(tempRoot, 'gh.body.js');
-  const stubPath = join(stubDir, 'gh');
   const runnerPath = join(tempRoot, 'runner.mts');
-  writeFileSync(
-    bodyPath,
+  // The runner is a separate process, so this run's own execArgv (here
+  // `--stack-trace-limit`, which Worker rejects) reaches ghApiJson; the
+  // child inherits the PATH that stubGh points at the stub.
+  const restore = stubGh(
     `process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ id: 3 })].join('\\n'));`,
   );
-  writeFileSync(
-    stubPath,
-    `#!/bin/sh\nexec "${process.execPath}" "${bodyPath}" "$@"\n`,
-  );
-  chmodSync(stubPath, 0o755);
   const modulePath = join(repoRoot(), 'src/scripts/gh-exec.mts');
   writeFileSync(
     runnerPath,
@@ -1048,14 +1040,12 @@ if (!Array.isArray(rows) || rows.length !== 3 || rows[2]?.id !== 3) {
   try {
     execFileSync(process.execPath, ['--stack-trace-limit=10', runnerPath], {
       cwd: repoRoot(),
-      env: {
-        ...process.env,
-        PATH: `${stubDir}:${process.env.PATH ?? ''}`,
-      },
+      env: process.env,
       encoding: 'utf8',
       timeout: 30_000,
     });
   } finally {
+    restore();
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
