@@ -2383,7 +2383,7 @@ test('--now moves stale for the claim annotation (#3675)', async () => {
   }
 });
 
-test('CLI: a malformed --now with --with-claim-state is a usage error before any gh call (#3675)', () => {
+test('CLI: a malformed or missing --now is a usage error before any gh call (#3675)', () => {
   // Every gh invocation fails loudly, so a pass proves the check ran before
   // the repository lookup or any read.
   const restore = stubExecutable(
@@ -2393,16 +2393,27 @@ process.exit(1);
 `,
   );
   try {
-    const result = spawnHelperBinWithEnvelope(
-      'idd-discover-orphan-filter.mjs',
-      ['--with-claim-state', '--now', 'Sep 27 2026'],
-    );
-    assert.equal(result.status, 1, JSON.stringify(result));
-    assert.match(result.stderr, /--now must be an ISO 8601 date-time/u);
-    assert.doesNotMatch(result.stderr, /unexpected gh invocation/u);
-    // The helper's usage-error shape, like an invalid --pr.
-    assert.equal(result.envelope?.kind, 'usage', JSON.stringify(result));
-    assert.equal(result.envelope?.exitCode, 1);
+    for (const [args, message] of [
+      [
+        ['--with-claim-state', '--now', 'Sep 27 2026'],
+        /--now must be an ISO 8601 date-time/u,
+      ],
+      // A flag in the value position is not swallowed as the clock.
+      [['--now', '--with-claim-state'], /missing value for argument: --now/u],
+      [['--with-claim-state', '--now'], /missing value for argument: --now/u],
+    ] as const) {
+      const result = spawnHelperBinWithEnvelope(
+        'idd-discover-orphan-filter.mjs',
+        args,
+      );
+      const label = `${args.join(' ')}: ${JSON.stringify(result)}`;
+      assert.equal(result.status, 1, label);
+      assert.match(result.stderr, message, label);
+      assert.doesNotMatch(result.stderr, /unexpected gh invocation/u, label);
+      // The helper's usage-error shape, like an invalid --pr.
+      assert.equal(result.envelope?.kind, 'usage', label);
+      assert.equal(result.envelope?.exitCode, 1, label);
+    }
   } finally {
     restore();
   }

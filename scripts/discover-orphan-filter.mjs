@@ -1235,7 +1235,15 @@ function parseArgs(rawArgv) {
       continue;
     }
     if (token === '--now') {
-      parsed.now = value ?? '';
+      // #3675: a missing value, or one that is really the next flag, is a
+      // usage error -- otherwise `--now --with-claim-state` would swallow that
+      // flag and silently run the annotation on the wall clock (or, without
+      // it, never annotate). An explicitly empty value still means not
+      // provided.
+      if (value === undefined || value.startsWith('--')) {
+        throw markCliUsageError(new Error('missing value for argument: --now'));
+      }
+      parsed.now = value;
       index += 1;
       continue;
     }
@@ -1402,7 +1410,8 @@ heartbeat; false otherwise, including whenever present is false. It is
 PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
 --now <ISO8601> (with --with-claim-state) sets the clock the annotation
 measures claim age against, for a reproducible run; it must be an ISO 8601
-date-time with a Z or numeric UTC offset, and anything else is a usage error.
+date-time with a Z or numeric UTC offset, and a missing or malformed value is a
+usage error.
 --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
 each activeClaim (true only when the active claim's claimId equals <id> and
 the current worktree's claim lock plus generated-tokens record confirm the
