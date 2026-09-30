@@ -1713,8 +1713,11 @@ Serial is the default.
 
 - A read waits for a slot, and for a cooldown, at most as long as its
   `admissionDeadlineMs` option (default `maxWait`, at most ten minutes).
-  An explicit `timeout` is the caller's whole budget: the wait may use at
-  most half of it and the spawn gets the remainder. Async callers wait on
+  An explicit `timeout` bounds the wait plus the spawn: the wait may use at
+  most half of it and the spawn gets the remainder. The one-time identity
+  lookup described above (local, at most ten seconds, once per process and
+  host, and skipped when a token variable is set) runs before that budget
+  starts and is not counted in it. Async callers wait on
   a timer, so a request already running in the same process keeps
   completing and releasing its slot. A synchronous caller whose every
   blocking slot is held only by this process's own async leases rides on
@@ -1779,11 +1782,11 @@ minutes, and restarting once the previous throttle is more than 30 minutes
 old. Alternating REST and GraphQL climbs the same ladder instead of restarting
 it. A throttle inside an active cooldown extends it without escalating.
 Concurrent recorders write separate files and the longest wins. The remaining
-time follows the operating system's uptime on Linux, where the event and the
-reader share a boot identity, and is bounded by the cooldown's own length
-elsewhere (another boot, another OS), so neither a wall-clock step nor a
-reboot stretches a cooldown. Only a failed request, or the GraphQL response
-above, records anything.
+time follows the operating system's uptime on Linux when the event and the
+reader share a boot identity. Elsewhere (another boot, another OS) it is the
+wall-clock time left, capped at the cooldown's own length, so a backward
+wall-clock step there can lengthen the wait, never beyond that cap. Only a
+failed request, or the GraphQL response above, records anything.
 
 `retry-after` and reset headers are visible only on `gh api --include`
 paths: a non-paginated `ghApiJson`, `ghApiJsonWithHeaders`, and the
