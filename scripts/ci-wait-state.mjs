@@ -700,6 +700,14 @@ export function ciWaitSummaryIsPreMergeCiPassing(summary) {
     presentRunConclusion,
   });
 }
+/** Project a CI-wait summary onto {@link RequiredCiHeadAgreement}. */
+export function requiredCiHeadAgreementFromSummary(summary) {
+  return {
+    headRefOid: summary.headRefOid.trim(),
+    requiredChecksPassing: ciWaitSummaryIsPreMergeCiPassing(summary),
+    latestPassingCompletedAt: latestPassingCompletedAt(summary),
+  };
+}
 /**
  * Latest completion among pass-equivalent checks, or `none`. Mirrors the
  * snapshot field `latestPassingCiCompletedAt` so a `--from-pr` watermark
