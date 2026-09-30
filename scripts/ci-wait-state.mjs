@@ -708,6 +708,12 @@ export function requiredCiHeadAgreementFromSummary(summary) {
     latestPassingCompletedAt: latestPassingCompletedAt(summary),
   };
 }
+/**
+ * Latest completion among pass-equivalent checks, or `none`. Mirrors the
+ * snapshot field `latestPassingCiCompletedAt` so a `--from-pr` watermark
+ * can refuse when the live read has moved past the snapshot it is about
+ * to record.
+ */
 export function latestPassingCompletedAt(summary) {
   let latest = '';
   for (const check of summary.checks) {
