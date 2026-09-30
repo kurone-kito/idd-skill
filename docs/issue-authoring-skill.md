@@ -777,9 +777,16 @@ previous body. A failure is never a clean review. Remaining held means
 the candidate does not become a released, discoverable issue. It does
 not mean creating a labeled issue to represent the stop.
 
-The reviewer is read-only and review-scoped. It returns a findings list
-only. It must not create or update issues, change labels, or append
-authoring markers. Prefer a non-context-inheriting reviewer.
+The reviewer must be read-only and review-scoped. It returns a findings
+list only. It must not create or update issues, change labels, or
+append authoring markers. This is a trust-based contract, not an
+enforced sandbox: the configured command runs in the caller's
+environment as executable configuration, so nothing in this workflow
+technically stops it from mutating, and a prose-only restriction in a
+dispatch prompt does not reliably stop a context-inheriting reviewer
+either. Prefer a non-context-inheriting reviewer, and run the reviewer
+under a read-only capability or sandbox wherever the harness offers
+one.
 issue #3448 records the observed risk: a context-inheriting
 no-mutation dispatch can still publish.
 
