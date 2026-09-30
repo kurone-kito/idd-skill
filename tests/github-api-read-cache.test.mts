@@ -218,6 +218,102 @@ test('hint expiry refetches while conditional revalidation reuses a 304 base', (
   }
 });
 
+test('a 304 refresh honors maxBytes and runs eviction like publish', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  const big = 'x'.repeat(600);
+  const conditional = (bytes: number) =>
+    readThrough(paths, () => ({ status: 304, body: null, etag: '"a"' }), {
+      mode: 'conditional',
+      requestShape: { path: '/a' },
+      policy: policy(paths.cacheDir, { maxBytes: bytes }),
+      now: () => now,
+    });
+  try {
+    const seed = (path: string, etag: string) => {
+      now += 10;
+      readThrough(paths, okBody({ big }, etag), {
+        requestShape: { path },
+        now: () => now,
+      });
+    };
+    seed('/b', '"b"');
+    seed('/a', '"a"');
+    assert.equal(entryNames(paths.cacheDir).length, 2);
+    now += 10;
+    // Each entry fits alone, but both together exceed the bound: the
+    // refresh must evict the older /b entry like publish does.
+    const refreshed = conditional(1_000);
+    assert.equal(refreshed.cache, 'revalidated');
+    assert.equal(entryNames(paths.cacheDir).length, 1);
+    assert.deepEqual(readEntry(paths.cacheDir, refreshed.entryId ?? ''), {
+      schemaVersion: 1,
+      storedAt: now,
+      status: 200,
+      body: { big },
+      complete: true,
+      etag: '"a"',
+    });
+    // A bound below the record's own size drops it instead of rewriting.
+    now += 10;
+    const shrunk = conditional(200);
+    assert.equal(shrunk.cache, 'revalidated');
+    assert.deepEqual(shrunk.body, { big });
+    assert.deepEqual(entryNames(paths.cacheDir), []);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a 304 refresh never overwrites a newer entry or resurrects a purged one', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  const clock = () => now;
+  try {
+    readThrough(paths, okBody({ v: 1 }, '"v1"'), { now: clock });
+    now += 10;
+    const superseded = readThrough(
+      paths,
+      (request) => {
+        if (request.etag === undefined) {
+          return { status: 200, body: { v: 1 }, etag: '"v1"' };
+        }
+        // A strict-fresh read (which takes no lease) stores v2 while this
+        // conditional request for v1 is still in flight.
+        now += 10;
+        readThrough(paths, okBody({ v: 2 }, '"v2"'), {
+          mode: 'strict-fresh',
+          now: clock,
+        });
+        now += 10;
+        return { status: 304, body: null, etag: '"v1"' };
+      },
+      { mode: 'conditional', now: clock },
+    );
+    assert.equal(superseded.cache, 'revalidated');
+    const hint = readThrough(paths, okBody({ v: 3 }), { now: clock });
+    assert.equal(hint.cache, 'hit');
+    assert.deepEqual(hint.body, { v: 2 });
+
+    now += 10;
+    const purged = readThrough(
+      paths,
+      () => {
+        readThrough(paths, okBody(null), {
+          operation: 'purge',
+          now: clock,
+        });
+        return { status: 304, body: null, etag: '"v2"' };
+      },
+      { mode: 'conditional', now: clock },
+    );
+    assert.equal(purged.cache, 'revalidated');
+    assert.deepEqual(entryNames(paths.cacheDir), []);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a 304 without a trusted base performs one real fetch', () => {
   const paths = tempRoot();
   let step = 0;

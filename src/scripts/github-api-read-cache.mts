@@ -785,6 +785,18 @@ function refreshBase(
   base: StoredRecord,
   result: GithubApiCacheFetchResult,
 ): void {
+  const destination = entryPath(ctx);
+  // Skip when the entry was superseded, purged, or evicted while the
+  // conditional request was in flight: a 304 for an older representation
+  // must not overwrite a newer one or resurrect a removed entry.
+  const current = readRecord(ctx, destination);
+  if (
+    !current ||
+    current.storedAt !== base.storedAt ||
+    current.etag !== base.etag
+  ) {
+    return;
+  }
   const record: StoredRecord = {
     ...base,
     storedAt: ctx.now(),
@@ -796,14 +808,19 @@ function refreshBase(
   ) {
     return;
   }
-  const destination = entryPath(ctx);
-  ctx.storage.writeAtomic(destination, serializeRecord(record));
+  const payload = serializeRecord(record);
+  if (Buffer.byteLength(payload) > ctx.maxBytes) {
+    safeUnlink(ctx.storage, destination);
+    return;
+  }
+  ctx.storage.writeAtomic(destination, payload);
   try {
     assertPrivate(ctx.storage, destination, 'file');
   } catch (error) {
     safeUnlink(ctx.storage, destination);
     throw error;
   }
+  evict(ctx);
 }
 
 function leaderFetch(ctx: CacheContext): ReadThroughGithubApiCacheResult {
