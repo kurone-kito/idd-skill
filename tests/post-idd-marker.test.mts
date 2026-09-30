@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,7 @@ import {
   MARKER_TYPES,
   parseArgs,
   parseIssueReference,
+  runOperationLocalSnapshotWatermark,
   validateAuthoringOwnerModeDigestCoupling,
   validateAuthoringOwnerSupersedesModeCoupling,
   validateAuthoringPublicationIntentStateIssueCoupling,
@@ -553,6 +554,24 @@ test('--help lists out-of-loop among the supported --type values', () => {
     { encoding: 'utf8' },
   );
   assert.match(output, /--type <type>\s+one of:.*\bout-of-loop\b/);
+});
+
+test('--help documents --operation-local and its --prior-* flags (#3592)', () => {
+  // post-idd-marker has a hand-rolled parser, so tests/help-text-flags.test.mts
+  // excludes it and cannot catch an accepted-but-undocumented flag.
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { encoding: 'utf8' },
+  );
+  for (const flag of [
+    '--operation-local',
+    '--prior-head-sha',
+    '--prior-total-item-count',
+    '--prior-max-activity-at',
+  ]) {
+    assert.ok(output.includes(flag), `--help must document ${flag}`);
+  }
 });
 
 test('a fractional-second embedded timestamp is recognized identically by operationalMarkerPrefix and the parse helpers', () => {
@@ -1324,10 +1343,41 @@ if (args[0] === 'pr' && args[1] === 'checks') {
 if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statusCheckRollup')) {
   out(${rollup});
 }
+if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('databaseId')) {
+  const raw = ${commentsBody};
+  const trimmed = String(raw).trim();
+  const rows = trimmed === ''
+    ? []
+    : trimmed.startsWith('[')
+      ? JSON.parse(trimmed)
+      : trimmed.split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+  const nodes = rows.map((row, index) => ({
+    id: row.node_id || ('C_rest_' + (index + 1)),
+    databaseId: typeof row.id === 'number' ? row.id : index + 1,
+    body: row.body || '',
+    createdAt: row.created_at || '2026-06-25T10:00:00Z',
+    updatedAt: row.updated_at || row.created_at || '2026-06-25T10:00:00Z',
+    lastEditedAt: null,
+    author: {
+      login: (row.user && row.user.login) || '',
+      __typename: 'User',
+    },
+  }));
+  out(JSON.stringify({
+    data: {
+      repository: {
+        issue: null,
+        pullRequest: {
+          comments: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  }));
+}
 if (args[0] === 'api' && args[1] === 'graphql') {
-  // #3249: the SAME canned response also answers listWorkItemComments's
-  // includeEditState node-lookup query (nodes(ids: ...) { lastEditedAt }),
-  // keyed by the comment's own node_id below -- one literal, two shapes.
   out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } }, nodes: [{ id: 'C_1', lastEditedAt: null }] } }));
 }
 if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
@@ -1507,9 +1557,9 @@ test('#3465: a non-required failure does not refuse a passing required check', (
 });
 
 test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
-  // Stub `gh` on PATH so the real subprocess composition runs offline: the
-  // post-idd-marker.mjs CLI resolves its sibling review-activity-snapshot.mjs,
-  // which makes the read calls below; the stub answers each by argv.
+  // Stub `gh` on PATH so the in-process activity capture and the separate
+  // required-CI/HEAD agreement read both run offline. The stub answers each
+  // `gh` argv shape those two reads make.
   const restore = stubExecutable('gh', REVIEW_ACTIVITY_SNAPSHOT_GH_STUB(SHA));
   try {
     const output = execFileSync(
@@ -2683,13 +2733,25 @@ if (args[0] === 'pr' && args[1] === 'view' && args.includes('headRefOid') && arg
   const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
   const classifierEntry = fValues.find((v) => v.indexOf('classifier=') === 0);
   const id = idEntry ? idEntry.slice('id='.length) : '';
-  fs.appendFileSync(mutationLogFile, JSON.stringify({ id, mutation: Boolean(classifierEntry) }) + '\\n');
+  const ids = fValues.filter((v) => v.indexOf('ids[]=') === 0).map((v) => v.slice('ids[]='.length));
   if (classifierEntry) {
+    fs.appendFileSync(mutationLogFile, JSON.stringify({ id, mutation: true }) + '\\n');
     if (failMutationFor.indexOf(id) !== -1) {
       fail('mutation-error: permission denied');
     }
     out(JSON.stringify({ data: { minimizeComment: { minimizedComment: { __typename: 'IssueComment', isMinimized: true } } } }));
+  } else if (ids.length > 0) {
+    for (const probedId of ids) {
+      fs.appendFileSync(mutationLogFile, JSON.stringify({ id: probedId, mutation: false }) + '\\n');
+    }
+    const nodes = ids.map((probedId) => {
+      const info = probeIndex[probedId];
+      if (!info) return null;
+      return { __typename: 'IssueComment', id: probedId, url: 'https://github.com/o/r/issues/1#issuecomment-' + probedId, isMinimized: info.isMinimized || false, viewerCanMinimize: info.viewerCanMinimize !== false, author: { login: info.author || 'kurone-kito' } };
+    });
+    out(JSON.stringify({ data: { nodes } }));
   } else {
+    fs.appendFileSync(mutationLogFile, JSON.stringify({ id, mutation: false }) + '\\n');
     const info = probeIndex[id];
     if (!info) {
       out(JSON.stringify({ data: { node: null } }));
@@ -5294,4 +5356,555 @@ test('authoring-publication-intent dry-run does not check --actor against the au
   } finally {
     restore();
   }
+});
+
+const OPERATION_LOCAL_SHA = 'a'.repeat(40);
+
+function operationLocalSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    headSha: OPERATION_LOCAL_SHA,
+    totalItemCount: 1,
+    maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    latestPassingCiCompletedAt: '2026-06-25T11:00:00Z',
+    dispositionEvidence: {
+      missingRegularCommentCount: 0,
+      missingThreadCount: 0,
+      soleCauseAckOnlyPostDisposition: false,
+    },
+    ...overrides,
+  };
+}
+
+function passingAgreement(head = OPERATION_LOCAL_SHA) {
+  return {
+    headRefOid: head,
+    requiredChecksPassing: true,
+    latestPassingCompletedAt: '2026-06-25T11:00:00Z',
+  };
+}
+
+test('operation-local watermark uses one rich capture and one CI agreement read', () => {
+  let rich = 0;
+  let agreement = 0;
+  const snapshot = operationLocalSnapshot();
+  const first = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => {
+      rich += 1;
+      return snapshot;
+    },
+    readRequiredCiAgreement: () => {
+      agreement += 1;
+      return passingAgreement();
+    },
+  });
+  assert.equal(rich, 1);
+  assert.equal(agreement, 1);
+  assert.equal(first.decision, 'publish');
+  assert.equal(first.watermarkFields?.['head-sha'], OPERATION_LOCAL_SHA);
+  assert.equal(first.watermarkFields?.['total-item-count'], '1');
+  assert.equal(
+    first.watermarkFields?.['max-activity-at'],
+    '2026-06-25T10:30:00Z',
+  );
+  assert.equal(
+    first.watermarkFields?.['ci-completed-at'],
+    '2026-06-25T11:00:00Z',
+  );
+  assert.equal(first.snapshot, snapshot);
+  runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => {
+      rich += 1;
+      return snapshot;
+    },
+    readRequiredCiAgreement: () => {
+      agreement += 1;
+      return passingAgreement();
+    },
+  });
+  assert.equal(rich, 2);
+  assert.equal(agreement, 2);
+});
+
+test('operation-local incomplete collection does not call the CI agreement read', () => {
+  let agreement = 0;
+  assert.throws(
+    () =>
+      runOperationLocalSnapshotWatermark({
+        prNumber: 3592,
+        collectRichActivity: () => {
+          throw new Error('pagination stopped');
+        },
+        readRequiredCiAgreement: () => {
+          agreement += 1;
+          return passingAgreement();
+        },
+      }),
+    /incomplete review-activity collection: pagination stopped/,
+  );
+  assert.equal(agreement, 0);
+  assert.throws(
+    () =>
+      runOperationLocalSnapshotWatermark({
+        prNumber: 3592,
+        collectRichActivity: () => ({ totalItemCount: 0 }),
+        readRequiredCiAgreement: () => {
+          agreement += 1;
+          return passingAgreement();
+        },
+      }),
+    /incomplete review-activity collection: review-activity-snapshot is missing a usable headSha/,
+  );
+  assert.equal(agreement, 0);
+});
+
+test('operation-local refuses a new HEAD, a moved expected HEAD, and CI completion drift', () => {
+  const other = 'b'.repeat(40);
+  const moved = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(other),
+  });
+  assert.equal(moved.decision, 'refuse');
+  assert.equal(moved.reasonCode, 'new-head');
+  assert.match(moved.reason ?? '', /Re-run --from-pr/);
+
+  const expected = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: other,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(expected.reasonCode, 'expected-head');
+  assert.match(expected.reason ?? '', /Re-run E1 from Step 1/);
+
+  const completion = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => ({
+      ...passingAgreement(),
+      latestPassingCompletedAt: '2026-06-25T12:00:00Z',
+    }),
+  });
+  assert.equal(completion.reasonCode, 'ci-completion');
+});
+
+test('operation-local defers the watermark when required CI is not passing', () => {
+  for (const passing of [false]) {
+    const result = runOperationLocalSnapshotWatermark({
+      prNumber: 3592,
+      collectRichActivity: () => operationLocalSnapshot(),
+      readRequiredCiAgreement: () => ({
+        ...passingAgreement(),
+        requiredChecksPassing: passing,
+      }),
+    });
+    assert.equal(result.decision, 'defer');
+    assert.equal(result.reasonCode, 'required-checks');
+    assert.equal(result.snapshot !== null, true);
+  }
+});
+
+test('operation-local refuses newly actionable same-HEAD activity past a stored boundary', () => {
+  const undispositioned = operationLocalSnapshot({
+    totalItemCount: 2,
+    maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+    dispositionEvidence: {
+      missingRegularCommentCount: 1,
+      missingThreadCount: 0,
+      soleCauseAckOnlyPostDisposition: false,
+    },
+  });
+  const refused = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
+      totalItemCount: 1,
+      maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    },
+    collectRichActivity: () => undispositioned,
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(refused.decision, 'refuse');
+  assert.equal(refused.reasonCode, 'same-head-activity');
+  assert.match(refused.reason ?? '', /fresh triage/);
+
+  const handled = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
+      totalItemCount: 1,
+      maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    },
+    collectRichActivity: () =>
+      operationLocalSnapshot({
+        totalItemCount: 2,
+        maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+      }),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(handled.decision, 'publish');
+});
+
+test('operation-local orders same-HEAD activity by instant, not timestamp text (#3592)', () => {
+  const laterFractional = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
+      totalItemCount: 2,
+      maxActivityUpdatedAt: '2026-05-11T08:00:00Z',
+    },
+    collectRichActivity: () =>
+      operationLocalSnapshot({
+        totalItemCount: 2,
+        maxActivityUpdatedAt: '2026-05-11T08:00:00.100Z',
+        dispositionEvidence: {
+          missingRegularCommentCount: 1,
+          missingThreadCount: 0,
+          soleCauseAckOnlyPostDisposition: false,
+        },
+      }),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(laterFractional.decision, 'refuse');
+  assert.equal(laterFractional.reasonCode, 'same-head-activity');
+
+  const earlierWholeSecond = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA,
+      totalItemCount: 2,
+      maxActivityUpdatedAt: '2026-05-11T08:00:00.900Z',
+    },
+    collectRichActivity: () =>
+      operationLocalSnapshot({
+        totalItemCount: 2,
+        maxActivityUpdatedAt: '2026-05-11T08:00:00Z',
+        dispositionEvidence: {
+          missingRegularCommentCount: 1,
+          missingThreadCount: 0,
+          soleCauseAckOnlyPostDisposition: false,
+        },
+      }),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.notEqual(earlierWholeSecond.reasonCode, 'same-head-activity');
+});
+
+test('operation-local refuses a prior boundary recorded for a different HEAD (#3592)', () => {
+  const otherHead = 'b'.repeat(40);
+  // This capture has neither more items nor newer activity than the boundary,
+  // which is exactly the case an untied boundary silently let through.
+  const mismatched = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: otherHead,
+      totalItemCount: 5,
+      maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+    },
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(mismatched.decision, 'refuse');
+  assert.equal(mismatched.reasonCode, 'prior-head');
+  assert.match(mismatched.reason ?? '', new RegExp(otherHead));
+
+  const sameHeadOtherCase = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    priorBoundary: {
+      headSha: OPERATION_LOCAL_SHA.toUpperCase(),
+      totalItemCount: 1,
+      maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+    },
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(sameHeadOtherCase.decision, 'publish');
+});
+
+const POST_IDD_MARKER_CLI = join(REPO_ROOT, 'scripts/post-idd-marker.mjs');
+
+function runWatermarkCli(extra: string[]): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const result = spawnSync(
+    process.execPath,
+    [
+      POST_IDD_MARKER_CLI,
+      '--type',
+      'watermark',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+      ...extra,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+/** Make the stub `gh` append every argv it sees to `logFile`, one JSON line each. */
+function withGhArgvLog(stub: string, logFile: string): string {
+  return stub.replace(
+    'const args = process.argv.slice(2);',
+    `const args = process.argv.slice(2);\nrequire('node:fs').appendFileSync(${JSON.stringify(logFile)}, JSON.stringify(args) + '\\n');`,
+  );
+}
+
+function ghPostCalls(logFile: string): string[] {
+  return readFileSync(logFile, 'utf8')
+    .split('\n')
+    .filter((line) => line.includes('--input'));
+}
+
+test('--prior-* flags must be passed together and only with --operation-local (#3592)', () => {
+  const partial = runWatermarkCli([
+    '--operation-local',
+    '--prior-total-item-count',
+    '1',
+    '--prior-max-activity-at',
+    'none',
+  ]);
+  assert.equal(partial.status, 1);
+  assert.match(
+    partial.stderr,
+    /--prior-head-sha, --prior-total-item-count and --prior-max-activity-at must be passed together/,
+  );
+
+  const withoutOperationLocal = runWatermarkCli([
+    '--prior-head-sha',
+    SHA,
+    '--prior-total-item-count',
+    '1',
+    '--prior-max-activity-at',
+    'none',
+  ]);
+  assert.equal(withoutOperationLocal.status, 1);
+  assert.match(
+    withoutOperationLocal.stderr,
+    /are only valid with --operation-local/,
+  );
+});
+
+test('--prior-max-activity-at accepts only none or a canonical UTC timestamp (#3592)', () => {
+  // Validation must run before any network call, so a `gh` that fails on any
+  // invocation proves it: a bad value is a usage error, not a confusing
+  // "newly actionable activity" refusal produced by an unordered comparison.
+  const restore = stubGhNeverCalled();
+  try {
+    for (const bad of ['zzz', '2026-06-25', '2026-06-25T19:44:00+09:00']) {
+      const result = runWatermarkCli([
+        '--operation-local',
+        '--prior-head-sha',
+        SHA,
+        '--prior-total-item-count',
+        '1',
+        '--prior-max-activity-at',
+        bad,
+      ]);
+      assert.equal(result.status, 1, `expected exit 1 for ${bad}`);
+      assert.match(
+        result.stderr,
+        /--prior-max-activity-at must be none or a canonical UTC timestamp/,
+      );
+      assert.doesNotMatch(result.stderr, /unexpected gh invocation/);
+      assert.equal(result.stdout, '');
+    }
+  } finally {
+    restore();
+  }
+});
+
+test('the operationLocal envelope schema requires every view field, including reason (#3592)', () => {
+  const view: Record<string, unknown> = {
+    decision: 'publish',
+    reason: null,
+    snapshot: {},
+    watermarkFields: null,
+    warnings: [],
+  };
+  const envelope = {
+    mode: 'dry-run',
+    type: 'watermark',
+    target: 'pr',
+    number: 1200,
+    operationLocal: view,
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+  for (const field of Object.keys(view)) {
+    const { [field]: _omitted, ...rest } = view;
+    assert.notDeepEqual(
+      validate({ ...envelope, operationLocal: rest }, schema),
+      [],
+      `operationLocal without ${field} must not validate`,
+    );
+  }
+});
+
+test('--operation-local CLI defers with the capture and never posts while required checks fail (#3592)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-defer-'));
+  const argvLog = join(tempRoot, 'gh-argv.log');
+  const restore = stubExecutable(
+    'gh',
+    withGhArgvLog(
+      watermarkFromPrGhStub(SHA, {
+        rollupNodes: [rollupCheck('lint', 'FAILURE')],
+        rulesBody: REQUIRED_LINT_RULE,
+      }),
+      argvLog,
+    ),
+  );
+  try {
+    for (const apply of [false, true]) {
+      const result = runWatermarkCli([
+        '--operation-local',
+        ...(apply ? ['--apply'] : []),
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assert.deepEqual(validate(envelope, schema), []);
+      assert.equal(envelope.mode, 'dry-run');
+      assert.equal(envelope.type, 'watermark');
+      assert.equal(envelope.target, 'pr');
+      assert.equal(envelope.number, 1200);
+      assert.equal(envelope.operationLocal.decision, 'defer');
+      assert.match(
+        envelope.operationLocal.reason,
+        /required checks are not passing/,
+      );
+      assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
+      assert.equal(envelope.operationLocal.watermarkFields['head-sha'], SHA);
+    }
+    assert.ok(
+      readFileSync(argvLog, 'utf8').length > 0,
+      'the stub must have observed the capture reads',
+    );
+    assert.deepEqual(ghPostCalls(argvLog), [], 'a deferred watermark posts');
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--operation-local CLI refuses a --prior-head-sha for another HEAD with the envelope and never posts (#3592)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-prior-'));
+  const argvLog = join(tempRoot, 'gh-argv.log');
+  const otherHead = 'b'.repeat(40);
+  const restore = stubExecutable(
+    'gh',
+    withGhArgvLog(watermarkFromPrGhStub(SHA), argvLog),
+  );
+  try {
+    // `none` and a canonical timestamp are both valid boundary values.
+    for (const priorMax of ['2026-06-25T10:45:00Z', 'none']) {
+      const result = runWatermarkCli([
+        '--operation-local',
+        '--prior-head-sha',
+        otherHead,
+        '--prior-total-item-count',
+        '5',
+        '--prior-max-activity-at',
+        priorMax,
+        '--apply',
+      ]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        new RegExp(`stored prior boundary is for HEAD ${otherHead}`),
+      );
+      const envelope = JSON.parse(result.stdout);
+      assert.deepEqual(validate(envelope, schema), []);
+      assert.equal(envelope.operationLocal.decision, 'refuse');
+      assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
+    }
+    assert.deepEqual(ghPostCalls(argvLog), [], 'a refused watermark posts');
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--operation-local keeps a required-CI read failure classified in the error envelope (#3592)', () => {
+  // Before the operation-local refactor a failed required-check read reached
+  // classifyHelperError; folding it into a `ci-read` refusal must not turn a
+  // tagged 503 into a generic gate exit under IDD_HELPER_ERROR_ENVELOPE=1.
+  const failingRollup = watermarkFromPrGhStub(SHA).replace(
+    'const args = process.argv.slice(2);',
+    `const args = process.argv.slice(2);\nif (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statusCheckRollup')) { process.stderr.write('gh: Service Unavailable (HTTP 503)'); process.exit(1); }`,
+  );
+  const restore = stubExecutable('gh', failingRollup);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        POST_IDD_MARKER_CLI,
+        '--type',
+        'watermark',
+        '--from-pr',
+        '1200',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'claude-02f8159e',
+        '--claim-id',
+        'claim-1134-02f8159e',
+        '--operation-local',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, IDD_HELPER_ERROR_ENVELOPE: '1' },
+      },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    // The capture is still returned on stdout as a refusal ...
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.operationLocal.decision, 'refuse');
+    assert.match(
+      envelope.operationLocal.reason,
+      /could not read required-check state/,
+    );
+    // ... while the stderr error envelope keeps the underlying classification.
+    const line = result.stderr
+      .split('\n')
+      .find((candidate) => candidate.includes('iddHelperError'));
+    assert.ok(line, `no error envelope on stderr: ${result.stderr}`);
+    const error = JSON.parse(line).iddHelperError;
+    assert.equal(error.kind, 'transport');
+    assert.equal(error.httpStatus, 503);
+  } finally {
+    restore();
+  }
+});
+
+test('operation-local CI agreement failure keeps the capture and does not publish', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => {
+      throw new Error('rules unreadable');
+    },
+  });
+  assert.equal(result.decision, 'refuse');
+  assert.equal(result.reasonCode, 'ci-read');
+  assert.equal(
+    (result.snapshot as { headSha: string }).headSha,
+    OPERATION_LOCAL_SHA,
+  );
 });

@@ -57,14 +57,17 @@ export function resolveOutPath(
 }
 
 // Vendor session env vars this helper knows how to auto-derive
-// `vendorSessionId` from (#2424). Claude-only for now: `$CLAUDE_CODE_SESSION_ID`
-// is a verified real env var whose value matches the session's own
+// `vendorSessionId` from (#2424, Codex: #3594). `$CLAUDE_CODE_SESSION_ID`
+// matches the Claude session's own
 // `~/.claude/projects/<encoded-cwd>/<id>.jsonl` basename exactly (the same
 // value `extractSessionId()` reads back out of that file's own records in
-// token-cost-adapter-claude.mts). Codex/Grok have no verified equivalent
-// yet -- add a row here once one is confirmed, rather than guessing.
+// token-cost-adapter-claude.mts). `$CODEX_SESSION_ID` matches the Codex
+// rollout's `session_meta.payload.id` and the rollout filename identity.
+// Grok has no verified equivalent yet -- add a row here once one is
+// confirmed, rather than guessing.
 const VENDOR_SESSION_ID_ENV_VAR: Readonly<Record<string, string>> = {
   claude: 'CLAUDE_CODE_SESSION_ID',
+  codex: 'CODEX_SESSION_ID',
 };
 
 /**
@@ -210,8 +213,11 @@ function printHelp(): void {
   --help, -h         Show this help.
 
 For --vendor claude, vendorSessionId is auto-derived from
-$CLAUDE_CODE_SESSION_ID when set -- no flag needed. No equivalent env var
-is known yet for grok or codex.
+$CLAUDE_CODE_SESSION_ID when set. For --vendor codex, it is auto-derived
+from $CODEX_SESSION_ID when that value is a non-empty, non-path-like
+string. An unset, empty, or path-like value leaves vendorSessionId
+absent, which is the legacy unidentified fallback. No equivalent env
+var is known yet for grok.
 
 Fail-open by default: a bad flag, a schema-invalid event, or an
 unwritable --out path prints a stderr warning and exits 0, so a

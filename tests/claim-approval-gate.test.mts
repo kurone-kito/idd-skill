@@ -1041,7 +1041,7 @@ if (args[0] === "api" && args[1] && args[1].endsWith("/issues/1")) {
   }) + "\\n");
   process.exit(0);
 }
-if (args[0] === "api" && args[1] && args[1].endsWith("/comments")) {
+if (args[0] === "api" && args[1] && String(args[1]).includes("/comments")) {
   process.stdout.write("[]\\n");
   process.exit(0);
 }

@@ -979,6 +979,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       maxClarificationRounds: 3,
       authoringLabelName: 'status:authoring',
       authoringStaleAge: 'PT4H',
+      adversarialReview: {
+        waitCeiling: 'PT20M',
+      },
     },
     labels: {
       roadmapLabelName: 'roadmap',
@@ -999,6 +1002,14 @@ test('policy normalization provides default-safe values and supports aliases', (
     providerHealth: {
       minCorroboratingPrs: 2,
       samplingWindow: 'PT24H',
+    },
+    githubApi: {
+      readCache: {
+        enabled: false,
+        maxAge: 'PT5M',
+        maxBytes: 104857600,
+        retention: 'PT24H',
+      },
     },
   });
 
@@ -1173,6 +1184,9 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxClarificationRounds: 4,
         authoringLabelName: 'status:drafting',
         authoringStaleAge: 'PT3H',
+        adversarialReview: {
+          waitCeiling: 'PT20M',
+        },
       },
       labels: {
         roadmapLabelName: 'epic',
@@ -1193,6 +1207,14 @@ test('policy normalization provides default-safe values and supports aliases', (
       providerHealth: {
         minCorroboratingPrs: 2,
         samplingWindow: 'PT24H',
+      },
+      githubApi: {
+        readCache: {
+          enabled: false,
+          maxAge: 'PT5M',
+          maxBytes: 104857600,
+          retention: 'PT24H',
+        },
       },
     },
   );

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCodeRabbitEmbeddedFindings,
+  collectReviewActivitySnapshot,
   normalizeComment,
   normalizeThread,
   parseArgs,
@@ -33,6 +34,59 @@ test('importing review-activity-snapshot.mts has no import-time side effect', as
   } finally {
     process.env.PATH = originalPath;
   }
+});
+
+test('collectReviewActivitySnapshot calls each rich loader once', () => {
+  const calls: string[] = [];
+  const snapshot = collectReviewActivitySnapshot({
+    prNumber: 3592,
+    owner: 'o',
+    repo: 'r',
+    trustedMarkerLoginsFlag: '',
+    advisoryBotLoginsFlag: '',
+    envTrustedMarkerActors: '',
+    envAdvisoryBotLogins: '',
+    port: {
+      resolveViewerLoginSafe: () => {
+        calls.push('viewer');
+        return { viewerLogin: '', viewerLoginUnavailable: true };
+      },
+      getChangeRequestHeadShaAndAuthor: () => {
+        calls.push('head');
+        return { headSha: 'c'.repeat(40), authorLogin: 'someone' };
+      },
+      listChangeRequestChecks: () => {
+        calls.push('checks');
+        return [];
+      },
+      listReviews: () => {
+        calls.push('reviews');
+        return [];
+      },
+      listWorkItemComments: () => {
+        calls.push('comments');
+        return [];
+      },
+      listChangeRequestReviewThreadsWithComments: () => {
+        calls.push('threads');
+        return [];
+      },
+    },
+  });
+  assert.deepEqual(calls, [
+    'viewer',
+    'head',
+    'checks',
+    'reviews',
+    'comments',
+    'threads',
+  ]);
+  assert.equal(snapshot.headSha, 'c'.repeat(40));
+  assert.equal(
+    (snapshot.dispositionEvidence as { missingRegularCommentCount: number })
+      .missingRegularCommentCount,
+    0,
+  );
 });
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -205,6 +259,37 @@ if (args[0] === 'pr' && args[1] === 'view') {
   out(${JSON.stringify(JSON.stringify({ headRefOid: SNAPSHOT_HEAD, author: { login: 'pr-author' } }))});
 }
 if (args[0] === 'pr' && args[1] === 'checks') out('[]');
+if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('databaseId')) {
+  const raw = ${JSON.stringify(commentNdjson)};
+  const rows = raw.trim() === ''
+    ? []
+    : raw.trim().split('\\n').map((line) => JSON.parse(line));
+  const nodes = rows.map((row, index) => ({
+    id: row.node_id || ('C_rest_' + (index + 1)),
+    databaseId: typeof row.id === 'number' ? row.id : index + 1,
+    body: row.body || '',
+    createdAt: row.created_at || '2026-05-12T03:00:00Z',
+    updatedAt: row.updated_at || row.created_at || '2026-05-12T03:00:00Z',
+    lastEditedAt: null,
+    author: {
+      login: (row.user && row.user.login) || '',
+      __typename: 'User',
+    },
+  }));
+  out(JSON.stringify({
+    data: {
+      repository: {
+        issue: null,
+        pullRequest: {
+          comments: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  }));
+}
 if (args[0] === 'api' && args[1] === 'graphql') out(${JSON.stringify(graphqlJson)});
 if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out(${JSON.stringify(reviewNdjson)});
 if (args[0] === 'api' && /\\/comments$/.test(args[1])) out(${JSON.stringify(commentNdjson)});

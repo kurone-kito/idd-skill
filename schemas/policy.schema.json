@@ -572,6 +572,44 @@
       },
       "description": "Container for the read-only provider-health classifier's corroboration threshold and sampling window (`minCorroboratingPrs`, `samplingWindow`). Optional; omitting any nested key keeps that key's own distributed default. Never a gate: no field this policy controls is, or is consumed as, a merge-readiness or CI-gate result."
     },
+    "githubApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "readCache": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Opt in to the host-local GitHub REST read cache. Optional; defaults to false. Only a literal true enables it. Enabling this key does not connect Discover."
+            },
+            "maxAge": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Maximum ISO 8601 age of a stored response that hint mode may reuse. Optional; defaults to `PT5M`. Retention is a separate bound."
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum total size, in bytes, of stored response entries. Optional; defaults to 104857600 (100 MiB). A larger value falls back to that default."
+            },
+            "retention": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Maximum ISO 8601 age of a stored response before it is dropped. Optional; defaults to `PT24H`. Independent of `maxAge`."
+            },
+            "directory": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional absolute override for the per-user OS-local cache directory. A relative path, filesystem root, workspace root, or ancestor of the workspace is not used as a cache root."
+            }
+          },
+          "description": "Host-local read cache for explicitly classified REST reads. Optional; omitting it keeps every read live."
+        }
+      },
+      "description": "Opt-in GitHub API read-cache policy. Optional; omitting it keeps live reads. This does not wire Discover."
+    },
     "discover": {
       "type": "object",
       "additionalProperties": false,
@@ -635,8 +673,8 @@
         },
         "deferByUrgency": {
           "type": "string",
-          "enum": ["off", "low", "low-and-medium"],
-          "description": "Independent E4/E5 defer trigger, active from round 1, based on \"adopt-now urgency\" rather than round count: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) disposes `Reject (defer)` when its defer-eligibility severity is within this mode's ceiling. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low`: Low-severity items only. `low-and-medium`: Low or Medium; High is never eligible under any mode. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
+          "enum": ["off", "low", "low-and-medium", "severity-tiered"],
+          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: ignores the adopt-now test and defers by the severity-and-urgency matrix, including High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
         },
         "subagentWaitCeiling": {
           "type": "string",
@@ -741,9 +779,40 @@
           "type": "string",
           "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$",
           "description": "Pre-existing repository-level authoring journal target (`owner/repo#number`) used as the publication-intent record location for a standalone authoring set with no existing issue or anchor. The issue number must be a positive integer with no leading zero (GitHub issue numbers start at 1). Optional; no default -- when absent, the issue-authoring skill stops with `blocked-by-human` before creating a standalone target rather than guessing a journal."
+        },
+        "adversarialReview": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "waitCeiling": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Positive ISO 8601 duration ceiling for a delegated issue-authoring adversarial draft review. Optional; defaults to `PT20M`. Independent of `critiqueLoop.subagentWaitCeiling`. A user-global document's ceiling is never read."
+            },
+            "delegate": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": ["command"],
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "description": "Shell command the issue-authoring caller runs against the issue draft. Required within this object; must contain a non-whitespace character. This command is trusted executable configuration and can transmit the issue-draft data it receives. It does not read or inherit `critiqueLoop.delegate`."
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": ["fallback", "combined", "on-success", "never"],
+                  "description": "Selects when the native issue-authoring reviewer also runs. `fallback` (default): only when the delegate fails. `combined`: always, without consulting the delegate's outcome. `on-success`: only when the delegate succeeded. `never`: not at all."
+                }
+              },
+              "description": "Dedicated issue-authoring adversarial-review delegate. Optional; a key genuinely absent keeps the native reviewer unless a local runtime inherits a user-global delegate. An explicit JSON `null` disables inheritance without installing a local command. `required` and `properties` apply only when the value is an object."
+            }
+          },
+          "description": "Issue-authoring adversarial draft review. Optional; omitting it keeps the native reviewer and the `PT20M` wait ceiling. Unknown keys are rejected."
         }
       },
-      "description": "Container for issue-authoring guard settings: authoring label, staleness window, heartbeat-coalesce window, and clarification-round bound. Optional; omitting any nested key keeps that key's own distributed default."
+      "description": "Container for issue-authoring guard settings: authoring label, staleness window, heartbeat-coalesce window, clarification-round bound, and the adversarial-review delegate. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "autopilotSuitability": {
       "type": "object",

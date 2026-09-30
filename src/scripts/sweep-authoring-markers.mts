@@ -447,6 +447,39 @@ export interface AuthoringMarkerSweepItem {
   author?: unknown;
 }
 
+/** One captured comment inside optional cleanup evidence (#3593).
+ * `author` is a login string. `isMinimized` is the fetched value, then
+ * set true only for a confirmed `applied` or `already-minimized`
+ * mutation of that id. A failed or unknown mutation never flips it. */
+export interface AuthoringCleanupComment {
+  id: string;
+  body: string;
+  author?: string;
+  createdAt?: string;
+  isMinimized: boolean;
+}
+
+export interface AuthoringCleanupMutation {
+  subjectId: string;
+  status: string;
+  reason?: string;
+  author?: string;
+}
+
+/** One fresh collection per canonical `owner/repo#number` (owner and
+ * repo compared case-insensitively). Not a concurrency snapshot. */
+export interface AuthoringCleanupCollection {
+  owner: string;
+  repo: string;
+  issue: number;
+  comments: AuthoringCleanupComment[];
+}
+
+export interface AuthoringCleanupEvidence {
+  collections: AuthoringCleanupCollection[];
+  mutations: AuthoringCleanupMutation[];
+}
+
 export interface AuthoringMarkerSweepReport {
   mode: 'apply' | 'dry-run';
   classifier: string;
@@ -456,6 +489,9 @@ export interface AuthoringMarkerSweepReport {
   issues: AuthoringMarkerSweepIssueResult[];
   families: Record<AuthoringMarkerFamily, AuthoringMarkerSweepFamilyCounts>;
   items: AuthoringMarkerSweepItem[];
+  /** Present only when {@link AuthoringMarkerSweepOptions.withCleanupEvidence}
+   * is selected. Absent otherwise, so the default JSON stays compatible. */
+  cleanupEvidence?: AuthoringCleanupEvidence;
 }
 
 /** Injectable dependencies (#2935): a test supplies a fake `fetchIssueComments`
@@ -498,6 +534,10 @@ export interface AuthoringMarkerSweepOptions {
    * `runMinimize`'s. `undefined` keeps the pre-existing unbounded
    * behavior. */
   deadlineMs?: number;
+  /** Opt-in (#3593). When true, the report adds `cleanupEvidence`: one
+   * captured collection per canonical target plus the mutation records.
+   * Default output omits the field. */
+  withCleanupEvidence?: boolean;
 }
 
 /**
@@ -531,18 +571,38 @@ export function runAuthoringMarkerSweep(
   };
   const issues: AuthoringMarkerSweepIssueResult[] = [];
   const subjectFamilies = new Map<string, AuthoringMarkerFamily>();
+  const capturedByKey = new Map<string, CapturedSweepTarget>();
 
   for (const target of options.issues) {
+    const key = canonicalSweepKey(target);
+    const cached = capturedByKey.get(key);
+    if (cached) {
+      // Same canonical target, including a case-only owner/repo spelling.
+      // Copy the first result. Do not refetch, reclassify, or retry a
+      // failure (#3593). A different repository with the same number is
+      // a different key and is fetched on its own.
+      issues.push({
+        owner: target.owner,
+        repo: target.repo,
+        issue: target.issue,
+        commentCount: cached.commentCount,
+        nonCanonical: cached.nonCanonical,
+        ...(cached.error !== undefined ? { error: cached.error } : {}),
+      });
+      continue;
+    }
     const budget = remaining();
     if (budget !== undefined && budget <= 0) {
-      issues.push({
+      const missed: CapturedSweepTarget = {
         owner: target.owner,
         repo: target.repo,
         issue: target.issue,
         commentCount: 0,
         nonCanonical: 0,
         error: 'deadline-exceeded',
-      });
+      };
+      capturedByKey.set(key, missed);
+      issues.push({ ...missed });
       continue;
     }
     let comments: SweepGraphqlComment[];
@@ -554,14 +614,16 @@ export function runAuthoringMarkerSweep(
         budget,
       );
     } catch (error) {
-      issues.push({
+      const failed: CapturedSweepTarget = {
         owner: target.owner,
         repo: target.repo,
         issue: target.issue,
         commentCount: 0,
         nonCanonical: 0,
         error: (error as Error).message,
-      });
+      };
+      capturedByKey.set(key, failed);
+      issues.push({ ...failed });
       continue;
     }
 
@@ -581,6 +643,15 @@ export function runAuthoringMarkerSweep(
         nonCanonical += 1;
       }
     }
+    const captured: CapturedSweepTarget = {
+      owner: target.owner,
+      repo: target.repo,
+      issue: target.issue,
+      commentCount: comments.length,
+      nonCanonical,
+      comments,
+    };
+    capturedByKey.set(key, captured);
     issues.push({
       owner: target.owner,
       repo: target.repo,
@@ -690,7 +761,7 @@ export function runAuthoringMarkerSweep(
     }
   }
 
-  return {
+  const report: AuthoringMarkerSweepReport = {
     mode: options.apply ? 'apply' : 'dry-run',
     classifier: options.classifier,
     markerPrefix: options.markerPrefix,
@@ -699,6 +770,85 @@ export function runAuthoringMarkerSweep(
     issues,
     families,
     items,
+  };
+  if (options.withCleanupEvidence) {
+    report.cleanupEvidence = buildCleanupEvidence(capturedByKey, items);
+  }
+  return report;
+}
+
+interface CapturedSweepTarget {
+  owner: string;
+  repo: string;
+  issue: number;
+  commentCount: number;
+  nonCanonical: number;
+  error?: string;
+  comments?: SweepGraphqlComment[];
+}
+
+function canonicalSweepKey(target: SweepIssueTarget): string {
+  return `${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.issue}`;
+}
+
+function normalizeCleanupAuthor(author: unknown): string | undefined {
+  if (typeof author === 'string') {
+    return author.length > 0 ? author : undefined;
+  }
+  if (author !== null && typeof author === 'object' && 'login' in author) {
+    const login = (author as { login?: unknown }).login;
+    if (typeof login === 'string' && login.length > 0) {
+      return login;
+    }
+  }
+  return undefined;
+}
+
+function buildCleanupEvidence(
+  capturedByKey: ReadonlyMap<string, CapturedSweepTarget>,
+  items: readonly AuthoringMarkerSweepItem[],
+): AuthoringCleanupEvidence {
+  const confirmed = new Set<string>();
+  for (const item of items) {
+    if (
+      item.status === 'applied' ||
+      (item.status === 'skipped' && item.reason === 'already-minimized')
+    ) {
+      confirmed.add(item.subjectId);
+    }
+  }
+  const collections: AuthoringCleanupCollection[] = [];
+  for (const captured of capturedByKey.values()) {
+    if (!captured.comments) {
+      continue;
+    }
+    collections.push({
+      owner: captured.owner,
+      repo: captured.repo,
+      issue: captured.issue,
+      comments: captured.comments.map((comment) => {
+        const author = normalizeCleanupAuthor(comment.authorLogin);
+        return {
+          id: comment.nodeId,
+          body: comment.body,
+          ...(author !== undefined ? { author } : {}),
+          ...(comment.createdAt ? { createdAt: comment.createdAt } : {}),
+          isMinimized: comment.isMinimized || confirmed.has(comment.nodeId),
+        };
+      }),
+    });
+  }
+  return {
+    collections,
+    mutations: items.map((item) => {
+      const author = normalizeCleanupAuthor(item.author);
+      return {
+        subjectId: item.subjectId,
+        status: item.status,
+        ...(item.reason !== undefined ? { reason: item.reason } : {}),
+        ...(author !== undefined ? { author } : {}),
+      };
+    }),
   };
 }
 
@@ -744,6 +894,7 @@ interface SweepCliArgs {
   apply: boolean;
   format: string;
   deadlineMs?: number;
+  withCleanupEvidence: boolean;
   help: boolean;
 }
 
@@ -760,6 +911,7 @@ const SWEEP_AUTHORING_MARKERS_FLAG_SPEC = {
   '--apply': { type: 'boolean' },
   '--format': { type: 'string', default: 'json' },
   '--deadline-ms': { type: 'string' },
+  '--with-cleanup-evidence': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -814,6 +966,7 @@ function parseArgs(argv: string[]): SweepCliArgs {
     apply: Boolean(values.apply),
     format: (values.format as string) ?? 'json',
     deadlineMs,
+    withCleanupEvidence: Boolean(values['with-cleanup-evidence']),
     help,
   };
 }
@@ -874,7 +1027,7 @@ function printTable(report: AuthoringMarkerSweepReport): void {
 
 function printUsage(): void {
   console.log(
-    `Usage: sweep-authoring-markers --issue <number|owner/repo#number> [--issue ...] [--owner <owner>] [--repo <repo>] [--marker-prefix <prefix>] [--classifier OUTDATED|RESOLVED] --trusted-marker-logins <login1,login2> [--apply] [--format json|table] [--deadline-ms <milliseconds>]
+    `Usage: sweep-authoring-markers --issue <number|owner/repo#number> [--issue ...] [--owner <owner>] [--repo <repo>] [--marker-prefix <prefix>] [--classifier OUTDATED|RESOLVED] --trusted-marker-logins <login1,login2> [--apply] [--format json|table] [--deadline-ms <milliseconds>] [--with-cleanup-evidence]
 
 Fetch-driven hide-on-supersede sweep for authoring-owner /
 authoring-publication-intent markers (#2935): fetches each --issue's
@@ -919,7 +1072,20 @@ must pass the already-resolved prefix explicitly.
 pagination plus the final minimize pass), not just the mutation --
 omit it to keep the default unbounded behavior. Best-effort: a single
 --issue's fetch failure is recorded in the report and does not abort the
-other issues in the same invocation.`,
+other issues in the same invocation.
+
+Repeated --issue values that name the same repository and number
+(owner and repo compared case-insensitively) are fetched once. The
+same number in a different repository stays a separate fetch. A later
+duplicate copies the first result, including a fetch error, and is
+not retried.
+
+--with-cleanup-evidence adds a cleanupEvidence object to the JSON
+report: one captured comment collection per canonical target, plus
+each mutation record. isMinimized on those comments is set true only
+for a confirmed applied or already-minimized result. The field is
+absent without the flag. It is not a fresh concurrency snapshot and
+does not decide marker ownership.`,
   );
 }
 
@@ -1017,6 +1183,7 @@ function main(): HelperCliResult {
     trustedSet: new Set(trustedActors),
     apply: args.apply,
     deadlineMs: args.deadlineMs,
+    withCleanupEvidence: args.withCleanupEvidence,
   });
   report.trustedMarkerActorsSource = trustedMarkerActorsSource;
 

@@ -538,6 +538,16 @@ export function mapGraphqlIssueCommentNode(node) {
       createdAt,
       updatedAt,
       lastEditedAt,
+      isMinimized:
+        typeof record.isMinimized === 'boolean'
+          ? record.isMinimized
+          : undefined,
+      minimizedReason:
+        typeof record.minimizedReason === 'string'
+          ? record.minimizedReason
+          : record.minimizedReason === null
+            ? null
+            : undefined,
     },
   };
 }
@@ -559,7 +569,7 @@ export function fetchProvenanceCommentsGraphql(owner, repo, issueNumber) {
   repository(owner:$owner,name:$repo){
     issue(number:$number){
       comments(first:100,after:$cursor){
-        nodes { databaseId lastEditedAt createdAt updatedAt body author { login } }
+        nodes { databaseId lastEditedAt createdAt updatedAt body author { login } isMinimized minimizedReason }
         pageInfo { hasNextPage endCursor }
       }
     }

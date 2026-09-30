@@ -62,6 +62,93 @@ if (import.meta.main) {
     applyHelperCliOutcomeWhenDisabled(main());
   }
 }
+/**
+ * Collect one PR's review activity and derive the snapshot JSON.
+ * Callers that also need watermark fields must reuse this object in the
+ * same operation. A later operation calls this again; nothing here is cached.
+ */
+export function collectReviewActivitySnapshot(input) {
+  const iddConfig = input.iddConfig ?? loadIddConfig();
+  const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
+    resolveTrustedMarkerActors({
+      flagValue: input.trustedMarkerLoginsFlag,
+      envValue: input.envTrustedMarkerActors,
+      config: iddConfig,
+    });
+  const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
+    resolveAdvisoryBotLogins({
+      flagValue: input.advisoryBotLoginsFlag,
+      envValue: input.envAdvisoryBotLogins,
+      config: iddConfig,
+    });
+  const activityTrustedMarkerLogins =
+    resolveActivitySnapshotTrustedMarkerLogins(
+      trustedMarkerLogins,
+      input.port.resolveViewerLoginSafe(),
+    );
+  const { headSha: rawHeadSha, authorLogin: rawAuthorLogin } =
+    input.port.getChangeRequestHeadShaAndAuthor(input.prNumber);
+  const headSha = rawHeadSha;
+  const prAuthorLogin = rawAuthorLogin.trim().toLowerCase();
+  const checks = input.port.listChangeRequestChecks(input.prNumber);
+  const reviews = input.port.listReviews(input.prNumber);
+  const comments = input.port.listWorkItemComments(input.prNumber, {
+    includeEditState: true,
+  });
+  const threads = input.port.listChangeRequestReviewThreadsWithComments(
+    input.prNumber,
+  );
+  const normalizedComments = comments.map(normalizeComment);
+  const normalizedThreads = threads.map(normalizeThread);
+  const summary = buildActivitySnapshotSummary(
+    {
+      comments: normalizedComments,
+      reviews: reviews.map(normalizeReview),
+      threads: normalizedThreads,
+      checks,
+    },
+    {
+      trustedMarkerLogins: activityTrustedMarkerLogins,
+      advisoryBotLogins,
+      advisoryBotLoginsSource,
+      dispositionAuthorLogins: activityTrustedMarkerLogins,
+    },
+  );
+  const embeddedFindings = buildCodeRabbitEmbeddedFindings(
+    reviews,
+    normalizedThreads,
+  );
+  const dispositionEvidence = summarizeDispositionEvidenceForGate(
+    { comments: normalizedComments, threads: normalizedThreads },
+    {
+      iddAgentLogins: activityTrustedMarkerLogins,
+      advisoryBotLogins,
+      trustedMarkerLogins: activityTrustedMarkerLogins,
+      prHeadSha: headSha,
+      prAuthorLogin,
+    },
+  );
+  return {
+    headSha,
+    trustedMarkerActors: trustedMarkerLogins,
+    trustedMarkerActorsSource,
+    totalItemCount: summary.totalItemCount,
+    maxActivityUpdatedAt: summary.maxActivityUpdatedAt,
+    latestCiCompletedAt: summary.latestCiCompletedAt,
+    latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
+    counts: summary.counts,
+    ackOnly: summary.ackOnly,
+    effective: summary.effective,
+    dispositionEvidence: {
+      missingRegularCommentCount:
+        dispositionEvidence.missingRegularCommentCount,
+      missingThreadCount: dispositionEvidence.missingThreadCount,
+      soleCauseAckOnlyPostDisposition:
+        dispositionEvidence.soleCauseAckOnlyPostDisposition,
+    },
+    embeddedFindings,
+  };
+}
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
 // `gh` call. Returns 0 or throws -- `runHelperCli` (#3344) classifies a
@@ -81,125 +168,17 @@ function main() {
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
-  const port = createGithubProviderAdapter(owner, repo);
-  const iddConfig = loadIddConfig();
-  const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
-    resolveTrustedMarkerActors({
-      flagValue: args.trustedMarkerLogins,
-      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-      config: iddConfig,
-    });
-  const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
-    resolveAdvisoryBotLogins({
-      flagValue: args.advisoryBotLogins,
-      envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
-      config: iddConfig,
-    });
-  // Issue #3337: the viewer-merged set feeds every trust/disposition-author
-  // input below (both `buildActivitySnapshotSummary` and
-  // `summarizeDispositionEvidenceForGate`) so an agent with no configured
-  // trusted actor still has its own digest and other operational markers
-  // recognized consistently on both the E1 activity side and the
-  // disposition-evidence side -- see `resolveActivitySnapshotTrustedMarkerLogins`'s
-  // own doc comment. The diagnostic `trustedMarkerActors` field in this
-  // helper's JSON output (below) intentionally keeps reporting the
-  // configured-only `trustedMarkerLogins` resolution, unchanged.
-  const activityTrustedMarkerLogins =
-    resolveActivitySnapshotTrustedMarkerLogins(
-      trustedMarkerLogins,
-      port.resolveViewerLoginSafe(),
-    );
-  // #1833: also reads the PR author's login (not just headSha) --
-  // `summarizeDispositionEvidenceForGate` below needs it to exclude the
-  // author's own comments/thread replies from "missing disposition" (they
-  // never require one), the same way `buildPreMergeReadinessSummary`'s own
-  // call to that function does. A missing/unresolvable head SHA fails
-  // closed downstream (`watermarkFieldsFromSnapshot` in post-idd-marker.mts
-  // throws "missing a usable headSha"), not a silent bad watermark.
-  const { headSha: rawHeadSha, authorLogin: rawAuthorLogin } =
-    port.getChangeRequestHeadShaAndAuthor(args.prNumber);
-  const headSha = rawHeadSha;
-  const prAuthorLogin = rawAuthorLogin.trim().toLowerCase();
-  const checks = port.listChangeRequestChecks(args.prNumber);
-  const reviews = port.listReviews(args.prNumber);
-  // #3249: `includeEditState` so `summarizeDispositionEvidenceForGate`
-  // (via `normalizeComment` below) can reject a body-edited disposition
-  // reply.
-  const comments = port.listWorkItemComments(args.prNumber, {
-    includeEditState: true,
+  const snapshot = collectReviewActivitySnapshot({
+    prNumber: args.prNumber,
+    owner,
+    repo,
+    trustedMarkerLoginsFlag: args.trustedMarkerLogins,
+    advisoryBotLoginsFlag: args.advisoryBotLogins,
+    envTrustedMarkerActors: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    envAdvisoryBotLogins: process.env.IDD_ADVISORY_BOT_LOGINS,
+    port: createGithubProviderAdapter(owner, repo),
   });
-  const threads = port.listChangeRequestReviewThreadsWithComments(
-    args.prNumber,
-  );
-  const normalizedComments = comments.map(normalizeComment);
-  const normalizedThreads = threads.map(normalizeThread);
-  const summary = buildActivitySnapshotSummary(
-    {
-      comments: normalizedComments,
-      reviews: reviews.map(normalizeReview),
-      threads: normalizedThreads,
-      checks,
-    },
-    {
-      trustedMarkerLogins: activityTrustedMarkerLogins,
-      advisoryBotLogins,
-      advisoryBotLoginsSource,
-      // Advisory bots are excluded from disposition authorship inside the
-      // summary builder, so the viewer-merged trusted-marker set is a safe
-      // default here.
-      dispositionAuthorLogins: activityTrustedMarkerLogins,
-    },
-  );
-  // #1833 / #3482: exposed so a `--from-pr` watermark post
-  // (post-idd-marker.mts) can warn, in its own success output, when the
-  // fresh snapshot it is about to become the watermark still has
-  // comments/threads lacking disposition evidence. The two counters mirror
-  // `AdvisoryConvergenceDispositionEvidence`. This snapshot also forwards
-  // `soleCauseAckOnlyPostDisposition`: `classifyThreadAckOnlyPostDisposition`
-  // already classifies a courtesy ack when no snapshot boundary exists, so
-  // that one flag is meaningful here. The other advisory-only sub-flags
-  // stay omitted; this is not `pre-merge-readiness`'s full
-  // `DispositionEvidenceSummary`.
-  const embeddedFindings = buildCodeRabbitEmbeddedFindings(
-    reviews,
-    normalizedThreads,
-  );
-  const dispositionEvidence = summarizeDispositionEvidenceForGate(
-    { comments: normalizedComments, threads: normalizedThreads },
-    {
-      iddAgentLogins: activityTrustedMarkerLogins,
-      advisoryBotLogins,
-      trustedMarkerLogins: activityTrustedMarkerLogins,
-      prHeadSha: headSha,
-      prAuthorLogin,
-    },
-  );
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        headSha,
-        trustedMarkerActors: trustedMarkerLogins,
-        trustedMarkerActorsSource,
-        totalItemCount: summary.totalItemCount,
-        maxActivityUpdatedAt: summary.maxActivityUpdatedAt,
-        latestCiCompletedAt: summary.latestCiCompletedAt,
-        latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
-        counts: summary.counts,
-        ackOnly: summary.ackOnly,
-        effective: summary.effective,
-        dispositionEvidence: {
-          missingRegularCommentCount:
-            dispositionEvidence.missingRegularCommentCount,
-          missingThreadCount: dispositionEvidence.missingThreadCount,
-          soleCauseAckOnlyPostDisposition:
-            dispositionEvidence.soleCauseAckOnlyPostDisposition,
-        },
-        embeddedFindings,
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
   return 0;
 }
 /**

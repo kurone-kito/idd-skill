@@ -53,16 +53,21 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
@@ -1991,7 +1996,7 @@ function isSchemaOrFixtureManifestPath(targetPath) {
  * completeness already reports it). A target path that exists but is
  * not a regular file is a non-file collision, not a content change.
  */
-function manifestContentDiffers(sourceRoot, targetRoot, file) {
+function manifestContentDiffers(sourceRoot, targetRoot, file, baseline) {
   if (!fileExists(sourceRoot, file.sourcePath)) {
     return false;
   }
@@ -2004,6 +2009,19 @@ function manifestContentDiffers(sourceRoot, targetRoot, file) {
     hasNonDirectoryAncestor(targetRoot, file.targetPath)
   ) {
     return false;
+  }
+  if (
+    !fileExists(targetRoot, file.targetPath) &&
+    pathExists(targetRoot, file.targetPath)
+  ) {
+    return false;
+  }
+  if (baseline !== undefined) {
+    const baselineContent = baseline.read(file.targetPath);
+    return (
+      baselineContent === null ||
+      !readFileSync(join(sourceRoot, file.sourcePath)).equals(baselineContent)
+    );
   }
   if (!fileExists(targetRoot, file.targetPath)) {
     return !pathExists(targetRoot, file.targetPath);
@@ -2072,7 +2090,10 @@ function listTargetScriptModules(targetRoot) {
  * `listTargetScriptModules`.
  */
 function isHeldDistributedScript(targetPath) {
-  return /^(?:src\/scripts|scripts)\/.+\.(?:mjs|cjs|mts|js)$/.test(targetPath);
+  return (
+    !targetPath.split(/[\\/]/u).some((segment) => segment === '..') &&
+    /^(?:src\/scripts|scripts)\/.+\.(?:mjs|cjs|mts|js)$/.test(targetPath)
+  );
 }
 function readHeldModule(targetRoot, targetPath) {
   if (!isHeldDistributedScript(targetPath)) {
@@ -2089,9 +2110,2525 @@ function readHeldModule(targetRoot, targetPath) {
     text: readFileSync(join(targetRoot, targetPath), 'utf8'),
   };
 }
-function moduleReferencesManifestPath(text, targetPath) {
+/**
+ * Directory enumeration APIs that can discover every schema/fixture entry
+ * without naming each basename. This is deliberately narrow: a directory
+ * string alone is not enough to infer a dependency, because modules often
+ * mention a directory in comments or diagnostics without reading it.
+ */
+const DIRECTORY_SCAN_API_NAMES = [
+  'readdir',
+  'readdirSync',
+  'opendir',
+  'opendirSync',
+  'glob',
+  'globSync',
+  'walkDir',
+  'walkDirectory',
+  'scanDir',
+  'scanDirectory',
+  'listFiles',
+  'listEntries',
+  'listDirectory',
+  'collectFiles',
+  'collectEntries',
+];
+function createDirectoryScanApiNameAtStart(names) {
+  const alternatives = [...new Set(names)]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join('|');
+  return new RegExp(`^(?:${alternatives})`, 'u');
+}
+const DIRECTORY_SCAN_API_NAME_AT_START = createDirectoryScanApiNameAtStart(
+  DIRECTORY_SCAN_API_NAMES,
+);
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+function isControlFlowClosingParenthesis(text, index) {
+  let depth = 0;
+  for (let current = index; current >= 0; current -= 1) {
+    const character = text[current] ?? '';
+    if (character === ')') {
+      depth += 1;
+    } else if (character === '(') {
+      depth -= 1;
+      if (depth === 0) {
+        return /\b(?:if|while|for|with|switch|catch)\s*$/u.test(
+          text.slice(0, current),
+        );
+      }
+    }
+  }
+  return false;
+}
+function isFunctionClosingParenthesis(text, index) {
+  let depth = 0;
+  for (let current = index; current >= 0; current -= 1) {
+    const character = text[current] ?? '';
+    if (character === ')') {
+      depth += 1;
+    } else if (character === '(') {
+      depth -= 1;
+      if (depth === 0) {
+        return /\bfunction(?:\s*\*)?(?:\s+[$\w]+)?\s*$/u.test(
+          text.slice(0, current),
+        );
+      }
+    }
+  }
+  return false;
+}
+/**
+ * Match the optional TypeScript type-parameter suffix after a function name.
+ * The scanner has already masked strings and comments, but generic
+ * constraints can still contain nested angle brackets and arrow types. A
+ * flat `<[^<>]*>` expression therefore stops too early on a declaration such
+ * as `function helper<T extends Promise<string>>()` and leaves the following
+ * regex literal exposed as executable code.
+ */
+function isBalancedFunctionTypeParameterSuffix(text) {
+  const suffix = text.trimStart();
+  if (suffix.length === 0) {
+    return true;
+  }
+  if (!suffix.startsWith('<')) {
+    return false;
+  }
+  let depth = 0;
+  for (let index = 0; index < suffix.length; index += 1) {
+    const character = suffix[index] ?? '';
+    if (character === '<') {
+      depth += 1;
+      continue;
+    }
+    if (character !== '>' || suffix[index - 1] === '=') {
+      continue;
+    }
+    depth -= 1;
+    if (depth < 0) {
+      return false;
+    }
+    if (depth === 0) {
+      return suffix.slice(index + 1).trim().length === 0;
+    }
+  }
+  return false;
+}
+function isFunctionDeclarationPrefix(text) {
+  const trimmed = text.trimEnd();
+  for (
+    let close = trimmed.lastIndexOf(')');
+    close >= 0;
+    close = trimmed.lastIndexOf(')', close - 1)
+  ) {
+    let depth = 0;
+    for (let current = close; current >= 0; current -= 1) {
+      const character = trimmed[current] ?? '';
+      if (character === ')') {
+        depth += 1;
+      } else if (character === '(') {
+        depth -= 1;
+        if (depth === 0) {
+          const returnAnnotation = trimmed.slice(close + 1).trimStart();
+          if (returnAnnotation !== '' && !returnAnnotation.startsWith(':')) {
+            break;
+          }
+          const declarationPrefix = trimmed.slice(0, current);
+          let declarationStart;
+          for (const match of declarationPrefix.matchAll(
+            /(?:^|[;{}])\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*(?:[$\w]+\s*)?/gu,
+          )) {
+            declarationStart = match;
+          }
+          const declarationIndex = declarationStart?.index;
+          if (
+            declarationStart !== undefined &&
+            declarationIndex !== undefined &&
+            isBalancedFunctionTypeParameterSuffix(
+              declarationPrefix.slice(
+                declarationIndex + declarationStart[0].length,
+              ),
+            )
+          ) {
+            return true;
+          }
+          break;
+        }
+      }
+    }
+  }
+  return false;
+}
+function stripLeadingDecorators(text) {
+  let candidate = text.trimStart();
+  while (candidate.startsWith('@')) {
+    const decorator =
+      /^@[^\n;{}]*?(?=\s+(?:@|(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b)|$)/u.exec(
+        candidate,
+      );
+    if (!decorator) {
+      break;
+    }
+    candidate = candidate.slice(decorator[0].length).trimStart();
+  }
+  return candidate;
+}
+function isClassLikeDeclarationPrefix(text) {
+  const statementStart =
+    Math.max(
+      text.lastIndexOf(';'),
+      text.lastIndexOf('}'),
+      text.lastIndexOf('{'),
+    ) + 1;
+  const declarationPrefix = stripLeadingDecorators(text.slice(statementStart));
+  return /^(?:export\s+(?:default\s+)?)?(?:declare\s+|abstract\s+)?(?:class|interface|enum|namespace|module|type)\b[^;]*$/u.test(
+    declarationPrefix,
+  );
+}
+function isSwitchCaseOpeningPrefix(text) {
+  return /(?:^|[{};])\s*(?:case\b[\s\S]*|default)\s*:\s*$/u.test(text);
+}
+function isBlockClosingBrace(text, index) {
+  let depth = 0;
+  for (let current = index; current >= 0; current -= 1) {
+    const character = text[current] ?? '';
+    if (character === '}') {
+      depth += 1;
+    } else if (character === '{') {
+      depth -= 1;
+      if (depth === 0) {
+        const openingPrefix = text.slice(0, current);
+        return (
+          /(?:^|[;}])\s*(?:else|do|try|finally|catch)\s*$/u.test(
+            openingPrefix,
+          ) ||
+          isFunctionDeclarationPrefix(openingPrefix) ||
+          (/\)\s*$/u.test(openingPrefix) &&
+            !isFunctionClosingParenthesis(
+              openingPrefix,
+              openingPrefix.trimEnd().length - 1,
+            )) ||
+          /=>\s*$/u.test(openingPrefix) ||
+          /(?:^|;)\s*$/u.test(openingPrefix) ||
+          /(?:^|[;}])\s*(?:[$\w]+\s*:\s*)+$/u.test(openingPrefix) ||
+          isSwitchCaseOpeningPrefix(openingPrefix) ||
+          isClassLikeDeclarationPrefix(openingPrefix)
+        );
+      }
+    }
+  }
+  return false;
+}
+function isRegexLiteralStart(text, index) {
+  let previousIndex = index - 1;
+  while (previousIndex >= 0 && /\s/u.test(text[previousIndex] ?? '')) {
+    previousIndex -= 1;
+  }
+  if (previousIndex < 0) {
+    return true;
+  }
+  const previous = text[previousIndex] ?? '';
+  if (
+    (previous === '+' && /\+\+\s*$/u.test(text.slice(0, previousIndex + 1))) ||
+    (previous === '-' && /--\s*$/u.test(text.slice(0, previousIndex + 1)))
+  ) {
+    return false;
+  }
+  if (/[=([{,:;!?&|+\-*%^~<>]/u.test(previous)) {
+    return true;
+  }
+  if (
+    previous === ')' &&
+    isControlFlowClosingParenthesis(text, previousIndex)
+  ) {
+    return true;
+  }
+  if (previous === '}' && isBlockClosingBrace(text, previousIndex)) {
+    return true;
+  }
+  return /\b(?:return|case|throw|else|do|break|continue|debugger|await|yield|typeof|void|delete|new|in|of|instanceof|export\s+default)$/u.test(
+    text.slice(0, previousIndex + 1),
+  );
+}
+function maskDirectoryApiNamesInString(
+  text,
+  apiNameAtStart = DIRECTORY_SCAN_API_NAME_AT_START,
+) {
+  let result = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const apiName = text.slice(index).match(apiNameAtStart)?.[0];
+    const previous = text[index - 1] ?? '';
+    const after = text[index + (apiName?.length ?? 0)] ?? '';
+    if (
+      apiName !== undefined &&
+      !/[A-Za-z0-9_$]/u.test(previous) &&
+      !/[A-Za-z0-9_$]/u.test(after)
+    ) {
+      result += ' '.repeat(apiName.length);
+      index += apiName.length - 1;
+      continue;
+    }
+    result += text[index] ?? '';
+  }
+  return result;
+}
+function stripJavaScriptComments(
+  text,
+  apiNameAtStart = DIRECTORY_SCAN_API_NAME_AT_START,
+) {
+  const preserveString = (value) =>
+    apiNameAtStart === null
+      ? value
+      : maskDirectoryApiNamesInString(value, apiNameAtStart);
+  let scanCode;
+  let scanTemplate;
+  scanTemplate = (start) => {
+    let result = '`';
+    let index = start + 1;
+    let literalStart = index;
+    while (index < text.length) {
+      const character = text[index] ?? '';
+      if (character === '\\') {
+        index += 2;
+        continue;
+      }
+      if (character === '`') {
+        result += preserveString(text.slice(literalStart, index));
+        result += '`';
+        return { text: result, nextIndex: index + 1 };
+      }
+      if (character === '$' && text[index + 1] === '{') {
+        result += preserveString(text.slice(literalStart, index));
+        result += '${';
+        const expression = scanCode(index + 2, true);
+        result += expression.text;
+        index = expression.nextIndex;
+        literalStart = index;
+        continue;
+      }
+      index += 1;
+    }
+    result += preserveString(text.slice(literalStart));
+    return { text: result, nextIndex: text.length };
+  };
+  scanCode = (start, stopAtClosingBrace) => {
+    let result = '';
+    let index = start;
+    let braceDepth = 0;
+    while (index < text.length) {
+      const character = text[index] ?? '';
+      const next = text[index + 1] ?? '';
+      if (stopAtClosingBrace && character === '}' && braceDepth === 0) {
+        return { text: result, nextIndex: index + 1 };
+      }
+      if (character === "'" || character === '"') {
+        let end = index + 1;
+        let escaped = false;
+        while (end < text.length) {
+          const quotedCharacter = text[end] ?? '';
+          if (escaped) {
+            escaped = false;
+          } else if (quotedCharacter === '\\') {
+            escaped = true;
+          } else if (quotedCharacter === character) {
+            end += 1;
+            break;
+          }
+          end += 1;
+        }
+        result += preserveString(text.slice(index, end));
+        index = end;
+        continue;
+      }
+      if (character === '`') {
+        const template = scanTemplate(index);
+        result += template.text;
+        index = template.nextIndex;
+        continue;
+      }
+      if (character === '/' && next === '/') {
+        result += ' ';
+        index += 2;
+        while (index < text.length && text[index] !== '\n') {
+          index += 1;
+        }
+        continue;
+      }
+      if (character === '/' && next === '*') {
+        result += ' ';
+        index += 2;
+        while (index < text.length) {
+          if (text[index] === '*' && text[index + 1] === '/') {
+            index += 2;
+            break;
+          }
+          if (text[index] === '\n' || text[index] === '\r') {
+            result += text[index];
+          }
+          index += 1;
+        }
+        continue;
+      }
+      if (
+        character === '/' &&
+        next !== '/' &&
+        next !== '*' &&
+        isRegexLiteralStart(text, index)
+      ) {
+        result += ' ';
+        index += 1;
+        let inCharacterClass = false;
+        let regexEscaped = false;
+        while (index < text.length) {
+          const regexCharacter = text[index] ?? '';
+          if (regexCharacter === '\n' || regexCharacter === '\r') {
+            result += regexCharacter;
+            index += 1;
+            break;
+          }
+          if (regexEscaped) {
+            regexEscaped = false;
+          } else if (regexCharacter === '\\') {
+            regexEscaped = true;
+          } else if (regexCharacter === '[') {
+            inCharacterClass = true;
+          } else if (regexCharacter === ']') {
+            inCharacterClass = false;
+          } else if (regexCharacter === '/' && !inCharacterClass) {
+            index += 1;
+            while (/[A-Za-z]/u.test(text[index] ?? '')) {
+              index += 1;
+            }
+            break;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      if (character === '{') {
+        braceDepth += 1;
+      } else if (character === '}') {
+        braceDepth -= 1;
+      }
+      result += character;
+      index += 1;
+    }
+    return { text: result, nextIndex: index };
+  };
+  return scanCode(0, false).text;
+}
+function isTypedMethodDeclarationPrefix(text, index) {
+  const prefix = text.slice(0, index);
+  const boundary = Math.max(
+    prefix.lastIndexOf('\n'),
+    prefix.lastIndexOf('{'),
+    prefix.lastIndexOf('}'),
+    prefix.lastIndexOf(';'),
+    prefix.lastIndexOf(','),
+  );
+  if (boundary === -1) {
+    return false;
+  }
+  return /^(?:(?:public|private|protected|static|readonly|abstract|async|get|set|override|declare)\s+|\*\s*)*$/u.test(
+    prefix.slice(boundary + 1).trim(),
+  );
+}
+function maskJavaScriptStringContents(text) {
+  let result = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character !== "'" && character !== '"' && character !== '`') {
+      result += character;
+      continue;
+    }
+    let end = index + 1;
+    let escaped = false;
+    while (end < text.length) {
+      const quotedCharacter = text[end] ?? '';
+      if (!escaped && quotedCharacter === character) {
+        break;
+      }
+      if (escaped) {
+        escaped = false;
+      } else if (quotedCharacter === '\\') {
+        escaped = true;
+      }
+      end += 1;
+    }
+    const content = text.slice(index + 1, end);
+    let after = end + (end < text.length ? 1 : 0);
+    while (/\s/u.test(text[after] ?? '')) {
+      after += 1;
+    }
+    const isPropertyKey =
+      /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(content) && text[after] === ':';
+    result += character;
+    result += isPropertyKey
+      ? content
+      : [...content]
+          .map((entry) => (entry === '\n' || entry === '\r' ? entry : ' '))
+          .join('');
+    if (end < text.length) {
+      result += text[end];
+    }
+    index = end;
+  }
+  return result;
+}
+function splitTopLevelArguments(text, separator = ',') {
+  const argumentsList = [];
+  let start = 0;
+  let quote = null;
+  let escaped = false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+    } else if (character === '(' || character === '[' || character === '{') {
+      depth += 1;
+    } else if (character === ')' || character === ']' || character === '}') {
+      depth = Math.max(0, depth - 1);
+    } else if (character === separator && depth === 0) {
+      argumentsList.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  argumentsList.push(text.slice(start));
+  return argumentsList;
+}
+function firstCallArgument(text) {
+  return splitTopLevelArguments(text)[0] ?? '';
+}
+function findTopLevelCharacter(text, target) {
+  let quote = null;
+  let escaped = false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+    } else if (character === '(' || character === '[' || character === '{') {
+      depth += 1;
+    } else if (character === ')' || character === ']' || character === '}') {
+      depth = Math.max(0, depth - 1);
+    } else if (character === target && depth === 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+function topLevelObjectExpression(text) {
+  const expression = text.trim();
+  if (!expression.startsWith('{')) {
+    return null;
+  }
+  let quote = null;
+  let escaped = false;
+  let depth = 0;
+  for (let index = 0; index < expression.length; index += 1) {
+    const character = expression[index] ?? '';
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+    } else if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const suffix = expression.slice(index + 1).trim();
+        return suffix === '' || /^(?:as|satisfies)\b/u.test(suffix)
+          ? expression.slice(0, index + 1)
+          : null;
+      }
+    }
+  }
+  return null;
+}
+function parseStaticOptionKey(text) {
+  let key = text.trim();
+  if (key.startsWith('[') && key.endsWith(']')) {
+    key = key.slice(1, -1).trim();
+  }
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key)) {
+    return key;
+  }
+  if (
+    key.length >= 2 &&
+    (key.startsWith("'") || key.startsWith('"') || key.startsWith('`')) &&
+    key.at(-1) === key[0] &&
+    !key.includes('${')
+  ) {
+    return decodeJavaScriptStringLiteral(key.slice(1, -1));
+  }
+  return null;
+}
+function objectPropertyValue(objectExpression, property) {
+  const options = topLevelObjectExpression(objectExpression);
+  if (options === null) {
+    return null;
+  }
+  let value = null;
+  const optionEntries = splitTopLevelArguments(options.slice(1, -1));
+  for (const entry of optionEntries) {
+    const trimmed = entry.trim();
+    if (trimmed.startsWith('...')) {
+      const spreadValue = objectPropertyValue(trimmed.slice(3), property);
+      if (spreadValue !== null) {
+        value = spreadValue;
+      }
+      continue;
+    }
+    const colon = findTopLevelCharacter(trimmed, ':');
+    if (
+      colon !== -1 &&
+      parseStaticOptionKey(trimmed.slice(0, colon)) === property
+    ) {
+      value = trimmed.slice(colon + 1).trim();
+    }
+  }
+  return value;
+}
+function topLevelOptionPropertyValue(argumentsText, property) {
+  return objectPropertyValue(
+    splitTopLevelArguments(argumentsText)[1] ?? '',
+    property,
+  );
+}
+function isStaticTrueExpression(expression) {
+  let candidate = expression.trim();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (
+      candidate.startsWith('(') &&
+      findGlobGroupEnd(candidate, 0, '(', ')') === candidate.length - 1
+    ) {
+      candidate = candidate.slice(1, -1).trim();
+      continue;
+    }
+    const assertion = /^(.*?)\s+(?:as|satisfies)\s+[\s\S]+$/u.exec(candidate);
+    if (assertion !== null) {
+      candidate = assertion[1]?.trim() ?? '';
+      continue;
+    }
+    break;
+  }
+  return candidate === 'true';
+}
+function stripStaticTypeAssertions(expression) {
+  let candidate = expression.trim();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (
+      candidate.startsWith('(') &&
+      findGlobGroupEnd(candidate, 0, '(', ')') === candidate.length - 1
+    ) {
+      candidate = candidate.slice(1, -1).trim();
+      continue;
+    }
+    const assertion = /^(.*?)\s+(?:as|satisfies)\s+[\s\S]+$/u.exec(candidate);
+    if (assertion === null) {
+      break;
+    }
+    candidate = assertion[1]?.trim() ?? '';
+  }
+  return candidate;
+}
+function isFunctionValuedExpression(text) {
+  const expression = maskJavaScriptStringContents(text).trim();
+  return /=>/u.test(expression) || /^(?:async\s+)?function\b/u.test(expression);
+}
+function normalizeComputedDirectoryScanMembers(text) {
+  return text.replace(
+    /\[\s*(['"`])((?:readdir(?:Sync)?|opendir(?:Sync)?|glob(?:Sync)?|walk(?:Dir|Directory)|scan(?:Dir|Directory)|list(?:Files|Entries|Directory)|collect(?:Files|Entries)))\1\s*\](?=\s*(?:\?\.|!)?\s*(?:<[^\r\n]*>)?(?:\s*\(|\s*[;,)]|\s*$))/gu,
+    (_match, _quote, apiName) => `.${apiName}`,
+  );
+}
+function resolveBoundDirectoryScanAlias(
+  sourceName,
+  knownNames,
+  namespaceNames,
+) {
+  const boundSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)\.bind\([\s\S]*\)$/u.exec(
+    sourceName,
+  );
+  if (
+    boundSource !== null &&
+    namespaceNames.has(boundSource[1] ?? '') &&
+    knownNames.has(boundSource[2] ?? '')
+  ) {
+    return boundSource[2];
+  }
+  const directBoundSource = /^([\w$]+)(?:\.|\?\.)bind\([\s\S]*\)$/u.exec(
+    sourceName,
+  );
+  if (
+    directBoundSource !== null &&
+    knownNames.has(directBoundSource[1] ?? '')
+  ) {
+    return directBoundSource[1];
+  }
+  return undefined;
+}
+function findDirectoryScanAliases(text) {
+  const aliases = new Map();
+  const knownNames = new Set(DIRECTORY_SCAN_API_NAMES);
+  const namespaceNames = new Set();
+  const namespaceImportPattern =
+    /(?:^|[;\n])\s*import\s+\*\s+as\s+([\w$]+)\s+from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
+  for (const match of text.matchAll(namespaceImportPattern)) {
+    namespaceNames.add(match[1] ?? '');
+  }
+  const defaultImportPattern =
+    /(?:^|[;\n])\s*import\s+([\w$]+)(?:\s*,\s*\{[\s\S]*?\})?\s+from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
+  for (const match of text.matchAll(defaultImportPattern)) {
+    namespaceNames.add(match[1] ?? '');
+  }
+  const namespaceRequirePattern =
+    /(?:^|[;\n])\s*(?:const|let|var)\s+([\w$]+)\s*=\s*require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*\)\s*;?/gu;
+  for (const match of text.matchAll(namespaceRequirePattern)) {
+    namespaceNames.add(match[1] ?? '');
+  }
+  const importPattern =
+    /(?:^|[;\n])\s*import(?:\s+[\w$]+\s*,)?\s*\{([\s\S]*?)\}\s*from\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*;?/gu;
+  for (const match of text.matchAll(importPattern)) {
+    for (const specifier of splitTopLevelArguments(match[1] ?? '')) {
+      const alias = /^([\w$]+)\s+as\s+([\w$]+)$/u.exec(specifier.trim());
+      if (alias !== null && knownNames.has(alias[1] ?? '')) {
+        aliases.set(alias[2] ?? '', alias[1] ?? '');
+      }
+    }
+  }
+  const requirePattern =
+    /(?:^|[;\n])\s*(?:const|let|var)\s*\{([\s\S]*?)\}\s*=\s*require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\2\s*\)\s*;?/gu;
+  for (const match of text.matchAll(requirePattern)) {
+    for (const specifier of splitTopLevelArguments(match[1] ?? '')) {
+      const alias = /^([\w$]+)\s*:\s*([\w$]+)(?:\s*=\s*[\s\S]+)?$/u.exec(
+        specifier.trim(),
+      );
+      if (alias !== null && knownNames.has(alias[1] ?? '')) {
+        aliases.set(alias[2] ?? '', alias[1] ?? '');
+      }
+    }
+  }
+  const directAliasDeclarationPattern =
+    /(?:^|[;\n])\s*(?:export\s+)?(?:const|let|var)\s+([^;]+)/gu;
+  for (const match of text.matchAll(directAliasDeclarationPattern)) {
+    for (const declarator of splitTopLevelArguments(match[1] ?? '')) {
+      const equals = findTopLevelCharacter(declarator, '=');
+      if (equals === -1) {
+        continue;
+      }
+      const aliasNameMatch = /^(?<name>[\w$]+)(?:\s*:\s*[\s\S]+)?$/u.exec(
+        declarator.slice(0, equals).trim(),
+      );
+      const aliasName = aliasNameMatch?.groups?.name ?? '';
+      const sourceName = stripStaticTypeAssertions(
+        declarator.slice(equals + 1),
+      );
+      if (!/^[\w$]+$/u.test(aliasName)) {
+        continue;
+      }
+      const inlineRequireSource =
+        /^require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\1\s*\)\.([\w$]+)$/u.exec(
+          sourceName,
+        );
+      const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
+      const boundApiName = resolveBoundDirectoryScanAlias(
+        sourceName,
+        knownNames,
+        namespaceNames,
+      );
+      const apiName = knownNames.has(sourceName)
+        ? sourceName
+        : (aliases.get(sourceName) ??
+          (inlineRequireSource !== null &&
+          knownNames.has(inlineRequireSource[2] ?? '')
+            ? inlineRequireSource[2]
+            : qualifiedSource !== null &&
+                namespaceNames.has(qualifiedSource[1] ?? '') &&
+                knownNames.has(qualifiedSource[2] ?? '')
+              ? qualifiedSource[2]
+              : boundApiName));
+      if (apiName !== undefined) {
+        aliases.set(aliasName, apiName);
+      }
+    }
+  }
+  const directAliasAssignmentPattern = /(?:^|[;\n])\s*([\w$]+)\s*=\s*([^;]+)/gu;
+  for (const match of text.matchAll(directAliasAssignmentPattern)) {
+    const aliasName = match[1] ?? '';
+    if (!/^[\w$]+$/u.test(aliasName)) {
+      continue;
+    }
+    const sourceName = stripStaticTypeAssertions(match[2] ?? '');
+    const inlineRequireSource =
+      /^require\(\s*(['"])(?:node:)?(?:fs|fs\/promises)\1\s*\)\.([\w$]+)$/u.exec(
+        sourceName,
+      );
+    const qualifiedSource = /^([\w$]+)(?:\.|\?\.)([\w$]+)$/u.exec(sourceName);
+    const boundApiName = resolveBoundDirectoryScanAlias(
+      sourceName,
+      knownNames,
+      namespaceNames,
+    );
+    const apiName = knownNames.has(sourceName)
+      ? sourceName
+      : (aliases.get(sourceName) ??
+        (inlineRequireSource !== null &&
+        knownNames.has(inlineRequireSource[2] ?? '')
+          ? inlineRequireSource[2]
+          : qualifiedSource !== null &&
+              namespaceNames.has(qualifiedSource[1] ?? '') &&
+              knownNames.has(qualifiedSource[2] ?? '')
+            ? qualifiedSource[2]
+            : boundApiName));
+    if (apiName !== undefined) {
+      aliases.set(aliasName, apiName);
+    }
+  }
+  return aliases;
+}
+function createDirectoryScanApiPattern(names) {
+  const alternatives = [...new Set(names)]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join('|');
+  return new RegExp(
+    `(?<!['"\\x60])(?<![\\p{ID_Continue}$#])(${alternatives})(?=\\s*(?:\\?\\.|!)?\\s*(?:<|\\)|\\())`,
+    'gu',
+  );
+}
+function findDirectoryScanCalls(text) {
+  const calls = [];
+  const normalizedSource = normalizeComputedDirectoryScanMembers(text);
+  const aliases = findDirectoryScanAliases(
+    stripJavaScriptComments(normalizedSource),
+  );
+  const apiNames = new Set([...DIRECTORY_SCAN_API_NAMES, ...aliases.keys()]);
+  const normalizedText = stripJavaScriptComments(
+    normalizedSource,
+    createDirectoryScanApiNameAtStart(apiNames),
+  );
+  const pathExpressionText = stripJavaScriptComments(normalizedSource, null);
+  for (const match of normalizedText.matchAll(
+    createDirectoryScanApiPattern(apiNames),
+  )) {
+    const matchedApiName = match[1] ?? '';
+    const apiName = aliases.get(matchedApiName) ?? matchedApiName;
+    let openIndex = (match.index ?? 0) + matchedApiName.length;
+    while (true) {
+      while (/\s/u.test(normalizedText[openIndex] ?? '')) {
+        openIndex += 1;
+      }
+      if (normalizedText.slice(openIndex, openIndex + 2) === '?.') {
+        openIndex += 2;
+        continue;
+      }
+      if (normalizedText[openIndex] === '!') {
+        openIndex += 1;
+        continue;
+      }
+      if (normalizedText[openIndex] === ')') {
+        openIndex += 1;
+        continue;
+      }
+      if (normalizedText[openIndex] === '<') {
+        let angleDepth = 0;
+        let closed = false;
+        for (; openIndex < normalizedText.length; openIndex += 1) {
+          const character = normalizedText[openIndex] ?? '';
+          if (character === "'" || character === '"' || character === '`') {
+            const quote = character;
+            let escaped = false;
+            openIndex += 1;
+            for (; openIndex < normalizedText.length; openIndex += 1) {
+              const quotedCharacter = normalizedText[openIndex] ?? '';
+              if (escaped) {
+                escaped = false;
+              } else if (quotedCharacter === '\\') {
+                escaped = true;
+              } else if (quotedCharacter === quote) {
+                break;
+              }
+            }
+            continue;
+          }
+          if (character === '<') {
+            angleDepth += 1;
+          } else if (
+            character === '>' &&
+            normalizedText[openIndex - 1] !== '='
+          ) {
+            angleDepth -= 1;
+            if (angleDepth === 0) {
+              openIndex += 1;
+              closed = true;
+              break;
+            }
+          }
+        }
+        if (!closed) {
+          break;
+        }
+        continue;
+      }
+      break;
+    }
+    if (normalizedText[openIndex] !== '(') {
+      continue;
+    }
+    let depth = 1;
+    let quote = null;
+    let escaped = false;
+    for (let index = openIndex + 1; index < normalizedText.length; index += 1) {
+      const character = normalizedText[index] ?? '';
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') {
+        quote = character;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          let afterCall = index + 1;
+          const gap = normalizedText.slice(afterCall);
+          while (/\s/u.test(normalizedText[afterCall] ?? '')) {
+            afterCall += 1;
+          }
+          const matchIndex = match.index ?? 0;
+          const declarationPrefix = normalizedText.slice(
+            Math.max(0, matchIndex - 64),
+            matchIndex,
+          );
+          const isDeclaration =
+            (normalizedText[afterCall] === '{' &&
+              (!/[\r\n]/u.test(gap.slice(0, afterCall - index - 1)) ||
+                isTypedMethodDeclarationPrefix(normalizedText, matchIndex))) ||
+            (normalizedText[afterCall] === ':' &&
+              isTypedMethodDeclarationPrefix(normalizedText, matchIndex)) ||
+            /\bfunction\s*\*?\s*$/u.test(declarationPrefix);
+          if (!isDeclaration) {
+            calls.push({
+              apiName,
+              argumentsText: pathExpressionText.slice(openIndex + 1, index),
+            });
+          }
+          break;
+        }
+      }
+    }
+  }
+  return calls;
+}
+function decodeJavaScriptStringLiteral(text) {
+  const simpleEscapes = {
+    b: '\b',
+    f: '\f',
+    n: '\n',
+    r: '\r',
+    t: '\t',
+    v: '\v',
+    0: '\0',
+  };
+  let result = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character !== '\\') {
+      result += character;
+      continue;
+    }
+    const escaped = text[index + 1] ?? '';
+    if (escaped === '\n') {
+      index += 1;
+      continue;
+    }
+    if (escaped === '\r') {
+      index += text[index + 2] === '\n' ? 2 : 1;
+      continue;
+    }
+    if (escaped === 'x') {
+      const hex = text.slice(index + 2, index + 4);
+      if (/^[0-9A-Fa-f]{2}$/u.test(hex)) {
+        result += String.fromCharCode(Number.parseInt(hex, 16));
+        index += 3;
+        continue;
+      }
+    }
+    if (escaped === 'u') {
+      if (text[index + 2] === '{') {
+        const close = text.indexOf('}', index + 3);
+        const hex = text.slice(index + 3, close);
+        const value = Number.parseInt(hex, 16);
+        if (
+          close !== -1 &&
+          /^[0-9A-Fa-f]{1,6}$/u.test(hex) &&
+          Number.isInteger(value) &&
+          value <= 0x10ffff
+        ) {
+          result += String.fromCodePoint(value);
+          index = close;
+          continue;
+        }
+      } else {
+        const hex = text.slice(index + 2, index + 6);
+        if (/^[0-9A-Fa-f]{4}$/u.test(hex)) {
+          result += String.fromCharCode(Number.parseInt(hex, 16));
+          index += 5;
+          continue;
+        }
+      }
+    }
+    result += simpleEscapes[escaped] ?? escaped;
+    index += 1;
+  }
+  return result;
+}
+function scanStringLiterals(text) {
+  const literals = [];
+  for (let index = 0; index < text.length; index += 1) {
+    const quote = text[index];
+    if (quote !== "'" && quote !== '"' && quote !== '`') {
+      continue;
+    }
+    const isRawTemplate =
+      quote === '`' &&
+      /(?:^|[^A-Za-z0-9_$])String\.raw\s*$/u.test(text.slice(0, index));
+    let content = '';
+    for (let cursor = index + 1; cursor < text.length; cursor += 1) {
+      const character = text[cursor] ?? '';
+      if (character === '\\') {
+        content += character;
+        const escaped = text[cursor + 1];
+        if (escaped !== undefined) {
+          content += escaped;
+          cursor += 1;
+        }
+        continue;
+      }
+      if (character === quote) {
+        literals.push(
+          isRawTemplate ? content : decodeJavaScriptStringLiteral(content),
+        );
+        index = cursor;
+        break;
+      }
+      if (character === '\n' || character === '\r') {
+        break;
+      }
+      content += character;
+    }
+  }
+  return literals;
+}
+function unwrapParenthesizedExpression(text) {
+  let expression = text.trim();
+  while (expression.startsWith('(') && expression.endsWith(')')) {
+    let depth = 0;
+    let quote = null;
+    let escaped = false;
+    let closesAt = -1;
+    for (let index = 0; index < expression.length; index += 1) {
+      const character = expression[index] ?? '';
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === '\\') {
+          escaped = true;
+        } else if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') {
+        quote = character;
+      } else if (character === '(') {
+        depth += 1;
+      } else if (character === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          closesAt = index;
+          break;
+        }
+      }
+    }
+    if (closesAt !== expression.length - 1) {
+      break;
+    }
+    expression = expression.slice(1, -1).trim();
+  }
+  return expression;
+}
+function pathExpressionCandidates(text) {
+  const expression = unwrapParenthesizedExpression(text);
+  if (expression.startsWith('[') && expression.endsWith(']')) {
+    return splitTopLevelArguments(expression.slice(1, -1)).flatMap((entry) =>
+      pathExpressionCandidates(entry),
+    );
+  }
+  const conditionalIndex = findTopLevelCharacter(expression, '?');
+  if (conditionalIndex !== -1 && expression[conditionalIndex + 1] !== '.') {
+    const alternateIndex = findConditionalAlternateIndex(
+      expression,
+      conditionalIndex,
+    );
+    if (alternateIndex !== -1) {
+      return [
+        ...pathExpressionCandidates(
+          expression.slice(conditionalIndex + 1, alternateIndex),
+        ),
+        ...pathExpressionCandidates(expression.slice(alternateIndex + 1)),
+      ];
+    }
+  }
+  const expressionText = maskJavaScriptStringContents(expression);
+  if (/\+\s*/u.test(expressionText)) {
+    const argumentGroups = splitTopLevelArguments(expression, '+')
+      .map((argument) => pathExpressionCandidates(argument))
+      .filter((candidates) => candidates.length > 0);
+    if (argumentGroups.length === 0) {
+      return [];
+    }
+    return argumentGroups.reduce(
+      (paths, candidates) =>
+        paths.flatMap((path) =>
+          candidates.map((candidate) => `${path}${candidate}`),
+        ),
+      [''],
+    );
+  }
+  const literals = scanStringLiterals(expression);
+  if (/\b(?:join|resolve)\s*\(/u.test(expressionText)) {
+    const call = /\b(join|resolve)\s*\(/u.exec(expressionText);
+    if (call !== null) {
+      const open = expressionText.indexOf('(', call.index);
+      const closing = findGlobGroupEnd(expression, open, '(', ')');
+      if (open !== -1 && closing !== -1) {
+        const argumentGroups = splitTopLevelArguments(
+          expression.slice(open + 1, closing),
+        )
+          .map((argument) => pathExpressionCandidates(argument))
+          .filter((candidates) => candidates.length > 0);
+        if (argumentGroups.length === 0) {
+          return [];
+        }
+        if (
+          call[1] === 'resolve' &&
+          argumentGroups.some((candidates) =>
+            candidates.some((candidate) => candidate.startsWith('/')),
+          )
+        ) {
+          return [];
+        }
+        return argumentGroups.reduce(
+          (paths, candidates) =>
+            paths.flatMap((path) =>
+              candidates.map((candidate) =>
+                path === '' ? candidate : `${path}/${candidate}`,
+              ),
+            ),
+          [''],
+        );
+      }
+    }
+    return literals.length === 0 ? [] : [literals.join('/')];
+  }
+  return literals;
+}
+function findConditionalAlternateIndex(expression, questionIndex) {
+  let quote = null;
+  let escaped = false;
+  let delimiterDepth = 0;
+  let nestedConditionalDepth = 0;
+  for (let index = questionIndex + 1; index < expression.length; index += 1) {
+    const character = expression[index] ?? '';
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+      continue;
+    }
+    if (character === '(' || character === '[' || character === '{') {
+      delimiterDepth += 1;
+      continue;
+    }
+    if (character === ')' || character === ']' || character === '}') {
+      delimiterDepth = Math.max(0, delimiterDepth - 1);
+      continue;
+    }
+    if (delimiterDepth !== 0) {
+      continue;
+    }
+    if (character === '?' && expression[index + 1] !== '.') {
+      nestedConditionalDepth += 1;
+    } else if (character === ':') {
+      if (nestedConditionalDepth === 0) {
+        return index;
+      }
+      nestedConditionalDepth -= 1;
+    }
+  }
+  return -1;
+}
+function normalizeManifestScanPath(
+  path,
+  preserveTrailingSlash = false,
+  preserveGlobCharacterClassEscapes = false,
+) {
+  let normalized = '';
+  let inCharacterClass = false;
+  let inPosixCharacterClass = false;
+  for (let index = 0; index < path.length; index += 1) {
+    const character = path[index] ?? '';
+    if (character === '\\') {
+      if (preserveGlobCharacterClassEscapes && inCharacterClass) {
+        normalized += character;
+        const escapedCharacter = path[index + 1];
+        if (escapedCharacter !== undefined) {
+          normalized += escapedCharacter;
+          index += 1;
+        }
+      } else {
+        normalized += '/';
+      }
+      continue;
+    }
+    normalized += character;
+    if (preserveGlobCharacterClassEscapes && inCharacterClass) {
+      if (character === '[' && /[:.=]/u.test(path[index + 1] ?? '')) {
+        inPosixCharacterClass = true;
+      } else if (character === ']') {
+        if (inPosixCharacterClass) {
+          inPosixCharacterClass = false;
+        } else {
+          inCharacterClass = false;
+        }
+      }
+    } else if (preserveGlobCharacterClassEscapes && character === '[') {
+      inCharacterClass = true;
+    }
+  }
+  const hasTrailingSlash = preserveTrailingSlash && normalized.endsWith('/');
+  if (normalized.startsWith('/')) {
+    return normalized;
+  }
+  const segments = [];
+  for (const segment of normalized.split('/')) {
+    if (segment === '' || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      if (segments.at(-1) !== undefined && segments.at(-1) !== '..') {
+        segments.pop();
+      } else {
+        segments.push(segment);
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const result = segments.join('/');
+  return hasTrailingSlash && result !== '' ? `${result}/` : result;
+}
+function resolveModuleRelativeScanPath(
+  path,
+  modulePath,
+  leadingSlashIsRelative = false,
+) {
+  if (
+    modulePath === undefined ||
+    (path.startsWith('/') && !leadingSlashIsRelative)
+  ) {
+    return path;
+  }
+  const moduleSlash = modulePath.lastIndexOf('/');
+  if (moduleSlash <= 0) {
+    return path;
+  }
+  const base = modulePath.slice(0, moduleSlash);
+  return normalizeManifestScanPath(
+    `${base}/${path}`,
+    false,
+    isGlobPattern(path),
+  );
+}
+function usesModuleRelativePathExpression(text) {
+  return (
+    text.includes('import.meta.dirname') || text.includes('import.meta.url')
+  );
+}
+function isModuleRelativeFragmentExpression(text) {
+  return (
+    /import\.meta\.dirname\s*\+\s*['"`]/u.test(text) ||
+    /\b(?:join|resolve)\s*\(\s*import\.meta\.dirname\s*,\s*['"`]/u.test(text)
+  );
+}
+function isBareModuleDirectoryExpression(text) {
+  return /^import\.meta\.dirname(?:\s*\})?$/u.test(text.trim());
+}
+function isGlobPattern(text) {
+  return /[?*[\]{}]|[+@!]\(/u.test(text);
+}
+function findGlobGroupEnd(pattern, start, opening, closing) {
+  let depth = 0;
+  let inCharacterClass = false;
+  let characterClassStart = false;
+  for (let index = start; index < pattern.length; index += 1) {
+    if (pattern[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (inCharacterClass) {
+      if (pattern[index] === ']' && !characterClassStart) {
+        inCharacterClass = false;
+      } else {
+        characterClassStart = false;
+      }
+      continue;
+    }
+    if (pattern[index] === '[') {
+      inCharacterClass = true;
+      characterClassStart = true;
+    } else if (pattern[index] === opening) {
+      depth += 1;
+    } else if (pattern[index] === closing) {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+function splitGlobAlternatives(text, separator) {
+  const alternatives = [];
+  let depth = 0;
+  let inCharacterClass = false;
+  let characterClassStart = false;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (text[index] === '[' && !inCharacterClass) {
+      inCharacterClass = true;
+      characterClassStart = true;
+    } else if (
+      text[index] === ']' &&
+      inCharacterClass &&
+      !characterClassStart
+    ) {
+      inCharacterClass = false;
+    } else if (inCharacterClass) {
+      characterClassStart = false;
+    } else if (text[index] === '(' || text[index] === '{') {
+      depth += 1;
+    } else if (text[index] === ')' || text[index] === '}') {
+      depth = Math.max(0, depth - 1);
+    } else if (text[index] === separator && depth === 0) {
+      alternatives.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  alternatives.push(text.slice(start));
+  return alternatives;
+}
+function containsUnescapedGlobSlash(text) {
+  let inCharacterClass = false;
+  let characterClassStart = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (inCharacterClass) {
+      if (character === ']' && !characterClassStart) {
+        inCharacterClass = false;
+      } else {
+        characterClassStart = false;
+      }
+      continue;
+    }
+    if (character === '[') {
+      inCharacterClass = true;
+      characterClassStart = true;
+    } else if (character === '/') {
+      return true;
+    }
+  }
+  return false;
+}
+function hasCrossSegmentExtglob(pattern) {
+  for (let index = 0; index < pattern.length - 1; index += 1) {
+    if (!/[+@!?*]/u.test(pattern[index] ?? '') || pattern[index + 1] !== '(') {
+      continue;
+    }
+    const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
+    if (
+      closing !== -1 &&
+      containsUnescapedGlobSlash(pattern.slice(index + 2, closing))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+function expandGlobRange(text) {
+  const numeric =
+    /^(?<start>-?\d+)\.\.(?<end>-?\d+)(?:\.\.(?<step>-?\d+))?$/u.exec(text);
+  if (numeric?.groups !== undefined) {
+    const start = Number(numeric.groups.start);
+    const end = Number(numeric.groups.end);
+    const requestedStep = Number(numeric.groups.step ?? 0);
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      !Number.isSafeInteger(requestedStep)
+    ) {
+      return null;
+    }
+    const direction = start <= end ? 1 : -1;
+    const step = direction * (Math.abs(requestedStep) || 1);
+    const values = [];
+    const startDigits = numeric.groups.start.replace(/^-/u, '');
+    const endDigits = numeric.groups.end.replace(/^-/u, '');
+    const hasPadding = [startDigits, endDigits].some(
+      (digits) => digits.length > 1 && digits.startsWith('0'),
+    );
+    const width = hasPadding
+      ? Math.max(numeric.groups.start.length, numeric.groups.end.length)
+      : 0;
+    for (
+      let value = start;
+      (step > 0 && value <= end) || (step < 0 && value >= end);
+      value += step
+    ) {
+      if (values.length >= MAX_GLOB_BRACE_EXPANSIONS) {
+        return ['*'];
+      }
+      const sign = value < 0 ? '-' : '';
+      const absoluteText = Math.abs(value).toString();
+      const absolute = hasPadding
+        ? absoluteText.padStart(
+            sign === '' ? width : Math.max(0, width - 1),
+            '0',
+          )
+        : absoluteText;
+      values.push(`${sign}${absolute}`);
+    }
+    return values;
+  }
+  const alphabetic =
+    /^(?<start>[A-Za-z])\.\.(?<end>[A-Za-z])(?:\.\.(?<step>-?\d+))?$/u.exec(
+      text,
+    );
+  if (alphabetic?.groups !== undefined) {
+    const start = alphabetic.groups.start.codePointAt(0) ?? 0;
+    const end = alphabetic.groups.end.codePointAt(0) ?? 0;
+    const requestedStep = Number(alphabetic.groups.step ?? 0);
+    const direction = start <= end ? 1 : -1;
+    const step = direction * (Math.abs(requestedStep) || 1);
+    if (!Number.isSafeInteger(requestedStep) || !Number.isSafeInteger(step)) {
+      return null;
+    }
+    const values = [];
+    for (
+      let value = start;
+      (step > 0 && value <= end) || (step < 0 && value >= end);
+      value += step
+    ) {
+      if (values.length >= MAX_GLOB_BRACE_EXPANSIONS) {
+        return ['*'];
+      }
+      values.push(String.fromCodePoint(value));
+    }
+    return values;
+  }
+  return null;
+}
+const MAX_GLOB_BRACE_EXPANSIONS = 1024;
+const MAX_GLOB_BRACE_EXPANSION_DEPTH = 32;
+const MAX_GLOB_REGEX_PATTERN_LENGTH = 2048;
+const MAX_GLOB_REGEX_TARGET_LENGTH = 2048;
+const MAX_GLOB_REGEX_WILDCARDS_PER_SEGMENT = 4;
+function expandGlobBracePatternsBounded(text, depth, maxExpansions, maxDepth) {
+  if (depth > maxDepth) {
+    return null;
+  }
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== '{') {
+      continue;
+    }
+    const closing = findGlobGroupEnd(text, index, '{', '}');
+    if (closing === -1) {
+      continue;
+    }
+    const content = text.slice(index + 1, closing);
+    const expandedRange = expandGlobRange(content);
+    const alternatives = expandedRange ?? splitGlobAlternatives(content, ',');
+    if (expandedRange === null && alternatives.length === 1) {
+      index = closing;
+      continue;
+    }
+    if (alternatives.length > maxExpansions) {
+      return null;
+    }
+    const prefixes = expandGlobBracePatternsBounded(
+      text.slice(0, index),
+      depth + 1,
+      maxExpansions,
+      maxDepth,
+    );
+    const suffixes = expandGlobBracePatternsBounded(
+      text.slice(closing + 1),
+      depth + 1,
+      maxExpansions,
+      maxDepth,
+    );
+    if (
+      prefixes === null ||
+      suffixes === null ||
+      prefixes.length * alternatives.length * suffixes.length > maxExpansions
+    ) {
+      return null;
+    }
+    return prefixes.flatMap((prefix) =>
+      alternatives.flatMap((alternative) =>
+        suffixes.map((suffix) => `${prefix}${alternative}${suffix}`),
+      ),
+    );
+  }
+  return [text];
+}
+function hasAmbiguousRepeatingExtglob(pattern) {
+  for (let index = 0; index < pattern.length - 1; index += 1) {
+    const operator = pattern[index] ?? '';
+    if (!/[+*]/u.test(operator) || pattern[index + 1] !== '(') {
+      continue;
+    }
+    const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
+    if (closing === -1) {
+      continue;
+    }
+    const content = pattern.slice(index + 2, closing);
+    if (hasNestedRepeatingExtglob(content)) {
+      return true;
+    }
+    const expandedGroups = expandGlobBracePatternsBounded(
+      content,
+      0,
+      MAX_GLOB_BRACE_EXPANSIONS,
+      MAX_GLOB_BRACE_EXPANSION_DEPTH,
+    );
+    if (expandedGroups === null) {
+      continue;
+    }
+    for (const expandedGroup of expandedGroups) {
+      const alternatives = splitGlobAlternatives(expandedGroup, '|');
+      for (let left = 0; left < alternatives.length; left += 1) {
+        for (let right = left + 1; right < alternatives.length; right += 1) {
+          const first = alternatives[left] ?? '';
+          const second = alternatives[right] ?? '';
+          if (first.startsWith(second) || second.startsWith(first)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+function hasNestedRepeatingExtglob(text) {
+  let inCharacterClass = false;
+  for (let index = 0; index < text.length - 1; index += 1) {
+    const character = text[index] ?? '';
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === '[') {
+      inCharacterClass = true;
+      continue;
+    }
+    if (character === ']') {
+      inCharacterClass = false;
+      continue;
+    }
+    if (
+      !inCharacterClass &&
+      /[+*]/u.test(character) &&
+      text[index + 1] === '('
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+const UNICODE_POSIX_GLOB_CLASS_PATTERN =
+  /^\[\[:(?:alnum|alpha|blank|digit|graph|lower|punct|space|upper|word):\]\]/u;
+const UNICODE_POSIX_GLOB_CLASS_AT_END_PATTERN =
+  /\[\[:(?:alnum|alpha|blank|digit|graph|lower|punct|space|upper|word):\]\]$/u;
+const UNICODE_POSIX_GLOB_CLASS_ANYWHERE_PATTERN =
+  /\[\[:(?:alnum|alpha|blank|digit|graph|lower|punct|space|upper|word):\]\]/u;
+function hasUnicodePosixGlobClassInSegment(pattern, index) {
+  const segmentStart = pattern.lastIndexOf('/', index) + 1;
+  const segmentEnd = pattern.indexOf('/', index);
+  return UNICODE_POSIX_GLOB_CLASS_ANYWHERE_PATTERN.test(
+    pattern.slice(segmentStart, segmentEnd === -1 ? undefined : segmentEnd),
+  );
+}
+function matchSimpleStarGlob(pattern, targetPath) {
+  if (pattern.includes('**') || /[?[\]{}\\]|[+@!?*]\(/u.test(pattern)) {
+    return null;
+  }
+  let patternIndex = 0;
+  let targetIndex = 0;
+  let lastStarIndex = -1;
+  let lastStarTargetIndex = -1;
+  while (targetIndex < targetPath.length) {
+    const character = pattern[patternIndex] ?? '';
+    if (character !== '*' && character === targetPath[targetIndex]) {
+      patternIndex += 1;
+      targetIndex += 1;
+      continue;
+    }
+    if (character === '*') {
+      if (
+        (patternIndex === 0 || pattern[patternIndex - 1] === '/') &&
+        targetPath[targetIndex] === '.'
+      ) {
+        return false;
+      }
+      lastStarIndex = patternIndex;
+      lastStarTargetIndex = targetIndex;
+      patternIndex += 1;
+      continue;
+    }
+    if (lastStarIndex === -1) {
+      return false;
+    }
+    if ((targetPath[lastStarTargetIndex] ?? '') === '/') {
+      return false;
+    }
+    const nextStarTargetIndex = lastStarTargetIndex + 1;
+    lastStarTargetIndex = nextStarTargetIndex;
+    targetIndex = lastStarTargetIndex;
+    patternIndex = lastStarIndex + 1;
+  }
+  while (pattern[patternIndex] === '*') {
+    patternIndex += 1;
+  }
+  return patternIndex === pattern.length;
+}
+function hasBoundedGlobRegexComplexity(pattern, targetPath) {
+  if (
+    pattern.length > MAX_GLOB_REGEX_PATTERN_LENGTH ||
+    targetPath.length > MAX_GLOB_REGEX_TARGET_LENGTH
+  ) {
+    return false;
+  }
+  let wildcardsInSegment = 0;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index] ?? '';
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === '/') {
+      wildcardsInSegment = 0;
+      continue;
+    }
+    const isExtglobOperator =
+      /[+@!?*]/u.test(character) && pattern[index + 1] === '(';
+    const countsTowardBacktrackingRisk =
+      (character === '*' && pattern[index + 1] !== '*') || isExtglobOperator;
+    if (countsTowardBacktrackingRisk) {
+      wildcardsInSegment += 1;
+      if (wildcardsInSegment > MAX_GLOB_REGEX_WILDCARDS_PER_SEGMENT) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+function globPatternToRegex(
+  pattern,
+  initialSegmentStart = true,
+  inheritedSuffix = '',
+  questionCaptures = [],
+  exactQuestionWidth = false,
+) {
+  let expression = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index] ?? '';
+    const segmentStart =
+      index === 0 ? initialSegmentStart : pattern[index - 1] === '/';
+    if (character === '\\') {
+      const escaped = pattern[index + 1];
+      if (escaped === undefined) {
+        expression += '\\\\';
+      } else {
+        expression += escapeRegExp(escaped);
+        index += 1;
+      }
+    } else if (/[+@!?*]/u.test(character) && pattern[index + 1] === '(') {
+      const closing = findGlobGroupEnd(pattern, index + 1, '(', ')');
+      if (closing === -1) {
+        expression += escapeRegExp(character);
+        continue;
+      }
+      const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
+      const expandedGroups = expandGlobBracePatternsBounded(
+        pattern.slice(index + 2, closing),
+        0,
+        MAX_GLOB_BRACE_EXPANSIONS,
+        MAX_GLOB_BRACE_EXPANSION_DEPTH,
+      );
+      if (expandedGroups === null) {
+        expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+        index = closing;
+        continue;
+      }
+      const innerExpressions = expandedGroups.map((expandedGroup) =>
+        splitGlobAlternatives(expandedGroup, '|')
+          .map((alternative) =>
+            globPatternToRegex(
+              alternative,
+              segmentStart,
+              trailingPattern,
+              questionCaptures,
+              exactQuestionWidth,
+            ),
+          )
+          .join('|'),
+      );
+      const translatedGroups = innerExpressions.map((inner) => {
+        if (character === '!') {
+          if (/[+@!?*]\(/u.test(pattern.slice(index + 2, closing))) {
+            return `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+          }
+          const slash = trailingPattern.indexOf('/');
+          const suffix = trailingPattern.slice(
+            0,
+            slash === -1 ? trailingPattern.length : slash,
+          );
+          const wildcard = /^\?/u.test(trailingPattern) ? '[^/]*?' : '[^/]*';
+          return `${segmentStart ? '(?!\\.)' : ''}(?!(?:${inner})${globPatternToRegex(suffix, false, '', questionCaptures, true)}(?=$|/))${wildcard}`;
+        }
+        const quantifier =
+          character === '@'
+            ? ''
+            : /^\?/u.test(trailingPattern)
+              ? `${character}?`
+              : character;
+        return `(?:${inner})${quantifier}`;
+      });
+      expression +=
+        translatedGroups.length === 1
+          ? translatedGroups[0]
+          : `(?:${translatedGroups.join('|')})`;
+      index = closing;
+    } else if (
+      character === '*' &&
+      pattern[index + 1] === '*' &&
+      pattern[index + 2] === '('
+    ) {
+      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+    } else if (character === '*' && pattern[index + 1] === '*') {
+      index += 1;
+      if (segmentStart && pattern[index + 1] === '/') {
+        index += 1;
+        expression += '(?:(?!\\.)[^/]+/)*';
+      } else if (segmentStart && index + 1 === pattern.length) {
+        expression += '(?:(?!\\.)[^/]+(?:/|$))*';
+      } else {
+        const wildcard = pattern[index + 1] === '?' ? '[^/]*?' : '[^/]*';
+        expression += `${segmentStart ? '(?!\\.)' : ''}${wildcard}`;
+      }
+    } else if (character === '*') {
+      const questionRunFollows = pattern[index + 1] === '?';
+      expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*${questionRunFollows ? '?' : ''}`;
+    } else if (character === '?') {
+      let questionEnd = index + 1;
+      while (pattern[questionEnd] === '?' && pattern[questionEnd + 1] !== '(') {
+        questionEnd += 1;
+      }
+      const captureName = `__iddQuestion${questionCaptures.length}`;
+      const hasAdjacentPosixClass =
+        UNICODE_POSIX_GLOB_CLASS_AT_END_PATTERN.test(pattern.slice(0, index)) ||
+        UNICODE_POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(questionEnd));
+      const hasPosixClassInSegment = hasUnicodePosixGlobClassInSegment(
+        pattern,
+        index,
+      );
+      questionCaptures.push({
+        name: captureName,
+        codeUnitCount: questionEnd - index,
+        allowsAstralCodePoint:
+          questionEnd - index === 1 &&
+          ((pattern[questionEnd] === '*' && pattern[questionEnd + 1] !== '(') ||
+            hasPosixClassInSegment),
+        requiresCodePointCount: hasAdjacentPosixClass,
+      });
+      const questionQuantifier = exactQuestionWidth
+        ? `{${questionEnd - index}}`
+        : `{1,${questionEnd - index}}`;
+      expression += `(?<${captureName}>${segmentStart ? '(?!\\.)' : ''}[^/]${questionQuantifier})`;
+      index = questionEnd - 1;
+    } else if (character === '[') {
+      let closing = index + 1;
+      if (pattern[closing] === '!') {
+        closing += 1;
+      }
+      if (pattern[closing] === ']') {
+        closing += 1;
+      }
+      while (closing < pattern.length) {
+        if (
+          pattern[closing] === '[' &&
+          /[:.=]/u.test(pattern[closing + 1] ?? '')
+        ) {
+          const delimiter = pattern[closing + 1] ?? '';
+          const posixClosing = pattern.indexOf(`${delimiter}]`, closing + 2);
+          if (posixClosing !== -1) {
+            closing = posixClosing + 2;
+            continue;
+          }
+        }
+        if (pattern[closing] === ']') {
+          break;
+        }
+        closing += 1;
+      }
+      if (closing >= pattern.length) {
+        expression += '\\[';
+      } else {
+        let characterClass = pattern.slice(index + 1, closing);
+        const negatedCharacterClass = characterClass.startsWith('!');
+        const explicitlyMatchesDot =
+          !negatedCharacterClass && characterClass === '.';
+        if (characterClass.startsWith('!')) {
+          characterClass = `^${characterClass.slice(1)}`;
+        }
+        const posixClassReplacements = {
+          alnum: '\\p{L}\\p{N}',
+          alpha: '\\p{L}',
+          ascii: '\\x00-\\x7F',
+          blank: '\\p{Zs}\\t',
+          cntrl: '\\x00-\\x1F\\x7F',
+          digit: '\\p{Nd}',
+          graph: '\\p{L}\\p{M}\\p{N}\\p{P}\\p{S}',
+          lower: '\\p{Ll}',
+          print: '\\x00-\\x1F\\x7F',
+          punct: '\\p{P}',
+          space: '\\s',
+          upper: '\\p{Lu}',
+          word: '\\p{L}\\p{N}_',
+          xdigit: 'A-Fa-f0-9',
+        };
+        characterClass = characterClass.replace(
+          /\[:(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit):\]/gu,
+          (_match, name) => `__IDD_POSIX_${name}__`,
+        );
+        let escapedCharacterClass = '';
+        for (
+          let classIndex = 0;
+          classIndex < characterClass.length;
+          classIndex += 1
+        ) {
+          const classCharacter = characterClass[classIndex] ?? '';
+          if (classCharacter !== '\\') {
+            escapedCharacterClass += classCharacter;
+            continue;
+          }
+          const escapedCharacter = characterClass[classIndex + 1];
+          if (escapedCharacter === undefined) {
+            escapedCharacterClass += '\\\\';
+            continue;
+          }
+          if (/[-[\\\]^]/u.test(escapedCharacter)) {
+            escapedCharacterClass += `\\${escapedCharacter}`;
+          } else {
+            escapedCharacterClass += escapeRegExp(escapedCharacter);
+          }
+          classIndex += 1;
+        }
+        characterClass = escapedCharacterClass.replace(
+          /__IDD_POSIX_(alnum|alpha|ascii|blank|cntrl|digit|graph|lower|print|punct|space|upper|word|xdigit)__/gu,
+          (_match, name) => posixClassReplacements[name] ?? _match,
+        );
+        if (characterClass.startsWith('^]')) {
+          characterClass = `^\\]${characterClass.slice(2)}`;
+        } else if (characterClass.startsWith(']')) {
+          characterClass = `\\]${characterClass.slice(1)}`;
+        }
+        const classPrefix =
+          segmentStart && !explicitlyMatchesDot ? '(?!\\.)' : '';
+        const segmentCharacterClassPrefix = `${classPrefix}(?!/)`;
+        const hasPosixClass = /\\p\{|\\s/u.test(characterClass);
+        if (hasPosixClass) {
+          expression += `${segmentCharacterClassPrefix}[${characterClass}]`;
+        } else {
+          const captureName = `__iddQuestion${questionCaptures.length}`;
+          const hasAdjacentPosixClass =
+            UNICODE_POSIX_GLOB_CLASS_AT_END_PATTERN.test(
+              pattern.slice(0, index),
+            ) ||
+            UNICODE_POSIX_GLOB_CLASS_PATTERN.test(pattern.slice(closing + 1));
+          const hasPosixClassInSegment = hasUnicodePosixGlobClassInSegment(
+            pattern,
+            index,
+          );
+          questionCaptures.push({
+            name: captureName,
+            codeUnitCount: 1,
+            allowsAstralCodePoint:
+              (pattern[closing + 1] === '*' && pattern[closing + 2] !== '(') ||
+              hasPosixClassInSegment,
+            requiresCodePointCount: hasAdjacentPosixClass,
+          });
+          expression += `(?<${captureName}>${segmentCharacterClassPrefix}[${characterClass}])`;
+        }
+        index = closing;
+      }
+    } else if (character === '{') {
+      const closing = findGlobGroupEnd(pattern, index, '{', '}');
+      if (closing === -1) {
+        expression += '\\{';
+      } else {
+        const content = pattern.slice(index + 1, closing);
+        const expandedRange = expandGlobRange(content);
+        const rawAlternatives =
+          expandedRange ?? splitGlobAlternatives(content, ',');
+        const alternatives =
+          expandedRange === null
+            ? rawAlternatives.flatMap(
+                (alternative) =>
+                  expandGlobBracePatternsBounded(
+                    alternative,
+                    0,
+                    MAX_GLOB_BRACE_EXPANSIONS,
+                    MAX_GLOB_BRACE_EXPANSION_DEPTH,
+                  ) ?? [],
+              )
+            : rawAlternatives;
+        if (expandedRange === null && alternatives.length === 1) {
+          expression += escapeRegExp(pattern.slice(index, closing + 1));
+          index = closing;
+          continue;
+        }
+        if (
+          alternatives.length === 0 ||
+          alternatives.length > MAX_GLOB_BRACE_EXPANSIONS
+        ) {
+          expression += `${segmentStart ? '(?!\\.)' : ''}[^/]*`;
+          index = closing;
+          continue;
+        }
+        const trailingPattern = `${pattern.slice(closing + 1)}${inheritedSuffix}`;
+        expression += `(?:${alternatives
+          .map((alternative) =>
+            globPatternToRegex(
+              alternative,
+              segmentStart,
+              trailingPattern,
+              questionCaptures,
+              exactQuestionWidth,
+            ),
+          )
+          .join('|')})`;
+        index = closing;
+      }
+    } else {
+      expression += escapeRegExp(character);
+    }
+  }
+  return expression;
+}
+function globPatternMatchesPath(
+  pattern,
+  targetPath,
+  { unknownMatches = true } = {},
+) {
+  if (!isGlobPattern(pattern)) {
+    return false;
+  }
+  const simpleMatch = matchSimpleStarGlob(pattern, targetPath);
+  if (simpleMatch !== null) {
+    return simpleMatch;
+  }
+  if (
+    expandGlobBracePatternsBounded(
+      pattern,
+      0,
+      MAX_GLOB_BRACE_EXPANSIONS,
+      MAX_GLOB_BRACE_EXPANSION_DEPTH,
+    ) === null
+  ) {
+    return unknownMatches;
+  }
+  if (
+    hasCrossSegmentExtglob(pattern) ||
+    hasAmbiguousRepeatingExtglob(pattern)
+  ) {
+    return false;
+  }
+  if (!hasBoundedGlobRegexComplexity(pattern, targetPath)) {
+    return false;
+  }
+  const questionCaptures = [];
+  const expression = globPatternToRegex(pattern, true, '', questionCaptures);
+  try {
+    const regexSource = `^${expression}$`;
+    const capturesHaveExpectedWidth = (match) =>
+      match !== null &&
+      questionCaptures.every(
+        ({
+          name,
+          codeUnitCount,
+          allowsAstralCodePoint,
+          requiresCodePointCount,
+        }) => {
+          const captured = match.groups?.[name];
+          if (captured === undefined) {
+            return true;
+          }
+          if (requiresCodePointCount) {
+            return Array.from(captured).length === codeUnitCount;
+          }
+          return (
+            captured.length === codeUnitCount ||
+            (allowsAstralCodePoint && captured.length === 2)
+          );
+        },
+      );
+    const unicodeMatch = new RegExp(regexSource, 'u').exec(targetPath);
+    if (capturesHaveExpectedWidth(unicodeMatch)) {
+      return true;
+    }
+    // Node's glob implementation counts UTF-16 code units for adjacent
+    // fixed-width wildcards. Retry without Unicode mode so a surrogate
+    // pair can be consumed by two neighboring classes or wildcards. POSIX
+    // classes remain Unicode-only because their translated escapes are not
+    // valid in a non-Unicode regexp.
+    if (!/\\p\{/u.test(expression)) {
+      return capturesHaveExpectedWidth(
+        new RegExp(regexSource).exec(targetPath),
+      );
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function moduleScansManifestDirectory(text, targetPath, modulePath) {
+  const slash = targetPath.lastIndexOf('/');
+  if (slash <= 0) {
+    return false;
+  }
+  const directory = targetPath.slice(0, slash);
+  for (const match of findDirectoryScanCalls(text)) {
+    const { apiName, argumentsText } = match;
+    const isGlobScanApi = /^glob(?:Sync)?$/u.test(apiName);
+    const recursiveExpression = topLevelOptionPropertyValue(
+      argumentsText,
+      'recursive',
+    );
+    const recursive =
+      (recursiveExpression !== null &&
+        isStaticTrueExpression(recursiveExpression)) ||
+      /^(?:walk(?:Dir|Directory)|scan(?:Dir|Directory))$/u.test(apiName);
+    const firstArgument = firstCallArgument(argumentsText);
+    const firstCandidates = pathExpressionCandidates(firstArgument).map(
+      (candidate) =>
+        usesModuleRelativePathExpression(firstArgument)
+          ? resolveModuleRelativeScanPath(
+              candidate,
+              modulePath,
+              isModuleRelativeFragmentExpression(firstArgument),
+            )
+          : candidate,
+    );
+    const cwdCandidates = (() => {
+      if (!isGlobScanApi) {
+        return [];
+      }
+      const cwdExpression = topLevelOptionPropertyValue(argumentsText, 'cwd');
+      if (cwdExpression === null) {
+        return [];
+      }
+      if (
+        /^(?:undefined|import\.meta\.dirname)(?:\s*\})?$/u.test(
+          cwdExpression.trim(),
+        )
+      ) {
+        return isBareModuleDirectoryExpression(cwdExpression)
+          ? [modulePath === undefined ? '' : dirname(modulePath)]
+          : [''];
+      }
+      return pathExpressionCandidates(cwdExpression).map((candidate) =>
+        usesModuleRelativePathExpression(cwdExpression) &&
+        !isBareModuleDirectoryExpression(cwdExpression)
+          ? resolveModuleRelativeScanPath(
+              candidate,
+              modulePath,
+              isModuleRelativeFragmentExpression(cwdExpression),
+            )
+          : candidate,
+      );
+    })();
+    const cwdExpression = isGlobScanApi
+      ? topLevelOptionPropertyValue(argumentsText, 'cwd')
+      : null;
+    const hasCwd = cwdExpression !== null;
+    const excludeExpression = isGlobScanApi
+      ? topLevelOptionPropertyValue(argumentsText, 'exclude')
+      : null;
+    if (
+      excludeExpression !== null &&
+      isFunctionValuedExpression(excludeExpression)
+    ) {
+      continue;
+    }
+    const excludeCandidates =
+      excludeExpression === null ? [] : scanStringLiterals(excludeExpression);
+    const joinScanPath = (base, path) =>
+      base === '' ? path : `${base}/${path}`;
+    const candidates = (
+      hasCwd
+        ? firstCandidates.flatMap((candidate) =>
+            cwdCandidates
+              .filter((cwd) => !isGlobPattern(cwd))
+              .map((cwd) => joinScanPath(cwd, candidate)),
+          )
+        : firstCandidates
+    )
+      .flat()
+      .map((candidate) =>
+        normalizeManifestScanPath(
+          candidate,
+          isGlobScanApi,
+          isGlobPattern(candidate),
+        ),
+      );
+    const exclusions = (
+      hasCwd
+        ? excludeCandidates.flatMap((candidate) =>
+            cwdCandidates
+              .filter((cwd) => !isGlobPattern(cwd))
+              .map((cwd) => joinScanPath(cwd, candidate)),
+          )
+        : excludeCandidates
+    )
+      .flat()
+      .map((candidate) =>
+        normalizeManifestScanPath(candidate, false, isGlobPattern(candidate)),
+      );
+    const normalizedTargetPath = normalizeManifestScanPath(targetPath);
+    const normalizedDirectory = normalizeManifestScanPath(directory);
+    const readsDirectoryEntries = !isGlobScanApi;
+    if (
+      candidates.some(
+        (candidate) =>
+          !exclusions.some(
+            (exclusion) =>
+              globPatternMatchesPath(exclusion, normalizedTargetPath, {
+                unknownMatches: false,
+              }) ||
+              exclusion === normalizedTargetPath ||
+              (!isGlobPattern(exclusion) &&
+                normalizedTargetPath.startsWith(`${exclusion}/`)),
+          ) &&
+          (globPatternMatchesPath(candidate, normalizedTargetPath) ||
+            candidate === normalizedTargetPath ||
+            (!isGlobPattern(candidate) &&
+              (recursive
+                ? candidate === '' ||
+                  new RegExp(`^${escapeRegExp(candidate)}(?=$|/)`, 'u').test(
+                    normalizedTargetPath,
+                  )
+                : readsDirectoryEntries && candidate === normalizedDirectory))),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+function moduleDerivesSchemaFixturePath(text, targetPath, modulePath) {
+  const match = /^fixtures\/schemas\/(.+)\.(valid|invalid)\.json$/u.exec(
+    targetPath,
+  );
+  if (match === null) {
+    return false;
+  }
+  const schemaName = match[1] ?? '';
+  const fixtureKind = match[2] ?? '';
+  const schemaPath = `schemas/${schemaName}.schema.json`;
+  const code = stripJavaScriptComments(text);
+  const fixtureTemplate = new RegExp(
+    '`fixtures/schemas/\\$\\{[^}\\r\\n]+(?:\\}|(?=\\.' +
+      `${fixtureKind}\\.json))\\.` +
+      `${fixtureKind}\\.json` +
+      '`',
+    'u',
+  );
+  return (
+    fixtureTemplate.test(code) &&
+    moduleScansManifestDirectory(code, schemaPath, modulePath)
+  );
+}
+function moduleReferencesManifestPath(text, targetPath, modulePath) {
   const basename = targetPath.slice(targetPath.lastIndexOf('/') + 1);
-  return text.includes(targetPath) || text.includes(basename);
+  return (
+    text.includes(targetPath) ||
+    text.includes(basename) ||
+    moduleScansManifestDirectory(text, targetPath, modulePath) ||
+    moduleDerivesSchemaFixturePath(text, targetPath, modulePath)
+  );
+}
+/**
+ * Keep target baseline reads tied to the requested repository instead of
+ * ambient Git overrides inherited from a hook, wrapper, or parent process.
+ */
+function sanitizedGitEnvironment() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+  delete env.GIT_CEILING_DIRECTORIES;
+  delete env.GIT_NAMESPACE;
+  delete env.GIT_QUARANTINE_PATH;
+  delete env.GIT_REPLACE_REF_BASE;
+  delete env.GIT_NO_REPLACE_OBJECTS;
+  return env;
+}
+function hasGitMetadataInAncestors(targetRoot) {
+  let current = resolve(targetRoot);
+  while (true) {
+    try {
+      lstatSync(join(current, '.git'));
+      return true;
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? error.code
+          : undefined;
+      if (code !== 'ENOENT') {
+        return true;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return false;
+    }
+    current = parent;
+  }
+}
+function isUnbornGitHead(targetRoot) {
+  let headRef;
+  try {
+    headRef = execFileSync(
+      'git',
+      ['-C', targetRoot, 'symbolic-ref', '--quiet', 'HEAD'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: sanitizedGitEnvironment(),
+      },
+    ).trim();
+  } catch {
+    return false;
+  }
+  try {
+    execFileSync(
+      'git',
+      ['-C', targetRoot, 'show-ref', '--verify', '--quiet', headRef],
+      { stdio: ['ignore', 'ignore', 'ignore'], env: sanitizedGitEnvironment() },
+    );
+    return false;
+  } catch (error) {
+    const status =
+      typeof error === 'object' && error !== null && 'status' in error
+        ? error.status
+        : undefined;
+    if (status !== 1) {
+      return false;
+    }
+    let refPath;
+    try {
+      refPath = execFileSync(
+        'git',
+        ['-C', targetRoot, 'rev-parse', '--git-path', headRef],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: sanitizedGitEnvironment(),
+        },
+      ).trim();
+    } catch {
+      return false;
+    }
+    const resolvedRefPath = isAbsolute(refPath)
+      ? refPath
+      : resolve(targetRoot, refPath);
+    if (existsSync(resolvedRefPath)) {
+      return false;
+    }
+    let packedRefsPath;
+    try {
+      packedRefsPath = execFileSync(
+        'git',
+        ['-C', targetRoot, 'rev-parse', '--git-path', 'packed-refs'],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: sanitizedGitEnvironment(),
+        },
+      ).trim();
+    } catch {
+      return true;
+    }
+    const resolvedPackedRefsPath = isAbsolute(packedRefsPath)
+      ? packedRefsPath
+      : resolve(targetRoot, packedRefsPath);
+    try {
+      return !readFileSync(resolvedPackedRefsPath, 'utf8')
+        .split(/\r?\n/u)
+        .some((line) => line.endsWith(` ${headRef}`));
+    } catch {
+      return true;
+    }
+  }
+}
+/**
+ * Resolve a target repository's pre-import Git tree. Non-Git target trees
+ * keep the historical source-vs-current-target comparison so the exported
+ * helper remains useful for directory fixtures and non-Git adopters. A Git
+ * target with an invalid baseline ref fails closed instead of silently
+ * suppressing an advisory.
+ */
+function resolveGitTargetBaseline(targetRoot, targetBaseRef) {
+  let gitRoot;
+  try {
+    gitRoot = execFileSync(
+      'git',
+      ['-C', targetRoot, 'rev-parse', '--show-toplevel'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: sanitizedGitEnvironment(),
+      },
+    ).trim();
+  } catch (error) {
+    if (targetBaseRef !== undefined) {
+      throw new Error(
+        `--target-base-ref requires a Git target: ${targetBaseRef}`,
+      );
+    }
+    if (hasGitMetadataInAncestors(targetRoot)) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `unable to inspect Git target baseline at ${targetRoot}: ${detail}`,
+      );
+    }
+    return undefined;
+  }
+  const normalize = (path) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  const normalizedGitRoot = normalize(gitRoot);
+  const normalizedTargetRoot = normalize(targetRoot);
+  const targetPrefix = relative(normalizedGitRoot, normalizedTargetRoot)
+    .split(sep)
+    .join('/');
+  if (
+    isAbsolute(targetPrefix) ||
+    targetPrefix === '..' ||
+    targetPrefix.startsWith('../')
+  ) {
+    return undefined;
+  }
+  const baselineRef = targetBaseRef ?? 'HEAD';
+  let baselineCommit;
+  try {
+    const resolvedBaselineRef = execFileSync(
+      'git',
+      [
+        '-C',
+        targetRoot,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        '--end-of-options',
+        baselineRef,
+      ],
+      { stdio: ['ignore', 'pipe', 'ignore'], env: sanitizedGitEnvironment() },
+    )
+      .toString('utf8')
+      .trim();
+    baselineCommit = execFileSync(
+      'git',
+      [
+        '-C',
+        targetRoot,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        '--end-of-options',
+        `${resolvedBaselineRef}^{commit}`,
+      ],
+      { stdio: ['ignore', 'pipe', 'ignore'], env: sanitizedGitEnvironment() },
+    )
+      .toString('utf8')
+      .trim();
+  } catch {
+    if (targetBaseRef === undefined && isUnbornGitHead(targetRoot)) {
+      // A freshly initialized target has no HEAD commit yet. The advisory
+      // must retain the historical working-tree comparison in that case.
+      return undefined;
+    }
+    if (targetBaseRef === undefined) {
+      throw new Error(
+        `unable to resolve Git target baseline at ${targetRoot}: HEAD does not resolve to a commit`,
+      );
+    }
+    throw new Error(
+      `--target-base-ref does not resolve to a commit in --target: ${targetBaseRef}`,
+    );
+  }
+  return {
+    read: (targetPath) => {
+      const treePath = targetPrefix
+        ? `${targetPrefix}/${targetPath}`
+        : targetPath;
+      const treeEntry = execFileSync(
+        'git',
+        [
+          '-C',
+          normalizedGitRoot,
+          'ls-tree',
+          '-z',
+          '--full-tree',
+          baselineCommit,
+          '--',
+          `:(literal)${treePath}`,
+        ],
+        {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: sanitizedGitEnvironment(),
+        },
+      );
+      if (treeEntry.length === 0) {
+        // A path absent from the baseline is meaningful drift: --import
+        // would add the source entry while the held module remains old.
+        return null;
+      }
+      const entryHeader = treeEntry.slice(0, treeEntry.indexOf('\t'));
+      const [entryMode, entryType] = entryHeader.split(' ');
+      if (
+        entryType !== 'blob' ||
+        (entryMode !== '100644' && entryMode !== '100755')
+      ) {
+        throw new Error(
+          `Git target baseline path is not a regular file: ${treePath}`,
+        );
+      }
+      const temporaryRoot = mkdtempSync(
+        join(tmpdir(), 'idd-onboard-baseline-'),
+      );
+      const temporaryPath = join(temporaryRoot, 'blob');
+      let outputFd;
+      try {
+        outputFd = openSync(temporaryPath, 'w');
+        const result = spawnSync(
+          'git',
+          ['-C', normalizedGitRoot, 'show', `${baselineCommit}:${treePath}`],
+          {
+            stdio: ['ignore', outputFd, 'pipe'],
+            env: sanitizedGitEnvironment(),
+          },
+        );
+        closeSync(outputFd);
+        outputFd = undefined;
+        if (result.error !== undefined) {
+          throw result.error;
+        }
+        if (result.status !== 0) {
+          throw new Error(
+            `Command failed: git show ${baselineCommit}:${treePath}`,
+          );
+        }
+        return readFileSync(temporaryPath);
+      } finally {
+        if (outputFd !== undefined) {
+          closeSync(outputFd);
+        }
+        rmSync(temporaryRoot, { recursive: true, force: true });
+      }
+    },
+  };
 }
 function formatHeldSchemaDriftWarning(findings) {
   if (findings.length === 0) {
@@ -2111,10 +4648,15 @@ function formatHeldSchemaDriftWarning(findings) {
  * path a vendored-node import actually copies — is read directly.
  *
  * The scan is a static text match against the entry's manifest path or
- * its basename — the same grep-level proxy the Groom hearing adopted.
- * It cannot see a semantic dependency that no source text names. An
- * empty `hold` list short-circuits to no findings, so a verify that
- * never passes `--hold` keeps the previous cost and result.
+ * its basename — the same grep-level proxy the Groom hearing adopted —
+ * plus a narrow set of directory-enumeration consumers. It recognizes
+ * the supported `readdir*`/`opendir*`/`glob*` call forms, literal path composition,
+ * recursive and `cwd`/`exclude` options, and the bounded glob syntax
+ * implemented by `globPatternToRegex`. It remains conservative: it cannot
+ * see a semantic dependency that no source text names, or arbitrary
+ * runtime-computed paths. An empty `hold` list short-circuits to no
+ * findings, so a verify that never passes `--hold` keeps the previous cost
+ * and result.
  *
  * An unknown `--hold` path throws the same usage error
  * `buildImportPlan` throws, including the skip when manifest resolution
@@ -2123,8 +4665,12 @@ function formatHeldSchemaDriftWarning(findings) {
 export function checkHeldSchemaDrift(
   sourceRoot,
   targetRoot,
-  { profile, hold = [] } = {},
+  { profile, hold = [], targetBaseRef } = {},
 ) {
+  const baseline =
+    targetBaseRef === undefined && hold.length === 0
+      ? undefined
+      : resolveGitTargetBaseline(targetRoot, targetBaseRef);
   if (hold.length === 0) {
     return { findings: [], warning: null };
   }
@@ -2143,7 +4689,7 @@ export function checkHeldSchemaDrift(
     (file) =>
       !holdSet.has(file.targetPath) &&
       isSchemaOrFixtureManifestPath(file.targetPath) &&
-      manifestContentDiffers(sourceRoot, targetRoot, file),
+      manifestContentDiffers(sourceRoot, targetRoot, file, baseline),
   );
   if (changed.length === 0) {
     return { findings: [], warning: null };
@@ -2166,7 +4712,9 @@ export function checkHeldSchemaDrift(
       continue;
     }
     for (const file of changed) {
-      if (!moduleReferencesManifestPath(module.text, file.targetPath)) {
+      if (
+        !moduleReferencesManifestPath(module.text, file.targetPath, module.path)
+      ) {
         continue;
       }
       findings.push({
@@ -2197,7 +4745,13 @@ export function checkHeldSchemaDrift(
  * list `--import` accepts; an empty list leaves the drift advisory
  * with no findings.
  */
-export function runVerify(sourceRoot, targetRoot, profile, hold = []) {
+export function runVerify(
+  sourceRoot,
+  targetRoot,
+  profile,
+  hold = [],
+  targetBaseRef,
+) {
   const manifestCompleteness = checkManifestCompleteness(
     sourceRoot,
     targetRoot,
@@ -2223,6 +4777,7 @@ export function runVerify(sourceRoot, targetRoot, profile, hold = []) {
   const heldSchemaDrift = checkHeldSchemaDrift(sourceRoot, targetRoot, {
     profile,
     hold,
+    targetBaseRef,
   });
   const blocking =
     manifestCompleteness.missingSource.length > 0 ||
@@ -3504,6 +6059,7 @@ function parseArgs(rawArgv) {
     force: false,
     profile: undefined,
     hold: [],
+    targetBaseRef: undefined,
     overrides: {},
     help: false,
     allowRoots: [],
@@ -3602,6 +6158,11 @@ function parseArgs(rawArgv) {
       index += 1;
       continue;
     }
+    if (token === '--target-base-ref') {
+      parsed.targetBaseRef = requireValue();
+      index += 1;
+      continue;
+    }
     if (token === '--allow-root') {
       parsed.allowRoots.push(requireValue());
       index += 1;
@@ -3669,8 +6230,9 @@ function recordPolicyOnlyFlagsPresent(args) {
  * Flags --verify does not accept: every substitute-only override flag (verify
  * never substitutes), plus `--force` and `--dry-run` (verify never writes, so
  * "allow overwriting" and "print the plan without writing" are both
- * meaningless for it). `--hold` is accepted: it does not exclude files from
- * the completeness check, and it feeds the held-schema drift advisory.
+ * meaningless for it). `--hold` is accepted: held target paths are excluded
+ * from the manifest-completeness missing-target check, unheld missing entries
+ * remain blocking, and `--hold` still feeds the held-schema drift advisory.
  */
 function verifyForeignFlagsPresent(args) {
   const present = substituteOnlyFlagsPresent(args);
@@ -3681,6 +6243,10 @@ function verifyForeignFlagsPresent(args) {
     present.push('--dry-run');
   }
   return present;
+}
+/** The target-baseline selector is meaningful only to `--verify`. */
+function verifyOnlyFlagsPresent(args) {
+  return args.targetBaseRef === undefined ? [] : ['--target-base-ref'];
 }
 /**
  * --hear-only flags the user explicitly passed (present regardless of
@@ -3713,6 +6279,7 @@ function hearOnlyFlagsPresent(args) {
 function hearForeignFlagsPresent(args) {
   return [
     ...importOnlyFlagsPresent(args),
+    ...verifyOnlyFlagsPresent(args),
     ...substituteOnlyFlagsPresent(args),
     ...recordPolicyOnlyFlagsPresent(args),
   ];
@@ -3758,6 +6325,7 @@ async function runCli() {
     // --substitute below still reject it via the unfiltered helper.
     const foreign = [
       ...importOnlyFlagsPresent(args).filter((flag) => flag !== '--force'),
+      ...verifyOnlyFlagsPresent(args),
       ...substituteOnlyFlagsPresent(args),
       ...(args.propose ? ['--propose'] : []),
       ...(args.answers !== undefined ? ['--answers'] : []),
@@ -3785,12 +6353,13 @@ async function runCli() {
     const foreign = [
       ...substituteOnlyFlagsPresent(args),
       ...hearOnlyFlagsPresent(args),
+      ...verifyOnlyFlagsPresent(args),
       ...recordPolicyOnlyFlagsPresent(args),
     ];
     if (foreign.length > 0) {
       throw markCliUsageError(
         new Error(
-          `--import does not accept substitute-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+          `--import does not accept substitute-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
         ),
       );
     }
@@ -3820,13 +6389,14 @@ async function runCli() {
   }
   const foreign = [
     ...importOnlyFlagsPresent(args),
+    ...verifyOnlyFlagsPresent(args),
     ...hearOnlyFlagsPresent(args),
     ...recordPolicyOnlyFlagsPresent(args),
   ];
   if (foreign.length > 0) {
     throw markCliUsageError(
       new Error(
-        `--substitute does not accept import-only flag(s), --hear-only flag(s), or --record-policy-only flag(s): ${foreign.join(', ')}`,
+        `--substitute does not accept import-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
       ),
     );
   }
@@ -4029,7 +6599,13 @@ function runVerifyCli(args) {
     '--target',
     args.allowRoots,
   );
-  const result = runVerify(sourceDir, targetDir, args.profile, args.hold);
+  const result = runVerify(
+    sourceDir,
+    targetDir,
+    args.profile,
+    args.hold,
+    args.targetBaseRef,
+  );
   const verdict = {
     protocolVersion: '1',
     mode: 'verify',
@@ -4172,9 +6748,12 @@ mutable default archive URL instead of an audited pin), and
 heldSchemaDrift (advisory only, never blocking: for each schema
 (schemas/*.json) or fixture (fixtures/**/*.json) manifest entry that
 --hold does not exclude and whose content differs between --source and
---target, reports each held src/scripts .mts module, and each held
-scripts/*.mjs module a vendored import copies, that textually
-references that entry's path or basename).
+the target's pre-import Git tree, reports each held src/scripts .mts
+module, and each held scripts/*.mjs module a vendored import copies,
+that textually references that entry's path or basename or scans its
+containing directory. \`--target-base-ref\` selects that Git ref (default
+\`HEAD\` for a Git target); non-Git targets retain the
+source-vs-current-target fallback).
 
 Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest
 gap, placeholder residue, or a helper-load failure); 2 usage or
@@ -4194,11 +6773,18 @@ configuration error.
   --profile <name>                   ${PROFILE_NAMES.join(' | ')}
   --hold <target-path>               name a manifest entry left at its
                                       current target content (repeatable).
-                                      Completeness still requires the file;
-                                      the held-schema drift advisory uses
-                                      the list. A value that matches no
-                                      resolved manifest path is a usage
-                                      error (exit 2).
+                                      Held target paths are excluded from the
+                                      manifest-completeness missing-target
+                                      check, unheld missing entries remain
+                                      blocking, and --hold still feeds the
+                                      held-schema drift advisory. A value that
+                                      matches no resolved manifest path is a
+                                      usage error (exit 2).
+  --target-base-ref <ref>            Git ref containing the target's
+                                      pre-import tree (default: HEAD for a
+                                      Git target; an unborn HEAD and
+                                      non-Git targets use the current tree;
+                                      other Git discovery failures are errors)
   --help, -h                         show this help
 
 --hear (#2281): the operator-facing hearing CLI over the catalog and

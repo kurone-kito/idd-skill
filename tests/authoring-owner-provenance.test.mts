@@ -1437,6 +1437,58 @@ test('mapGraphqlIssueCommentNode: null body fails closed', () => {
   }
 });
 
+test('mapGraphqlIssueCommentNode: isMinimized=true and minimizedReason are passed through', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 5577810398,
+    lastEditedAt: null,
+    createdAt: '2026-09-27T12:00:00Z',
+    updatedAt: '2026-09-27T12:00:01Z',
+    body: 'idd-skill-authoring-owner: ...',
+    author: { login: 'kurone-kito' },
+    isMinimized: true,
+    minimizedReason: 'outdated',
+  });
+  assert.equal(mapped.ok, true);
+  if (mapped.ok) {
+    assert.equal(mapped.comment.isMinimized, true);
+    assert.equal(mapped.comment.minimizedReason, 'outdated');
+  }
+});
+
+test('mapGraphqlIssueCommentNode: isMinimized=false maps to false', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    lastEditedAt: null,
+    createdAt: '2026-09-27T12:00:00Z',
+    updatedAt: '2026-09-27T12:00:00Z',
+    body: 'body',
+    author: { login: 'kurone-kito' },
+    isMinimized: false,
+    minimizedReason: null,
+  });
+  assert.equal(mapped.ok, true);
+  if (mapped.ok) {
+    assert.equal(mapped.comment.isMinimized, false);
+    assert.equal(mapped.comment.minimizedReason, null);
+  }
+});
+
+test('mapGraphqlIssueCommentNode: omitted isMinimized and minimizedReason map to undefined', () => {
+  const mapped = mapGraphqlIssueCommentNode({
+    databaseId: 1,
+    lastEditedAt: null,
+    createdAt: '2026-09-27T12:00:00Z',
+    updatedAt: '2026-09-27T12:00:00Z',
+    body: 'body',
+    author: { login: 'kurone-kito' },
+  });
+  assert.equal(mapped.ok, true);
+  if (mapped.ok) {
+    assert.equal(mapped.comment.isMinimized, undefined);
+    assert.equal(mapped.comment.minimizedReason, undefined);
+  }
+});
+
 test('inspectGraphqlCommentsPage: missing nodes fails closed', () => {
   const page = inspectGraphqlCommentsPage(
     { pageInfo: { hasNextPage: false, endCursor: null } },

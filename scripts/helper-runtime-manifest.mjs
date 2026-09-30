@@ -386,6 +386,15 @@ const HELPER_COMMANDS = [
       'Print the canonical helper bundle import plan for each runtime profile.',
   },
   {
+    id: 'issue-authoring-delegate',
+    scriptName: 'idd:issue-authoring-delegate',
+    binName: 'idd-issue-authoring-delegate',
+    entryPath: 'scripts/idd-issue-authoring-delegate.mjs',
+    vendoredCommand: 'node scripts/idd-issue-authoring-delegate.mjs',
+    description:
+      'Resolve the effective issueAuthoring.adversarialReview delegate and repository-local wait ceiling.',
+  },
+  {
     id: 'live-status-digest',
     scriptName: 'idd:live-status-digest',
     binName: 'idd-live-status-digest',
@@ -402,6 +411,15 @@ const HELPER_COMMANDS = [
     description:
       'Resolve or record HEAD-pinned local validation evidence for the pre-merge-readiness report during an Actions outage.',
     contractPaths: ['schemas/local-validation-evidence.schema.json'],
+  },
+  {
+    id: 'local-worktree-recovery',
+    scriptName: 'idd:local-worktree-recovery',
+    binName: 'idd-local-worktree-recovery',
+    entryPath: 'scripts/local-worktree-recovery.mjs',
+    vendoredCommand: 'node scripts/local-worktree-recovery.mjs',
+    description:
+      "Consolidate docs/idd-resume-detail.md's §LWR (Local Worktree Recovery) steps 1 (confirm), 3 (preserve), and 4 (remove) into one invocation.",
   },
   {
     id: 'merge-execute',

@@ -68,7 +68,7 @@
 // protect.
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -78,6 +78,8 @@ import {
 } from './helper-cli-runner.mjs';
 
 const CLONE_LOCK_FILE_NAME = 'idd-clone.lock';
+const CLONE_LOCK_PATH_ENV = 'IDD_CLONE_LOCK_PATH';
+const CLONE_LOCK_TOKEN_ENV = 'IDD_CLONE_LOCK_TOKEN';
 /** How long a waiter blocks (retrying) before giving up. */
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** Delay between retry attempts while waiting for a held lock. */
@@ -222,6 +224,22 @@ function tryExclusiveCreate(path, agentId, token) {
   }
 }
 /**
+ * Reuse a clone lock inherited from `withCloneLock` when a wrapped helper
+ * needs to acquire the same mutex again. The path and token are a scoped
+ * capability: both must match the live lock file, so an unrelated ambient
+ * environment value cannot authorize a bypass.
+ */
+export function inheritedCloneLockAtPath(path) {
+  const inheritedPath = process.env[CLONE_LOCK_PATH_ENV];
+  const inheritedToken = process.env[CLONE_LOCK_TOKEN_ENV];
+  if (!inheritedPath || !inheritedToken) return null;
+  if (resolve(inheritedPath) !== resolve(path)) return null;
+  const read = readLock(path);
+  return read.status === 'present' && read.lock.token === inheritedToken
+    ? { path, token: inheritedToken }
+    : null;
+}
+/**
  * Thrown when a lock cannot be acquired within `timeoutMs`. The message
  * names the lock path and, when readable, the recorded holder's `pid`
  * (and whether that process still appears to be alive) so a human can
@@ -266,6 +284,19 @@ export function acquireCloneLock(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ) {
   const path = resolveCloneLockPath(repoPath);
+  return acquireCloneLockAtPath(path, agentId, timeoutMs);
+}
+/**
+ * Acquire a clone lock when the caller already resolved its path. This is
+ * useful for a worktree operation that may remove the worktree while waiting:
+ * resolving the path before blocking keeps the mutex usable after that
+ * worktree disappears.
+ */
+export function acquireCloneLockAtPath(
+  path,
+  agentId,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+) {
   const token = randomToken();
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -340,7 +371,11 @@ export async function withCloneLock(
       const child = spawn(command, args, {
         stdio: 'inherit',
         cwd: repoPath,
-        env: sanitizedGitEnvironment(),
+        env: {
+          ...sanitizedGitEnvironment(),
+          [CLONE_LOCK_PATH_ENV]: handle.path,
+          [CLONE_LOCK_TOKEN_ENV]: handle.token,
+        },
       });
       child.once('error', reject);
       child.once('exit', (code) => resolve(code));

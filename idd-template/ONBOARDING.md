@@ -217,18 +217,31 @@ below instead.
    node scripts/idd-onboard.mjs --hear --target <target-repo>  # optional TTY wizard, after propose
    ```
 
-2. Validate the answers, print the confirmed transcript, and save it.
+2. Validate, print, and save the confirmed transcript.
 
    ```sh
    node scripts/idd-onboard.mjs --hear --apply \
      --answers <answers-file> --target <target-repo>
    ```
 
-   **Check `bootstrap-execution-mode`.** If `issue-mediated`, stop and use
+   **Check `bootstrap-execution-mode`.** For `issue-mediated`, stop and use
    [Onboarding Reference — Issue-Mediated
    Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of steps
-   3-5; they write the template directly without review (`direct-import`
-   default).
+   3-5; those steps write the template directly (`direct-import` default).
+
+   Unborn:
+
+   ```sh
+   git -C <target-repo> rev-parse --verify HEAD >/dev/null 2>&1 || \
+     git -C <target-repo> status --short --untracked-files=all
+   ```
+
+   Review before staging; PR #3574 (2026-09-28) found it unsafe.
+
+   ```sh
+   git -C <target-repo> add -A
+   git -C <target-repo> commit --allow-empty -m "chore: record baseline"
+   ```
 
    Require a clean target:
 
@@ -242,21 +255,25 @@ below instead.
 3. Import the core template file set (add `--profile vendored-node`
    when that profile was confirmed).
 
+   Before import, record `<pre-import-ref>` (SHA/tag). The retry
+   baseline is that recorded ref, supplied with `--target-base-ref`;
+   keep it unchanged across checkpoints.
+
+   ```sh
+   git -C <target-repo> rev-parse --verify HEAD  # record as <pre-import-ref>
+   ```
+
    ```sh
    node scripts/idd-onboard.mjs --import \
      --source <idd-skill-clone> --target <target-repo>
    ```
 
-   **Checkpoint.** Commit before `--substitute`:
+   **Checkpoint.** Before `--substitute`, commit the mirror:
 
    ```sh
-   git -C <target-repo> status --short
-   git -C <target-repo> add -A
-   git -C <target-repo> commit -m "chore: record idd template mirror"
+   git -C <target-repo> add -A && \
+   git -C <target-repo> commit --allow-empty -m "chore: record idd template mirror"
    ```
-
-   `--target-ref` must name it; keep it reachable through a ref until
-   verification and reruns finish. Do not squash it.
 
 4. Replace the seven placeholders from the confirmed transcript.
 
@@ -287,21 +304,20 @@ below instead.
 6. Read
    [Onboarding Reference — Project Tuning](docs/onboarding/project-tuning.md)
    for the judgment calls the CLI does not automate.
-7. Verify the imported result. Pass the same `--profile` used for
-   `--import` in step 3 (if any) — `--verify` resolves
-   `manifestCompleteness` from `--source` and `--profile` together, so
-   omitting a non-default profile here hides a missing or
-   failed-to-copy profile-conditional file.
+7. Verify the imported result. Reuse the `--import` profile from step 3
+   (if any); omitting a non-default profile hides missing
+   profile-conditional files.
 
    ```sh
    node scripts/idd-onboard.mjs --verify \
-     --source <idd-skill-clone> --target <target-repo> [--profile <name>]
+     --source <idd-skill-clone> --target <target-repo> [--profile <name>] \
+     [--hold <target-path>] [--target-base-ref <pre-import-ref>]
    ```
 
-If any step reports a blocking finding, open the referenced companion
-doc — Step 1B below documents every policy decision in full, and
-[Placeholder Values](docs/onboarding/placeholders.md) documents every
-placeholder — to resolve it, then resume from that step.
+   Use this ref only for Git targets; omit it for non-Git fallback.
+
+For blocking findings, consult the referenced companion doc, resolve the
+issue, then resume from that step.
 
 ## Instructions-only path
 
@@ -689,27 +705,22 @@ error), so an agent can gate on the exit code without parsing prose.
 - **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
   check for a target tree after `--import` and `--substitute` have run,
   replacing a manual walkthrough of the checklist below with six check
-  groups: manifest completeness (reusing `--import`'s own file-set
-  resolution; held targets are exempt), placeholder residue
-  (reusing `--substitute`'s scanner), a helper-load check
-  (`vendored-node` only: spawns each cataloged helper under `--target`
-  with `--help`), an informational stale-import signal, a non-blocking
-  package-pin advisory (flags an `ephemeral-npx`/`package-manager`
-  helper runtime profile with no configured `helperRuntime.packageSpec`
-  — see
-  [Helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
-  and a non-blocking held-schema drift advisory (a schema or fixture
-  `--import` would update, while a held `src/scripts` module or a held
-  vendored `scripts` module still names it). A missing manifest file,
-  leftover placeholder, or helper-load failure is blocking; the
-  stale-import signal, package-pin
-  advisory, and held-schema drift advisory are never blocking. Repeat
-  `--hold` with a manifest target path to name content left unchanged;
-  an unknown path is a usage error.
+  groups: manifest completeness (held targets are exempt), placeholder
+  residue, helper loads (`vendored-node` only), stale-import signal,
+  package-pin advisory (for an `ephemeral-npx`/`package-manager` profile
+  without `helperRuntime.packageSpec`; see the
+  [helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
+  and held-schema drift (a changed schema or fixture is still named by a
+  held module). Missing manifests, placeholders, or helper-load failures
+  block; the three advisories do not. Repeat `--hold` for unchanged
+  manifest paths; unknown paths are usage errors. `--target-base-ref`
+  defaults to `HEAD` for Git targets; pass the pre-import ref after import.
+  Unborn targets use fallback; Git failures error.
 
   ```sh
   node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
-    --target <target-repo> [--profile <name>] [--hold <target-path>]
+    --target <target-repo> [--profile <name>] [--hold <target-path>] \
+    [--target-base-ref <pre-import-ref>]
   ```
 
 Run `node scripts/idd-onboard.mjs --help` for the full flag reference —

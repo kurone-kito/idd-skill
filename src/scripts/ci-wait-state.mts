@@ -974,6 +974,28 @@ export function ciWaitSummaryIsPreMergeCiPassing(
 }
 
 /**
+ * The distinct required-CI/HEAD agreement read a watermark publication
+ * compares with one operation-local activity capture. It carries no review
+ * comments, threads, or saved snapshot.
+ */
+export interface RequiredCiHeadAgreement {
+  headRefOid: string;
+  requiredChecksPassing: boolean;
+  latestPassingCompletedAt: string;
+}
+
+/** Project a CI-wait summary onto {@link RequiredCiHeadAgreement}. */
+export function requiredCiHeadAgreementFromSummary(
+  summary: CiWaitStateSummary,
+): RequiredCiHeadAgreement {
+  return {
+    headRefOid: summary.headRefOid.trim(),
+    requiredChecksPassing: ciWaitSummaryIsPreMergeCiPassing(summary),
+    latestPassingCompletedAt: latestPassingCompletedAt(summary),
+  };
+}
+
+/**
  * Latest completion among pass-equivalent checks, or `none`. Mirrors the
  * snapshot field `latestPassingCiCompletedAt` so a `--from-pr` watermark
  * can refuse when the live read has moved past the snapshot it is about

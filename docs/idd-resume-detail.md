@@ -377,12 +377,28 @@ stop, and Discover marks the candidate ineligible, rather than assume the
 claim is abandoned. In a shared-clone
 setup this stop has no defined recovery when the worktree's own session
 actually crashed, so its issue can never reach the normal stale takeover. This
-section defines that recovery. It is operator-run, never automated, and checks
-no process-liveness signal — `src/scripts/claim-lock.mts`'s header records why:
+section defines that recovery. Step 2 (below) is operator-run, never
+automated, and checks no process-liveness signal —
+`src/scripts/claim-lock.mts`'s header records why:
 this "deliberately excludes any local liveness signal (e.g. process PID)... the
 process invoking this CLI is a one-shot child that exits the moment the call
 returns, so a recorded PID would be a tombstone before any competing session
 could ever observe it as 'alive'".
+
+**Primary path: the `local-worktree-recovery` helper** (kurone-kito/idd-skill#3536)
+consolidates steps 1, 3, and 4 below into a single invocation, composed from
+the `resume-claim-routing`, `claim-lock`, and `clone-lock` building-block
+helpers rather than reimplementing their logic — see
+[Local worktree recovery](idd-helper-scripts.md#local-worktree-recovery) for
+the full CLI surface and invocation forms per `helperRuntime.profile`. It
+never checks step 2 mechanically either: `--operator-confirmed-no-live-session`
+is your own explicit attestation for that step, required before any mutation,
+regardless of `--apply` or what step 1 finds. Default mode is dry-run (no
+mutation); pass `--apply` once you have independently performed step 2 and
+reviewed the dry-run's reported plan. The written procedure below remains the
+canonical spec this helper's own behavior must match, the authoritative
+fallback for an `instructions-only` profile, and the reference for any step
+the helper's dry-run output doesn't make self-explanatory.
 
 1. **Confirm the block.** Run the profile-selected `resume-claim-routing`
    helper (`docs/idd-helper-scripts.md`; source-repo/vendored-node: `node
@@ -437,6 +453,18 @@ could ever observe it as 'alive'".
    from `$(git -C <path> rev-parse --git-path rebase-merge)/orig-head`
    or `rebase-apply/orig-head` (whichever the detection above matched)
    instead.
+
+   Before the first step-3 mutation, acquire the
+   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for the
+   shared primary clone and keep it held through all preservation and step-4
+   removal commands. In a helper-enabled profile, the
+   `local-worktree-recovery` helper does this in-process. In an
+   `instructions-only` profile, wrap the step-3 and step-4 command sequence
+   in the profile-selected `clone-lock --exec -- ...` form; do not release the
+   lock between preservation and removal. This prevents a stale same-claim
+   session from reacquiring its worktree lock while preservation is still in
+   progress (Codex review, PR `#3550`, comment `#4116882321`). Stop if the
+   clone-scoped lock cannot be acquired.
 
    Inspect `<path>` the way F4's own removal step already does, not
    just its superproject status — a submodule's own uncommitted or
@@ -502,19 +530,17 @@ could ever observe it as 'alive'".
    change has nothing to stash: `stash push` reports no local changes
    to save and creates no new entry, so step 4 skips the stash check
    for it.
-4. **Remove.** Acquire the
-   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) before
-   either branch's fresh claim/lock re-check, and hold it through that
-   re-check and the mutation that follows — the checkout on the
+4. **Remove.** Keep the clone-scoped lock acquired before step 3 held through
+   either branch's fresh claim/lock re-check and the mutation that follows —
+   the checkout on the
    primary-worktree branch, or `git worktree remove` on the ordinary
-   linked-worktree branch. Do not re-check and then wait to acquire
-   the lock: a concurrent session can acquire or replace
-   `idd-claim.lock` during that wait, so a re-check that already
-   passed before the lock is held is stale. The lock serializes
+   linked-worktree branch. Do not release the lock after preservation and
+   reacquire it here: a concurrent session can acquire or replace
+   `idd-claim.lock` during that gap, so the preserved snapshot would be
+   stale. The lock serializes
    `worktree add`/`remove` and `fetch` against the shared primary
-   clone (`src/scripts/clone-lock.mts`'s own documented scope). Step
-   3's stash, update-ref, and copy operations never touch that
-   topology, so nothing before this step needs the lock.
+   clone (`src/scripts/clone-lock.mts`'s own documented scope), while also
+   keeping the preservation and removal sequence one exclusion window.
 
    While that lock is already held — not step 1's earlier read —
    re-run the confirm-the-block check, using the same
@@ -540,7 +566,14 @@ could ever observe it as 'alive'".
    satisfy — (or the submodule-scoped equivalent) only where step 3
    found unpushed commits to back up, and any copied-out ignored
    files landed outside the worktree — before removing anything.
-   Stop and do not run `git worktree remove`, `--force` included, if
+   For a linked worktree, top-level local-only refs also require copying
+   its private worktree git-admin directory before removal; a deinitialized
+   submodule's private admin data is preserved under the same rule when it
+   contains relevant stashes, local-only refs, or an interrupted operation.
+   Symlink targets inside any soon-to-be-removed source are materialized in
+   the backup, and special files fail closed instead of being copied as
+   regular files. These are preventive safeguards; no observed incident
+   yet. Stop and do not run `git worktree remove`, `--force` included, if
    any of them failed.
 
    If `<path>` is the primary worktree — the path the first `worktree`
@@ -564,8 +597,11 @@ could ever observe it as 'alive'".
    the deletion otherwise. Only if that fresh check still matches
    this primary worktree's lock to the claim-id being recovered, or
    — for a legacy release — still finds no lock at all (matching
-   step 1's own absent-lock finding): run `git -C <path> checkout
-   {development-branch}` there to release the branch — re-resolve
+   step 1's own absent-lock finding): clear any interrupted operation
+   (`rebase --quit`, `merge --abort`, `cherry-pick --abort`, or
+   `bisect reset`), then run `git -C <path> checkout
+   {development-branch}` there to release the branch and retry the
+   confirmed-absent routing check up to three total observations — re-resolve
    `{development-branch}` per §CSA's note above if this file is
    entered without a fresh B1 pass — confirm `resume-claim-routing.mjs`
    now reports this branch's `evidence.local_worktree.status` as
@@ -587,8 +623,9 @@ could ever observe it as 'alive'".
    (`idd-merge.instructions.md`). If it fails with `fatal: working
    trees containing submodules cannot be moved or removed`, retry
    `git worktree remove --force <path>` after confirming step 3's
-   preservation already succeeded — the only case `--force` is
-   warranted here, mirroring F4's own retry rule. This also deletes
+   preservation already succeeded — the other allowed case is a dirty
+   removal failure after a fresh, complete unmerged-path fallback copy;
+   generic dirty-removal failures remain a hold. This also deletes
    that worktree's claim lock and generated-tokens record, since both
    live in its own private git-admin directory.
 5. **Re-enter.** Re-run Resume from Step 0. A now-`absent` worktree

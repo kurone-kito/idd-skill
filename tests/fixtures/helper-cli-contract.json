@@ -365,6 +365,19 @@
         }
       }
     },
+    "idd-issue-authoring-delegate.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 0,
+          "kind": null
+        }
+      }
+    },
     "idd-live-status-digest.mjs": {
       "migrated": true,
       "runs": {
@@ -379,6 +392,19 @@
       }
     },
     "idd-local-validation-evidence.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
+    "idd-local-worktree-recovery.mjs": {
       "migrated": true,
       "runs": {
         "unknownFlag": {
@@ -783,7 +809,7 @@
         "exitCode": 1,
         "kind": "transport",
         "httpStatus": 503,
-        "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('/comments')) { process.exit(0); } process.stderr.write('gh: HTTP 503'); process.exit(1);"
+        "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('databaseId')) { process.stdout.write(JSON.stringify({ data: { repository: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }, pullRequest: null } } })); process.exit(0); } if (argv.includes('/comments')) { process.exit(0); } process.stderr.write('gh: HTTP 503'); process.exit(1);"
       }
     ],
     "idd-audit-pr-cleanup.mjs": [

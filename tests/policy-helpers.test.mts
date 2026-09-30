@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   clone,
   DEFAULT_PROVIDER,
+  decideUrgencyDefer,
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectDevelopmentBranch,
+  inspectIssueAuthoringDelegateLayer,
   inspectProvider,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
@@ -14,7 +17,9 @@ import {
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveDevelopmentBranch,
+  resolveEffectiveIssueAuthoringDelegate,
   resolveEffectiveProvider,
+  resolveIssueAuthoringAdversarialWaitCeiling,
   selectDesyncedIndex,
 } from '../src/scripts/policy-helpers.mts';
 
@@ -249,7 +254,7 @@ test('parseIsoDurationToMs parses supported ISO durations', () => {
   assert.equal(parseIsoDurationToMs('invalid'), null);
 });
 
-test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medium', () => {
+test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medium / severity-tiered', () => {
   assert.equal(POLICY_DEFAULTS.critiqueLoop.deferByUrgency, 'off');
   assert.equal(normalizePolicyConfig({}).critiqueLoop.deferByUrgency, 'off');
   assert.equal(
@@ -263,6 +268,12 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
     }).critiqueLoop.deferByUrgency,
     'low-and-medium',
   );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { deferByUrgency: 'severity-tiered' },
+    }).critiqueLoop.deferByUrgency,
+    'severity-tiered',
+  );
   // Unknown or invalid value falls back to the default.
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 'high' } })
@@ -274,6 +285,336 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
       .deferByUrgency,
     'off',
   );
+});
+
+test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () => {
+  const base = {
+    mode: 'severity-tiered' as const,
+    path: 'A' as const,
+    e4Severity: 'medium' as const,
+    copilotLabel: null,
+    urgency: 'low' as const,
+    scopeFence: false,
+    protectedAuthority: false,
+    awaitingMaintainerDecision: false,
+    acceptedMidFix: false,
+    adoptNow: false,
+  };
+  const matrix: Array<
+    ['low' | 'medium' | 'high', 'very-low' | 'low' | 'medium' | 'high', boolean]
+  > = [
+    ['high', 'very-low', true],
+    ['high', 'low', false],
+    ['high', 'medium', false],
+    ['high', 'high', false],
+    ['medium', 'very-low', true],
+    ['medium', 'low', true],
+    ['medium', 'medium', true],
+    ['medium', 'high', false],
+    ['low', 'very-low', true],
+    ['low', 'low', true],
+    ['low', 'medium', true],
+    ['low', 'high', true],
+  ];
+  for (const [e4Severity, urgency, defer] of matrix) {
+    const decision = decideUrgencyDefer({ ...base, e4Severity, urgency });
+    assert.equal(decision.defer, defer, `${e4Severity}/${urgency}`);
+    assert.equal(decision.eligibility, e4Severity);
+    assert.equal(decision.blockedBy, defer ? null : 'matrix');
+  }
+  for (const urgency of ['very-low', 'low', 'medium', 'high'] as const) {
+    const decision = decideUrgencyDefer({
+      ...base,
+      e4Severity: null,
+      urgency,
+    });
+    const defer = urgency !== 'high';
+    assert.equal(decision.defer, defer, `unknown/${urgency}`);
+    assert.equal(decision.eligibility, 'medium');
+    assert.equal(decision.blockedBy, defer ? null : 'matrix');
+  }
+  for (const e4Severity of ['low', 'medium', 'high'] as const) {
+    const decision = decideUrgencyDefer({
+      ...base,
+      e4Severity,
+      urgency: null,
+    });
+    assert.equal(decision.defer, false, `${e4Severity}/unscored`);
+    assert.equal(decision.blockedBy, 'unknown-urgency');
+  }
+  assert.deepEqual(
+    decideUrgencyDefer({ ...base, path: 'B', urgency: 'very-low' }),
+    { defer: false, eligibility: null, blockedBy: 'path-b' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      path: 'B',
+      scopeFence: true,
+      urgency: 'very-low',
+    }),
+    { defer: false, eligibility: null, blockedBy: 'path-b' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({ ...base, scopeFence: true, adoptNow: true }),
+    { defer: false, eligibility: null, blockedBy: 'scope-fence' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      awaitingMaintainerDecision: true,
+      acceptedMidFix: true,
+    }),
+    {
+      defer: false,
+      eligibility: null,
+      blockedBy: 'awaiting-maintainer-decision',
+    },
+  );
+  assert.deepEqual(decideUrgencyDefer({ ...base, acceptedMidFix: true }), {
+    defer: false,
+    eligibility: null,
+    blockedBy: 'accepted-mid-fix',
+  });
+  // A fresh CODEOWNER/required-reviewer item is never deferred, even
+  // before any hold reply exists (awaitingMaintainerDecision is false).
+  for (const mode of ['severity-tiered', 'low', 'low-and-medium'] as const) {
+    for (const e4Severity of ['low', 'medium', 'high'] as const) {
+      assert.deepEqual(
+        decideUrgencyDefer({
+          ...base,
+          mode,
+          e4Severity,
+          urgency: 'very-low',
+          protectedAuthority: true,
+        }),
+        { defer: false, eligibility: null, blockedBy: 'protected-authority' },
+        `${mode}/${e4Severity}`,
+      );
+    }
+  }
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'high',
+      urgency: 'very-low',
+      protectedAuthority: true,
+      awaitingMaintainerDecision: true,
+      acceptedMidFix: true,
+    }),
+    { defer: false, eligibility: null, blockedBy: 'protected-authority' },
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      copilotLabel: 'high',
+      urgency: 'very-low',
+    }).eligibility,
+    'high',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      copilotLabel: 'high',
+      urgency: 'low',
+    }).defer,
+    false,
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'high',
+      copilotLabel: 'low',
+      urgency: 'low',
+    }).eligibility,
+    'high',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: null,
+      copilotLabel: 'low',
+      urgency: 'high',
+    }).eligibility,
+    'medium',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: null,
+      copilotLabel: 'high',
+      urgency: 'very-low',
+    }).eligibility,
+    'high',
+  );
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      urgency: 'high',
+      adoptNow: true,
+    }).defer,
+    true,
+  );
+  // Accept forced does not win: severity-tiered ignores adoptNow, so the
+  // riskiest cell (High at very-low) defers even when an adopt-now
+  // condition holds, and adoptNow never rescues a cell the matrix blocks.
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'high',
+      urgency: 'very-low',
+      adoptNow: true,
+    }),
+    { defer: true, eligibility: 'high', blockedBy: null },
+  );
+  for (const urgency of ['low', 'medium', 'high'] as const) {
+    assert.deepEqual(
+      decideUrgencyDefer({
+        ...base,
+        e4Severity: 'high',
+        urgency,
+        adoptNow: true,
+      }),
+      { defer: false, eligibility: 'high', blockedBy: 'matrix' },
+      `high/${urgency}/adoptNow`,
+    );
+  }
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'medium',
+      urgency: 'high',
+      adoptNow: true,
+    }),
+    { defer: false, eligibility: 'medium', blockedBy: 'matrix' },
+  );
+  const binary = { ...base, mode: 'low' as const, urgency: null };
+  assert.deepEqual(decideUrgencyDefer({ ...binary, e4Severity: 'high' }), {
+    defer: false,
+    eligibility: 'high',
+    blockedBy: 'above-ceiling',
+  });
+  assert.deepEqual(decideUrgencyDefer({ ...binary, e4Severity: 'low' }), {
+    defer: true,
+    eligibility: 'low',
+    blockedBy: null,
+  });
+  assert.deepEqual(
+    decideUrgencyDefer({ ...binary, e4Severity: 'low', adoptNow: true }),
+    { defer: false, eligibility: 'low', blockedBy: 'adopt-now' },
+  );
+  assert.deepEqual(decideUrgencyDefer({ ...binary, e4Severity: 'medium' }), {
+    defer: false,
+    eligibility: 'medium',
+    blockedBy: 'above-ceiling',
+  });
+  // The Copilot label only raises eligibility over a known E4 tier.
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      e4Severity: 'low',
+      copilotLabel: 'medium',
+    }),
+    { defer: false, eligibility: 'medium', blockedBy: 'above-ceiling' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'medium',
+      copilotLabel: 'high',
+    }),
+    { defer: false, eligibility: 'high', blockedBy: 'above-ceiling' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'low',
+      copilotLabel: 'medium',
+    }),
+    { defer: true, eligibility: 'medium', blockedBy: null },
+  );
+  for (const mode of ['low', 'low-and-medium'] as const) {
+    for (const copilotLabel of [null, 'low', 'medium', 'high'] as const) {
+      assert.deepEqual(
+        decideUrgencyDefer({
+          ...binary,
+          mode,
+          e4Severity: null,
+          copilotLabel,
+        }),
+        { defer: false, eligibility: null, blockedBy: 'unknown-severity' },
+        `${mode}/${copilotLabel}`,
+      );
+    }
+  }
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'medium',
+    }),
+    { defer: true, eligibility: 'medium', blockedBy: null },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'high',
+      urgency: 'very-low',
+    }),
+    { defer: false, eligibility: 'high', blockedBy: 'above-ceiling' },
+  );
+  assert.deepEqual(decideUrgencyDefer({ ...base, mode: 'off' }), {
+    defer: false,
+    eligibility: null,
+    blockedBy: 'mode-off',
+  });
+});
+
+test('the triage defer section keeps condition (c) and the urgency matrix', () => {
+  const text = readFileSync(
+    new URL(
+      '../idd-template/.github/instructions/idd-review-triage.instructions.md',
+      import.meta.url,
+    ),
+    'utf8',
+  ).replace(/\s+/g, ' ');
+  const phrases = [
+    'instead of normal judgment',
+    'defect in shipped behavior — code, helper output, CI result, or instruction text that changes what an agent does',
+    'excluding wording/clarity polish and extra test coverage for already-working behavior',
+    'Judge validity and E4 severity (a false claim is Rejected)',
+    "the fix's marginal review-wave cost",
+    'never override.',
+    'wording/formatting changing no behavior',
+    'extra tests, comments, or naming for already-correct behavior',
+    'a correctness risk short of `high`',
+    'an adopt-now (a)-(c) condition',
+    '`very-low` < `low` < `medium` < `high`',
+    'High defers only at `very-low`',
+    'Medium or unknown, not at `high`',
+    'the floor only raises',
+    'Unscored urgency never defers',
+    'null urgency still defers',
+    'unknown severity never defers in these modes',
+    'counts as Medium',
+    'never PATH B',
+    'CODEOWNER/required-reviewer item',
+    'Accept forced does not win',
+    'High never eligible',
+    'a missing, failed, or incomplete fetch fails closed',
+    'every scored urgency',
+    'review-fix-loop-cutoff',
+    '(a)-(c)',
+  ];
+  for (const phrase of phrases) {
+    assert.ok(text.includes(phrase), phrase);
+  }
 });
 
 test('critiqueLoop.subagentWaitCeiling defaults to PT20M and accepts positive durations', () => {
@@ -1360,4 +1701,341 @@ test('providerHealth.samplingWindow rejects an invalid duration deterministicall
       `expected samplingWindow ${JSON.stringify(invalid)} to fail safe to the default`,
     );
   }
+});
+
+test('issueAuthoring.adversarialReview.waitCeiling defaults to PT20M and ignores critiqueLoop (#3599)', () => {
+  assert.equal(
+    POLICY_DEFAULTS.issueAuthoring.adversarialReview.waitCeiling,
+    'PT20M',
+  );
+  assert.equal(
+    Object.hasOwn(POLICY_DEFAULTS.issueAuthoring.adversarialReview, 'delegate'),
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      critiqueLoop: { subagentWaitCeiling: 'PT45M' },
+    }).issueAuthoring.adversarialReview.waitCeiling,
+    'PT20M',
+  );
+  assert.equal(
+    resolveIssueAuthoringAdversarialWaitCeiling({
+      critiqueLoop: { subagentWaitCeiling: 'PT45M' },
+      issueAuthoring: { adversarialReview: { waitCeiling: 'PT5M' } },
+    }),
+    'PT5M',
+  );
+});
+
+test('issueAuthoring.adversarialReview.waitCeiling falls back to PT20M for an invalid duration (#3599)', () => {
+  for (const invalid of ['not-a-duration', 'PT0S', 'P0D', 42, null]) {
+    assert.equal(
+      resolveIssueAuthoringAdversarialWaitCeiling({
+        issueAuthoring: { adversarialReview: { waitCeiling: invalid } },
+      }),
+      'PT20M',
+      `expected waitCeiling ${JSON.stringify(invalid)} to fail safe to PT20M`,
+    );
+  }
+  assert.equal(
+    resolveIssueAuthoringAdversarialWaitCeiling({
+      issueAuthoring: { adversarialReview: 'not-an-object' },
+    }),
+    'PT20M',
+  );
+});
+
+test('normalizePolicyConfig keeps a parsed issue-authoring delegate and omits it when absent (#3599)', () => {
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({}).issueAuthoring.adversarialReview,
+      'delegate',
+    ),
+    false,
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      issueAuthoring: {
+        adversarialReview: {
+          waitCeiling: 'PT5M',
+          delegate: { command: 'draft-review', mode: 'combined' },
+        },
+      },
+    }).issueAuthoring.adversarialReview,
+    {
+      waitCeiling: 'PT5M',
+      delegate: { command: 'draft-review', mode: 'combined' },
+    },
+  );
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({
+        issueAuthoring: { adversarialReview: { delegate: null } },
+      }).issueAuthoring.adversarialReview,
+      'delegate',
+    ),
+    false,
+  );
+});
+
+test('normalizePolicyConfig fail-safes an invalid issue-authoring mode and ignores a sibling typo (#3599)', () => {
+  assert.deepEqual(
+    normalizePolicyConfig({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review', mode: 'always' },
+          typo: true,
+        },
+      },
+    }).issueAuthoring.adversarialReview.delegate,
+    { command: 'draft-review', mode: 'fallback' },
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review', mode: 'on-success' },
+          typo: true,
+        },
+      },
+    }).issueAuthoring.adversarialReview.delegate,
+    { command: 'draft-review', mode: 'on-success' },
+  );
+});
+
+test('inspectIssueAuthoringDelegateLayer distinguishes absent, disabled, configured, and malformed (#3599)', () => {
+  assert.deepEqual(inspectIssueAuthoringDelegateLayer({}), {
+    status: 'absent',
+  });
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: { adversarialReview: { waitCeiling: 'PT5M' } },
+    }),
+    { status: 'absent' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: { adversarialReview: { delegate: null } },
+    }),
+    { status: 'disabled' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: {
+        adversarialReview: { delegate: { command: 'draft-review' } },
+      },
+    }),
+    {
+      status: 'configured',
+      delegate: { command: 'draft-review', mode: 'fallback' },
+    },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review', mode: 'always' },
+        },
+      },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'draft-review' },
+          extra: true,
+        },
+      },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({ issueAuthoring: 'not-an-object' }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+  assert.deepEqual(
+    inspectIssueAuthoringDelegateLayer({
+      issueAuthoring: { adversarialReview: 'not-an-object' },
+    }),
+    { status: 'malformed', reason: 'invalid-repository-local-delegate' },
+  );
+});
+
+test('resolveEffectiveIssueAuthoringDelegate does not read critiqueLoop.delegate (#3599)', () => {
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {
+        critiqueLoop: { delegate: { command: 'must-not-leak' } },
+        issueAuthoring: {
+          adversarialReview: {
+            delegate: { command: 'local-review', mode: 'combined' },
+          },
+        },
+      },
+      globalConfig: {
+        issueAuthoring: {
+          adversarialReview: { delegate: { command: 'global-review' } },
+        },
+      },
+    }),
+    {
+      status: 'local',
+      source: 'repository-local',
+      delegate: { command: 'local-review', mode: 'combined' },
+    },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {
+        issueAuthoring: { adversarialReview: { delegate: null } },
+      },
+      globalConfig: {
+        critiqueLoop: { delegate: { command: 'must-not-leak' } },
+        issueAuthoring: {
+          adversarialReview: { delegate: { command: 'global-review' } },
+        },
+      },
+    }),
+    { status: 'disabled', source: 'repository-local' },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {
+        issueAuthoring: {
+          adversarialReview: {
+            delegate: { command: 'local-review', mode: 'always' },
+          },
+        },
+      },
+      globalConfig: {
+        issueAuthoring: {
+          adversarialReview: { delegate: { command: 'global-review' } },
+        },
+      },
+    }),
+    {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: 'invalid-repository-local-delegate',
+    },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {},
+      globalConfig: {
+        critiqueLoop: {
+          delegate: { command: 'must-not-leak' },
+          subagentWaitCeiling: 'PT45M',
+        },
+        issueAuthoring: {
+          adversarialReview: {
+            waitCeiling: 'PT1H',
+            delegate: { command: 'global-review', mode: 'never' },
+          },
+        },
+      },
+    }),
+    {
+      status: 'global',
+      source: 'user-global',
+      delegate: { command: 'global-review', mode: 'never' },
+    },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {},
+      globalConfig: {
+        issueAuthoring: { adversarialReview: { delegate: null } },
+      },
+    }),
+    { status: 'none', source: 'none' },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({
+      localConfig: {},
+      globalConfig: {
+        issueAuthoring: {
+          adversarialReview: {
+            delegate: { command: 'global-review', bogus: 1 },
+          },
+        },
+      },
+    }),
+    { status: 'none', source: 'none' },
+  );
+  assert.deepEqual(
+    resolveEffectiveIssueAuthoringDelegate({ localConfig: {} }),
+    { status: 'none', source: 'none' },
+  );
+});
+
+test('githubApi.readCache defaults to disabled, PT5M, 100 MiB, and PT24H (#3587)', () => {
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.enabled, false);
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.maxAge, 'PT5M');
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.maxBytes, 104857600);
+  assert.equal(POLICY_DEFAULTS.githubApi.readCache.retention, 'PT24H');
+  assert.equal(
+    Object.hasOwn(POLICY_DEFAULTS.githubApi.readCache, 'directory'),
+    false,
+  );
+  assert.deepEqual(normalizePolicyConfig({}).githubApi.readCache, {
+    enabled: false,
+    maxAge: 'PT5M',
+    maxBytes: 104857600,
+    retention: 'PT24H',
+  });
+});
+
+test('githubApi.readCache opts in only for literal true and ignores invalid values (#3587)', () => {
+  assert.equal(
+    normalizePolicyConfig({
+      githubApi: { readCache: { enabled: 'true' } },
+    }).githubApi.readCache.enabled,
+    false,
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      githubApi: {
+        readCache: {
+          enabled: true,
+          maxAge: 'PT1M',
+          maxBytes: 32,
+          retention: 'PT2H',
+          directory: ' /tmp/idd-cache ',
+        },
+      },
+    }).githubApi.readCache,
+    {
+      enabled: true,
+      maxAge: 'PT1M',
+      maxBytes: 32,
+      retention: 'PT2H',
+      directory: '/tmp/idd-cache',
+    },
+  );
+  for (const invalid of [0, -1, 1.5, 104857601, '10', null]) {
+    assert.equal(
+      normalizePolicyConfig({
+        githubApi: { readCache: { maxBytes: invalid } },
+      }).githubApi.readCache.maxBytes,
+      104857600,
+      `expected maxBytes ${JSON.stringify(invalid)} to fail safe`,
+    );
+  }
+  const invalidDuration = normalizePolicyConfig({
+    githubApi: { readCache: { maxAge: 'P0D', retention: 'nope' } },
+  }).githubApi.readCache;
+  assert.equal(invalidDuration.maxAge, 'PT5M');
+  assert.equal(invalidDuration.retention, 'PT24H');
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({
+        githubApi: { readCache: { directory: '   ' } },
+      }).githubApi.readCache,
+      'directory',
+    ),
+    false,
+  );
 });

@@ -142,25 +142,31 @@ test('listWorkItemComments: GitHub and fake adapters agree on lastEditedAt when 
     'o',
     'r',
     fakeDeps({
-      ghApiJson: () => [
-        {
-          id: 111,
-          node_id: 'IC_kwDOexample000',
-          body: 'hello',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:05:00Z',
-          user: { login: 'claude-bot' },
-        },
-      ],
+      ghApiJson: () => {
+        throw new Error('REST must not be consulted');
+      },
       ghText: () =>
         JSON.stringify({
           data: {
-            nodes: [
-              {
-                id: 'IC_kwDOexample000',
-                lastEditedAt: '2026-01-01T00:10:00Z',
+            repository: {
+              issue: {
+                comments: {
+                  nodes: [
+                    {
+                      id: 'IC_kwDOexample000',
+                      databaseId: 111,
+                      body: 'hello',
+                      createdAt: '2026-01-01T00:00:00Z',
+                      updatedAt: '2026-01-01T00:05:00Z',
+                      lastEditedAt: '2026-01-01T00:10:00Z',
+                      author: { login: 'claude-bot', __typename: 'User' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
               },
-            ],
+              pullRequest: null,
+            },
           },
         }),
     }),
@@ -237,23 +243,30 @@ test('listWorkItemCommentsWithRetryAsync: GitHub and fake adapters agree on last
     'o',
     'r',
     fakeDeps({
-      ghText: (args) => {
-        if (args[1] === 'graphql') {
-          return JSON.stringify({
-            data: { nodes: [{ id: 'IC_1', lastEditedAt: null }] },
-          });
-        }
-        return JSON.stringify([
-          {
-            id: 1,
-            node_id: 'IC_1',
-            body: 'hi',
-            created_at: '2026-01-01T00:00:00Z',
-            updated_at: '2026-01-01T00:00:00Z',
-            user: { login: 'kurone-kito' },
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                comments: {
+                  nodes: [
+                    {
+                      id: 'IC_1',
+                      databaseId: 1,
+                      body: 'hi',
+                      createdAt: '2026-01-01T00:00:00Z',
+                      updatedAt: '2026-01-01T00:00:00Z',
+                      lastEditedAt: null,
+                      author: { login: 'kurone-kito', __typename: 'User' },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+              pullRequest: null,
+            },
           },
-        ]);
-      },
+        }),
     }),
   );
   const fakePort = createFakeProviderAdapter({

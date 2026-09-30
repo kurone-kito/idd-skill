@@ -38,6 +38,7 @@ words:
   - tsfile
   - undispositioned
   - unexcluded
+  - unheld
   - unioned
   - unmigrated
   - unmirrored
@@ -56,6 +57,7 @@ words:
   - WHATWG
   - dedented
   - dedup
+  - deinitialized
   - demotability
   - deprioritize
   - dofork

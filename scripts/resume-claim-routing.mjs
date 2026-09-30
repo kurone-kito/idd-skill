@@ -414,7 +414,11 @@ export function evaluateResumeClaimRouting(input, options = {}) {
             },
           }
         : {}),
-      ...(localWorktree ? { local_worktree: localWorktree } : {}),
+      // Preserve an explicit `absent` probe result too. Recovery's primary
+      // worktree path checks out the development branch and then invokes this
+      // resolver again; omitting `absent` makes that successful production
+      // result indistinguishable from a probe that never ran.
+      ...(localWorktree !== null ? { local_worktree: localWorktree } : {}),
     },
   };
 }

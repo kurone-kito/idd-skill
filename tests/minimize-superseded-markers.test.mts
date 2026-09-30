@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -11,6 +17,7 @@ import {
   computeExitCode,
   isTrustedAuthor,
   probeSubject,
+  probeSubjects,
   resolveGhHostnameArgs,
   resolveTrustedActors,
   runMinimize,
@@ -402,9 +409,11 @@ function runMinimizeAgainstUnresolvableId(
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
   const restore = stubExecutable(
     'gh',
-    `const value = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
-const message = \`Could not resolve to a node with the global id of '\${value}'\`;
-process.stdout.write(JSON.stringify({ data: { node: null }, errors: [{ type: 'NOT_FOUND', message }] }));
+    `const ids = process.argv.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
+const legacy = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
+const values = ids.length > 0 ? ids : [legacy];
+const message = values.map((value) => \`Could not resolve to a node with the global id of '\${value}'\`).join('; ');
+process.stdout.write(JSON.stringify({ data: { nodes: values.map(() => null) }, errors: [{ type: 'NOT_FOUND', message }] }));
 process.stderr.write(\`gh: \${message}\\n\`);
 process.exit(1);
 `,
@@ -644,8 +653,11 @@ for (let i = 0; i < args.length; i += 1) {
 }
 const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
 const id = idEntry ? idEntry.slice('id='.length) : '';
+const ids = fValues.filter((v) => v.indexOf('ids[]=') === 0).map((v) => v.slice('ids[]='.length));
 if (args[0] === 'api' && args[1] === 'graphql') {
-  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-' + id, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  const requested = ids.length > 0 ? ids : [id];
+  const nodes = requested.map((nodeId) => ({ __typename: 'IssueComment', id: nodeId, url: 'https://github.com/o/r/issues/1#issuecomment-' + nodeId, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } }));
+  process.stdout.write(JSON.stringify({ data: { nodes } }));
   process.exit(0);
 }
 fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
@@ -739,8 +751,11 @@ for (let i = 0; i < args.length; i += 1) {
 const idEntry = fValues.find((v) => v.indexOf('id=') === 0);
 const classifierEntry = fValues.find((v) => v.indexOf('classifier=') === 0);
 const id = idEntry ? idEntry.slice('id='.length) : '';
+const ids = fValues.filter((v) => v.indexOf('ids[]=') === 0).map((v) => v.slice('ids[]='.length));
 if (args[0] === 'api' && args[1] === 'graphql' && !classifierEntry) {
-  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-' + id, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  const requested = ids.length > 0 ? ids : [id];
+  const nodes = requested.map((nodeId) => ({ __typename: 'IssueComment', id: nodeId, url: 'https://github.com/o/r/issues/1#issuecomment-' + nodeId, isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } }));
+  process.stdout.write(JSON.stringify({ data: { nodes } }));
   process.exit(0);
 }
 fs.writeSync(2, 'unexpected gh invocation (mutation attempted after deadline): ' + args.join(' '));
@@ -1191,6 +1206,156 @@ test('printTable prints deadlineSkipped=0 even when --deadline-ms is omitted, ma
       countsLine,
       'counts: eligible=1 applied=0 failed=0 already=0 blocked=0 untrusted=0 unsupported=0 deadlineSkipped=0',
     );
+  } finally {
+    restore();
+  }
+});
+
+test('runMinimize batches deduplicated ids into nodes requests of at most 100 (#3593)', () => {
+  const logFile = join(tmpdir(), `idd-probe-batches-${process.pid}.log`);
+  rmSync(logFile, { force: true });
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const ids = args.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
+fs.appendFileSync(${JSON.stringify(logFile)}, ids.join(',') + '\\n');
+if (ids.includes('IC_bad')) {
+  fs.writeSync(2, "gh: Could not resolve to a node with the global id of 'IC_bad'\\n");
+  process.exit(1);
+}
+const nodes = ids.map((id) => ({ __typename: 'IssueComment', id, url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } }));
+process.stdout.write(JSON.stringify({ data: { nodes } }));
+`,
+  );
+  try {
+    const subjectIds = Array.from({ length: 100 }, (_, index) => `IC_${index}`);
+    subjectIds.splice(1, 0, 'IC_0');
+    subjectIds.push('IC_bad');
+    const report = runMinimize({
+      subjectIds,
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+    });
+    const lines = readFileSync(logFile, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0]?.split(',').length, 100);
+    assert.equal(lines[1], 'IC_bad');
+    assert.equal(report.items.length, 101);
+    assert.equal(
+      report.items.filter((item) => item.status === 'would-apply').length,
+      100,
+    );
+    assert.equal(report.items.at(-1)?.subjectId, 'IC_bad');
+    assert.equal(report.items.at(-1)?.status, 'failed');
+    assert.match(report.items.at(-1)?.reason ?? '', /^gh-graphql-error:/);
+    assert.equal(
+      report.items.filter((item) => item.subjectId === 'IC_0').length,
+      1,
+    );
+  } finally {
+    restore();
+    rmSync(logFile, { force: true });
+  }
+});
+
+test('runMinimize does not widen an exhausted deadline into a 100-id probe (#3593)', () => {
+  const logFile = join(tmpdir(), `idd-probe-exhausted-${process.pid}.log`);
+  rmSync(logFile, { force: true });
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const ids = process.argv.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
+fs.appendFileSync(${JSON.stringify(logFile)}, ids.join(',') + '\\n');
+const nodes = ids.map((id) => ({ __typename: 'IssueComment', id, url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } }));
+process.stdout.write(JSON.stringify({ data: { nodes } }));
+`,
+  );
+  try {
+    const subjectIds = Array.from({ length: 101 }, (_, index) => `IC_${index}`);
+    const report = runMinimize({
+      subjectIds,
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+      deadlineMs: 0,
+    });
+    assert.equal(readFileSync(logFile, 'utf8').trim(), 'IC_0');
+    assert.equal(report.items[0]?.status, 'would-apply');
+    assert.equal(report.counts.deadlineSkipped, 100);
+  } finally {
+    restore();
+    rmSync(logFile, { force: true });
+  }
+});
+
+test('probeSubjects keeps a matching node and rejects a null, a mismatched id, and a path-scoped REST failure (#3593)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const ids = process.argv.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
+const nodes = ids.map((id) => {
+  if (id === 'IC_missing') return null;
+  if (id === 'IC_mismatch') return { __typename: 'IssueComment', id: 'IC_other', url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } };
+  return { __typename: 'IssueComment', id, url: 'u', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } };
+});
+const errors = ids.includes('4870591746') ? [{ message: "Could not resolve to a node with the global id of '4870591746'", path: ['nodes', ids.indexOf('4870591746')] }] : [];
+process.stdout.write(JSON.stringify({ data: { nodes }, errors }));
+`,
+  );
+  try {
+    const result = probeSubjects([
+      'IC_ok',
+      'IC_missing',
+      'IC_mismatch',
+      '4870591746',
+    ]);
+    assert.equal(result[0]?.ok, true);
+    assert.equal(result[1]?.ok, false);
+    if (!result[1]?.ok) {
+      assert.equal(result[1].reason, 'node-missing');
+    }
+    assert.equal(result[2]?.ok, false);
+    if (!result[2]?.ok) {
+      assert.equal(result[2].reason, 'node-id-mismatch');
+    }
+    assert.equal(result[3]?.ok, false);
+    if (!result[3]?.ok) {
+      assert.match(result[3].reason, /^unresolvable-node-id:/);
+    }
+  } finally {
+    restore();
+  }
+});
+
+test('runMinimize reports an unsupported node as unsupported-type when its id is selected (#3593)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+const query = args.find((arg) => arg.startsWith('query=')) ?? '';
+const nodesBody = query.split('nodes(ids:$ids){')[1]?.split('... on ')[0] ?? '';
+const selectsId = /\\bid\\b/.test(nodesBody);
+const ids = args.filter((arg) => arg.startsWith('ids[]=')).map((arg) => arg.slice('ids[]='.length));
+const nodes = ids.map((id) => selectsId ? { __typename: 'Issue', id } : { __typename: 'Issue' });
+process.stdout.write(JSON.stringify({ data: { nodes } }));
+`,
+  );
+  try {
+    const report = runMinimize({
+      subjectIds: ['ISSUE_1'],
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['kurone-kito']),
+      apply: false,
+      allowUntrusted: false,
+    });
+    assert.equal(report.items.length, 1);
+    assert.equal(report.items[0]?.status, 'skipped');
+    assert.equal(report.items[0]?.reason, 'unsupported-type');
+    assert.equal(report.items[0]?.typename, 'Issue');
+    assert.equal(report.counts.unsupportedType, 1);
+    assert.equal(report.counts.failed, 0);
   } finally {
     restore();
   }

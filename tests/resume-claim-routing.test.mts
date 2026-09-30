@@ -443,6 +443,38 @@ test('stale takeover is blocked by a live local worktree', () => {
   assert.equal(gate.reason, 'stale-claim-local-worktree-occupied');
 });
 
+test('stale claim preserves an explicit absent local-worktree probe', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'absent',
+        paths: [],
+        reason: null,
+      }),
+    },
+  );
+
+  assert.equal(result.state, 'stale');
+  assert.equal(result.action, 'takeover');
+  assert.equal(result.reason, 'active-claim-stale');
+  assert.deepEqual(result.evidence.local_worktree, {
+    status: 'absent',
+    paths: [],
+    reason: null,
+  });
+});
+
 test('fresh claim gate withholds winningClaimId for a stale claim with an unreadable worktree (#3154)', () => {
   // An unreadable probe cannot verify that the stale active claim's own
   // worktree is what a taker-over would inherit -- exposing its id here
@@ -2584,6 +2616,22 @@ if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('format-tester\\n');
   process.exit(0);
 }
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => String(arg).includes('databaseId'))) {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+        pullRequest: null,
+      },
+    },
+  }));
+  process.exit(0);
+}
 if (args[0] === 'api' && args.some((arg) => /\\/issues\\/1\\/comments/.test(arg))) {
   process.exit(0);
 }
@@ -2701,6 +2749,32 @@ function linkedPrLookupFailureCliFixture() {
     `const args = process.argv.slice(2);
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('maintainer\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => String(arg).includes('databaseId'))) {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: {
+        repository: {
+          issue: {
+            comments: {
+              nodes: comments.map((row) => ({
+                id: row.node_id,
+                databaseId: row.id,
+                body: row.body,
+                createdAt: row.created_at,
+                updatedAt: row.created_at,
+                lastEditedAt: null,
+                author: { login: row.user.login, __typename: 'User' },
+              })),
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+          pullRequest: null,
+        },
+      },
+    }),
+  )});
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {
@@ -2914,6 +2988,34 @@ function trustedLadderFixture({
 const commentPayloads = ${commentPayloadsJs};
 if (args[0] === 'api' && args[1] === 'user') {
   process.stdout.write('viewer-login\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => String(arg).includes('databaseId'))) {
+  const nodes = commentPayloads.map((payload) => {
+    const row = JSON.parse(payload);
+    return {
+      id: row.node_id,
+      databaseId: row.id,
+      body: row.body,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at || row.created_at,
+      lastEditedAt: null,
+      author: { login: row.user.login, __typename: 'User' },
+    };
+  });
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+        pullRequest: null,
+      },
+    },
+  }));
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => /nodes\\(ids/.test(arg))) {

@@ -142,6 +142,12 @@ const UNIVERSAL_FLAGS = new Set(['--help']);
 // example, not documentation of this helper's own parser. Each entry names
 // the owning command so the exclusion stays auditable.
 const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  'audit-authored-issue': [
+    // sweep-authoring-markers.mjs's own flag, cited so this helper's
+    // --cleanup-evidence-file description names the sweep mode that
+    // writes the file (#3593).
+    '--with-cleanup-evidence',
+  ],
   'claim-lock': [
     // `git rev-parse --absolute-git-dir` / `--git-common-dir` -- git flags,
     // not claim-lock's own.
@@ -203,10 +209,12 @@ const COVERED_HELPERS = [
   'idd-critique-report',
   'idd-critique-telemetry-hook',
   'idd-doctor',
+  'idd-issue-authoring-delegate',
   'idd-roadmap-audit-execute',
   'idd-suggest-untrusted-labelers',
   'live-status-digest',
   'local-validation-evidence',
+  'local-worktree-recovery',
   'merged-pr-feedback-sweep',
   'phase-id-resolver',
   'pre-merge-readiness',

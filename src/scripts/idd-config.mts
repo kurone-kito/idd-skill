@@ -20,7 +20,8 @@
 // production call site reads this file at most once per process anyway,
 // so memoization had no real payoff to justify that risk.
 //
-// `loadIddConfig()` below only covers the default, no-path case (#1208's
+// `loadIddConfig()` below only covers the default, current-working-directory
+// case (#1208's
 // original scope). #1721 adds `loadPolicyConfig()` beside it for the nine
 // helpers that also accept an explicit `--policy`/`--config` path, with
 // stricter failure semantics (see that function's doc comment).
@@ -43,10 +44,13 @@ import { deriveGhHttpStatus } from './gh-http-status.mts';
 import {
   type EffectiveCritiqueLoopDelegate,
   type EffectiveCritiqueLoopTelemetryHook,
+  type EffectiveIssueAuthoringDelegate,
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
+  inspectIssueAuthoringDelegateLayer,
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
+  resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mts';
 
 /**
@@ -64,16 +68,16 @@ export interface IddConfig {
 
 /**
  * Read and parse `.github/idd/config.json` from the current working
- * directory, returning `null` when the file is missing, unreadable, or
- * not valid JSON — the existing fail-safe every per-helper copy already
- * implements: treat a missing or malformed config the same as "no policy
- * configured". Always re-reads the file; see the module header for why
- * this does not memoize.
+ * directory, returning `null` when the file is missing,
+ * unreadable, or not valid JSON — the existing fail-safe every per-helper
+ * copy already implements: treat a missing or malformed config the same as
+ * "no policy configured". Always re-reads the file; see the module header
+ * for why this does not memoize.
  */
 export function loadIddConfig(): IddConfig | null {
   try {
     return JSON.parse(
-      readFileSync('.github/idd/config.json', 'utf8'),
+      readFileSync(resolve(process.cwd(), '.github/idd/config.json'), 'utf8'),
     ) as IddConfig;
   } catch {
     return null;
@@ -446,11 +450,12 @@ export function resolveUserGlobalConfigPath(
  * Read the operator-global policy file for C1 delegate inheritance.
  *
  * Missing, unreadable, non-JSON, and non-object documents are `absent`
- * (non-fatal). Callers must not merge any key other than
- * `critiqueLoop.delegate` into repository policy — pass the document to
- * {@link resolveEffectiveCritiqueLoopDelegate}, which reads only that
- * fragment. Opt-in to local C1 execution; CI and merge helpers must not
- * call this.
+ * (non-fatal). Callers must not merge this document into repository
+ * policy. {@link resolveEffectiveCritiqueLoopDelegate} reads only
+ * `critiqueLoop.delegate`, and
+ * {@link resolveEffectiveIssueAuthoringDelegate} reads only
+ * `issueAuthoring.adversarialReview.delegate`. Opt-in to local C1 or
+ * issue-authoring resolution; CI and merge helpers must not call this.
  */
 export function loadUserGlobalPolicyDocument(options?: {
   env?: NodeJS.ProcessEnv;
@@ -548,6 +553,50 @@ export function resolveEffectiveCritiqueLoopTelemetryHookFromEnv(
   });
 
   return resolveEffectiveCritiqueLoopTelemetryHook({
+    localConfig,
+    globalConfig: global.status === 'present' ? global.config : undefined,
+  });
+}
+
+/** Options for {@link resolveEffectiveIssueAuthoringDelegateFromEnv}. */
+export interface ResolveEffectiveIssueAuthoringDelegateFromEnvOptions {
+  /** Raw repository-local policy object. When omitted, load from disk. */
+  localConfig?: unknown;
+  /** Path forwarded to {@link loadPolicyConfig} when `localConfig` is omitted. */
+  localPolicyPath?: string;
+  env?: NodeJS.ProcessEnv;
+  /** Injected user-global file path; skips XDG/`HOME` resolution. */
+  globalConfigPath?: string;
+  homedir?: string;
+}
+
+/**
+ * Opt-in issue-authoring entry: resolve
+ * `issueAuthoring.adversarialReview.delegate` from the repository-local
+ * document plus an optional user-global file (#3599). Does not read
+ * `critiqueLoop.delegate` and does not run as a side effect of
+ * {@link loadIddConfig} or {@link loadPolicyConfig}.
+ */
+export function resolveEffectiveIssueAuthoringDelegateFromEnv(
+  options?: ResolveEffectiveIssueAuthoringDelegateFromEnvOptions,
+): EffectiveIssueAuthoringDelegate {
+  const localConfig =
+    options && Object.hasOwn(options, 'localConfig')
+      ? options.localConfig
+      : loadPolicyConfig(options?.localPolicyPath).config;
+
+  const local = inspectIssueAuthoringDelegateLayer(localConfig);
+  if (local.status !== 'absent') {
+    return resolveEffectiveIssueAuthoringDelegate({ localConfig });
+  }
+
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+
+  return resolveEffectiveIssueAuthoringDelegate({
     localConfig,
     globalConfig: global.status === 'present' ? global.config : undefined,
   });

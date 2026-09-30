@@ -12,6 +12,7 @@ import {
 } from '../src/scripts/marker-helpers.mts';
 import { runMinimize } from '../src/scripts/minimize-superseded-markers.mts';
 import {
+  type AuthoringMarkerSweepDeps,
   computeSweepExitCode,
   fetchIssueCommentsGraphql,
   isCrossRepoIssueToken,
@@ -99,13 +100,15 @@ const GH_MINIMIZE_STUB = `
 const argv = process.argv.slice(2);
 const queryArg = argv.find((a) => a.startsWith('query=')) || '';
 const idArg = (argv.find((a) => a.startsWith('id=')) || '').slice(3);
+const ids = argv.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
 if (queryArg.includes('minimizeComment')) {
   process.stdout.write(JSON.stringify({
     data: { minimizeComment: { minimizedComment: { __typename: 'IssueComment', id: idArg, isMinimized: true, minimizedReason: 'OUTDATED' } } },
   }));
 } else {
+  const requested = ids.length > 0 ? ids : [idArg];
   process.stdout.write(JSON.stringify({
-    data: { node: { __typename: 'IssueComment', url: 'https://example.invalid/' + idArg, isMinimized: false, minimizedReason: null, viewerCanMinimize: true, author: { login: 'trusted-bot' } } },
+    data: { nodes: requested.map((id) => ({ __typename: 'IssueComment', id, url: 'https://example.invalid/' + id, isMinimized: false, minimizedReason: null, viewerCanMinimize: true, author: { login: 'trusted-bot' } })) },
   }));
 }
 `;
@@ -568,12 +571,12 @@ test('computeSweepExitCode returns 1 when the mutation genuinely fails for a can
     `
 const argv = process.argv.slice(2);
 const queryArg = argv.find((a) => a.startsWith('query=')) || '';
-const idArg = (argv.find((a) => a.startsWith('id=')) || '').slice(3);
+const ids = argv.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
 if (queryArg.includes('minimizeComment')) {
   process.stdout.write(JSON.stringify({ errors: [{ message: 'boom' }] }));
 } else {
   process.stdout.write(JSON.stringify({
-    data: { node: { __typename: 'IssueComment', url: 'https://example.invalid/' + idArg, isMinimized: false, minimizedReason: null, viewerCanMinimize: true, author: { login: 'trusted-bot' } } },
+    data: { nodes: ids.map((id) => ({ __typename: 'IssueComment', id, url: 'https://example.invalid/' + id, isMinimized: false, minimizedReason: null, viewerCanMinimize: true, author: { login: 'trusted-bot' } })) },
   }));
 }
 `,
@@ -606,8 +609,9 @@ test('a live re-probe skip (viewer-cannot-minimize) counts as skippedOther, not 
   const restore = stubExecutable(
     'gh',
     `
+const ids = process.argv.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
 process.stdout.write(JSON.stringify({
-  data: { node: { __typename: 'IssueComment', url: 'https://example.invalid/x', isMinimized: false, minimizedReason: null, viewerCanMinimize: false, author: { login: 'trusted-bot' } } },
+  data: { nodes: ids.map((id) => ({ __typename: 'IssueComment', id, url: 'https://example.invalid/x', isMinimized: false, minimizedReason: null, viewerCanMinimize: false, author: { login: 'trusted-bot' } })) },
 }));
 `,
   );
@@ -781,6 +785,7 @@ test('--help exits 0 and documents every flag the contract worked examples use',
     '--apply',
     '--format',
     '--deadline-ms',
+    '--with-cleanup-evidence',
   ]) {
     assert.match(result.stdout, new RegExp(flag.replace('-', '\\-')));
   }
@@ -876,4 +881,125 @@ test('an invalid --classifier is rejected before any network call', () => {
   ]);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--classifier must be one of/);
+});
+
+test('runAuthoringMarkerSweep fetches each canonical target once and emits cleanup evidence only when asked (#3593)', () => {
+  const fetches: string[] = [];
+  const commentsFor = (owner: string, repo: string, issue: number) => [
+    comment(
+      `${owner.toLowerCase()}-old`,
+      ownerMarker('acquire', 'owner-1', `${owner}/${repo}#${issue}`),
+      'trusted-bot',
+    ),
+    comment(
+      `${owner.toLowerCase()}-new`,
+      ownerMarker('release', 'owner-1', `${owner}/${repo}#${issue}`),
+      'trusted-bot',
+    ),
+  ];
+  const base = {
+    issues: [
+      { owner: 'Acme', repo: 'Widget', issue: 7 },
+      { owner: 'acme', repo: 'WIDGET', issue: 7 },
+      { owner: 'Other', repo: 'Widget', issue: 7 },
+    ],
+    markerPrefix: MARKER_PREFIX,
+    classifier: 'OUTDATED',
+    trustedSet: new Set(['trusted-bot']),
+    apply: true,
+  };
+  const deps = {
+    fetchIssueComments: (owner: string, repo: string, issue: number) => {
+      fetches.push(`${owner}/${repo}#${issue}`);
+      return commentsFor(owner, repo, issue);
+    },
+    minimize: (args: { subjectIds: string[]; classifier: string }) => ({
+      mode: 'apply' as const,
+      classifier: args.classifier,
+      counts: {
+        eligible: args.subjectIds.length,
+        alreadyMinimized: 0,
+        cannotMinimize: 0,
+        untrusted: 0,
+        unsupportedType: 0,
+        applied: 0,
+        failed: 0,
+        deadlineSkipped: 0,
+      },
+      items: args.subjectIds.map((subjectId) =>
+        subjectId === 'acme-old'
+          ? {
+              subjectId,
+              status: 'applied',
+              author: { login: 'trusted-bot' },
+            }
+          : {
+              subjectId,
+              status: 'failed',
+              reason: 'gh-graphql-error: boom',
+              author: 'nope',
+            },
+      ),
+    }),
+  } as AuthoringMarkerSweepDeps;
+  const plain = runAuthoringMarkerSweep(base, deps);
+  assert.equal(plain.cleanupEvidence, undefined);
+  fetches.length = 0;
+  const report = runAuthoringMarkerSweep(
+    { ...base, withCleanupEvidence: true },
+    deps,
+  );
+  assert.deepEqual(fetches, ['Acme/Widget#7', 'Other/Widget#7']);
+  assert.equal(report.issues.length, 3);
+  assert.equal(report.issues[1]?.commentCount, 2);
+  assert.equal(report.issues[1]?.error, undefined);
+  assert.equal(report.families['authoring-owner'].scanned, 4);
+  const evidence = report.cleanupEvidence;
+  assert.equal(evidence?.collections.length, 2);
+  assert.equal(evidence?.collections[0]?.owner, 'Acme');
+  const acmeOld = evidence?.collections[0]?.comments.find(
+    (entry) => entry.id === 'acme-old',
+  );
+  const otherOld = evidence?.collections[1]?.comments.find(
+    (entry) => entry.id === 'other-old',
+  );
+  assert.equal(acmeOld?.isMinimized, true);
+  assert.equal(acmeOld?.author, 'trusted-bot');
+  assert.equal(otherOld?.isMinimized, false);
+  const applied = evidence?.mutations.find(
+    (entry) => entry.subjectId === 'acme-old',
+  );
+  assert.equal(applied?.author, 'trusted-bot');
+  assert.equal(
+    evidence?.mutations.find((entry) => entry.subjectId === 'other-old')
+      ?.author,
+    'nope',
+  );
+});
+
+test('a failed canonical fetch is not retried for a later case-only duplicate (#3593)', () => {
+  const fetches: string[] = [];
+  const report = runAuthoringMarkerSweep(
+    {
+      issues: [
+        { owner: 'Acme', repo: 'Widget', issue: 7 },
+        { owner: 'acme', repo: 'widget', issue: 7 },
+      ],
+      markerPrefix: MARKER_PREFIX,
+      classifier: 'OUTDATED',
+      trustedSet: new Set(['trusted-bot']),
+      apply: false,
+    },
+    {
+      fetchIssueComments: (owner, repo, issue) => {
+        fetches.push(`${owner}/${repo}#${issue}`);
+        throw new Error('gh-graphql-error: boom');
+      },
+      minimize: runMinimize,
+    },
+  );
+  assert.deepEqual(fetches, ['Acme/Widget#7']);
+  assert.equal(report.issues[0]?.error, 'gh-graphql-error: boom');
+  assert.equal(report.issues[1]?.error, 'gh-graphql-error: boom');
+  assert.equal(report.families['authoring-owner'].scanned, 0);
 });

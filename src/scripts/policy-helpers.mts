@@ -27,7 +27,7 @@ interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
   deferAfterRounds: number;
-  deferByUrgency: 'off' | 'low' | 'low-and-medium';
+  deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
   subagentWaitCeiling: string;
   delegate?: CritiqueLoopDelegate;
 }
@@ -63,6 +63,23 @@ interface LocalValidationEvidencePolicy {
 interface ProviderHealthPolicy {
   minCorroboratingPrs: number;
   samplingWindow: string;
+}
+
+/**
+ * Opt-in host-local GitHub REST read cache (#3587). `directory` is omitted
+ * until configured, matching `providerOutage.declarationTarget`. Enabling
+ * the cache does not wire Discover.
+ */
+interface GithubApiReadCachePolicy {
+  enabled: boolean;
+  maxAge: string;
+  maxBytes: number;
+  retention: string;
+  directory?: string;
+}
+
+interface GithubApiPolicy {
+  readCache: GithubApiReadCachePolicy;
 }
 
 /** How one policy document presents `critiqueLoop.delegate`. */
@@ -147,6 +164,67 @@ export interface EffectiveCritiqueLoopTelemetryHook {
   status: EffectiveCritiqueLoopTelemetryHookStatus;
   source: CritiqueLoopTelemetryHookSource;
   hook?: CritiqueLoopTelemetryHook;
+  reason?: string;
+}
+
+/**
+ * `issueAuthoring.adversarialReview.delegate` (#3599). Same `{ command,
+ * mode }` shape as {@link CritiqueLoopDelegate}, but a separate namespace:
+ * issue drafts are prose, and this delegate must not read or inherit
+ * `critiqueLoop.delegate`.
+ */
+export interface IssueAuthoringDelegate {
+  command: string;
+  mode: 'fallback' | 'combined' | 'on-success' | 'never';
+}
+
+/** Repository-local adversarial-review settings carried on normalized policy. */
+export interface IssueAuthoringAdversarialReviewPolicy {
+  waitCeiling: string;
+  delegate?: IssueAuthoringDelegate;
+}
+
+interface IssueAuthoringPolicy {
+  maxClarificationRounds: number;
+  authoringLabelName: string;
+  authoringStaleAge: string;
+  adversarialReview: IssueAuthoringAdversarialReviewPolicy;
+}
+
+/** How one policy document presents `issueAuthoring.adversarialReview.delegate`. */
+export type IssueAuthoringDelegateLayerStatus =
+  | 'absent'
+  | 'disabled'
+  | 'configured'
+  | 'malformed';
+
+export interface IssueAuthoringDelegateLayer {
+  status: IssueAuthoringDelegateLayerStatus;
+  delegate?: IssueAuthoringDelegate;
+  reason?: string;
+}
+
+/**
+ * Outcome of layered issue-authoring delegate resolution. `local-malformed`
+ * is fail-closed: a bad repository-local delegate must not inherit a
+ * user-global object, and must not fall through to `critiqueLoop.delegate`.
+ */
+export type EffectiveIssueAuthoringDelegateStatus =
+  | 'local'
+  | 'disabled'
+  | 'global'
+  | 'none'
+  | 'local-malformed';
+
+export type IssueAuthoringDelegateSource =
+  | 'repository-local'
+  | 'user-global'
+  | 'none';
+
+export interface EffectiveIssueAuthoringDelegate {
+  status: EffectiveIssueAuthoringDelegateStatus;
+  source: IssueAuthoringDelegateSource;
+  delegate?: IssueAuthoringDelegate;
   reason?: string;
 }
 
@@ -423,6 +501,10 @@ interface RawConfig {
     maxClarificationRounds?: unknown;
     authoringLabelName?: unknown;
     authoringStaleAge?: unknown;
+    adversarialReview?: {
+      waitCeiling?: unknown;
+      delegate?: { command?: unknown; mode?: unknown } | null;
+    };
   };
   labels?: {
     roadmapLabelName?: unknown;
@@ -438,6 +520,15 @@ interface RawConfig {
   };
   localValidationEvidence?: { maxAge?: unknown };
   providerHealth?: { minCorroboratingPrs?: unknown; samplingWindow?: unknown };
+  githubApi?: {
+    readCache?: {
+      enabled?: unknown;
+      maxAge?: unknown;
+      maxBytes?: unknown;
+      retention?: unknown;
+      directory?: unknown;
+    };
+  };
   developmentBranch?: unknown;
   provider?: unknown;
 }
@@ -463,7 +554,12 @@ const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
 const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
 const ADVISORY_CONVERGENCE_SCOPES = new Set(['all-prs', 'idd-claimed']);
 const SELECTION_DESYNC_MODES = new Set(['off', 'session-offset']);
-const DEFER_BY_URGENCY_MODES = new Set(['off', 'low', 'low-and-medium']);
+const DEFER_BY_URGENCY_MODES = new Set([
+  'off',
+  'low',
+  'low-and-medium',
+  'severity-tiered',
+]);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -513,6 +609,7 @@ const DURATION_RE =
 // URLs, and tarball paths while excluding every shell metacharacter in
 // that list.
 const PACKAGE_SPEC_RE = /^[A-Za-z0-9@:/_.+^#%-]+$/;
+const GITHUB_API_READ_CACHE_MAX_BYTES = 104857600;
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -610,11 +707,17 @@ export const POLICY_DEFAULTS = Object.freeze({
     readyLabelName: 'idd:ready',
     labelFreshnessMode: 'presence-only',
   }),
+  // Cast so the optional `adversarialReview.delegate` key shares one
+  // declared type with normalizePolicyConfig's return. The runtime object
+  // still has no `delegate` key until a repository-local object parses.
   issueAuthoring: Object.freeze({
     maxClarificationRounds: 3,
     authoringLabelName: 'status:authoring',
     authoringStaleAge: 'PT4H',
-  }),
+    adversarialReview: Object.freeze({
+      waitCeiling: 'PT20M',
+    }),
+  }) as Readonly<IssueAuthoringPolicy>,
   // Added in #1272; the discover-roadmap-graph, discover-orphan-filter,
   // discover-readiness-check, idd-roadmap-audit-execute,
   // suitability-triage, and idd-doctor label lookups were wired to this
@@ -655,6 +758,16 @@ export const POLICY_DEFAULTS = Object.freeze({
     minCorroboratingPrs: 2,
     samplingWindow: 'PT24H',
   }) as Readonly<ProviderHealthPolicy>,
+  // #3587: disabled unless `enabled` is exactly true. `directory` is not an
+  // own key until an operator sets a non-empty string.
+  githubApi: Object.freeze({
+    readCache: Object.freeze({
+      enabled: false,
+      maxAge: 'PT5M',
+      maxBytes: GITHUB_API_READ_CACHE_MAX_BYTES,
+      retention: 'PT24H',
+    }),
+  }) as Readonly<GithubApiPolicy>,
 });
 
 export function parseProjectCommandRows(text: string): Map<string, string> {
@@ -861,6 +974,33 @@ export function normalizePolicyConfig(config: unknown) {
       POLICY_DEFAULTS.providerHealth.samplingWindow,
     ),
   };
+  const rawReadCacheMaxBytes = parsePositiveInteger(
+    c?.githubApi?.readCache?.maxBytes,
+    POLICY_DEFAULTS.githubApi.readCache.maxBytes,
+  );
+  const readCache: GithubApiReadCachePolicy = {
+    enabled: c?.githubApi?.readCache?.enabled === true,
+    maxAge: parsePositiveDuration(
+      c?.githubApi?.readCache?.maxAge,
+      POLICY_DEFAULTS.githubApi.readCache.maxAge,
+    ),
+    maxBytes:
+      rawReadCacheMaxBytes <= GITHUB_API_READ_CACHE_MAX_BYTES
+        ? rawReadCacheMaxBytes
+        : POLICY_DEFAULTS.githubApi.readCache.maxBytes,
+    retention: parsePositiveDuration(
+      c?.githubApi?.readCache?.retention,
+      POLICY_DEFAULTS.githubApi.readCache.retention,
+    ),
+  };
+  const rawReadCacheDirectory = c?.githubApi?.readCache?.directory;
+  if (
+    typeof rawReadCacheDirectory === 'string' &&
+    rawReadCacheDirectory.trim().length > 0
+  ) {
+    readCache.directory = rawReadCacheDirectory.trim();
+  }
+  const githubApi: GithubApiPolicy = { readCache };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured
@@ -1054,20 +1194,7 @@ export function normalizePolicyConfig(config: unknown) {
         POLICY_DEFAULTS.approvalSignals.labelFreshnessMode,
       ),
     },
-    issueAuthoring: {
-      maxClarificationRounds: parsePositiveInteger(
-        c?.issueAuthoring?.maxClarificationRounds,
-        POLICY_DEFAULTS.issueAuthoring.maxClarificationRounds,
-      ),
-      authoringLabelName: parseNonEmptyString(
-        c?.issueAuthoring?.authoringLabelName,
-        POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
-      ),
-      authoringStaleAge: parseDuration(
-        c?.issueAuthoring?.authoringStaleAge,
-        POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
-      ),
-    },
+    issueAuthoring: normalizeIssueAuthoringPolicy(c),
     // Added in #1272 for shape parity with the clone(POLICY_DEFAULTS)
     // early-return branch above (non-object input); wired to the
     // consuming helpers' label lookups in #1273 (see the POLICY_DEFAULTS
@@ -1110,6 +1237,7 @@ export function normalizePolicyConfig(config: unknown) {
     providerOutage,
     localValidationEvidence,
     providerHealth,
+    githubApi,
   };
 }
 
@@ -1564,6 +1692,239 @@ export function resolveEffectiveCritiqueLoopDelegate(input: {
   return { status: 'none', source: 'none' };
 }
 
+const ISSUE_AUTHORING_DELEGATE_KEYS = new Set(['waitCeiling', 'delegate']);
+const INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON =
+  'invalid-repository-local-delegate';
+
+/**
+ * Parse `issueAuthoring.adversarialReview.delegate`. Absence is not
+ * defaulted to a command. A non-object, an unknown nested key, or a
+ * missing/whitespace-only `command` normalizes to `undefined`.
+ */
+function parseIssueAuthoringDelegate(
+  value: unknown,
+): IssueAuthoringDelegate | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const candidate = value as { command?: unknown; mode?: unknown };
+  const candidateKeys = Object.keys(candidate);
+  if (candidateKeys.some((key) => key !== 'command' && key !== 'mode')) {
+    return undefined;
+  }
+  if (!Object.hasOwn(candidate, 'command')) {
+    return undefined;
+  }
+
+  const command = parseNonEmptyString(candidate.command, '');
+  if (!command || command.trim() === '') {
+    return undefined;
+  }
+
+  return {
+    command,
+    mode: Object.hasOwn(candidate, 'mode')
+      ? (parseEnum(candidate.mode, CRITIQUE_LOOP_DELEGATE_MODES, 'fallback') as
+          | 'fallback'
+          | 'combined'
+          | 'on-success'
+          | 'never')
+      : 'fallback',
+  };
+}
+
+/**
+ * Read `issueAuthoring.adversarialReview.waitCeiling` from one raw policy
+ * document. Never reads `critiqueLoop.subagentWaitCeiling`. A missing or
+ * non-positive value falls back to `PT20M`. A user-global document is not
+ * consulted: callers pass the repository-local document only.
+ */
+export function resolveIssueAuthoringAdversarialWaitCeiling(
+  config: unknown,
+): string {
+  const fallback = POLICY_DEFAULTS.issueAuthoring.adversarialReview.waitCeiling;
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return fallback;
+  }
+  if (!Object.hasOwn(config, 'issueAuthoring')) {
+    return fallback;
+  }
+  const issueAuthoring = (config as RawConfig).issueAuthoring;
+  if (
+    typeof issueAuthoring !== 'object' ||
+    issueAuthoring === null ||
+    Array.isArray(issueAuthoring) ||
+    !Object.hasOwn(issueAuthoring, 'adversarialReview')
+  ) {
+    return fallback;
+  }
+  const review = issueAuthoring.adversarialReview;
+  if (
+    typeof review !== 'object' ||
+    review === null ||
+    Array.isArray(review) ||
+    !Object.hasOwn(review, 'waitCeiling')
+  ) {
+    return fallback;
+  }
+  return parsePositiveDuration(review.waitCeiling, fallback);
+}
+
+function normalizeIssueAuthoringPolicy(
+  config: RawConfig,
+): IssueAuthoringPolicy {
+  const delegate = parseIssueAuthoringDelegate(
+    config.issueAuthoring?.adversarialReview?.delegate,
+  );
+  const adversarialReview: IssueAuthoringAdversarialReviewPolicy = {
+    waitCeiling: resolveIssueAuthoringAdversarialWaitCeiling(config),
+  };
+  if (delegate) {
+    adversarialReview.delegate = delegate;
+  }
+  return {
+    maxClarificationRounds: parsePositiveInteger(
+      config.issueAuthoring?.maxClarificationRounds,
+      POLICY_DEFAULTS.issueAuthoring.maxClarificationRounds,
+    ),
+    authoringLabelName: parseNonEmptyString(
+      config.issueAuthoring?.authoringLabelName,
+      POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
+    ),
+    authoringStaleAge: parseDuration(
+      config.issueAuthoring?.authoringStaleAge,
+      POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
+    ),
+    adversarialReview,
+  };
+}
+
+/**
+ * Inspect `issueAuthoring.adversarialReview.delegate` without collapsing a
+ * malformed value into "absent". Unknown keys on `adversarialReview` fail
+ * closed so a typo cannot inherit a user-global command. Does not read
+ * `critiqueLoop`.
+ */
+export function inspectIssueAuthoringDelegateLayer(
+  config: unknown,
+): IssueAuthoringDelegateLayer {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'absent' };
+  }
+  if (!Object.hasOwn(config, 'issueAuthoring')) {
+    return { status: 'absent' };
+  }
+
+  const issueAuthoring = (config as RawConfig).issueAuthoring;
+  if (
+    typeof issueAuthoring !== 'object' ||
+    issueAuthoring === null ||
+    Array.isArray(issueAuthoring)
+  ) {
+    return {
+      status: 'malformed',
+      reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+  if (!Object.hasOwn(issueAuthoring, 'adversarialReview')) {
+    return { status: 'absent' };
+  }
+
+  const review = issueAuthoring.adversarialReview;
+  if (typeof review !== 'object' || review === null || Array.isArray(review)) {
+    return {
+      status: 'malformed',
+      reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+  if (
+    Object.keys(review).some((key) => !ISSUE_AUTHORING_DELEGATE_KEYS.has(key))
+  ) {
+    return {
+      status: 'malformed',
+      reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+  if (!Object.hasOwn(review, 'delegate')) {
+    return { status: 'absent' };
+  }
+
+  const value = review.delegate;
+  if (value === null) {
+    return { status: 'disabled' };
+  }
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const candidate = value as { mode?: unknown };
+    if (Object.hasOwn(candidate, 'mode')) {
+      const mode = candidate.mode;
+      if (typeof mode !== 'string' || !CRITIQUE_LOOP_DELEGATE_MODES.has(mode)) {
+        return {
+          status: 'malformed',
+          reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+        };
+      }
+    }
+  }
+
+  const parsed = parseIssueAuthoringDelegate(value);
+  if (parsed) {
+    return { status: 'configured', delegate: parsed };
+  }
+  return {
+    status: 'malformed',
+    reason: INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+  };
+}
+
+/**
+ * Resolve the effective issue-authoring delegate from a repository-local
+ * document and an optional user-global document. Pure: callers supply
+ * already-loaded JSON. Never reads the filesystem or `critiqueLoop`.
+ *
+ * Order: local object, local `null` disable, global object, then none.
+ * A malformed local delegate is fail-closed and does not inherit global.
+ * A malformed or disabled global fragment is treated as absent.
+ */
+export function resolveEffectiveIssueAuthoringDelegate(input: {
+  localConfig: unknown;
+  globalConfig?: unknown;
+}): EffectiveIssueAuthoringDelegate {
+  const local = inspectIssueAuthoringDelegateLayer(input.localConfig);
+  if (local.status === 'configured' && local.delegate) {
+    return {
+      status: 'local',
+      source: 'repository-local',
+      delegate: local.delegate,
+    };
+  }
+  if (local.status === 'disabled') {
+    return { status: 'disabled', source: 'repository-local' };
+  }
+  if (local.status === 'malformed') {
+    return {
+      status: 'local-malformed',
+      source: 'repository-local',
+      reason: local.reason ?? INVALID_LOCAL_ISSUE_AUTHORING_DELEGATE_REASON,
+    };
+  }
+
+  if (input.globalConfig === undefined || input.globalConfig === null) {
+    return { status: 'none', source: 'none' };
+  }
+
+  const global = inspectIssueAuthoringDelegateLayer(input.globalConfig);
+  if (global.status === 'configured' && global.delegate) {
+    return {
+      status: 'global',
+      source: 'user-global',
+      delegate: global.delegate,
+    };
+  }
+
+  return { status: 'none', source: 'none' };
+}
+
 /**
  * Parse `critiqueLoop.telemetryHook`. Mirrors {@link parseCritiqueLoopDelegate}
  * but for the simpler `{ command }`-only shape (#2679): a non-object, an
@@ -1709,6 +2070,167 @@ function hasConfiguredCollaboratorMarkerTrust(config: unknown): boolean {
 
 function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
+}
+
+type ReviewSeverityTier = 'low' | 'medium' | 'high';
+type UrgencyScore = 'very-low' | 'low' | 'medium' | 'high';
+type UrgencyDeferBlock =
+  | 'mode-off'
+  | 'path-b'
+  | 'scope-fence'
+  | 'protected-authority'
+  | 'awaiting-maintainer-decision'
+  | 'accepted-mid-fix'
+  | 'unknown-severity'
+  | 'adopt-now'
+  | 'above-ceiling'
+  | 'unknown-urgency'
+  | 'matrix';
+
+interface UrgencyDeferInput {
+  mode: CritiqueLoopPolicy['deferByUrgency'];
+  path: 'A' | 'B';
+  e4Severity: ReviewSeverityTier | null;
+  copilotLabel: ReviewSeverityTier | null;
+  urgency: UrgencyScore | null;
+  scopeFence: boolean;
+  /**
+   * The PATH A actor is a CODEOWNER or required reviewer (E6's AMD
+   * exception). Blocks a fresh item before any hold reply is posted.
+   */
+  protectedAuthority: boolean;
+  /** The item already sits in the AMD hold (E5 inconclusive or E6). */
+  awaitingMaintainerDecision: boolean;
+  acceptedMidFix: boolean;
+  adoptNow: boolean;
+}
+
+interface UrgencyDeferDecision {
+  defer: boolean;
+  eligibility: ReviewSeverityTier | null;
+  blockedBy: UrgencyDeferBlock | null;
+}
+
+const SEVERITY_RANK: Record<ReviewSeverityTier, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+
+function knownSeverity(
+  value: ReviewSeverityTier | null,
+): ReviewSeverityTier | null {
+  if (value === 'low' || value === 'medium' || value === 'high') {
+    return value;
+  }
+  return null;
+}
+
+function knownUrgency(value: UrgencyScore | null): UrgencyScore | null {
+  if (
+    value === 'very-low' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function higherSeverity(
+  left: ReviewSeverityTier | null,
+  right: ReviewSeverityTier | null,
+): ReviewSeverityTier | null {
+  if (left === null) {
+    return right;
+  }
+  if (right === null) {
+    return left;
+  }
+  return SEVERITY_RANK[left] >= SEVERITY_RANK[right] ? left : right;
+}
+
+function denyUrgencyDefer(
+  blockedBy: UrgencyDeferBlock,
+  eligibility: ReviewSeverityTier | null = null,
+): UrgencyDeferDecision {
+  return { defer: false, eligibility, blockedBy };
+}
+
+function severityTieredDefers(
+  eligibility: ReviewSeverityTier,
+  urgency: UrgencyScore,
+): boolean {
+  if (eligibility === 'high') {
+    return urgency === 'very-low';
+  }
+  if (eligibility === 'medium') {
+    return urgency !== 'high';
+  }
+  return true;
+}
+
+/**
+ * Pure specification of the E4/E5 urgency-defer matrix. Instruction text
+ * applies it; this module has no production caller. Check order fails
+ * closed toward not deferring. `severity-tiered` ignores `adoptNow` and
+ * treats an unknown E4 tier as Medium before the Copilot floor, which
+ * only raises eligibility. `low` and `low-and-medium` do not: they need
+ * a known E4 tier, and the floor never stands in for it.
+ */
+// audit:ignore-dead-export: E4/E5 applies this matrix from instruction text; tests lock every cell and there is no helper caller
+export function decideUrgencyDefer(
+  input: UrgencyDeferInput,
+): UrgencyDeferDecision {
+  if (input.mode === 'off') {
+    return denyUrgencyDefer('mode-off');
+  }
+  if (input.path !== 'A') {
+    return denyUrgencyDefer('path-b');
+  }
+  if (input.scopeFence) {
+    return denyUrgencyDefer('scope-fence');
+  }
+  if (input.protectedAuthority) {
+    return denyUrgencyDefer('protected-authority');
+  }
+  if (input.awaitingMaintainerDecision) {
+    return denyUrgencyDefer('awaiting-maintainer-decision');
+  }
+  if (input.acceptedMidFix) {
+    return denyUrgencyDefer('accepted-mid-fix');
+  }
+
+  const e4 = knownSeverity(input.e4Severity);
+  const copilot = knownSeverity(input.copilotLabel);
+
+  if (input.mode === 'severity-tiered') {
+    const eligibility = higherSeverity(e4 ?? 'medium', copilot) ?? 'medium';
+    const urgency = knownUrgency(input.urgency);
+    if (urgency === null) {
+      return denyUrgencyDefer('unknown-urgency', eligibility);
+    }
+    if (!severityTieredDefers(eligibility, urgency)) {
+      return denyUrgencyDefer('matrix', eligibility);
+    }
+    return { defer: true, eligibility, blockedBy: null };
+  }
+
+  if (e4 === null) {
+    return denyUrgencyDefer('unknown-severity');
+  }
+  const eligibility = higherSeverity(e4, copilot) ?? e4;
+  if (eligibility === 'high') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  if (input.adoptNow) {
+    return denyUrgencyDefer('adopt-now', eligibility);
+  }
+  if (input.mode === 'low' && eligibility !== 'low') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  return { defer: true, eligibility, blockedBy: null };
 }
 
 function hasOwn(value: unknown, key: string): boolean {

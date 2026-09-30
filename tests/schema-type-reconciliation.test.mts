@@ -239,7 +239,7 @@ interface PolicyConfigFile {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
     deferAfterRounds?: number;
-    deferByUrgency?: 'off' | 'low' | 'low-and-medium';
+    deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
     subagentWaitCeiling?: string;
     delegate?: {
       command: string;
@@ -261,6 +261,13 @@ interface PolicyConfigFile {
     authoringStaleAge?: string;
     heartbeatCoalesceWindow?: string;
     journalIssue?: string;
+    adversarialReview?: {
+      waitCeiling?: string;
+      delegate?: {
+        command: string;
+        mode?: 'fallback' | 'combined' | 'on-success' | 'never';
+      } | null;
+    };
   };
   autopilotSuitability?: { floor?: 1 | 2 | 3 | 4 | 5; enabled?: boolean };
   worktreeGuard?: { enabled?: boolean; branchPatterns?: readonly string[] };
@@ -285,6 +292,15 @@ interface PolicyConfigFile {
   providerHealth?: {
     minCorroboratingPrs?: number;
     samplingWindow?: string;
+  };
+  githubApi?: {
+    readCache?: {
+      enabled?: boolean;
+      maxAge?: string;
+      maxBytes?: number;
+      retention?: string;
+      directory?: string;
+    };
   };
 }
 
@@ -583,6 +599,7 @@ export const policyConfigKeys = [
   'providerOutage',
   'localValidationEvidence',
   'providerHealth',
+  'githubApi',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
@@ -1268,6 +1285,14 @@ const policyConfigFixture = {
     maxValidity: 'PT24H',
     maxParkedChanges: 10,
   },
+  githubApi: {
+    readCache: {
+      enabled: false,
+      maxAge: 'PT5M',
+      maxBytes: 104857600,
+      retention: 'PT24H',
+    },
+  },
 } satisfies PolicyConfigFile;
 
 const preMergeReadinessFixture = {
@@ -1594,6 +1619,7 @@ const postIddMarkerKeys = [
   'commentId',
   'url',
   'warnings',
+  'operationLocal',
 ] as const satisfies readonly (keyof PostIddMarkerResult)[];
 
 const postIddMarkerFixture = {
