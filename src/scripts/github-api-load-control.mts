@@ -963,10 +963,17 @@ export function classifyThrottle(
     ...(retryAfterSec !== undefined ? { retryAfterSec } : {}),
     ...(resetEpochSec !== undefined ? { resetEpochSec } : {}),
   };
-  // The secondary wording wins over a `remaining` of 0 read from the same
-  // failure: the throttle is account-wide, and one resource being empty says
-  // nothing about the others.
-  if (observation.remaining === 0 && !observation.signals.secondaryThrottling) {
+  // Anything that reads as a secondary limit wins over a `remaining` of 0
+  // read from the same failure: the throttle is account-wide, and one
+  // resource being empty says nothing about the others. A `retry-after` is
+  // GitHub's secondary-limit timing, and the older abuse-detection wording
+  // names the same limit.
+  const stderr = typeof evidence.stderr === 'string' ? evidence.stderr : '';
+  const secondaryLike =
+    observation.signals.secondaryThrottling ||
+    retryAfterSec !== undefined ||
+    /abuse detection|secondary rate/i.test(stderr);
+  if (observation.remaining === 0 && !secondaryLike) {
     const resource =
       typeof observation.resource === 'string' &&
       observation.resource !== 'unknown'
@@ -978,14 +985,13 @@ export function classifyThrottle(
   }
   if (
     observation.signals.primaryExhaustion &&
-    !observation.signals.secondaryThrottling &&
+    !secondaryLike &&
     requestResource !== undefined
   ) {
     return { kind: 'primary', resource: requestResource, ...timing };
   }
   const status =
     typeof observation.status === 'number' ? observation.status : null;
-  const stderr = typeof evidence.stderr === 'string' ? evidence.stderr : '';
   const wording =
     observation.signals.secondaryThrottling ||
     observation.signals.primaryExhaustion ||

@@ -1305,15 +1305,16 @@ test('an event from an earlier boot is not revived by a later boot whose uptime 
   const h = harness();
   try {
     throttle(h, SECONDARY_403);
-    // A day later, after a reboot: the new boot's uptime is now larger than
-    // the uptime the event recorded, but it is a different boot. The wall
-    // clock says the cooldown ended long ago.
+    // A day later, after a reboot: the new boot's uptime (30 s past the one
+    // the event recorded, inside its 60 s cooldown) looks like time elapsed
+    // since the event, but it is a different boot. The wall clock says the
+    // cooldown ended long ago.
     h.clock.wall = T0 + 86_400_000;
     const gate = admitRequestSync(
       IDENTITY,
       POLICY,
       { classification: 'write' },
-      h.runtime({ bootId: 'boot-b', uptimeMs: () => 9_000_000 }),
+      h.runtime({ bootId: 'boot-b', uptimeMs: () => 5_030_000 }),
     );
     assert.ok(gate, 'the old event does not refuse a request');
     gate.release();
@@ -1322,7 +1323,7 @@ test('an event from an earlier boot is not revived by a later boot whose uptime 
       IDENTITY,
       POLICY,
       { classification: 'write' },
-      h.runtime({ bootId: undefined, uptimeMs: () => 9_000_000 }),
+      h.runtime({ bootId: undefined, uptimeMs: () => 5_030_000 }),
     );
     assert.ok(none);
     none.release();
@@ -1453,6 +1454,36 @@ test('a secondary throttle that also reports remaining 0 is shared, not one reso
   } finally {
     h.cleanup();
   }
+});
+
+test('any secondary-limit reading beats remaining 0, while a plain 429 with remaining 0 stays primary', () => {
+  const headers = (extra: string) =>
+    `HTTP/2.0 403 Forbidden\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 4102444800\nX-RateLimit-Resource: core\n${extra}\n{}`;
+  for (const evidence of [
+    // A retry-after is GitHub's secondary-limit timing.
+    throttleEvidence('gh: Forbidden (HTTP 403)', headers('Retry-After: 60\n')),
+    // The older abuse-detection wording names the same limit.
+    throttleEvidence(
+      'gh: You have triggered an abuse detection mechanism. (HTTP 403)',
+      headers(''),
+    ),
+  ]) {
+    const observation = observeGhFailure(evidence);
+    assert.equal(observation.remaining, 0);
+    assert.equal(
+      classifyThrottle(observation, evidence, 'core')?.kind,
+      'shared',
+      evidence.stderr,
+    );
+  }
+  const tooMany = throttleEvidence(
+    'gh: Too Many Requests (HTTP 429)',
+    'HTTP/2.0 429 Too Many Requests\nX-RateLimit-Remaining: 0\nX-RateLimit-Resource: core\n\n{}',
+  );
+  assert.equal(
+    classifyThrottle(observeGhFailure(tooMany), tooMany, 'core')?.kind,
+    'primary',
+  );
 });
 
 test('a synchronous request joins its own lease only when every blocker is this process', async () => {
