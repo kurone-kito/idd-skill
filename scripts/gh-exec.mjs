@@ -1586,9 +1586,13 @@ function readPaginatedGhApi(args, options) {
       if (status !== 0) {
         throw ghCommandFailure(status, stderr, readPaginatedErrorBody(outPath));
       }
-      // The tag is only read by the telemetry recording, so an error thrown
-      // with telemetry off stays exactly what it was.
-      throw telemetryIsEnabled() ? tagResponseParseFailure(error) : error;
+      // Only a JSON syntax error is a response that did not parse; a file
+      // read error while reading the capture back is not. The tag is only
+      // read by the telemetry recording, so an error thrown with telemetry
+      // off stays exactly what it was.
+      throw telemetryIsEnabled() && error instanceof SyntaxError
+        ? tagResponseParseFailure(error)
+        : error;
     }
     // A missing status with no signal is a clean exit. A signal was
     // already rejected above, so it cannot take this `?? 0` path.
