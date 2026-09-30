@@ -17,20 +17,15 @@ E1; otherwise continue to E14/E15 in `idd-review-fix.instructions.md`.
 
 ## E4 — Classify and score ReviewItems_snapshot
 
-Once per triage pass (not per item), read the claimed issue's own body
-and note any explicit out-of-scope statement in it, trusted for the
-scope fence below only if it predates the B2 plan
-(`idd-work.instructions.md`) — an author keeps edit rights throughout
-the claim and could otherwise time an edit to force-reject a legitimate
-finding. Fetch `userContentEdits` (GraphQL; `updatedAt` also moves on
-unrelated activity, so it will not do). Paginate until
-`pageInfo.hasNextPage` is false. Treat each `diff` as the full
-post-edit body, not a line patch. Use the latest `editedAt` at or
-before the plan's post time; that `diff` (or the creation-time body —
-never the live current body — if none predates the plan) is the
-trusted snapshot. A statement absent from it — added later, or
-present now but not there — needs a maintainer comment, not another
-edit. A missing, failed, or incomplete pagination fails closed.
+Once per triage pass, snapshot the claimed issue body. Trust an
+out-of-scope statement only if it predates the B2 plan
+(`idd-work.instructions.md`): a later author edit must not
+force-reject a finding. Fetch `userContentEdits`, not `updatedAt`,
+paginating until `pageInfo.hasNextPage` is false; a missing, failed, or
+incomplete fetch fails closed. Each `diff` is the full post-edit body:
+use the latest `editedAt` at or before the plan post, else the
+creation-time body, never the live body. A statement absent from that
+snapshot needs a maintainer comment.
 
 For each item in ReviewItems_snapshot, first classify it:
 
@@ -159,48 +154,56 @@ resolved thread's claim.
   information the prior thread didn't address.
 
 **Defer (`critiqueLoop.deferAfterRounds` / `critiqueLoop.deferByUrgency`).**
-Two independent triggers dispose an eligible PATH A item
-**Reject (defer)** instead of normal judgment — never an Accepted item
-mid-fix (`e10NoProgressHoldAfter` unaffected) nor a
-CODEOWNER/required-reviewer item (E6's AMD exception):
+Two triggers dispose any human or automated reviewer's PATH A item
+**Reject (defer)** instead of normal judgment — never PATH B, a
+scope-fenced item, an Accepted item mid-fix
+(`e10NoProgressHoldAfter`), or a CODEOWNER/required-reviewer item
+(E6 AMD). Reply
+`**Rejected** — deferred to follow-up issue #<n> ({clause}): {reason}`.
 
-- **Round-count** (`deferAfterRounds`, default `12`, Low-only,
-  unchanged). Once the PR's total, paginated
+- **Round-count** (`deferAfterRounds`, default `12`, Low-only). Once
+  the PR's total, paginated
   `copilot-pull-request-reviewer[bot]` review count (PR-wide, not
   per-claim; never one page's `length`) hits the threshold, an
-  undispositioned Low-severity (E4) item is eligible. Reply
-  `**Rejected** — deferred to follow-up issue #<n> (round
-  <round>/<threshold>): {reason}`.
+  undispositioned Low-severity (E4) item is eligible. Clause:
+  `round <round>/<threshold>`.
 - **Adopt-now urgency** (`deferByUrgency`, default `off` — E4/E5
-  unchanged when off; `low`/`low-and-medium` apply from round 1).
-  Scope: PATH A only, including Copilot's inline review-thread
-  comments (E4). Eligibility severity is the higher of E4's own tier
-  and Copilot's label for that thread — the `alt="<Level> severity"`
-  text next to its `#discussion_r<id>` link in the Open section of any
-  `<!-- ccr-overview-v2 -->` review on the PR; this floor only decides
-  eligibility, never E4's own tier or its Accept-forced rule. An item
-  is **adopt-now** (never eligible) when any holds: (a) a regression
-  this PR's diff introduced relative to its merge base; (b) the
-  claimed issue's acceptance criteria or requirement are unmet; (c) a
+  unchanged when off; `low`/`low-and-medium` from round 1).
+  Eligibility is the higher of the E4 tier and Copilot's label — the
+  `alt="<Level> severity"` text next to its `#discussion_r<id>` link
+  in the Open section of any `<!-- ccr-overview-v2 -->` review. The
+  floor never replaces E4's tier: unknown severity never defers in these modes.
+  **Adopt-now** (never eligible) when any holds: (a) a regression this PR's diff
+  introduced relative to its merge base; (b) the claimed issue's
+  acceptance criteria or requirement are unmet; (c) a
   defect in shipped behavior — code, helper output, CI result, or
   instruction text that changes what an agent does — or a
   safety/CI-stability problem, excluding wording/clarity polish and
   extra test coverage for already-working behavior; (d) another item
-  in the same E5 pass is already Accepted (any severity), so a push is
-  certain, and this fix stays within that push's files (bounds new
-  diff surface and its findings). Otherwise it is eligible when its
-  severity is within the mode's ceiling (`low`: Low; `low-and-medium`:
-  Low or Medium — High never eligible). Reply `**Rejected** — deferred
-  to follow-up issue #<n> (adopt-now: no; severity <tier>[, Copilot
-  <label>]): {reason}`.
+  in the same E5 pass is already Accepted (any severity), so a push
+  is certain, and this fix stays within that push's files. Otherwise
+  eligible within the ceiling (`low`: Low; `low-and-medium`: Low or
+  Medium — High never eligible). A null urgency still defers. Clause:
+  `adopt-now: no; severity <tier>[, Copilot <label>]`.
+- **`severity-tiered`** replaces that allowlist from round 1. Judge
+  validity and E4 severity (a false claim is Rejected), then urgency by
+  the fix's marginal review-wave cost: `very-low` < `low` < `medium` <
+  `high`. The matrix decides; regression, unmet requirements,
+  correctness, and safety never override. `very-low`: wording/formatting
+  changing no behavior; `low`: extra tests, comments, or naming for
+  already-correct behavior; `medium`: local maintainability, or a
+  correctness risk short of `high`; `high`: an adopt-now (a)-(c)
+  condition. Unknown E4 severity counts as Medium; the floor only
+  raises. Unscored urgency never defers. High defers only at `very-low`
+  (Accept forced does not win); Medium or unknown, not at `high`; Low at
+  every scored urgency. Clause: `urgency <level>; severity <tier>[,
+  Copilot <label>]`.
 
-Resolve normally, and bundle every item either trigger defers in one
-E5 pass into one follow-up issue per E6's follow-up-issue rule (never
-appended to an earlier published follow-up), each with an AC bullet,
-exactly one `Refs #<originating-issue>` line, and the
+Bundle one E5 pass's deferred items into one follow-up issue (E6; do
+not append). Each keeps an AC bullet, exactly one
+`Refs #<originating-issue>` line, and the
 `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
-marker, then continue at once to the issue-authoring skill's Stage 2
-narrow auto-release exception instead of stopping at the Stage 1
+marker, then issue-authoring's Stage 2 narrow auto-release, not the Stage 1
 hold. See
 [rationale](../../docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer).
 
@@ -559,9 +562,8 @@ Route based on `branchState` from the helper (or `mergeable` /
 
 ## Merge-development-branch livelock under fast-moving {development-branch}
 
-Under heavy concurrent-session load, `{development-branch}` can advance
-faster than one sync cycle finishes, livelocking naive retries before
-ever reaching F3 (background:
+`{development-branch}` can advance faster than one sync finishes
+(background:
 [design rationale](../../docs/idd-design-rationale.md#merge-main-livelock-under-fast-moving-main)).
 
 **Rule**: post the watermark as the **last** action before F3's

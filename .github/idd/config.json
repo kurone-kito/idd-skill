@@ -45,7 +45,7 @@
   },
   "critiqueLoop": {
     "deferAfterRounds": 5,
-    "deferByUrgency": "low-and-medium",
+    "deferByUrgency": "severity-tiered",
     "telemetryHook": {
       "command": "idd-critique-telemetry"
     }

@@ -157,7 +157,12 @@ const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
 const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
 const ADVISORY_CONVERGENCE_SCOPES = new Set(['all-prs', 'idd-claimed']);
 const SELECTION_DESYNC_MODES = new Set(['off', 'session-offset']);
-const DEFER_BY_URGENCY_MODES = new Set(['off', 'low', 'low-and-medium']);
+const DEFER_BY_URGENCY_MODES = new Set([
+  'off',
+  'low',
+  'low-and-medium',
+  'severity-tiered',
+]);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -1479,6 +1484,105 @@ function hasConfiguredCollaboratorMarkerTrust(config) {
 }
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
+}
+const SEVERITY_RANK = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+function knownSeverity(value) {
+  if (value === 'low' || value === 'medium' || value === 'high') {
+    return value;
+  }
+  return null;
+}
+function knownUrgency(value) {
+  if (
+    value === 'very-low' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high'
+  ) {
+    return value;
+  }
+  return null;
+}
+function higherSeverity(left, right) {
+  if (left === null) {
+    return right;
+  }
+  if (right === null) {
+    return left;
+  }
+  return SEVERITY_RANK[left] >= SEVERITY_RANK[right] ? left : right;
+}
+function denyUrgencyDefer(blockedBy, eligibility = null) {
+  return { defer: false, eligibility, blockedBy };
+}
+function severityTieredDefers(eligibility, urgency) {
+  if (eligibility === 'high') {
+    return urgency === 'very-low';
+  }
+  if (eligibility === 'medium') {
+    return urgency !== 'high';
+  }
+  return true;
+}
+/**
+ * Pure specification of the E4/E5 urgency-defer matrix. Instruction text
+ * applies it; this module has no production caller. Check order fails
+ * closed toward not deferring. `severity-tiered` ignores `adoptNow` and
+ * treats an unknown E4 tier as Medium before the Copilot floor, which
+ * only raises eligibility. `low` and `low-and-medium` do not: they need
+ * a known E4 tier, and the floor never stands in for it.
+ */
+// audit:ignore-dead-export: E4/E5 applies this matrix from instruction text; tests lock every cell and there is no helper caller
+export function decideUrgencyDefer(input) {
+  if (input.mode === 'off') {
+    return denyUrgencyDefer('mode-off');
+  }
+  if (input.path !== 'A') {
+    return denyUrgencyDefer('path-b');
+  }
+  if (input.scopeFence) {
+    return denyUrgencyDefer('scope-fence');
+  }
+  if (input.protectedAuthority) {
+    return denyUrgencyDefer('protected-authority');
+  }
+  if (input.awaitingMaintainerDecision) {
+    return denyUrgencyDefer('awaiting-maintainer-decision');
+  }
+  if (input.acceptedMidFix) {
+    return denyUrgencyDefer('accepted-mid-fix');
+  }
+  const e4 = knownSeverity(input.e4Severity);
+  const copilot = knownSeverity(input.copilotLabel);
+  if (input.mode === 'severity-tiered') {
+    const eligibility = higherSeverity(e4 ?? 'medium', copilot) ?? 'medium';
+    const urgency = knownUrgency(input.urgency);
+    if (urgency === null) {
+      return denyUrgencyDefer('unknown-urgency', eligibility);
+    }
+    if (!severityTieredDefers(eligibility, urgency)) {
+      return denyUrgencyDefer('matrix', eligibility);
+    }
+    return { defer: true, eligibility, blockedBy: null };
+  }
+  if (e4 === null) {
+    return denyUrgencyDefer('unknown-severity');
+  }
+  const eligibility = higherSeverity(e4, copilot) ?? e4;
+  if (eligibility === 'high') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  if (input.adoptNow) {
+    return denyUrgencyDefer('adopt-now', eligibility);
+  }
+  if (input.mode === 'low' && eligibility !== 'low') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  return { defer: true, eligibility, blockedBy: null };
 }
 function hasOwn(value, key) {
   return Object.hasOwn(value ?? {}, key);

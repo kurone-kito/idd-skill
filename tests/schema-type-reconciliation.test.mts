@@ -239,7 +239,7 @@ interface PolicyConfigFile {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
     deferAfterRounds?: number;
-    deferByUrgency?: 'off' | 'low' | 'low-and-medium';
+    deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
     subagentWaitCeiling?: string;
     delegate?: {
       command: string;
