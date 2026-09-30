@@ -714,6 +714,32 @@ function persistable(
   ]);
 }
 
+/**
+ * A 404 or 410 is a definitive answer: the stored 200 for this same
+ * context is contradicted, so hint reads must not keep serving it. Other
+ * failures (401, 403, 429, 5xx) say nothing about the resource and keep
+ * the entry. A non-forced (older in-flight) fetch never removes an entry
+ * a newer fetch stored meanwhile.
+ */
+function invalidateOnMissing(
+  ctx: CacheContext,
+  result: GithubApiCacheFetchResult,
+  startedAt: number,
+  force: boolean,
+): void {
+  if (result.status !== 404 && result.status !== 410) return;
+  try {
+    const destination = entryPath(ctx);
+    if (!force) {
+      const existing = readRecord(ctx, destination);
+      if (existing && existing.storedAt >= startedAt) return;
+    }
+    safeUnlink(ctx.storage, destination);
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+  }
+}
+
 function serializeRecord(record: StoredRecord): string {
   return JSON.stringify(record);
 }
@@ -887,6 +913,7 @@ function leaderFetch(ctx: CacheContext): ReadThroughGithubApiCacheResult {
       );
     }
   }
+  invalidateOnMissing(ctx, result, startedAt, false);
   try {
     publish(ctx, result, startedAt, false);
   } catch (error) {
@@ -1066,6 +1093,7 @@ function coalesce(ctx: CacheContext): ReadThroughGithubApiCacheResult {
 function strictFresh(ctx: CacheContext): ReadThroughGithubApiCacheResult {
   const startedAt = ctx.now();
   const result = ctx.fetch({});
+  invalidateOnMissing(ctx, result, startedAt, true);
   try {
     publish(ctx, result, startedAt, true);
   } catch (error) {

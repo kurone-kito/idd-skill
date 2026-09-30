@@ -533,6 +533,102 @@ test('retention and size eviction drop the oldest stored response', () => {
   }
 });
 
+test('a definitive 404 or 410 invalidates the stored 200, other failures keep it', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  const clock = () => now;
+  try {
+    for (const status of [404, 410]) {
+      readThrough(paths, okBody({ exists: true }), { now: clock });
+      assert.equal(entryNames(paths.cacheDir).length, 1);
+      now += 10;
+      const gone = readThrough(
+        paths,
+        () => ({ status, body: { gone: true } }),
+        {
+          mode: 'strict-fresh',
+          now: clock,
+        },
+      );
+      assert.equal(gone.status, status);
+      assert.deepEqual(entryNames(paths.cacheDir), []);
+      // The stale 200 is no longer served to a hint read.
+      now += 10;
+      const next = readThrough(paths, okBody({ exists: false }), {
+        now: clock,
+      });
+      assert.equal(next.cache, 'miss');
+      assert.deepEqual(next.body, { exists: false });
+      readThrough(paths, () => ({ status: 200, body: {} }), {
+        mode: 'strict-fresh',
+        now: clock,
+      });
+      now += 10;
+    }
+    // An expired hint whose refetch is a definitive 404 drops the entry too.
+    readThrough(paths, okBody({ exists: true }), {
+      policy: policy(paths.cacheDir, { maxAgeMs: 1_000 }),
+      now: clock,
+    });
+    now += 1_001;
+    readThrough(paths, () => ({ status: 404, body: null }), {
+      policy: policy(paths.cacheDir, { maxAgeMs: 1_000 }),
+      now: clock,
+    });
+    assert.deepEqual(entryNames(paths.cacheDir), []);
+    // 401, 403, 429 and 5xx say nothing about the resource.
+    for (const status of [401, 403, 429, 500, 503]) {
+      const requestShape = { path: `/status-${status}` };
+      readThrough(paths, okBody({ keep: status }), {
+        requestShape,
+        now: clock,
+      });
+      now += 10;
+      readThrough(paths, () => ({ status, body: null }), {
+        mode: 'strict-fresh',
+        requestShape,
+        now: clock,
+      });
+      const kept = readThrough(paths, okBody({ other: true }), {
+        requestShape,
+        now: clock,
+      });
+      assert.equal(kept.cache, 'hit', `${status}`);
+      assert.deepEqual(kept.body, { keep: status });
+      now += 10;
+    }
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an older in-flight 404 does not remove a newer stored entry', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  const clock = () => now;
+  try {
+    const result = readThrough(
+      paths,
+      () => {
+        now += 10;
+        readThrough(paths, okBody({ v: 2 }), {
+          mode: 'strict-fresh',
+          now: clock,
+        });
+        now += 10;
+        return { status: 404, body: null };
+      },
+      { now: clock },
+    );
+    assert.equal(result.status, 404);
+    const hint = readThrough(paths, okBody({ v: 3 }), { now: clock });
+    assert.equal(hint.cache, 'hit');
+    assert.deepEqual(hint.body, { v: 2 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('strict-fresh bypasses a stored response', () => {
   const paths = tempRoot();
   let fetches = 0;
