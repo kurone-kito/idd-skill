@@ -1597,7 +1597,8 @@ enable the cache, and Discover does not use it.
 `ghApiJson` consults the cache only when its `readCache` option is set,
 the policy is enabled, and `classification` is `read`. `write`,
 `graphql-mutation`, `ambiguous-write`, and `authority` always call
-GitHub. Modes are `hint`, `conditional`, and `strict-fresh`. Hint reuse
+GitHub, and so does a read whose `extraArgs` name a non-GET `--method`
+or `-X`. Modes are `hint`, `conditional`, and `strict-fresh`. Hint reuse
 stops at `maxAge`. Conditional mode sends `If-None-Match` only with a
 complete trusted base; otherwise it performs one real fetch. A second
 304, still without that base, throws instead of being stored.
@@ -1622,7 +1623,9 @@ partitioned by API host, a hash of the credential context, repository,
 request shape (including the request body), schema version, and a hash
 of derived inputs. The host is `GH_HOST`, otherwise the host from
 `GITHUB_SERVER_URL`, otherwise the single host from `gh auth status`.
-Several configured hosts and no `GH_HOST` skip the cache. For
+A process remembers that single host, and asks `gh` again after a
+failed, empty, or ambiguous answer; the credential is read on every
+call. Several configured hosts and no `GH_HOST` skip the cache. For
 `github.com`, `github.localhost`, and a `ghe.com` subdomain, the
 credential is `GH_TOKEN` or `GITHUB_TOKEN` when set. For a GitHub
 Enterprise Server host it is `GH_ENTERPRISE_TOKEN` or

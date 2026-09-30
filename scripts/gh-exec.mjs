@@ -1565,7 +1565,40 @@ function readGhStdout(args) {
     return undefined;
   }
 }
+/**
+ * Process-lifetime memo of the one host `gh auth status` reported (#3621).
+ * Without it every cached read ran a `gh` process before the cache lookup,
+ * so a warm hit cost more than it saved. A single slot keyed by the
+ * `GH_HOST` and `GITHUB_SERVER_URL` values in effect, so a change to either
+ * re-resolves.
+ *
+ * Only a lookup that reports exactly one non-empty host is stored. A failed
+ * call, empty output, unparseable or non-object JSON, an empty `hosts`
+ * object, several hosts and an empty host name are returned as they always
+ * were and are retried on the next call.
+ *
+ * Accepted residual: a `github.com` result is not pinned to the request (see
+ * {@link explicitCacheHostname}). If the sole logged-in host changes while
+ * the process runs, a read keyed under that memo could be stored under the
+ * `github.com` partition when an environment token is set. Neither an
+ * environment token nor the keyring credential is memoized, and the memo
+ * gains no further key inputs.
+ */
+let ghAuthHostMemo;
+function ghAuthHostMemoKey() {
+  return JSON.stringify([
+    process.env.GH_HOST ?? null,
+    process.env.GITHUB_SERVER_URL ?? null,
+  ]);
+}
+/** Forget the memoized `gh auth status` host so the next read resolves it again. */
+// audit:ignore-dead-export: test seam for the activeGhHost memo (issue #3621)
+export function resetGhAuthHostMemo() {
+  ghAuthHostMemo = undefined;
+}
 function activeGhHost() {
+  const key = ghAuthHostMemoKey();
+  if (ghAuthHostMemo?.key === key) return ghAuthHostMemo.host;
   const raw = readGhStdout(['auth', 'status', '--json', 'hosts']);
   if (raw === undefined) return undefined;
   try {
@@ -1578,7 +1611,11 @@ function activeGhHost() {
       return undefined;
     }
     const hosts = Object.keys(parsed.hosts).map((host) => host.toLowerCase());
-    if (hosts.length === 1) return hosts[0];
+    if (hosts.length === 1) {
+      const host = hosts[0];
+      if (host) ghAuthHostMemo = { key, host };
+      return host;
+    }
     if (hosts.length === 0) return 'github.com';
     return undefined;
   } catch {
@@ -1736,6 +1773,39 @@ function hasHostnameOverride(extraArgs) {
     (arg) => arg === '--hostname' || arg.startsWith('--hostname='),
   );
 }
+/**
+ * True when `extraArgs` names an HTTP method other than GET for `gh api`
+ * (#3621): `--method V`, `--method=V`, `-X V`, `-X=V` or `-XV`, the value
+ * compared case-insensitively. A flag with no value, or an empty one, counts,
+ * as does any non-GET occurrence of a repeated flag. A bundle of short flags
+ * whose letters reach an `X` (for example `-iXPOST` or `-iX=POST`) also
+ * counts: it cannot be split without knowing which flags take a value, and
+ * wrongly bypassing only costs a cache hit. A request body alone (`--input`,
+ * `-f`, `-F`) is not a method: `gh` infers POST for it, and those reads stay
+ * cacheable with the body in the entry key.
+ */
+function hasExplicitNonGetMethod(extraArgs) {
+  const args = extraArgs ?? [];
+  const isGet = (value) => value?.trim().toLowerCase() === 'get';
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? '';
+    let value;
+    if (arg === '--method' || arg === '-X') {
+      index += 1;
+      value = args[index];
+    } else if (arg.startsWith('--method=')) {
+      value = arg.slice('--method='.length);
+    } else if (arg.startsWith('-X')) {
+      value = arg.slice(2).replace(/^=/, '');
+    } else if (/^-[A-Za-z]+X/.test(arg)) {
+      return true;
+    } else {
+      continue;
+    }
+    if (!isGet(value)) return true;
+  }
+  return false;
+}
 function ghApiJsonWithReadCache(path, options) {
   const request = options.readCache;
   if (request?.classification !== 'read') {
@@ -1743,6 +1813,13 @@ function ghApiJsonWithReadCache(path, options) {
   }
   const policy = loadReadCachePolicy(request.policy);
   if (!policy.enabled) return ghApiJsonUncached(path, options);
+  // A caller that spells a non-GET method is performing a write however it
+  // classified the call, so it neither reads from nor writes to the cache.
+  // This precedes host and credential resolution: a bypassed write runs no
+  // `gh auth` process at all.
+  if (hasExplicitNonGetMethod(options.extraArgs)) {
+    return ghApiJsonUncached(path, options);
+  }
   // The entry key and credential are derived for the environment host. A
   // caller-supplied --hostname would send the request elsewhere, so an
   // explicit override stays uncached rather than keyed under the wrong host.
