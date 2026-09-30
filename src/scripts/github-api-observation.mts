@@ -12,17 +12,16 @@
 
 import { randomBytes } from 'node:crypto';
 import {
-  chmodSync,
   closeSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   unlinkSync,
-  writeSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import {
   classifyInaccessibleIssueLookup,
@@ -794,15 +793,18 @@ export function appendRequestObservation(
       const kept = lines.slice(-maxRecords);
       // An unpredictable name created exclusively (`wx`) and written through
       // the opened descriptor: a pre-created file or symlink at a guessable
-      // name would otherwise be followed and overwritten.
+      // name would otherwise be followed and overwritten. The name does not
+      // repeat the target's base name, so a long base name cannot make the
+      // temporary name too long. `writeFileSync` on a descriptor writes every
+      // byte or throws, so a full disk cannot leave a cut file to be renamed.
       const temporary = join(
         dirname(options.path),
-        `.${basename(options.path)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+        `.idd-github-api-telemetry.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
       );
       try {
         const fd = openSync(temporary, 'wx', 0o600);
         try {
-          writeSync(fd, `${kept.join('\n')}\n`);
+          writeFileSync(fd, `${kept.join('\n')}\n`);
         } finally {
           closeSync(fd);
         }
@@ -815,7 +817,9 @@ export function appendRequestObservation(
         }
         throw error;
       }
-      chmodSync(options.path, 0o600);
+      // The temporary file was created with mode 0600 and the rename keeps
+      // it, so the target needs no path-based chmod (which would follow a
+      // symlink swapped in after the rename).
     },
   );
 }
