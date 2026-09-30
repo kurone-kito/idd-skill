@@ -1649,7 +1649,31 @@ files, and orphaned temp files whose writer has exited, under that
 cache; without `directory` it targets the default location. The cache
 refuses a filesystem root, the workspace, an ancestor of the workspace,
 a symlinked cache root, and an existing directory that holds anything
-besides its own layout. Entries are
+besides its own layout.
+
+On Windows there are no permission mode bits, so permission-mode checks
+are skipped. The default `LOCALAPPDATA` location is trusted without an
+ACL read. A configured `directory` must instead be shown by its ACL to
+grant access only to the current user, `SYSTEM`, and the built-in
+Administrators (read with `whoami` and `icacls`, by SID); otherwise, or
+when the ACL cannot be read, the cache degrades to a live read and
+stores nothing. Any other principal (Everyone, Users, Authenticated
+Users, `CREATOR OWNER`, an unknown SID) makes the directory permissive,
+including an inherit-only entry that would reach the stored files, so a
+directory under a shared or profile location usually needs its
+inheritance removed first (for example
+`icacls <dir> /inheritance:r /grant:r *<your-SID>:(OI)(CI)F`). The
+verdict is read on every cache read, which costs one `icacls` process
+for a configured directory. This check reads an ACL and never changes
+one or deletes anything: it gates each read and write, so entries stored
+while the directory was private stay on disk if its ACL is later
+loosened, and the degrade to live reads does not protect them; tighten
+the ACL or remove the directory yourself. Only the directory's own ACL
+is read, not each stored entry's, which inherit it when the cache
+creates them. It does not notice a different owner, who keeps implicit
+permission to rewrite the ACL.
+
+Entries are
 partitioned by API host, a hash of the credential context, repository,
 request shape (including the request body), schema version, and a hash
 of derived inputs. The host is `GH_HOST`, otherwise the host from

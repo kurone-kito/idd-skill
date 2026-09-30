@@ -33,6 +33,13 @@ import {
   sep,
 } from 'node:path';
 
+import {
+  evaluateWindowsAcl,
+  readWindowsAcl,
+  type WindowsAclReader,
+  type WindowsAclVerdict,
+} from './windows-acl.mts';
+
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = '.idd-github-api-read-cache';
 const ENTRY_NAME = /^[0-9a-f]{64}\.json$/;
@@ -138,6 +145,17 @@ export interface ReadThroughGithubApiCacheInput {
   cwd?: string;
   defaultDirectory?: string;
   storage?: Partial<GithubApiReadCacheStorage>;
+  /**
+   * The platform whose directory-privacy rule applies to a configured cache
+   * directory; defaults to `process.platform`. Only the Windows ACL branch
+   * reads it, so that branch is testable on any operating system.
+   */
+  platform?: NodeJS.Platform;
+  /**
+   * Reads a Windows directory's ACL for the privacy check; defaults to the
+   * real `whoami`/`icacls` reader. May throw; a throw counts as unreadable.
+   */
+  windowsAclReader?: WindowsAclReader;
 }
 
 /** The parts of a read that decide identity, location, and bypass. */
@@ -172,6 +190,9 @@ interface StoredRecord {
   lastModified?: string;
 }
 
+/** Which candidate `resolveReadDirectory` chose. */
+type DirectorySource = 'configured' | 'default';
+
 interface CacheContext {
   storage: GithubApiReadCacheStorage;
   now: () => number;
@@ -198,6 +219,10 @@ interface CacheContext {
    * long computation is not fresher than the moment it began.
    */
   ageBasis: 'stored' | 'started';
+  /** Where the chosen root came from; only a `default` root skips the ACL check. */
+  directorySource: DirectorySource;
+  platform: NodeJS.Platform;
+  aclReader: WindowsAclReader;
   /**
    * Whether this cache use already ran a full sweep, for example because a
    * write pushed the total past `maxBytes`. The due-check that follows the
@@ -678,12 +703,40 @@ function assertAdoptableRoot(ctx: CacheContext): void {
   }
 }
 
+/**
+ * Windows has no mode bits, so a configured cache directory must be shown by
+ * its ACL to grant access only to the current user, SYSTEM, and the
+ * built-in Administrators. The per-user default location under
+ * `LOCALAPPDATA` inherits a user-only ACL and is trusted without an ACL read.
+ * A permissive or unreadable ACL degrades to a live read like any other
+ * storage refusal (#3623).
+ */
+function assertWindowsDirectoryPrivate(ctx: CacheContext): void {
+  if (ctx.platform !== 'win32' || ctx.directorySource === 'default') return;
+  let verdict: WindowsAclVerdict;
+  try {
+    verdict = evaluateWindowsAcl(ctx.aclReader(ctx.root));
+  } catch {
+    verdict = 'unreadable';
+  }
+  if (verdict === 'private') return;
+  throw new CacheStorageError(
+    verdict === 'permissive'
+      ? 'cache directory ACL grants access to other principals'
+      : 'cache directory ACL could not be read',
+  );
+}
+
 function prepareRoot(ctx: CacheContext): void {
   if (isUnsafeDirectory(ctx.root, ctx.anchors)) {
     throw new CacheStorageError('unsafe cache directory');
   }
   assertAdoptableRoot(ctx);
   ensurePrivateDir(ctx, ctx.root);
+  // After the root exists (so a directory created just now is judged by the ACL
+  // it inherited) and before anything is stored under it: a refusal leaves only
+  // an empty root, no marker and no entries.
+  assertWindowsDirectoryPrivate(ctx);
   ensurePrivateDir(ctx, join(ctx.root, 'entries'));
   ensurePrivateDir(ctx, join(ctx.root, 'leases'));
   if (isUnsafeDirectory(ctx.root, ctx.anchors)) {
@@ -1472,16 +1525,20 @@ function strictFresh(ctx: CacheContext): ReadThroughGithubApiCacheResult {
 function resolveReadDirectory(
   input: PrepareInput,
   anchors: readonly string[],
-): string {
-  const candidates = [
-    input.policy.directory?.trim() ?? '',
-    input.defaultDirectory?.trim() ?? '',
-    defaultCacheDirectory(process.env, process.platform),
+): { root: string; source: DirectorySource } {
+  const candidates: { path: string; source: DirectorySource }[] = [
+    { path: input.policy.directory?.trim() ?? '', source: 'configured' },
+    { path: input.defaultDirectory?.trim() ?? '', source: 'default' },
+    {
+      path: defaultCacheDirectory(process.env, process.platform),
+      source: 'default',
+    },
   ];
   for (const candidate of candidates) {
-    const root = normalizedRoot(candidate);
+    const root = normalizedRoot(candidate.path);
     if (root === null) continue;
-    if (!isUnsafeDirectory(root, anchors)) return root;
+    if (!isUnsafeDirectory(root, anchors))
+      return { root, source: candidate.source };
   }
   throw new CacheStorageError('no safe cache directory');
 }
@@ -1623,8 +1680,9 @@ function prepareRead(
     return { kind: 'bypass' };
   }
   let root: string;
+  let directorySource: DirectorySource;
   try {
-    root = resolveReadDirectory(input, anchors);
+    ({ root, source: directorySource } = resolveReadDirectory(input, anchors));
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
     return { kind: 'degraded', entryId };
@@ -1661,6 +1719,10 @@ function prepareRead(
       fetch,
       heldLease: null,
       ageBasis: 'stored',
+      directorySource,
+      platform: input.platform ?? process.platform,
+      aclReader:
+        input.windowsAclReader ?? ((directory) => readWindowsAcl(directory)),
       fullSweepRan: false,
     },
   };

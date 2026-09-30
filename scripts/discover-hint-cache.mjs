@@ -219,6 +219,10 @@ function baseInput(config, deps) {
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.isPidAlive ? { isPidAlive: deps.isPidAlive } : {}),
     ...(deps.pid !== undefined ? { pid: deps.pid } : {}),
+    ...(deps.platform ? { platform: deps.platform } : {}),
+    ...(deps.windowsAclReader
+      ? { windowsAclReader: deps.windowsAclReader }
+      : {}),
     ...(deps.storage ? { storage: deps.storage } : {}),
     ...(deps.defaultDirectory
       ? { defaultDirectory: deps.defaultDirectory }

@@ -34,6 +34,13 @@ const result = readThroughGithubApiCache({
   requestShape: { path: '/repos/o/r' },
   workspaceRoot: workspace,
   cwd: workspace,
+  // A configured directory under the Windows temp folder inherits a
+  // permissive profile ACL, which the real check refuses (#3623); this
+  // worker exercises lease coalescing, not the ACL rule.
+  windowsAclReader: () => ({
+    kind: 'entries',
+    entries: [{ sid: 'S-1-5-18', allow: true }],
+  }),
   fetch: () => {
     const previous = existsSync(countFile)
       ? Number(readFileSync(countFile, 'utf8'))
