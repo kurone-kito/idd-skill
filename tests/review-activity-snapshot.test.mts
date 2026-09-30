@@ -71,6 +71,10 @@ test('collectReviewActivitySnapshot calls each rich loader once', () => {
         calls.push('threads');
         return [];
       },
+      getReviewThreadCommentUserContentEdits: () => {
+        calls.push('edit-histories');
+        return [];
+      },
     },
   });
   assert.deepEqual(calls, [

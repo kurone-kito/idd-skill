@@ -5332,14 +5332,18 @@ reflexively as any other CLI option.
   Anything else — a substantive text change, a deleted or `null`
   revision, an incomplete `userContentEdits` page (`totalCount` above
   what was fetched), a non-bot editor, or a failed fetch — keeps
-  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch this
-  needs runs ONLY in the two merge-gate collectors —
-  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's own
-  required-check collector — and only for advisory-bot thread comments
-  whose `lastEditedAt` postdates their thread's latest IDD disposition;
-  every other consumer (`review-activity-snapshot.mjs`, the merged-PR
-  feedback sweep, `audit-pr-cleanup.mjs`) never fetches it, so an edited
-  comment keeps `updatedAt` dating there, unchanged.
+  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch
+  this needs runs in the two merge-gate collectors —
+  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's
+  own required-check collector — and in `review-activity-snapshot.mjs`
+  (so the one-command watermark path reports the same disposition
+  evidence as the merge gate, kurone-kito/idd-skill#3655); it covers
+  only advisory-bot thread comments whose `lastEditedAt` postdates
+  their thread's latest IDD disposition, in one batched call when
+  there is at least one such comment and none otherwise. Every other
+  consumer (the merged-PR feedback sweep, `audit-pr-cleanup.mjs`)
+  never fetches it, so an edited comment keeps `updatedAt` dating
+  there, unchanged.
   `missingThreads[].inPlaceEditOnly` / `soleCauseInPlaceEditOnly` stay a
   separate, coarser, revision-content-blind heuristic
   (`classifyThreadAckOnlyPostDisposition`), unaffected by this dating
