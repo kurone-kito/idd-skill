@@ -198,6 +198,12 @@ interface CacheContext {
    * long computation is not fresher than the moment it began.
    */
   ageBasis: 'stored' | 'started';
+  /**
+   * Whether this cache use already ran a full sweep, for example because a
+   * write pushed the total past `maxBytes`. The due-check that follows the
+   * read still records its claim but does not parse every entry again.
+   */
+  fullSweepRan: boolean;
 }
 
 class CacheStorageError extends Error {
@@ -912,6 +918,7 @@ function publish(
  * {@link enforceSizeBound}.
  */
 function evict(ctx: CacheContext): void {
+  ctx.fullSweepRan = true;
   const entriesDir = join(ctx.root, 'entries');
   const stat = tryLstat(ctx.storage, entriesDir);
   if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return;
@@ -1100,7 +1107,9 @@ function sweepIfDue(ctx: CacheContext): void {
         ? Math.min(record.retentionMs, ctx.retentionMs)
         : ctx.retentionMs,
     );
-    evict(ctx);
+    // A write in this use may already have run the full sweep (its total went
+    // past `maxBytes`); the record above still claims the due state.
+    if (!ctx.fullSweepRan) evict(ctx);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
@@ -1623,6 +1632,7 @@ function prepareRead(
       fetch,
       heldLease: null,
       ageBasis: 'stored',
+      fullSweepRan: false,
     },
   };
 }

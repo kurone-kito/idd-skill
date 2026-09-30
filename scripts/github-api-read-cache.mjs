@@ -666,6 +666,7 @@ function publish(ctx, result, startedAt) {
  * {@link enforceSizeBound}.
  */
 function evict(ctx) {
+  ctx.fullSweepRan = true;
   const entriesDir = join(ctx.root, 'entries');
   const stat = tryLstat(ctx.storage, entriesDir);
   if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return;
@@ -838,7 +839,9 @@ function sweepIfDue(ctx) {
         ? Math.min(record.retentionMs, ctx.retentionMs)
         : ctx.retentionMs,
     );
-    evict(ctx);
+    // A write in this use may already have run the full sweep (its total went
+    // past `maxBytes`); the record above still claims the due state.
+    if (!ctx.fullSweepRan) evict(ctx);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
@@ -1307,6 +1310,7 @@ function prepareRead(input, fetch, sleep) {
       fetch,
       heldLease: null,
       ageBasis: 'stored',
+      fullSweepRan: false,
     },
   };
 }

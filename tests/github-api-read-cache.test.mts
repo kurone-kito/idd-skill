@@ -2049,6 +2049,47 @@ test('a read whose response is not stored still removes entries beyond a lowered
   }
 });
 
+test('a write that already ran the full sweep is not swept again by the due-check (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  const counter = countingStorage();
+  try {
+    const ids = seedEntries(paths, clock, 3);
+    const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+    // Lowering maxBytes makes the sweep due, and the new entry pushes the
+    // total past the bound, so the write's own size pass runs the full sweep.
+    // The due-check that follows must record its claim without parsing every
+    // entry a second time.
+    clock.now += 10;
+    counter.reset();
+    const result = readThrough(paths, okBody({ pad: 'x'.repeat(400) }), {
+      requestShape: { path: '/new-key' },
+      policy: policy(paths.cacheDir, { maxBytes: Math.floor(size * 2.5) }),
+      now: () => clock.now,
+      storage: counter.storage,
+    });
+    assert.equal(result.cache, 'miss');
+    assert.equal(entryNames(paths.cacheDir).length, 2);
+    for (const id of ids) {
+      const reads = counter.calls.readFile.filter(
+        (path) => path === entryPathOf(paths.cacheDir, id),
+      );
+      assert.equal(reads.length <= 1, true, `${id} was parsed more than once`);
+    }
+    assert.equal(
+      counter.calls.readdir.filter((path) => path.endsWith(`${sep}entries`))
+        .length,
+      2,
+    );
+    assert.equal(
+      sweepRecordOf(paths.cacheDir).maxBytes,
+      Math.floor(size * 2.5),
+    );
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('within bounds and inside the sweep interval, a hit or publish reads no unrelated entry (#3627)', () => {
   const paths = tempRoot();
   const clock = { now: 1_000_000 };
