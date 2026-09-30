@@ -506,11 +506,15 @@ the helper's dry-run output doesn't make self-explanatory.
    `stale-claim-...` or `released-claim-...`. If `<path>` no longer
    exists on disk (a prunable record), skip to `git worktree remove
    --force <path-from-list>` — mirroring B1's own same-shape recovery
-   rule for a prunable entry (`idd-work.instructions.md`); plain `git
-   worktree prune` silently no-ops on a record younger than Git's
-   default 3-month prune expiry, leaving the occupancy helper failing
-   closed on it. Nothing to preserve or
-   remove. Otherwise run the profile-selected
+   rule for a prunable entry (`idd-work.instructions.md`). Keep that
+   command rather than a plain `git worktree prune`: prune is
+   clone-wide (replayed on git 2.53.0, one prune cleared an unrelated
+   record together with the claimed branch's own), though it does
+   remove an unlocked prunable record at once. The 3-month expiry
+   belongs to `gc.worktreePruneExpire`, which only `git gc` applies. A
+   locked record is never flagged `prunable`, so this skip-ahead does
+   not reach it; unlocking it is the operator's call. Nothing to
+   preserve or remove. Otherwise run the profile-selected
    `claim-lock` helper's check form (source-repo/vendored-node: `node
    scripts/claim-lock.mjs --check --worktree <path>`) to read which
    claim-id holds the lock. Proceed only when that claim-id matches the
