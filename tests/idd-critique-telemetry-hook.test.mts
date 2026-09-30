@@ -432,10 +432,12 @@ async function waitForNonEmptyFile(
   return readFileSync(path, 'utf8').trim();
 }
 
-/** Stub-hook source that captures its whole stdin and writes it to
- * `receivedPath` once stdin ends (a single write of the full buffer). */
-function captureStdinStubSource(receivedPath: string): string {
+/** Stub-hook source that records its own pid in `pidPath`, then captures
+ * its whole stdin and writes it to `receivedPath` once stdin ends (a single
+ * write of the full buffer). */
+function captureStdinStubSource(receivedPath: string, pidPath: string): string {
   return `const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {
@@ -481,6 +483,27 @@ async function waitForReceivedPayload(
   throw new Error(
     `received file stayed short: got ${last?.length ?? 0} of ${expectedBytes.length} bytes at ${path} after ${timeoutMs}ms`,
   );
+}
+
+/** Best-effort wait for the capture stub hook whose pid file is `pidPath` to
+ * have exited, so that the `restore()` that follows can remove the directory
+ * holding its executable (NTFS refuses to delete a running image, and
+ * `restore()` only retries for about half a second). Each of its two phases
+ * (the pid file appearing, then the process exiting) is bounded by
+ * `timeoutMs`; a timeout in either is silent and `restore()` then runs anyway.
+ * A stub that never started, or is already gone, has nothing to wait for. */
+async function waitForStubHookExit(
+  pidPath: string,
+  timeoutMs: number,
+): Promise<void> {
+  try {
+    const pid = Number(await waitForNonEmptyFile(pidPath, timeoutMs));
+    if (Number.isInteger(pid) && pid > 0) {
+      await waitUntilProcessGone(pid, timeoutMs);
+    }
+  } catch {
+    // The pid file never appeared: the stub did not start.
+  }
 }
 
 /** Identifies the backup watchdog's own spawn call among every spawnFn
@@ -2354,10 +2377,11 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
       join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-large-payload-'),
     );
     const receivedPath = join(sandbox, 'received.json');
+    const pidPath = join(sandbox, 'pid');
     const stubName = `idd-telemetry-hook-capture-stdin-large-${attempt}`;
     const restore = stubExecutable(
       stubName,
-      captureStdinStubSource(receivedPath),
+      captureStdinStubSource(receivedPath, pidPath),
     );
     try {
       const policyPath = join(sandbox, 'config.json');
@@ -2388,14 +2412,6 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
         `expected --invoke to return promptly even for a large payload, took ${Math.round(elapsedMs)}ms`,
       );
       if (elapsedMs >= CLI_DELIVERY_BOUND_MS) {
-        // Let the straggler hook finish before `restore()` removes the
-        // directory holding its executable (NTFS refuses to delete a
-        // running image), so a retry is very unlikely to fail on cleanup.
-        // The hook writes its file and exits right away; best effort,
-        // bounded.
-        await waitForNonEmptyFile(receivedPath, RECEIVED_FILE_TIMEOUT_MS).catch(
-          () => undefined,
-        );
         continue;
       }
       t.diagnostic(
@@ -2413,6 +2429,10 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
       );
       return;
     } finally {
+      // Whether the attempt was conclusive, inconclusive or failed, let its
+      // hook exit before `restore()` removes the directory holding its
+      // executable (a retry would otherwise race a still-running straggler).
+      await waitForStubHookExit(pidPath, RECEIVED_FILE_TIMEOUT_MS);
       restore();
     }
   }
@@ -2422,8 +2442,10 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
 });
 
 test('CLI --invoke waits for a small payload to fully reach the hook before exiting on win32 (kurone-kito/idd-skill#2910)', {
-  // The large-payload test above already covers win32 for a payload well
-  // over the OS pipe buffer; #2910's own reproduction found the defect
+  // The large-payload test above covers win32 for a payload well over the
+  // OS pipe buffer whenever one of its attempts is conclusive (it skips when
+  // every attempt is inconclusive; the backpressure test above still covers
+  // the delivery wiring then); #2910's own reproduction found the defect
   // was size-independent (0B and every size up to 500KB+ all failed
   // identically), so this test closes the acceptance criterion's other
   // explicit half -- a small (well under 1KB), single-write payload --
@@ -2488,10 +2510,11 @@ test('CLI --invoke delivers a production-sized payload to a real hook byte for b
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-production-'),
   );
   const receivedPath = join(sandbox, 'received.json');
+  const pidPath = join(sandbox, 'pid');
   const stubName = 'idd-telemetry-hook-capture-stdin-production';
   const restore = stubExecutable(
     stubName,
-    captureStdinStubSource(receivedPath),
+    captureStdinStubSource(receivedPath, pidPath),
   );
   try {
     const policyPath = join(sandbox, 'config.json');
@@ -2526,6 +2549,7 @@ test('CLI --invoke delivers a production-sized payload to a real hook byte for b
       'expected the hook to receive the full, untruncated production-sized payload',
     );
   } finally {
+    await waitForStubHookExit(pidPath, RECEIVED_FILE_TIMEOUT_MS);
     restore();
   }
 });
