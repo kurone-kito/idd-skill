@@ -34,6 +34,7 @@ import {
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = '.idd-github-api-read-cache';
 const ENTRY_NAME = /^[0-9a-f]{64}\.json$/;
+const TEMP_NAME = /^[0-9a-f]{64}\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
 const MAX_CACHE_BYTES = 104857600;
 const DEFAULT_LEASE_TTL_MS = 15_000;
 const POLL_MS = 20;
@@ -321,6 +322,16 @@ function tryLstat(storage, path) {
     throw new CacheStorageError('cache lstat failed', { cause: error });
   }
 }
+/**
+ * The writer pid of an atomic-write temp file, or null for any other
+ * name. A temp file whose writer is gone is an orphan left by a crash
+ * between the write and the rename, and it holds private response data
+ * outside the entry size and retention bounds.
+ */
+function tempWriterPid(name) {
+  const match = TEMP_NAME.exec(name);
+  return match ? Number(match[1]) : null;
+}
 function safeUnlink(storage, path) {
   try {
     const stat = storage.lstat(path);
@@ -543,6 +554,12 @@ function evict(ctx) {
   const keep = [];
   let total = 0;
   for (const name of names) {
+    const writer = tempWriterPid(name);
+    if (writer !== null) {
+      if (!ctx.isPidAlive(writer))
+        safeUnlink(ctx.storage, join(entriesDir, name));
+      continue;
+    }
     if (!ENTRY_NAME.test(name)) continue;
     const path = join(entriesDir, name);
     const fileStat = tryLstat(ctx.storage, path);
@@ -831,7 +848,7 @@ function resolveReadDirectory(input, anchors) {
   }
   throw new CacheStorageError('no safe cache directory');
 }
-function purgeDirectory(storage, root, anchors) {
+function purgeDirectory(storage, root, anchors, isPidAlive) {
   if (!isAbsolute(root) || isUnsafeDirectory(root, anchors)) {
     return {
       body: null,
@@ -884,7 +901,8 @@ function purgeDirectory(storage, root, anchors) {
   }
   let removed = 0;
   for (const name of storage.readdir(entries)) {
-    if (!ENTRY_NAME.test(name)) continue;
+    const writer = tempWriterPid(name);
+    if (writer !== null ? isPidAlive(writer) : !ENTRY_NAME.test(name)) continue;
     const path = join(entries, name);
     const stat = tryLstat(storage, path);
     if (!stat || stat.isSymbolicLink() || !stat.isFile()) continue;
@@ -920,7 +938,12 @@ export function readThroughGithubApiCache(input) {
   if (input.operation === 'purge') {
     const root = normalizedRoot(input.policy.directory?.trim() ?? '') ?? '';
     try {
-      return purgeDirectory(storage, root, anchors);
+      return purgeDirectory(
+        storage,
+        root,
+        anchors,
+        input.isPidAlive ?? defaultIsPidAlive,
+      );
     } catch (error) {
       if (error instanceof CacheStorageError) {
         return {

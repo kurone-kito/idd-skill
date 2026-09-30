@@ -636,6 +636,40 @@ test('a crash before atomic replacement keeps the previous entry', () => {
   }
 });
 
+test('orphaned atomic-write temp files are evicted and purged, live writers are not', () => {
+  const paths = tempRoot();
+  const stem = 'a'.repeat(64);
+  const dead = 999_999_001;
+  const alive = process.pid;
+  const orphan = `${stem}.json.${dead}.0123456789ab.tmp`;
+  const inFlight = `${stem}.json.${alive}.ba9876543210.tmp`;
+  const isPidAlive = (pid: number) => pid === alive;
+  try {
+    readThrough(paths, okBody({ seed: true }), { isPidAlive });
+    const entries = join(paths.cacheDir, 'entries');
+    writeFileSync(join(entries, orphan), 'x'.repeat(2_000), { mode: 0o600 });
+    writeFileSync(join(entries, inFlight), 'y', { mode: 0o600 });
+    // A later publish runs eviction, which sweeps the crashed writer's file.
+    readThrough(paths, okBody({ other: true }), {
+      requestShape: { path: '/other' },
+      isPidAlive,
+    });
+    assert.equal(existsSync(join(entries, orphan)), false);
+    assert.equal(existsSync(join(entries, inFlight)), true);
+
+    writeFileSync(join(entries, orphan), 'x'.repeat(2_000), { mode: 0o600 });
+    const purged = readThrough(paths, okBody(null), {
+      operation: 'purge',
+      isPidAlive,
+    });
+    assert.equal(purged.cache, 'purged');
+    assert.equal(purged.removed, 3);
+    assert.deepEqual(readdirSync(entries), [inFlight]);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('unwritable storage and loose permissions degrade to the live response', () => {
   const paths = tempRoot();
   try {
