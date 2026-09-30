@@ -785,8 +785,10 @@ function persistable(
  * The generation of a stored record: when its fetch started. A record
  * from before this field existed falls back to when it was stored.
  * Concurrent writers are ordered by it, so an older fetch that finishes
- * later never overwrites or removes what a newer fetch stored, including
- * between two lease-free strict-fresh reads.
+ * later does not overwrite or remove what a newer fetch stored, including
+ * between two lease-free strict-fresh reads. This is best-effort: the
+ * check reads the existing record and the write follows, so a newer
+ * lease-free writer that lands inside that window can still be replaced.
  */
 function generationOf(record: StoredRecord): number {
   return record.startedAt ?? record.storedAt;

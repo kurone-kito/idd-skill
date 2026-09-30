@@ -850,6 +850,33 @@ test('a legacy entry without startedAt orders by storedAt against strict-fresh r
   }
 });
 
+test('an older in-flight hint 200 does not overwrite a newer strict-fresh entry', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  const clock = () => now;
+  try {
+    const result = readThrough(
+      paths,
+      () => {
+        now += 10;
+        readThrough(paths, okBody({ v: 'newer' }), {
+          mode: 'strict-fresh',
+          now: clock,
+        });
+        now += 10;
+        return { status: 200, body: { v: 'older' } };
+      },
+      { now: clock },
+    );
+    assert.deepEqual(result.body, { v: 'older' });
+    const hint = readThrough(paths, okBody({ v: 'hint' }), { now: clock });
+    assert.equal(hint.cache, 'hit');
+    assert.deepEqual(hint.body, { v: 'newer' });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('an older in-flight 404 does not remove a newer stored entry', () => {
   const paths = tempRoot();
   let now = 1_000_000;
