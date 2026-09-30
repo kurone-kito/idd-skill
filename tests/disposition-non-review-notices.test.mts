@@ -34,6 +34,7 @@ import {
   summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const planSchema = loadJson(
   'schemas/disposition-non-review-notices.schema.json',
@@ -297,6 +298,25 @@ test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
 
 test('parseArgs: rejects an unknown flag instead of silently ignoring it', () => {
   assert.throws(() => parseArgs(['--bogus']));
+});
+
+// #3669: only a `parseArgs` help test existed. The `--help` text must state
+// that a CodeRabbit summary the gate already classifies as resolved is
+// skipped without a reply, so a literal reader of E6 knows the omission is
+// deliberate.
+test('--help: says a resolved CodeRabbit summary is skipped without a reply, with the reason string (#3669)', () => {
+  const result = spawnHelperBinWithEnvelope(
+    'idd-disposition-non-review-notices.mjs',
+    ['--help'],
+  );
+  assert.equal(result.status, 0, JSON.stringify(result));
+  assert.match(
+    result.stdout,
+    /^usage: node scripts\/disposition-non-review-notices\.mjs/,
+  );
+  assert.match(result.stdout, /summary-resolved-no-actionable-comments/);
+  assert.match(result.stdout, /receives no reply/);
+  assert.match(result.stdout, /written\s+E6 rule stays authoritative/);
 });
 
 test('parseArgs: --help is recognized without requiring --pr', () => {
