@@ -79,6 +79,87 @@ its own — always use the marker's assigned `new-claim-id`. (`{agent-id}` may
 legitimately equal the displaced claim's agent-id; only `{claim-id}` must
 always be the fresh marker-assigned value.)
 
+**Successor whose clone still holds the predecessor's worktree** — Step 1
+of `idd-resume.instructions.md` maps `owner_evidence_required` (reason
+`claim-id-match-without-independent-owner-evidence`) to "retry once with
+`--worktree`, else stop". For a forced-handoff successor whose clone still
+holds the predecessor's worktree `W` for the claimed branch, that stop
+persists on every retry: the handoff marker made this session's
+`new-claim-id` the active claim, but `W`'s `idd-claim.lock` still names the
+displaced claim-id and `W` holds no generated-claim record for the new one.
+The stop at `kurone-kito/idd-skill#3597` (2026-09-30) is the observed
+instance. Every other `owner_evidence_required` case keeps "stop", and §LWR
+does not apply: it recovers a stale or released claim's occupied worktree,
+not a live forced-handoff claim. Apply this only when all of these hold:
+
+- The routing call passed this session's `--claim-id`, `--nonce`,
+  `--worktree W` and `--fresh-claim-gate`, and
+  `evidence.forced_handoff.new_claim_id` equals this session's claim-id while
+  `old_claim_id` does not. Pass `evidence.forced_handoff.new_agent_id` as
+  `--agent-id` on every call below: it usually equals the displaced
+  agent-id, but a marker may name a distinct successor id, and a lock or
+  record written under another agent-id leaves routing at
+  `owner_evidence_required` (preventive; no observed incident yet).
+- `evidence.activation_nonce_winner` is non-null and equals this session's
+  nonce, after the nonce steps of `idd-claim.instructions.md` (its
+  Activation-nonce format and Claim verification sections: post the nonce,
+  wait `claim.verifySettleDelay`, confirm the winner). A nonce marker that
+  is not yet visible looks the same as agreement in a bare
+  `owner_evidence_required`, so check the winner again immediately before
+  the takeover.
+- `fresh_claim_gate.verdict` is `already-claimed`,
+  `fresh_claim_gate.winning_claim_id` equals this session's claim-id, and
+  the top-level `reason` is not a `released-claim-*` reason; the further
+  conditions of the takeover authorization in `docs/idd-helper-scripts.md`
+  (claim-lock section) apply.
+- `W` comes from `git worktree list --porcelain`: exactly one linked
+  worktree for the claimed branch, showing `branch refs/heads/<branch>` and
+  neither `prunable` nor `locked`. A `detached` record (a rebase left by the
+  dead predecessor shows only that) while routing still says
+  `owner_evidence_required` means stop. `git -C W symbolic-ref --quiet
+--short HEAD` must print the branch (that is the routing check itself), and
+  none of `git -C W rev-parse --git-path rebase-merge`, `rebase-apply`,
+  `MERGE_HEAD` or `BISECT_START` may name an existing path (they live in the
+  worktree's own git directory, not in `W/.git`, which is a file there). A
+  worktree left mid-rebase lets the takeover succeed while routing still
+  returns `owner_evidence_required` (preventive; no observed incident yet).
+  Merge and dirty state do not change routing and are only a safety check:
+  the takeover adopts whatever uncommitted or unpushed work the predecessor
+  left, so run the content-scope audit (§CSA) before any of it is pushed.
+  Otherwise do not run `--takeover`: report to the operator, and retry Step
+  1 after `W` has been cleaned up.
+- `claim-lock --check --worktree W` shows a holder (`holder.claimId`) equal
+  to `old_claim_id`. If it already shows this session's claim-id (a takeover
+  done earlier), skip the takeover and only record the claim identity; if no
+  lock exists (`present` is false), use the normal `--acquire`. Any other
+  holder means stop.
+
+The recommended order (it differed between the sessions that hit the stop;
+treat it as recommended, not observed): adopt the marker's agent-id and
+claim-id; record the claim identity against `W`; post this session's own
+activation nonce, wait, and confirm the winner; run the four-flag routing
+call once and read `fresh_claim_gate.verdict` and `winning_claim_id`; check
+the lock holder; take the lock over; re-run routing. Run every
+`claim-lock` call with `W` as the current directory and with `--worktree W`
+(every mode accepts it, and the cwd rule in `docs/idd-helper-scripts.md`
+applies), through the profile-selected claim-lock command:
+
+1. `--record-tokens --worktree W --agent-id <new_agent_id> --claim-id
+   <new_claim_id> --nonce <nonce>`. The target is `W`, not the primary
+   checkout that `idd-claim.instructions.md` names for a fresh claim:
+   recording in the primary lets the takeover succeed while routing still
+   returns `owner_evidence_required` (preventive; no observed incident yet).
+2. Post the nonce, wait, and confirm the winner, then run the routing call.
+3. `--check --worktree W`, then `--acquire --takeover --worktree W
+   --agent-id <new_agent_id> --claim-id <new_claim_id>`; confirm the output's
+   `holder.claimId` equals `old_claim_id`. A displaced predecessor that is
+   somehow still running is displaced by definition.
+4. Re-run the routing call and expect `already_owned`.
+
+The trust basis is the human-gated forced-handoff marker, the nonce winner,
+and the `--check` run immediately before the takeover. `resume-claim-routing`
+and `claim-lock` keep their fail-closed behavior; nothing here changes them.
+
 **Content-scope audit** — Once the successor's post-handoff routing
 (Step 2 in `idd-resume.instructions.md`) lands it on §W7 or §W8 with
 inherited commits on `{branch}`, run the content-scope audit described
