@@ -515,9 +515,10 @@ that matches neither the primary nor the secondary wording records as
 `graphql-throttled` instead of `graphql-errors`. It says the call was
 throttled without naming a subtype, because that wording can be GitHub's
 secondary limit while the hourly quota is healthy (observed 2026-09-27,
-issue `#3560`; see the REST section below). A reader that predates the
-value reads such a retained record back as `unknown`. A read or write
-failure in this retention path does not change the wrapper result.
+issue `kurone-kito/idd-skill#3560`; see the REST section below). A reader
+that predates the value reads such a retained record back as `unknown`. A
+read or write failure in this retention path does not change the wrapper
+result.
 
 ## REST
 
