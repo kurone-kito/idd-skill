@@ -1650,8 +1650,11 @@ test('trimming the event files never drops the longest-lived event of a family',
     // The only active primary event of a resource has the earliest `until`
     // of all, followed by more shared events than the retention cap keeps.
     const primary = plant('primary', 'core', T0 + 600_000, 0, 'core');
+    const shared: string[] = [];
     for (let index = 1; index <= 70; index += 1) {
-      plant('secondary', 'shared', T0 + 700_000 + index * 1_000, index);
+      shared.push(
+        plant('secondary', 'shared', T0 + 700_000 + index * 1_000, index),
+      );
     }
     gate.recordFailure(SECONDARY_403);
     gate.release();
@@ -1659,8 +1662,12 @@ test('trimming the event files never drops the longest-lived event of a family',
     assert.ok(names.includes(primary), 'the only primary event is kept');
     assert.ok(names.length <= 64, `trimmed to the cap, got ${names.length}`);
     assert.ok(
-      names.some((name) => name.startsWith('secondary.shared.')),
+      names.includes(shared.at(-1) as string),
       'the shared family keeps its longest event',
+    );
+    assert.ok(
+      !names.includes(shared[0] as string),
+      'the oldest trimmable event is the one removed',
     );
   } finally {
     h.cleanup();
