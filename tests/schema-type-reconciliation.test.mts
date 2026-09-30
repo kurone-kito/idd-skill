@@ -1291,6 +1291,11 @@ const policyConfigFixture = {
     maxParkedChanges: 10,
   },
   githubApi: {
+    telemetry: {
+      enabled: false,
+      maxRecords: 100,
+      path: '/var/tmp/idd-github-api-telemetry.jsonl',
+    },
     readCache: {
       enabled: false,
       maxAge: 'PT5M',
