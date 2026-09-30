@@ -447,8 +447,8 @@ process.stdin.on('end', () => {
 
 /** Polls by content until the file at `path` holds exactly `expected`, so a
  * read that lands while the stub is still mid-write can never be compared
- * (kurone-kito/idd-skill#3630: the old first-non-blank-poll read saw a
- * partly written 500KB file under load). A file longer than `expected` is
+ * (kurone-kito/idd-skill#3630: the old first-non-blank-poll read could see
+ * a partly written 500KB file under load). A file longer than `expected` is
  * returned at once so the caller's assertion shows the mismatch. If the
  * file is still short at the deadline, this throws a failure that says so,
  * rather than returning the short content for a confusing equality diff. */
@@ -2005,9 +2005,9 @@ test('invokeCritiqueTelemetryHook signals payload delivery only after the last b
   // instead of racing a real pipe and real scheduling, the fake child's
   // stdin accepts the payload one 64 KiB slice at a time, only when this
   // test releases a slice, and holds the write callback until the last one.
-  // `onPayloadDelivered` must not fire before that point (a regression that
-  // notified right after `end()` or after the first write would fail
-  // here) and must fire exactly once after it.
+  // `onPayloadDelivered` must not fire before that point (a regression
+  // that signalled delivery right after `end()` would fail here) and must
+  // fire exactly once after it.
   const SLICE_BYTES = 64 * 1024;
   const bigPayload = { ...samplePayload(), padding: 'x'.repeat(500_000) };
   const expected = JSON.stringify(bigPayload);
@@ -2305,6 +2305,10 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
  * so the process-level tests mirror its value as a literal. */
 const CLI_DELIVERY_BOUND_MS = 1_000;
 
+/** How long the process-level payload tests wait for a stub hook to write
+ * its received file (it starts a node process, so it can be slow under load). */
+const RECEIVED_FILE_TIMEOUT_MS = 15_000;
+
 /** How many times the large-payload test retries an attempt whose CLI took
  * at least {@link CLI_DELIVERY_BOUND_MS} before it gives up and skips. */
 const LARGE_PAYLOAD_MAX_ATTEMPTS = 5;
@@ -2384,6 +2388,14 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
         `expected --invoke to return promptly even for a large payload, took ${Math.round(elapsedMs)}ms`,
       );
       if (elapsedMs >= CLI_DELIVERY_BOUND_MS) {
+        // Let the straggler hook finish before `restore()` removes the
+        // directory holding its executable (NTFS refuses to delete a
+        // running image), so a retry is very unlikely to fail on cleanup.
+        // The hook writes its file and exits right away; best effort,
+        // bounded.
+        await waitForNonEmptyFile(receivedPath, RECEIVED_FILE_TIMEOUT_MS).catch(
+          () => undefined,
+        );
         continue;
       }
       t.diagnostic(
@@ -2392,7 +2404,7 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
       const received = await waitForReceivedPayload(
         receivedPath,
         expected,
-        15_000,
+        RECEIVED_FILE_TIMEOUT_MS,
       );
       assert.equal(
         received,
@@ -2506,7 +2518,7 @@ test('CLI --invoke delivers a production-sized payload to a real hook byte for b
     const received = await waitForReceivedPayload(
       receivedPath,
       expected,
-      15_000,
+      RECEIVED_FILE_TIMEOUT_MS,
     );
     assert.equal(
       received,
