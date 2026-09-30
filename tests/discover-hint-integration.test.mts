@@ -20,6 +20,7 @@ import {
   invalidateDiscoverHints,
   readDiscoverHint,
 } from '../src/scripts/discover-hint-cache.mts';
+import { hasEligibleOrphan } from '../src/scripts/discover-orphan-filter.mts';
 import {
   enumerateAllRoadmapsGraph,
   hasStartableCandidate,
@@ -365,7 +366,10 @@ interface CliFixture {
   restore: () => void;
 }
 
-function cliFixture(enabled: boolean): CliFixture {
+function cliFixture(
+  enabled: boolean,
+  stub: (logPath: string) => string = GH_STUB,
+): CliFixture {
   const root = mkdtempSync(join(tmpdir(), 'idd-hint-cli-'));
   const workspace = join(root, 'workspace');
   const cacheDir = join(root, 'cache');
@@ -392,14 +396,18 @@ function cliFixture(enabled: boolean): CliFixture {
     workspace,
     cacheDir,
     log,
-    restore: stubExecutable('gh', GH_STUB(log)),
+    restore: stubExecutable('gh', stub(log)),
   };
 }
 
-function runCli(fx: CliFixture, args: string[]) {
+function runCli(
+  fx: CliFixture,
+  args: string[],
+  script = 'discover-roadmap-graph.mjs',
+) {
   return spawnSync(
     process.execPath,
-    [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), ...args],
+    [join(REPO_ROOT, 'scripts', script), ...args],
     {
       cwd: fx.workspace,
       encoding: 'utf8',
@@ -559,6 +567,135 @@ test('the union report shape gains only the optional cache object', async () => 
     assert.deepEqual(withoutCache(live.report), withoutCache(plain));
     assert.equal(live.cache?.mode, 'off');
   } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+// ---- discover-orphan-filter shares the same layer ----
+
+const ORPHAN_STUB = (issues: string, logPath: string) => `
+const { appendFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n");
+if (args[0] === "repo" && args[1] === "view") {
+  const jq = args[args.indexOf("--jq") + 1];
+  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  process.exit(0);
+}
+if (args[0] === "api" && /issues\\?/.test(args[1] || "")) {
+  process.stdout.write(${JSON.stringify(issues)});
+  process.exit(0);
+}
+if (args[0] === "issue" && args[1] === "view" && args[2] === "900") {
+  process.stderr.write("gh: Not Found (HTTP 404)\\n");
+  process.exit(1);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`;
+
+const ORPHAN_SCRIPT = 'discover-orphan-filter.mjs';
+
+test('orphan eligibility prefers claim state, then bare presence', () => {
+  assert.equal(hasEligibleOrphan({ orphans: [] }), false);
+  assert.equal(hasEligibleOrphan({ orphans: [{ number: 1 }] }), true);
+  assert.equal(
+    hasEligibleOrphan({ orphans: [{ number: 1, claimEligible: false }] }),
+    false,
+  );
+  assert.equal(
+    hasEligibleOrphan({
+      orphans: [
+        { number: 1, claimEligible: false },
+        { number: 2, claimEligible: true },
+      ],
+    }),
+    true,
+  );
+  assert.equal(hasEligibleOrphan(null), false);
+  assert.equal(hasEligibleOrphan({}), false);
+});
+
+test('CLI orphan filter: an empty cached inventory is refreshed once, never believed', () => {
+  const fx = cliFixture(true, (log) => ORPHAN_STUB('[]', log));
+  try {
+    const cold = runCli(fx, [], ORPHAN_SCRIPT);
+    assert.equal(cold.status, 0, cold.stderr);
+    const coldReport = JSON.parse(cold.stdout);
+    assert.equal(coldReport.cache.source, 'live');
+    assert.equal(coldReport.cache.exhaustionRefresh, false);
+    const base = ghCalls(fx);
+    const again = runCli(fx, [], ORPHAN_SCRIPT);
+    assert.equal(again.status, 0, again.stderr);
+    const againReport = JSON.parse(again.stdout);
+    assert.equal(againReport.cache.exhaustionRefresh, true);
+    assert.equal(againReport.cache.source, 'live');
+    assert.ok(ghCalls(fx) > base);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI orphan filter: an unresolvable reference is reported incomplete and never stored', () => {
+  const issue = `${JSON.stringify({
+    number: 5,
+    title: 'needs 900',
+    state: 'open',
+    body: 'Blocked by #900',
+    labels: [],
+    html_url: 'https://example.test/5',
+  })}\n`;
+  const fx = cliFixture(true, (log) => ORPHAN_STUB(issue, log));
+  try {
+    const first = runCli(fx, [], ORPHAN_SCRIPT);
+    assert.equal(first.status, 0, first.stderr);
+    const firstReport = JSON.parse(first.stdout);
+    assert.equal(firstReport.counts.unresolvable, 1);
+    assert.equal(firstReport.cache.complete, false);
+    const base = ghCalls(fx);
+    const second = runCli(fx, [], ORPHAN_SCRIPT);
+    assert.equal(JSON.parse(second.stdout).cache.source, 'live');
+    assert.ok(ghCalls(fx) > base);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI orphan filter: --no-cache, --refresh-cache, and --purge-cache behave like the graph helper', () => {
+  const fx = cliFixture(true, (log) => ORPHAN_STUB('[]', log));
+  try {
+    const conflict = runCli(
+      fx,
+      ['--no-cache', '--refresh-cache'],
+      ORPHAN_SCRIPT,
+    );
+    assert.notEqual(conflict.status, 0);
+    assert.match(
+      `${conflict.stdout}${conflict.stderr}`,
+      /--no-cache cannot be combined with --refresh-cache/,
+    );
+    const off = runCli(fx, ['--no-cache'], ORPHAN_SCRIPT);
+    assert.equal(JSON.parse(off.stdout).cache.mode, 'off');
+    const refreshed = runCli(fx, ['--refresh-cache'], ORPHAN_SCRIPT);
+    assert.equal(JSON.parse(refreshed.stdout).cache.mode, 'refresh');
+    const purged = runCli(fx, ['--purge-cache'], ORPHAN_SCRIPT);
+    assert.equal(JSON.parse(purged.stdout).cache.cache, 'purged');
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI orphan filter: the feature off leaves the output free of a cache object', () => {
+  const fx = cliFixture(false, (log) => ORPHAN_STUB('[]', log));
+  try {
+    const result = runCli(fx, [], ORPHAN_SCRIPT);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal('cache' in JSON.parse(result.stdout), false);
+  } finally {
+    fx.restore();
     rmSync(fx.root, { recursive: true, force: true });
   }
 });
