@@ -1412,17 +1412,23 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        are not passing, exit 0 and post nothing. Every other
                        refusal still exits 1 (HEAD or CI-completion mismatch,
                        unreadable check state, or the --prior-* guard below,
-                       which is checked before the defer).
+                       which is checked before the defer). Read
+                       operationLocal.decision to tell the runs apart, since
+                       --apply does not: publish posts the marker (exit 0);
+                       defer exits 0 with "mode": "dry-run" and posts nothing;
+                       refuse exits 1, posts nothing, and prints the same
+                       envelope on stdout next to the reason on stderr.
   --prior-head-sha <sha>
   --prior-total-item-count <n>
   --prior-max-activity-at <iso|none>
                        --operation-local only, and only together: the head-SHA,
-                       total-item-count and max-activity fields of an earlier
-                       watermark for the SAME HEAD. Refuses (exit 1) when that
-                       HEAD is not the live HEAD, or when the capture still
-                       holds undispositioned items and its activity has
-                       advanced past the boundary, so it routes back to triage
-                       instead of being marked handled.
+                       total-item-count and max-activity values E1 Step 1 saw
+                       for the SAME HEAD. Refuses (exit 1) when that HEAD is
+                       not the live HEAD, or when the capture still holds
+                       undispositioned comments or threads, or findings in a
+                       review body that has no thread for them, and its
+                       activity has advanced past the boundary, so it routes
+                       back to triage instead of being marked handled.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
@@ -1569,7 +1575,7 @@ copilot-unavailable is a brand-new terminal marker with no legacy form, so
 all five fields are required.
 
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
-the snapshot child (--type watermark only) so its counts match the manual
+the activity capture (--type watermark only) so its counts match the manual
 review-activity-snapshot path.
 --expected-head-sha pins a --type watermark --from-pr to the Step 1 stored
 HEAD and fails closed (no post) on drift instead of silently posting a newer
