@@ -1536,6 +1536,11 @@ test('the default directory follows the OS cache home', () => {
   }
 });
 
+/** A `sleep` that fails the read on its first call: the read must not wait. */
+function refuseToWait(): never {
+  throw new Error('the read waited on a lease it should not have waited on');
+}
+
 /** A policy with no `directory`, so a read resolves the default location. */
 function policyWithoutDirectory(): ReadThroughGithubApiCacheInput['policy'] {
   return {
@@ -1681,9 +1686,9 @@ test('a dead or future lease is recovered without waiting out the ttl', async ()
       lease,
       JSON.stringify({ pid: deadPid, createdAt: Date.now(), mode: 'hint' }),
     );
-    const started = Date.now();
-    const recovered = readThrough(paths, okBody({ n: 2 }));
-    assert.ok(Date.now() - started < 500);
+    const recovered = readThrough(paths, okBody({ n: 2 }), {
+      sleep: refuseToWait,
+    });
     assert.equal(recovered.fetched, true);
     assert.deepEqual(recovered.body, { n: 2 });
 
@@ -1696,9 +1701,9 @@ test('a dead or future lease is recovered without waiting out the ttl', async ()
         mode: 'hint',
       }),
     );
-    const futureStarted = Date.now();
-    const future = readThrough(paths, okBody({ n: 3 }));
-    assert.ok(Date.now() - futureStarted < 500);
+    const future = readThrough(paths, okBody({ n: 3 }), {
+      sleep: refuseToWait,
+    });
     assert.deepEqual(future.body, { n: 3 });
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
@@ -1718,12 +1723,11 @@ test('strict-fresh does not wait on a live hint lease', async () => {
       join(paths.cacheDir, 'leases', `${first.entryId}.json`),
       JSON.stringify({ pid: sleeper.pid, createdAt: Date.now(), mode: 'hint' }),
     );
-    const started = Date.now();
     const result = readThrough(paths, okBody({ live: true }), {
       mode: 'strict-fresh',
       leaseTtlMs: 5_000,
+      sleep: refuseToWait,
     });
-    assert.ok(Date.now() - started < 400);
     assert.deepEqual(result.body, { live: true });
   } finally {
     sleeper.kill();
@@ -1979,12 +1983,15 @@ test('two processes coalesce a cold hint read onto one fetch', async () => {
   const leaderBoot = join(paths.root, 'leader-boot');
   const followerBoot = join(paths.root, 'follower-boot');
   const leaderStarted = join(paths.root, 'leader-started');
+  const leaderSlept = join(paths.root, 'leader-slept');
+  const followerSlept = join(paths.root, 'follower-slept');
   const flags = process.execArgv.filter(
     (arg) => arg !== '--test' && !arg.startsWith('--test-'),
   );
   function start(role: 'leader' | 'follower') {
     const boot = role === 'leader' ? leaderBoot : followerBoot;
     const count = role === 'leader' ? leaderCount : followerCount;
+    const slept = role === 'leader' ? leaderSlept : followerSlept;
     let stdout = '';
     let stderr = '';
     const child = spawn(process.execPath, [...flags, WORKER], {
@@ -1995,6 +2002,7 @@ test('two processes coalesce a cold hint read onto one fetch', async () => {
         IDD_CACHE_WORKSPACE: paths.workspace,
         IDD_CACHE_BOOTED: boot,
         IDD_CACHE_STARTED: leaderStarted,
+        IDD_CACHE_SLEPT: slept,
         IDD_CACHE_RELEASE: release,
         IDD_CACHE_COUNT: count,
       },
@@ -2031,9 +2039,11 @@ test('two processes coalesce a cold hint read onto one fetch', async () => {
     const follower = start('follower');
     try {
       await waitFor(followerBoot);
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      // The follower's first poll of the leader's lease proves it is waiting.
+      await waitFor(followerSlept);
       assert.equal(follower.child.exitCode, null);
       assert.equal(existsSync(followerCount), false);
+      assert.equal(existsSync(leaderSlept), false);
       writeFileSync(release, '1');
       assert.equal(await leader.exited, 0, leader.output().stderr);
       assert.equal(await follower.exited, 0, follower.output().stderr);
