@@ -679,6 +679,10 @@ function activeCooldown(ctx, resource) {
   }
   return best;
 }
+/** The cooldown family an event file belongs to: its kind and its scope. */
+function eventFamily(name) {
+  return name.split('.', 2).join('.');
+}
 function collectEventGarbage(ctx) {
   try {
     const now = ctx.now();
@@ -698,8 +702,23 @@ function collectEventGarbage(ctx) {
       }
       survivors.push({ name, until });
     }
-    survivors.sort((left, right) => left.until - right.until);
-    for (const stale of survivors.slice(
+    // The longest-lived event of each family (the shared secondary cooldown,
+    // or one resource's primary cooldown) is what an active cooldown rests
+    // on, so it is never trimmed: dropping it would end that cooldown early.
+    // Only the rest are trimmed, oldest first.
+    const longest = new Map();
+    for (const survivor of survivors) {
+      const family = eventFamily(survivor.name);
+      const current = longest.get(family);
+      if (current === undefined || survivor.until > current.until) {
+        longest.set(family, survivor);
+      }
+    }
+    const kept = new Set([...longest.values()].map((event) => event.name));
+    const trimmable = survivors
+      .filter((event) => !kept.has(event.name))
+      .sort((left, right) => left.until - right.until);
+    for (const stale of trimmable.slice(
       0,
       Math.max(0, survivors.length - MAX_EVENT_FILES),
     )) {

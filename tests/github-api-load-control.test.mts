@@ -1619,6 +1619,54 @@ test('a lease this process could not mark released is still its own, so a synchr
   }
 });
 
+test('trimming the event files never drops the longest-lived event of a family', () => {
+  const h = harness();
+  try {
+    const gate = admitRead(h);
+    const dir = join(scopeDir(h), 'cooldown');
+    const plant = (
+      kind: 'primary' | 'secondary',
+      scope: string,
+      until: number,
+      index: number,
+      resource?: string,
+    ): string => {
+      const name = `${kind}.${scope}.${String(until).padStart(15, '0')}.${String(index).padStart(16, '0')}.json`;
+      writeFileSync(
+        join(dir, name),
+        JSON.stringify({
+          schemaVersion: 1,
+          kind,
+          ...(resource ? { resource } : {}),
+          observedAt: T0,
+          until,
+          durationMs: until - T0,
+          level: 1,
+          source: 'server',
+        }),
+      );
+      return name;
+    };
+    // The only active primary event of a resource has the earliest `until`
+    // of all, followed by more shared events than the retention cap keeps.
+    const primary = plant('primary', 'core', T0 + 600_000, 0, 'core');
+    for (let index = 1; index <= 70; index += 1) {
+      plant('secondary', 'shared', T0 + 700_000 + index * 1_000, index);
+    }
+    gate.recordFailure(SECONDARY_403);
+    gate.release();
+    const names = readdirSync(dir);
+    assert.ok(names.includes(primary), 'the only primary event is kept');
+    assert.ok(names.length <= 64, `trimmed to the cap, got ${names.length}`);
+    assert.ok(
+      names.some((name) => name.startsWith('secondary.shared.')),
+      'the shared family keeps its longest event',
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('a rate-limit error inside a successful GraphQL response starts the shared cooldown', () => {
   const h = harness();
   try {

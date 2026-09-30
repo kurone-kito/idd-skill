@@ -1815,13 +1815,15 @@ existing state directory that other users can access is tightened to
 owner-only before use, and one that cannot be made private makes the request
 run uncoordinated; a filesystem that stores no POSIX modes (a Windows mount
 under WSL) cannot enforce that guarantee, so keep the state root on a native
-one. A state root that is itself a symlink is used only when its target is
-already private, and is never chmod-ed; the directories above the root, such
-as a relocated `XDG_STATE_HOME`, are the operator's own environment and are
-not inspected. A request whose host or credential cannot be verified runs
-uncoordinated instead of borrowing another scope, and so does a state
-directory that cannot be used. Nothing is refused for a coordination fault,
-only for evidence.
+one. On Windows the state lives under the per-user `LOCALAPPDATA` directory
+and relies on its inherited access controls; no ACL is inspected, so keep that
+directory private to the user. A state root that is itself a symlink is used
+only when its target is already private, and is never chmod-ed; the
+directories above the root, such as a relocated `XDG_STATE_HOME`, are the
+operator's own environment and are not inspected. A request whose host or
+credential cannot be verified runs uncoordinated instead of borrowing another
+scope, and so does a state directory that cannot be used. Nothing is refused
+for a coordination fault, only for evidence.
 
 ### Which requests are admitted
 
@@ -1917,7 +1919,9 @@ timing the cooldown is 60 seconds, doubling per consecutive throttle up to 15
 minutes, and restarting once the previous throttle is more than 30 minutes
 old. Alternating REST and GraphQL climbs the same ladder instead of restarting
 it. A throttle inside an active cooldown extends it without escalating.
-Concurrent recorders write separate files and the longest wins. The remaining
+Concurrent recorders write separate files and the longest wins. Old event
+files are trimmed to a small bound, but the longest-lived event of the shared
+cooldown and of each resource's primary cooldown is always kept. The remaining
 time follows the operating system's uptime on Linux when the event and the
 reader share a boot identity. Elsewhere (another boot, another OS) it is the
 wall-clock time left, capped at the cooldown's own length, so a backward
