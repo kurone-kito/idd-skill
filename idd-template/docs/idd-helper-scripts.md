@@ -1715,10 +1715,11 @@ Serial is the default.
   An explicit `timeout` is the caller's whole budget: the wait may use at
   most half of it and the spawn gets the remainder. Async callers wait on
   a timer, so a request already running in the same process keeps
-  completing and releasing its slot. A synchronous caller that finds only
-  this process's own async lease in the way rides on it (one request
-  over the bound) instead of waiting for a release that its blocked event
-  loop could not run. Waiters are unordered pollers bounded by their
+  completing and releasing its slot. A synchronous caller whose every
+  blocking slot is held only by this process's own async leases rides on
+  them (one request over the bound) instead of waiting for a release that
+  its blocked event loop could not run; a slot another process holds is
+  waited for as usual. Waiters are unordered pollers bounded by their
   deadline, not a queue. A known cooldown end beyond the deadline refuses
   at once without sleeping.
 - A write or unclassified request is admitted now or refused. It is never
@@ -1757,7 +1758,8 @@ stop the sessions and delete the state directory.
 
 ### Cooldown
 
-A failed request is read through the request observations (issue
+A failed request, or a successful GraphQL response that carries a
+`RATE_LIMITED` error, is read through the request observations (issue
 `#3585`) plus one more check. It is a throttle when it reads as a
 secondary limit, is an HTTP 429, carries a `retry-after`, has a GraphQL
 `RATE_LIMITED` error, or says `API rate limit already exceeded` (issue
@@ -1774,10 +1776,11 @@ minutes, and restarting once the previous throttle is more than 30 minutes
 old. Alternating REST and GraphQL climbs the same ladder instead of restarting
 it. A throttle inside an active cooldown extends it without escalating.
 Concurrent recorders write separate files and the longest wins. The remaining
-time follows the operating system's uptime where it is a real monotonic clock
-(Linux, Windows), and is bounded by the cooldown's own length elsewhere, so a
-wall-clock step never stretches a cooldown. Only a failed request records
-anything.
+time follows the operating system's uptime on Linux, where the event and the
+reader share a boot identity, and is bounded by the cooldown's own length
+elsewhere (another boot, another OS), so neither a wall-clock step nor a
+reboot stretches a cooldown. Only a failed request, or the GraphQL response
+above, records anything.
 
 `retry-after` and reset headers are visible only on `gh api --include`
 paths: a non-paginated `ghApiJson`, `ghApiJsonWithHeaders`, and the

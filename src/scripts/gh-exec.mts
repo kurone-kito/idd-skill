@@ -635,6 +635,10 @@ function execGhSync(
             ),
           },
     );
+    // A GraphQL throttle can arrive as an error inside a successful response.
+    if (gate !== null && call.prepared?.request.resource === 'graphql') {
+      gate.recordResponse(String(output));
+    }
     return output;
   } catch (error) {
     gate?.recordFailure(
@@ -665,6 +669,9 @@ async function execGhAsync(
     );
     run.child.stdin?.end();
     const { stdout } = await run;
+    if (gate !== null && call.prepared?.request.resource === 'graphql') {
+      gate.recordResponse(stdout);
+    }
     return stdout;
   } catch (error) {
     gate?.recordFailure(

@@ -158,6 +158,23 @@ function readPidNamespace() {
   pidNamespaceCache = value;
   return value;
 }
+let bootIdCache = null;
+/** The Linux `boot_id`, else undefined: no other supported OS exposes one cheaply. */
+function readBootId() {
+  if (bootIdCache !== null) return bootIdCache;
+  let value;
+  if (process.platform === 'linux') {
+    try {
+      value =
+        readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() ||
+        undefined;
+    } catch {
+      value = undefined;
+    }
+  }
+  bootIdCache = value;
+  return value;
+}
 function sleepBlocking(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -472,15 +489,25 @@ function trySlot(ctx, slot) {
   }
   return { kind: 'busy' };
 }
-/** True when a live lease in this scope belongs to this very process. */
-function holdsOwnLease(ctx) {
+/**
+ * True when every slot is held, and held only by live leases of this very
+ * process. Only then can waiting never succeed: the event loop that would
+ * release them is the one a synchronous wait blocks. A slot another process
+ * holds (or a free one) will clear without this process, so the request
+ * waits for it as usual instead of running beyond the bound.
+ */
+function onlyThisProcessBlocks(ctx) {
   for (let slot = 0; slot < ctx.maxConcurrent; slot += 1) {
+    let own = false;
     for (const entry of listSlot(ctx, slot)) {
       const lease = readLease(ctx, entry);
-      if (lease.record?.pid === ctx.pid && isLive(ctx, lease)) return true;
+      if (!isLive(ctx, lease)) continue;
+      if (lease.record?.pid !== ctx.pid) return false;
+      own = true;
     }
+    if (!own) return false;
   }
-  return false;
+  return true;
 }
 function finiteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -524,6 +551,9 @@ function readEvents(ctx) {
       ...(finiteNumber(parsed.observedUptimeMs)
         ? { observedUptimeMs: parsed.observedUptimeMs }
         : {}),
+      ...(typeof parsed.bootId === 'string' && parsed.bootId.length > 0
+        ? { bootId: parsed.bootId }
+        : {}),
       until: parsed.until,
       // Whatever the file says, a cooldown is bounded.
       durationMs: Math.min(Math.max(parsed.durationMs, 0), MAX_COOLDOWN_MS),
@@ -534,20 +564,25 @@ function readEvents(ctx) {
   return events;
 }
 /**
- * Milliseconds still to wait for one event. On the boot that wrote it the
- * remainder is the duration minus the OS uptime elapsed, which a wall-clock
- * step cannot change. Across a reboot, or where the uptime is itself
- * derived from the wall clock, it is bounded by the duration chosen when
- * the event was written, so a clock that moves backwards never stretches a
- * cooldown past its own length.
+ * Milliseconds still to wait for one event. On the very boot that wrote it
+ * (an event and this process report the same boot identity) the remainder
+ * is the duration minus the OS uptime elapsed, which a wall-clock step
+ * cannot change. Anywhere else, including across a reboot (whose new uptime
+ * would otherwise be mistaken for time elapsed since the event) and where
+ * the OS names no boot, it is bounded by the duration chosen when the event
+ * was written, so a clock that moves backwards never stretches a cooldown
+ * past its own length.
  */
 function remainingMs(ctx, event, now) {
-  const uptime = ctx.uptimeMs();
   if (
-    event.observedUptimeMs !== undefined &&
-    uptime >= event.observedUptimeMs
+    event.bootId !== undefined &&
+    event.bootId === ctx.bootId &&
+    event.observedUptimeMs !== undefined
   ) {
-    return event.durationMs - (uptime - event.observedUptimeMs);
+    const uptime = ctx.uptimeMs();
+    if (uptime >= event.observedUptimeMs) {
+      return event.durationMs - (uptime - event.observedUptimeMs);
+    }
   }
   return Math.min(event.until - now, event.durationMs);
 }
@@ -664,7 +699,9 @@ function recordThrottle(ctx, verdict) {
     kind,
     ...(resource !== undefined ? { resource } : {}),
     observedAt: now,
-    observedUptimeMs: ctx.uptimeMs(),
+    ...(ctx.bootId !== undefined
+      ? { observedUptimeMs: ctx.uptimeMs(), bootId: ctx.bootId }
+      : {}),
     until: now + durationMs,
     durationMs,
     level,
@@ -724,7 +761,10 @@ export function classifyThrottle(observation, evidence, requestResource) {
     ...(retryAfterSec !== undefined ? { retryAfterSec } : {}),
     ...(resetEpochSec !== undefined ? { resetEpochSec } : {}),
   };
-  if (observation.remaining === 0) {
+  // The secondary wording wins over a `remaining` of 0 read from the same
+  // failure: the throttle is account-wide, and one resource being empty says
+  // nothing about the others.
+  if (observation.remaining === 0 && !observation.signals.secondaryThrottling) {
     const resource =
       typeof observation.resource === 'string' &&
       observation.resource !== 'unknown'
@@ -787,6 +827,7 @@ function buildContext(identity, policy, runtime) {
       now: runtime.now ?? Date.now,
       monotonic: runtime.monotonic ?? (() => performance.now()),
       uptimeMs: runtime.uptimeMs ?? (() => osUptime() * 1000),
+      bootId: 'bootId' in runtime ? runtime.bootId : readBootId(),
       sleepSync: runtime.sleepSync ?? sleepBlocking,
       sleep: runtime.sleep ?? ((ms) => delay(ms)),
       isPidAlive: runtime.isPidAlive ?? defaultIsPidAlive,
@@ -869,7 +910,7 @@ function step(ctx, request, deadlineAt, synchronous) {
   if (!waits) return { kind: 'refuse', detail: busy };
   // A sync waiter cannot see this process's own async lease released: the
   // event loop that would release it is blocked. Ride on it instead.
-  if (synchronous && holdsOwnLease(ctx))
+  if (synchronous && onlyThisProcessBlocks(ctx))
     return { kind: 'admitted', lease: null };
   if (remainingDeadline <= 0) {
     return { kind: 'refuse', detail: { ...busy, outcome: 'deadline-expired' } };
@@ -882,25 +923,32 @@ function step(ctx, request, deadlineAt, synchronous) {
 }
 function makeGate(ctx, request, lease, waitedMs) {
   let released = false;
+  const recordFailure = (evidence) => {
+    try {
+      const observation = observeGhFailure(evidence, {
+        graphql: request.resource === 'graphql',
+        paginated: request.paginated === true,
+      });
+      const source = evidence;
+      const verdict = classifyThrottle(
+        observation,
+        { stderr: source?.stderr, stdout: source?.stdout },
+        request.resource,
+      );
+      if (verdict) recordThrottle(ctx, verdict);
+    } catch {
+      // Recording is best effort: it must not replace the call's outcome.
+    }
+  };
   return {
     joined: lease === null,
     waitedMs,
-    recordFailure(evidence) {
-      try {
-        const observation = observeGhFailure(evidence, {
-          graphql: request.resource === 'graphql',
-          paginated: request.paginated === true,
-        });
-        const source = evidence;
-        const verdict = classifyThrottle(
-          observation,
-          { stderr: source?.stderr, stdout: source?.stdout },
-          request.resource,
-        );
-        if (verdict) recordThrottle(ctx, verdict);
-      } catch {
-        // Recording is best effort: it must not replace the call's outcome.
+    recordFailure,
+    recordResponse(text) {
+      if (request.resource !== 'graphql' || !text.includes('RATE_LIMITED')) {
+        return;
       }
+      recordFailure({ stderr: '', stdout: text });
     },
     release() {
       if (released || lease === null) return;

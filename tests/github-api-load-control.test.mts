@@ -79,6 +79,7 @@ function harness(): Harness {
         now: () => state.clock.wall,
         monotonic: () => state.clock.mono,
         uptimeMs: () => state.clock.mono + 5_000_000,
+        bootId: 'boot-a',
         sleepSync: (ms) => {
           state.slept.push(ms);
           state.onSleep?.(ms);
@@ -389,11 +390,31 @@ test('a bounded concurrency override admits that many holders and refuses the ne
         h.runtime({ pid: 3333 }),
       ),
     );
-    // A value outside 1..8 is clamped, not trusted.
-    const clamped = { ...POLICY, maxConcurrent: 99 };
-    assert.ok(clamped.maxConcurrent > 8);
     a.release();
     b.release();
+    // A value outside 1..8 is clamped to 8, not trusted: eight admissions
+    // succeed and the ninth is refused.
+    const wide = { ...POLICY, maxConcurrent: 99 };
+    for (let pid = 4000; pid <= 4008; pid += 1) h.alive.add(pid);
+    const held = Array.from({ length: 8 }, (_, index) => {
+      const gate = admitRequestSync(
+        IDENTITY,
+        wide,
+        { classification: 'write' },
+        h.runtime({ pid: 4000 + index }),
+      );
+      assert.ok(gate);
+      return gate;
+    });
+    refusalOf(() =>
+      admitRequestSync(
+        IDENTITY,
+        wide,
+        { classification: 'write' },
+        h.runtime({ pid: 4008 }),
+      ),
+    );
+    for (const gate of held) gate.release();
   } finally {
     h.cleanup();
   }
@@ -1251,7 +1272,11 @@ test('without a usable uptime (a reboot) the remainder is still bounded by the c
         IDENTITY,
         POLICY,
         { classification: 'write' },
-        h.runtime({ monotonic: () => 0, uptimeMs: () => 1_000 }),
+        h.runtime({
+          monotonic: () => 0,
+          uptimeMs: () => 1_000,
+          bootId: 'boot-b',
+        }),
       ),
     );
     assert.equal(
@@ -1263,10 +1288,44 @@ test('without a usable uptime (a reboot) the remainder is still bounded by the c
       IDENTITY,
       POLICY,
       { classification: 'write' },
-      h.runtime({ monotonic: () => 0, uptimeMs: () => 1_000 }),
+      h.runtime({
+        monotonic: () => 0,
+        uptimeMs: () => 1_000,
+        bootId: 'boot-b',
+      }),
     );
     assert.ok(gate);
     gate.release();
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('an event from an earlier boot is not revived by a later boot whose uptime passes the recorded one', () => {
+  const h = harness();
+  try {
+    throttle(h, SECONDARY_403);
+    // A day later, after a reboot: the new boot's uptime is now larger than
+    // the uptime the event recorded, but it is a different boot. The wall
+    // clock says the cooldown ended long ago.
+    h.clock.wall = T0 + 86_400_000;
+    const gate = admitRequestSync(
+      IDENTITY,
+      POLICY,
+      { classification: 'write' },
+      h.runtime({ bootId: 'boot-b', uptimeMs: () => 9_000_000 }),
+    );
+    assert.ok(gate, 'the old event does not refuse a request');
+    gate.release();
+    // Without any boot identity the uptime is not trusted either.
+    const none = admitRequestSync(
+      IDENTITY,
+      POLICY,
+      { classification: 'write' },
+      h.runtime({ bootId: undefined, uptimeMs: () => 9_000_000 }),
+    );
+    assert.ok(none);
+    none.release();
   } finally {
     h.cleanup();
   }
@@ -1361,6 +1420,126 @@ test('the credential never reaches the state directory', () => {
         file,
       );
       assert.equal(file.includes('credential-a'), false, file);
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('a secondary throttle that also reports remaining 0 is shared, not one resource', () => {
+  const evidence = throttleEvidence(
+    'gh: You have exceeded a secondary rate limit. (HTTP 403)',
+    'HTTP/2.0 403 Forbidden\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 4102444800\nX-RateLimit-Resource: core\n\n{}',
+  );
+  const observation = observeGhFailure(evidence);
+  assert.equal(observation.remaining, 0);
+  assert.deepEqual(classifyThrottle(observation, evidence, 'core'), {
+    kind: 'shared',
+  });
+  const h = harness();
+  try {
+    throttle(h, evidence, 'core');
+    // Every other resource and protocol is blocked too.
+    for (const resource of ['graphql', 'search', undefined]) {
+      refusalOf(() =>
+        admitRequestSync(
+          IDENTITY,
+          POLICY,
+          { classification: 'write', resource },
+          h.runtime(),
+        ),
+      );
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('a synchronous request joins its own lease only when every blocker is this process', async () => {
+  const h = harness();
+  try {
+    const policy = { ...POLICY, maxConcurrent: 2 };
+    const own = await admitRequest(
+      IDENTITY,
+      policy,
+      { classification: 'read' },
+      h.runtime({ pid: 1111 }),
+    );
+    assert.ok(own);
+    // A second slot is held by ANOTHER live process: joining would put three
+    // requests in flight against a bound of two, so this request waits.
+    plantLease(h, 1, liveRecord(3333), IDENTITY, 1);
+    const { detail } = refusalOf(() =>
+      admitRequestSync(
+        IDENTITY,
+        policy,
+        { classification: 'read', deadlineMs: 100 },
+        h.runtime({ pid: 1111 }),
+      ),
+    );
+    assert.equal(detail.outcome, 'deadline-expired');
+    assert.ok(h.slept.length > 0, 'it waited instead of joining');
+    // Once the other holder is gone, only this process blocks: it joins.
+    h.alive.delete(3333);
+    const own2 = await admitRequest(
+      IDENTITY,
+      policy,
+      { classification: 'read' },
+      h.runtime({ pid: 1111 }),
+    );
+    assert.ok(own2);
+    const before = h.slept.length;
+    const joined = admitRequestSync(
+      IDENTITY,
+      policy,
+      { classification: 'read', deadlineMs: 60_000 },
+      h.runtime({ pid: 1111 }),
+    );
+    assert.ok(joined);
+    assert.equal(joined.joined, true);
+    assert.equal(h.slept.length, before, 'no wait for its own release');
+    joined.release();
+    own2.release();
+    own.release();
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('a rate-limit error inside a successful GraphQL response starts the shared cooldown', () => {
+  const h = harness();
+  try {
+    const body = JSON.stringify({
+      data: null,
+      errors: [{ type: 'RATE_LIMITED', message: 'slow down' }],
+    });
+    const gate = admitRead(h, IDENTITY, 'graphql');
+    gate.recordResponse('{"data":{"viewer":{"login":"x"}}}');
+    assert.equal(
+      eventFiles(h).length,
+      0,
+      'an ordinary response records nothing',
+    );
+    gate.recordResponse(body);
+    gate.release();
+    assert.equal(eventFiles(h).length, 1);
+    refusalOf(() =>
+      admitRequestSync(
+        IDENTITY,
+        POLICY,
+        { classification: 'write', resource: 'core' },
+        h.runtime(),
+      ),
+    );
+    // A REST request never reads a response body for GraphQL evidence.
+    const h2 = harness();
+    try {
+      const rest = admitRead(h2, IDENTITY, 'core');
+      rest.recordResponse(body);
+      rest.release();
+      assert.equal(eventFiles(h2).length, 0);
+    } finally {
+      h2.cleanup();
     }
   } finally {
     h.cleanup();

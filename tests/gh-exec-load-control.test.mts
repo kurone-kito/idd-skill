@@ -70,6 +70,10 @@ if (mode === 'already-exceeded') {
   process.stderr.write('GraphQL: API rate limit already exceeded for user ID 12345.\n');
   process.exit(1);
 }
+if (mode === 'graphql-limited') {
+  process.stdout.write('{"data":null,"errors":[{"type":"RATE_LIMITED","message":"slow down"}]}');
+  process.exit(0);
+}
 if (mode === 'plain-failure') {
   process.stderr.write('gh: Server Error (HTTP 502)\n');
   process.exit(1);
@@ -805,6 +809,19 @@ test('no gh configuration at all means github.com', () => {
       }),
     ]);
   });
+});
+
+test('a rate-limit error inside a successful GraphQL response starts the cooldown through ghGraphql', () => {
+  const f = fixture();
+  f.enable({ maxWaitMs: 1_000 });
+  f.mode('graphql-limited');
+  const response = ghGraphql('query { viewer { login } }', {});
+  assert.deepEqual((response as { data: unknown }).data, null);
+  assert.equal(stateFiles(f, 'cooldown').length, 1);
+  f.mode('ok');
+  const spawned = f.calls().length;
+  refusalOf(() => ghText(['api', 'repos/o/r']));
+  assert.equal(f.calls().length, spawned);
 });
 
 test('a failed identity lookup runs uncoordinated and is not retried on every call', () => {
