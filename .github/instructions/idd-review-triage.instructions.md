@@ -17,15 +17,15 @@ E1; otherwise continue to E14/E15 in `idd-review-fix.instructions.md`.
 
 ## E4 — Classify and score ReviewItems_snapshot
 
-Once per triage pass (not per item), snapshot the claimed issue body.
-Trust an out-of-scope statement for the scope fence only if it
-predates the B2 plan (`idd-work.instructions.md`): a later author
-edit must not force-reject a finding. Fetch `userContentEdits`, not
-`updatedAt`. Paginate until `pageInfo.hasNextPage` is false;
-incomplete pagination fails closed. Each `diff` is the full post-edit
-body. Use the latest `editedAt` at or before the plan post, else the
-creation-time body — never the live body. A statement absent from
-that snapshot needs a maintainer comment.
+Once per triage pass, snapshot the claimed issue body. Trust an
+out-of-scope statement only if it predates the B2 plan
+(`idd-work.instructions.md`): a later author edit must not
+force-reject a finding. Fetch `userContentEdits`, not `updatedAt`,
+paginating until `pageInfo.hasNextPage` is false; a missing, failed, or
+incomplete fetch fails closed. Each `diff` is the full post-edit body:
+use the latest `editedAt` at or before the plan post, else the
+creation-time body, never the live body. A statement absent from that
+snapshot needs a maintainer comment.
 
 For each item in ReviewItems_snapshot, first classify it:
 
@@ -165,17 +165,15 @@ scope-fenced item, an Accepted item mid-fix
   the PR's total, paginated
   `copilot-pull-request-reviewer[bot]` review count (PR-wide, not
   per-claim; never one page's `length`) hits the threshold, an
-  undispositioned Low-severity (E4) item is eligible. Urgency is
-  ignored. Clause: `round <round>/<threshold>`.
+  undispositioned Low-severity (E4) item is eligible. Clause:
+  `round <round>/<threshold>`.
 - **Adopt-now urgency** (`deferByUrgency`, default `off` — E4/E5
   unchanged when off; `low`/`low-and-medium` from round 1).
-  Eligibility is the higher of the present E4 tier and Copilot's
-  label — the `alt="<Level> severity"` text next to its
-  `#discussion_r<id>` link in the Open section of any
-  `<!-- ccr-overview-v2 -->` review. The floor never replaces E4's
-  tier. Under `low` and `low-and-medium`, unknown severity is not
-  Medium and Accept forced still stands. **Adopt-now** (never
-  eligible) when any holds: (a) a regression this PR's diff
+  Eligibility is the higher of the E4 tier and Copilot's label — the
+  `alt="<Level> severity"` text next to its `#discussion_r<id>` link
+  in the Open section of any `<!-- ccr-overview-v2 -->` review. The
+  floor never replaces E4's tier: unknown severity never defers here.
+  **Adopt-now** (never eligible) when any holds: (a) a regression this PR's diff
   introduced relative to its merge base; (b) the claimed issue's
   acceptance criteria or requirement are unmet; (c) a
   defect in shipped behavior — code, helper output, CI result, or
@@ -187,24 +185,27 @@ scope-fenced item, an Accepted item mid-fix
   eligible within the ceiling (`low`: Low; `low-and-medium`: Low or
   Medium — High never eligible). A null urgency still defers. Clause:
   `adopt-now: no; severity <tier>[, Copilot <label>]`.
-- **`severity-tiered`** replaces that allowlist from round 1. Urgency
-  `very-low` < `low` < `medium` < `high`. Anchors do not override
-  the matrix; regression, unmet requirements, correctness, and safety
-  do not either: `very-low` wording or formatting that does not
-  change behavior; `low` extra tests, comments, or naming for
-  already-correct behavior; `medium` local maintainability, or a
-  small correctness risk that is not a regression of this PR;
-  `high` (a)-(c). Unknown E4 severity counts as Medium; the floor
-  only raises. Unscored urgency does not defer, including Low. High
-  defers only at `very-low` (Accept forced does not win); Medium or
-  unknown, not at `high`; Low at every scored urgency. Clause:
+- **`severity-tiered`** replaces that allowlist from round 1. Judge
+  validity and E4 severity first (a claim false on evidence is
+  Rejected), then urgency by the fix's marginal review-wave cost:
+  `very-low` < `low` < `medium` < `high`. The matrix decides;
+  regression, unmet requirements, correctness, and safety never
+  override it. `very-low`:
+  wording/formatting only; `low`: extra tests, comments, or naming for
+  already-correct behavior; `medium`: local maintainability, or a
+  correctness risk short of `high`; `high`: an adopt-now (a)-(c) condition.
+  Unknown E4 severity counts as Medium; the floor only raises.
+  Unscored urgency never defers. High defers only at `very-low`
+  (Accept forced does not win); Medium or unknown, not at `high`; Low
+  at every scored urgency. Clause:
   `urgency <level>; severity <tier>[, Copilot <label>]`.
 
-Bundle one E5 pass into one follow-up issue (E6; do not append). Each
-keeps an AC bullet, exactly one `Refs #<originating-issue>` line, and
-the
+Bundle every item deferred in one E5 pass into one follow-up issue
+(E6; do not append). Each keeps an AC bullet, exactly one
+`Refs #<originating-issue>` line, and the
 `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
-marker, then Stage 2 narrow auto-release, not the Stage 1 hold. See
+marker, then issue-authoring's Stage 2 narrow auto-release, not the Stage 1
+hold. See
 [rationale](../../docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer).
 
 ## E6 — Post disposition replies
