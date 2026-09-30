@@ -754,6 +754,10 @@ if (mode === 'plain-ok') {
       extensions: { cost: { actualQueryCost: 9 } },
     }),
   )});
+} else if (mode === 'allow-paginated') {
+  process.stdout.write('{"partial":1}\\n');
+  process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n');
+  process.exit(1);
 } else if (mode === 'paginate') {
   process.stdout.write(${JSON.stringify(`{"${pageSecret}":1}\n{"${pageSecret}":2}\n`)});
 } else {
@@ -957,6 +961,17 @@ if (mode === 'plain-ok') {
     assert.ok(last);
     assert.equal(last.classification, 'ok');
     assert.equal(last.graphqlCost, 'unknown');
+
+    setMode('allow-paginated');
+    assert.deepEqual(
+      ghApiJson(apiPath, { paginate: true, allowStatuses: [1] }),
+      [{ partial: 1 }],
+    );
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.status, 403);
+    assert.equal(last.classification, 'primary-exhaustion');
+    assert.equal(last.httpRequestCount, 'unknown');
 
     setMode('paginate');
     assert.deepEqual(ghApiJson(apiPath, { paginate: true }), [

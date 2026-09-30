@@ -621,6 +621,9 @@ export function ghApiJson(path, options = {}) {
     options.timeout ??
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   let raw;
+  // Set when an allow-listed non-zero exit is tolerated below, so the
+  // paginated result records the original failure, not a clean success.
+  let toleratedFailure = null;
   try {
     raw = execFileSync('gh', args, {
       encoding: 'utf8',
@@ -637,6 +640,7 @@ export function ghApiJson(path, options = {}) {
       );
       throw tagGhCommandError(error);
     }
+    toleratedFailure = { error };
     const stdout = String(failure?.stdout ?? '');
     const included = observeHttp ? tryParseIncludedBody(stdout) : null;
     // An envelope parser turns an empty body into `{}`. That is fine for
@@ -679,8 +683,11 @@ export function ghApiJson(path, options = {}) {
   }
   if (paginate) {
     const data = parsePaginatedGhNdjson(raw);
+    const tolerated = toleratedFailure;
     recordTransportObservation(() =>
-      observeGhSuccess({ data, paginated: true }),
+      tolerated
+        ? observeGhFailure(tolerated.error, { paginated: true })
+        : observeGhSuccess({ data, paginated: true }),
     );
     return data;
   }
