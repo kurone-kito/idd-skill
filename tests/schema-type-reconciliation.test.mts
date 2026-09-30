@@ -239,7 +239,7 @@ interface PolicyConfigFile {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
     deferAfterRounds?: number;
-    deferByUrgency?: 'off' | 'low' | 'low-and-medium';
+    deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
     subagentWaitCeiling?: string;
     delegate?: {
       command: string;
@@ -298,6 +298,13 @@ interface PolicyConfigFile {
       enabled?: boolean;
       maxRecords?: number;
       path?: string;
+    };
+    readCache?: {
+      enabled?: boolean;
+      maxAge?: string;
+      maxBytes?: number;
+      retention?: string;
+      directory?: string;
     };
   };
 }
@@ -1283,6 +1290,14 @@ const policyConfigFixture = {
     maxValidity: 'PT24H',
     maxParkedChanges: 10,
   },
+  githubApi: {
+    readCache: {
+      enabled: false,
+      maxAge: 'PT5M',
+      maxBytes: 104857600,
+      retention: 'PT24H',
+    },
+  },
 } satisfies PolicyConfigFile;
 
 const preMergeReadinessFixture = {
@@ -1609,6 +1624,7 @@ const postIddMarkerKeys = [
   'commentId',
   'url',
   'warnings',
+  'operationLocal',
 ] as const satisfies readonly (keyof PostIddMarkerResult)[];
 
 const postIddMarkerFixture = {

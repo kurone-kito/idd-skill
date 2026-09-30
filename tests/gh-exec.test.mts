@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1607,4 +1614,860 @@ test('combineOwnerRepoFlags: --owner with an empty-string --repo throws the same
     () => combineOwnerRepoFlags({ owner: 'kurone-kito', repo: '' }),
     /--owner requires --repo <name>/,
   );
+});
+
+const READ_CACHE_ENTRY = /^[0-9a-f]{64}\.json$/;
+
+function readCacheFixture(): {
+  root: string;
+  cacheDir: string;
+  workspace: string;
+  argsFile: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), 'idd-gh-read-cache-'));
+  const workspace = join(root, 'workspace');
+  mkdirSync(workspace);
+  return {
+    root,
+    cacheDir: join(root, 'cache'),
+    workspace,
+    argsFile: join(root, 'args.jsonl'),
+  };
+}
+
+function readCachePolicy(directory: string, enabled = true) {
+  return {
+    enabled,
+    maxAgeMs: 300_000,
+    maxBytes: 104857600,
+    retentionMs: 86_400_000,
+    directory,
+  };
+}
+
+function recordingGh(
+  argsFile: string,
+  bodySource: string,
+  statusJson = '{"hosts":{"github.com":[{"state":"success"}]}}',
+): string {
+  return `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write(${JSON.stringify(statusJson)});
+  process.exit(0);
+}
+if (args[0] === 'auth' && args[1] === 'token') {
+  process.stdout.write('keyring-token\\n');
+  process.exit(0);
+}
+fs.appendFileSync(${JSON.stringify(argsFile)}, JSON.stringify(args) + '\\n');
+${bodySource}
+`;
+}
+
+function recordedArgs(argsFile: string): string[][] {
+  if (!existsSync(argsFile)) return [];
+  const text = readFileSync(argsFile, 'utf8').trim();
+  if (!text) return [];
+  return text.split('\n').map((line) => JSON.parse(line) as string[]);
+}
+
+function cacheEntryNames(cacheDir: string): string[] {
+  const entries = join(cacheDir, 'entries');
+  if (!existsSync(entries)) return [];
+  return readdirSync(entries).filter((name) => READ_CACHE_ENTRY.test(name));
+}
+
+test('ghApiJson readCache write classification stays uncached when enabled (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(JSON.stringify({ ok: true }));',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        readCache: {
+          classification: 'write' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          defaultDirectory: paths.cacheDir,
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      const recorded = recordedArgs(paths.argsFile);
+      assert.equal(recorded.length, 2);
+      for (const args of recorded) {
+        assert.equal(args.includes('--include'), false);
+        assert.deepEqual(args, ['api', 'repos/o/r']);
+      }
+      assert.equal(
+        existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+        false,
+      );
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache resolves github.com from GITHUB_SERVER_URL with several configured hosts (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}\');',
+      '{"hosts":{"github.com":[{"state":"success"}],"ghe.example.com":[{"state":"success"}]}}',
+    ),
+  );
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+      const readCache = {
+        classification: 'read' as const,
+        policy: readCachePolicy(paths.cacheDir),
+        workspaceRoot: paths.workspace,
+        repository: 'o/r',
+        credentialMaterial: 'credential-sentinel',
+        requestShape: { path: 'repos/o/r' },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+      // The server URL already names the host, so two configured hosts no
+      // longer force a bypass: the second read is a cache hit.
+      assert.equal(recordedArgs(paths.argsFile).length, 1);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache stays uncached when extraArgs overrides the hostname (#3587)', () => {
+  for (const extraArgs of [
+    ['--hostname', 'other.example.com'],
+    ['--hostname=other.example.com'],
+  ]) {
+    const paths = readCacheFixture();
+    const restore = stubGh(
+      recordingGh(
+        paths.argsFile,
+        'process.stdout.write(JSON.stringify({ ok: true }));',
+      ),
+    );
+    try {
+      withGhHostEnv({}, () => {
+        const options = {
+          extraArgs,
+          readCache: {
+            classification: 'read' as const,
+            policy: readCachePolicy(paths.cacheDir),
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            credentialMaterial: 'credential-sentinel',
+            requestShape: { path: 'repos/o/r' },
+          },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        // Both calls reach gh, and nothing is stored under the wrong host.
+        const recorded = recordedArgs(paths.argsFile);
+        assert.equal(recorded.length, 2, extraArgs.join(' '));
+        for (const args of recorded) {
+          assert.equal(args.includes('--include'), false);
+        }
+        assert.deepEqual(cacheEntryNames(paths.cacheDir), []);
+      });
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('ghApiJson readCache pins a request to the host it keyed the entry for (#3587)', () => {
+  const ghesStatus = '{"hosts":{"ghe.example.com":[{"state":"success"}]}}';
+  const cases = [
+    {
+      label: 'single request',
+      paginate: false,
+      body: 'process.stdout.write(\'HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}\');',
+      args: ['api', 'repos/o/r', '--hostname', 'ghe.example.com', '--include'],
+    },
+    {
+      label: 'paginated',
+      paginate: true,
+      body: 'process.stdout.write(\'{"id":1}\\n\');',
+      args: [
+        'api',
+        'repos/o/r',
+        '--hostname',
+        'ghe.example.com',
+        '--paginate',
+        '--jq',
+        '.[]',
+      ],
+    },
+  ];
+  for (const scenario of cases) {
+    const paths = readCacheFixture();
+    const restore = stubGh(
+      recordingGh(paths.argsFile, scenario.body, ghesStatus),
+    );
+    try {
+      withGhHostEnv({}, () => {
+        ghApiJson('repos/o/r', {
+          paginate: scenario.paginate,
+          readCache: {
+            classification: 'read' as const,
+            policy: readCachePolicy(paths.cacheDir),
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            credentialMaterial: 'credential-sentinel',
+            requestShape: { path: 'repos/o/r' },
+          },
+        });
+        // The entry is keyed for the sole GHES host, so the request must
+        // target it explicitly rather than rely on gh's default host.
+        assert.deepEqual(
+          recordedArgs(paths.argsFile)[0],
+          scenario.args,
+          scenario.label,
+        );
+      });
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('ghApiJson readCache with blank credential material stays uncached (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(JSON.stringify({ ok: true }));',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      for (const credentialMaterial of ['', '   ']) {
+        const options = {
+          readCache: {
+            classification: 'read' as const,
+            policy: readCachePolicy(paths.cacheDir),
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            credentialMaterial,
+            defaultDirectory: paths.cacheDir,
+          },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      }
+      const recorded = recordedArgs(paths.argsFile);
+      assert.equal(recorded.length, 2);
+      for (const args of recorded) {
+        assert.deepEqual(args, ['api', 'repos/o/r']);
+      }
+      assert.equal(
+        existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+        false,
+      );
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache stays uncached when the policy is disabled (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(JSON.stringify({ ok: true }));',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        readCache: {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir, false),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          defaultDirectory: paths.cacheDir,
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      const recorded = recordedArgs(paths.argsFile);
+      assert.equal(recorded.length, 2);
+      for (const args of recorded) {
+        assert.deepEqual(args, ['api', 'repos/o/r']);
+      }
+      assert.equal(
+        existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+        false,
+      );
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache without an injected policy stays uncached (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(JSON.stringify({ ok: true }));',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        readCache: {
+          classification: 'read' as const,
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          defaultDirectory: paths.cacheDir,
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      const recorded = recordedArgs(paths.argsFile);
+      assert.equal(recorded.length, 2);
+      for (const args of recorded) {
+        assert.equal(args.includes('--include'), false);
+      }
+      assert.equal(
+        existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+        false,
+      );
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache reuses one included response for a later hint read (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}\');',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        readCache: {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          requestShape: { path: 'repos/o/r' },
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      const recorded = recordedArgs(paths.argsFile);
+      assert.equal(recorded.length, 1);
+      assert.deepEqual(recorded[0], ['api', 'repos/o/r', '--include']);
+      const names = cacheEntryNames(paths.cacheDir);
+      assert.equal(names.length, 1);
+      const stored = readFileSync(
+        join(paths.cacheDir, 'entries', names[0] ?? ''),
+        'utf8',
+      );
+      assert.equal(stored.includes('credential-sentinel'), false);
+      assert.equal(stored.includes('GH_TOKEN'), false);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+function failsAfterFirstGh(
+  argsFile: string,
+  counterFile: string,
+  stderrLine: string,
+): string {
+  return recordingGh(
+    argsFile,
+    `const counter = ${JSON.stringify(counterFile)};
+const seen = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) : 0;
+fs.writeFileSync(counter, String(seen + 1));
+if (seen === 0) {
+  process.stdout.write('HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}');
+} else {
+  process.stderr.write(${JSON.stringify(`${stderrLine}\n`)});
+  process.exit(1);
+}`,
+  );
+}
+
+test('ghApiJson readCache drops the stored 200 when a strict-fresh read throws a 404 or 410 (#3587)', () => {
+  for (const [status, line] of [
+    [404, 'gh: Not Found (HTTP 404)'],
+    [410, 'gh: Gone (HTTP 410)'],
+  ] as const) {
+    const paths = readCacheFixture();
+    const restore = stubGh(
+      failsAfterFirstGh(paths.argsFile, join(paths.root, 'counter'), line),
+    );
+    try {
+      withGhHostEnv({}, () => {
+        const readCache = {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          requestShape: { path: 'repos/o/r' },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+        assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+        // The caller still sees the thrown failure it would see uncached.
+        assert.throws(
+          () =>
+            ghApiJson('repos/o/r', {
+              readCache: { ...readCache, mode: 'strict-fresh' },
+            }),
+          new RegExp(`HTTP ${status}`),
+          `${status}`,
+        );
+        assert.deepEqual(cacheEntryNames(paths.cacheDir), [], `${status}`);
+      });
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('ghApiJson readCache keeps the stored 200 when a strict-fresh read throws a 5xx (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    failsAfterFirstGh(
+      paths.argsFile,
+      join(paths.root, 'counter'),
+      'gh: Internal Server Error (HTTP 500)',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const readCache = {
+        classification: 'read' as const,
+        policy: readCachePolicy(paths.cacheDir),
+        workspaceRoot: paths.workspace,
+        repository: 'o/r',
+        credentialMaterial: 'credential-sentinel',
+        requestShape: { path: 'repos/o/r' },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+      assert.throws(
+        () =>
+          ghApiJson('repos/o/r', {
+            readCache: { ...readCache, mode: 'strict-fresh' },
+          }),
+        /HTTP 500/,
+      );
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache stores a paginated aggregate without --include (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'{"id":1}\\n{"id":2}\\n\');',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        paginate: true,
+        readCache: {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          requestShape: { path: 'repos/o/r', paginate: true },
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), [{ id: 1 }, { id: 2 }]);
+      assert.deepEqual(ghApiJson('repos/o/r', options), [{ id: 1 }, { id: 2 }]);
+      const recorded = recordedArgs(paths.argsFile);
+      assert.equal(recorded.length, 1);
+      assert.deepEqual(recorded[0], [
+        'api',
+        'repos/o/r',
+        '--paginate',
+        '--jq',
+        '.[]',
+      ]);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache keeps different request bodies in different entries (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\n\\n{"ok":true}\');',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const base = {
+        readCache: {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+        },
+      };
+      ghApiJson('repos/o/r', { ...base, input: '{"q":"alpha"}' });
+      ghApiJson('repos/o/r', { ...base, input: '{"q":"beta"}' });
+      assert.equal(recordedArgs(paths.argsFile).length, 2);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 2);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache hashes the keyring token when no env token is set (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\n\\n{"ok":true}\');',
+    ),
+  );
+  const previousGh = process.env.GH_TOKEN;
+  const previousGithub = process.env.GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        readCache: {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          defaultDirectory: paths.cacheDir,
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.equal(recordedArgs(paths.argsFile).length, 1);
+      const names = cacheEntryNames(paths.cacheDir);
+      assert.equal(names.length, 1);
+      const stored = readFileSync(
+        join(paths.cacheDir, 'entries', names[0] ?? ''),
+        'utf8',
+      );
+      assert.equal(stored.includes('keyring-token'), false);
+    });
+  } finally {
+    if (previousGh === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = previousGh;
+    if (previousGithub === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previousGithub;
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache stays uncached when several gh hosts are configured (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(`
+const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write('{"hosts":{"github.com":[],"ghe.example":[]}}');
+  process.exit(0);
+}
+process.stdout.write(JSON.stringify({ ok: true }));
+`);
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        readCache: {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          defaultDirectory: paths.cacheDir,
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      assert.equal(
+        existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+        false,
+      );
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache does not store a tolerated paginated failure (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(`
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write('{"hosts":{"github.com":[{"state":"success"}]}}');
+  process.exit(0);
+}
+fs.appendFileSync(${JSON.stringify(paths.argsFile)}, JSON.stringify(args) + '\\n');
+process.stdout.write('{"id":1}\\n');
+process.exit(1);
+`);
+  try {
+    withGhHostEnv({}, () => {
+      const options = {
+        paginate: true,
+        allowStatuses: [1],
+        readCache: {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+        },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', options), [{ id: 1 }]);
+      assert.deepEqual(ghApiJson('repos/o/r', options), [{ id: 1 }]);
+      assert.equal(recordedArgs(paths.argsFile).length, 2);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 0);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+function withTokenEnv(
+  values: {
+    GH_TOKEN?: string;
+    GITHUB_TOKEN?: string;
+    GH_ENTERPRISE_TOKEN?: string;
+    GITHUB_ENTERPRISE_TOKEN?: string;
+  },
+  run: () => void,
+): void {
+  const keys = [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+  ] as const;
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) {
+    const value = values[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    run();
+  } finally {
+    for (const key of keys) {
+      const prior = previous.get(key);
+      if (prior === undefined) delete process.env[key];
+      else process.env[key] = prior;
+    }
+  }
+}
+
+test('ghApiJson readCache partitions a GHES host by the enterprise token (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\n\\n{"ok":true}\');',
+    ),
+  );
+  try {
+    withGhHostEnv({ GH_HOST: 'ghes.example.com' }, () => {
+      const call = (enterprise: string) => {
+        withTokenEnv(
+          {
+            GH_TOKEN: 'shared-dotcom-token',
+            GH_ENTERPRISE_TOKEN: enterprise,
+          },
+          () => {
+            ghApiJson('repos/o/r', {
+              readCache: {
+                classification: 'read',
+                policy: readCachePolicy(paths.cacheDir),
+                workspaceRoot: paths.workspace,
+                repository: 'o/r',
+                defaultDirectory: paths.cacheDir,
+              },
+            });
+          },
+        );
+      };
+      call('enterprise-token-one');
+      call('enterprise-token-two');
+      assert.equal(recordedArgs(paths.argsFile).length, 2);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 2);
+      for (const name of cacheEntryNames(paths.cacheDir)) {
+        const stored = readFileSync(
+          join(paths.cacheDir, 'entries', name),
+          'utf8',
+        );
+        assert.equal(stored.includes('shared-dotcom-token'), false);
+        assert.equal(stored.includes('enterprise-token-one'), false);
+        assert.equal(stored.includes('enterprise-token-two'), false);
+      }
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache keeps a github.com token stable across enterprise token changes (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\n\\n{"ok":true}\');',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const call = (enterprise: string) => {
+        withTokenEnv(
+          {
+            GH_TOKEN: 'shared-dotcom-token',
+            GH_ENTERPRISE_TOKEN: enterprise,
+          },
+          () => {
+            ghApiJson('repos/o/r', {
+              readCache: {
+                classification: 'read',
+                policy: readCachePolicy(paths.cacheDir),
+                workspaceRoot: paths.workspace,
+                repository: 'o/r',
+                defaultDirectory: paths.cacheDir,
+              },
+            });
+          },
+        );
+      };
+      call('enterprise-token-one');
+      call('enterprise-token-two');
+      assert.equal(recordedArgs(paths.argsFile).length, 1);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache stays uncached when the keyring token lookup fails (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(`
+const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write('{"hosts":{"github.com":[{"state":"success"}]}}');
+  process.exit(0);
+}
+if (args[0] === 'auth' && args[1] === 'token') process.exit(1);
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(paths.argsFile)}, JSON.stringify(args) + '\\n');
+process.stdout.write(JSON.stringify({ ok: true }));
+`);
+  try {
+    withGhHostEnv({}, () => {
+      withTokenEnv({}, () => {
+        const options = {
+          readCache: {
+            classification: 'read' as const,
+            policy: readCachePolicy(paths.cacheDir),
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            defaultDirectory: paths.cacheDir,
+          },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.equal(recordedArgs(paths.argsFile).length, 2);
+        assert.equal(
+          existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+          false,
+        );
+      });
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache keeps caller requestShape from hiding the request body (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\n\\n{"ok":true}\');',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const readCache = {
+        classification: 'read' as const,
+        policy: readCachePolicy(paths.cacheDir),
+        workspaceRoot: paths.workspace,
+        repository: 'o/r',
+        credentialMaterial: 'credential-sentinel',
+        requestShape: { path: 'repos/o/r' },
+      };
+      ghApiJson('repos/o/r', { input: '{"q":"alpha"}', readCache });
+      ghApiJson('repos/o/r', { input: '{"q":"beta"}', readCache });
+      assert.equal(recordedArgs(paths.argsFile).length, 2);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 2);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
 });

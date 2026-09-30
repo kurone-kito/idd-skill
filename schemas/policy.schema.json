@@ -596,9 +596,40 @@
             }
           },
           "description": "Local-only retention for safe request-cost observations. Defaults off. Records omit credentials, request and query text, issue and comment bodies, and environment dumps."
+        },
+        "readCache": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Opt in to the host-local GitHub REST read cache. Optional; defaults to false. Only a literal true enables it. Enabling this key does not connect Discover."
+            },
+            "maxAge": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Maximum ISO 8601 age of a stored response that hint mode may reuse. Optional; defaults to `PT5M`. Retention is a separate bound."
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum total size, in bytes, of stored response entries. Optional; defaults to 104857600 (100 MiB). A larger value falls back to that default."
+            },
+            "retention": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Maximum ISO 8601 age of a stored response before it is dropped. Optional; defaults to `PT24H`. Independent of `maxAge`."
+            },
+            "directory": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional absolute override for the per-user OS-local cache directory. A relative path, filesystem root, workspace root, or ancestor of the workspace is not used as a cache root."
+            }
+          },
+          "description": "Host-local read cache for explicitly classified REST reads. Optional; omitting it keeps every read live."
         }
       },
-      "description": "Container for owned GitHub REST and GraphQL transport observations. Optional; omitting it keeps telemetry disabled. This is not a read cache or a request-admission policy."
+      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations and `readCache` opts in to the host-local REST read cache. Optional; omitting the container keeps telemetry disabled and every read live. Neither key wires Discover or admits requests."
     },
     "discover": {
       "type": "object",
@@ -663,8 +694,8 @@
         },
         "deferByUrgency": {
           "type": "string",
-          "enum": ["off", "low", "low-and-medium"],
-          "description": "Independent E4/E5 defer trigger, active from round 1, based on \"adopt-now urgency\" rather than round count: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) disposes `Reject (defer)` when its defer-eligibility severity is within this mode's ceiling. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low`: Low-severity items only. `low-and-medium`: Low or Medium; High is never eligible under any mode. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
+          "enum": ["off", "low", "low-and-medium", "severity-tiered"],
+          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: ignores the adopt-now test and defers by the severity-and-urgency matrix, including High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
         },
         "subagentWaitCeiling": {
           "type": "string",

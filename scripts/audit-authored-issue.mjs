@@ -369,6 +369,7 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--expect-bucket': { type: 'string' },
   '--comments-file': { type: 'string' },
   '--journal-comments-file': { type: 'string' },
+  '--cleanup-evidence-file': { type: 'string' },
   '--new-issue': { type: 'boolean', default: false },
   '--trusted-marker-logins': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
@@ -525,6 +526,84 @@ if (import.meta.main) {
  * none of the three ever affects `passed` or the caller's exit code. See
  * {@link AuditFinding.severity}.
  */
+function backlogOptionsFor(options) {
+  if (options.cleanupEvidence === undefined) {
+    return options;
+  }
+  const evidence = options.cleanupEvidence;
+  return {
+    ...options,
+    comments: backlogCommentsFor(
+      options.comments,
+      evidence,
+      issueIdentity(options.currentRepo, options.issueNumber),
+    ),
+    journalComments: backlogCommentsFor(
+      options.journalComments,
+      evidence,
+      normalizeIssueRef(options.cleanupJournalIssue),
+    ),
+  };
+}
+function issueIdentity(currentRepo, issueNumber) {
+  if (
+    currentRepo === undefined ||
+    issueNumber === undefined ||
+    !Number.isInteger(issueNumber)
+  ) {
+    return undefined;
+  }
+  const parts = currentRepo.split('/');
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
+    return undefined;
+  }
+  return `${parts[0].toLowerCase()}/${parts[1].toLowerCase()}#${issueNumber}`;
+}
+function normalizeIssueRef(ref) {
+  if (ref === undefined) {
+    return undefined;
+  }
+  const match = /^([^/]+)\/([^#]+)#([1-9]\d*)$/.exec(ref.trim());
+  if (!match) {
+    return undefined;
+  }
+  return `${match[1].toLowerCase()}/${match[2].toLowerCase()}#${match[3]}`;
+}
+function backlogCommentsFor(explicit, evidence, identity) {
+  const mutations = evidence.mutations ?? [];
+  if (explicit !== undefined) {
+    return applyConfirmedMinimization(explicit, mutations);
+  }
+  if (identity === undefined) {
+    return undefined;
+  }
+  const collection = (evidence.collections ?? []).find(
+    (entry) =>
+      `${entry.owner.toLowerCase()}/${entry.repo.toLowerCase()}#${entry.issue}` ===
+      identity,
+  );
+  if (!collection) {
+    return undefined;
+  }
+  return applyConfirmedMinimization(collection.comments, mutations);
+}
+function applyConfirmedMinimization(comments, mutations) {
+  const confirmed = new Set();
+  for (const mutation of mutations) {
+    if (
+      mutation.status === 'applied' ||
+      (mutation.status === 'skipped' && mutation.reason === 'already-minimized')
+    ) {
+      confirmed.add(mutation.subjectId);
+    }
+  }
+  return comments.map((comment) => {
+    if (comment.id !== undefined && confirmed.has(comment.id)) {
+      return { ...comment, isMinimized: true };
+    }
+    return { ...comment };
+  });
+}
 export function auditAuthoredIssue(body, options) {
   const rawText = typeof body === 'string' ? body : String(body ?? '');
   // Mask Markdown code regions (fenced blocks, indented blocks, and
@@ -618,7 +697,10 @@ export function auditAuthoredIssue(body, options) {
       normalizeCurrentRepo(options.currentRepo),
     ),
     checkAuthoringOwnerMarkerTrail(text, markerPrefix, labels, options),
-    checkAuthoringMarkerMinimizationBacklog(markerPrefix, options),
+    checkAuthoringMarkerMinimizationBacklog(
+      markerPrefix,
+      backlogOptionsFor(options),
+    ),
     checkUpstreamCandidateMarkerLabel(
       text,
       markerPrefix,
@@ -3532,6 +3614,7 @@ function readCommentsFile(path) {
     }
     return {
       body: record.body,
+      ...(typeof record.id === 'string' ? { id: record.id } : {}),
       ...(typeof record.author === 'string' ? { author: record.author } : {}),
       ...(typeof record.createdAt === 'string'
         ? { createdAt: record.createdAt }
@@ -3541,6 +3624,93 @@ function readCommentsFile(path) {
         : {}),
     };
   });
+}
+function normalizeEvidenceAuthor(author) {
+  if (typeof author === 'string') {
+    return author.length > 0 ? author : undefined;
+  }
+  if (author !== null && typeof author === 'object' && 'login' in author) {
+    const login = author.login;
+    if (typeof login === 'string' && login.length > 0) {
+      return login;
+    }
+  }
+  return undefined;
+}
+export function readCleanupEvidenceFile(path) {
+  const raw = readFileSync(resolve(process.cwd(), path), 'utf8');
+  const parsed = JSON.parse(raw);
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${path} must contain a JSON object`);
+  }
+  const record = parsed;
+  const collections = Array.isArray(record.collections)
+    ? record.collections.map((entry, index) => {
+        const collection = entry;
+        if (
+          typeof collection.owner !== 'string' ||
+          typeof collection.repo !== 'string' ||
+          typeof collection.issue !== 'number' ||
+          !Array.isArray(collection.comments)
+        ) {
+          throw new Error(
+            `${path}.collections[${index}] must have owner, repo, issue, and comments`,
+          );
+        }
+        return {
+          owner: collection.owner,
+          repo: collection.repo,
+          issue: collection.issue,
+          comments: collection.comments.map((comment, commentIndex) => {
+            const item = comment;
+            if (typeof item.body !== 'string') {
+              throw new Error(
+                `${path}.collections[${index}].comments[${commentIndex}] is missing a string body`,
+              );
+            }
+            const author = normalizeEvidenceAuthor(item.author);
+            return {
+              body: item.body,
+              ...(typeof item.id === 'string' ? { id: item.id } : {}),
+              ...(author !== undefined ? { author } : {}),
+              ...(typeof item.createdAt === 'string'
+                ? { createdAt: item.createdAt }
+                : {}),
+              ...(typeof item.isMinimized === 'boolean'
+                ? { isMinimized: item.isMinimized }
+                : {}),
+            };
+          }),
+        };
+      })
+    : [];
+  const mutations = Array.isArray(record.mutations)
+    ? record.mutations.map((entry, index) => {
+        const mutation = entry;
+        if (
+          typeof mutation.subjectId !== 'string' ||
+          typeof mutation.status !== 'string'
+        ) {
+          throw new Error(
+            `${path}.mutations[${index}] must have string subjectId and status`,
+          );
+        }
+        const author = normalizeEvidenceAuthor(mutation.author);
+        return {
+          subjectId: mutation.subjectId,
+          status: mutation.status,
+          ...(typeof mutation.reason === 'string'
+            ? { reason: mutation.reason }
+            : {}),
+          ...(author !== undefined ? { author } : {}),
+        };
+      })
+    : [];
+  return { collections, mutations };
+}
+function configuredJournalIssue(config) {
+  const value = config?.issueAuthoring?.journalIssue;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -3652,6 +3822,12 @@ function main() {
       : undefined,
     journalComments: args.journalCommentsFile
       ? readCommentsFile(args.journalCommentsFile)
+      : undefined,
+    cleanupEvidence: args.cleanupEvidenceFile
+      ? readCleanupEvidenceFile(args.cleanupEvidenceFile)
+      : undefined,
+    cleanupJournalIssue: args.cleanupEvidenceFile
+      ? configuredJournalIssue(policy.rawConfig)
       : undefined,
     newIssue: args.newIssue,
     upstreamEscalationEnabled: policy.upstreamEscalationEnabled,
@@ -3787,6 +3963,7 @@ function parseArgs(argv) {
     expectBucket: values['expect-bucket'],
     commentsFile: values['comments-file'],
     journalCommentsFile: values['journal-comments-file'],
+    cleanupEvidenceFile: values['cleanup-evidence-file'],
     newIssue: values['new-issue'],
     trustedMarkerLogins: values['trusted-marker-logins'],
     format,
@@ -3863,7 +4040,7 @@ Options:
                                     target match (requires --current-repo or
                                     $GITHUB_REPOSITORY to be resolvable)
   --comments-file <path>           JSON array of this issue's pre-fetched comments
-                                    ({body, author?, createdAt?, isMinimized?});
+                                    ({id?, body, author?, createdAt?, isMinimized?});
                                     enables authoring-owner-marker-trail and the
                                     authoring-owner half of
                                     authoring-marker-minimization-backlog
@@ -3882,6 +4059,21 @@ Options:
                                     new-issue publication-intent cross-check
                                     when --comments-file, --new-issue, and
                                     --issue are also given
+  --cleanup-evidence-file <path>   optional JSON {collections, mutations} from a
+                                    sweep run with --with-cleanup-evidence
+                                    (#3593). Applied only to the minimization
+                                    backlog copy: a confirmed applied or
+                                    already-minimized mutation sets isMinimized
+                                    true on the matching comment id. Other
+                                    outcomes stay unchanged. When --comments-file
+                                    is omitted, a collection matching
+                                    --current-repo plus --issue supplies that
+                                    backlog's captured comments. When
+                                    --journal-comments-file is omitted, a
+                                    collection matching the configured
+                                    issueAuthoring.journalIssue supplies the
+                                    publication-intent half. Not an ownership
+                                    input and not a fresh concurrency snapshot
   --new-issue                      this issue was just created in this invocation
                                     (not an edit); requires the leading
                                     authoring-publication body line, and (when

@@ -1009,6 +1009,12 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxRecords: 100,
         path: null,
       },
+      readCache: {
+        enabled: false,
+        maxAge: 'PT5M',
+        maxBytes: 104857600,
+        retention: 'PT24H',
+      },
     },
   });
 
@@ -1212,6 +1218,12 @@ test('policy normalization provides default-safe values and supports aliases', (
           enabled: false,
           maxRecords: 100,
           path: null,
+        },
+        readCache: {
+          enabled: false,
+          maxAge: 'PT5M',
+          maxBytes: 104857600,
+          retention: 'PT24H',
         },
       },
     },

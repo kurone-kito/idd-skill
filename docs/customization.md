@@ -352,12 +352,15 @@ for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
 `markerTrust`, `advisoryWait`, `ciWait`, `ciGate`, `discover`, `claim`,
 `critiqueLoop`, `reviewEscalation`, `approvalSignals`,
 `issueAuthoring`, `labels`, and `githubApi`. Leaving these keys unset
-keeps distributed behavior.
+keeps distributed behavior. `githubApi.readCache` stays off unless
+`enabled` is true. Turning it on does not connect Discover; the
+helper-script read-cache section describes the contract.
 
 `githubApi.telemetry` records local request-lifecycle observations for
 the `ghApiJson`, `ghApiJsonWithHeaders`, and `ghGraphql` wrappers (issue
 `kurone-kito/idd-skill#3585`). Requests that helpers make through the
-generic `gh` text runners are not observed. The default is off. While
+generic `gh` text runners, and the read cache's own revalidation
+fetch, are not observed. The default is off. While
 off, command arguments, parsed results, thrown errors, and the process
 exit stay unchanged. While on, each record keeps HTTP
 status, the rate-limit header fields, GraphQL query cost when the query
@@ -1534,7 +1537,9 @@ supports these keys:
 - `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `3`)
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
 - `critiqueLoop.deferAfterRounds` (default `12`)
-- `critiqueLoop.deferByUrgency` (default `off`; `low` or `low-and-medium`)
+- `critiqueLoop.deferByUrgency` (default `off`; `low`,
+  `low-and-medium`, or `severity-tiered`). High stays ineligible under
+  `low` and `low-and-medium`.
 - `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`

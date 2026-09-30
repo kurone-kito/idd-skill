@@ -491,7 +491,12 @@ test('policy schema rejects a critiqueLoop.delegate mode outside the enum (#2324
 
 test('policy schema accepts every critiqueLoop.deferByUrgency value (#3311)', () => {
   const schema = loadJson('schemas/policy.schema.json');
-  for (const deferByUrgency of ['off', 'low', 'low-and-medium']) {
+  for (const deferByUrgency of [
+    'off',
+    'low',
+    'low-and-medium',
+    'severity-tiered',
+  ]) {
     const instance = JSON.parse(
       JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
     );

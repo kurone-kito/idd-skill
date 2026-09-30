@@ -27,7 +27,7 @@ interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
   deferAfterRounds: number;
-  deferByUrgency: 'off' | 'low' | 'low-and-medium';
+  deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
   subagentWaitCeiling: string;
   delegate?: CritiqueLoopDelegate;
 }
@@ -63,6 +63,34 @@ interface LocalValidationEvidencePolicy {
 interface ProviderHealthPolicy {
   minCorroboratingPrs: number;
   samplingWindow: string;
+}
+
+/**
+ * Opt-in host-local GitHub REST read cache (#3587). `directory` is omitted
+ * until configured, matching `providerOutage.declarationTarget`. Enabling
+ * the cache does not wire Discover.
+ */
+interface GithubApiReadCachePolicy {
+  enabled: boolean;
+  maxAge: string;
+  maxBytes: number;
+  retention: string;
+  directory?: string;
+}
+
+/**
+ * `githubApi.telemetry` (#3585): local request-lifecycle observations for
+ * the owned GitHub transport wrappers. Off unless `enabled` is exactly true.
+ */
+interface GithubApiTelemetryPolicy {
+  enabled: boolean;
+  maxRecords: number;
+  path: string | null;
+}
+
+interface GithubApiPolicy {
+  telemetry: GithubApiTelemetryPolicy;
+  readCache: GithubApiReadCachePolicy;
 }
 
 /** How one policy document presents `critiqueLoop.delegate`. */
@@ -505,6 +533,13 @@ interface RawConfig {
   providerHealth?: { minCorroboratingPrs?: unknown; samplingWindow?: unknown };
   githubApi?: {
     telemetry?: { enabled?: unknown; maxRecords?: unknown; path?: unknown };
+    readCache?: {
+      enabled?: unknown;
+      maxAge?: unknown;
+      maxBytes?: unknown;
+      retention?: unknown;
+      directory?: unknown;
+    };
   };
   developmentBranch?: unknown;
   provider?: unknown;
@@ -531,7 +566,12 @@ const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
 const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
 const ADVISORY_CONVERGENCE_SCOPES = new Set(['all-prs', 'idd-claimed']);
 const SELECTION_DESYNC_MODES = new Set(['off', 'session-offset']);
-const DEFER_BY_URGENCY_MODES = new Set(['off', 'low', 'low-and-medium']);
+const DEFER_BY_URGENCY_MODES = new Set([
+  'off',
+  'low',
+  'low-and-medium',
+  'severity-tiered',
+]);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -581,6 +621,7 @@ const DURATION_RE =
 // URLs, and tarball paths while excluding every shell metacharacter in
 // that list.
 const PACKAGE_SPEC_RE = /^[A-Za-z0-9@:/_.+^#%-]+$/;
+const GITHUB_API_READ_CACHE_MAX_BYTES = 104857600;
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -729,20 +770,23 @@ export const POLICY_DEFAULTS = Object.freeze({
     minCorroboratingPrs: 2,
     samplingWindow: 'PT24H',
   }) as Readonly<ProviderHealthPolicy>,
-  // #3585: absent or false leaves the GitHub transport wrappers unchanged.
+  // #3585 / #3587: `telemetry` and `readCache` are both disabled unless
+  // `enabled` is exactly true, so absent or false leaves the GitHub transport
+  // wrappers unchanged. `readCache.directory` is not an own key until an
+  // operator sets a non-empty string.
   githubApi: Object.freeze({
     telemetry: Object.freeze({
       enabled: false,
       maxRecords: 100,
       path: null,
     }),
-  }) as Readonly<{
-    telemetry: Readonly<{
-      enabled: boolean;
-      maxRecords: number;
-      path: string | null;
-    }>;
-  }>,
+    readCache: Object.freeze({
+      enabled: false,
+      maxAge: 'PT5M',
+      maxBytes: GITHUB_API_READ_CACHE_MAX_BYTES,
+      retention: 'PT24H',
+    }),
+  }) as Readonly<GithubApiPolicy>,
 });
 
 export function parseProjectCommandRows(text: string): Map<string, string> {
@@ -940,18 +984,16 @@ export function normalizePolicyConfig(config: unknown) {
     POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
   );
   const telemetryPath = c?.githubApi?.telemetry?.path;
-  const githubApi = {
-    telemetry: {
-      enabled: c?.githubApi?.telemetry?.enabled === true,
-      maxRecords: parsePositiveInteger(
-        c?.githubApi?.telemetry?.maxRecords,
-        POLICY_DEFAULTS.githubApi.telemetry.maxRecords,
-      ),
-      path:
-        typeof telemetryPath === 'string' && telemetryPath.trim().length > 0
-          ? telemetryPath.trim()
-          : null,
-    },
+  const telemetry: GithubApiTelemetryPolicy = {
+    enabled: c?.githubApi?.telemetry?.enabled === true,
+    maxRecords: parsePositiveInteger(
+      c?.githubApi?.telemetry?.maxRecords,
+      POLICY_DEFAULTS.githubApi.telemetry.maxRecords,
+    ),
+    path:
+      typeof telemetryPath === 'string' && telemetryPath.trim().length > 0
+        ? telemetryPath.trim()
+        : null,
   };
   const providerHealth: ProviderHealthPolicy = {
     minCorroboratingPrs:
@@ -963,6 +1005,33 @@ export function normalizePolicyConfig(config: unknown) {
       POLICY_DEFAULTS.providerHealth.samplingWindow,
     ),
   };
+  const rawReadCacheMaxBytes = parsePositiveInteger(
+    c?.githubApi?.readCache?.maxBytes,
+    POLICY_DEFAULTS.githubApi.readCache.maxBytes,
+  );
+  const readCache: GithubApiReadCachePolicy = {
+    enabled: c?.githubApi?.readCache?.enabled === true,
+    maxAge: parsePositiveDuration(
+      c?.githubApi?.readCache?.maxAge,
+      POLICY_DEFAULTS.githubApi.readCache.maxAge,
+    ),
+    maxBytes:
+      rawReadCacheMaxBytes <= GITHUB_API_READ_CACHE_MAX_BYTES
+        ? rawReadCacheMaxBytes
+        : POLICY_DEFAULTS.githubApi.readCache.maxBytes,
+    retention: parsePositiveDuration(
+      c?.githubApi?.readCache?.retention,
+      POLICY_DEFAULTS.githubApi.readCache.retention,
+    ),
+  };
+  const rawReadCacheDirectory = c?.githubApi?.readCache?.directory;
+  if (
+    typeof rawReadCacheDirectory === 'string' &&
+    rawReadCacheDirectory.trim().length > 0
+  ) {
+    readCache.directory = rawReadCacheDirectory.trim();
+  }
+  const githubApi: GithubApiPolicy = { telemetry, readCache };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured
@@ -2032,6 +2101,167 @@ function hasConfiguredCollaboratorMarkerTrust(config: unknown): boolean {
 
 function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
+}
+
+type ReviewSeverityTier = 'low' | 'medium' | 'high';
+type UrgencyScore = 'very-low' | 'low' | 'medium' | 'high';
+type UrgencyDeferBlock =
+  | 'mode-off'
+  | 'path-b'
+  | 'scope-fence'
+  | 'protected-authority'
+  | 'awaiting-maintainer-decision'
+  | 'accepted-mid-fix'
+  | 'unknown-severity'
+  | 'adopt-now'
+  | 'above-ceiling'
+  | 'unknown-urgency'
+  | 'matrix';
+
+interface UrgencyDeferInput {
+  mode: CritiqueLoopPolicy['deferByUrgency'];
+  path: 'A' | 'B';
+  e4Severity: ReviewSeverityTier | null;
+  copilotLabel: ReviewSeverityTier | null;
+  urgency: UrgencyScore | null;
+  scopeFence: boolean;
+  /**
+   * The PATH A actor is a CODEOWNER or required reviewer (E6's AMD
+   * exception). Blocks a fresh item before any hold reply is posted.
+   */
+  protectedAuthority: boolean;
+  /** The item already sits in the AMD hold (E5 inconclusive or E6). */
+  awaitingMaintainerDecision: boolean;
+  acceptedMidFix: boolean;
+  adoptNow: boolean;
+}
+
+interface UrgencyDeferDecision {
+  defer: boolean;
+  eligibility: ReviewSeverityTier | null;
+  blockedBy: UrgencyDeferBlock | null;
+}
+
+const SEVERITY_RANK: Record<ReviewSeverityTier, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+};
+
+function knownSeverity(
+  value: ReviewSeverityTier | null,
+): ReviewSeverityTier | null {
+  if (value === 'low' || value === 'medium' || value === 'high') {
+    return value;
+  }
+  return null;
+}
+
+function knownUrgency(value: UrgencyScore | null): UrgencyScore | null {
+  if (
+    value === 'very-low' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function higherSeverity(
+  left: ReviewSeverityTier | null,
+  right: ReviewSeverityTier | null,
+): ReviewSeverityTier | null {
+  if (left === null) {
+    return right;
+  }
+  if (right === null) {
+    return left;
+  }
+  return SEVERITY_RANK[left] >= SEVERITY_RANK[right] ? left : right;
+}
+
+function denyUrgencyDefer(
+  blockedBy: UrgencyDeferBlock,
+  eligibility: ReviewSeverityTier | null = null,
+): UrgencyDeferDecision {
+  return { defer: false, eligibility, blockedBy };
+}
+
+function severityTieredDefers(
+  eligibility: ReviewSeverityTier,
+  urgency: UrgencyScore,
+): boolean {
+  if (eligibility === 'high') {
+    return urgency === 'very-low';
+  }
+  if (eligibility === 'medium') {
+    return urgency !== 'high';
+  }
+  return true;
+}
+
+/**
+ * Pure specification of the E4/E5 urgency-defer matrix. Instruction text
+ * applies it; this module has no production caller. Check order fails
+ * closed toward not deferring. `severity-tiered` ignores `adoptNow` and
+ * treats an unknown E4 tier as Medium before the Copilot floor, which
+ * only raises eligibility. `low` and `low-and-medium` do not: they need
+ * a known E4 tier, and the floor never stands in for it.
+ */
+// audit:ignore-dead-export: E4/E5 applies this matrix from instruction text; tests lock every cell and there is no helper caller
+export function decideUrgencyDefer(
+  input: UrgencyDeferInput,
+): UrgencyDeferDecision {
+  if (input.mode === 'off') {
+    return denyUrgencyDefer('mode-off');
+  }
+  if (input.path !== 'A') {
+    return denyUrgencyDefer('path-b');
+  }
+  if (input.scopeFence) {
+    return denyUrgencyDefer('scope-fence');
+  }
+  if (input.protectedAuthority) {
+    return denyUrgencyDefer('protected-authority');
+  }
+  if (input.awaitingMaintainerDecision) {
+    return denyUrgencyDefer('awaiting-maintainer-decision');
+  }
+  if (input.acceptedMidFix) {
+    return denyUrgencyDefer('accepted-mid-fix');
+  }
+
+  const e4 = knownSeverity(input.e4Severity);
+  const copilot = knownSeverity(input.copilotLabel);
+
+  if (input.mode === 'severity-tiered') {
+    const eligibility = higherSeverity(e4 ?? 'medium', copilot) ?? 'medium';
+    const urgency = knownUrgency(input.urgency);
+    if (urgency === null) {
+      return denyUrgencyDefer('unknown-urgency', eligibility);
+    }
+    if (!severityTieredDefers(eligibility, urgency)) {
+      return denyUrgencyDefer('matrix', eligibility);
+    }
+    return { defer: true, eligibility, blockedBy: null };
+  }
+
+  if (e4 === null) {
+    return denyUrgencyDefer('unknown-severity');
+  }
+  const eligibility = higherSeverity(e4, copilot) ?? e4;
+  if (eligibility === 'high') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  if (input.adoptNow) {
+    return denyUrgencyDefer('adopt-now', eligibility);
+  }
+  if (input.mode === 'low' && eligibility !== 'low') {
+    return denyUrgencyDefer('above-ceiling', eligibility);
+  }
+  return { defer: true, eligibility, blockedBy: null };
 }
 
 function hasOwn(value: unknown, key: string): boolean {

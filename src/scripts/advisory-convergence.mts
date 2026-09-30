@@ -155,6 +155,7 @@ import type {
   PrLoopMembership,
 } from './protocol-helpers.mts';
 import {
+  advisoryBotIdentityToken,
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   classifyPrLoopMembership,
@@ -2852,15 +2853,37 @@ validly waived past the configured deadline).
 `);
 }
 
+/** Cheap pending-review watch. It never means the gate is ready. */
+export interface PendingReviewWatchResult {
+  kind: 'unchanged' | 'changed' | 'unknown';
+  fingerprint: string | null;
+  /**
+   * Reviews this watch actually read. The poll compares them with the
+   * verdict's own review set before it will skip a later collection.
+   * Test doubles may omit the field and keep the fingerprint contract.
+   */
+  reviews?: readonly unknown[];
+}
+
 /** Dependencies injected by tests; production defaults perform real I/O. */
 export interface AdvisoryConvergenceDeps {
   collect: (args: AdvisoryConvergenceArgs) => {
     inputs: AdvisoryConvergenceInputs;
     options: AdvisoryConvergenceOptions;
   };
+  /**
+   * Optional HEAD and review-identity watch. When omitted, every in-budget
+   * poll tick still runs a full collection. Production supplies one.
+   */
+  watchPendingReview?: (
+    argv: string[],
+    previousFingerprint: string | null,
+  ) => PendingReviewWatchResult;
 }
 
-const defaultDeps: AdvisoryConvergenceDeps = { collect: collectFromGitHub };
+const defaultDeps: AdvisoryConvergenceDeps = {
+  collect: collectFromGitHub,
+};
 
 /**
  * Parse argv, collect evidence (via `deps.collect`, real `gh` calls by
@@ -3062,6 +3085,187 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/** Stable identity for one cheap pending-review watch. */
+export function pendingReviewFingerprint(input: {
+  headSha: string;
+  reviews: readonly unknown[];
+}): string {
+  const reviews = input.reviews.map((review) => {
+    const row = (review ?? {}) as Record<string, unknown>;
+    const user = row.user as { login?: unknown } | undefined;
+    return {
+      id: String(row.id ?? ''),
+      user: String(user?.login ?? ''),
+      state: String(row.state ?? ''),
+      commitId: String(row.commit_id ?? row.commitId ?? ''),
+      submittedAt: String(row.submitted_at ?? row.submittedAt ?? ''),
+      body: String(row.body ?? ''),
+    };
+  });
+  reviews.sort(
+    (left, right) =>
+      left.id.localeCompare(right.id) ||
+      left.submittedAt.localeCompare(right.submittedAt),
+  );
+  return JSON.stringify({
+    headSha: input.headSha.trim().toLowerCase(),
+    reviews,
+  });
+}
+
+export function classifyPendingReviewWatch(
+  previousFingerprint: string | null,
+  nextFingerprint: string | null,
+): PendingReviewWatchResult['kind'] {
+  if (nextFingerprint === null) return 'unknown';
+  if (previousFingerprint === null) return 'unchanged';
+  return previousFingerprint === nextFingerprint ? 'unchanged' : 'changed';
+}
+
+/**
+ * Identity shared by a GraphQL verdict row and a REST watch row. Those
+ * two GitHub APIs do not use the same review id, so a baseline check
+ * compares author, submission time, commit, and body.
+ */
+function reviewIdentityKeys(reviews: readonly unknown[]): string[] {
+  return reviews
+    .map((review) => {
+      const row = (review ?? {}) as Record<string, unknown>;
+      const user = row.user as { login?: unknown } | undefined;
+      const author = row.author as { login?: unknown } | undefined;
+      const login = advisoryBotIdentityToken(user?.login ?? author?.login);
+      const submittedRaw = String(
+        row.submitted_at ?? row.submittedAt ?? '',
+      ).trim();
+      const submittedMs = Date.parse(submittedRaw);
+      const submittedAt = Number.isNaN(submittedMs)
+        ? submittedRaw
+        : String(submittedMs);
+      const commitId = String(row.commit_id ?? row.commitId ?? '')
+        .trim()
+        .toLowerCase();
+      const body = row.body == null ? '' : String(row.body);
+      return JSON.stringify({ login, submittedAt, commitId, body });
+    })
+    .sort();
+}
+
+function sameReviewIdentity(
+  left: readonly unknown[],
+  right: readonly unknown[],
+): boolean {
+  const leftKeys = reviewIdentityKeys(left);
+  const rightKeys = reviewIdentityKeys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((value, index) => value === rightKeys[index])
+  );
+}
+
+/** True when a parsed watch fingerprint names a different HEAD than the
+ * verdict. Opaque tokens such as the poll tests' `baseline` have no JSON
+ * `headSha` and stay on the fingerprint-only contract. A watched head
+ * paired with an empty verdict head fails closed.
+ */
+function watchedFingerprintHeadDiffers(
+  fingerprint: string,
+  inputs: AdvisoryConvergenceInputs | null,
+): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fingerprint);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return false;
+  }
+  const headSha = (parsed as { headSha?: unknown }).headSha;
+  if (typeof headSha !== 'string') return false;
+  const watched = headSha.trim().toLowerCase();
+  const verdict = (inputs?.prHeadSha ?? '').trim().toLowerCase();
+  if (watched.length > 0 && verdict.length === 0) return true;
+  return watched !== verdict;
+}
+
+/** True when the watch reported reviews that are not the verdict's set.
+ * An omitted `reviews` array keeps the fingerprint-only test contract.
+ */
+function baselineReviewSetDiffers(
+  baseline: PendingReviewWatchResult,
+  inputs: AdvisoryConvergenceInputs | null,
+): boolean {
+  if (!Array.isArray(baseline.reviews)) return false;
+  if (!inputs || !Array.isArray(inputs.reviews)) return true;
+  return !sameReviewIdentity(inputs.reviews, baseline.reviews);
+}
+
+function readPendingReviewWatch(
+  watch: NonNullable<AdvisoryConvergenceDeps['watchPendingReview']>,
+  argv: string[],
+  previousFingerprint: string | null,
+): PendingReviewWatchResult {
+  try {
+    return watch(argv, previousFingerprint);
+  } catch {
+    return { kind: 'unknown', fingerprint: null };
+  }
+}
+
+/**
+ * Builds a pending-review watch: one HEAD read plus one review list per call.
+ * A throw or a blank HEAD is unknown, never an empty successful watch.
+ *
+ * When argv carries no `--owner` or `--repo`, the repository is resolved from
+ * the current checkout (two `gh repo view` reads) once and reused by every
+ * later call of the same instance, so a poll pays for it once instead of on
+ * every tick (#3617). Only a resolved pair whose owner and repo are both
+ * non-empty is kept: a throw or a blank value is unknown evidence, is never
+ * cached, and the next call retries. The instance is therefore stateful; the
+ * exported default keeps its cache for the life of the process, which is
+ * exactly one poll for the CLI.
+ */
+export function createPendingReviewWatch(
+  resolveRepository: () => {
+    owner: string;
+    repo: string;
+  } = resolveCurrentGithubRepository,
+): NonNullable<AdvisoryConvergenceDeps['watchPendingReview']> {
+  let resolved: { owner: string; repo: string } | null = null;
+  return (argv, previousFingerprint) => {
+    try {
+      const args = parseArgs(argv);
+      if (!args.prNumber) return { kind: 'unknown', fingerprint: null };
+      let currentRepo = resolved;
+      if (!(args.owner && args.repo) && currentRepo === null) {
+        currentRepo = resolveRepository();
+        if (currentRepo.owner && currentRepo.repo) resolved = currentRepo;
+      }
+      const owner = args.owner || currentRepo?.owner || '';
+      const repo = args.repo || currentRepo?.repo || '';
+      if (!owner || !repo) return { kind: 'unknown', fingerprint: null };
+      const port = createGithubProviderAdapter(owner, repo);
+      const headSha = port
+        .getChangeRequestHeadShaAndAuthor(Number(args.prNumber))
+        .headSha.trim();
+      if (!headSha) return { kind: 'unknown', fingerprint: null };
+      const reviews = port.listReviews(Number(args.prNumber));
+      const fingerprint = pendingReviewFingerprint({ headSha, reviews });
+      return {
+        kind: classifyPendingReviewWatch(previousFingerprint, fingerprint),
+        fingerprint,
+        reviews,
+      };
+    } catch {
+      return { kind: 'unknown', fingerprint: null };
+    }
+  };
+}
+
+export const watchPendingReviewFromGitHub = createPendingReviewWatch();
+
+defaultDeps.watchPendingReview = watchPendingReviewFromGitHub;
+
 /**
  * #2015: wraps {@link runAdvisoryConvergence} with a short, bounded poll
  * for the narrow case {@link isSoleCopilotNotReviewedYetReason} identifies
@@ -3155,7 +3359,16 @@ export function runAdvisoryConvergenceWithPoll(
   help: boolean;
   nowFlagError?: string;
 } {
-  let result = runAdvisoryConvergence(argv, deps);
+  let lastInputs: AdvisoryConvergenceInputs | null = null;
+  const collectingDeps: AdvisoryConvergenceDeps = {
+    ...deps,
+    collect: (args) => {
+      const collected = deps.collect(args);
+      lastInputs = collected.inputs;
+      return collected;
+    },
+  };
+  let result = runAdvisoryConvergence(argv, collectingDeps);
   if (
     result.exitCode !== 0 &&
     result.verdict &&
@@ -3172,21 +3385,77 @@ export function runAdvisoryConvergenceWithPoll(
     const sleep = pollOptions.sleep ?? sleepSync;
     const now = pollOptions.now ?? Date.now;
     const deadline = now() + maxWaitMs;
-    while (now() < deadline) {
+    let fingerprint: string | null = null;
+    let watchBaselineOk = false;
+    const solePending = (): boolean =>
+      result.exitCode !== 0 &&
+      !!result.verdict &&
+      isSoleCopilotNotReviewedYetReason(result.verdict);
+    // Re-anchor after every still-pending verdict. A watch that names a
+    // different HEAD, or reviews the verdict missed, must not become the
+    // unchanged baseline. Once the deadline has passed, do not start the
+    // watch: a collection that began in budget can finish after it.
+    const anchorBaseline = (): 'anchored' | 'differs' | 'unavailable' => {
+      if (now() >= deadline || !deps.watchPendingReview) {
+        watchBaselineOk = false;
+        fingerprint = null;
+        return 'unavailable';
+      }
+      const baseline = readPendingReviewWatch(
+        deps.watchPendingReview,
+        argv,
+        null,
+      );
+      if (baseline.kind === 'unknown' || baseline.fingerprint === null) {
+        watchBaselineOk = false;
+        fingerprint = null;
+        return 'unavailable';
+      }
+      if (
+        watchedFingerprintHeadDiffers(baseline.fingerprint, lastInputs) ||
+        baselineReviewSetDiffers(baseline, lastInputs)
+      ) {
+        watchBaselineOk = false;
+        fingerprint = null;
+        return 'differs';
+      }
+      fingerprint = baseline.fingerprint;
+      watchBaselineOk = true;
+      return 'anchored';
+    };
+    // One extra collection when the watch and the verdict disagree, then
+    // one re-anchor. A second disagreement in the same pass does not
+    // collect again.
+    const recollectIfAnchorDiffers = (): void => {
+      if (anchorBaseline() !== 'differs' || now() >= deadline) return;
+      result = runAdvisoryConvergence(argv, collectingDeps);
+      if (!solePending() || now() >= deadline) return;
+      anchorBaseline();
+    };
+    recollectIfAnchorDiffers();
+    while (now() < deadline && solePending()) {
       sleep(Math.min(pollIntervalMs, deadline - now()));
       // #2023 review round 2: don't launch a re-check once the sleep above
       // has already consumed the entire remaining budget -- see this
       // function's own doc comment for why (collection has its own
       // unbounded-relative-to-maxWaitMs `gh` timeouts).
       if (now() >= deadline) break;
-      result = runAdvisoryConvergence(argv, deps);
-      if (
-        result.exitCode === 0 ||
-        !result.verdict ||
-        !isSoleCopilotNotReviewedYetReason(result.verdict)
-      ) {
-        break;
+      if (deps.watchPendingReview && watchBaselineOk) {
+        const watched = readPendingReviewWatch(
+          deps.watchPendingReview,
+          argv,
+          fingerprint,
+        );
+        // The watch itself is unbounded gh I/O. Once it has crossed the
+        // deadline, do not start the full collection (#2023).
+        if (now() >= deadline) break;
+        const terminalRecheck = deadline - now() <= pollIntervalMs;
+        if (watched.kind === 'unchanged' && !terminalRecheck) continue;
+        if (watched.kind === 'unknown') watchBaselineOk = false;
       }
+      result = runAdvisoryConvergence(argv, collectingDeps);
+      if (!solePending()) break;
+      recollectIfAnchorDiffers();
     }
   }
   return result;
