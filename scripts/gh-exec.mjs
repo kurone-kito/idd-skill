@@ -1108,6 +1108,20 @@ function paginatedStreamError(status) {
   return tagGhCommandError(error);
 }
 /**
+ * Best-effort removal of the capture's temp directory. A worker that is
+ * still terminating can hold a file open (Windows refuses to remove it),
+ * and that cleanup failure must not replace the capture result or its
+ * tagged error (CodeRabbit critique, PR #3605). The directory then stays
+ * in the OS temp area.
+ */
+function removePaginatedCaptureDir(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Leave it for the OS temp cleanup.
+  }
+}
+/**
  * Run paginated `gh api --paginate` without Node's 1 MiB `maxBuffer`.
  * A worker counts stdout as it arrives, writes only the in-limit bytes,
  * and kills `gh` when the next chunk would pass
@@ -1129,31 +1143,39 @@ function readPaginatedGhApi(args, options) {
   const statusPath = join(dir, 'status.json');
   const flag = new SharedArrayBuffer(CAPTURE_FLAG_BYTES);
   const view = new Int32Array(flag);
-  const worker = new Worker(new URL(import.meta.url), {
-    // Empty on purpose. The worker only spawns `gh`. Forwarding the
-    // parent's execArgv hands Node's test runner flags
-    // (`--stack-trace-limit`, `--secure-heap`, `--node-snapshot`, and
-    // `--test`) to Worker, which rejects them with
-    // ERR_WORKER_INVALID_EXEC_ARGV (CI lint on PR #3605, Node 24). An
-    // empty list also keeps this module from being loaded as a test file.
-    execArgv: [],
-    workerData: {
-      kind: PAGINATED_CAPTURE_KIND,
-      args,
-      timeout: options.timeout,
-      ...(options.input !== undefined ? { input: options.input } : {}),
-      outPath,
-      errPath,
-      statusPath,
-      limitBytes: GH_API_PAGINATED_MAX_BYTES,
-      flag,
-    },
-  });
-  // A worker 'error' event is queued on this thread and cannot be
-  // dispatched while Atomics.wait is blocking it. The listener only
-  // keeps that event from crashing the parent after the wait returns.
-  worker.on('error', () => {});
+  let worker;
   try {
+    try {
+      worker = new Worker(new URL(import.meta.url), {
+        // Empty on purpose. The worker only spawns `gh`. Forwarding the
+        // parent's execArgv hands Node's test runner flags
+        // (`--stack-trace-limit`, `--secure-heap`, `--node-snapshot`, and
+        // `--test`) to Worker, which rejects them with
+        // ERR_WORKER_INVALID_EXEC_ARGV (CI lint on PR #3605, Node 24). An
+        // empty list also keeps this module from being loaded as a test
+        // file.
+        execArgv: [],
+        workerData: {
+          kind: PAGINATED_CAPTURE_KIND,
+          args,
+          timeout: options.timeout,
+          ...(options.input !== undefined ? { input: options.input } : {}),
+          outPath,
+          errPath,
+          statusPath,
+          limitBytes: GH_API_PAGINATED_MAX_BYTES,
+          flag,
+        },
+      });
+    } catch (error) {
+      // A worker that never started is a transport failure, and the
+      // temp directory is still removed by the `finally` below.
+      throw tagGhCommandError(error);
+    }
+    // A worker 'error' event is queued on this thread and cannot be
+    // dispatched while Atomics.wait is blocking it. The listener only
+    // keeps that event from crashing the parent after the wait returns.
+    worker.on('error', () => {});
     if (options.timeout > 0) {
       Atomics.wait(
         view,
@@ -1224,8 +1246,8 @@ function readPaginatedGhApi(args, options) {
     if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0) {
       killPaginatedGhChild(Atomics.load(view, CAPTURE_SLOT_PID));
     }
-    void worker.terminate();
-    rmSync(dir, { recursive: true, force: true });
+    void worker?.terminate();
+    removePaginatedCaptureDir(dir);
   }
 }
 export function ghApiJson(path, options = {}) {
