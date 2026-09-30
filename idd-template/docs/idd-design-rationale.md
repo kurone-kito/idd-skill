@@ -302,7 +302,14 @@ and that difference is intentional policy, not drift:
   (kurone-kito/idd-skill#1058, an issue-only handoff predating the PR). The
   merge gate re-validates an _already-verified_ session and must tolerate a
   maintainer-authorized handoff relayed by a separate automation actor;
-  authorization then rests on `isAuthorizedForcedHandoff` alone.
+  authorization then rests on `isAuthorizedForcedHandoff` alone. The
+  external-check waiver (`resolveLinkedIssueCandidates` in
+  `external-check-waiver.mts`) is one of these lenient merge-side callers and
+  passes `prFirstCommitAt` too (kurone-kito/idd-skill#3675: without it a
+  successor of an issue-only handoff could not use the waiver on its own PR,
+  observed 2026-09-30 in a private adopter). The marker planner calls the same
+  `resolveHelperActiveClaim` without it on purpose, so its PR-scoped replay
+  keeps rejecting an issue-only marker.
 
 Because the two callers apply different strictness, they can return **different
 verdicts for the same corrected-handoff state** — resume may report
