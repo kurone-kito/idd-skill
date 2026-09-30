@@ -2435,9 +2435,9 @@ instruction files execute them.
 
 Issue authoring under the hold and IDD execution are separate
 decisions, but drafting and publishing are not: by default, the skill
-authors and publishes its drafted issue set, including any body
-published into `needs-decision` or `blocked-by-human`, directly under
-the configured authoring label (`issueAuthoring.authoringLabelName`,
+authors and publishes each `ready`, `needs-decision`, or
+`blocked-by-human` body directly under the configured authoring label
+(`issueAuthoring.authoringLabelName`,
 default `status:authoring`), gated by the completed-draft adversarial
 review and then the mechanical `audit-authored-issue` check — no prior
 user

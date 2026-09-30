@@ -118,10 +118,10 @@ needs-decision, blocked-by-human, and out-of-scope.
    requires the matching `authoring-bucket` marker for that publish,
    closing the gap where a non-ready body would otherwise never be
    audited at all.
-8. Publish each drafted body directly under the authoring hold once
-   the completed-draft review (step 6) and then the mechanical gate
-   (step 7) have passed. That includes a body published into
-   `needs-decision` or `blocked-by-human`. The Intake critique stays the pre-draft
+8. Publish each `ready`, `needs-decision`, or `blocked-by-human` body
+   directly under the authoring hold once the completed-draft review
+   (step 6) and then the mechanical gate (step 7) have passed. The
+   Intake critique stays the pre-draft
    pass above and does not replace step 6. No separate publish
    approval is needed. Only skip publishing when the current request
    explicitly asked for a preview instead. Manage the authoring label

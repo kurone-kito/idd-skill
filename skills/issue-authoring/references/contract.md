@@ -2436,10 +2436,10 @@ only approval boundary.
 
 ## Publication boundary
 
-Publishing a drafted body under the authoring hold, including one
-published into `needs-decision` or `blocked-by-human`, does not need a
-separate user approval once it passes the completed-draft adversarial
-review and then the mechanical `audit-authored-issue` gate — see
+Publishing a `ready`, `needs-decision`, or `blocked-by-human` body under
+the authoring hold does not need a separate user approval once it
+passes the completed-draft adversarial review and then the mechanical
+`audit-authored-issue` gate — see
 [Authoring hold and release](#authoring-hold-and-release) above for the
 full two-stage contract. Removing the authoring label and starting the
 IDD execution loop both require the user's explicit hold-release
