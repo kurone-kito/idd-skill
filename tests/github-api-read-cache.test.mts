@@ -332,6 +332,7 @@ test('a 304 refresh honors maxBytes and runs eviction like publish', () => {
     assert.deepEqual(readEntry(paths.cacheDir, refreshed.entryId ?? ''), {
       schemaVersion: 1,
       storedAt: now,
+      startedAt: now,
       status: 200,
       body: { big },
       complete: true,
@@ -772,6 +773,83 @@ test('a 404 seen after a failed 304 refresh still drops the stored 200', () => {
   }
 });
 
+test('an older strict-fresh read never overwrites or removes a newer one', () => {
+  for (const older of [
+    { status: 200, body: { v: 'older' } },
+    { status: 404, body: null },
+  ]) {
+    const paths = tempRoot();
+    let now = 1_000_000;
+    const clock = () => now;
+    try {
+      const result = readThrough(
+        paths,
+        () => {
+          // A newer strict-fresh read (no lease) starts and finishes while
+          // this older one is still in flight.
+          now += 10;
+          readThrough(paths, okBody({ v: 'newer' }), {
+            mode: 'strict-fresh',
+            now: clock,
+          });
+          now += 10;
+          return older;
+        },
+        { mode: 'strict-fresh', now: clock },
+      );
+      assert.equal(result.status, older.status);
+      now += 10;
+      const hint = readThrough(paths, okBody({ v: 'hint' }), { now: clock });
+      assert.equal(hint.cache, 'hit', String(older.status));
+      assert.deepEqual(hint.body, { v: 'newer' }, String(older.status));
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('a legacy entry without startedAt orders by storedAt against strict-fresh reads', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  const clock = () => now;
+  try {
+    const first = readThrough(paths, okBody({ v: 1 }), { now: clock });
+    // A record written before startedAt existed carries only storedAt.
+    const entryFile = join(
+      paths.cacheDir,
+      'entries',
+      `${String(first.entryId)}.json`,
+    );
+    const legacy = JSON.parse(readFileSync(entryFile, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    delete legacy.startedAt;
+    unlinkSync(entryFile);
+    writeFileSync(entryFile, JSON.stringify(legacy), { mode: 0o600 });
+    const stored = () =>
+      readEntry(paths.cacheDir, String(first.entryId)) as { body: unknown };
+    // A strict-fresh read that started before the legacy record was stored
+    // (its generation is the older storedAt) must not overwrite it.
+    now = 999_990;
+    readThrough(
+      paths,
+      () => {
+        now = 1_000_020;
+        return { status: 200, body: { v: 'older' } };
+      },
+      { mode: 'strict-fresh', now: clock },
+    );
+    assert.deepEqual(stored().body, { v: 1 });
+    // One that starts after it replaces it.
+    now = 1_000_030;
+    readThrough(paths, okBody({ v: 2 }), { mode: 'strict-fresh', now: clock });
+    assert.deepEqual(stored().body, { v: 2 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('an older in-flight 404 does not remove a newer stored entry', () => {
   const paths = tempRoot();
   let now = 1_000_000;
@@ -858,6 +936,12 @@ test('a failed replacement leaves the previous complete entry in place', () => {
           'utf8',
         ),
       ).storedAt,
+      startedAt: JSON.parse(
+        readFileSync(
+          join(paths.cacheDir, 'entries', `${first.entryId}.json`),
+          'utf8',
+        ),
+      ).startedAt,
       status: 200,
       body: { v: 'a' },
       complete: true,

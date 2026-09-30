@@ -138,6 +138,8 @@ export interface ReadThroughGithubApiCacheResult {
 interface StoredRecord {
   schemaVersion: number;
   storedAt: number;
+  /** When the fetch that produced this record started; orders concurrent writers. */
+  startedAt?: number;
   status: number;
   body: unknown;
   complete: true;
@@ -672,6 +674,10 @@ function isStoredRecord(value: unknown, now: number): value is StoredRecord {
     typeof record.storedAt === 'number' &&
     Number.isFinite(record.storedAt) &&
     record.storedAt <= now &&
+    (record.startedAt === undefined ||
+      (typeof record.startedAt === 'number' &&
+        Number.isFinite(record.startedAt) &&
+        record.startedAt <= now)) &&
     typeof record.status === 'number' &&
     record.status >= 200 &&
     record.status < 300 &&
@@ -776,25 +782,32 @@ function persistable(
 }
 
 /**
+ * The generation of a stored record: when its fetch started. A record
+ * from before this field existed falls back to when it was stored.
+ * Concurrent writers are ordered by it, so an older fetch that finishes
+ * later never overwrites or removes what a newer fetch stored, including
+ * between two lease-free strict-fresh reads.
+ */
+function generationOf(record: StoredRecord): number {
+  return record.startedAt ?? record.storedAt;
+}
+
+/**
  * A 404 or 410 is a definitive answer: the stored 200 for this same
  * context is contradicted, so hint reads must not keep serving it. Other
  * failures (401, 403, 429, 5xx) say nothing about the resource and keep
- * the entry. A non-forced (older in-flight) fetch never removes an entry
- * a newer fetch stored meanwhile.
+ * the entry. A fetch never removes an entry a newer fetch stored.
  */
 function invalidateOnMissing(
   ctx: CacheContext,
   result: GithubApiCacheFetchResult,
   startedAt: number,
-  force: boolean,
 ): void {
   if (result.status !== 404 && result.status !== 410) return;
   try {
     const destination = entryPath(ctx);
-    if (!force) {
-      const existing = readRecord(ctx, destination);
-      if (existing && existing.storedAt >= startedAt) return;
-    }
+    const existing = readRecord(ctx, destination);
+    if (existing && generationOf(existing) > startedAt) return;
     safeUnlink(ctx.storage, destination);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
@@ -809,12 +822,12 @@ function publish(
   ctx: CacheContext,
   result: GithubApiCacheFetchResult,
   startedAt: number,
-  force: boolean,
 ): void {
   if (!persistable(ctx, result)) return;
   const record: StoredRecord = {
     schemaVersion: SCHEMA_VERSION,
     storedAt: ctx.now(),
+    startedAt,
     status: result.status,
     body: result.body,
     complete: true,
@@ -824,10 +837,8 @@ function publish(
   const payload = serializeRecord(record);
   if (Buffer.byteLength(payload) > ctx.maxBytes) return;
   const destination = entryPath(ctx);
-  if (!force) {
-    const existing = readRecord(ctx, destination);
-    if (existing && existing.storedAt >= startedAt) return;
-  }
+  const existing = readRecord(ctx, destination);
+  if (existing && generationOf(existing) > startedAt) return;
   ctx.storage.writeAtomic(destination, payload);
   try {
     assertPrivate(ctx.storage, destination, 'file');
@@ -893,6 +904,7 @@ function refreshBase(
   ctx: CacheContext,
   base: StoredRecord,
   result: GithubApiCacheFetchResult,
+  startedAt: number,
 ): void {
   const destination = entryPath(ctx);
   // Skip when the entry was superseded, purged, or evicted while the
@@ -909,6 +921,7 @@ function refreshBase(
   const record: StoredRecord = {
     ...base,
     storedAt: ctx.now(),
+    startedAt,
     ...(result.etag ? { etag: result.etag } : {}),
     ...(result.lastModified ? { lastModified: result.lastModified } : {}),
   };
@@ -951,13 +964,13 @@ function leaderFetch(ctx: CacheContext): ReadThroughGithubApiCacheResult {
     result = ctx.fetch({ etag: base.etag, lastModified: base.lastModified });
     if (result.status === 304) {
       try {
-        refreshBase(ctx, base, result);
+        refreshBase(ctx, base, result, startedAt);
       } catch (error) {
         if (!(error instanceof CacheStorageError)) throw error;
         const live = ctx.fetch({});
-        invalidateOnMissing(ctx, live, startedAt, false);
+        invalidateOnMissing(ctx, live, startedAt);
         try {
-          publish(ctx, live, startedAt, false);
+          publish(ctx, live, startedAt);
         } catch (publishError) {
           if (!(publishError instanceof CacheStorageError)) throw publishError;
         }
@@ -982,9 +995,9 @@ function leaderFetch(ctx: CacheContext): ReadThroughGithubApiCacheResult {
       );
     }
   }
-  invalidateOnMissing(ctx, result, startedAt, false);
+  invalidateOnMissing(ctx, result, startedAt);
   try {
-    publish(ctx, result, startedAt, false);
+    publish(ctx, result, startedAt);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
@@ -1162,9 +1175,9 @@ function coalesce(ctx: CacheContext): ReadThroughGithubApiCacheResult {
 function strictFresh(ctx: CacheContext): ReadThroughGithubApiCacheResult {
   const startedAt = ctx.now();
   const result = ctx.fetch({});
-  invalidateOnMissing(ctx, result, startedAt, true);
+  invalidateOnMissing(ctx, result, startedAt);
   try {
-    publish(ctx, result, startedAt, true);
+    publish(ctx, result, startedAt);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
