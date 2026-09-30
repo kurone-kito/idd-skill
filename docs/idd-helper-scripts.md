@@ -4661,25 +4661,30 @@ reflexively as any other CLI option.
   review body, or any review-thread comment (resolved threads included)
   names it as `#N`, `<owner>/<repo>#N`, or a full issue URL for this
   repository; any author counts, since this proves the PR names the
-  follow-up, not that the deferral was right. The check makes exactly one
+  follow-up, not that the deferral was right. A trusted IDD-operational
+  comment such as the live status digest never counts, because it only
+  lists this gate's own blocker. The check makes exactly one
   strict `gh search issues` read per invocation (bounded by the shared
   search result cap; the PR body arrives on the existing readiness
   snapshot read), and none for `--claimless`, which has no origin issue.
   Optional in the schema, but a real collector run always emits it. An
   unreconciled item is a `deferred-followup-unreconciled` merge-gate
-  blocker, one per follow-up, whose detail names it and both repairs:
+  blocker, one per follow-up, whose detail names it and both repairs: (a)
   reply on the source review thread with
-  `**Rejected** — deferred to follow-up issue #N` and resolve it, or post a
+  `**Rejected** — deferred to follow-up issue #N` and resolve it, which
+  needs no authoring ownership and leaves the follow-up open; or (b) post a
   PR comment naming the follow-up when the finding was fixed in the PR, is
-  no longer needed, or was deferred without a source thread. Either clears
-  the gate, but the new activity keeps `review-currency` at `return-to-e1`
-  until E1 refreshes the watermark, and polling never clears it. Then close
-  the follow-up as not planned through the authoring journal `cleanup` then
+  no longer needed, or was deferred without a source thread, then close the
+  follow-up as not planned through the authoring journal `cleanup` then
   `abandoned` path, only when the session owns its authoring hold or the
-  hold is older than `issueAuthoring.authoringStaleAge`. `checked: false`
-  (the search failed, returned a non-array or empty response, or returned at
-  least the result cap so it may be truncated) is a
-  `deferred-followup-unverified` blocker carrying `unverifiedReason`; it
+  hold is older than `issueAuthoring.authoringStaleAge`. Either repair
+  clears the gate, but the new activity keeps `review-currency` at
+  `return-to-e1` until E1 refreshes the watermark, and polling never clears
+  it. `checked: false` (the search failed, returned a non-array or empty
+  response, returned a result entry without a usable `number`, `state`, or
+  `body`, or returned at least the result cap so it may be truncated) is a
+  `deferred-followup-unverified` blocker carrying `unverifiedReason`; so is
+  a `checked: true` section whose `unverifiedReason` is not `null`. It
   fails closed and never reads as zero follow-ups. A transient failure such
   as a rate limit usually clears on the next invocation; a persistent one
   needs its cause fixed. A
