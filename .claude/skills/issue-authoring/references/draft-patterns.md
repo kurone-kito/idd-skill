@@ -666,9 +666,10 @@ verification shape, not a rigid edit order.
 
 ## Publication boundary
 
-Publish each `ready` body directly under the authoring hold once the
-completed-draft adversarial review and then the mechanical gate have
-passed — this is the default
+Publish each drafted body directly under the authoring hold — a `ready`
+body, or a body published into `needs-decision` or `blocked-by-human` —
+once the completed-draft adversarial review and then the mechanical gate
+have passed. This is the default
 outcome of drafting, and it needs no separate publish approval. Stop
 after publishing (and applying/creating the authoring label) unless
 the user also separately requests release from the authoring hold —
