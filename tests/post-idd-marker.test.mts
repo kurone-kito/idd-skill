@@ -556,6 +556,23 @@ test('--help lists out-of-loop among the supported --type values', () => {
   assert.match(output, /--type <type>\s+one of:.*\bout-of-loop\b/);
 });
 
+test('--help documents --operation-local and its --prior-* flags (#3592)', () => {
+  // post-idd-marker has a hand-rolled parser, so tests/help-text-flags.test.mts
+  // excludes it and cannot catch an accepted-but-undocumented flag.
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { encoding: 'utf8' },
+  );
+  for (const flag of [
+    '--operation-local',
+    '--prior-total-item-count',
+    '--prior-max-activity-at',
+  ]) {
+    assert.ok(output.includes(flag), `--help must document ${flag}`);
+  }
+});
+
 test('a fractional-second embedded timestamp is recognized identically by operationalMarkerPrefix and the parse helpers', () => {
   // OPERATIONAL_MARKERS (regex-based recognition) and
   // parseBoundAdvisoryEvidenceMarker (structured field extraction) must

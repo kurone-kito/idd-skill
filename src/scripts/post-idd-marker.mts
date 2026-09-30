@@ -1332,6 +1332,20 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        fresh snapshot's live HEAD no longer matches it, i.e.
                        the branch moved between E1 Step 1 and this Step 2
                        call.
+  --operation-local    --from-pr --type watermark only: also return the review
+                       activity capture in the JSON envelope's operationLocal
+                       field, and make a defer non-fatal: while required checks
+                       are not passing, exit 0 and post nothing. Every other
+                       refusal still exits 1 (HEAD or CI-completion mismatch,
+                       unreadable check state, or the --prior-* guard below,
+                       which is checked before the defer).
+  --prior-total-item-count <n>
+  --prior-max-activity-at <iso|none>
+                       --operation-local only, and only together: the stored
+                       boundary of an earlier watermark. Refuses (exit 1) when
+                       the capture still holds undispositioned items and its
+                       activity has advanced past that boundary, so it routes
+                       back to triage instead of being marked handled.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
