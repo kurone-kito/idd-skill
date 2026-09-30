@@ -741,6 +741,20 @@ function activeGhHost(): string | undefined {
   }
 }
 
+/**
+ * The `--hostname` for a cached request when nothing else names one. The
+ * cache key and credential were derived for `cacheHost`, possibly from the
+ * sole host `gh auth status` reported, so the request is pinned to it
+ * instead of relying on `gh`'s own default agreeing. `github.com` stays
+ * unpinned so the emitted argv is unchanged there, as elsewhere.
+ */
+function explicitCacheHostname(
+  cacheHost: string | undefined,
+): string | undefined {
+  if (cacheHost === undefined || cacheHost === 'github.com') return undefined;
+  return process.env.GH_HOST?.trim() ? undefined : cacheHost;
+}
+
 function resolveReadCacheHost(): string | undefined {
   const configured = process.env.GH_HOST?.trim().toLowerCase();
   if (configured) return configured;
@@ -823,8 +837,9 @@ function loadReadCachePolicy(
 function ghApiIncluded(
   path: string,
   options: GhApiJsonOptions,
+  cacheHost?: string,
 ): IncludedGhApiEnvelope {
-  const hostname = resolveGhApiHostname();
+  const hostname = resolveGhApiHostname() ?? explicitCacheHostname(cacheHost);
   const args = [
     'api',
     path,
@@ -874,9 +889,10 @@ function fetchForReadCache(
   path: string,
   options: GhApiJsonOptions,
   request: GithubApiCacheFetchRequest,
+  cacheHost: string,
 ): GithubApiCacheFetchResult {
   if (options.paginate) {
-    const executed = executeGhApiJson(path, options);
+    const executed = executeGhApiJson(path, options, cacheHost);
     return {
       status: 200,
       body: executed.data,
@@ -886,7 +902,7 @@ function fetchForReadCache(
   const etag = safeHeaderValue(request.etag);
   const extraArgs = [...(options.extraArgs ?? [])];
   if (etag) extraArgs.push('-H', `If-None-Match: ${etag}`);
-  const envelope = ghApiIncluded(path, { ...options, extraArgs });
+  const envelope = ghApiIncluded(path, { ...options, extraArgs }, cacheHost);
   return {
     status: envelope.status,
     body: envelope.data,
@@ -943,7 +959,7 @@ function ghApiJsonWithReadCache(
     fetch: (conditional) => {
       thrown = undefined;
       try {
-        return fetchForReadCache(path, options, conditional);
+        return fetchForReadCache(path, options, conditional, host);
       } catch (error) {
         // A definitive 404/410 reaches the cache so it drops the stored
         // 200; the original error is rethrown below, so the caller sees
@@ -1015,9 +1031,10 @@ export function ghApiJson(
 function executeGhApiJson(
   path: string,
   options: GhApiJsonOptions = {},
+  cacheHost?: string,
 ): { data: unknown; toleratedFailure: boolean } {
   const { paginate = false, extraArgs = [], allowStatuses = [] } = options;
-  const hostname = resolveGhApiHostname();
+  const hostname = resolveGhApiHostname() ?? explicitCacheHostname(cacheHost);
   const args = [
     'api',
     path,

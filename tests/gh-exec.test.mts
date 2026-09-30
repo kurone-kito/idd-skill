@@ -1750,6 +1750,63 @@ test('ghApiJson readCache resolves github.com from GITHUB_SERVER_URL with severa
   }
 });
 
+test('ghApiJson readCache pins a request to the host it keyed the entry for (#3587)', () => {
+  const ghesStatus = '{"hosts":{"ghe.example.com":[{"state":"success"}]}}';
+  const cases = [
+    {
+      label: 'single request',
+      paginate: false,
+      body: 'process.stdout.write(\'HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}\');',
+      args: ['api', 'repos/o/r', '--hostname', 'ghe.example.com', '--include'],
+    },
+    {
+      label: 'paginated',
+      paginate: true,
+      body: 'process.stdout.write(\'{"id":1}\\n\');',
+      args: [
+        'api',
+        'repos/o/r',
+        '--hostname',
+        'ghe.example.com',
+        '--paginate',
+        '--jq',
+        '.[]',
+      ],
+    },
+  ];
+  for (const scenario of cases) {
+    const paths = readCacheFixture();
+    const restore = stubGh(
+      recordingGh(paths.argsFile, scenario.body, ghesStatus),
+    );
+    try {
+      withGhHostEnv({}, () => {
+        ghApiJson('repos/o/r', {
+          paginate: scenario.paginate,
+          readCache: {
+            classification: 'read' as const,
+            policy: readCachePolicy(paths.cacheDir),
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            credentialMaterial: 'credential-sentinel',
+            requestShape: { path: 'repos/o/r' },
+          },
+        });
+        // The entry is keyed for the sole GHES host, so the request must
+        // target it explicitly rather than rely on gh's default host.
+        assert.deepEqual(
+          recordedArgs(paths.argsFile)[0],
+          scenario.args,
+          scenario.label,
+        );
+      });
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('ghApiJson readCache with blank credential material stays uncached (#3587)', () => {
   const paths = readCacheFixture();
   const restore = stubGh(
