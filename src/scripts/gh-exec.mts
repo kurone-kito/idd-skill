@@ -913,6 +913,14 @@ function fetchForReadCache(
   };
 }
 
+function hasHostnameOverride(
+  extraArgs: readonly string[] | undefined,
+): boolean {
+  return (extraArgs ?? []).some(
+    (arg) => arg === '--hostname' || arg.startsWith('--hostname='),
+  );
+}
+
 function ghApiJsonWithReadCache(
   path: string,
   options: GhApiJsonOptions,
@@ -923,6 +931,12 @@ function ghApiJsonWithReadCache(
   }
   const policy = loadReadCachePolicy(request.policy);
   if (!policy.enabled) return ghApiJsonUncached(path, options);
+  // The entry key and credential are derived for the environment host. A
+  // caller-supplied --hostname would send the request elsewhere, so an
+  // explicit override stays uncached rather than keyed under the wrong host.
+  if (hasHostnameOverride(options.extraArgs)) {
+    return ghApiJsonUncached(path, options);
+  }
   const host = resolveReadCacheHost();
   if (host === undefined) return ghApiJsonUncached(path, options);
   const credentialMaterial =

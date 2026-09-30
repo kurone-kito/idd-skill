@@ -1750,6 +1750,48 @@ test('ghApiJson readCache resolves github.com from GITHUB_SERVER_URL with severa
   }
 });
 
+test('ghApiJson readCache stays uncached when extraArgs overrides the hostname (#3587)', () => {
+  for (const extraArgs of [
+    ['--hostname', 'other.example.com'],
+    ['--hostname=other.example.com'],
+  ]) {
+    const paths = readCacheFixture();
+    const restore = stubGh(
+      recordingGh(
+        paths.argsFile,
+        'process.stdout.write(JSON.stringify({ ok: true }));',
+      ),
+    );
+    try {
+      withGhHostEnv({}, () => {
+        const options = {
+          extraArgs,
+          readCache: {
+            classification: 'read' as const,
+            policy: readCachePolicy(paths.cacheDir),
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            credentialMaterial: 'credential-sentinel',
+            requestShape: { path: 'repos/o/r' },
+          },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        // Both calls reach gh, and nothing is stored under the wrong host.
+        const recorded = recordedArgs(paths.argsFile);
+        assert.equal(recorded.length, 2, extraArgs.join(' '));
+        for (const args of recorded) {
+          assert.equal(args.includes('--include'), false);
+        }
+        assert.deepEqual(cacheEntryNames(paths.cacheDir), []);
+      });
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('ghApiJson readCache pins a request to the host it keyed the entry for (#3587)', () => {
   const ghesStatus = '{"hosts":{"ghe.example.com":[{"state":"success"}]}}';
   const cases = [
