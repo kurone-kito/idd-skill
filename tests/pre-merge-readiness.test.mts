@@ -15664,8 +15664,6 @@ test('computeDeferFollowUps: only an open follow-up counts, matching the state c
     hits: [
       deferHit(30, { state: 'closed' }),
       deferHit(31, { state: 'CLOSED' }),
-      deferHit(32, { state: null }),
-      deferHit(33, { state: 5 }),
       deferHit(34, { state: 'open' }),
       deferHit(35, { state: 'OPEN' }),
     ],
@@ -15673,6 +15671,48 @@ test('computeDeferFollowUps: only an open follow-up counts, matching the state c
   assert.deepEqual(
     evidence.items.map((item) => item.number),
     [34, 35],
+  );
+});
+
+// A result entry the search returned without a usable identity or state cannot
+// be told from a real follow-up, so silently skipping it would let a marked
+// follow-up drop out and the check read as a verified empty result.
+for (const [label, entry] of [
+  ['a string entry', 'oops'],
+  ['a null entry', null],
+  ['an array entry', []],
+  ['an entry with no number', { ...deferHit(30), number: undefined }],
+  ['an entry with a string number', { ...deferHit(30), number: '30' }],
+  ['an entry with a zero number', deferHit(0)],
+  ['an entry with a fractional number', deferHit(30.5)],
+  ['an entry with a null state', deferHit(30, { state: null })],
+  ['an entry with a numeric state', deferHit(30, { state: 5 })],
+  ['an entry with no state', { ...deferHit(30), state: undefined }],
+  ['an entry with an object body', { ...deferHit(30), body: {} }],
+] as [string, unknown][]) {
+  test(`computeDeferFollowUps: ${label} fails the whole check closed, even beside a valid follow-up`, () => {
+    const { evidence } = deferEvidence({ hits: [deferHit(12), entry] });
+    assert.equal(evidence.checked, false);
+    assert.match(
+      evidence.unverifiedReason ?? '',
+      /without a usable number, state, or body/,
+    );
+    assert.deepEqual(evidence.items, []);
+  });
+}
+
+test('computeDeferFollowUps: an entry with a null or absent body is skipped, not malformed', () => {
+  const { evidence } = deferEvidence({
+    hits: [
+      deferHit(12),
+      { ...deferHit(30), body: null },
+      { ...deferHit(31), body: undefined },
+    ],
+  });
+  assert.equal(evidence.checked, true);
+  assert.deepEqual(
+    evidence.items.map((item) => item.number),
+    [12],
   );
 });
 
@@ -16175,6 +16215,27 @@ for (const [label, overrides] of RECONCILING_SOURCES) {
     );
   });
 }
+
+const DEFER_DIGEST_COMMENT =
+  '<!-- idd-live-status: current -->\n\nOpen blockers: deferred-followup-unreconciled #12';
+
+test('collectPreMergeReadiness: a trusted live status digest that lists the follow-up as an open blocker does not reconcile it', () => {
+  const { port } = deferCollectorFixture({ comments: [DEFER_DIGEST_COMMENT] });
+  const { evidence, gates } = collectDeferReport(port, [
+    '--claim-issue',
+    '7',
+    '--trusted-marker-logins',
+    'commenter',
+  ]);
+  assert.equal(evidence.items[0].reconciled, false);
+  assert.ok(gates.includes('deferred-followup-unreconciled'), gates.join());
+});
+
+test('collectPreMergeReadiness: a digest-shaped comment from an untrusted author is ordinary text and still counts as naming the follow-up', () => {
+  const { port } = deferCollectorFixture({ comments: [DEFER_DIGEST_COMMENT] });
+  const { evidence } = collectDeferReport(port);
+  assert.equal(evidence.items[0].reconciled, true);
+});
 
 test('collectPreMergeReadiness: a number that only resembles the follow-up (#120, another repository) does not reconcile it', () => {
   const { port } = deferCollectorFixture({

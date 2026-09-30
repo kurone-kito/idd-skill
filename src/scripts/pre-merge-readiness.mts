@@ -65,6 +65,7 @@ import {
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   buildPreMergeReadinessSummary,
+  classifyIddPrComment,
   classifyPrLoopMembership,
   deriveIddAgentLogins,
   extractSameRepoClosingIssueNumbers,
@@ -1190,9 +1191,21 @@ export function collectPreMergeReadiness(
             ),
           ]),
         ],
+    // An IDD-operational comment (the live status digest lists the open
+    // blockers, follow-up numbers included) is bookkeeping about this very
+    // gate, so it never counts as the pull request naming a follow-up;
+    // otherwise an agent's digest entry for the blocker would clear it.
     mentionTexts: [
       snapshot.body ?? '',
-      ...comments.map((comment) => String(comment.body ?? '')),
+      ...comments
+        .filter(
+          (comment) =>
+            classifyIddPrComment(comment, {
+              trustedMarkerLogins,
+              iddAgentLogins,
+            }) !== 'idd-operational',
+        )
+        .map((comment) => String(comment.body ?? '')),
       ...reviews.map((review) => String(review.body ?? '')),
       ...threads.flatMap((thread) =>
         thread.comments.map((comment) => comment.body),
@@ -1751,16 +1764,28 @@ function labelNames(labels: unknown): string[] {
     .filter(Boolean);
 }
 
+function malformedDeferSearchHit(): DeferFollowUpsEvidence {
+  return {
+    checked: false,
+    unverifiedReason:
+      'the follow-up search returned a result entry without a usable number, state, or body',
+    items: [],
+  };
+}
+
 /**
  * Enumerate open follow-ups deferred from this PR's origin issue(s) and mark
  * which the PR names (#3624). Read-only. No origin issue means a verified
  * empty result with no search. Otherwise exactly one strict
  * `searchOpenWorkItems` call: a throw, a non-array result, or a result at or
  * over `GH_SEARCH_RESULT_CAP` (possibly truncated) is `checked: false`, never
- * an empty successful result. Each hit is re-confirmed locally: open, carrying
- * the defer-source marker outside any code region, and whose sole unambiguous
- * `Refs` line names one of the origin issues. A marked issue with no or an
- * ambiguous `Refs` line is not attributed to any PR and never counts.
+ * an empty successful result, and so is a hit that is not an object or lacks a
+ * positive integer `number`, a string `state`, or a string-or-absent `body`
+ * (a follow-up cannot be told from noise, so it must not drop out silently).
+ * Each hit is re-confirmed locally: open, carrying the defer-source marker
+ * outside any code region, and whose sole unambiguous `Refs` line names one of
+ * the origin issues. A marked issue with no or an ambiguous `Refs` line is not
+ * attributed to any PR and never counts.
  */
 export function computeDeferFollowUps({
   port,
@@ -1822,17 +1847,31 @@ export function computeDeferFollowUps({
   const authoringLabel = authoringLabelName.trim().toLowerCase();
   const byNumber = new Map<number, DeferFollowUpItem>();
   for (const raw of hits) {
-    const hit = (raw ?? {}) as {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return malformedDeferSearchHit();
+    }
+    const hit = raw as {
       number?: unknown;
       body?: unknown;
       labels?: unknown;
       state?: unknown;
     };
-    const number = Number(hit.number);
-    if (!Number.isInteger(number) || number <= 0 || byNumber.has(number)) {
+    const number = hit.number;
+    if (
+      typeof number !== 'number' ||
+      !Number.isInteger(number) ||
+      number <= 0 ||
+      typeof hit.state !== 'string' ||
+      (hit.body !== undefined &&
+        hit.body !== null &&
+        typeof hit.body !== 'string')
+    ) {
+      return malformedDeferSearchHit();
+    }
+    if (byNumber.has(number)) {
       continue;
     }
-    if (String(hit.state ?? '').toLowerCase() !== 'open') {
+    if (hit.state.toLowerCase() !== 'open') {
       continue;
     }
     const body = typeof hit.body === 'string' ? hit.body : '';
