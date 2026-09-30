@@ -799,19 +799,21 @@ test('every mutating helper path invalidates the discover hints', () => {
     }
   }
   assert.deepEqual(missing, []);
-  const expectedHooks: Record<string, number> = {
-    'post-idd-marker.mts': 1,
-    'idd-merge-execute.mts': 2,
-    'idd-roadmap-audit-execute.mts': 2,
-    'suitability-close-execute.mts': 2,
-    'force-handoff.mts': 2,
+  // `force-handoff` reaches the invalidation through an injectable option so
+  // unit tests stay off the host cache; its two post sites call that option.
+  const expectedHooks: Record<string, [token: string, count: number]> = {
+    'post-idd-marker.mts': ['invalidateDiscoverHints(', 1],
+    'idd-merge-execute.mts': ['invalidateDiscoverHints(', 2],
+    'idd-roadmap-audit-execute.mts': ['invalidateDiscoverHints(', 2],
+    'suitability-close-execute.mts': ['invalidateDiscoverHints(', 2],
+    'force-handoff.mts': ['invalidateHints(', 2],
   };
-  for (const [name, count] of Object.entries(expectedHooks)) {
+  for (const [name, [token, count]] of Object.entries(expectedHooks)) {
     const source = readFileSync(join(scriptsDir, name), 'utf8');
     assert.equal(
-      source.split('invalidateDiscoverHints(').length - 1,
+      source.split(token).length - 1,
       count,
-      `${name} should call invalidateDiscoverHints ${count} time(s)`,
+      `${name} should call ${token} ${count} time(s)`,
     );
   }
 });

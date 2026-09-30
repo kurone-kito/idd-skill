@@ -1578,12 +1578,15 @@ async function strictFreshAsync(
  * Async twin of {@link readThroughGithubApiCache} for `hint` and
  * `strict-fresh` reads whose producer is asynchronous (a whole helper
  * enumeration rather than one REST call). It applies the same bypass,
- * identity, freshness, secret, size, and `incomplete` rules and holds the
- * same cross-process single-flight lease across the whole computation. A
- * leader that died is detected by its pid; a live one is waited on up to
- * `leaseMaxWaitMs` and never robbed, so a long enumeration is not
- * duplicated. Fetch failures propagate after the lease is released and are
- * never stored.
+ * identity, secret, size, and `incomplete` rules. A `hint` read holds the
+ * same cross-process single-flight lease across the whole computation and
+ * measures freshness from when the fetch started; a leader that died is
+ * detected by its pid, a live one is waited on up to `leaseMaxWaitMs` and
+ * never robbed, so a long enumeration is not duplicated. A `strict-fresh`
+ * read, like the sync path's, takes no lease and ignores stored records: it
+ * is defined as "compute now", and coalescing it onto an enumeration that
+ * began earlier would return a record older than the call asked for. Fetch
+ * failures propagate after any lease is released and are never stored.
  */
 export async function readThroughGithubApiCacheAsync(
   input: ReadThroughGithubApiCacheAsyncInput,

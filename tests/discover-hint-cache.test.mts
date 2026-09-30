@@ -714,6 +714,17 @@ test('concurrent readers of a hint that is stale from its start still coalesce',
   const fx = fixture();
   let calls = 0;
   let release: (() => void) | null = null;
+  // The follower reaches the lease only when it starts to wait on the leader,
+  // which is when the injected sleep is first called: an explicit signal, not
+  // a real-time delay.
+  let followerWaiting!: () => void;
+  const followerAtLease = new Promise<void>((done) => {
+    followerWaiting = done;
+  });
+  fx.deps.sleep = async () => {
+    followerWaiting();
+    await new Promise<void>((done) => setTimeout(done, 5));
+  };
   const compute = async (): Promise<Report> => {
     calls += 1;
     if (calls === 1) {
@@ -732,8 +743,7 @@ test('concurrent readers of a hint that is stale from its start still coalesce',
     fx.clock.now += 250_000;
     const first = readDiscoverHint(request(fx, compute));
     const second = readDiscoverHint(request(fx, compute));
-    // Let both reach the lease before the leader finishes.
-    await new Promise<void>((done) => setTimeout(done, 60));
+    await followerAtLease;
     (release as (() => void) | null)?.();
     const [a, b] = await Promise.all([first, second]);
     assert.equal(calls, 2);
@@ -766,6 +776,67 @@ test('an invalidation without an explicit repository falls back to origin', asyn
       );
     }
     assert.equal(calls(), partial.length + 1);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('a half-given identity is not identified locally and bypasses the cache', async () => {
+  const fx = fixture();
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    // The helpers fill the missing half from `gh repo view`, which this layer
+    // never calls, so the key could not name what was enumerated.
+    const ownerOnly = await readDiscoverHint(
+      request(fx, compute, { owner: 'other' }),
+    );
+    const repoOnly = await readDiscoverHint(
+      request(fx, compute, { repo: 'other' }),
+    );
+    assert.equal('cache' in ownerOnly, false);
+    assert.equal('cache' in repoOnly, false);
+    const again = await readDiscoverHint(
+      request(fx, compute, { owner: 'other' }),
+    );
+    assert.equal('cache' in again, false);
+    assert.equal(calls(), 3);
+    assert.equal(existsSync(join(fx.cacheDir, 'entries')), false);
+    // A complete explicit pair is identified and cached.
+    await readDiscoverHint(request(fx, compute, { owner: 'x', repo: 'y' }));
+    const warm = await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y' }),
+    );
+    assert.equal(warm.cache?.source, 'hint');
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('an invalidation by one credential drops the hints of every credential', async () => {
+  const fx = fixture();
+  const withCredential = (credential: string): DiscoverHintDeps => ({
+    ...fx.deps,
+    credential: () => credential,
+  });
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    const a = withCredential('credential-a');
+    const b = withCredential('credential-b');
+    await readDiscoverHint(request(fx, compute, { deps: a }));
+    await readDiscoverHint(request(fx, compute, { deps: b }));
+    assert.equal(calls(), 2);
+    // Each credential keeps its own hint.
+    const warmA = await readDiscoverHint(request(fx, compute, { deps: a }));
+    const warmB = await readDiscoverHint(request(fx, compute, { deps: b }));
+    assert.equal(warmA.cache?.source, 'hint');
+    assert.equal(warmB.cache?.source, 'hint');
+    // A mutation made with credential A drops credential B's hint as well.
+    assert.equal(invalidateDiscoverHints({}, a), true);
+    const afterA = await readDiscoverHint(request(fx, compute, { deps: a }));
+    const afterB = await readDiscoverHint(request(fx, compute, { deps: b }));
+    assert.equal(afterA.cache?.source, 'live');
+    assert.equal(afterB.cache?.source, 'live');
+    assert.equal(calls(), 4);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

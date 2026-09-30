@@ -1679,6 +1679,9 @@ speed-up, never a gate.
   `gh auth status`); the credential from the read cache's local lookup. An
   unidentified caller bypasses the cache and, unless a cache flag was
   passed, reports nothing (`cache.mode` `bypass` appears only with a flag).
+  So does a half-given identity (`--owner` without `--repo`, or the
+  reverse): the helper fills the missing half from `gh repo view`, which the
+  hint layer never calls, so it could not name what was enumerated.
   A clone whose `origin` differs from `gh`'s default repository (for example
   a fork) keys hints by `origin`; pass the same `--owner`/`--repo` to every
   helper there so hints and invalidation agree.
@@ -1715,8 +1718,12 @@ speed-up, never a gate.
 - **Invalidation.** Claim and unclaim markers posted by `post-idd-marker`,
   both merge paths of `idd-merge-execute`, the closures and claim releases
   of `idd-roadmap-audit-execute` and `suitability-close-execute`, and the
-  interactive `force-handoff` bump the generation token, which drops every
-  Discover hint in one step without touching other cache entries. The call
+  interactive `force-handoff` (after any successful post) bump the
+  generation token, which drops every Discover hint in one step without
+  touching other cache entries. The token is not secret and is shared by
+  every credential on the host and repository, so a mutation made with one
+  credential also drops the others' hints; the hints themselves stay
+  credential-isolated. The call
   is best effort and never blocks the helper, and it keys on an explicit
   repository argument, else `origin`, like the hint. Writes made outside
   these helpers, such as a raw `gh` label, body, link, or close change, are

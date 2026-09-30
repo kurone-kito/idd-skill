@@ -86,6 +86,12 @@ interface RunHandoffOptions {
     body: string,
   ) => Promise<PostedCommentPayload> | PostedCommentPayload;
   mode?: string;
+  /**
+   * Drops the cached Discover hints after a handoff comment posts (#3588).
+   * Defaults to the real best-effort invalidation; tests inject a no-op or a
+   * spy so they never touch a host cache.
+   */
+  invalidateHints?: (identity: { owner?: string; repo?: string }) => void;
   /** Sink for the plan-preview / result output; defaults to stdout. Tests
    * inject this to capture and assert on printed output (e.g. the
    * same-successor warning) without touching the real stdout stream. */
@@ -128,6 +134,7 @@ export async function runHandoff(
     fetchIssueComments,
     fetchLinkedPrs,
     postComment,
+    invalidateHints = invalidateDiscoverHints,
     mode,
     write = (chunk: string) => {
       process.stdout.write(chunk);
@@ -315,10 +322,8 @@ export async function runHandoff(
             '-f',
             `body=${releaseBody}`,
           ]) as PostedCommentPayload);
-      if (!postComment) {
-        // A released claim changes what a cached Discover hint may list (#3588).
-        invalidateDiscoverHints(repo ? { owner, repo: name } : {});
-      }
+      // A released claim changes what a cached Discover hint may list (#3588).
+      invalidateHints(repo ? { owner, repo: name } : {});
       const releaseUrl = String(
         releaseResult.html_url ?? releaseResult.url ?? '',
       );
@@ -383,11 +388,9 @@ export async function runHandoff(
           `body=${plan.markerBody}`,
         ]) as PostedCommentPayload);
 
-    if (!postComment) {
-      // A forced handoff changes claim ownership, so drop cached Discover
-      // hints (best effort; #3588).
-      invalidateDiscoverHints(repo ? { owner, repo: name } : {});
-    }
+    // A forced handoff changes claim ownership, so drop cached Discover hints
+    // (best effort; #3588).
+    invalidateHints(repo ? { owner, repo: name } : {});
     const commentUrl = String(result.html_url ?? result.url ?? '');
     write(
       [

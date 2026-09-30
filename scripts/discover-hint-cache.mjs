@@ -96,15 +96,13 @@ function secretEnv(env) {
     env.GITHUB_ENTERPRISE_TOKEN,
   ].filter((value) => typeof value === 'string');
 }
-/**
- * Resolve the cache identity **without any network call**: repo from an
- * explicit pair or the origin remote, host from `GH_HOST`, then
- * `GITHUB_SERVER_URL`, then the origin remote (never `gh auth status`, which
- * calls the API), and credential material from the delivered local lookup.
- * `null` means the feature is off or the caller cannot be identified, so the
- * cache is bypassed rather than keyed under a guessed identity.
- */
-function resolveConfig(request, deps) {
+function resolveConfig(request, deps, partial) {
+  if (
+    partial === 'bypass' &&
+    Boolean(request.owner) !== Boolean(request.repo)
+  ) {
+    return null;
+  }
   const env = deps.env ?? process.env;
   const cwd = deps.cwd ?? process.cwd();
   const policy = deps.policy ?? loadReadCachePolicy(undefined);
@@ -140,6 +138,20 @@ function resolveConfig(request, deps) {
     cwd,
   };
 }
+/**
+ * The generation token is not secret and is shared by every credential on a
+ * host and repository, so a claim or merge made with one credential drops the
+ * hints of every other credential too. Hints themselves stay credential
+ * isolated: only this fixed, non-secret partition is shared.
+ */
+const GENERATION_CREDENTIAL = 'idd-discover-hint-generation';
+function generationInput(config, deps) {
+  return {
+    ...baseInput(config, deps),
+    credentialMaterial: GENERATION_CREDENTIAL,
+    secretMaterial: [],
+  };
+}
 function baseInput(config, deps) {
   return {
     classification: 'read',
@@ -166,7 +178,7 @@ function baseInput(config, deps) {
  */
 function readGeneration(config, deps) {
   const result = readThroughGithubApiCache({
-    ...baseInput(config, deps),
+    ...generationInput(config, deps),
     mode: 'hint',
     // The token must outlive every hint, so it is fresh for the whole
     // retention window rather than the short hint window.
@@ -312,7 +324,9 @@ export async function readDiscoverHint(request) {
   }
   // Identity resolution spawns local processes, so it is skipped entirely
   // while the feature is off.
-  const config = active ? resolveConfig(request, { ...deps, policy }) : null;
+  const config = active
+    ? resolveConfig(request, { ...deps, policy }, 'bypass')
+    : null;
   // A run the cache did not take part in (feature off, caller unidentified,
   // or storage degraded) reports nothing unless a cache flag asked about it,
   // so its output stays byte-identical to the uncached helper.
@@ -407,11 +421,11 @@ function meta(
  */
 export function invalidateDiscoverHints(request = {}, deps = {}) {
   try {
-    const config = resolveConfig(request, deps);
+    const config = resolveConfig(request, deps, 'origin');
     if (config === null) return false;
     const token = randomUUID();
     readThroughGithubApiCache({
-      ...baseInput(config, deps),
+      ...generationInput(config, deps),
       mode: 'strict-fresh',
       policy: { ...config.policy, maxAgeMs: config.policy.retentionMs },
       requestShape: { unit: GENERATION_UNIT },

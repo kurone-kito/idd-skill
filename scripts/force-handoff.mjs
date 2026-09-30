@@ -52,6 +52,7 @@ export async function runHandoff(options = {}) {
     fetchIssueComments,
     fetchLinkedPrs,
     postComment,
+    invalidateHints = invalidateDiscoverHints,
     mode,
     write = (chunk) => {
       process.stdout.write(chunk);
@@ -223,10 +224,8 @@ export async function runHandoff(options = {}) {
             '-f',
             `body=${releaseBody}`,
           ]);
-      if (!postComment) {
-        // A released claim changes what a cached Discover hint may list (#3588).
-        invalidateDiscoverHints(repo ? { owner, repo: name } : {});
-      }
+      // A released claim changes what a cached Discover hint may list (#3588).
+      invalidateHints(repo ? { owner, repo: name } : {});
       const releaseUrl = String(
         releaseResult.html_url ?? releaseResult.url ?? '',
       );
@@ -286,11 +285,9 @@ export async function runHandoff(options = {}) {
           '-f',
           `body=${plan.markerBody}`,
         ]);
-    if (!postComment) {
-      // A forced handoff changes claim ownership, so drop cached Discover
-      // hints (best effort; #3588).
-      invalidateDiscoverHints(repo ? { owner, repo: name } : {});
-    }
+    // A forced handoff changes claim ownership, so drop cached Discover hints
+    // (best effort; #3588).
+    invalidateHints(repo ? { owner, repo: name } : {});
     const commentUrl = String(result.html_url ?? result.url ?? '');
     write(
       [
