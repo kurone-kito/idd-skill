@@ -22,6 +22,7 @@ import {
   classifyPendingReviewWatch,
   collectAssertNextActions,
   computeAdvisoryConvergenceVerdict,
+  createPendingReviewWatch,
   DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
   DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
   formatAssertNextActions,
@@ -7293,9 +7294,24 @@ const scenario = JSON.parse(fs.readFileSync(process.env.IDD_WATCH_STUB_SCENARIO,
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.IDD_WATCH_STUB_CALLS, args.join(' ') + '\\n');
 const after = (flag) => args[args.indexOf(flag) + 1];
+const expectedRepo = scenario.expectedRepo || 'example-owner/example-repo';
+if (args[0] === 'repo' && args[1] === 'view') {
+  const resolution = scenario.repoResolution;
+  const field = after('--json');
+  if (!resolution || (field !== 'owner' && field !== 'name')) {
+    process.stderr.write('unexpected repo view argv: ' + args.join(' ') + '\\n');
+    process.exit(1);
+  }
+  if ((field === 'owner' && resolution.ownerFails) || (field === 'name' && resolution.nameFails)) {
+    process.stderr.write('gh: repo view failed\\n');
+    process.exit(1);
+  }
+  process.stdout.write((field === 'owner' ? resolution.owner : resolution.name) + '\\n');
+  process.exit(0);
+}
 if (args[0] === 'pr' && args[1] === 'view') {
   const fields = String(after('--json')).split(',');
-  if (args[2] !== '1234' || after('-R') !== 'example-owner/example-repo' || !fields.includes('headRefOid')) {
+  if (args[2] !== '1234' || after('-R') !== expectedRepo || !fields.includes('headRefOid')) {
     process.stderr.write('unexpected pr view argv: ' + args.join(' ') + '\\n');
     process.exit(1);
   }
@@ -7306,7 +7322,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   process.stdout.write(JSON.stringify({ headRefOid: scenario.head, author: { login: 'someone' } }));
   process.exit(0);
 }
-if (args[0] === 'api' && args[1] === 'repos/example-owner/example-repo/pulls/1234/reviews') {
+if (args[0] === 'api' && args[1] === 'repos/' + expectedRepo + '/pulls/1234/reviews') {
   if (!args.includes('--paginate')) {
     process.stderr.write('unexpected reviews argv: ' + args.join(' ') + '\\n');
     process.exit(1);
@@ -7457,6 +7473,162 @@ test('the default pending-review watch reports unknown, never an empty success, 
       unknownWatch,
     );
     assert.equal(ghCalls().length, callsBefore);
+  });
+});
+
+// kurone-kito/idd-skill#3617: the shipped workflow runs the helper without
+// --owner or --repo, so the watch must resolve the repository from the
+// checkout (two `gh repo view` reads) once per poll, not on every tick.
+const NO_REPO_ARGV = ['--pr', '1234'];
+
+const REPO_RESOLUTION = { owner: 'example-owner', name: 'example-repo' };
+
+function countGhCalls(ghCalls: () => string[], prefix: string): number {
+  return ghCalls().filter((call) => call.startsWith(prefix)).length;
+}
+
+test('the pending-review watch resolves the repository once across ticks when argv has no --owner or --repo', () => {
+  withDefaultWatchGhStub((setScenario, ghCalls) => {
+    setScenario({
+      head: HEAD,
+      reviews: [defaultWatchReview(7)],
+      repoResolution: REPO_RESOLUTION,
+    });
+    const watch = createPendingReviewWatch();
+    let previous: string | null = null;
+    for (let tick = 0; tick < 3; tick += 1) {
+      const result = watch(NO_REPO_ARGV, previous);
+      assert.equal(result.kind, 'unchanged');
+      previous = result.fingerprint;
+    }
+    // One resolution is exactly two reads (owner, then name); every tick
+    // still reads the HEAD and the review list once each.
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 2);
+    assert.equal(countGhCalls(ghCalls, 'pr view'), 3);
+    assert.equal(countGhCalls(ghCalls, 'api '), 3);
+  });
+});
+
+// The only test that drives the exported singleton without --owner and
+// --repo: its cache lives for the whole test process, so any other case that
+// needs a resolution builds its own instance with createPendingReviewWatch().
+test('the exported default pending-review watch shares one cached repository resolution across ticks', () => {
+  withDefaultWatchGhStub((setScenario, ghCalls) => {
+    setScenario({
+      head: HEAD,
+      reviews: [defaultWatchReview(7)],
+      repoResolution: REPO_RESOLUTION,
+    });
+    let previous: string | null = null;
+    for (let tick = 0; tick < 3; tick += 1) {
+      const result = watchPendingReviewFromGitHub(NO_REPO_ARGV, previous);
+      assert.equal(result.kind, 'unchanged');
+      previous = result.fingerprint;
+    }
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 2);
+  });
+});
+
+test('the pending-review watch never resolves the repository when --owner and --repo are given', () => {
+  withDefaultWatchGhStub((setScenario, ghCalls) => {
+    // No repoResolution in the scenario: the stub fails any `repo view`.
+    setScenario({ head: HEAD, reviews: [defaultWatchReview(7)] });
+    const watch = createPendingReviewWatch();
+    assert.equal(watch(DEFAULT_WATCH_ARGV, null).kind, 'unchanged');
+    assert.equal(watch(DEFAULT_WATCH_ARGV, 'previous').kind, 'changed');
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 0);
+  });
+});
+
+test('the pending-review watch keeps a given --owner or --repo and fills only the missing half from one cached resolution', () => {
+  // Each resolved half differs from its flag, so a watch that preferred the
+  // resolved value over the flag would ask for the wrong repository and fail.
+  const cases = [
+    {
+      flag: ['--owner', 'flag-owner'],
+      resolution: { owner: 'resolved-owner', name: 'example-repo' },
+      expectedRepo: 'flag-owner/example-repo',
+    },
+    {
+      flag: ['--repo', 'flag-repo'],
+      resolution: { owner: 'example-owner', name: 'resolved-repo' },
+      expectedRepo: 'example-owner/flag-repo',
+    },
+  ];
+  for (const { flag, resolution, expectedRepo } of cases) {
+    withDefaultWatchGhStub((setScenario, ghCalls) => {
+      setScenario({
+        head: HEAD,
+        reviews: [defaultWatchReview(7)],
+        repoResolution: resolution,
+        expectedRepo,
+      });
+      const watch = createPendingReviewWatch();
+      const argv = ['--pr', '1234', ...flag];
+      const first = watch(argv, null);
+      assert.equal(first.kind, 'unchanged', expectedRepo);
+      assert.equal(watch(argv, first.fingerprint).kind, 'unchanged');
+      assert.equal(countGhCalls(ghCalls, 'repo view'), 2, expectedRepo);
+    });
+  }
+});
+
+test('a failing repository resolution is unknown, is not cached, and the next tick retries and then caches', () => {
+  withDefaultWatchGhStub((setScenario, ghCalls) => {
+    const unknownWatch = { kind: 'unknown', fingerprint: null };
+    const watch = createPendingReviewWatch();
+    const base = { head: HEAD, reviews: [defaultWatchReview(7)] };
+
+    // The owner read fails first, so the name read is never attempted.
+    setScenario({
+      ...base,
+      repoResolution: { ...REPO_RESOLUTION, ownerFails: true },
+    });
+    assert.deepEqual(watch(NO_REPO_ARGV, 'previous'), unknownWatch);
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 1);
+    assert.equal(countGhCalls(ghCalls, 'pr view'), 0);
+
+    // The owner read succeeds and the name read fails: still unknown, and the
+    // half that resolved is not kept.
+    setScenario({
+      ...base,
+      repoResolution: { ...REPO_RESOLUTION, nameFails: true },
+    });
+    assert.deepEqual(watch(NO_REPO_ARGV, 'previous'), unknownWatch);
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 3);
+
+    // The next tick retries and resolves, then later ticks reuse the result.
+    setScenario({ ...base, repoResolution: REPO_RESOLUTION });
+    const recovered = watch(NO_REPO_ARGV, null);
+    assert.equal(recovered.kind, 'unchanged');
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 5);
+    assert.equal(watch(NO_REPO_ARGV, recovered.fingerprint).kind, 'unchanged');
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 5);
+  });
+});
+
+test('a blank repository resolution is unknown, reads nothing else, and is not cached', () => {
+  withDefaultWatchGhStub((setScenario, ghCalls) => {
+    const watch = createPendingReviewWatch();
+    const base = { head: HEAD, reviews: [defaultWatchReview(7)] };
+
+    for (const blank of [
+      { ...REPO_RESOLUTION, owner: '' },
+      { ...REPO_RESOLUTION, name: '' },
+    ]) {
+      setScenario({ ...base, repoResolution: blank });
+      assert.deepEqual(watch(NO_REPO_ARGV, 'previous'), {
+        kind: 'unknown',
+        fingerprint: null,
+      });
+    }
+    assert.equal(countGhCalls(ghCalls, 'pr view'), 0);
+    assert.equal(countGhCalls(ghCalls, 'api '), 0);
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 4);
+
+    setScenario({ ...base, repoResolution: REPO_RESOLUTION });
+    assert.equal(watch(NO_REPO_ARGV, null).kind, 'unchanged');
+    assert.equal(countGhCalls(ghCalls, 'repo view'), 6);
   });
 });
 

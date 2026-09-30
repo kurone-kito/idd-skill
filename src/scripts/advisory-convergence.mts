@@ -3213,36 +3213,56 @@ function readPendingReviewWatch(
 }
 
 /**
- * One HEAD read plus one review list. A throw or a blank HEAD is unknown,
- * never an empty successful watch.
+ * Builds a pending-review watch: one HEAD read plus one review list per call.
+ * A throw or a blank HEAD is unknown, never an empty successful watch.
+ *
+ * When argv carries no `--owner` or `--repo`, the repository is resolved from
+ * the current checkout (two `gh repo view` reads) once and reused by every
+ * later call of the same instance, so a poll pays for it once instead of on
+ * every tick (#3617). Only a resolved pair whose owner and repo are both
+ * non-empty is kept: a throw or a blank value is unknown evidence, is never
+ * cached, and the next call retries. The instance is therefore stateful; the
+ * exported default keeps its cache for the life of the process, which is
+ * exactly one poll for the CLI.
  */
-export function watchPendingReviewFromGitHub(
-  argv: string[],
-  previousFingerprint: string | null,
-): PendingReviewWatchResult {
-  try {
-    const args = parseArgs(argv);
-    if (!args.prNumber) return { kind: 'unknown', fingerprint: null };
-    const currentRepo =
-      args.owner && args.repo ? null : resolveCurrentGithubRepository();
-    const owner = args.owner || currentRepo?.owner || '';
-    const repo = args.repo || currentRepo?.repo || '';
-    const port = createGithubProviderAdapter(owner, repo);
-    const headSha = port
-      .getChangeRequestHeadShaAndAuthor(Number(args.prNumber))
-      .headSha.trim();
-    if (!headSha) return { kind: 'unknown', fingerprint: null };
-    const reviews = port.listReviews(Number(args.prNumber));
-    const fingerprint = pendingReviewFingerprint({ headSha, reviews });
-    return {
-      kind: classifyPendingReviewWatch(previousFingerprint, fingerprint),
-      fingerprint,
-      reviews,
-    };
-  } catch {
-    return { kind: 'unknown', fingerprint: null };
-  }
+export function createPendingReviewWatch(
+  resolveRepository: () => {
+    owner: string;
+    repo: string;
+  } = resolveCurrentGithubRepository,
+): NonNullable<AdvisoryConvergenceDeps['watchPendingReview']> {
+  let resolved: { owner: string; repo: string } | null = null;
+  return (argv, previousFingerprint) => {
+    try {
+      const args = parseArgs(argv);
+      if (!args.prNumber) return { kind: 'unknown', fingerprint: null };
+      let currentRepo = resolved;
+      if (!(args.owner && args.repo) && currentRepo === null) {
+        currentRepo = resolveRepository();
+        if (currentRepo.owner && currentRepo.repo) resolved = currentRepo;
+      }
+      const owner = args.owner || currentRepo?.owner || '';
+      const repo = args.repo || currentRepo?.repo || '';
+      if (!owner || !repo) return { kind: 'unknown', fingerprint: null };
+      const port = createGithubProviderAdapter(owner, repo);
+      const headSha = port
+        .getChangeRequestHeadShaAndAuthor(Number(args.prNumber))
+        .headSha.trim();
+      if (!headSha) return { kind: 'unknown', fingerprint: null };
+      const reviews = port.listReviews(Number(args.prNumber));
+      const fingerprint = pendingReviewFingerprint({ headSha, reviews });
+      return {
+        kind: classifyPendingReviewWatch(previousFingerprint, fingerprint),
+        fingerprint,
+        reviews,
+      };
+    } catch {
+      return { kind: 'unknown', fingerprint: null };
+    }
+  };
 }
+
+export const watchPendingReviewFromGitHub = createPendingReviewWatch();
 
 defaultDeps.watchPendingReview = watchPendingReviewFromGitHub;
 
