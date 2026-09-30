@@ -1242,9 +1242,10 @@ export interface ProviderPort {
    * scope `nodeIds` to advisory-bot thread comments whose `lastEditedAt`
    * postdates their thread's latest IDD disposition -- see
    * `protocol-helpers.mts`'s `selectAdvisoryThreadCommentIdsEditedAfterDisposition`.
-   * Every other review-thread consumer (`review-activity-snapshot.mts`,
-   * the merged-PR sweep, `audit-pr-cleanup.mts`) never calls this method,
-   * so an edited thread comment keeps `updatedAt` dating there.
+   * `review-activity-snapshot.mts` (#3655) makes the same bounded call
+   * through `review-thread-edit-histories.mts`. Every other review-thread
+   * consumer (the merged-PR sweep, `audit-pr-cleanup.mts`) never calls this
+   * method, so an edited thread comment keeps `updatedAt` dating there.
    *
    * Returns one entry per requested id, `commentId` echoing it back.
    * `totalCount` is the comment's FULL edit-history size, which can exceed
