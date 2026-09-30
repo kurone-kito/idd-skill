@@ -784,6 +784,14 @@ const PAGINATED_CAPTURE_KIND = 'paginated-gh-capture';
 /** Largest delay `setTimeout` honors; a longer one fires after 1 ms. */
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
+/**
+ * How long a `gh` the worker signaled may take to exit before it is sent
+ * SIGKILL. The status is published only once `gh` has exited, so a `gh`
+ * that ignores SIGTERM cannot outlive the capture (Copilot review, PR
+ * #3605).
+ */
+const PAGINATED_KILL_ESCALATION_MS = 2_000;
+
 /** Shared flag: index 0 is completion, index 1 is the `gh` pid. */
 const CAPTURE_SLOT_DONE = 0;
 const CAPTURE_SLOT_PID = 1;
@@ -1051,6 +1059,8 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
   const stopTimeout = (): void => {
     if (timeoutTimer) clearTimeout(timeoutTimer);
   };
+  let escalationTimer: NodeJS.Timeout | undefined;
+  let closed = false;
   let finished = false;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
@@ -1064,6 +1074,7 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
     if (finished) return;
     finished = true;
     stopTimeout();
+    if (escalationTimer) clearTimeout(escalationTimer);
     try {
       closeSync(outFd);
     } catch {
@@ -1117,19 +1128,21 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
     timeoutTimer = setTimeout(
       () => {
         timedOut = true;
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          // The child already exited.
-        }
+        killChild();
       },
       Math.min(data.timeout, MAX_TIMER_DELAY_MS),
     );
   }
 
-  // A kill for the byte limit, a write failure, or a pipe error stops the
-  // timeout timer first: once the capture has its own failure recorded, a
-  // slow-to-die `gh` must not have that failure reported as a timeout.
+  // Every worker-initiated stop goes through here: the timeout, the byte
+  // limit, a write failure, and a pipe error. It stops the timeout timer
+  // first, so a capture that already has its own failure recorded is not
+  // reported as a timeout when `gh` is slow to die. It then escalates to
+  // SIGKILL if `gh` has not exited after a bounded wait. `finish` runs
+  // from the `close` event, so the status is never published, and the
+  // worker never exits, while a signaled `gh` may still be running. This
+  // relies on `gh` leaving no descendant that keeps its pipes open, which
+  // would delay `close`; the parent's timeout backstop still bounds that.
   const killChild = (): void => {
     stopTimeout();
     try {
@@ -1137,13 +1150,21 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
     } catch {
       // The child already exited.
     }
+    if (!closed && !escalationTimer) {
+      escalationTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // The child already exited.
+        }
+      }, PAGINATED_KILL_ESCALATION_MS);
+    }
   };
   const noteStreamError = (error: unknown): void => {
     if (!streamError) {
       streamError = error instanceof Error ? error : new Error(String(error));
     }
     killChild();
-    setTimeout(finish, 0);
   };
   const armStreamFault = (
     stream: { destroy: (error?: Error) => void } | null,
@@ -1152,8 +1173,8 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
     if (fault !== token || streamFaulted || !stream) return;
     streamFaulted = true;
     // `destroy` emits `error` on nextTick, which runs before the
-    // deferred `finish` timer, so the status file records the pipe
-    // failure rather than a later exit 0.
+    // `finish` that the `close` event defers by one turn, so the status
+    // file records the pipe failure rather than a later exit 0.
     stream.destroy(new Error(`paginated gh ${token} pipe failed`));
   };
 
@@ -1198,14 +1219,18 @@ function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
   child.once('error', (error: Error) => {
     spawnError = error;
     stopTimeout();
+    if (escalationTimer) clearTimeout(escalationTimer);
     setTimeout(finish, 0);
   });
   child.once('close', (code, signal) => {
     exitCode = code;
     exitSignal = signal;
+    closed = true;
     // `finish` runs a turn later; a timer expiring in between must not
-    // mark a capture that already closed as timed out.
+    // mark a capture that already closed as timed out, or signal a `gh`
+    // that already exited.
     stopTimeout();
+    if (escalationTimer) clearTimeout(escalationTimer);
     setTimeout(finish, 0);
   });
 }

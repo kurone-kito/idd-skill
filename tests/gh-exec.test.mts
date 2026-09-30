@@ -1108,6 +1108,127 @@ setTimeout(() => process.exit(0), 30_000);
   }
 });
 
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A `gh` that ignores SIGTERM, records its pid, writes `output`, then idles. */
+function stubSigtermIgnoringGh(pidPath: string, output: string): () => void {
+  return stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+process.on('SIGTERM', () => {});
+${output}
+setTimeout(() => process.exit(0), 60_000);
+`);
+}
+
+function assertRecordedPidStopped(pidPath: string): void {
+  assert.equal(existsSync(pidPath), true);
+  const pid = Number(readFileSync(pidPath, 'utf8'));
+  assert.equal(Number.isInteger(pid) && pid > 0, true);
+  assert.equal(processIsAlive(pid), false, `gh ${pid} outlived the capture`);
+}
+
+const SIGKILL_ESCALATION_SKIP = {
+  skip: process.platform === 'win32',
+};
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores the timeout SIGTERM before returning (#3597)',
+  SIGKILL_ESCALATION_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `process.stdout.write('{"id":1}\\n');`,
+    );
+    try {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 300 }),
+        (error: unknown) => {
+          assert.equal((error as { code?: unknown }).code, 'ETIMEDOUT');
+          return true;
+        },
+      );
+      assertRecordedPidStopped(pidPath);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM after a pipe error before returning (#3597)',
+  SIGKILL_ESCALATION_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `process.stdout.write('{"id":1}\\n');`,
+    );
+    try {
+      withCaptureFault('stdout', () => {
+        assert.throws(
+          () =>
+            ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : '';
+            assert.match(message, /stdout pipe failed/);
+            return true;
+          },
+        );
+      });
+      assertRecordedPidStopped(pidPath);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM past the ceiling before returning (#3597)',
+  SIGKILL_ESCALATION_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `const chunk = 'x'.repeat(1024 * 1024);
+for (let i = 0; i < 10; i += 1) process.stdout.write(chunk);`,
+    );
+    try {
+      assert.throws(
+        () =>
+          ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+        (error: unknown) => {
+          assert.equal(
+            error instanceof Error ? error.name : '',
+            'GhPaginatedResponseLimitError',
+          );
+          return true;
+        },
+      );
+      assertRecordedPidStopped(pidPath);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
 test('ghApiJson (paginated) treats a timeout past the timer range as the longest delay (#3597)', () => {
   // `setTimeout` fires after 1 ms for a delay past 2^31-1, which would
   // time out a capture that has plenty of time left.
