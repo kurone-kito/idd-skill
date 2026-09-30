@@ -14421,6 +14421,13 @@ type ThreadCommentRevisionDatingOutcome =
  * - {@link isVisibleTextAppendOnly} between the two revisions;
  * - {@link isOnlyAllowlistedMarkerCommentDiff} between the two revisions.
  *
+ * Tie rule (#3663): revisions are ordered by `editedAt` ascending, and
+ * revisions sharing one `editedAt` (GitHub reports one-second
+ * resolution) are ordered by their position in the supplied array --
+ * among equal values the revision listed EARLIER is treated as the LATER
+ * one, which is their true order for the newest-first array the
+ * connection returns.
+ *
  * Returns `'all-cosmetic'` when every transition qualifies (dating stays
  * `createdAt`), `'dated'` with the LAST transition that failed
  * (dating is that revision's own `editedAt`), or `'unverifiable'` when
@@ -14464,13 +14471,35 @@ function resolveThreadCommentRevisionDatingOutcome(
   // Connection order is newest-edit-first by convention
   // (`ProviderPort.getReviewThreadCommentUserContentEdits`'s own doc
   // comment), but a caller (a hand-built test fixture, in particular)
-  // must never be trusted to preserve that order -- sort explicitly by
-  // `editedAt` ascending (oldest/creation revision first). Every
-  // `editedAt` is already confirmed parseable above.
-  const chronological = [...edits].sort(
-    (left, right) =>
-      Date.parse(String(left.editedAt)) - Date.parse(String(right.editedAt)),
-  );
+  // must never be trusted to preserve that order across DIFFERENT
+  // timestamps -- sort explicitly by `editedAt` ascending (oldest/creation
+  // revision first). Every `editedAt` is already confirmed parseable
+  // above.
+  //
+  // #3663: GitHub reports `editedAt` with one-second resolution, so two
+  // revisions can share one. A stable ascending sort alone would keep such
+  // tied revisions in their newest-first input order, i.e. classify them
+  // in the REVERSE of the order they happened in. Observed 2026-09-30 on
+  // kurone-kito/idd-skill PR #3660, review comment 4146452802: its
+  // `Confirmed` and `Addressed` revisions shared one second, so the
+  // marker-only rewrite after them was compared with the wrong
+  // predecessor and dated six seconds after a fresh IDD reply. Among equal
+  // `editedAt` values, therefore, the revision listed EARLIER in the
+  // supplied array is treated as the LATER one (the tie-break is the
+  // input index, descending), which puts tied revisions in their true
+  // chronological order whenever the input is newest-first. The index
+  // tie-break is explicit rather than relying on sort stability.
+  const chronological = edits
+    .map((edit, index) => ({
+      edit,
+      index,
+      editedAtMs: Date.parse(String(edit.editedAt)),
+    }))
+    .sort(
+      (left, right) =>
+        left.editedAtMs - right.editedAtMs || right.index - left.index,
+    )
+    .map(({ edit }) => edit);
   // Copilot review, PR #3430: `comment.body` and `comment.userContentEdits`
   // come from two SEPARATE fetches (the thread-comments read and the
   // bounded edit-history read) that are never guaranteed to observe the

@@ -3951,20 +3951,28 @@ test('disposition evidence does not flag ack-only or in-place-edit-only for a no
  * structural shape `isVisibleTextAppendOnly` /
  * `isOnlyAllowlistedMarkerCommentDiff` read: a finding sentence, then the
  * `auto-generated comment`/`auto-generated reply` marker HTML comment,
- * optionally followed by the "Addressed in commit(s)" resolution line. */
+ * optionally followed by the "Addressed in commit(s)" resolution line.
+ * #3663: `trailingMarkerVariant` optionally adds a SECOND marker after the
+ * resolution line (CodeRabbit's current reply shape: the leading marker,
+ * the resolution line, then a fresh trailing marker). It is a separate
+ * HTML comment, so it changes the body's comment count. */
 function coderabbitFindingBody(
   findingText: string,
   markerVariant: 'comment' | 'reply',
   appendedResolutionLine?: string,
+  trailingMarkerVariant?: 'comment' | 'reply',
 ): string {
-  const marker =
-    markerVariant === 'comment'
+  const markerFor = (variant: 'comment' | 'reply'): string =>
+    variant === 'comment'
       ? '<!-- This is an auto-generated comment by CodeRabbit -->'
       : '<!-- This is an auto-generated reply by CodeRabbit -->';
-  const withMarker = `${findingText}\n\n${marker}`;
-  return appendedResolutionLine
+  const withMarker = `${findingText}\n\n${markerFor(markerVariant)}`;
+  const withResolution = appendedResolutionLine
     ? `${withMarker}\n\n${appendedResolutionLine}`
     : withMarker;
+  return trailingMarkerVariant
+    ? `${withResolution}\n\n${markerFor(trailingMarkerVariant)}`
+    : withResolution;
 }
 
 test('hasFreshDisposition: PR #3160 thread PRRT_kwDOSWpaqs6kHP8I comment 4056226337 -- 3 real revisions (append, then marker-only rewrite) all cosmetic, dated by createdAt (fresh) (#3269)', () => {
@@ -4894,6 +4902,221 @@ test('#3269 positive: a `[bot]`-suffixed editor login still verifies as cosmetic
     }),
     true,
   );
+});
+
+// ---------------------------------------------------------------------------
+// #3663: same-second revision tie-break. GitHub reports `editedAt` with
+// one-second resolution and the adapter returns the connection's own order
+// (newest first), so two revisions sharing an `editedAt` must be ordered
+// chronologically by array position (the earlier-listed one is the later
+// revision) rather than keeping that newest-first order through a stable
+// ascending sort. Observed 2026-09-30 on kurone-kito/idd-skill PR #3660,
+// review comment 4146452802 (`PRRC_kwDOSWpaqs73JdlC`): the `Confirmed` and
+// `Addressed` revisions share `15:43:28Z`, and a thread whose IDD
+// `**Accepted**` reply landed at `16:15:11Z` was reported as
+// `missing-fresh-disposition`. Timestamps, the real body shape (a leading
+// `reply` marker, the resolution line, a trailing marker) and the returned
+// order below are the real ones; the finding text is abbreviated.
+// ---------------------------------------------------------------------------
+
+const TIE_BREAK_ADVISORY_OPTIONS = {
+  isDispositionAuthor: (login: string) => login === 'kurone-kito',
+  advisoryBotLogins: ['coderabbitai[bot]'],
+};
+
+/** A one-comment advisory-bot thread plus one IDD `**Accepted**` reply at
+ * `dispositionAt`. `edits` is passed through in the given order, and each
+ * caller sets `root.body` to the newest revision's body, so the
+ * fetched-body check sees a consistent history. */
+function tieBreakThread(
+  root: {
+    createdAt: string;
+    updatedAt: string;
+    lastEditedAt: string;
+    body: string;
+  },
+  edits: {
+    editedAt: string;
+    diff: string;
+    editorLogin: string;
+    deletedAt: null;
+  }[],
+  dispositionAt: string,
+) {
+  return {
+    id: 'thread-3663',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PRRC_kwDOSWpaqs73JdlC',
+          author: { login: 'coderabbitai' },
+          ...root,
+          userContentEdits: { totalCount: edits.length, edits },
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: dispositionAt,
+          updatedAt: dispositionAt,
+          lastEditedAt: null,
+          body: '**Accepted** — fixed.',
+        },
+      ],
+    },
+  };
+}
+
+function tieBreakEdit(editedAt: string, diff: string) {
+  return { editedAt, diff, editorLogin: 'coderabbitai', deletedAt: null };
+}
+
+test('hasFreshDisposition: PR #3660 comment 4146452802 -- two revisions tied at 15:43:28Z are ordered by array position, so the marker-only rewrite follows Confirmed (#3663)', () => {
+  const findingText = '**Define the four-hour action for a matching keyword.**';
+  const confirmed = '✅ Confirmed as addressed by @kurone-kito';
+  // In the order GraphQL returned them (newest first; the two `15:43:28Z`
+  // revisions are listed Confirmed-then-Addressed, which is the true
+  // reverse-chronological order: Addressed was the earlier of the two and
+  // the later one replaced its resolution line).
+  const edits = [
+    tieBreakEdit(
+      '2026-09-30T16:15:17Z',
+      coderabbitFindingBody(findingText, 'reply', confirmed, 'reply'),
+    ),
+    tieBreakEdit(
+      '2026-09-30T15:43:28Z',
+      coderabbitFindingBody(findingText, 'reply', confirmed, 'comment'),
+    ),
+    tieBreakEdit(
+      '2026-09-30T15:43:28Z',
+      coderabbitFindingBody(
+        findingText,
+        'reply',
+        '✅ Addressed in commit 7ef17bb',
+        'comment',
+      ),
+    ),
+    tieBreakEdit(
+      '2026-09-30T15:43:10Z',
+      coderabbitFindingBody(findingText, 'reply'),
+    ),
+    tieBreakEdit(
+      '2026-09-30T15:38:44Z',
+      coderabbitFindingBody(findingText, 'comment'),
+    ),
+  ];
+  const root = {
+    createdAt: '2026-09-30T15:38:44Z',
+    updatedAt: '2026-09-30T16:15:17Z',
+    lastEditedAt: '2026-09-30T16:15:17Z',
+    body: edits[0].diff,
+  };
+  // The real IDD reply (16:15:11Z) came after the last change of substance
+  // (Confirmed, 15:43:28Z) and six seconds before the marker-only rewrite.
+  const fresh = tieBreakThread(root, edits, '2026-09-30T16:15:11Z');
+  assert.equal(hasFreshDisposition(fresh, TIE_BREAK_ADVISORY_OPTIONS), true);
+  assert.equal(
+    summarizeDispositionEvidenceForGate(
+      { comments: [], threads: [fresh] },
+      {
+        iddAgentLogins: ['kurone-kito'],
+        trustedMarkerLogins: ['kurone-kito'],
+        advisoryBotLogins: ['coderabbitai[bot]'],
+      },
+    ).missingThreadCount,
+    0,
+  );
+  // A reply from before the last change of substance is still stale.
+  assert.equal(
+    hasFreshDisposition(
+      tieBreakThread(root, edits, '2026-09-30T15:43:20Z'),
+      TIE_BREAK_ADVISORY_OPTIONS,
+    ),
+    false,
+  );
+});
+
+test('hasFreshDisposition: two cosmetic revisions tied at the newest editedAt are verified in array order, not unverifiable (#3663)', () => {
+  const findingText = '**Potential issue**: needs a null check.';
+  const resolution = '✅ Addressed in commit abcdef1';
+  // Newest first: the marker-only rewrite (the body the comment reports
+  // today) and the appended resolution line share the newest `editedAt`.
+  const edits = [
+    tieBreakEdit(
+      '2026-09-30T10:05:30Z',
+      coderabbitFindingBody(findingText, 'reply', resolution),
+    ),
+    tieBreakEdit(
+      '2026-09-30T10:05:30Z',
+      coderabbitFindingBody(findingText, 'comment', resolution),
+    ),
+    tieBreakEdit(
+      '2026-09-30T10:00:00Z',
+      coderabbitFindingBody(findingText, 'comment'),
+    ),
+  ];
+  const thread = tieBreakThread(
+    {
+      createdAt: '2026-09-30T10:00:00Z',
+      updatedAt: '2026-09-30T10:05:30Z',
+      lastEditedAt: '2026-09-30T10:05:30Z',
+      body: edits[0].diff,
+    },
+    edits,
+    // Strictly between createdAt and updatedAt: an `unverifiable` fallback
+    // to `updatedAt` dating reads this as stale, verified dating as fresh.
+    '2026-09-30T10:05:00Z',
+  );
+  assert.equal(hasFreshDisposition(thread, TIE_BREAK_ADVISORY_OPTIONS), true);
+});
+
+test('hasFreshDisposition: distinct-timestamp revisions date by the newest non-cosmetic revision in any supplied order (#3663)', () => {
+  const dispositionAt = '2026-09-30T10:15:00Z';
+  const d0 = tieBreakEdit(
+    '2026-09-30T10:00:00Z',
+    coderabbitFindingBody(
+      '**Potential issue**: needs a null check.',
+      'comment',
+    ),
+  );
+  // Non-cosmetic: the visible finding text changes.
+  const d1 = tieBreakEdit(
+    '2026-09-30T10:10:00Z',
+    coderabbitFindingBody(
+      '**Potential issue**: needs a range check.',
+      'comment',
+    ),
+  );
+  // Cosmetic: only the marker is rewritten from `comment` to `reply`.
+  const d2 = tieBreakEdit(
+    '2026-09-30T10:20:00Z',
+    coderabbitFindingBody('**Potential issue**: needs a range check.', 'reply'),
+  );
+  const root = {
+    createdAt: d0.editedAt,
+    updatedAt: '2026-09-30T10:30:00Z',
+    lastEditedAt: d2.editedAt,
+    body: d2.diff,
+  };
+  // The newest non-cosmetic revision (d1) is not the newest one (d2), and
+  // the disposition falls after d1 and before both d2 and `updatedAt`. The
+  // explicit sort by `editedAt` must hold whatever order the history comes
+  // in: newest-first (the connection's order), a fixed permutation, and
+  // oldest-first. A reverse-only ordering fails the last two.
+  for (const [label, edits] of [
+    ['newest-first', [d2, d1, d0]],
+    ['permutation [d1, d2, d0]', [d1, d2, d0]],
+    ['oldest-first', [d0, d1, d2]],
+  ] as const) {
+    assert.equal(
+      hasFreshDisposition(
+        tieBreakThread(root, [...edits], dispositionAt),
+        TIE_BREAK_ADVISORY_OPTIONS,
+      ),
+      true,
+      label,
+    );
+  }
 });
 
 test('disposition evidence reports sole-cause false when a regular comment also blocks (#978)', () => {

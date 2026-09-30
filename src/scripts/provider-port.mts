@@ -1254,8 +1254,14 @@ export interface ProviderPort {
    * in protocol-helpers.mts) MUST fail closed (treat the history as
    * unverifiable, keeping `updatedAt` dating) whenever `totalCount` does
    * not equal `edits.length`. `edits` is in the connection's own order
-   * (newest edit first); a caller must sort by `editedAt` itself rather
-   * than trust that order. A missing/mismatched node in the response, or
+   * (newest edit first). A caller must sort by `editedAt` itself rather
+   * than trust that order across different timestamps, and must break a
+   * same-second tie (GitHub reports `editedAt` with one-second resolution)
+   * by array position: among equal `editedAt` values the revision listed
+   * earlier is the later one, so this newest-first order is what puts tied
+   * revisions in their true chronological order (#3663;
+   * `resolveThreadCommentRevisionDatingOutcome` applies this rule). A
+   * missing/mismatched node in the response, or
    * any other transport failure, throws -- mirrors
    * `fetchLastEditedAtByNodeId`'s fail-fast contract (every requested id
    * was selected from an already-successful thread-comments read, so a

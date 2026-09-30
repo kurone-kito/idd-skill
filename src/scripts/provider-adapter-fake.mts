@@ -225,7 +225,9 @@ export interface FakeProviderFixture {
    * keyed by the requested comment's own GraphQL node id (#3269). An id
    * with no fixture entry gets a `{commentId, totalCount: 0, edits: []}`
    * default -- matches the real adapter's behavior for a comment GitHub
-   * reports as never edited. */
+   * reports as never edited. List each entry's `edits` newest-first, like
+   * the real connection: revisions sharing one `editedAt` are ordered by
+   * that position, the earlier-listed one being the later revision (#3663). */
   reviewThreadCommentUserContentEdits?: Record<
     string,
     ProviderReviewThreadCommentEditHistory
