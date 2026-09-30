@@ -1250,12 +1250,18 @@ function defaultLeaseHeartbeat(ctx) {
   };
 }
 async function leadAsync(ctx, fetch, startHeartbeat) {
-  const stopHeartbeat = startHeartbeat(() => renewLease(ctx));
+  let stopHeartbeat = () => {};
   try {
+    // Set up inside the protected block: the lease is already held, so a
+    // heartbeat that fails to start (or stop) must still release it.
+    stopHeartbeat = startHeartbeat(() => renewLease(ctx));
     return await leaderFetchAsync(ctx, fetch);
   } finally {
-    stopHeartbeat();
-    releaseLease(ctx);
+    try {
+      stopHeartbeat();
+    } finally {
+      releaseLease(ctx);
+    }
   }
 }
 async function coalesceAsync(ctx, fetch, sleep, maxWaitMs, startHeartbeat) {

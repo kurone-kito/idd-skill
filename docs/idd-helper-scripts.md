@@ -1730,9 +1730,10 @@ speed-up, never a gate.
   every identity the mutation may be keyed under: the repository the helper
   resolved and the explicit argument (else `origin`) Discover keyed on,
   which differ for example in a fork whose `gh` default repository is
-  upstream. The call is best effort and never blocks or fails the helper.
-  Writes made outside these helpers, such as a raw `gh` label, body, link,
-  or close change, are discovered by `--refresh-cache`, the exhaustion
+  upstream. The call is best effort and never fails the helper; it does no
+  network or credential lookup, only at most one bounded local `git remote`
+  call. Writes made outside these helpers, such as a raw `gh` label, body,
+  link, or close change, are discovered by `--refresh-cache`, the exhaustion
   refresh, or `maxAge`.
 - **Concurrency.** Concurrent hint computations in one worktree on one host
   coalesce onto one enumeration through the same single-flight lease as the

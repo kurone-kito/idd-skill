@@ -2281,3 +2281,36 @@ test("a stale leader's heartbeat never overwrites a lease taken over since", asy
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
+
+test('a heartbeat that fails to start or stop still releases the async lease', async () => {
+  const paths = tempRoot();
+  try {
+    await assert.rejects(
+      readThroughAsync(paths, async () => ({ status: 200, body: {} }), {
+        startLeaseHeartbeat: () => {
+          throw new Error('cannot start the heartbeat');
+        },
+      }),
+      /cannot start the heartbeat/,
+    );
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+    await assert.rejects(
+      readThroughAsync(paths, async () => ({ status: 200, body: {} }), {
+        startLeaseHeartbeat: () => () => {
+          throw new Error('cannot stop the heartbeat');
+        },
+      }),
+      /cannot stop the heartbeat/,
+    );
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+    // The fetch had already published before the stop failed, so the next
+    // read is served from it rather than blocked behind a stranded lease.
+    const recovered = await readThroughAsync(paths, async () => ({
+      status: 200,
+      body: { ok: true },
+    }));
+    assert.equal(recovered.cache, 'hit');
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});

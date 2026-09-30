@@ -73,7 +73,7 @@ function defaultOriginUrl(cwd) {
     const raw = execFileSync('git', ['remote', 'get-url', 'origin'], {
       cwd,
       encoding: 'utf8',
-      timeout: 5_000,
+      timeout: 2_000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     return raw.length > 0 ? raw : undefined;
@@ -431,9 +431,9 @@ function meta(
 }
 /**
  * Invalidate every discover hint after an observed local mutation (claim,
- * unclaim, merge, closure). Best effort: it never throws, never blocks the
- * calling helper on a network or credential lookup, and is a no-op when the
- * cache is off or the repository cannot be named. Pass every identity the
+ * unclaim, merge, closure). Best effort: it never throws, does no network or
+ * credential lookup (at most one bounded local `git remote` call), and is a
+ * no-op when the cache is off or the repository cannot be named. Pass every identity the
  * mutation may be keyed under (the pair the helper resolved, and the explicit
  * arguments or `origin` fallback Discover keyed on); duplicates collapse.
  * Writes outside the helper paths are discovered by `--refresh-cache`, the

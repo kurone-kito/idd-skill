@@ -1605,12 +1605,18 @@ async function leadAsync(
   fetch: AsyncFetch,
   startHeartbeat: (renew: () => void) => () => void,
 ): Promise<ReadThroughGithubApiCacheResult> {
-  const stopHeartbeat = startHeartbeat(() => renewLease(ctx));
+  let stopHeartbeat: () => void = () => {};
   try {
+    // Set up inside the protected block: the lease is already held, so a
+    // heartbeat that fails to start (or stop) must still release it.
+    stopHeartbeat = startHeartbeat(() => renewLease(ctx));
     return await leaderFetchAsync(ctx, fetch);
   } finally {
-    stopHeartbeat();
-    releaseLease(ctx);
+    try {
+      stopHeartbeat();
+    } finally {
+      releaseLease(ctx);
+    }
   }
 }
 
