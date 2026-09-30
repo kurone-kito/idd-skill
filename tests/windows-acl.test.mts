@@ -401,3 +401,59 @@ test('windows acl reader: a relative SystemRoot is ignored so the tools are alwa
     assert.ok(!file.startsWith('evil'), file);
   }
 });
+
+test('windows acl parser: malformed DACL text fails closed instead of yielding entries', () => {
+  const malformed = [
+    // Text that is neither control flags nor an ACE, before, between, or after.
+    'D:PAIgarbage(A;;FA;;;SY)',
+    'D:PAI(A;;FA;;;SY)junk',
+    'D:PAI(A;;FA;;;SY)junk(A;;FA;;;BA)',
+    'D:PAI (A;;FA;;;SY)',
+    // Wrong ACE field count: extra, missing, or a seventh on a plain allow.
+    'D:PAI(A;;FA;;;SY;extra)',
+    'D:PAI(A;;FA;;SY)',
+    'D:PAI(A;;FA;;;)',
+    // A principal that is neither a SID nor a two-letter alias.
+    'D:PAI(A;;FA;;;garbage)',
+    'D:PAI(A;;FA;;;S-1-5)',
+    'D:PAI(A;;FA;;;S-1-x)',
+  ];
+  for (const sddl of malformed) {
+    assert.deepEqual(
+      parseIcaclsSave(`dir\r\n${sddl}\r\n`),
+      { kind: 'unreadable' },
+      sddl,
+    );
+  }
+  // The well-formed shapes still parse: control flags, and a callback ACE with
+  // its seventh conditional-expression field.
+  assert.deepEqual(parseIcaclsSave('dir\r\nD:PAIAR(A;OICI;FA;;;SY)\r\n'), {
+    kind: 'entries',
+    entries: [{ sid: 'S-1-5-18', allow: true }],
+  });
+  assert.deepEqual(
+    parseIcaclsSave('dir\r\nD:(XA;;FA;;;SY;(@User.Title=="PM"))\r\n'),
+    { kind: 'entries', entries: [{ sid: 'S-1-5-18', allow: true }] },
+  );
+});
+
+test('windows acl rule: a current SID that is not a SID makes the result unreadable', () => {
+  const entries = [{ sid: 'XX', allow: true }];
+  for (const currentSid of ['XX', '', '   ', 'S-1-5', 7, null, {}]) {
+    assert.equal(
+      evaluateWindowsAcl({ kind: 'entries', entries, currentSid }),
+      'unreadable',
+      String(currentSid),
+    );
+  }
+  // Absent stays a valid "no current user"; the unknown principal is permissive.
+  assert.equal(evaluateWindowsAcl({ kind: 'entries', entries }), 'permissive');
+  assert.equal(
+    evaluateWindowsAcl({
+      kind: 'entries',
+      entries: [{ sid: USER_SID, allow: true }],
+      currentSid: ` ${USER_SID.toLowerCase()} `,
+    }),
+    'private',
+  );
+});

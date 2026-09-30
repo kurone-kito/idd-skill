@@ -67,6 +67,9 @@ const SDDL_ALIASES: Readonly<Record<string, string>> = {
   WD: 'S-1-1-0',
 };
 
+/** A well-formed SID string, e.g. `S-1-5-18`. */
+const SID_PATTERN = /^S-1-\d+(?:-\d+)+$/;
+
 function expandAlias(
   principal: string,
   extra: Readonly<Record<string, string>>,
@@ -91,12 +94,20 @@ export function decodeIcaclsSave(bytes: Uint8Array): string {
   return buffer.toString('utf8');
 }
 
-/** Split `(...)(...)` at the top level, honoring nested parentheses. */
+/**
+ * Split `[flags](...)(...)` at the top level, honoring nested parentheses.
+ * The text before the first ACE may only be the DACL control flags (`P`,
+ * `AI`, `AR`), and nothing may sit between or after the ACEs: stray text is a
+ * malformed ACL, not something to skip over.
+ */
 function splitAces(dacl: string): string[] | null {
   const aces: string[] = [];
   let depth = 0;
   let start = -1;
-  for (let index = 0; index < dacl.length; index += 1) {
+  let flagsEnd = dacl.indexOf('(');
+  if (flagsEnd === -1) flagsEnd = dacl.length;
+  if (!/^(?:P|AI|AR)*$/.test(dacl.slice(0, flagsEnd))) return null;
+  for (let index = flagsEnd; index < dacl.length; index += 1) {
     const char = dacl[index];
     if (char === '(') {
       if (depth === 0) start = index + 1;
@@ -105,6 +116,8 @@ function splitAces(dacl: string): string[] | null {
       depth -= 1;
       if (depth < 0) return null;
       if (depth === 0) aces.push(dacl.slice(start, index));
+    } else if (depth === 0) {
+      return null;
     }
   }
   return depth === 0 ? aces : null;
@@ -176,8 +189,12 @@ export function parseIcaclsSave(
   for (const ace of aces) {
     const fields = splitAceFields(ace);
     const type = (fields[0] ?? '').trim().toUpperCase();
-    const principal = fields[5];
-    if (principal === undefined || principal.trim() === '') {
+    // type;flags;rights;object;inherit-object;principal, plus a seventh
+    // conditional-expression field on the callback types only.
+    const expected = type === 'XA' || type === 'XD' ? [6, 7] : [6];
+    if (!expected.includes(fields.length)) return { kind: 'unreadable' };
+    const principal = (fields[5] ?? '').trim().toUpperCase();
+    if (!SID_PATTERN.test(principal) && !/^[A-Z]{2}$/.test(principal)) {
       return { kind: 'unreadable' };
     }
     if (type === 'A' || type === 'OA' || type === 'XA') {
@@ -222,8 +239,15 @@ export function evaluateWindowsAcl(result: unknown): WindowsAclVerdict {
   const allows = entries.filter((entry) => entry.allow);
   if (allows.length === 0) return 'unreadable';
   const permitted = new Set([SID_SYSTEM, SID_ADMINISTRATORS]);
-  if (typeof candidate.currentSid === 'string' && candidate.currentSid !== '') {
-    permitted.add(candidate.currentSid.trim().toUpperCase());
+  // An absent current user only narrows the set; a supplied one that is not a
+  // SID is a malformed result, never a principal that authorizes itself.
+  if (candidate.currentSid !== undefined) {
+    const current =
+      typeof candidate.currentSid === 'string'
+        ? candidate.currentSid.trim().toUpperCase()
+        : '';
+    if (!SID_PATTERN.test(current)) return 'unreadable';
+    permitted.add(current);
   }
   return allows.every((entry) => permitted.has(entry.sid))
     ? 'private'

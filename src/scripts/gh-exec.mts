@@ -55,6 +55,7 @@ import {
   parseIsoDurationToMs,
 } from './policy-helpers.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+import type { WindowsAclReader } from './windows-acl.mts';
 
 /**
  * Tag a thrown `gh`-invocation error with a non-enumerable `ghCommand:
@@ -539,6 +540,9 @@ export interface GhApiJsonReadCacheOptions {
   leaseTtlMs?: number;
   workspaceRoot?: string;
   defaultDirectory?: string;
+  /** Forwarded to the read cache; lets tests pin the platform and ACL reader. */
+  platform?: NodeJS.Platform;
+  windowsAclReader?: WindowsAclReader;
 }
 
 /** JSON response plus the HTTP headers returned by `gh api --include`. */
@@ -2233,6 +2237,10 @@ function ghApiJsonWithReadCache(
     workspaceRoot: request.workspaceRoot ?? process.cwd(),
     cwd: process.cwd(),
     defaultDirectory: request.defaultDirectory,
+    ...(request.platform ? { platform: request.platform } : {}),
+    ...(request.windowsAclReader
+      ? { windowsAclReader: request.windowsAclReader }
+      : {}),
   });
   if (thrown !== undefined) throw thrown.error;
   return result.body;

@@ -1877,6 +1877,10 @@ function ghApiJsonWithReadCache(path, options) {
     workspaceRoot: request.workspaceRoot ?? process.cwd(),
     cwd: process.cwd(),
     defaultDirectory: request.defaultDirectory,
+    ...(request.platform ? { platform: request.platform } : {}),
+    ...(request.windowsAclReader
+      ? { windowsAclReader: request.windowsAclReader }
+      : {}),
   });
   if (thrown !== undefined) throw thrown.error;
   return result.body;

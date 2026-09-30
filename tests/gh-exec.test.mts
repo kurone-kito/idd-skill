@@ -2623,6 +2623,16 @@ function readCacheFixture(): {
   };
 }
 
+/**
+ * A configured cache directory under the Windows temp folder inherits a
+ * permissive profile ACL, which the real check refuses (#3623) and every
+ * cache test here would then degrade on; report a private ACL instead.
+ */
+const PRIVATE_ACL_STUB = () => ({
+  kind: 'entries' as const,
+  entries: [{ sid: 'S-1-5-18', allow: true }],
+});
+
 function readCachePolicy(directory: string, enabled = true) {
   return {
     enabled,
@@ -2681,6 +2691,7 @@ test('ghApiJson readCache write classification stays uncached when enabled (#358
         readCache: {
           classification: 'write' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -2720,6 +2731,7 @@ test('ghApiJson readCache resolves github.com from GITHUB_SERVER_URL with severa
       const readCache = {
         classification: 'read' as const,
         policy: readCachePolicy(paths.cacheDir),
+        windowsAclReader: PRIVATE_ACL_STUB,
         workspaceRoot: paths.workspace,
         repository: 'o/r',
         credentialMaterial: 'credential-sentinel',
@@ -2757,6 +2769,7 @@ test('ghApiJson readCache stays uncached when extraArgs overrides the hostname (
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             credentialMaterial: 'credential-sentinel',
@@ -2816,6 +2829,7 @@ test('ghApiJson readCache pins a request to the host it keyed the entry for (#35
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             credentialMaterial: 'credential-sentinel',
@@ -2852,6 +2866,7 @@ test('ghApiJson readCache with blank credential material stays uncached (#3587)'
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             credentialMaterial,
@@ -2876,6 +2891,58 @@ test('ghApiJson readCache with blank credential material stays uncached (#3587)'
   }
 });
 
+test('ghApiJson readCache forwards the ACL seam, so a permissive Windows ACL degrades to live reads (#3623)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}\');',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const readCache = (
+        windowsAclReader: () => { kind: 'entries'; entries: unknown[] },
+      ) => ({
+        classification: 'read' as const,
+        policy: readCachePolicy(paths.cacheDir),
+        workspaceRoot: paths.workspace,
+        repository: 'o/r',
+        credentialMaterial: 'credential-sentinel',
+        requestShape: { path: 'repos/o/r' },
+        platform: 'win32' as const,
+        windowsAclReader: windowsAclReader as never,
+      });
+      const everyone = () => ({
+        kind: 'entries' as const,
+        entries: [{ sid: 'S-1-1-0', allow: true }],
+      });
+      assert.deepEqual(
+        ghApiJson('repos/o/r', { readCache: readCache(everyone) }),
+        { ok: true },
+      );
+      assert.deepEqual(
+        ghApiJson('repos/o/r', { readCache: readCache(everyone) }),
+        { ok: true },
+      );
+      assert.equal(recordedArgs(paths.argsFile).length, 2);
+      assert.deepEqual(cacheEntryNames(paths.cacheDir), []);
+      // The same call with a private ACL is cached.
+      const priv = () => ({
+        kind: 'entries' as const,
+        entries: [{ sid: 'S-1-5-18', allow: true }],
+      });
+      ghApiJson('repos/o/r', { readCache: readCache(priv) });
+      ghApiJson('repos/o/r', { readCache: readCache(priv) });
+      assert.equal(recordedArgs(paths.argsFile).length, 3);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson readCache stays uncached when the policy is disabled (#3587)', () => {
   const paths = readCacheFixture();
   const restore = stubGh(
@@ -2890,6 +2957,7 @@ test('ghApiJson readCache stays uncached when the policy is disabled (#3587)', (
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir, false),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -2974,6 +3042,7 @@ test('ghApiJson readCache reuses one included response for a later hint read (#3
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3033,6 +3102,7 @@ test('ghApiJson readCache drops the stored 200 when a strict-fresh read throws a
         const readCache = {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3072,6 +3142,7 @@ test('ghApiJson readCache keeps the stored 200 when a strict-fresh read throws a
       const readCache = {
         classification: 'read' as const,
         policy: readCachePolicy(paths.cacheDir),
+        windowsAclReader: PRIVATE_ACL_STUB,
         workspaceRoot: paths.workspace,
         repository: 'o/r',
         credentialMaterial: 'credential-sentinel',
@@ -3108,6 +3179,7 @@ test('ghApiJson readCache stores a paginated aggregate without --include (#3587)
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3147,6 +3219,7 @@ test('ghApiJson readCache keeps different request bodies in different entries (#
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3181,6 +3254,7 @@ test('ghApiJson readCache hashes the keyring token when no env token is set (#35
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           defaultDirectory: paths.cacheDir,
@@ -3223,6 +3297,7 @@ process.stdout.write(JSON.stringify({ ok: true }));
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3263,6 +3338,7 @@ process.exit(1);
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3332,6 +3408,7 @@ test('ghApiJson readCache partitions a GHES host by the enterprise token (#3587)
               readCache: {
                 classification: 'read',
                 policy: readCachePolicy(paths.cacheDir),
+                windowsAclReader: PRIVATE_ACL_STUB,
                 workspaceRoot: paths.workspace,
                 repository: 'o/r',
                 defaultDirectory: paths.cacheDir,
@@ -3381,6 +3458,7 @@ test('ghApiJson readCache keeps a github.com token stable across enterprise toke
               readCache: {
                 classification: 'read',
                 policy: readCachePolicy(paths.cacheDir),
+                windowsAclReader: PRIVATE_ACL_STUB,
                 workspaceRoot: paths.workspace,
                 repository: 'o/r',
                 defaultDirectory: paths.cacheDir,
@@ -3420,6 +3498,7 @@ process.stdout.write(JSON.stringify({ ok: true }));
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             defaultDirectory: paths.cacheDir,
@@ -3453,6 +3532,7 @@ test('ghApiJson readCache keeps caller requestShape from hiding the request body
       const readCache = {
         classification: 'read' as const,
         policy: readCachePolicy(paths.cacheDir),
+        windowsAclReader: PRIVATE_ACL_STUB,
         workspaceRoot: paths.workspace,
         repository: 'o/r',
         credentialMaterial: 'credential-sentinel',
