@@ -142,7 +142,7 @@ export interface ReadThroughGithubApiCacheResult {
   removed?: number;
   /**
    * Async twin only: this hit was produced by a concurrent leader while the
-   * call waited, so it is as fresh as a live computation would have been.
+   * call waited or raced for the lease, not by an earlier call.
    */
   coalesced?: boolean;
 }
@@ -179,6 +179,12 @@ interface CacheContext {
   retentionMs: number;
   fetch: (request: GithubApiCacheFetchRequest) => GithubApiCacheFetchResult;
   heldLease: LeaseRecord | null;
+  /**
+   * What a record's age is measured from. The sync path measures from when
+   * it was stored; the async twin measures from when the fetch started, so a
+   * long computation is not fresher than the moment it began.
+   */
+  ageBasis: 'stored' | 'started';
 }
 
 class CacheStorageError extends Error {
@@ -754,7 +760,9 @@ function trustedRecord(ctx: CacheContext): StoredRecord | null {
 function freshRecord(ctx: CacheContext): StoredRecord | null {
   const record = trustedRecord(ctx);
   if (!record) return null;
-  if (ctx.now() - record.storedAt > ctx.maxAgeMs) return null;
+  const basis =
+    ctx.ageBasis === 'started' ? generationOf(record) : record.storedAt;
+  if (ctx.now() - basis > ctx.maxAgeMs) return null;
   return record;
 }
 
@@ -1385,6 +1393,7 @@ function prepareRead(
       retentionMs: positiveMs(input.policy.retentionMs, 24 * 60 * 60 * 1000),
       fetch,
       heldLease: null,
+      ageBasis: 'stored',
     },
   };
 }
@@ -1488,8 +1497,10 @@ async function leaderFetchAsync(
 ): Promise<ReadThroughGithubApiCacheResult> {
   const startedAt = ctx.now();
   if (ctx.mode === 'hint') {
+    // Reached only after the caller's own freshness check missed, so a fresh
+    // record here was published by a peer while this call raced for the lease.
     const fresh = freshRecord(ctx);
-    if (fresh) return hitResult(fresh, ctx.entryId);
+    if (fresh) return { ...hitResult(fresh, ctx.entryId), coalesced: true };
   }
   const result = await fetch({});
   invalidateOnMissing(ctx, result, startedAt);
@@ -1595,6 +1606,7 @@ export async function readThroughGithubApiCacheAsync(
     return liveResultAsync(fetch, 'degraded', prepared.entryId);
   }
   const { ctx } = prepared;
+  ctx.ageBasis = 'started';
   try {
     prepareRoot(ctx);
     if (input.mode === 'strict-fresh')

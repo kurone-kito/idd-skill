@@ -709,3 +709,64 @@ test('an invalidation names the repository it was given and no other', async () 
     rmSync(fx.root, { recursive: true, force: true });
   }
 });
+
+test('concurrent readers of a hint that is stale from its start still coalesce', async () => {
+  const fx = fixture();
+  let calls = 0;
+  let release: (() => void) | null = null;
+  const compute = async (): Promise<Report> => {
+    calls += 1;
+    if (calls === 1) {
+      // The first enumeration outlives part of the freshness window.
+      fx.clock.now += 100_000;
+      return { leaves: [1] };
+    }
+    await new Promise<void>((done) => {
+      release = done;
+    });
+    return { leaves: [2] };
+  };
+  try {
+    await readDiscoverHint(request(fx, compute));
+    // Stored 250 s ago, but its enumeration began 350 s ago (maxAge 300 s).
+    fx.clock.now += 250_000;
+    const first = readDiscoverHint(request(fx, compute));
+    const second = readDiscoverHint(request(fx, compute));
+    // Let both reach the lease before the leader finishes.
+    await new Promise<void>((done) => setTimeout(done, 60));
+    (release as (() => void) | null)?.();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(calls, 2);
+    assert.deepEqual(a.report.leaves, [2]);
+    assert.deepEqual(b.report.leaves, [2]);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('an invalidation without an explicit repository falls back to origin', async () => {
+  const fx = fixture();
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  const partial = [
+    {},
+    { owner: 'o' },
+    { repo: 'r' },
+    { owner: undefined, repo: undefined },
+    { owner: '', repo: '' },
+  ];
+  try {
+    for (const identity of partial) {
+      await readDiscoverHint(request(fx, compute));
+      assert.equal(invalidateDiscoverHints(identity, fx.deps), true);
+      const after = await readDiscoverHint(request(fx, compute));
+      assert.equal(
+        after.cache?.source,
+        'live',
+        `identity ${JSON.stringify(identity)} should drop the origin hint`,
+      );
+    }
+    assert.equal(calls(), partial.length + 1);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});

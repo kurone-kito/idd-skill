@@ -2115,3 +2115,56 @@ test('an async read bypasses a disabled policy and a blank credential', async ()
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
+
+test('an async hint ages from the start of its fetch, the sync read from its storage', async () => {
+  const paths = tempRoot();
+  const clock = { now: 1_800_000_000_000 };
+  const now = () => clock.now;
+  try {
+    // The fetch itself takes 100 s, so the record is stored at t+100 s.
+    await readThroughAsync(
+      paths,
+      async () => {
+        clock.now += 100_000;
+        return { status: 200, body: { report: 'slow' } };
+      },
+      { now },
+    );
+    // 250 s after storage but 350 s after the fetch began; maxAge is 300 s.
+    clock.now += 250_000;
+    let calls = 0;
+    const again = await readThroughAsync(
+      paths,
+      async () => {
+        calls += 1;
+        return { status: 200, body: { report: 'fresh' } };
+      },
+      { now },
+    );
+    assert.equal(calls, 1);
+    assert.equal(again.cache, 'miss');
+    // The sync path still measures from storage: its own record is fresh.
+    const syncPaths = tempRoot();
+    try {
+      readThrough(
+        syncPaths,
+        () => {
+          clock.now += 100_000;
+          return { status: 200, body: { n: 1 } };
+        },
+        { now },
+      );
+      clock.now += 250_000;
+      const hit = readThrough(
+        syncPaths,
+        () => ({ status: 200, body: { n: 2 } }),
+        { now },
+      );
+      assert.equal(hit.cache, 'hit');
+    } finally {
+      rmSync(syncPaths.root, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});

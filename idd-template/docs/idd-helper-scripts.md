@@ -1721,8 +1721,11 @@ speed-up, never a gate.
   repository argument, else `origin`, like the hint. Writes made outside
   these helpers, such as a raw `gh` label, body, link, or close change, are
   discovered by `--refresh-cache`, the exhaustion refresh, or `maxAge`.
-- **Concurrency.** Concurrent hint computations on one host coalesce onto
-  one enumeration through the same single-flight lease as the read cache.
+- **Concurrency.** Concurrent hint computations in one worktree on one host
+  coalesce onto one enumeration through the same single-flight lease as the
+  read cache, and a hint is stale for every reader at the same moment (aged
+  from the start of its enumeration), so a stale hint sends one reader to
+  recompute rather than a herd.
   Unlike a single request, a Discover enumeration can run for a long time,
   so a waiter polls a live leader for up to two minutes and does not take
   the lease from a live process (a lease older than ten minutes is treated

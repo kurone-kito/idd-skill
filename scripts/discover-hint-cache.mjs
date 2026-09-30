@@ -250,25 +250,22 @@ async function readOnce(request, config, generation, mode) {
   if (result.cache === 'hit' && isStoredHint(result.body)) {
     const stored = result.body;
     const ageMs = Math.max(0, now() - stored.generatedAt);
-    const coalesced = result.coalesced === true;
-    // The cache judges freshness from when a record was stored; a hint is
-    // only as fresh as its enumeration's start, so a hit that is older than
-    // that (other than one a peer just finished for this very call) is
-    // recomputed rather than served.
-    if (coalesced || ageMs <= config.policy.maxAgeMs) {
+    // The cache already measures a hint from the start of its enumeration;
+    // this is a defensive re-check of the same bound.
+    if (ageMs <= config.policy.maxAgeMs || mode !== 'hint') {
       return {
         report: stored.report,
         source: 'hint',
         ageMs,
         complete: true,
         enumerations,
-        coalesced,
+        coalesced: result.coalesced === true,
       };
     }
     return readOnce(request, config, generation, 'strict-fresh');
   }
   // A hit with a body this layer did not write is replaced, not served.
-  if (result.cache === 'hit') {
+  if (result.cache === 'hit' && mode === 'hint') {
     return readOnce(request, config, generation, 'strict-fresh');
   }
   // A miss, degraded read, or bypass all computed live; when the injected

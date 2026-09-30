@@ -536,7 +536,9 @@ function trustedRecord(ctx) {
 function freshRecord(ctx) {
   const record = trustedRecord(ctx);
   if (!record) return null;
-  if (ctx.now() - record.storedAt > ctx.maxAgeMs) return null;
+  const basis =
+    ctx.ageBasis === 'started' ? generationOf(record) : record.storedAt;
+  if (ctx.now() - basis > ctx.maxAgeMs) return null;
   return record;
 }
 function hitResult(record, entryId) {
@@ -1094,6 +1096,7 @@ function prepareRead(input, fetch, sleep) {
       retentionMs: positiveMs(input.policy.retentionMs, 24 * 60 * 60 * 1000),
       fetch,
       heldLease: null,
+      ageBasis: 'stored',
     },
   };
 }
@@ -1162,8 +1165,10 @@ async function liveResultAsync(fetch, cache, entryId) {
 async function leaderFetchAsync(ctx, fetch) {
   const startedAt = ctx.now();
   if (ctx.mode === 'hint') {
+    // Reached only after the caller's own freshness check missed, so a fresh
+    // record here was published by a peer while this call raced for the lease.
     const fresh = freshRecord(ctx);
-    if (fresh) return hitResult(fresh, ctx.entryId);
+    if (fresh) return { ...hitResult(fresh, ctx.entryId), coalesced: true };
   }
   const result = await fetch({});
   invalidateOnMissing(ctx, result, startedAt);
@@ -1251,6 +1256,7 @@ export async function readThroughGithubApiCacheAsync(input) {
     return liveResultAsync(fetch, 'degraded', prepared.entryId);
   }
   const { ctx } = prepared;
+  ctx.ageBasis = 'started';
   try {
     prepareRoot(ctx);
     if (input.mode === 'strict-fresh')
