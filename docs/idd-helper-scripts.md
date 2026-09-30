@@ -1617,7 +1617,8 @@ govern `ghApiJson` reads that opt in.
 `ghApiJson` consults the cache only when its `readCache` option is set,
 the policy is enabled, and `classification` is `read`. `write`,
 `graphql-mutation`, `ambiguous-write`, and `authority` always call
-GitHub. Modes are `hint`, `conditional`, and `strict-fresh`. Hint reuse
+GitHub, and so does a read whose `extraArgs` name a non-GET `--method`
+or `-X`. Modes are `hint`, `conditional`, and `strict-fresh`. Hint reuse
 stops at `maxAge`. Conditional mode sends `If-None-Match` only with a
 complete trusted base; otherwise it performs one real fetch. A second
 304, still without that base, throws instead of being stored.
@@ -1664,7 +1665,9 @@ partitioned by API host, a hash of the credential context, repository,
 request shape (including the request body), schema version, and a hash
 of derived inputs. The host is `GH_HOST`, otherwise the host from
 `GITHUB_SERVER_URL`, otherwise the single host from `gh auth status`.
-Several configured hosts and no `GH_HOST` skip the cache. For
+A process remembers that single host, and asks `gh` again after a
+failed, empty, or ambiguous answer; the credential is read on every
+call. Several configured hosts and no `GH_HOST` skip the cache. For
 `github.com`, `github.localhost`, and a `ghe.com` subdomain, the
 credential is `GH_TOKEN` or `GITHUB_TOKEN` when set. For a GitHub
 Enterprise Server host it is `GH_ENTERPRISE_TOKEN` or
@@ -5380,14 +5383,18 @@ reflexively as any other CLI option.
   Anything else — a substantive text change, a deleted or `null`
   revision, an incomplete `userContentEdits` page (`totalCount` above
   what was fetched), a non-bot editor, or a failed fetch — keeps
-  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch this
-  needs runs ONLY in the two merge-gate collectors —
-  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's own
-  required-check collector — and only for advisory-bot thread comments
-  whose `lastEditedAt` postdates their thread's latest IDD disposition;
-  every other consumer (`review-activity-snapshot.mjs`, the merged-PR
-  feedback sweep, `audit-pr-cleanup.mjs`) never fetches it, so an edited
-  comment keeps `updatedAt` dating there, unchanged.
+  `updatedAt` dating. The bounded GraphQL `userContentEdits` fetch
+  this needs runs in the two merge-gate collectors —
+  `pre-merge-readiness.mjs`'s F2 evidence collector and this file's
+  own required-check collector — and in `review-activity-snapshot.mjs`
+  (so the one-command watermark path reports the same disposition
+  evidence as the merge gate, kurone-kito/idd-skill#3655); it covers
+  only advisory-bot thread comments whose `lastEditedAt` postdates
+  their thread's latest IDD disposition, in one batched call when
+  there is at least one such comment and none otherwise. Every other
+  consumer (the merged-PR feedback sweep, `audit-pr-cleanup.mjs`)
+  never fetches it, so an edited comment keeps `updatedAt` dating
+  there, unchanged.
   `missingThreads[].inPlaceEditOnly` / `soleCauseInPlaceEditOnly` stay a
   separate, coarser, revision-content-blind heuristic
   (`classifyThreadAckOnlyPostDisposition`), unaffected by this dating

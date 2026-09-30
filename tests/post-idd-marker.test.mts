@@ -1327,6 +1327,10 @@ function watermarkFromPrGhStub(
     rollupHeadSha?: string;
     rulesBody?: string;
     commentsBody?: string;
+    /** Raw GraphQL body for the review-threads query (#3655). */
+    threadsBody?: string;
+    /** Raw GraphQL body for the `userContentEdits` `nodes(ids:)` query. */
+    editsBody?: string;
   } = {},
 ): string {
   const rollup = JSON.stringify(
@@ -1391,6 +1395,16 @@ if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('datab
       },
     },
   }));
+}
+${
+  options.editsBody === undefined
+    ? ''
+    : `if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('userContentEdits')) out(${JSON.stringify(options.editsBody)});`
+}
+${
+  options.threadsBody === undefined
+    ? ''
+    : `if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('reviewThreads(')) out(${JSON.stringify(options.threadsBody)});`
 }
 if (args[0] === 'api' && args[1] === 'graphql') {
   out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } }, nodes: [{ id: 'C_1', lastEditedAt: null }] } }));
@@ -5927,5 +5941,177 @@ test('operation-local CI agreement failure keeps the capture and does not publis
   assert.equal(
     (result.snapshot as { headSha: string }).headSha,
     OPERATION_LOCAL_SHA,
+  );
+});
+
+// #3655: the one-command watermark path must not refuse a courtesy ack that
+// only follows a cosmetic in-place edit of an advisory-bot comment. The
+// timestamps sit before the stub's passing check (2026-06-25T11:00:00Z).
+function cosmeticEditFixtureBodies(finding: string): {
+  threadsBody: string;
+  editsBody: string;
+} {
+  const marker = (kind: string) =>
+    `<!-- This is an auto-generated ${kind} by CodeRabbit -->`;
+  const bot = 'coderabbitai[bot]';
+  const original = `**Potential issue**: the cache key ignores the host.\n\n${marker('comment')}`;
+  const edited = `${finding}\n\n${marker('reply')}`;
+  const node = (
+    id: string,
+    login: string,
+    body: string,
+    created: string,
+    updated: string,
+    lastEditedAt: string | null,
+  ) => ({
+    id,
+    body,
+    createdAt: created,
+    updatedAt: updated,
+    lastEditedAt,
+    author: { login },
+    pullRequestReview: null,
+  });
+  return {
+    threadsBody: JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  id: 'PRRT_courtesy',
+                  isResolved: true,
+                  path: 'src/a.ts',
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      node(
+                        'PRRC_root',
+                        bot,
+                        edited,
+                        '2026-06-25T09:29:17Z',
+                        '2026-06-25T10:02:44Z',
+                        '2026-06-25T10:02:44Z',
+                      ),
+                      node(
+                        'PRRC_disposition',
+                        'kurone-kito',
+                        '**Rejected** — the host is part of the key already.',
+                        '2026-06-25T10:02:38Z',
+                        '2026-06-25T10:02:38Z',
+                        null,
+                      ),
+                      node(
+                        'PRRC_ack',
+                        bot,
+                        '`@kurone-kito`, confirmed. Thanks.\n\n✅ Review thread resolved.\n\n' +
+                          marker('reply'),
+                        '2026-06-25T10:03:05Z',
+                        '2026-06-25T10:03:05Z',
+                        null,
+                      ),
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    }),
+    editsBody: JSON.stringify({
+      data: {
+        nodes: [
+          {
+            id: 'PRRC_root',
+            userContentEdits: {
+              totalCount: 2,
+              nodes: [
+                {
+                  editedAt: '2026-06-25T10:02:44Z',
+                  diff: edited,
+                  editor: { login: bot },
+                  deletedAt: null,
+                },
+                {
+                  editedAt: '2026-06-25T09:29:17Z',
+                  diff: original,
+                  editor: { login: bot },
+                  deletedAt: null,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    }),
+  };
+}
+
+function runCosmeticEditWatermark(finding: string): {
+  status: number | null;
+  stderr: string;
+  envelope: {
+    operationLocal: {
+      decision: string;
+      reason?: string | null;
+      warnings: string[];
+    };
+  };
+} {
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, {
+      commentsBody: '[]',
+      ...cosmeticEditFixtureBodies(finding),
+    }),
+  );
+  try {
+    const result = runWatermarkCli([
+      '--operation-local',
+      '--trusted-marker-logins',
+      'kurone-kito',
+      '--advisory-bot-logins',
+      'coderabbitai[bot]',
+      '--prior-head-sha',
+      SHA,
+      '--prior-total-item-count',
+      '0',
+      '--prior-max-activity-at',
+      'none',
+    ]);
+    return {
+      status: result.status,
+      stderr: result.stderr,
+      envelope: result.stdout
+        ? JSON.parse(result.stdout)
+        : { operationLocal: {} },
+    };
+  } finally {
+    restore();
+  }
+}
+
+test('--operation-local CLI publishes past a cosmetic bot edit followed by a courtesy ack (#3655)', () => {
+  const result = runCosmeticEditWatermark(
+    '**Potential issue**: the cache key ignores the host.',
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.envelope.operationLocal.decision, 'publish');
+  assert.deepEqual(result.envelope.operationLocal.warnings, []);
+});
+
+test('--operation-local CLI still refuses a genuinely new post-disposition bot finding (#3655)', () => {
+  const result = runCosmeticEditWatermark(
+    '**Potential issue**: also handle an empty host.',
+  );
+  // A refusal exits 1 but still prints the envelope.
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.envelope.operationLocal.decision, 'refuse');
+  assert.match(
+    result.envelope.operationLocal.reason ?? '',
+    /newly actionable same-HEAD activity/,
   );
 });

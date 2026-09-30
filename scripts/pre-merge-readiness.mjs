@@ -51,7 +51,6 @@ import {
   resolveEffectiveDevelopmentBranch,
 } from './policy-helpers.mjs';
 import {
-  attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   buildPreMergeReadinessSummary,
   classifyIddPrComment,
@@ -71,7 +70,6 @@ import {
   resolvePrFirstCommitAt,
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
-  selectAdvisoryThreadCommentIdsEditedAfterDisposition,
   selectCodeownersText,
 } from './protocol-helpers.mjs';
 import {
@@ -88,6 +86,7 @@ import {
   fetchReviewsAndHeadCommit,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mjs';
+import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mjs';
 // #3298: this file's only consumer of supersession-detection.mts --
 // protocol-helpers.mts must never import from it (supersession-detection.mts
 // already transitively depends on protocol-helpers.mts via
@@ -770,54 +769,23 @@ export function collectPreMergeReadiness(
     trustedMarkerLogins,
     operationalComments: [...comments, ...claimComments],
   });
-  // #3269: bounded second-pass GraphQL fetch, scoped to only advisory-bot
-  // thread comments edited after their thread's latest IDD disposition
-  // (see `selectAdvisoryThreadCommentIdsEditedAfterDisposition`'s own doc
-  // comment) -- so `dispositionEvidence` below can verify a cosmetic edit
-  // (e.g. CodeRabbit's own comment-to-reply marker rewrite) and date it by
-  // content activity instead of `updatedAt`, which also moves on IDD's
-  // own hide-on-supersede minimization (kurone-kito/idd-skill#3173). The
-  // `isDispositionAuthor` predicate here MUST match
-  // `summarizeDispositionEvidenceForGate`'s own (via
+  // #3269: bounded second-pass GraphQL fetch for advisory-bot thread comments
+  // edited after their thread's latest IDD disposition, so
+  // `dispositionEvidence` below can date a cosmetic edit (e.g. CodeRabbit's
+  // own comment-to-reply marker rewrite) by content activity instead of
+  // `updatedAt`, which also moves on IDD's own hide-on-supersede
+  // minimization (kurone-kito/idd-skill#3173). Shared with the
+  // review-activity snapshot (#3655); the disposition-author logins here
+  // MUST match `summarizeDispositionEvidenceForGate`'s own (via
   // `buildPreMergeReadinessSummary`'s `iddAgentLogins`/`trustedMarkerLogins`
-  // options), or candidate selection and freshness evaluation could
-  // disagree about which comment anchors "the disposition". A fetch
-  // failure degrades to no enrichment (today's `updatedAt` dating)
-  // rather than failing this whole collector.
-  const baseNormalizedThreads = threads.map(normalizeThread);
-  const dispositionAuthorLoginSet = new Set([
-    ...iddAgentLogins,
-    ...trustedMarkerLogins,
-  ]);
-  const editHistoryCandidateIds =
-    selectAdvisoryThreadCommentIdsEditedAfterDisposition(
-      baseNormalizedThreads,
-      {
-        isDispositionAuthor: (login) => dispositionAuthorLoginSet.has(login),
-        advisoryBotLogins,
-      },
-    );
-  let editHistories = [];
-  if (editHistoryCandidateIds.length > 0) {
-    try {
-      editHistories = port.getReviewThreadCommentUserContentEdits(
-        editHistoryCandidateIds,
-      );
-    } catch {
-      // Fail closed to no enrichment -- every affected comment keeps
-      // today's `updatedAt` dating (see
-      // `resolveThreadCommentRevisionDatingOutcome`'s own "unverifiable"
-      // outcome for an absent/incomplete history, protocol-helpers.mts).
-    }
-  }
-  // Called unconditionally (even with an empty `editHistories`): returns
-  // `baseNormalizedThreads` UNCHANGED (same reference) when there is
-  // nothing to attach, so this is never more than a no-op enrichment pass
-  // in that case, and keeps `normalizedThreads`'s inferred type the same
-  // (structurally `ThreadLike[]`) regardless of which branch above ran.
-  const normalizedThreads = attachReviewThreadCommentEditHistories(
-    baseNormalizedThreads,
-    editHistories,
+  // options). A fetch failure degrades to no enrichment.
+  const normalizedThreads = enrichThreadsWithBotEditHistories(
+    port,
+    threads.map(normalizeThread),
+    {
+      dispositionAuthorLogins: [...iddAgentLogins, ...trustedMarkerLogins],
+      advisoryBotLogins,
+    },
   );
   const advisoryWaitPolicy = resolveAdvisoryWaitPolicy(advisoryWaitConfig);
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(advisoryWaitConfig);
