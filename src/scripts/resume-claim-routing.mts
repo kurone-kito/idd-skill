@@ -9,8 +9,10 @@ import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
 import {
-  isCurrentSessionWorktreeOwner,
-  resolveCurrentSessionClaimEvidence,
+  type CurrentSessionOwnerCheck,
+  type CurrentSessionOwnerEvidence,
+  evaluateCurrentSessionOwnerEvidence,
+  firstFailedOwnerProof,
 } from './discover-roadmap-graph.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -135,8 +137,18 @@ interface ResumeClaimRoutingOptions {
   ) => boolean;
   /** Read same-clone worktree occupancy before a stale takeover. */
   inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
-  /** Independently prove the active claim belongs to this session. */
-  isCurrentSessionOwner?: (claim: ParsedClaimMarker) => boolean;
+  /**
+   * Independently prove the active claim belongs to this session. Receives
+   * the occupancy probe the routing already took for the claimed branch
+   * (absent when `inspectLocalWorktree` is not wired). A plain `boolean` is
+   * the whole verdict; a {@link CurrentSessionOwnerCheck} adds the
+   * per-proof evidence (#3667), which the routing reports as
+   * `evidence.owner_evidence`.
+   */
+  isCurrentSessionOwner?: (
+    claim: ParsedClaimMarker,
+    localWorktree?: LocalWorktreeInspection,
+  ) => boolean | CurrentSessionOwnerCheck;
   /**
    * #3276: true when the caller's linked-PR lookup for this issue itself
    * failed (PR state unknown), as opposed to succeeding with no connected
@@ -277,6 +289,43 @@ export function buildForcedHandoffEnabledGate(options: {
       : false;
 }
 
+/** The owner-proof outcome {@link checkCurrentSessionOwner} reports. */
+interface OwnerCheckOutcome {
+  /** The routing's probe for the claimed branch; absent when not wired. */
+  probe: LocalWorktreeInspection | undefined;
+  /** The gate applies and this session is not proven to own the claim. */
+  unproven: boolean;
+  /** Per-proof evidence, only from a structured callback and a probe. */
+  evidence: CurrentSessionOwnerEvidence | null;
+}
+
+/**
+ * Take the occupancy probe and the owner check once for a claim-id match.
+ * The gate applies only when a probe or an owner callback is wired and the
+ * probe did not come back `absent` (#3154): with nothing occupying the
+ * branch there is no second session to tell apart. A wired probe with no
+ * owner callback never proves ownership.
+ */
+function checkCurrentSessionOwner(
+  claim: ParsedClaimMarker,
+  options: ResumeClaimRoutingOptions,
+): OwnerCheckOutcome {
+  const probe = options.inspectLocalWorktree?.(claim.branch);
+  if (
+    !(options.inspectLocalWorktree || options.isCurrentSessionOwner) ||
+    probe?.status === 'absent'
+  ) {
+    return { probe, unproven: false, evidence: null };
+  }
+  const verdict = options.isCurrentSessionOwner?.(claim, probe);
+  const structured = typeof verdict === 'object' ? verdict : null;
+  return {
+    probe,
+    unproven: !(structured ? structured.owner : verdict),
+    evidence: probe !== undefined && structured ? structured.evidence : null,
+  };
+}
+
 export function evaluateResumeClaimRouting(
   input: ResumeClaimRoutingInput,
   options: ResumeClaimRoutingOptions = {},
@@ -325,6 +374,7 @@ export function evaluateResumeClaimRouting(
   let routeState = 'unclaimed';
   let action = 're_claim';
   let reason = 'no-active-claim';
+  let ownerCheck: OwnerCheckOutcome | null = null;
 
   if (state.mode === 'legacy-only') {
     if (!state.legacyClaim) {
@@ -375,6 +425,11 @@ export function evaluateResumeClaimRouting(
       activationNonceWinner !== null &&
       nonceChecked &&
       activationNonceWinner !== nonceChecked;
+    // #3667: probe and owner check run once, ahead of the nonce branches, so
+    // `evidence.owner_evidence` is reported for every claim-id match whose
+    // probe is not `absent`, including a `disputed` nonce route (whose
+    // state, action and reason this never changes).
+    ownerCheck = checkCurrentSessionOwner(state.activeClaim, options);
     if (laterCompetingClaim) {
       warnings.push(
         `later trusted claim ${laterCompetingClaim.claim_id} at ${laterCompetingClaim.created_at} cannot activate under Claim-state parsing rules 4/6 and is ignored on the owner path`,
@@ -391,12 +446,7 @@ export function evaluateResumeClaimRouting(
       routeState = 'disputed';
       action = 'stop';
       reason = 'cold-recovery-activation-nonce-collision';
-    } else if (
-      (options.inspectLocalWorktree || options.isCurrentSessionOwner) &&
-      options.inspectLocalWorktree?.(state.activeClaim.branch)?.status !==
-        'absent' &&
-      !options.isCurrentSessionOwner?.(state.activeClaim)
-    ) {
+    } else if (ownerCheck.unproven) {
       // A matching remote claim-id is not sufficient to resume a live
       // session when a local worktree probe for this branch did not come
       // back `absent`: the current canonical worktree, lock, generated
@@ -520,6 +570,23 @@ export function evaluateResumeClaimRouting(
     reason = 'forced-handoff-linked-pr-lookup-failed';
   }
 
+  // #3667: name the failed proof, and report the probe that blocked the
+  // owner, only for the verdict the caller actually receives -- set after
+  // the override above so a rewritten `disputed` state never carries them.
+  if (routeState === 'owner_evidence_required' && ownerCheck) {
+    localWorktree = ownerCheck.probe ?? null;
+    const failedProof = ownerCheck.evidence
+      ? firstFailedOwnerProof(ownerCheck.evidence)
+      : null;
+    if (ownerCheck.evidence && failedProof !== null) {
+      warnings.push(
+        failedProof === 'occupancy_probe'
+          ? `owner evidence required: first failed proof is ${failedProof} (${ownerCheck.evidence.occupancy_probe})`
+          : `owner evidence required: first failed proof is ${failedProof}`,
+      );
+    }
+  }
+
   return {
     state: routeState,
     action,
@@ -582,6 +649,10 @@ export function evaluateResumeClaimRouting(
       // resolver again; omitting `absent` makes that successful production
       // result indistinguishable from a probe that never ran.
       ...(localWorktree !== null ? { local_worktree: localWorktree } : {}),
+      // #3667: one field per owner proof, in evaluation order (see
+      // CurrentSessionOwnerEvidence). Absent unless a structured owner
+      // callback ran against a probe that was not `absent`.
+      ...(ownerCheck?.evidence ? { owner_evidence: ownerCheck.evidence } : {}),
     },
   };
 }
@@ -791,25 +862,15 @@ function runCli(): HelperCliResult {
       ),
     inspectLocalWorktree: (branchName: string) =>
       inspectLocalWorktreeBranch(branchName),
-    isCurrentSessionOwner: (claim: ParsedClaimMarker) => {
-      const evidence = resolveCurrentSessionClaimEvidence(
-        claim.claimId,
+    isCurrentSessionOwner: (
+      claim: ParsedClaimMarker,
+      localWorktree?: LocalWorktreeInspection,
+    ) =>
+      evaluateCurrentSessionOwnerEvidence(
+        claim,
+        localWorktree ?? inspectLocalWorktreeBranch(claim.branch),
         args.worktree || undefined,
-      );
-      if (
-        evidence === null ||
-        evidence.agentId !== claim.agentId ||
-        evidence.branchName !== claim.branch
-      ) {
-        return false;
-      }
-      return isCurrentSessionWorktreeOwner(
-        evidence.worktreePath,
-        evidence.branchName,
-        claim.branch,
-        inspectLocalWorktreeBranch(claim.branch),
-      );
-    },
+      ),
     linkedPrLookupFailed,
   };
   const result = evaluateResumeClaimRouting(

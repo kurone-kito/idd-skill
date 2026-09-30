@@ -4563,3 +4563,252 @@ test('the owner proof fails closed when the current directory no longer exists (
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// #3667: the same proofs, reported through the routing itself.
+
+/** Routing as the CLI wires it: a structured owner callback over the probe. */
+function routeWithOwnerEvidence(
+  sandbox: { primary: string; worktree: string },
+  overrides: { probe?: LocalWorktreeInspection; nonce?: string } = {},
+) {
+  const inspect = (branch: string) =>
+    overrides.probe ?? inspectLocalWorktreeBranch(branch, sandbox.primary);
+  return evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      nonce: overrides.nonce ?? 'nonce-new',
+      now: '2026-05-12T11:00:00Z',
+      events: SUCCESSOR_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      inspectLocalWorktree: inspect,
+      isCurrentSessionOwner: (claim, localWorktree) =>
+        evaluateCurrentSessionOwnerEvidence(
+          claim,
+          localWorktree ?? inspect(claim.branch),
+          sandbox.worktree,
+        ),
+    },
+  );
+}
+
+function ownerEvidenceWarnings(warnings: string[]): string[] {
+  return warnings.filter((line) => line.startsWith('owner evidence required'));
+}
+
+function recordSuccessorTokens(worktree: string): void {
+  recordGeneratedClaimTokens(worktree, {
+    agentId: 'agent-new',
+    claimId: 'claim-new',
+    nonce: 'nonce-new',
+  });
+}
+
+test('owner_evidence_required reports the lock proof, the warning and the local worktree (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    const result = routeWithOwnerEvidence(sandbox);
+    assertSuccessorStop(result);
+    assert.deepEqual(Object.keys(result.evidence.owner_evidence ?? {}), [
+      ...OWNER_PROOF_ORDER,
+    ]);
+    assert.deepEqual(result.evidence.owner_evidence, {
+      worktree_identity: true,
+      claim_lock_matches: false,
+      generated_tokens_match: null,
+      agent_and_branch_match: null,
+      occupancy_probe: 'occupied',
+      occupancy_paths_match: null,
+    });
+    assert.deepEqual(ownerEvidenceWarnings(result.warnings), [
+      'owner evidence required: first failed proof is claim_lock_matches',
+    ]);
+    assert.deepEqual(
+      result.evidence.local_worktree,
+      inspectLocalWorktreeBranch(SUCCESSOR_BRANCH, sandbox.primary),
+    );
+    assert.equal(result.evidence.local_worktree?.status, 'occupied');
+  });
+});
+
+test('owner_evidence_required names a missing generated-tokens record (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const result = routeWithOwnerEvidence(sandbox);
+    assertSuccessorStop(result);
+    assert.equal(result.evidence.owner_evidence?.claim_lock_matches, true);
+    assert.equal(result.evidence.owner_evidence?.generated_tokens_match, false);
+    assert.equal(result.evidence.owner_evidence?.agent_and_branch_match, null);
+    assert.deepEqual(ownerEvidenceWarnings(result.warnings), [
+      'owner evidence required: first failed proof is generated_tokens_match',
+    ]);
+  });
+});
+
+test('owner_evidence_required names no resolvable worktree identity (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    leaveWorktreeMidRebase(sandbox);
+    recordSuccessorTokens(sandbox.worktree);
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const result = routeWithOwnerEvidence(sandbox);
+    assertSuccessorStop(result);
+    assert.equal(result.evidence.owner_evidence?.worktree_identity, false);
+    assert.equal(result.evidence.owner_evidence?.claim_lock_matches, null);
+    assert.deepEqual(ownerEvidenceWarnings(result.warnings), [
+      'owner evidence required: first failed proof is worktree_identity',
+    ]);
+  });
+});
+
+test('owner_evidence_required names an unreadable probe with its status (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordSuccessorTokens(sandbox.worktree);
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const probe: LocalWorktreeInspection = {
+      status: 'unreadable',
+      paths: [sandbox.worktree],
+      reason: 'ambiguous detached-operation metadata',
+    };
+    const result = routeWithOwnerEvidence(sandbox, { probe });
+    assertSuccessorStop(result);
+    assert.equal(result.evidence.owner_evidence?.occupancy_probe, 'unreadable');
+    assert.equal(result.evidence.owner_evidence?.occupancy_paths_match, null);
+    assert.deepEqual(ownerEvidenceWarnings(result.warnings), [
+      'owner evidence required: first failed proof is occupancy_probe (unreadable)',
+    ]);
+    assert.deepEqual(result.evidence.local_worktree, probe);
+  });
+});
+
+test('owner_evidence_required names an occupied probe at another path (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordSuccessorTokens(sandbox.worktree);
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const probe: LocalWorktreeInspection = {
+      status: 'occupied',
+      paths: [join(tmpdir(), 'idd-some-other-worktree')],
+      reason: null,
+    };
+    const result = routeWithOwnerEvidence(sandbox, { probe });
+    assertSuccessorStop(result);
+    assert.equal(result.evidence.owner_evidence?.occupancy_probe, 'occupied');
+    assert.equal(result.evidence.owner_evidence?.occupancy_paths_match, false);
+    assert.deepEqual(ownerEvidenceWarnings(result.warnings), [
+      'owner evidence required: first failed proof is occupancy_paths_match',
+    ]);
+    assert.deepEqual(result.evidence.local_worktree, probe);
+  });
+});
+
+test('already_owned reports all-true owner evidence and no local_worktree or failed-proof warning (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    recordSuccessorTokens(sandbox.worktree);
+    acquireClaimLock(sandbox.worktree, 'agent-new', 'claim-new', true);
+    const result = routeWithOwnerEvidence(sandbox);
+    assert.equal(result.state, 'already_owned');
+    assert.equal(result.action, 'keep');
+    assert.deepEqual(result.evidence.owner_evidence, {
+      worktree_identity: true,
+      claim_lock_matches: true,
+      generated_tokens_match: true,
+      agent_and_branch_match: true,
+      occupancy_probe: 'occupied',
+      occupancy_paths_match: true,
+    });
+    assert.equal(result.evidence.local_worktree, undefined);
+    assert.deepEqual(ownerEvidenceWarnings(result.warnings), []);
+  });
+});
+
+test('an absent probe reports no owner_evidence and keeps already_owned (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    const result = routeWithOwnerEvidence(sandbox, {
+      probe: { status: 'absent', paths: [], reason: null },
+    });
+    assert.equal(result.state, 'already_owned');
+    assert.equal(result.evidence.owner_evidence, undefined);
+    assert.equal(result.evidence.local_worktree, undefined);
+  });
+});
+
+test('a nonce-mismatch dispute still reports owner_evidence without changing the verdict (#3667)', () => {
+  withSuccessorSandbox((sandbox) => {
+    const result = routeWithOwnerEvidence(sandbox, { nonce: 'nonce-other' });
+    assert.equal(result.state, 'disputed');
+    assert.equal(result.action, 'stop');
+    assert.equal(result.reason, 'activation-nonce-mismatch');
+    assert.equal(result.evidence.owner_evidence?.claim_lock_matches, false);
+    assert.deepEqual(ownerEvidenceWarnings(result.warnings), []);
+    assert.equal(result.evidence.local_worktree, undefined);
+  });
+});
+
+test('a boolean owner callback reports no owner_evidence and no failed-proof warning (#3667)', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-old',
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-3-task'],
+        reason: null,
+      }),
+      isCurrentSessionOwner: () => false,
+    },
+  );
+  assert.equal(result.state, 'owner_evidence_required');
+  assert.equal(result.evidence.owner_evidence, undefined);
+  assert.deepEqual(ownerEvidenceWarnings(result.warnings), []);
+  // The blocking probe is still reported on this verdict.
+  assert.equal(result.evidence.local_worktree?.status, 'occupied');
+});
+
+test('a forced-handoff lookup failure override never carries the owner-evidence warning or local_worktree (#3667)', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-old',
+      now: '2026-05-12T11:00:00Z',
+      events: FORCED_HANDOFF_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+        forcedHandoffEnabled: true,
+        expectedLinkedPrReferences: new Set(),
+        linkedPrLookupFailed: true,
+      }),
+      isAuthorizedForcedHandoff: (forcedBy: string) =>
+        forcedBy === 'maintainer',
+      linkedPrLookupFailed: true,
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/repo.issue-11-task'],
+        reason: null,
+      }),
+      isCurrentSessionOwner: (claim, localWorktree) =>
+        evaluateCurrentSessionOwnerEvidence(
+          claim,
+          localWorktree ?? { status: 'absent', paths: [], reason: null },
+          '/nonexistent/idd-3667-worktree',
+        ),
+    },
+  );
+  assert.equal(result.state, 'disputed');
+  assert.equal(result.reason, 'forced-handoff-linked-pr-lookup-failed');
+  // The owner check did run (so this override is what dropped the warning).
+  assert.equal(result.evidence.owner_evidence?.worktree_identity, false);
+  assert.deepEqual(ownerEvidenceWarnings(result.warnings), []);
+  assert.equal(result.evidence.local_worktree, undefined);
+});
