@@ -690,7 +690,11 @@ function parsePaginatedNdjsonFile(
   const items: unknown[] = [];
   let jsonShaped = false;
   let observedBytes = 0;
-  let pending = Buffer.alloc(0);
+  // The unfinished line, kept as the chunks that make it up and joined once
+  // when its newline arrives. Re-joining it on every read copies a long
+  // line's prefix again for each 64 KiB read, which is quadratic for a row
+  // near the ceiling (Copilot review, PR #3605).
+  let pendingChunks: Buffer[] = [];
   const chunk = Buffer.alloc(64 * 1024);
   const fd = openSync(filePath, 'r');
   try {
@@ -701,22 +705,38 @@ function parsePaginatedNdjsonFile(
       if (observedBytes > limitBytes) {
         throw new GhPaginatedResponseLimitError(limitBytes, observedBytes);
       }
-      pending = Buffer.concat([pending, chunk.subarray(0, read)]);
+      const bytes = chunk.subarray(0, read);
       let start = 0;
-      for (let index = 0; index < pending.length; index += 1) {
-        if (pending[index] !== 0x0a) continue;
-        if (appendPaginatedNdjsonLine(items, pending.subarray(start, index))) {
+      // Only the newly read bytes are scanned for a newline.
+      for (
+        let index = bytes.indexOf(0x0a);
+        index !== -1;
+        index = bytes.indexOf(0x0a, start)
+      ) {
+        const tail = bytes.subarray(start, index);
+        const line =
+          pendingChunks.length > 0
+            ? Buffer.concat([...pendingChunks, tail])
+            : tail;
+        pendingChunks = [];
+        if (appendPaginatedNdjsonLine(items, line)) {
           jsonShaped = true;
         }
         start = index + 1;
       }
-      pending = Buffer.from(pending.subarray(start));
+      // `chunk` is reused by the next read, so the leftover must be copied.
+      if (start < bytes.length) {
+        pendingChunks.push(Buffer.from(bytes.subarray(start)));
+      }
     }
   } finally {
     closeSync(fd);
   }
-  if (pending.length > 0 && appendPaginatedNdjsonLine(items, pending)) {
-    jsonShaped = true;
+  if (pendingChunks.length > 0) {
+    const line = Buffer.concat(pendingChunks);
+    if (appendPaginatedNdjsonLine(items, line)) {
+      jsonShaped = true;
+    }
   }
   return { items, jsonShaped };
 }

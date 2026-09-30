@@ -1322,6 +1322,37 @@ test(
   },
 );
 
+test('ghApiJson (paginated) parses rows whose newlines fall on read boundaries and rows spanning many reads (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'boundaries.ndjson');
+  const readSize = 64 * 1024;
+  const rowOfLength = (id: number, length: number) => {
+    const base = JSON.stringify({ id, pad: '' }).length;
+    return { id, pad: 'x'.repeat(length - base) };
+  };
+  const rows: Array<Record<string, unknown>> = [
+    // Each newline lands just before, on, and just after a 64 KiB edge.
+    rowOfLength(0, readSize - 1),
+    rowOfLength(1, readSize),
+    rowOfLength(2, readSize + 1),
+    rowOfLength(3, 2 * readSize - 1),
+    // One row spanning many reads, with multibyte text over the edges.
+    { id: 4, pad: '日本語𠮷'.repeat(60_000) },
+    { id: 5, pad: 'tail' },
+  ];
+  writeFileSync(
+    fixturePath,
+    `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+  );
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues', { paginate: true }), rows);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson (paginated) throws a tagged gh failure for an allow-listed status with a non-JSON body (#3597)', () => {
   const restore = stubGh(`
 const fs = require('node:fs');
