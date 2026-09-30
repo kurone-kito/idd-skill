@@ -560,6 +560,27 @@ test('errors, throttles, and incomplete collections are not stored', () => {
   }
 });
 
+test('a response naming its own host and repository is stored', () => {
+  const paths = tempRoot();
+  const body = {
+    full_name: 'o/r',
+    html_url: 'https://github.com/o/r',
+    url: 'https://api.github.com/repos/o/r',
+  };
+  try {
+    const first = readThrough(paths, okBody(body));
+    assert.equal(first.cache, 'miss');
+    assert.equal(entryNames(paths.cacheDir).length, 1);
+    // The secret scan looks for the credential inside the scope identifiers
+    // and body, never for the identifiers inside the body.
+    const second = readThrough(paths, okBody({ other: true }));
+    assert.equal(second.cache, 'hit');
+    assert.deepEqual(second.body, body);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a response echoing the credential material is never stored, even without secretMaterial', () => {
   const paths = tempRoot();
   const credentialMaterial = 'ghp_credential_material_sentinel';
