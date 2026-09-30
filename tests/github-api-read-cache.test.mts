@@ -397,6 +397,48 @@ test('a 304 refresh never overwrites a newer entry or resurrects a purged one', 
   }
 });
 
+test('a failing eviction after a 304 refresh does not trigger a second fetch', () => {
+  const paths = tempRoot();
+  let now = 1_000_000;
+  let failEviction = false;
+  let fetches = 0;
+  try {
+    const run = (mode: 'hint' | 'conditional') =>
+      readThrough(
+        paths,
+        () => {
+          fetches += 1;
+          return fetches === 1
+            ? { status: 200, body: { v: 1 }, etag: '"v1"' }
+            : { status: 304, body: null, etag: '"v1"' };
+        },
+        {
+          mode,
+          now: () => now,
+          storage: {
+            readdir(path: string): string[] {
+              // Only the entries listing eviction reads; prepareRoot's
+              // root listing must keep working so the 304 is reached.
+              if (failEviction && path.endsWith(`${sep}entries`)) {
+                throw new Error('readdir failed');
+              }
+              return readdirSync(path);
+            },
+          },
+        },
+      );
+    run('hint');
+    failEviction = true;
+    now += 10;
+    const result = run('conditional');
+    assert.equal(result.cache, 'revalidated');
+    assert.equal(fetches, 2);
+    assert.deepEqual(result.body, { v: 1 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a 304 without a trusted base performs one real fetch', () => {
   const paths = tempRoot();
   let step = 0;
@@ -1084,9 +1126,12 @@ test('a dot-dot after a symlink is judged where the OS resolves it', {
         defaultDirectory: fallback,
       },
     );
-    assert.notEqual(result.cache, 'refused');
+    // `other` holds only the symlink, so it is a foreign directory and
+    // the read degrades to a live fetch instead of adopting it.
+    assert.equal(result.cache, 'degraded');
     assert.equal(statSync(wsParent).mode & 0o777, 0o755);
     assert.deepEqual(readdirSync(wsParent), ['repo']);
+    assert.deepEqual(readdirSync(other), ['link']);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }

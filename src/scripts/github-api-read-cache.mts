@@ -929,7 +929,14 @@ function refreshBase(
     safeUnlink(ctx.storage, destination);
     throw error;
   }
-  evict(ctx);
+  // The refreshed entry is already stored. A failing eviction must not
+  // turn a valid 304 into a second live fetch, as publish's callers also
+  // treat storage failures as non-fatal.
+  try {
+    evict(ctx);
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+  }
 }
 
 function leaderFetch(ctx: CacheContext): ReadThroughGithubApiCacheResult {
