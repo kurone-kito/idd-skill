@@ -4,9 +4,11 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -643,6 +645,38 @@ test('a path holding foreign content is left untouched', () => {
     assert.deepEqual(
       JSON.parse(readFileSync(empty, 'utf8').trim()),
       observation,
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('the temporary file is created exclusively under an unpredictable name', (t) => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-tmp-'));
+  const victim = join(tempRoot, 'victim.txt');
+  const target = join(tempRoot, 'telemetry.jsonl');
+  const guessable = `${target}.${process.pid}.tmp`;
+  const observation = observeGhSuccess({ status: 200, data: { ok: true } });
+  try {
+    writeFileSync(victim, 'keep me\n');
+    try {
+      // The former temporary name was this guessable one; a link planted
+      // there must not be followed by the write.
+      symlinkSync(victim, guessable);
+    } catch {
+      t.skip('symbolic links are unavailable here');
+      return;
+    }
+    appendRequestObservation(observation, { path: target, maxRecords: 5 });
+    assert.equal(readFileSync(victim, 'utf8'), 'keep me\n');
+    assert.equal(existsSync(`${target}.lock`), false);
+    const leftovers = readdirSync(tempRoot).filter(
+      (name) => name.endsWith('.tmp') && join(tempRoot, name) !== guessable,
+    );
+    assert.deepEqual(leftovers, []);
+    assert.equal(
+      readFileSync(target, 'utf8').split('\n').filter(Boolean).length,
+      1,
     );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

@@ -9,6 +9,7 @@
 // stderr, body, token, query, or environment is never copied through.
 // Telemetry defaults off. A read or write failure here must not change
 // the caller's return value or thrown error.
+import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
@@ -18,10 +19,10 @@ import {
   renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import {
   classifyInaccessibleIssueLookup,
   deriveGhHttpStatus,
@@ -611,10 +612,20 @@ export function appendRequestObservation(observation, options) {
     const lines = readRetainedLines(options.path);
     lines.push(JSON.stringify(allowlistObservation(observation)));
     const kept = lines.slice(-maxRecords);
-    const temporary = `${options.path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${kept.join('\n')}\n`, { mode: 0o600 });
-    chmodSync(temporary, 0o600);
+    // An unpredictable name created exclusively (`wx`) and written through
+    // the opened descriptor: a pre-created file or symlink at a guessable
+    // name would otherwise be followed and overwritten.
+    const temporary = join(
+      dirname(options.path),
+      `.${basename(options.path)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+    );
     try {
+      const fd = openSync(temporary, 'wx', 0o600);
+      try {
+        writeSync(fd, `${kept.join('\n')}\n`);
+      } finally {
+        closeSync(fd);
+      }
       renameSync(temporary, options.path);
     } catch (error) {
       try {
