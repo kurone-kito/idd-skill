@@ -10,6 +10,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -1608,6 +1609,52 @@ test('a pre-existing state directory that others can access is tightened to owne
     for (const path of [h.dir, scope, slots, cooldown]) {
       assert.equal(statSync(path).mode & 0o077, 0, `${path} is owner-only`);
     }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('a symlinked state root is inspected at its target and never chmod-ed', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows has its own ACL model');
+    return;
+  }
+  const h = harness();
+  try {
+    const probe = join(h.dir, 'mode-probe');
+    mkdirSync(probe);
+    chmodSync(probe, 0o700);
+    if ((statSync(probe).mode & 0o077) !== 0) {
+      t.skip('this filesystem does not store POSIX modes');
+      return;
+    }
+    const target = join(h.dir, 'relocated');
+    const link = join(h.dir, 'link');
+    mkdirSync(target);
+    symlinkSync(target, link);
+    // A private target is used as is.
+    chmodSync(target, 0o700);
+    const private1 = admitRequestSync(
+      IDENTITY,
+      POLICY,
+      { classification: 'write' },
+      h.runtime({ directory: link }),
+    );
+    assert.ok(private1, 'a private relocated root is coordinated');
+    private1.release();
+    // An accessible target is not this code's to tighten: uncoordinated,
+    // and its mode is left alone.
+    chmodSync(target, 0o755);
+    assert.equal(
+      admitRequestSync(
+        IDENTITY,
+        POLICY,
+        { classification: 'write' },
+        h.runtime({ directory: link }),
+      ),
+      null,
+    );
+    assert.equal(statSync(target).mode & 0o777, 0o755);
   } finally {
     h.cleanup();
   }

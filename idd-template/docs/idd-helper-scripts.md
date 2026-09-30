@@ -1687,9 +1687,11 @@ existing state directory that other users can access is tightened to
 owner-only before use, and one that cannot be made private makes the request
 run uncoordinated; a filesystem that stores no POSIX modes (a Windows mount
 under WSL) cannot enforce that guarantee, so keep the state root on a native
-one. A request whose host or credential cannot be verified runs uncoordinated
-instead of borrowing another scope, and so does a state directory that cannot
-be used. Nothing is refused for a coordination fault, only for evidence.
+one. A state root reached through a symlink is used only when its target is
+already private, and is never chmod-ed. A request whose host or credential
+cannot be verified runs uncoordinated instead of borrowing another scope, and
+so does a state directory that cannot be used. Nothing is refused for a
+coordination fault, only for evidence.
 
 ### Which requests are admitted
 

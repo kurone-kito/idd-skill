@@ -205,12 +205,29 @@ function ensureRoot(path) {
     mkdirSync(path, { recursive: true, mode: DIR_MODE });
     // The root may legitimately be reached through a symlink (a relocated
     // state directory), so its target is what is inspected. Its children are
-    // additionally required to be real directories.
+    // required to be real directories.
     const stat = statSync(path);
     if (!stat.isDirectory()) {
       storageFailure('load control root is not a directory');
     }
-    requireOwnedAndPrivate(path, stat);
+    if (lstatSync(path).isSymbolicLink()) {
+      // A relocated root is the operator's own choice: inspect its target,
+      // but never chmod a directory this code did not create. One that is
+      // not already private runs the request uncoordinated instead.
+      if (process.platform !== 'win32') {
+        if (
+          typeof process.getuid === 'function' &&
+          stat.uid !== process.getuid()
+        ) {
+          storageFailure('load control directory belongs to another user');
+        }
+        if ((stat.mode & 0o077) !== 0) {
+          storageFailure('a relocated load control root is not private');
+        }
+      }
+    } else {
+      requireOwnedAndPrivate(path, stat);
+    }
   } catch (error) {
     if (error instanceof LoadControlStorageError) throw error;
     storageFailure('load control directory is unavailable', error);
