@@ -345,16 +345,27 @@ export function normalizeConcurrency(value) {
  * returning results in input order. A fixed pool of workers pulls from a shared
  * cursor, so a slow item never blocks faster siblings (continuous, not
  * lock-step batches). An empty input runs no workers; the first rejection
- * propagates (mirroring the previous serial traversal's fail-closed abort).
+ * propagates (mirroring the previous serial traversal's fail-closed abort) and
+ * stops the other workers from starting further items.
  */
 async function mapPool(items, limit, task) {
   const results = new Array(items.length);
   let cursor = 0;
+  // After the first rejection the whole call is already failed, so sibling
+  // workers stop pulling new items (a request already in flight still
+  // finishes). Otherwise an interrupted scan would keep sending requests into
+  // a throttled API until the queue drained (#3598).
+  let failed = false;
   const worker = async () => {
-    while (cursor < items.length) {
+    while (!failed && cursor < items.length) {
       const index = cursor;
       cursor += 1;
-      results[index] = await task(items[index]);
+      try {
+        results[index] = await task(items[index]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   };
   const workerCount = Math.min(Math.max(1, limit), items.length);

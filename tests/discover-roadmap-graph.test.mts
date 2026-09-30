@@ -4492,3 +4492,46 @@ test("buildCommentLoader delegates directly to the port's raw comment fetch (#22
     },
   ]);
 });
+
+test('a failed traversal fetch stops sibling workers from pulling more items (#3598)', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      700,
+      roadmapIssue(
+        700,
+        [701, 702, 703, 704, 705, 706, 707, 708]
+          .map((number) => `- [ ] #${number}`)
+          .join('\n'),
+        'epic-stop',
+      ),
+    ],
+  ]);
+  const loaded: number[] = [];
+  await assert.rejects(
+    () =>
+      enumerateRoadmapGraph(700, {
+        concurrency: 2,
+        loadIssue: async (issueNumber) => {
+          loaded.push(issueNumber);
+          if (issueNumber === 701) {
+            throw new Error('boom 701');
+          }
+          if (issueNumber !== 700) {
+            // Later than 701's rejection: the sibling is mid-item when the
+            // failure lands.
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          return issues.get(issueNumber) ?? executionIssue(issueNumber, '');
+        },
+      }),
+    /boom 701/,
+  );
+  // Let the sibling finish its in-flight item and, without the stop flag,
+  // keep draining the queue: the rejection alone settles the call early.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(
+    loaded.filter((issueNumber) => issueNumber > 702),
+    [],
+    'no item beyond the two in flight was requested after the failure',
+  );
+});
