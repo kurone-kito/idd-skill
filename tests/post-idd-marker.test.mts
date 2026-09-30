@@ -5687,7 +5687,7 @@ test('--prior-max-activity-at accepts only none or a canonical UTC timestamp (#3
 });
 
 test('the operationLocal envelope schema requires every view field, including reason (#3592)', () => {
-  const view = {
+  const view: Record<string, unknown> = {
     decision: 'publish',
     reason: null,
     snapshot: {},
