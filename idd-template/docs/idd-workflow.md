@@ -1541,8 +1541,9 @@ a weak model could get wrong.
 A local runtime (one that reads the operator's own `$HOME`) may also
 inherit a `critiqueLoop.delegate` from a user-global file when the
 repository leaves the repo-local field genuinely absent — a
-GitHub-hosted or other remote agent surface has no such operator home
-directory and never consults this layer. Resolution order: repo-local
+GitHub-hosted or other remote agent surface is not meant to consult this
+layer, but the helper detects only `GITHUB_ACTIONS=true` on its own (pass
+`--no-user-global` on any other remote surface). Resolution order: repo-local
 `critiqueLoop.delegate` (a configured object, an explicit JSON `null`
 disable, or a malformed value) always wins outright and never inherits
 the global layer — an explicit repo-local `null` forces the per-agent
@@ -1660,8 +1661,9 @@ is configured, missing, or failing.
 A local runtime (one that reads the operator's own `$HOME`) may also
 inherit a `critiqueLoop.telemetryHook` from a user-global file when the
 repository leaves the repo-local field genuinely absent — a
-GitHub-hosted or other remote agent surface has no such operator home
-directory and never consults this layer. Resolution order: repo-local
+GitHub-hosted or other remote agent surface is not meant to consult this
+layer, but the helper detects only `GITHUB_ACTIONS=true` on its own (pass
+`--no-user-global` on any other remote surface). Resolution order: repo-local
 `critiqueLoop.telemetryHook` (a configured object, an explicit JSON
 `null` disable, or a malformed value) always wins outright and never
 inherits the global layer — an explicit repo-local `null` disables the
