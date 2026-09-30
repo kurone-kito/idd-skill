@@ -2886,3 +2886,30 @@ test('an unsafe lease token is never turned into a path outside the leases direc
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
+
+test('an async read whose report is not stored still removes entries beyond a lowered maxBytes (#3627)', async () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  try {
+    const ids = seedEntries(paths, clock, 2);
+    const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+    clock.now += 10;
+    const result = await readThroughAsync(
+      paths,
+      async () => ({
+        status: 200,
+        body: { report: 'partial' },
+        incomplete: true,
+      }),
+      {
+        requestShape: { unit: 'not-stored' },
+        policy: policy(paths.cacheDir, { maxBytes: Math.floor(size * 1.5) }),
+        now: () => clock.now,
+      },
+    );
+    assert.equal(result.fetched, true);
+    assert.deepEqual(entryNames(paths.cacheDir), [`${ids[1]}.json`]);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});

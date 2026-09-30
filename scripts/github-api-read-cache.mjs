@@ -1491,18 +1491,23 @@ export async function readThroughGithubApiCacheAsync(input) {
   ctx.ageBasis = 'started';
   try {
     prepareRoot(ctx);
-    if (input.mode === 'strict-fresh')
-      return await strictFreshAsync(ctx, fetch);
-    return await coalesceAsync(
-      ctx,
-      fetch,
-      sleep ?? sleepAsync,
-      positiveMs(
-        leaseMaxWaitMs ?? DEFAULT_ASYNC_MAX_WAIT_MS,
-        DEFAULT_ASYNC_MAX_WAIT_MS,
-      ),
-      startLeaseHeartbeat ?? defaultLeaseHeartbeat(ctx),
-    );
+    try {
+      if (input.mode === 'strict-fresh')
+        return await strictFreshAsync(ctx, fetch);
+      return await coalesceAsync(
+        ctx,
+        fetch,
+        sleep ?? sleepAsync,
+        positiveMs(
+          leaseMaxWaitMs ?? DEFAULT_ASYNC_MAX_WAIT_MS,
+          DEFAULT_ASYNC_MAX_WAIT_MS,
+        ),
+        startLeaseHeartbeat ?? defaultLeaseHeartbeat(ctx),
+      );
+    } finally {
+      // The same best-effort due-check as the sync path, after the read.
+      sweepIfDue(ctx);
+    }
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
     return liveResultAsync(fetch, 'degraded', ctx.entryId);
