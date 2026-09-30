@@ -5725,9 +5725,12 @@ same as `AW4`/`AW5`.
 - `usable: false` reasons are `repository-local-explicit-disable`,
   `invalid-repository-local-delegate`, and `not-configured`. A
   repository-local object, JSON `null`, or malformed value stops
-  resolution there. A user-global fragment applies only when the local
+  resolution there. A user-global fragment, read from
+  `$XDG_CONFIG_HOME/idd-skill/config.json` (falling back to
+  `$HOME/.config/idd-skill/config.json`), applies only when the local
   delegate is absent. `GITHUB_ACTIONS=true` and `--no-user-global` skip
-  that layer.
+  that layer. See
+  [User-global issue-authoring delegate default](idd-workflow.md#user-global-issue-authoring-delegate-default).
 - The helper does not invoke the command and does not read a branch
   diff. The caller sends the draft to the command on stdin as one JSON
   object (`title`, `body`, and a bounded `packet`) described by the

@@ -585,6 +585,55 @@ one JSON object (`title`, `body`, and a bounded `packet`), described by the
 The normative checklist and disposition rule live in the
 [issue-authoring skill contract](issue-authoring-skill.md#completed-draft-adversarial-review).
 
+### User-global issue-authoring delegate default
+
+A local runtime may also inherit `issueAuthoring.adversarialReview.delegate`
+from the same optional user-global file the critique delegate uses when the
+repository leaves the repo-local field genuinely absent. A GitHub-hosted or
+other remote agent surface is not meant to consult this layer, but the helper
+detects only `GITHUB_ACTIONS=true` on its own; pass `--no-user-global` on any
+other remote surface. The file path and the qualified-root rule are the ones in
+[User-global critique delegate default](#user-global-critique-delegate-default)
+(`$XDG_CONFIG_HOME/idd-skill/config.json`, falling back to
+`$HOME/.config/idd-skill/config.json`); a missing, unreadable, invalid-JSON, or
+non-object file is treated as absent, and the layer is opt-in.
+
+Resolution order: a repo-local `issueAuthoring.adversarialReview.delegate` (a
+configured object, an explicit JSON `null` disable, or a malformed value)
+always wins outright and never inherits the global layer, so an explicit
+repo-local `null` keeps the native reviewer even when a global delegate exists.
+A repo-local `issueAuthoring` or `adversarialReview` that is not an object, or
+an `adversarialReview` with a key other than `delegate` and `waitCeiling`, is
+malformed in the same way, so a typo cannot inherit a global command. Only when
+the repo-local delegate is entirely absent does the global fragment apply;
+absent both, the native reviewer or structured self-critique above runs
+unchanged. A malformed or explicit-`null` global fragment, including an
+`adversarialReview` with an unknown key, is treated the same as a missing one.
+`GITHUB_ACTIONS=true` always skips the global layer, and `--no-user-global`
+skips it on any other remote surface the caller recognizes (see
+[Effective issue-authoring adversarial review delegate](idd-helper-scripts.md#effective-issue-authoring-adversarial-review-delegate)).
+This resolver reads only that fragment: it never reads `critiqueLoop.delegate`,
+and the critique delegate never reads it.
+
+Example (a generic local draft reviewer, not a specific product):
+
+```json
+{
+  "issueAuthoring": {
+    "adversarialReview": {
+      "delegate": { "command": "my-local-draft-reviewer" }
+    }
+  }
+}
+```
+
+The optional `mode` takes the same values as the critique delegate and defaults
+to `fallback`. `issueAuthoring.adversarialReview.waitCeiling` stays
+repository-local (default `PT20M`), so a user-global ceiling is ignored. The
+command is trusted executable configuration and may transmit the issue draft it
+receives, so neither the user-global nor the repo-local config file should hold
+secrets.
+
 ## External-signal entry path
 
 The Discover -> Claim -> Work loop above only reads issues already
@@ -1514,8 +1563,9 @@ a weak model could get wrong.
 A local runtime (one that reads the operator's own `$HOME`) may also
 inherit a `critiqueLoop.delegate` from a user-global file when the
 repository leaves the repo-local field genuinely absent — a
-GitHub-hosted or other remote agent surface has no such operator home
-directory and never consults this layer. Resolution order: repo-local
+GitHub-hosted or other remote agent surface is not meant to consult this
+layer, but the helper detects only `GITHUB_ACTIONS=true` on its own (pass
+`--no-user-global` on any other remote surface). Resolution order: repo-local
 `critiqueLoop.delegate` (a configured object, an explicit JSON `null`
 disable, or a malformed value) always wins outright and never inherits
 the global layer — an explicit repo-local `null` forces the per-agent
@@ -1543,8 +1593,11 @@ under review. A missing, unreadable,
 invalid-JSON, or non-object global file is silently treated as
 absent — this layer is opt-in and never required for OSS adopters.
 Only the
-`critiqueLoop.delegate` fragment is read from it; every other key is
-ignored, and repository-local `.github/idd/config.json` stays the sole
+`critiqueLoop.delegate` fragment is read by this resolver. The same file
+can also carry `critiqueLoop.telemetryHook` (read only by the telemetry
+hook resolver) and `issueAuthoring.adversarialReview.delegate` (read only
+by the issue-authoring delegate resolver); every other key is ignored by
+all three, and repository-local `.github/idd/config.json` stays the sole
 authority for every other policy surface.
 
 Example (a generic local reviewer, not a specific product):
@@ -1630,8 +1683,9 @@ is configured, missing, or failing.
 A local runtime (one that reads the operator's own `$HOME`) may also
 inherit a `critiqueLoop.telemetryHook` from a user-global file when the
 repository leaves the repo-local field genuinely absent — a
-GitHub-hosted or other remote agent surface has no such operator home
-directory and never consults this layer. Resolution order: repo-local
+GitHub-hosted or other remote agent surface is not meant to consult this
+layer, but the helper detects only `GITHUB_ACTIONS=true` on its own (pass
+`--no-user-global` on any other remote surface). Resolution order: repo-local
 `critiqueLoop.telemetryHook` (a configured object, an explicit JSON
 `null` disable, or a malformed value) always wins outright and never
 inherits the global layer — an explicit repo-local `null` disables the
@@ -1647,10 +1701,12 @@ The global file lives at the same path, and under the same
 qualified-root rules, as the critique delegate's own user-global file
 above (`$XDG_CONFIG_HOME/idd-skill/config.json`, falling back to
 `$HOME/.config/idd-skill/config.json`). Only the
-`critiqueLoop.telemetryHook` fragment is read from it; every other key
-— including `critiqueLoop.delegate` — is ignored, and repository-local
-`.github/idd/config.json` stays the sole authority for every other
-policy surface.
+`critiqueLoop.telemetryHook` fragment is read by this resolver. The same
+file can also carry `critiqueLoop.delegate` (read only by the critique
+delegate resolver) and `issueAuthoring.adversarialReview.delegate` (read
+only by the issue-authoring delegate resolver); every other key is
+ignored by all three, and repository-local `.github/idd/config.json`
+stays the sole authority for every other policy surface.
 
 Example (a generic local notifier, not a specific product):
 
