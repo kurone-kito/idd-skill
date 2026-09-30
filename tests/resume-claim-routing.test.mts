@@ -3,22 +3,25 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   acquireClaimLock,
+  checkClaimLock,
   recordGeneratedClaimTokens,
 } from '../src/scripts/claim-lock.mts';
 import {
   isCurrentSessionWorktreeOwner,
   resolveCurrentSessionClaimEvidence,
 } from '../src/scripts/discover-roadmap-graph.mts';
+import { inspectLocalWorktreeBranch } from '../src/scripts/local-worktree-occupancy.mts';
 import {
   DEFAULT_STALE_AGE_MS,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
@@ -3948,4 +3951,247 @@ test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree 
     fixture.restore();
     rmSync(sandboxRoot, { recursive: true, force: true });
   }
+});
+
+// A forced-handoff successor whose clone still holds the predecessor's
+// worktree (kurone-kito/idd-skill#3645, docs/idd-resume-detail.md section FH).
+// The fixture is the file's forced-handoff one with a distinct successor
+// agent-id and an activation-nonce marker for the successor.
+
+const SUCCESSOR_BRANCH = 'issue/11-task';
+const SUCCESSOR_EVENTS = [
+  {
+    createdAt: '2026-05-12T10:00:00Z',
+    author: { login: 'maintainer' },
+    body: `<!-- claimed-by: agent-old claim-old supersedes: none 2026-05-12T10:00:00Z branch: ${SUCCESSOR_BRANCH} -->`,
+  },
+  {
+    createdAt: '2026-05-12T10:01:00Z',
+    author: { login: 'maintainer' },
+    body: `<!-- forced-handoff: {"oldAgentId":"agent-old","oldClaimId":"claim-old","newAgentId":"agent-new","newClaimId":"claim-new","branch":"${SUCCESSOR_BRANCH}","forcedBy":"maintainer","reason":"handoff","timestamp":"2026-05-12T10:01:00Z","contextScope":"issue-only"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._`,
+  },
+  {
+    createdAt: '2026-05-12T10:02:00Z',
+    author: { login: 'maintainer' },
+    body: '<!-- activation-nonce: agent-new claim-new nonce-new 2026-05-12T10:02:00Z -->',
+  },
+];
+
+function gitIn(cwd: string, args: string[], env: NodeJS.ProcessEnv): string {
+  return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env,
+  });
+}
+
+/**
+ * A sandbox git repository (the primary checkout) with a linked worktree on
+ * the claimed branch and a lock plus generated-claim record left there by
+ * the displaced predecessor, as a successor's clone would have them.
+ */
+function withSuccessorSandbox(
+  body: (sandbox: {
+    primary: string;
+    worktree: string;
+    env: NodeJS.ProcessEnv;
+  }) => void,
+): void {
+  const primary = mkdtempSync(join(tmpdir(), 'idd-successor-primary-'));
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
+  try {
+    gitIn(primary, ['init', '--quiet', '-b', 'main'], env);
+    gitIn(primary, ['commit', '--quiet', '--allow-empty', '-m', 'seed'], env);
+    gitIn(
+      primary,
+      ['worktree', 'add', '--quiet', '-b', SUCCESSOR_BRANCH, worktree, 'main'],
+      env,
+    );
+    acquireClaimLock(worktree, 'agent-old', 'claim-old', false);
+    recordGeneratedClaimTokens(worktree, {
+      agentId: 'agent-old',
+      claimId: 'claim-old',
+      nonce: 'nonce-old',
+    });
+    body({ primary, worktree, env });
+  } finally {
+    try {
+      gitIn(primary, ['worktree', 'remove', '--force', worktree], env);
+    } catch {
+      // best-effort; rmSync below still runs
+    }
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+  }
+}
+
+/** Routing as the successor runs it, with the real occupancy probe. */
+function routeAsSuccessor(sandbox: { primary: string; worktree: string }) {
+  const inspect = (branch: string) =>
+    inspectLocalWorktreeBranch(branch, sandbox.primary);
+  return evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+      now: '2026-05-12T11:00:00Z',
+      events: SUCCESSOR_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      inspectLocalWorktree: inspect,
+      isCurrentSessionOwner: (claim) => {
+        const evidence = resolveCurrentSessionClaimEvidence(
+          claim.claimId,
+          sandbox.worktree,
+        );
+        if (
+          evidence === null ||
+          evidence.agentId !== claim.agentId ||
+          evidence.branchName !== claim.branch
+        ) {
+          return false;
+        }
+        return isCurrentSessionWorktreeOwner(
+          evidence.worktreePath,
+          evidence.branchName,
+          claim.branch,
+          inspect(claim.branch),
+        );
+      },
+    },
+  );
+}
+
+function assertSuccessorStop(result: ReturnType<typeof routeAsSuccessor>) {
+  assert.equal(result.state, 'owner_evidence_required');
+  assert.equal(result.action, 'stop');
+  assert.equal(
+    result.reason,
+    'claim-id-match-without-independent-owner-evidence',
+  );
+  assert.deepEqual(
+    {
+      old: result.evidence.forced_handoff?.old_claim_id,
+      next: result.evidence.forced_handoff?.new_claim_id,
+      agent: result.evidence.forced_handoff?.new_agent_id,
+      winner: result.evidence.activation_nonce_winner,
+    },
+    {
+      old: 'claim-old',
+      next: 'claim-new',
+      agent: 'agent-new',
+      winner: 'nonce-new',
+    },
+  );
+}
+
+test('a forced-handoff successor turns the owner-evidence stop into already_owned by recording against the occupying worktree and taking the lock over (#3645)', () => {
+  withSuccessorSandbox((sandbox) => {
+    const { worktree } = sandbox;
+    // The stop: the lock in the worktree still names the displaced claim and
+    // no generated-claim record exists for the successor's claim-id.
+    assertSuccessorStop(routeAsSuccessor(sandbox));
+
+    // Recording the identity against the occupying worktree is not enough
+    // while the lock still names the displaced claim.
+    recordGeneratedClaimTokens(worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    assertSuccessorStop(routeAsSuccessor(sandbox));
+
+    // The fresh-claim gate names the successor's claim as the winner, which
+    // is what authorizes the takeover of a lock held by the displaced claim.
+    const gate = evaluateFreshClaimGate(
+      { now: '2026-05-12T11:00:00Z', events: SUCCESSOR_EVENTS },
+      {
+        isTrustedAuthor: trusted(['maintainer']),
+        isForcedHandoffEnabled: () => true,
+        isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+        inspectLocalWorktree: (branch) =>
+          inspectLocalWorktreeBranch(branch, sandbox.primary),
+      },
+    );
+    assert.equal(gate.verdict, 'already-claimed');
+    assert.equal(gate.winningClaimId, 'claim-new');
+    assert.equal(checkClaimLock(worktree).holder?.claimId, 'claim-old');
+
+    const takeover = acquireClaimLock(worktree, 'agent-new', 'claim-new', true);
+    assert.equal(takeover.mode, 'acquired');
+    assert.equal(takeover.forcedTakeover, true);
+    assert.equal(takeover.holder?.claimId, 'claim-old');
+
+    const result = routeAsSuccessor(sandbox);
+    assert.equal(result.state, 'already_owned');
+    assert.equal(result.action, 'keep');
+    assert.equal(result.reason, 'claim-id-match');
+  });
+});
+
+test('a takeover after recording the identity against another worktree still stops with owner_evidence_required (#3645)', () => {
+  withSuccessorSandbox((sandbox) => {
+    // The claim docs record a fresh claim's identity in the primary checkout;
+    // for a successor that lets the takeover succeed and routing still stops.
+    recordGeneratedClaimTokens(sandbox.primary, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    const takeover = acquireClaimLock(
+      sandbox.worktree,
+      'agent-new',
+      'claim-new',
+      true,
+    );
+    assert.equal(takeover.mode, 'acquired');
+    assert.equal(takeover.holder?.claimId, 'claim-old');
+    assertSuccessorStop(routeAsSuccessor(sandbox));
+  });
+});
+
+test('a takeover of a worktree the dead predecessor left mid-rebase still stops with owner_evidence_required (#3645)', () => {
+  withSuccessorSandbox((sandbox) => {
+    const { primary, worktree, env } = sandbox;
+    // A real conflicting rebase: the same new file with different content on
+    // main and on the claimed branch. (A plain `git checkout --detach` would
+    // make the probe report the branch absent, which routes already_owned.)
+    writeFileSync(join(primary, 'conflict.txt'), 'main\n');
+    gitIn(primary, ['add', 'conflict.txt'], env);
+    gitIn(primary, ['commit', '--quiet', '-m', 'main side'], env);
+    writeFileSync(join(worktree, 'conflict.txt'), 'branch\n');
+    gitIn(worktree, ['add', 'conflict.txt'], env);
+    gitIn(worktree, ['commit', '--quiet', '-m', 'branch side'], env);
+    assert.throws(() => gitIn(worktree, ['rebase', 'main'], env));
+    const rebaseState = gitIn(
+      worktree,
+      ['rev-parse', '--git-path', 'rebase-merge'],
+      env,
+    ).trim();
+    assert.equal(
+      readdirSync(resolve(worktree, rebaseState)).length > 0,
+      true,
+      'expected the conflicting rebase to be left in progress',
+    );
+
+    recordGeneratedClaimTokens(worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+    });
+    const takeover = acquireClaimLock(worktree, 'agent-new', 'claim-new', true);
+    assert.equal(takeover.mode, 'acquired');
+    assert.equal(takeover.holder?.claimId, 'claim-old');
+    assertSuccessorStop(routeAsSuccessor(sandbox));
+  });
 });
