@@ -37,6 +37,13 @@ const RESOURCE_TOKEN = /^[A-Za-z0-9_.-]{1,64}$/;
 const INTEGER_TOKEN = /^\d{1,12}$/;
 const PRIMARY_WORDING = /API rate limit exceeded/i;
 const SECONDARY_WORDING = /secondary rate limit/i;
+/**
+ * GitHub's GraphQL throttle wording (`API rate limit already exceeded for
+ * user ID <n>`), which neither matcher above knows. It can be the secondary
+ * or abuse limit while the hourly quota is healthy (issue #3560), so it is
+ * never labeled primary.
+ */
+const THROTTLE_WORDING = /already exceeded/i;
 const EMPTY_SIGNALS = Object.freeze({
   graphqlErrors: false,
   primaryExhaustion: false,
@@ -105,6 +112,32 @@ function graphqlErrorText(root) {
     .filter((line) => line.length > 0)
     .join('\n');
 }
+/**
+ * True when every entry of a non-empty GraphQL `errors` array is
+ * throttle-shaped: its `type` is `RATE_LIMITED`, or its message has the
+ * `already exceeded` wording. The error text must also match neither the
+ * primary nor the secondary wording, whether or not the caller scans wording
+ * (a GraphQL success has no status, so the matchers never run on it): such
+ * a response keeps its current classification. Only the server's failure
+ * text is read, never `data`, which can quote user content.
+ */
+function graphqlErrorsAreThrottleShaped(root) {
+  const errors = graphqlRoot(root)?.errors;
+  if (!Array.isArray(errors) || errors.length === 0) return false;
+  const shaped = errors.every((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return false;
+    }
+    const { type, message } = entry;
+    return (
+      type === 'RATE_LIMITED' ||
+      (typeof message === 'string' && THROTTLE_WORDING.test(message))
+    );
+  });
+  if (!shaped) return false;
+  const text = graphqlErrorText(root);
+  return !PRIMARY_WORDING.test(text) && !SECONDARY_WORDING.test(text);
+}
 function parseJsonObject(text) {
   const start = text.indexOf('{');
   if (start < 0) return null;
@@ -160,7 +193,9 @@ function classifyFields(input) {
   if (positive > 1) {
     classification = 'unknown';
   } else if (graphqlErrors) {
-    classification = 'graphql-errors';
+    classification = graphqlErrorsAreThrottleShaped(root)
+      ? 'graphql-throttled'
+      : 'graphql-errors';
   } else if (primaryExhaustion) {
     classification = 'primary-exhaustion';
   } else if (secondaryThrottling) {
@@ -180,7 +215,9 @@ function classifyFields(input) {
   return {
     status: input.status === null ? OBSERVATION_UNKNOWN : input.status,
     resource,
-    remaining: input.remaining === null ? OBSERVATION_UNKNOWN : input.remaining,
+    // A header value wins. Without one, a GraphQL query that selected
+    // `rateLimit { remaining }` supplies it; otherwise it stays unknown.
+    remaining: input.remaining ?? throttleRemaining ?? OBSERVATION_UNKNOWN,
     reset: input.reset === null ? OBSERVATION_UNKNOWN : input.reset,
     retryAfter:
       input.retryAfter === null ? OBSERVATION_UNKNOWN : input.retryAfter,
@@ -220,7 +257,15 @@ function mergeSignals(parts) {
     accessDenied: parts.some((part) => part.accessDenied),
   };
 }
-function classificationFromSignals(signals, transportSucceeded) {
+function classificationFromSignals(
+  signals,
+  transportSucceeded,
+  /**
+   * True only when every response that carried GraphQL errors was itself
+   * `graphql-throttled`. Read only when GraphQL errors are the one signal.
+   */
+  graphqlErrorsAllThrottled = false,
+) {
   const positive = [
     signals.graphqlErrors,
     signals.primaryExhaustion,
@@ -228,7 +273,9 @@ function classificationFromSignals(signals, transportSucceeded) {
     signals.accessDenied,
   ].filter(Boolean).length;
   if (positive > 1) return 'unknown';
-  if (signals.graphqlErrors) return 'graphql-errors';
+  if (signals.graphqlErrors) {
+    return graphqlErrorsAllThrottled ? 'graphql-throttled' : 'graphql-errors';
+  }
   if (signals.primaryExhaustion) return 'primary-exhaustion';
   if (signals.secondaryThrottling) return 'secondary-throttling';
   if (signals.accessDenied) return 'access-denied';
@@ -290,7 +337,13 @@ export function summarizeInjectedExchanges(exchanges) {
     pageCount: pages,
     commandInvocationCount: commands,
     retryAttempts: retries,
-    classification: classificationFromSignals(signals, transportSucceeded),
+    classification: classificationFromSignals(
+      signals,
+      transportSucceeded,
+      fields
+        .filter((field) => field.signals.graphqlErrors)
+        .every((field) => field.classification === 'graphql-throttled'),
+    ),
     signals,
   };
 }
@@ -442,6 +495,7 @@ const TELEMETRY_LOCK_WAIT_MS = 250;
 const CLASSIFICATIONS = new Set([
   'ok',
   'graphql-errors',
+  'graphql-throttled',
   'primary-exhaustion',
   'secondary-throttling',
   'access-denied',
