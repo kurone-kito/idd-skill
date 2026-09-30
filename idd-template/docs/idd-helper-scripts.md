@@ -1315,7 +1315,12 @@ default below is unchanged.
     traversal; **excludes** the root roadmap (A1 traversal entry point)
   - `executionCandidates`: `number[]`
   - `diagnostics`: `{ duplicateReferences: object[], cycles: object[],`
-    `inaccessibleReferences: object[], unresolvedReferences: object[] }`
+    `inaccessibleReferences: object[], unresolvedReferences: object[] }`.
+    `duplicateReferences` does not report a task-list entry plus a native
+    sub-issue link for the same child under the same parent: that pair is
+    one membership, and both edges stay in `edges`. Every other pair of
+    different relationships on one source and target, for example a
+    task-list entry plus a `Blocked by` line, is still reported.
   - `summary`: `{ rootNumber: number, nodeCount: number, edgeCount: number,`
     `roadmapNodeCount: number, executionCandidateCount: number,`
     `duplicateReferenceCount: number, cycleCount: number,`
