@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { classifyDiscoverInterruption } from '../src/scripts/discover-progress.mts';
 import { GhPaginatedResponseLimitError } from '../src/scripts/gh-exec.mts';
 import {
   createGithubProviderAdapter,
@@ -5244,4 +5245,213 @@ test('listOpenChangeRequests returns all 101 rows via the paginated REST endpoin
   assert.equal(result[0].url, 'https://github.com/o/r/pull/1');
   assert.equal(result[100].url, 'https://github.com/o/r/pull/101');
   assert.ok(result.every((pr, index) => pr.url === rows[index].html_url));
+});
+
+// ---------------------------------------------------------------------------
+// #3598: the discovery loaders rebuild a failed `gh` call as a plain `Error`.
+// The interruption classifier reads a timeout or a rate limit from the
+// failure's own streams and codes, so each rebuild must keep that evidence
+// (as non-enumerable own properties, never as `cause`) or a real timeout or
+// throttle in exactly these loaders would look like an unclassifiable error.
+// ---------------------------------------------------------------------------
+
+const EVIDENCE_NOW_MS = Date.parse('2026-10-01T00:00:00.000Z');
+
+function timedOutGhError(): Error {
+  const error = new Error('Command failed: gh api SECRET-COMMAND-LINE');
+  Object.defineProperty(error, 'code', {
+    value: 'ETIMEDOUT',
+    enumerable: false,
+  });
+  Object.defineProperty(error, 'killed', { value: true, enumerable: false });
+  return error;
+}
+
+function assertEvidenceKept(error: unknown, expectedCode: string | null) {
+  const carried = error as { code?: unknown; killed?: unknown };
+  if (expectedCode !== null) {
+    assert.equal(carried.code, expectedCode);
+    assert.equal(carried.killed, true);
+  }
+  // Non-enumerable: an uncaught error still prints exactly as before.
+  assert.equal(Object.keys(error as object).includes('code'), false);
+  assert.equal(Object.keys(error as object).includes('killed'), false);
+  assert.equal((error as { cause?: unknown }).cause, undefined);
+}
+
+test('listWorkItemCommentsWithRetryAsync keeps timeout evidence on a rebuilt transport failure (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw timedOutGhError();
+      },
+    }),
+  );
+  const error = await port
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(error instanceof Error);
+  assertEvidenceKept(error, 'ETIMEDOUT');
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'timeout',
+  );
+});
+
+test('getWorkItemForTraversalAsync keeps timeout evidence on a rebuilt failure (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw timedOutGhError();
+      },
+    }),
+  );
+  const error = await port.getWorkItemForTraversalAsync(900).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(error instanceof Error);
+  assertEvidenceKept(error, 'ETIMEDOUT');
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'timeout',
+  );
+});
+
+test('listWorkItemSubIssueNodesAsync keeps rate-limit and timeout evidence on a rebuilt failure (#3598)', async () => {
+  const rateLimited = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw Object.assign(new Error('Command failed: gh api graphql'), {
+          stderr: 'gh: API rate limit exceeded for user ID 1. (HTTP 403)',
+          stdout: '',
+        });
+      },
+    }),
+  );
+  const throttled = await rateLimited.listWorkItemSubIssueNodesAsync(700).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(throttled instanceof Error);
+  assertEvidenceKept(throttled, null);
+  assert.equal(
+    classifyDiscoverInterruption(throttled, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+
+  const timedOut = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw timedOutGhError();
+      },
+    }),
+  );
+  const slow = await timedOut.listWorkItemSubIssueNodesAsync(700).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(slow instanceof Error);
+  assertEvidenceKept(slow, 'ETIMEDOUT');
+  assert.equal(
+    classifyDiscoverInterruption(slow, EVIDENCE_NOW_MS)?.reason,
+    'timeout',
+  );
+});
+
+test('listWorkItemCommentsWithRetryAsync keeps a GraphQL rate-limit error that arrives with a successful exit (#3598)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        return JSON.stringify({
+          errors: [
+            {
+              type: 'RATE_LIMITED',
+              message: 'API rate limit exceeded for user ID 1.',
+            },
+          ],
+        });
+      },
+    }),
+  );
+  const error = await port
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(error instanceof Error);
+  assert.equal(calls, 1, 'a non-retryable GraphQL error is not retried');
+  assertEvidenceKept(error, null);
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+});
+
+test('listWorkItemSubIssueNodesAsync keeps a GraphQL rate-limit error that arrives with a successful exit (#3598)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        return JSON.stringify({
+          errors: [
+            {
+              type: 'RATE_LIMITED',
+              message: 'API rate limit exceeded for user ID 1.',
+            },
+          ],
+        });
+      },
+    }),
+  );
+  const error = await port.listWorkItemSubIssueNodesAsync(700).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(error instanceof Error);
+  assert.equal(calls, 3, 'the bounded retry still runs before giving up');
+  assertEvidenceKept(error, null);
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+});
+
+test('a traversal failure that is neither a timeout nor a throttle stays unclassified (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw Object.assign(new Error('gh failed'), {
+          stderr: 'gh: Bad credentials (HTTP 401)',
+        });
+      },
+    }),
+  );
+  const error = await port.getWorkItemForTraversalAsync(900).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(error instanceof Error);
+  assert.equal(classifyDiscoverInterruption(error, EVIDENCE_NOW_MS), null);
 });

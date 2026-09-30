@@ -95,6 +95,39 @@ function toProviderError(error) {
   return preserveLoadControlRefusal(wrapped, error);
 }
 /**
+ * Copy the failure evidence a caller may need to classify a rebuilt error
+ * (#3598): the failed process's own `stderr`/`stdout` text, its `code`, and
+ * its `killed` flag. A wrapper here rebuilds the error as a plain `Error`
+ * from a message, which would drop the timeout and rate-limit evidence the
+ * discovery recovery path reads. Each value is defined as an own,
+ * non-enumerable property (never as `cause`, which would change how Node
+ * prints an uncaught error), only when the original carries a value of the
+ * expected type and the wrapper does not already hold one.
+ */
+function preserveTransportEvidence(wrapper, original) {
+  const source = original;
+  const evidence = {};
+  for (const key of ['stderr', 'stdout', 'code']) {
+    if (typeof source?.[key] === 'string') {
+      evidence[key] = source[key];
+    }
+  }
+  if (typeof source?.killed === 'boolean') {
+    evidence.killed = source.killed;
+  }
+  for (const [key, value] of Object.entries(evidence)) {
+    if (!Object.hasOwn(wrapper, key)) {
+      Object.defineProperty(wrapper, key, {
+        value,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  return wrapper;
+}
+/**
  * #2267: throw when a GraphQL response carries top-level `errors`, so a bad
  * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
  * message instead of being silently read as an empty result -- ported
@@ -406,9 +439,12 @@ function readWorkItemCommentPage(
       throw unresolvedWorkItemSideError(side, number);
     }
     const detail = error instanceof Error ? error.message : String(error);
-    throw new WorkItemCommentReadError(
-      `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
-      true,
+    throw preserveTransportEvidence(
+      new WorkItemCommentReadError(
+        `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
+        true,
+      ),
+      error,
     );
   }
   let parsed;
@@ -433,8 +469,14 @@ function readWorkItemCommentPage(
     ) {
       throw unresolvedWorkItemSideError(side, number);
     }
-    throw new WorkItemCommentReadError(
-      `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
+    // A GraphQL throttle can arrive as a successful response whose `errors`
+    // say so. Keep those messages as stderr-style evidence so the discovery
+    // recovery path can still tell a rate limit from a defect (#3598).
+    throw preserveTransportEvidence(
+      new WorkItemCommentReadError(
+        `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
+      ),
+      { stderr: detail },
     );
   }
   const repository = parsed.data?.repository;
@@ -1897,7 +1939,7 @@ function wrapTraversalGhFailure(error, args) {
   const wrapped = new Error(summary);
   wrapped.stderr = stderr;
   wrapped.stdout = stdout;
-  throw wrapped;
+  throw preserveTransportEvidence(wrapped, error);
 }
 // #1449: explicit above the promisified execFile's 1 MiB default, applied
 // PER STREAM. The two traversal hot-path callers (a single GitHub issue's
@@ -2617,14 +2659,23 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             });
             const parsed = JSON.parse(stdout.trim() || '{}');
             if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
-              throw new Error(formatTraversalGraphqlErrors(parsed.errors));
+              // A GraphQL throttle can arrive as a successful response whose
+              // `errors` say so; keep the text as stderr-style evidence (the
+              // catch below carries it onto the rebuilt error, #3598).
+              const formatted = formatTraversalGraphqlErrors(parsed.errors);
+              throw preserveTransportEvidence(new Error(formatted), {
+                stderr: formatted,
+              });
             }
             return parsed;
           } catch (error) {
             if (isNotDispatchedRefusal(error)) throw error;
             const stderr = String(error?.stderr ?? '').trim();
             const detail = stderr || error.message;
-            throw new Error(`gh api graphql failed: ${detail}`);
+            throw preserveTransportEvidence(
+              new Error(`gh api graphql failed: ${detail}`),
+              error,
+            );
           }
         });
         const connection = result?.data?.repository?.issue?.subIssues;

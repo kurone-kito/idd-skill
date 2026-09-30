@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -11,6 +11,11 @@ import {
   recordGeneratedClaimTokens,
   resolveGeneratedTokensPath,
 } from '../src/scripts/claim-lock.mts';
+import { readDiscoverHint } from '../src/scripts/discover-hint-cache.mts';
+import {
+  createDiscoverProgress,
+  isDiscoverIncompleteResult as isIncomplete,
+} from '../src/scripts/discover-progress.mts';
 import {
   buildClaimStateResolution,
   buildCommentLoader,
@@ -21,6 +26,7 @@ import {
   classifyIssue,
   coalesceIssueLoader,
   enumerateAllRoadmapsGraph,
+  enumerateAllRoadmapsGraphWithRecovery,
   enumerateRoadmapGraph,
   extractKeywordReferences,
   extractRoadmapMarkerId,
@@ -33,6 +39,7 @@ import {
   type SearchIssuesQuery,
   warnOnSearchResultCap,
 } from '../src/scripts/discover-roadmap-graph.mts';
+import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import type { LocalWorktreeInspection } from '../src/scripts/local-worktree-occupancy.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -4493,6 +4500,396 @@ test("buildCommentLoader delegates directly to the port's raw comment fetch (#22
   ]);
 });
 
+// ---------------------------------------------------------------------------
+// #3598: `--with-progress` progress lines and the interruption recovery result.
+// ---------------------------------------------------------------------------
+
+/** A manual clock so the delayed-provider tests never wait on real time. */
+function progressClock(start = Date.parse('2026-10-01T00:00:00.000Z')) {
+  let current = start;
+  return {
+    now: () => current,
+    advance(ms: number) {
+      current += ms;
+    },
+  };
+}
+
+function progressTracker(clock: ReturnType<typeof progressClock>) {
+  const lines: string[] = [];
+  return {
+    lines,
+    events: () =>
+      lines.map(
+        (line) =>
+          (JSON.parse(line) as { iddProgress: Record<string, unknown> })
+            .iddProgress,
+      ),
+    progress: createDiscoverProgress({
+      write: (line) => lines.push(line),
+      now: clock.now,
+      minIntervalMs: 2000,
+    }),
+  };
+}
+
+/** Six open leaves under one roadmap root. */
+function progressGraphIssues() {
+  const issues = new Map<number, unknown>([
+    [
+      700,
+      roadmapIssue(
+        700,
+        [701, 702, 703, 704, 705, 706]
+          .map((number) => `- [ ] #${number}`)
+          .join('\n'),
+        'epic-progress',
+      ),
+    ],
+  ]);
+  for (const number of [701, 702, 703, 704, 705, 706]) {
+    issues.set(number, executionIssue(number, `leaf ${number}`));
+  }
+  return issues;
+}
+
+/** Fail like `gh` does when its own request is throttled or times out. */
+function ghFailureWith(fields: {
+  stderr?: string;
+  stdout?: string;
+  code?: string;
+  killed?: boolean;
+}): Error {
+  const error = new Error(
+    'Command failed: gh api graphql -f query=SECRET-COMMAND-LINE ghp_SECRET_TOKEN_123',
+  );
+  for (const [key, value] of Object.entries(fields)) {
+    Object.defineProperty(error, key, { value, enumerable: false });
+  }
+  return error;
+}
+
+test('--with-progress: a delayed provider yields bounded phase/count lines and an unchanged report (#3598)', async () => {
+  const issues = progressGraphIssues();
+  const clock = progressClock();
+  const tracker = progressTracker(clock);
+  const { resolution, seen } = buildClaimState(new Map());
+  // The provider is slow: each comment read costs 700 ms of (fake) time.
+  const delayedClaimState = {
+    ...resolution,
+    loadComments: async (issueNumber: number) => {
+      clock.advance(700);
+      await Promise.resolve();
+      return resolution.loadComments(issueNumber);
+    },
+  };
+
+  const withProgress = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: delayedClaimState,
+      readiness: readinessResolution(),
+    },
+    { progress: tracker.progress, now: clock.now },
+  );
+  const plain = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+    readiness: readinessResolution(),
+  });
+
+  // Same bytes as a run without the flag: progress never touches the report.
+  assert.equal(JSON.stringify(withProgress), JSON.stringify(plain));
+  assert.equal(seen.length >= 6, true, 'every leaf was annotated');
+
+  const events = tracker.events();
+  assert.deepEqual(
+    events
+      .filter((event) => event.event !== 'progress')
+      .map((event) => `${event.phase}:${event.event}`),
+    [
+      'root-discovery:start',
+      'root-discovery:complete',
+      'traversal:start',
+      'traversal:complete',
+      'claim-state:start',
+      'claim-state:complete',
+      'readiness:start',
+      'readiness:complete',
+    ],
+  );
+  const claimEvents = events.filter((event) => event.phase === 'claim-state');
+  assert.equal(claimEvents[0]?.known, 6);
+  assert.equal(claimEvents.at(-1)?.completed, 6);
+  // Six 700 ms reads (4.2 s) under a 2 s interval: a couple of updates at
+  // most, never one per read.
+  const midPhase = claimEvents.filter((event) => event.event === 'progress');
+  assert.ok(
+    midPhase.length >= 1 && midPhase.length <= 3,
+    `got ${midPhase.length}`,
+  );
+  assert.ok(
+    tracker.lines.length <= 14,
+    `bounded output, got ${tracker.lines.length} lines`,
+  );
+});
+
+test('--with-progress: an interruption after partial annotation returns a recovery result (#3598)', async () => {
+  const issues = progressGraphIssues();
+  const clock = progressClock();
+  const tracker = progressTracker(clock);
+  let reads = 0;
+  const { resolution } = buildClaimState(new Map());
+  const interruptedClaimState = {
+    ...resolution,
+    loadComments: async (issueNumber: number) => {
+      reads += 1;
+      if (reads === 4) {
+        throw createLoadControlRefusal({
+          outcome: 'not-dispatched',
+          reason: 'cooldown',
+          retryAt: '2026-10-01T00:12:00Z',
+          retryAtSource: 'server',
+        });
+      }
+      return resolution.loadComments(issueNumber);
+    },
+  };
+  const rerunArguments = [
+    '--all-roadmaps',
+    '--with-claim-state',
+    '--with-progress',
+  ];
+
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: interruptedClaimState,
+    },
+    { progress: tracker.progress, now: clock.now, rerunArguments },
+  );
+
+  assert.deepEqual(result, {
+    mode: 'all-roadmaps',
+    status: 'incomplete',
+    incomplete: {
+      reason: 'rate-limit',
+      phase: 'claim-state',
+      lastCompletedPhase: 'traversal',
+      counts: { unit: 'leaves', completed: 3, known: 6, leavesKnown: 6 },
+      retryAt: '2026-10-01T00:12:00.000Z',
+      retryAtSource: 'server',
+      exhausted: false,
+      recovery: {
+        safeToRerun: true,
+        sameArguments: true,
+        notBefore: '2026-10-01T00:12:00.000Z',
+        arguments: rerunArguments,
+      },
+    },
+  });
+  // Neither partial rows nor a zero count can be read from it.
+  assert.equal('leaves' in result, false);
+  assert.equal('summary' in result, false);
+  const last = tracker.events().at(-1);
+  assert.equal(last?.event, 'interrupted');
+  assert.equal(last?.reason, 'rate-limit');
+  assert.equal(last?.completed, 3);
+});
+
+test('--with-progress: an interrupted result is never stored and reports complete:false (#3588 contract)', async () => {
+  const { report, cache } = await readDiscoverHint({
+    helper: 'discover-roadmap-graph',
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    args: {},
+    policy: {},
+    noCache: true,
+    compute: () =>
+      enumerateAllRoadmapsGraphWithRecovery(
+        {
+          loadOpenRoadmapRoots: async () => {
+            throw ghFailureWith({ code: 'ETIMEDOUT' });
+          },
+        },
+        { progress: createDiscoverProgress() },
+      ),
+    hasCandidate: () => true,
+  });
+  assert.equal((report as { status?: string }).status, 'incomplete');
+  assert.equal(cache?.complete, false);
+});
+
+test('--with-progress: primary quota exhaustion during traversal reads its reset (#3598)', async () => {
+  const clock = progressClock();
+  const resetEpochSec = clock.now() / 1000 + 900;
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700, 800],
+      loadIssue: async (issueNumber) => {
+        if (issueNumber === 800) {
+          throw ghFailureWith({
+            stderr: [
+              'HTTP/2.0 403 Forbidden',
+              'x-ratelimit-remaining: 0',
+              `x-ratelimit-reset: ${resetEpochSec}`,
+              'x-ratelimit-resource: core',
+              '',
+              'gh: API rate limit exceeded for user ID 1. (HTTP 403)',
+            ].join('\n'),
+          });
+        }
+        return issueNumber === 700
+          ? roadmapIssue(700, '- [ ] #701', 'epic-a')
+          : executionIssue(701, 'leaf 701');
+      },
+    },
+    { progress: createDiscoverProgress({ now: clock.now }), now: clock.now },
+  );
+  assert.equal(isIncomplete(result), true);
+  if (!isIncomplete(result)) return;
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.phase, 'traversal');
+  assert.equal(result.incomplete.lastCompletedPhase, 'root-discovery');
+  // Root 700 finished; root 800 was in flight when the quota ran out.
+  assert.deepEqual(result.incomplete.counts, {
+    unit: 'roots',
+    completed: 1,
+    known: 2,
+    leavesKnown: 1,
+  });
+  assert.equal(result.incomplete.retryAt, '2026-10-01T00:15:00.000Z');
+  assert.equal(result.incomplete.retryAtSource, 'server');
+});
+
+test('--with-progress: a timeout in the root search is incomplete, not an empty scan (#3598)', async () => {
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => {
+        throw ghFailureWith({ code: 'ETIMEDOUT' });
+      },
+    },
+    { progress: createDiscoverProgress() },
+  );
+  assert.equal(isIncomplete(result), true);
+  if (!isIncomplete(result)) return;
+  assert.equal(result.incomplete.reason, 'timeout');
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  assert.equal(result.incomplete.lastCompletedPhase, null);
+  // Zero roots were never found: the size is unknown, not 0.
+  assert.equal(result.incomplete.counts.known, null);
+  assert.equal(result.incomplete.retryAt, null);
+  assert.equal(result.incomplete.recovery.notBefore, null);
+  assert.equal(result.incomplete.exhausted, false);
+});
+
+test('--with-progress: a complete empty scan is a normal report, not an incomplete result (#3598)', async () => {
+  const clock = progressClock();
+  const tracker = progressTracker(clock);
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    { loadOpenRoadmapRoots: async () => [] },
+    { progress: tracker.progress },
+  );
+  assert.equal(isIncomplete(result), false);
+  assert.equal('status' in result, false);
+  assert.deepEqual(
+    result,
+    await enumerateAllRoadmapsGraph({ loadOpenRoadmapRoots: async () => [] }),
+  );
+  const events = tracker.events();
+  assert.deepEqual(
+    events.map(
+      (event) =>
+        `${event.phase}:${event.event}:${event.completed}/${event.known}`,
+    ),
+    [
+      'root-discovery:start:0/null',
+      'root-discovery:complete:0/0',
+      'traversal:start:0/0',
+      'traversal:complete:0/0',
+    ],
+  );
+});
+
+test('--with-progress: an error that is not an interruption still rethrows (#3598)', async () => {
+  const tracker = progressTracker(progressClock());
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraphWithRecovery(
+        {
+          loadOpenRoadmapRoots: async () => [700],
+          loadIssue: async () => {
+            throw ghFailureWith({ stderr: 'gh: Bad credentials (HTTP 401)' });
+          },
+        },
+        { progress: tracker.progress },
+      ),
+    /Command failed/,
+  );
+  // The tracker is closed once the run is over, so nothing prints after it.
+  const before = tracker.lines.length;
+  tracker.progress.advance();
+  assert.equal(tracker.lines.length, before);
+});
+
+test('an interruption without --with-progress still throws exactly as before (#3598)', async () => {
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => {
+          throw ghFailureWith({ code: 'ETIMEDOUT' });
+        },
+      }),
+    /Command failed/,
+  );
+});
+
+test('--with-progress: progress lines and the result never carry tokens, bodies, or raw error text (#3598)', async () => {
+  const issues = new Map<number, unknown>([
+    [700, roadmapIssue(700, '- [ ] #701', 'epic-leak')],
+    [
+      701,
+      executionIssue(
+        701,
+        'ISSUE-BODY-SECRET do not print <!-- idd-skill-x -->',
+      ),
+    ],
+  ]);
+  const tracker = progressTracker(progressClock());
+  const { resolution } = buildClaimState(new Map());
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: {
+        ...resolution,
+        loadComments: async () => {
+          throw ghFailureWith({
+            stderr:
+              'gh: API rate limit exceeded for user ID 1. (HTTP 403) COMMENT-BODY-SECRET ghp_SECRET_TOKEN_123',
+          });
+        },
+      },
+    },
+    { progress: tracker.progress },
+  );
+  const everything = `${JSON.stringify(result)}\n${tracker.lines.join('')}`;
+  for (const secret of [
+    'ghp_SECRET_TOKEN_123',
+    'ISSUE-BODY-SECRET',
+    'COMMENT-BODY-SECRET',
+    'SECRET-COMMAND-LINE',
+    'Command failed',
+    'roadmap 700',
+    'issue 701',
+  ]) {
+    assert.equal(everything.includes(secret), false, `leaked ${secret}`);
+  }
+});
+
 test('a failed traversal fetch stops sibling workers from pulling more items (#3598)', async () => {
   const issues = new Map<number, unknown>([
     [
@@ -4534,4 +4931,216 @@ test('a failed traversal fetch stops sibling workers from pulling more items (#3
     [],
     'no item beyond the two in flight was requested after the failure',
   );
+});
+
+test('CLI: --with-progress without --all-roadmaps is a usage error (#3598)', () => {
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
+          '--issue',
+          '700',
+          '--with-progress',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    /--with-progress requires --all-roadmaps/,
+  );
+});
+
+/** Run the built CLI in a config-free directory against a stubbed `gh`. */
+function runProgressCli(
+  ghBody: string,
+  extraArgs: string[],
+  { identity = true }: { identity?: boolean } = {},
+) {
+  const cwd = mkdtempSync(join(tmpdir(), 'idd-progress-cli-'));
+  const restore = stubExecutable('gh', ghBody);
+  try {
+    return spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
+        '--all-roadmaps',
+        ...(identity ? ['--owner', 'kurone-kito', '--repo', 'idd-skill'] : []),
+        '--with-progress',
+        ...extraArgs,
+      ],
+      { cwd, encoding: 'utf8', env: { ...process.env } },
+    );
+  } finally {
+    restore();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
+test('CLI: a rate-limited scan prints an incomplete result on stdout and exits 75 (#3598)', () => {
+  const child = runProgressCli(
+    `const args = process.argv.slice(2);
+if (args[0] === "search") {
+  process.stderr.write("gh: API rate limit exceeded for user ID 1. (HTTP 403) ghp_SECRET_TOKEN_123\\n");
+  process.exit(1);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+    ['--with-claim-state', '--no-cache'],
+  );
+  assert.equal(child.status, 75);
+  const result = JSON.parse(child.stdout) as {
+    status: string;
+    incomplete: {
+      reason: string;
+      phase: string;
+      recovery: { arguments: string[]; safeToRerun: boolean };
+    };
+    cache: { complete: boolean };
+    leaves?: unknown;
+  };
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  assert.equal(result.incomplete.recovery.safeToRerun, true);
+  assert.deepEqual(result.incomplete.recovery.arguments, [
+    '--all-roadmaps',
+    '--owner',
+    'kurone-kito',
+    '--repo',
+    'idd-skill',
+    '--with-claim-state',
+    '--with-progress',
+    '--no-cache',
+  ]);
+  assert.equal(result.cache.complete, false);
+  assert.equal('leaves' in result, false);
+  // Progress went to stderr as JSON lines and never leaked the token.
+  assert.equal(child.stderr.includes('ghp_SECRET_TOKEN_123'), false);
+  assert.equal(child.stdout.includes('ghp_SECRET_TOKEN_123'), false);
+  const progressLines = child.stderr
+    .split('\n')
+    .filter((line) => line.startsWith('{"iddProgress"'));
+  assert.ok(progressLines.length >= 2);
+  assert.equal(
+    (
+      JSON.parse(progressLines.at(-1) as string) as {
+        iddProgress: { event: string };
+      }
+    ).iddProgress.event,
+    'interrupted',
+  );
+});
+
+test('CLI: a complete empty scan keeps the report format, prints progress on stderr, and exits 0 (#3598)', () => {
+  const ghBody = `const args = process.argv.slice(2);
+if (args[0] === "search") {
+  process.stdout.write("[]\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`;
+  const withProgress = runProgressCli(ghBody, ['--no-cache']);
+  assert.equal(withProgress.status, 0);
+  const report = JSON.parse(withProgress.stdout) as Record<string, unknown>;
+  assert.equal(report.mode, 'all-roadmaps');
+  assert.deepEqual(report.leaves, []);
+  assert.equal('status' in report, false);
+  const progressLines = withProgress.stderr
+    .split('\n')
+    .filter((line) => line.startsWith('{"iddProgress"'));
+  assert.ok(progressLines.length >= 4, 'phase edges were printed');
+});
+
+test('CLI: a rate limit while resolving the repository is still an incomplete result (#3598)', () => {
+  const child = runProgressCli(
+    `const args = process.argv.slice(2);
+if (args[0] === "repo") {
+  process.stderr.write("gh: API rate limit exceeded for user ID 1. (HTTP 403)\\n");
+  process.exit(1);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+    ['--no-cache'],
+    { identity: false },
+  );
+  assert.equal(child.status, 75);
+  const result = JSON.parse(child.stdout) as {
+    status: string;
+    incomplete: {
+      reason: string;
+      phase: string;
+      counts: { known: number | null };
+      recovery: { arguments: string[] };
+    };
+  };
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  // The repository lookup ran before any phase: nothing is known yet.
+  assert.equal(result.incomplete.counts.known, null);
+  assert.deepEqual(result.incomplete.recovery.arguments, [
+    '--all-roadmaps',
+    '--with-progress',
+    '--no-cache',
+  ]);
+});
+
+test('CLI: the rerun arguments name every scope and flag of the invocation (#3598)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-progress-policy-'));
+  const policyPath = join(dir, 'policy.json');
+  writeFileSync(policyPath, '{}');
+  try {
+    const child = runProgressCli(
+      `const args = process.argv.slice(2);
+if (args[0] === "search") {
+  process.stderr.write("gh: You have exceeded a secondary rate limit. (HTTP 403)\\n");
+  process.exit(1);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+      [
+        '--policy',
+        policyPath,
+        '--with-claim-state',
+        '--with-readiness',
+        '--current-claim-id',
+        'claim-abc123',
+        '--concurrency',
+        '3',
+        '--refresh-cache',
+      ],
+    );
+    assert.equal(child.status, 75);
+    const result = JSON.parse(child.stdout) as {
+      incomplete: { recovery: { arguments: string[] } };
+    };
+    assert.deepEqual(result.incomplete.recovery.arguments, [
+      '--all-roadmaps',
+      '--owner',
+      'kurone-kito',
+      '--repo',
+      'idd-skill',
+      '--policy',
+      policyPath,
+      '--with-claim-state',
+      '--with-readiness',
+      '--current-claim-id',
+      'claim-abc123',
+      '--concurrency',
+      '3',
+      '--with-progress',
+      '--refresh-cache',
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
