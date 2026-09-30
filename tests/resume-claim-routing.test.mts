@@ -4156,6 +4156,12 @@ test('a takeover after recording the identity against another worktree still sto
     );
     assert.equal(takeover.mode, 'acquired');
     assert.equal(takeover.holder?.claimId, 'claim-old');
+    // The lock now names the successor, but nothing was recorded in the
+    // worktree the routing reads, so no owner evidence exists there.
+    assert.equal(
+      resolveCurrentSessionClaimEvidence('claim-new', sandbox.worktree),
+      null,
+    );
     assertSuccessorStop(routeAsSuccessor(sandbox));
   });
 });
@@ -4184,6 +4190,12 @@ test('a takeover of a worktree the dead predecessor left mid-rebase still stops 
       'expected the conflicting rebase to be left in progress',
     );
 
+    // The real probe still reports the branch occupied by this worktree (it
+    // reads the rebase metadata); it is the detached HEAD that leaves the
+    // session without owner evidence.
+    const probe = inspectLocalWorktreeBranch(SUCCESSOR_BRANCH, primary);
+    assert.equal(probe.status, 'occupied');
+
     recordGeneratedClaimTokens(worktree, {
       agentId: 'agent-new',
       claimId: 'claim-new',
@@ -4192,6 +4204,10 @@ test('a takeover of a worktree the dead predecessor left mid-rebase still stops 
     const takeover = acquireClaimLock(worktree, 'agent-new', 'claim-new', true);
     assert.equal(takeover.mode, 'acquired');
     assert.equal(takeover.holder?.claimId, 'claim-old');
+    assert.equal(
+      resolveCurrentSessionClaimEvidence('claim-new', worktree),
+      null,
+    );
     assertSuccessorStop(routeAsSuccessor(sandbox));
   });
 });
