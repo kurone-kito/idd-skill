@@ -956,12 +956,24 @@ export function applyDispositionPlan(plan, deps) {
         // generic 'unknown error' -- coerce it the same way the rest of this
         // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
         // rerun-advisory-convergence.mts).
-        lastThrown = error;
-        lastError = error instanceof Error ? error.message : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         // #3586: host-local load control refused the create before any
         // request was sent. Nothing can have landed, so there is nothing to
         // recover, and a second attempt would only be refused again.
-        if (isNotDispatchedRefusal(error)) break;
+        if (isNotDispatchedRefusal(error)) {
+          if (lastThrown === null) {
+            lastThrown = error;
+            lastError = message;
+          } else {
+            // The retry was refused, but an earlier attempt was dispatched
+            // and may have landed. That earlier failure stays the classified
+            // one, so the report never claims that nothing was sent.
+            lastError = `${lastError}; retry not dispatched: ${message}`;
+          }
+          break;
+        }
+        lastThrown = error;
+        lastError = message;
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
         // double-post.

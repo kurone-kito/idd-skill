@@ -361,6 +361,29 @@ test('a refused recovery read after a failed create reports the create and stops
   assert.match((result.postFailure as Error).message, /HTTP 502/);
 });
 
+test('a refused retry after a failed first create keeps the dispatched failure as the classified one', () => {
+  let posts = 0;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: () => {
+      posts += 1;
+      if (posts === 1) throw new Error('gh: Server Error (HTTP 502)');
+      throw refusal('cooldown', '2026-09-30T10:00:00.000Z');
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(onePlannedDisposition(), deps);
+  assert.equal(posts, 2, 'the retry was attempted and refused');
+  assert.deepEqual(result.applied, []);
+  assert.match(result.failed[0].error, /HTTP 502/);
+  assert.match(result.failed[0].error, /retry not dispatched/);
+  // The first create was dispatched and may have landed, so the failure the
+  // helper classifies must not claim that nothing was sent.
+  assert.equal(isNotDispatchedRefusal(result.postFailure), false);
+  assert.match((result.postFailure as Error).message, /HTTP 502/);
+});
+
 test('a refused claim revalidation keeps the report of what was already posted', () => {
   const plan: DispositionPlan = {
     headSha: 'abc1234',
