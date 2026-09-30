@@ -3694,7 +3694,7 @@ test('ghApiJson readCache retries a gh auth status lookup that failed, was empty
   }
 });
 
-test('ghApiJson readCache asks again after gh auth status returns unusable JSON or an empty host name (#3621)', () => {
+test('ghApiJson readCache asks again after gh auth status returns unusable JSON or an empty or whitespace-only host name (#3621, #3657)', () => {
   const paths = readCacheFixture();
   const logFile = join(paths.root, 'auth.log');
   const restore = stubGh(
@@ -3704,6 +3704,7 @@ test('ghApiJson readCache asks again after gh auth status returns unusable JSON 
         { stdout: 'not json' },
         { stdout: '{"hosts":[]}' },
         { stdout: '{"hosts":{"":[]}}' },
+        { stdout: '{"hosts":{" ":[]}}' },
         { stdout: '{"hosts":{"github.com":[{"state":"success"}]}}' },
       ],
     }),
@@ -3713,15 +3714,24 @@ test('ghApiJson readCache asks again after gh auth status returns unusable JSON 
       withGhHostEnv({}, () => {
         const options = { readCache: authCountingRead(paths) };
         const statusCalls = () => authCalls(logFile).status;
-        // Unparseable output, a `hosts` value that is not an object, and an
-        // empty host name are each asked again; only the fourth answer, one
-        // named host, is remembered.
-        for (const expected of [1, 2, 3, 4]) {
+        // Unparseable output, a `hosts` value that is not an object, an empty
+        // host name and a whitespace-only host name are each asked again and
+        // leave the read live and uncached; only the fifth answer, one named
+        // host, is remembered and cached.
+        for (const expected of [1, 2, 3, 4, 5]) {
           assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
           assert.equal(statusCalls(), expected);
+          assert.equal(
+            cacheEntryNames(paths.cacheDir).length,
+            expected === 5 ? 1 : 0,
+            `entries after read ${expected}`,
+          );
         }
         assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
-        assert.equal(statusCalls(), 4);
+        assert.equal(statusCalls(), 5);
+        assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+        // Four live reads and one miss reached `gh`; the sixth read was a hit.
+        assert.equal(recordedArgs(paths.argsFile).length, 5);
       }),
     );
   } finally {
