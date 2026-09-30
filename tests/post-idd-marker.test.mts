@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -42,6 +42,7 @@ import {
   loadJson,
   validate,
 } from '../src/scripts/validate-schemas.mts';
+import { PR_1897_REVIEW_4863787336 } from './coderabbit-pr-1897-review.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // A real 40-hex SHA — the watermark/baseline/advisory renderers require it.
@@ -1327,8 +1328,11 @@ function watermarkFromPrGhStub(
     rollupHeadSha?: string;
     rulesBody?: string;
     commentsBody?: string;
+    /** REST `pulls/<n>/reviews` payload (JSON text); default no reviews. */
+    reviewsBody?: string;
   } = {},
 ): string {
+  const reviewsBody = JSON.stringify(options.reviewsBody ?? '[]');
   const rollup = JSON.stringify(
     statusCheckRollupResponse(
       options.rollupHeadSha ?? headSha,
@@ -1395,7 +1399,7 @@ if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('datab
 if (args[0] === 'api' && args[1] === 'graphql') {
   out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } }, nodes: [{ id: 'C_1', lastEditedAt: null }] } }));
 }
-if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out(${reviewsBody});
 if (args[0] === 'api' && /rules\\/branches\\//.test(args[1])) out(${rulesBody});
 if (args[0] === 'api' && /\\/protection$/.test(args[1])) out('{}');
 if (args[0] === 'api' && /contents\\/\\.github\\/idd\\/config\\.json/.test(args[1])) out('e30=');
@@ -5708,6 +5712,221 @@ test('a refusal reports the summed uncovered body findings next to the undisposi
   assert.equal(both.warnings.length, 2);
   assert.match(both.warnings[0], /^1 comment has no disposition evidence/);
   assert.match(both.warnings[1], /^1 review-body finding has no thread/);
+});
+
+// ---------------------------------------------------------------------------
+// #3622: `--operation-local` through the CLI. The offline `gh` stub answers the
+// activity capture and the required-check read, and records every comment POST
+// so a run can be told from a deferred or refused one by what it posted.
+// ---------------------------------------------------------------------------
+
+function operationLocalCliStub(
+  options: Parameters<typeof watermarkFromPrGhStub>[1],
+  postLogPath: string,
+): string {
+  const prelude = `const __fs = require('node:fs');
+const __args = process.argv.slice(2);
+if (__args[0] === 'api' && __args.includes('--method') && __args[__args.indexOf('--method') + 1] === 'POST') {
+  const __sent = JSON.parse(__fs.readFileSync(0, 'utf8'));
+  __fs.appendFileSync(${JSON.stringify(postLogPath)}, JSON.stringify({ args: __args, body: __sent.body }) + '\\n');
+  process.stdout.write(JSON.stringify({ id: 9001, html_url: 'https://github.com/o/r/issues/1200#issuecomment-9001', body: __sent.body }));
+  process.exit(0);
+}
+`;
+  return prelude + watermarkFromPrGhStub(SHA, options);
+}
+
+/** The slice of the CLI's JSON envelope these tests read. */
+interface OperationLocalCliEnvelope {
+  mode?: string;
+  body?: string;
+  commentId?: number;
+  warnings?: string[];
+  operationLocal: {
+    decision: string;
+    reason: string | null;
+    watermarkFields: Record<string, string>;
+  };
+}
+
+interface OperationLocalCliRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  posts: { args: string[]; body: string }[];
+  json: OperationLocalCliEnvelope | null;
+}
+
+function runOperationLocalCli(
+  extraArgs: readonly string[],
+  stubOptions: Parameters<typeof watermarkFromPrGhStub>[1] = {},
+): OperationLocalCliRun {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-operation-local-cli-'));
+  const postLog = join(tempRoot, 'posts.jsonl');
+  const restore = stubExecutable(
+    'gh',
+    operationLocalCliStub(stubOptions, postLog),
+  );
+  try {
+    const { status, stdout, stderr } = runWatermarkCli([...extraArgs]);
+    return {
+      status,
+      stdout,
+      stderr,
+      posts: existsSync(postLog)
+        ? readFileSync(postLog, 'utf8')
+            .split('\n')
+            .filter((line) => line.length > 0)
+            .map((line) => JSON.parse(line))
+        : [],
+      json: stdout.trim().startsWith('{') ? JSON.parse(stdout) : null,
+    };
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+/** The boundary flags of one stored watermark, for the stub's HEAD. */
+function boundaryFlags(count: string, maxActivityAt: string): string[] {
+  return [
+    '--prior-head-sha',
+    SHA,
+    '--prior-total-item-count',
+    count,
+    '--prior-max-activity-at',
+    maxActivityAt,
+  ];
+}
+
+test('--operation-local dry-run publishes the same marker body plus the operationLocal envelope (#3622)', () => {
+  const plain = runOperationLocalCli([]);
+  const local = runOperationLocalCli(['--operation-local']);
+  assert.equal(plain.status, 0);
+  assert.equal(local.status, 0);
+  assert.equal(local.json?.mode, 'dry-run');
+  assert.equal(local.json?.body, plain.json?.body);
+  assert.deepEqual(local.json?.warnings, plain.json?.warnings);
+  assert.equal(local.json?.operationLocal.decision, 'publish');
+  assert.equal(local.json?.operationLocal.reason, null);
+  assert.equal(local.json?.operationLocal.watermarkFields['head-sha'], SHA);
+  assert.equal(plain.json !== null && 'operationLocal' in plain.json, false);
+  assert.deepEqual(local.posts, []);
+});
+
+test('--operation-local --apply POSTs exactly one marker whose body is the dry-run body (#3622)', () => {
+  const dryRun = runOperationLocalCli(['--operation-local']);
+  const applied = runOperationLocalCli(['--operation-local', '--apply']);
+  assert.equal(applied.status, 0);
+  assert.equal(applied.json?.mode, 'apply');
+  assert.equal(applied.json?.commentId, 9001);
+  assert.equal(applied.json?.operationLocal.decision, 'publish');
+  assert.equal(applied.posts.length, 1);
+  assert.equal(applied.posts[0].body, dryRun.json?.body);
+});
+
+test('--operation-local refuses new same-HEAD activity past a stored boundary given as count 0 or none (#3622)', () => {
+  for (const [count, maxActivityAt] of [
+    ['0', 'none'],
+    ['0', '2026-06-25T10:00:00Z'],
+    ['1', '2026-06-25T10:00:00Z'],
+  ] as const) {
+    for (const apply of [false, true]) {
+      const run = runOperationLocalCli([
+        '--operation-local',
+        ...boundaryFlags(count, maxActivityAt),
+        ...(apply ? ['--apply'] : []),
+      ]);
+      const label = `${count}/${maxActivityAt}${apply ? ' --apply' : ''}`;
+      assert.equal(run.status, 1, label);
+      assert.match(run.stderr, /fresh triage/, label);
+      assert.equal(run.json?.mode, 'dry-run', label);
+      assert.equal(run.json?.operationLocal.decision, 'refuse', label);
+      assert.equal('body' in (run.json ?? {}), false, label);
+      assert.deepEqual(run.posts, [], label);
+    }
+  }
+});
+
+test('--operation-local publishes when nothing arrived past the stored boundary (#3622)', () => {
+  const unchanged = runOperationLocalCli([
+    '--operation-local',
+    ...boundaryFlags('1', '2026-06-25T10:30:00Z'),
+  ]);
+  assert.equal(unchanged.status, 0);
+  assert.equal(unchanged.json?.operationLocal.decision, 'publish');
+  const empty = runOperationLocalCli(
+    ['--operation-local', ...boundaryFlags('0', 'none')],
+    { commentsBody: '[]' },
+  );
+  assert.equal(empty.status, 0);
+  assert.equal(empty.json?.operationLocal.decision, 'publish');
+});
+
+test('--operation-local evaluates the boundary guard before the defer for failing required checks (#3622)', () => {
+  const failing = {
+    rollupNodes: [rollupCheck('lint', 'FAILURE')],
+    rulesBody: REQUIRED_LINT_RULE,
+  };
+  // No boundary: the required-check failure defers, exit 0, nothing posted.
+  const deferred = runOperationLocalCli(
+    ['--operation-local', '--apply'],
+    failing,
+  );
+  assert.equal(deferred.status, 0);
+  assert.equal(deferred.json?.mode, 'dry-run');
+  assert.equal(deferred.json?.operationLocal.decision, 'defer');
+  assert.match(
+    deferred.json?.operationLocal.reason ?? '',
+    /required checks are not passing/,
+  );
+  assert.equal('body' in (deferred.json ?? {}), false);
+  assert.deepEqual(deferred.posts, []);
+  // The same failing checks with a boundary the capture already passed: the
+  // guard refuses first, so the caller gets the triage route, not a retry.
+  const refused = runOperationLocalCli(
+    ['--operation-local', '--apply', ...boundaryFlags('0', 'none')],
+    failing,
+  );
+  assert.equal(refused.status, 1);
+  assert.equal(refused.json?.operationLocal.decision, 'refuse');
+  assert.match(refused.stderr, /fresh triage/);
+  assert.deepEqual(refused.posts, []);
+});
+
+test('--operation-local refuses a review that arrived after the boundary and carries only uncovered body findings (#3622)', () => {
+  const review = JSON.stringify([
+    {
+      id: 555,
+      node_id: 'PRR_coderabbit_body_only',
+      user: { login: 'coderabbitai[bot]' },
+      body: PR_1897_REVIEW_4863787336,
+      state: 'COMMENTED',
+      submitted_at: '2026-06-25T10:50:00Z',
+      commit_id: SHA,
+    },
+  ]);
+  const options = { commentsBody: '[]', reviewsBody: review };
+  const refused = runOperationLocalCli(
+    ['--operation-local', ...boundaryFlags('0', 'none')],
+    options,
+  );
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /fresh triage/);
+  assert.equal(refused.json?.operationLocal.decision, 'refuse');
+  assert.match(
+    refused.json?.warnings?.[0] ?? '',
+    /^\d+ review-body findings? (has|have) no thread of (its|their) own/,
+  );
+  // The same capture publishes once the boundary already contains the review.
+  const publishes = runOperationLocalCli(
+    ['--operation-local', ...boundaryFlags('1', '2026-06-25T10:50:00Z')],
+    options,
+  );
+  assert.equal(publishes.status, 0);
+  assert.equal(publishes.json?.operationLocal.decision, 'publish');
+  // The uncovered body finding is reported by a refusal only.
+  assert.equal('warnings' in (publishes.json ?? {}), false);
 });
 
 test('operation-local orders same-HEAD activity by instant, not timestamp text (#3592)', () => {
