@@ -3544,6 +3544,39 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         throw error;
       }
     },
+    getChangeRequestOutcomeAtRepo(atRepoOwner, atRepoRepo, number) {
+      try {
+        const raw = deps.ghText(
+          [
+            'pr',
+            'view',
+            String(number),
+            '-R',
+            `${atRepoOwner}/${atRepoRepo}`,
+            '--json',
+            'state,mergedAt,headRefOid',
+          ],
+          GH_TEXT_LOOP_OPTIONS,
+        );
+        const parsed = JSON.parse(raw);
+        const mergedAt = String(parsed.mergedAt ?? '');
+        return {
+          state: String(parsed.state ?? '').toUpperCase(),
+          // A never-merged pull request reads back as null (or, defensively,
+          // as Go's zero time), never as a merge timestamp.
+          mergedAt:
+            mergedAt === '' || mergedAt.startsWith('0001-01-01')
+              ? null
+              : mergedAt,
+          headRefOid: String(parsed.headRefOid ?? ''),
+        };
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
     mergeChangeRequestAtRepo(mergeOwner, mergeRepo, number, headSha) {
       return deps.ghText([
         'pr',

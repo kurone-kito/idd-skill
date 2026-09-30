@@ -5461,6 +5461,48 @@ reflexively as any other CLI option.
   whenever the check cannot run (no git repo, a different or detached
   branch, or an unreadable local/remote read) or finds no divergence,
   and it never gates `ready` or blocks the merge.
+- **Phase lines (`#3681`).** Under `--apply` only, the helper writes one
+  line per phase to stderr, so a slow run under host load can be told
+  apart from a hung one: the readiness collector runs before the merge,
+  again immediately before it, and a third time before a solo-CODEOWNER
+  `--admin` retry. The last line appears only when that fallback is
+  entered.
+
+  ```text
+  idd-merge-execute: collecting readiness
+  idd-merge-execute: re-validating claim and head
+  idd-merge-execute: merging <validated-head-sha>
+  idd-merge-execute: admin fallback
+  ```
+
+  Stdout stays a single JSON document, and dry-run prints no phase line.
+- **Post-failure state (`#3681`).** After a failed merge attempt (the
+  plain merge, the `--admin` retry, or an admin fallback that aborted
+  after the plain merge failed), the helper makes one best-effort read of
+  the pull request and adds `postFailureState: { state, mergedAt,
+  headRefOid }` to the verdict, then appends a sentence to `mergeResult`
+  on its own line. A `gh` call cut off by its timeout can still finish on
+  the server (preventive; no observed incident yet), so `MERGED` means the
+  merge completed server-side: do not retry, and continue with F4 after
+  confirming. `OPEN` at the validated head means the merge did not happen
+  and a retry is safe once the cause in `mergeResult` is resolved, because
+  `--match-head-commit` binds the head. Any other state, a moved head, or
+  an unreadable pull request means read it before retrying. The field is
+  absent (never `null`) when the read returned nothing. It is diagnostic
+  only: `merged`, `adminFallbackUsed` and the exit code keep their values.
+- **Interrupted `--apply` (`#3681`).** After any interruption of
+  `--apply` (an outer `timeout`, a killed shell, a lost connection), read
+  the pull request's `state`, `mergedAt` and `headRefOid` before
+  retrying, for example with `gh pr view <pr-number> -R <owner>/<repo>
+  --json state,mergedAt,headRefOid`; drop `-R` only when the run used
+  neither `--owner` nor `--repo`. A retry is safe only while it is `OPEN`
+  at the validated head. That head is the `<sha>` of the last
+  `idd-merge-execute: merging <sha>` phase line, or the verdict's
+  `prHeadSha` when a verdict was printed. A `MERGED` pull request needs no
+  retry. Observed 2026-09-30 in an adopter repository under host load
+  (`kurone-kito/dotfiles#523`): under an outer `timeout 300` the helper
+  printed nothing and was killed with exit 124, and the retry under
+  `timeout 1200` finished in 81 seconds and merged.
 - Fail closed: if helper execution fails, output is invalid JSON,
   required fields are missing, or helper evidence conflicts with live
   GitHub state, discard helper output and run the manual F3 gate +

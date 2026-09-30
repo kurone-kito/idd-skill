@@ -100,6 +100,26 @@
         }
       },
       "additionalProperties": false
+    },
+    "postFailureState": {
+      "type": "object",
+      "description": "#3681: the pull request read back once after a failed merge attempt (the plain merge, the --admin retry, or an aborted admin fallback), so a gh call cut off by its timeout that completed server-side is not misread as an unmerged pull request. Absent (never null) on every other path, including a failed or empty read-back and a run without a read-back dependency. Diagnostic only: merged, adminFallbackUsed and the exit code never depend on it.",
+      "required": ["state", "mergedAt", "headRefOid"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "The pull request state word, upper-cased (for example OPEN, CLOSED or MERGED); empty when the provider returned none."
+        },
+        "mergedAt": {
+          "type": ["string", "null"],
+          "description": "ISO timestamp of the merge, or null when the pull request has not been merged."
+        },
+        "headRefOid": {
+          "type": "string",
+          "description": "Head commit SHA of the pull request; empty when the provider returned none."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

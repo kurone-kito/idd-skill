@@ -2768,6 +2768,97 @@ test('mergeChangeRequestAtRepo targets an explicit owner/repo distinct from the 
   ]);
 });
 
+test('getChangeRequestOutcomeAtRepo reads state, mergedAt and headRefOid from an explicit owner/repo (#3681)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'ambient-owner',
+    'ambient-repo',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return JSON.stringify({
+          state: 'MERGED',
+          mergedAt: '2026-10-01T03:04:05Z',
+          headRefOid: 'deadbeef',
+        });
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getChangeRequestOutcomeAtRepo('other-owner', 'other-repo', 42),
+    {
+      state: 'MERGED',
+      mergedAt: '2026-10-01T03:04:05Z',
+      headRefOid: 'deadbeef',
+    },
+  );
+  assert.deepEqual(capturedArgs, [
+    'pr',
+    'view',
+    '42',
+    '-R',
+    'other-owner/other-repo',
+    '--json',
+    'state,mergedAt,headRefOid',
+  ]);
+});
+
+test('getChangeRequestOutcomeAtRepo maps a never-merged pull request to a null mergedAt and upper-cases the state (#3681)', () => {
+  for (const mergedAt of [null, '', '0001-01-01T00:00:00Z']) {
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () =>
+          JSON.stringify({ state: 'open', mergedAt, headRefOid: 'abc' }),
+      }),
+    );
+    assert.deepEqual(port.getChangeRequestOutcomeAtRepo('o', 'r', 7), {
+      state: 'OPEN',
+      mergedAt: null,
+      headRefOid: 'abc',
+    });
+  }
+  const sparse = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: () => '{}' }),
+  );
+  assert.deepEqual(sparse.getChangeRequestOutcomeAtRepo('o', 'r', 7), {
+    state: '',
+    mergedAt: null,
+    headRefOid: '',
+  });
+});
+
+test('getChangeRequestOutcomeAtRepo returns null on a 404 and rethrows any other failure (#3681)', () => {
+  const notFound = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('HTTP 404') as Error & { stderr?: string };
+        error.stderr = 'gh: Not Found (HTTP 404)';
+        throw error;
+      },
+    }),
+  );
+  assert.equal(notFound.getChangeRequestOutcomeAtRepo('o', 'r', 7), null);
+
+  const boom = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('boom') as Error & { stderr?: string };
+        error.stderr = 'gh: Internal Server Error (HTTP 500)';
+        throw error;
+      },
+    }),
+  );
+  assert.throws(() => boom.getChangeRequestOutcomeAtRepo('o', 'r', 7), /boom/);
+});
+
 test('listChangeRequestChecks omits --required, unlike listRequiredChecks', () => {
   let capturedArgs: string[] | undefined;
   const port = createGithubProviderAdapter(

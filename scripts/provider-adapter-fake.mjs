@@ -527,6 +527,10 @@ export function createFakeProviderAdapter(fixture) {
       const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
       return fixture.changeRequestsAtRepo?.[key] ?? null;
     },
+    getChangeRequestOutcomeAtRepo(atRepoOwner, atRepoRepo, number) {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      return fixture.changeRequestOutcomesAtRepo?.[key] ?? null;
+    },
     mergeChangeRequestAtRepo(mergeOwner, mergeRepo, number, headSha) {
       fixture.mergedChangeRequestCalls ??= [];
       fixture.mergedChangeRequestCalls.push({

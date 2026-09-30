@@ -51,6 +51,14 @@ discipline and has no tag.
   arguments to rerun. It has no leaves or summary, so it is never read as
   candidates or as exhaustion, and the hint cache never stores it. A
   complete report is unchanged, and so is a run without the flag.
+- `idd-merge-execute --apply` prints one stderr line per phase (collecting
+  readiness, re-validating claim and head, merging, and admin fallback when
+  it is entered), so a slow run under load can be told apart from a hung
+  one; stdout stays one JSON document and dry-run is unchanged. After a
+  failed merge attempt it reads the pull request back once, adds an optional
+  `postFailureState` (`state`, `mergedAt`, `headRefOid`) to the verdict, and
+  appends a read-before-retrying sentence to `mergeResult`. `merged`,
+  `adminFallbackUsed` and the exit code are unchanged (#3681).
 
 ### Fixed
 

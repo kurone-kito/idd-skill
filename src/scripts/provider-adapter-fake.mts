@@ -22,6 +22,7 @@ import type {
   ProviderChangeRequestBranchAndChecks,
   ProviderChangeRequestConvergenceView,
   ProviderChangeRequestHeadShaAndAuthor,
+  ProviderChangeRequestOutcome,
   ProviderChangeRequestReadinessSnapshot,
   ProviderChangeRequestState,
   ProviderChangeRequestSummary,
@@ -311,6 +312,10 @@ export interface FakeProviderFixture {
   /** Backs {@link ProviderPort.getChangeRequestAtRepo}, keyed by
    * `${owner}/${repo}/${number}`. */
   changeRequestsAtRepo?: Record<string, ProviderChangeRequestState>;
+  /** Backs {@link ProviderPort.getChangeRequestOutcomeAtRepo}, keyed by
+   * `${owner}/${repo}/${number}`; an absent key reads as `null` (a missing
+   * pull request), like the adapter's own 404 mapping. */
+  changeRequestOutcomesAtRepo?: Record<string, ProviderChangeRequestOutcome>;
   /** Every merge call (ambient or cross-repo, admin or not) is appended
    * here, in call order. */
   mergedChangeRequestCalls?: {
@@ -1066,6 +1071,15 @@ export function createFakeProviderAdapter(
     ): ProviderChangeRequestState | null {
       const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
       return fixture.changeRequestsAtRepo?.[key] ?? null;
+    },
+
+    getChangeRequestOutcomeAtRepo(
+      atRepoOwner: string,
+      atRepoRepo: string,
+      number: number,
+    ): ProviderChangeRequestOutcome | null {
+      const key = `${atRepoOwner}/${atRepoRepo}/${number}`;
+      return fixture.changeRequestOutcomesAtRepo?.[key] ?? null;
     },
 
     mergeChangeRequestAtRepo(

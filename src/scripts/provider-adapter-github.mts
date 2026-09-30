@@ -44,6 +44,7 @@ import type {
   ProviderChangeRequestBranchAndChecks,
   ProviderChangeRequestConvergenceView,
   ProviderChangeRequestHeadShaAndAuthor,
+  ProviderChangeRequestOutcome,
   ProviderChangeRequestReadinessSnapshot,
   ProviderChangeRequestState,
   ProviderChangeRequestSummary,
@@ -4417,6 +4418,48 @@ export function createGithubProviderAdapter(
         return {
           mergeable: String(parsed.mergeable ?? ''),
           mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
+        };
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+
+    getChangeRequestOutcomeAtRepo(
+      atRepoOwner: string,
+      atRepoRepo: string,
+      number: number,
+    ): ProviderChangeRequestOutcome | null {
+      try {
+        const raw = deps.ghText(
+          [
+            'pr',
+            'view',
+            String(number),
+            '-R',
+            `${atRepoOwner}/${atRepoRepo}`,
+            '--json',
+            'state,mergedAt,headRefOid',
+          ],
+          GH_TEXT_LOOP_OPTIONS,
+        );
+        const parsed = JSON.parse(raw) as {
+          state?: unknown;
+          mergedAt?: unknown;
+          headRefOid?: unknown;
+        };
+        const mergedAt = String(parsed.mergedAt ?? '');
+        return {
+          state: String(parsed.state ?? '').toUpperCase(),
+          // A never-merged pull request reads back as null (or, defensively,
+          // as Go's zero time), never as a merge timestamp.
+          mergedAt:
+            mergedAt === '' || mergedAt.startsWith('0001-01-01')
+              ? null
+              : mergedAt,
+          headRefOid: String(parsed.headRefOid ?? ''),
         };
       } catch (error) {
         if (deriveGhHttpStatus(error) === 404) {
