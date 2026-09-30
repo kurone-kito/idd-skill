@@ -461,10 +461,10 @@ directly to its contract.
 `ghApiJsonWithHeaders`, and `ghGraphql` wrappers then keep their current
 arguments, parsed return values, thrown errors, and process exit. Only
 those three wrappers record observations: requests made through the
-generic `ghText` and `ghTextUnbounded` runners, including `gh api` calls
-a helper makes that way, are not observed. Setting `enabled` to true
-appends allowlisted observations to a local JSON Lines file. The default
-file name is `github-api-telemetry.jsonl`:
+generic `ghText`, `ghTextUnbounded`, and `ghTextAsync` runners, including
+`gh api` calls a helper makes that way, are not observed. Setting
+`enabled` to true appends allowlisted observations to a local JSON Lines
+file. The default file name is `github-api-telemetry.jsonl`:
 
 ```text
 ~/.local/state/idd-skill/github-api-telemetry.jsonl
@@ -487,8 +487,9 @@ GraphQL success leave both counts unknown. Each write replaces the
 retention file through a temporary file, and a `path` whose existing file
 holds anything other than these records is not modified and nothing is
 recorded. A configured `path` must be absolute or start with `~/`, which
-is the home directory; any other value keeps telemetry off, so a relative
-path cannot put the file into the working tree.
+is the home directory, followed by a file name; any other non-blank value
+keeps telemetry off, so a relative path cannot put the file into the
+working tree. A blank `path` counts as unset and uses the default file.
 More than one of GraphQL errors, primary exhaustion, secondary
 throttling, and access denial stays `unknown` rather than guessing a
 subtype. A read or write failure in this retention path does not change
