@@ -11397,6 +11397,48 @@ export function computePreMergeReadinessBlockers(
     }
   }
 
+  // #3624: an open deferred follow-up (a review finding a session deferred by
+  // filing an issue) that this pull request never names. Tested with
+  // `!== undefined`, like `closingSet` above, so only a genuinely absent key
+  // (an unmigrated caller or unit fixture) skips the gate; a present `null`, a
+  // non-boolean `checked`, or a non-array `items` is malformed evidence and
+  // fails closed to the unverified gate rather than reading as zero
+  // follow-ups.
+  if (report.deferFollowUps !== undefined) {
+    const deferFollowUps = preMergeAsRecord(report.deferFollowUps);
+    const items = Array.isArray(deferFollowUps.items)
+      ? deferFollowUps.items
+      : null;
+    if (deferFollowUps.checked !== true || items === null) {
+      const reason =
+        typeof deferFollowUps.unverifiedReason === 'string' &&
+        deferFollowUps.unverifiedReason
+          ? deferFollowUps.unverifiedReason
+          : 'the deferred follow-up evidence is missing or malformed';
+      blockers.push({
+        gate: 'deferred-followup-unverified',
+        detail: `deferred follow-up evidence is unverified (${reason}); this fails closed and never reads as zero follow-ups. A transient failure such as a rate limit usually clears on the next invocation; a persistent one needs its cause fixed`,
+      });
+    } else {
+      for (const entry of items) {
+        const item = preMergeAsRecord(entry);
+        if (item.reconciled === true) {
+          continue;
+        }
+        const number = String(item.number ?? '?');
+        const origin = String(item.origin ?? '?');
+        const held =
+          item.heldByAuthoringLabel === true
+            ? ', still under its authoring hold'
+            : '';
+        blockers.push({
+          gate: 'deferred-followup-unreconciled',
+          detail: `deferred follow-up #${number} (deferred from #${origin}${held}) is not named anywhere on this pull request. If the finding is still deferred, reply on its source review thread with "**Rejected** — deferred to follow-up issue #${number}" and resolve the thread. If it was fixed in this pull request or is no longer needed (or the deferral has no source thread), post a pull request comment naming #${number} and the fix. Either one clears this gate; polling never will. Then return to E1 to refresh the review-watermark, because that new activity keeps review-currency at return-to-e1 until then. Then close the follow-up as not planned through the authoring journal cleanup then abandoned path, but only when this session owns its authoring hold or the hold is older than issueAuthoring.authoringStaleAge; otherwise leave it to the stale-hold path`,
+        });
+      }
+    }
+  }
+
   return blockers;
 }
 
@@ -11714,6 +11756,22 @@ export function buildPreMergeReadinessSummary(
       extra: number[];
       missing: number[];
       strayCommitCloses: { sha: string; issue: number }[];
+    } | null;
+    // #3624: caller-precomputed deferred-follow-up evidence
+    // (`computeDeferFollowUps` in pre-merge-readiness.mts, which owns the two
+    // marker parsers this file must not import -- see the import comment
+    // there), reported verbatim. Omitted (the default) skips the gate, so
+    // every earlier fixture/caller is unaffected; `collectPreMergeReadiness`
+    // always resolves and passes a value.
+    deferFollowUps?: {
+      checked: boolean;
+      unverifiedReason: string | null;
+      items: {
+        number: number;
+        heldByAuthoringLabel: boolean;
+        origin: number;
+        reconciled: boolean;
+      }[];
     } | null;
     // Configured `advisoryWait.secondaryQuietWindow` in minutes (#2335),
     // resolved by the caller, mirroring `advisoryConvergenceDeadlineMinutes`
@@ -12795,6 +12853,14 @@ export function buildPreMergeReadinessSummary(
   // always emits one.
   if (options.closingSet) {
     summary.closingSet = options.closingSet;
+  }
+
+  // #3624: omitted entirely when the caller does not pass it. An explicit
+  // `null` is kept (unlike `closingSet` above) so
+  // `computePreMergeReadinessBlockers`, which tests for `!== undefined`, fails
+  // the malformed evidence closed instead of it vanishing here.
+  if (options.deferFollowUps !== undefined) {
+    summary.deferFollowUps = options.deferFollowUps;
   }
 
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`

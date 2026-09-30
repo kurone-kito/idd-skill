@@ -1871,6 +1871,51 @@
         }
       }
     },
+    "deferFollowUps": {
+      "type": "object",
+      "description": "#3624: the deferred-follow-up merge-gate evidence. A follow-up is an open issue carrying the review-fix-loop-cutoff defer-source marker whose sole Refs line names this PR's origin issue (the claimed issue or a same-repo closing issue). It is reconciled when the PR body, a conversation comment, a review body or any review-thread comment (resolved ones included) names it as #N, <owner>/<repo>#N or a full issue URL. Optional so older reports stay valid, but a real collectPreMergeReadiness run always emits it. An unreconciled item adds a deferred-followup-unreconciled blocker; checked=false adds a deferred-followup-unverified blocker and never reads as zero follow-ups.",
+      "required": ["checked", "unverifiedReason", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "checked": {
+          "type": "boolean",
+          "description": "True when the follow-up set was enumerated completely (or there is no origin issue, so no search ran). False when the search failed, returned a non-array result, or returned at least the search result cap and may be truncated."
+        },
+        "unverifiedReason": {
+          "type": ["string", "null"],
+          "description": "Why checked is false; null when checked is true."
+        },
+        "items": {
+          "type": "array",
+          "description": "Open marked follow-ups attributed to an origin issue, sorted by issue number.",
+          "items": {
+            "type": "object",
+            "required": ["number", "heldByAuthoringLabel", "origin", "reconciled"],
+            "additionalProperties": false,
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The follow-up issue number."
+              },
+              "heldByAuthoringLabel": {
+                "type": "boolean",
+                "description": "True when the follow-up still carries the configured authoring label."
+              },
+              "origin": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The origin issue the follow-up's Refs line names."
+              },
+              "reconciled": {
+                "type": "boolean",
+                "description": "True when this PR names the follow-up anywhere the check reads."
+              }
+            }
+          }
+        }
+      }
+    },
     "ready": {
       "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",
       "type": "boolean"

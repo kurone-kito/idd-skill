@@ -25,9 +25,14 @@ import {
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mts';
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mts';
+import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
+import {
+  extractReviewFixLoopCutoffRefsIssueNumbers,
+  hasReviewFixLoopCutoffDeferMarker,
+} from './discover-readiness-check.mts';
 import {
   type AuthorityEvidence,
   normalizeAuthorityEvidence,
@@ -81,6 +86,7 @@ import {
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
+  GH_SEARCH_RESULT_CAP,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
 import {
@@ -1163,6 +1169,36 @@ export function collectPreMergeReadiness(
     liveDefaultBranch: closingSetLiveDefaultBranch,
     commits: prCommits,
   });
+  // #3624: open follow-ups deferred from this PR's origin issue(s) that the PR
+  // never names. `--claimless` has no origin (even an out-of-loop PR that
+  // carries closing references), so it performs no enumeration read.
+  const deferFollowUps = computeDeferFollowUps({
+    port,
+    owner,
+    repo,
+    markerPrefix: resolveDeferMarkerPrefix(iddConfig),
+    authoringLabelName: resolveAuthoringGuardPolicy(iddConfig).labelName,
+    originIssueNumbers: args.claimless
+      ? []
+      : [
+          ...new Set([
+            args.claimIssueNumber as number,
+            ...extractSameRepoClosingIssueNumbers(
+              closingRefsAtEntry,
+              owner,
+              repo,
+            ),
+          ]),
+        ],
+    mentionTexts: [
+      snapshot.body ?? '',
+      ...comments.map((comment) => String(comment.body ?? '')),
+      ...reviews.map((review) => String(review.body ?? '')),
+      ...threads.flatMap((thread) =>
+        thread.comments.map((comment) => comment.body),
+      ),
+    ],
+  });
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors(iddConfig);
   const externalCheckWaiverMaxValidity =
@@ -1583,6 +1619,7 @@ export function collectPreMergeReadiness(
       primaryBotLogin,
       developmentBranchTarget,
       closingSet: closingSetEvidence,
+      deferFollowUps,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
@@ -1636,6 +1673,194 @@ export function collectPreMergeReadiness(
     trustedMarkerActors: configuredTrustedActors,
     trustedMarkerActorsSource,
   } as PreMergeReadinessReport;
+}
+
+/** One open follow-up deferred from an origin issue (#3624). */
+export interface DeferFollowUpItem {
+  number: number;
+  heldByAuthoringLabel: boolean;
+  origin: number;
+  reconciled: boolean;
+}
+
+/** Evidence behind the `deferred-followup-unreconciled` and
+ * `deferred-followup-unverified` merge gates (#3624). `checked: false` means
+ * the follow-up set could not be enumerated completely, and reads as unknown,
+ * never as zero follow-ups. */
+export interface DeferFollowUpsEvidence {
+  checked: boolean;
+  unverifiedReason: string | null;
+  items: DeferFollowUpItem[];
+}
+
+const DEFAULT_DEFER_MARKER_PREFIX = 'idd-skill';
+
+/** The marker prefix from the trusted config, defaulting like every other
+ * marker reader; never a hard-coded `idd-skill` in an adopter (#3624). */
+export function resolveDeferMarkerPrefix(iddConfig: unknown): string {
+  const configured = (iddConfig as { markerPrefix?: unknown } | null)
+    ?.markerPrefix;
+  const normalized = typeof configured === 'string' ? configured.trim() : '';
+  return normalized || DEFAULT_DEFER_MARKER_PREFIX;
+}
+
+function escapeForRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * True when `text` names issue `issueNumber` of `owner/repo` as `#N`,
+ * `<owner>/<repo>#N` for this repository, or a full issue URL for it (#3624).
+ * Code regions are deliberately not masked: this repository writes issue
+ * references in code spans, and this only proves the PR names the follow-up.
+ * A bare `#N` must not be preceded by a word character, `/`, `.` or `-` and
+ * must not be followed by a digit, so `#36150` and `other/repo#3615` never
+ * match `#3615`. The host is not pinned (the adapter is GHES-aware); a
+ * trailing `#issuecomment-...` is tolerated because nothing follows the digits
+ * except a non-digit.
+ */
+export function mentionsIssue(
+  text: string,
+  issueNumber: number,
+  owner: string,
+  repo: string,
+): boolean {
+  const slug = `${escapeForRegex(owner)}/${escapeForRegex(repo)}`;
+  const patterns = [
+    new RegExp(String.raw`(?<![\w/.-])#${issueNumber}(?!\d)`),
+    new RegExp(String.raw`(?<![\w/.-])${slug}#${issueNumber}(?!\d)`, 'i'),
+    new RegExp(
+      String.raw`https?://[^\s/]+/${slug}/issues/${issueNumber}(?!\d)`,
+      'i',
+    ),
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function labelNames(labels: unknown): string[] {
+  if (!Array.isArray(labels)) {
+    return [];
+  }
+  return labels
+    .map((label) =>
+      typeof label === 'string'
+        ? label
+        : String((label as { name?: unknown } | null)?.name ?? ''),
+    )
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Enumerate open follow-ups deferred from this PR's origin issue(s) and mark
+ * which the PR names (#3624). Read-only. No origin issue means a verified
+ * empty result with no search. Otherwise exactly one strict
+ * `searchOpenWorkItems` call: a throw, a non-array result, or a result at or
+ * over `GH_SEARCH_RESULT_CAP` (possibly truncated) is `checked: false`, never
+ * an empty successful result. Each hit is re-confirmed locally: open, carrying
+ * the defer-source marker outside any code region, and whose sole unambiguous
+ * `Refs` line names one of the origin issues. A marked issue with no or an
+ * ambiguous `Refs` line is not attributed to any PR and never counts.
+ */
+export function computeDeferFollowUps({
+  port,
+  owner,
+  repo,
+  markerPrefix,
+  authoringLabelName,
+  originIssueNumbers,
+  mentionTexts,
+}: {
+  port: ProviderPort;
+  owner: string;
+  repo: string;
+  markerPrefix: string;
+  authoringLabelName: string;
+  originIssueNumbers: number[];
+  mentionTexts: string[];
+}): DeferFollowUpsEvidence {
+  const origins = new Set(
+    originIssueNumbers.filter(
+      (number) => Number.isInteger(number) && number > 0,
+    ),
+  );
+  if (origins.size === 0) {
+    return { checked: true, unverifiedReason: null, items: [] };
+  }
+  let hits: unknown;
+  try {
+    hits = port.searchOpenWorkItems({
+      matchBody: `${markerPrefix}-authoring-defer-source`,
+      fields: ['number', 'body', 'labels', 'state'],
+      limit: GH_SEARCH_RESULT_CAP,
+      strict: true,
+    });
+  } catch (error) {
+    const message = String((error as Error)?.message ?? error)
+      .split('\n')[0]
+      .slice(0, 200);
+    return {
+      checked: false,
+      unverifiedReason: `the follow-up search failed: ${message}`,
+      items: [],
+    };
+  }
+  if (!Array.isArray(hits)) {
+    return {
+      checked: false,
+      unverifiedReason: 'the follow-up search returned a non-array result',
+      items: [],
+    };
+  }
+  if (hits.length >= GH_SEARCH_RESULT_CAP) {
+    return {
+      checked: false,
+      unverifiedReason: `the follow-up search returned ${hits.length} results, at or over the ${GH_SEARCH_RESULT_CAP}-result cap, so it may be truncated`,
+      items: [],
+    };
+  }
+  const authoringLabel = authoringLabelName.trim().toLowerCase();
+  const byNumber = new Map<number, DeferFollowUpItem>();
+  for (const raw of hits) {
+    const hit = (raw ?? {}) as {
+      number?: unknown;
+      body?: unknown;
+      labels?: unknown;
+      state?: unknown;
+    };
+    const number = Number(hit.number);
+    if (!Number.isInteger(number) || number <= 0 || byNumber.has(number)) {
+      continue;
+    }
+    if (String(hit.state ?? '').toLowerCase() !== 'open') {
+      continue;
+    }
+    const body = typeof hit.body === 'string' ? hit.body : '';
+    if (!hasReviewFixLoopCutoffDeferMarker(body, markerPrefix)) {
+      continue;
+    }
+    const refs = extractReviewFixLoopCutoffRefsIssueNumbers(body);
+    if (refs.ambiguous || refs.numbers.length !== 1) {
+      continue;
+    }
+    const [origin] = refs.numbers;
+    if (!origins.has(origin)) {
+      continue;
+    }
+    byNumber.set(number, {
+      number,
+      heldByAuthoringLabel: labelNames(hit.labels).includes(authoringLabel),
+      origin,
+      reconciled: mentionTexts.some((text) =>
+        mentionsIssue(text, number, owner, repo),
+      ),
+    });
+  }
+  return {
+    checked: true,
+    unverifiedReason: null,
+    items: [...byNumber.values()].sort((a, b) => a.number - b.number),
+  };
 }
 
 // #2707: a caller that repeats this invocation until F2 is ready (directly,

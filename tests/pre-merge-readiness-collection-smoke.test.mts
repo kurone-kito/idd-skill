@@ -267,6 +267,12 @@ function buildStubGhScript(
     commits?: unknown[];
     failOnClaimComments?: boolean;
     configJson?: string;
+    // #3624: the PR body the readiness snapshot returns, and what `gh search
+    // issues` answers for the deferred-follow-up check: an array of hits (the
+    // default `[]` keeps every earlier scenario clean), a non-zero exit, or a
+    // JSON object printed with exit 0.
+    prBody?: string;
+    searchIssues?: unknown[] | 'rate-limit' | 'non-array';
   } = {},
 ): string {
   const prView = {
@@ -288,7 +294,9 @@ function buildStubGhScript(
     ],
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
+    body: options.prBody ?? '',
   };
+  const searchIssues = options.searchIssues ?? [];
   const reviews = [
     {
       state: 'APPROVED',
@@ -395,6 +403,15 @@ const a = (i) => args[i];
 function out(text) { process.stdout.write(text); process.exit(0); }
 function notFound() { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }
 
+if (a(0) === 'search' && a(1) === 'issues') {
+  ${
+    searchIssues === 'rate-limit'
+      ? "process.stderr.write('gh: HTTP 403: API rate limit exceeded\\n'); process.exit(1);"
+      : searchIssues === 'non-array'
+        ? `out(${JSON.stringify(JSON.stringify({ message: 'API rate limit exceeded' }))});`
+        : `out(${JSON.stringify(JSON.stringify(searchIssues))});`
+  }
+}
 if (a(0) === 'api' && a(1) === 'user') out(${JSON.stringify('viewer-user')});
 if (a(0) === 'api' && a(1) === 'app') out('');
 if (a(0) === 'pr' && a(1) === 'view' && a(2) === '${String(PR_NUMBER)}') out(${JSON.stringify(JSON.stringify(prView))});
@@ -469,6 +486,8 @@ function runPreMergeReadinessSmoke(
   options: {
     configJson?: string;
     closingIssuesReferences?: unknown[];
+    prBody?: string;
+    searchIssues?: unknown[] | 'rate-limit' | 'non-array';
   } = {},
 ): Record<string, unknown> {
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-pre-merge-readiness-cwd-'));
@@ -482,6 +501,8 @@ function runPreMergeReadinessSmoke(
     buildStubGhScript(threadResolved, {
       configJson: options.configJson,
       closingIssuesReferences: options.closingIssuesReferences,
+      prBody: options.prBody,
+      searchIssues: options.searchIssues,
     }),
   );
   try {
@@ -598,6 +619,124 @@ test('pre-merge-readiness.mjs CLI: clean scenario collects and normalizes raw gh
     precondition.headCommittedAt,
     REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE,
   );
+
+  // #3624: the real adapter's strict `gh search issues` call is answered by
+  // the stub's `[]`, so the deferred-follow-up check ran and verified an
+  // empty result. Without a `search issues` route this whole file would read
+  // `deferred-followup-unverified` on every `--claim-issue` run.
+  assert.deepEqual(report.deferFollowUps, {
+    checked: true,
+    unverifiedReason: null,
+    items: [],
+  });
+  assert.equal(
+    deferGateNames(report).filter((gate) => gate.startsWith('deferred-'))
+      .length,
+    0,
+  );
+});
+
+// #3624: the deferred-follow-up check goes through the real gh adapter here
+// (the stub's `search issues` route), so these cases cover what the fake
+// provider cannot: the exact `--json number,body,labels,state` payload shape
+// (lowercase `state`, `labels: [{name}]`), and a non-zero exit or a non-array
+// body from `gh` reading as unverified rather than as zero hits.
+const DEFER_SMOKE_MARKER =
+  '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->';
+
+function deferSmokeHit(number: number) {
+  return {
+    number,
+    state: 'open',
+    labels: [{ name: 'status:authoring' }],
+    body: [
+      DEFER_SMOKE_MARKER,
+      '',
+      `Refs #${CLAIM_ISSUE}`,
+      '',
+      '## Background',
+    ].join('\n'),
+  };
+}
+
+function deferGateNames(report: Record<string, unknown>): string[] {
+  return (report.blockers as { gate: string }[]).map((blocker) => blocker.gate);
+}
+
+test('pre-merge-readiness.mjs CLI: an open marked follow-up the PR never names blocks with deferred-followup-unreconciled through the real gh adapter (#3624)', () => {
+  const report = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+    searchIssues: [deferSmokeHit(12)],
+  });
+  assert.deepEqual(report.deferFollowUps, {
+    checked: true,
+    unverifiedReason: null,
+    items: [
+      {
+        number: 12,
+        heldByAuthoringLabel: true,
+        origin: CLAIM_ISSUE,
+        reconciled: false,
+      },
+    ],
+  });
+  assert.ok(deferGateNames(report).includes('deferred-followup-unreconciled'));
+  assert.ok(!deferGateNames(report).includes('deferred-followup-unverified'));
+  assert.equal(report.ready, false);
+});
+
+test('pre-merge-readiness.mjs CLI: naming the follow-up in the PR body reconciles it through the real gh adapter (#3624)', () => {
+  const report = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+    searchIssues: [deferSmokeHit(12)],
+    prBody: `Closes #${CLAIM_ISSUE}\n\nDeferred a review finding to #12.`,
+  });
+  const evidence = report.deferFollowUps as {
+    checked: boolean;
+    items: { number: number; reconciled: boolean }[];
+  };
+  assert.equal(evidence.checked, true);
+  assert.deepEqual(
+    evidence.items.map((item) => [item.number, item.reconciled]),
+    [[12, true]],
+  );
+  assert.ok(
+    !deferGateNames(report).some((gate) =>
+      gate.startsWith('deferred-followup-'),
+    ),
+    deferGateNames(report).join(),
+  );
+});
+
+test('pre-merge-readiness.mjs CLI: a failing follow-up search reads as deferred-followup-unverified, never as zero hits (#3624)', () => {
+  const report = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+    searchIssues: 'rate-limit',
+  });
+  const evidence = report.deferFollowUps as {
+    checked: boolean;
+    unverifiedReason: string;
+    items: unknown[];
+  };
+  assert.equal(evidence.checked, false);
+  assert.match(evidence.unverifiedReason, /follow-up search failed/);
+  assert.deepEqual(evidence.items, []);
+  assert.ok(deferGateNames(report).includes('deferred-followup-unverified'));
+  assert.equal(report.ready, false);
+});
+
+test('pre-merge-readiness.mjs CLI: a non-array follow-up search body reads as deferred-followup-unverified (#3624)', () => {
+  const report = runPreMergeReadinessSmoke(true, {
+    closingIssuesReferences: [{ number: CLAIM_ISSUE }],
+    searchIssues: 'non-array',
+  });
+  const evidence = report.deferFollowUps as {
+    checked: boolean;
+    unverifiedReason: string;
+  };
+  assert.equal(evidence.checked, false);
+  assert.match(evidence.unverifiedReason, /follow-up search failed/);
+  assert.ok(deferGateNames(report).includes('deferred-followup-unverified'));
 });
 
 // #2319's isolation acceptance criterion: the read-only provider-health
