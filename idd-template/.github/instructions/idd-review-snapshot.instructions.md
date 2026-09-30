@@ -109,9 +109,11 @@ Persist all six values by posting a PR comment with this format (when
 helper runtime is enabled, prefer the **one-command** profile-selected
 post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---apply --operation-local` — one capture derives the fields;
-CI-incomplete defers only the post; forward
-`--trusted-marker-logins` too). **Always pass `--expected-head-sha`
+--apply --operation-local` — one capture derives the fields; forward
+`--trusted-marker-logins`, plus, when the latest same-claim watermark
+is for this `{head-SHA}`, its fields as `--prior-head-sha`,
+`--prior-total-item-count`, `--prior-max-activity-at`). **Always pass
+`--expected-head-sha`
 with the exact `{head-SHA}` from Step 1** — the helper fails closed
 (posts nothing) if it disagrees with the fresh snapshot's live HEAD,
 rather than silently keying the watermark to a moved HEAD; on that
@@ -154,10 +156,8 @@ no-code-fence note.
 
 Use server-reported timestamps, not the local wall clock.
 
-Note: the post-idd-marker helper above performs this JSON `POST`
-under `--apply`, sidestepping the `gh issue comment`/`gh api -f body=`
-HTML-body and leading-`@` pitfalls `idd-overview-core.instructions.md`'s
-Claim format note already covers.
+Note: `--apply` POSTs as JSON, avoiding the HTML-body and leading-`@`
+pitfalls in Claim format (`idd-overview-core.instructions.md`).
 
 On resume or restart, read the latest same-claim, trusted-author
 `<!-- review-watermark: {agent-id} {claim-id} … -->` comment to
