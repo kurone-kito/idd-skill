@@ -451,6 +451,63 @@
           "minimum": 0
         }
       }
+    },
+    "cache": {
+      "type": "object",
+      "description": "Additive hint-cache provenance (kurone-kito/idd-skill#3588). Present only when the cache feature is active or a cache flag was passed; absent otherwise so the default output stays byte-stable. A hint only ranks candidates: the selected candidate's live A3-A5 gates and the claim post never read from it.",
+      "required": [
+        "mode",
+        "source",
+        "ageMs",
+        "maxAgeMs",
+        "complete",
+        "enumerations",
+        "exhaustionRefresh"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "How the run related to the cache: hint (normal read-through), refresh (--refresh-cache), off (--no-cache), or bypass (feature off or caller unidentified while a cache flag was passed).",
+          "enum": [
+            "hint",
+            "refresh",
+            "off",
+            "bypass"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "Whether this report came from a stored hint or was computed live in this run.",
+          "enum": [
+            "hint",
+            "live"
+          ]
+        },
+        "ageMs": {
+          "type": "integer",
+          "description": "Age of the served hint in milliseconds; 0 for a live computation.",
+          "minimum": 0
+        },
+        "maxAgeMs": {
+          "type": "integer",
+          "description": "Configured hint freshness window in milliseconds; 0 when no window applies.",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "False when a completeness signal fired (a capped root search or a skipped root); such a report is never stored and never proves exhaustion."
+        },
+        "enumerations": {
+          "type": "integer",
+          "description": "Full discovery enumerations this run performed; 0 for a warm hint.",
+          "minimum": 0
+        },
+        "exhaustionRefresh": {
+          "type": "boolean",
+          "description": "True when a cached report with no startable candidate triggered the single complete refresh before exhaustion was believed."
+        }
+      }
     }
   }
 }

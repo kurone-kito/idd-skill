@@ -630,17 +630,20 @@ interface IncludedGhApiEnvelope extends GhApiJsonWithHeadersResult {
   status: number;
 }
 
-function parseIncludedGhApiEnvelope(raw: string): IncludedGhApiEnvelope {
-  const sections = raw.split(/\r?\n\r?\n/);
-  const body = sections.pop()?.trim() ?? '';
-  const headerBlock = sections.pop() ?? '';
+/** The status line and headers of a `--include` header block, without its body. */
+interface IncludedEnvelopeHead {
+  status: number;
+  headers: Record<string, string>;
+}
+
+function parseIncludedHeadBlock(
+  headerBlock: string,
+): IncludedEnvelopeHead | null {
   const headerLines = headerBlock.split(/\r?\n/);
   const statusMatch = /^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/.exec(
     headerLines[0] ?? '',
   );
-  if (!statusMatch) {
-    throw new Error('gh api --include returned no HTTP response headers');
-  }
+  if (!statusMatch) return null;
   const headers: Record<string, string> = {};
   for (const line of headerLines.slice(1)) {
     const separator = line.indexOf(':');
@@ -649,11 +652,92 @@ function parseIncludedGhApiEnvelope(raw: string): IncludedGhApiEnvelope {
       .slice(separator + 1)
       .trim();
   }
+  return { status: Number.parseInt(statusMatch[1] ?? '', 10), headers };
+}
+
+/**
+ * Read only the status and headers of a `--include` response, never its body,
+ * so an observation can still record them when the body fails to parse (#3616).
+ * `gh api --include` prints one status line and header block, then a blank
+ * line, then the body, so the head is the text before the FIRST blank line and
+ * must start with the status line. The body is never searched: an unparsable
+ * body may itself contain blank lines and header-shaped text, and none of it
+ * may enter a record. Null when the output carries no usable header block.
+ */
+function readIncludedEnvelopeHead(raw: string): IncludedEnvelopeHead | null {
+  // Not trimmed: `gh` starts its output with the status line, so an output
+  // that begins with blank lines has no head, and trimming them would let a
+  // header-shaped body that follows pass for one.
+  const blankLine = raw.search(/\r?\n\r?\n/);
+  if (blankLine < 0) return null;
+  return parseIncludedHeadBlock(raw.slice(0, blankLine));
+}
+
+function parseIncludedGhApiEnvelope(raw: string): IncludedGhApiEnvelope {
+  const sections = raw.split(/\r?\n\r?\n/);
+  const body = sections.pop()?.trim() ?? '';
+  const head = parseIncludedHeadBlock(sections.pop() ?? '');
+  if (!head) {
+    throw new Error('gh api --include returned no HTTP response headers');
+  }
   return {
-    status: Number.parseInt(statusMatch[1] ?? '', 10),
+    status: head.status,
     data: JSON.parse(body || '{}'),
-    headers,
+    headers: head.headers,
   };
+}
+
+/**
+ * Record what a request that exited cleanly but returned an unparsable body
+ * still tells us (#3616): the request consumed quota, and the status and
+ * allowlisted headers are known whenever the envelope itself parses, an
+ * explicit unknown otherwise. Nothing from the body enters the record, so the
+ * caller rethrows its original parse error unchanged.
+ */
+function recordResponseParseFailure(
+  raw: string | null,
+  extra: {
+    paginated?: boolean;
+    graphql?: boolean;
+    httpObserved?: boolean;
+  } = {},
+): void {
+  recordTransportObservation(() => {
+    const head = raw === null ? null : readIncludedEnvelopeHead(raw);
+    return observeGhSuccess({
+      status: head?.status ?? null,
+      headers: head?.headers,
+      ...extra,
+    });
+  });
+}
+
+/**
+ * Mark a body-parse error of a paginated read that exited cleanly, so the
+ * caller can tell it from a temp-directory or size-limit error and record it
+ * as an observation (#3616).
+ */
+function tagResponseParseFailure<T>(error: T): T {
+  if (
+    error &&
+    typeof error === 'object' &&
+    !Object.hasOwn(error, 'ghResponseParseFailure')
+  ) {
+    Object.defineProperty(error, 'ghResponseParseFailure', {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return error;
+}
+
+function isResponseParseFailure(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    Object.hasOwn(error, 'ghResponseParseFailure')
+  );
 }
 
 function parseIncludedGhApiResponse(raw: string): GhApiJsonWithHeadersResult {
@@ -700,7 +784,13 @@ export function ghApiJsonWithHeaders(
     recordTransportObservation(() => observeGhFailure(error));
     throw tagGhCommandError(error);
   }
-  const parsed = parseIncludedGhApiEnvelope(raw);
+  let parsed: IncludedGhApiEnvelope;
+  try {
+    parsed = parseIncludedGhApiEnvelope(raw);
+  } catch (error) {
+    recordResponseParseFailure(raw);
+    throw error;
+  }
   recordTransportObservation(() =>
     observeGhSuccess({
       status: parsed.status,
@@ -774,7 +864,7 @@ export function resolveGhApiHostname(
  * to keep the emitted argv unchanged, this names every host so a caller
  * that needs the host itself (the read cache) can use it.
  */
-function serverUrlHost(env: NodeJS.ProcessEnv): string | undefined {
+export function serverUrlHost(env: NodeJS.ProcessEnv): string | undefined {
   const serverUrl = env.GITHUB_SERVER_URL?.trim();
   if (!serverUrl) return undefined;
   const host = serverUrl
@@ -1814,7 +1904,13 @@ function readPaginatedGhApi(
       if (status !== 0) {
         throw ghCommandFailure(status, stderr, readPaginatedErrorBody(outPath));
       }
-      throw error;
+      // Only a JSON syntax error is a response that did not parse; a file
+      // read error while reading the capture back is not. The tag is only
+      // read by the telemetry recording, so an error thrown with telemetry
+      // off stays exactly what it was.
+      throw telemetryIsEnabled() && error instanceof SyntaxError
+        ? tagResponseParseFailure(error)
+        : error;
     }
     // A missing status with no signal is a clean exit. A signal was
     // already rejected above, so it cannot take this `?? 0` path.
@@ -1959,7 +2055,7 @@ function usesGithubToken(host: string): boolean {
   );
 }
 
-function defaultCredentialMaterial(host: string): string | undefined {
+export function defaultCredentialMaterial(host: string): string | undefined {
   const token = usesGithubToken(host)
     ? process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim()
     : process.env.GH_ENTERPRISE_TOKEN?.trim() ||
@@ -1985,7 +2081,7 @@ function readCacheLeaseTtlMs(
   return bounded + 30_000;
 }
 
-function loadReadCachePolicy(
+export function loadReadCachePolicy(
   injected: GithubApiReadCacheRuntimePolicy | undefined,
 ): GithubApiReadCacheRuntimePolicy {
   if (injected) {
@@ -2310,13 +2406,17 @@ function executeGhApiJson(
         allowStatuses,
       });
     } catch (error) {
-      // Only a failure of the gh run is a request outcome, as on the
-      // execFileSync path: a body that fails to parse after a clean exit,
-      // or a temp-dir error, carries no gh tag and is not recorded.
+      // A failure of the gh run is recorded as a failure. A body that fails
+      // to parse after a clean exit still consumed a request, so it is
+      // recorded as an observation with no status (#3616), never as a
+      // failed gh run. A temp-dir or size-limit error carries neither tag
+      // and is not recorded.
       if (isTaggedGhCommandError(error)) {
         recordTransportObservation(() =>
           observeGhFailure(failureEvidence(error, true), { paginated: true }),
         );
+      } else if (isResponseParseFailure(error)) {
+        recordResponseParseFailure(null, { paginated: true });
       }
       throw error;
     }
@@ -2407,7 +2507,13 @@ function executeGhApiJson(
       );
       return { data: included.data, toleratedFailure };
     }
-    const data = parseObservedGhBody(raw);
+    let data: unknown;
+    try {
+      data = parseObservedGhBody(raw);
+    } catch (error) {
+      recordResponseParseFailure(raw);
+      throw error;
+    }
     recordTransportObservation(() => observeGhSuccess({ data }));
     return { data, toleratedFailure };
   }
@@ -2466,7 +2572,13 @@ export function ghGraphql(
     );
     throw error;
   }
-  const data = JSON.parse(raw.trim() || '{}');
+  let data: unknown;
+  try {
+    data = JSON.parse(raw.trim() || '{}');
+  } catch (error) {
+    recordResponseParseFailure(null, { httpObserved: false, graphql: true });
+    throw error;
+  }
   recordTransportObservation(() =>
     observeGhSuccess({ data, httpObserved: false, graphql: true }),
   );

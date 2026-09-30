@@ -580,8 +580,12 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    the upsert reports `create`, `update`, or `noop`; on `duplicate` or
    any other failure, keep the claim, re-validate, then post a hold
    comment with the helper output, and stop for repair. Re-validate
-   again; if it still
-   uses your `{claim-id}`, post `unclaimed-by` for your own
+   again; if it still uses your `{claim-id}`, for each issue in step
+   1's closing set (none: skip), read
+   `gh issue view {issue-number} --json state` once; if open,
+   re-validate, then close it as step 1 does (a racing close counts); if
+   either fails, hold as above with its error (no `unclaimed-by`, no
+   retry). Then post `unclaimed-by` for your own
    `{agent-id}` / `{claim-id}` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
    to release the claim now that cleanup is complete (`#2220`). If

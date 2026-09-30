@@ -549,8 +549,10 @@ the configured command in a timeout utility. The ceiling does not read
 ignored. Use the same caller-side bound for the native reviewer, so a
 hung native pass is not an unbounded substitute. The configured command
 is trusted executable configuration and may transmit the supplied draft
-and evidence packet. The normative checklist and disposition rule live in
-the
+and evidence packet. The caller sends the draft to the command on stdin as
+one JSON object (`title`, `body`, and a bounded `packet`), described by the
+[issue-authoring review input schema][issue-authoring-review-input-schema].
+The normative checklist and disposition rule live in the
 [issue-authoring skill contract](https://github.com/kurone-kito/idd-skill/blob/main/docs/issue-authoring-skill.md#completed-draft-adversarial-review).
 
 ### User-global issue-authoring delegate default
@@ -1121,8 +1123,11 @@ widening it to a broader mode this session never selected.
   enumeration failure, unchanged from today's A2 rule; a helper that
   actually errors or exits non-zero is already an A2 enumeration
   failure on the first occurrence.
-- **No caching layer or change-detection pre-check**: this section
-  documents a cadence, not a cache.
+- **Optional hint cache**: this section decides _when_ to re-run.
+  With `githubApi.readCache.enabled`, a re-run inside `maxAge` is served
+  from a hint instead (see the helper-script
+  [Discover hint cache](idd-helper-scripts.md#discover-hint-cache)),
+  which changes only what a re-run costs, never when one is owed.
 
 ## Live Status Digests
 
@@ -1783,3 +1788,5 @@ function is not evidence for any of them. The gap class was observed on
 [kurone-kito/idd-skill#2330](https://github.com/kurone-kito/idd-skill/pull/2330),
 where a correct extraction still took seven advisory rounds, five of
 them this one shape.
+
+[issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json

@@ -139,12 +139,19 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
   process.env.PATH = originalPath
     ? `${tempRoot}${delimiter}${originalPath}`
     : tempRoot;
+  // A stubbed `gh` stands in for the real one, so a real token in the
+  // environment must not steer a helper under test into treating it as an
+  // identified caller: with the repository config enabling the Discover hint
+  // cache (#3588), that would store a hint keyed only by the stub's canned
+  // answers and let a later test read it back.
+  const scrubbedTokens = name === 'gh' ? scrubGitHubTokenEnv() : null;
   const restorePath = () => {
     if (originalPath === undefined) {
       delete process.env.PATH;
     } else {
       process.env.PATH = originalPath;
     }
+    scrubbedTokens?.();
   };
   if (process.platform !== 'win32') {
     return () => {
@@ -180,6 +187,27 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
       maxRetries: 5,
       retryDelay: 100,
     });
+  };
+}
+
+const GITHUB_TOKEN_ENV_NAMES = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+] as const;
+
+/** Remove GitHub token variables from `process.env`; the result restores them. */
+function scrubGitHubTokenEnv(): () => void {
+  const saved = GITHUB_TOKEN_ENV_NAMES.map(
+    (key) => [key, process.env[key]] as const,
+  );
+  for (const key of GITHUB_TOKEN_ENV_NAMES) delete process.env[key];
+  return () => {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   };
 }
 
