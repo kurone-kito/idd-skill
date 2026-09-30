@@ -326,7 +326,8 @@ test('invalidation forgets discover hints only, not other cache entries', async 
 
 test('invalidation is a silent no-op when the feature is off or unidentified', () => {
   const off = fixture();
-  const noIdentity = fixture({ credential: () => undefined });
+  // No origin and no host signal: the repository cannot be named.
+  const noIdentity = fixture({ originUrl: () => undefined });
   try {
     assert.equal(
       invalidateDiscoverHints(
@@ -899,6 +900,56 @@ test('an explicit pair with no origin and no host signal falls back to github.co
       request(fx, compute, { owner: 'x', repo: 'y', deps: unauthenticated }),
     );
     assert.equal('cache' in bypassed, false);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('an invalidation never looks up a credential', async () => {
+  const fx = fixture();
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  let lookups = 0;
+  try {
+    await readDiscoverHint(request(fx, compute));
+    const deps: DiscoverHintDeps = {
+      ...fx.deps,
+      credential: () => {
+        lookups += 1;
+        throw new Error('the mutation path must not spend a credential lookup');
+      },
+    };
+    assert.equal(invalidateDiscoverHints({}, deps), true);
+    assert.equal(lookups, 0);
+    const dropped = await readDiscoverHint(request(fx, compute));
+    assert.equal(dropped.cache?.source, 'live');
+    assert.equal(calls(), 2);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('an invalidation may name several identities and drops each one', async () => {
+  const fx = fixture();
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    // A hint under the origin identity and one under an explicit pair.
+    await readDiscoverHint(request(fx, compute));
+    await readDiscoverHint(request(fx, compute, { owner: 'x', repo: 'y' }));
+    assert.equal(calls(), 2);
+    assert.equal(
+      invalidateDiscoverHints(
+        [{ owner: 'x', repo: 'y' }, {}, { owner: 'X', repo: 'Y' }],
+        fx.deps,
+      ),
+      true,
+    );
+    const origin = await readDiscoverHint(request(fx, compute));
+    const explicit = await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y' }),
+    );
+    assert.equal(origin.cache?.source, 'live');
+    assert.equal(explicit.cache?.source, 'live');
+    assert.equal(calls(), 4);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

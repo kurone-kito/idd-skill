@@ -579,20 +579,22 @@ test('runHandoff closes the prompt even when a later step throws before its own 
 test('runHandoff drops the Discover hints after every successful post, injected poster or not', async () => {
   const responses = ['497', '', 'y'];
   let callIndex = 0;
-  const identities: { owner?: string; repo?: string }[] = [];
+  const calls: { owner?: string; repo?: string }[][] = [];
   const result = await runHandoff(
     makeCommonOpts({
       prompt: async () => responses[callIndex++],
-      invalidateHints: (identity) => {
-        identities.push(identity);
+      invalidateHints: (identities) => {
+        calls.push([...identities]);
       },
     }),
   );
   assert.equal(result.posted, true);
-  // The explicit `repo` names the identity Discover keyed on.
-  assert.ok(identities.length >= 1);
-  for (const identity of identities) {
-    assert.deepEqual(identity, { owner: 'kurone-kito', repo: 'idd-skill' });
+  assert.ok(calls.length >= 1);
+  // Both the resolved pair and the explicit `repo` identity are named.
+  for (const identities of calls) {
+    for (const identity of identities) {
+      assert.deepEqual(identity, { owner: 'kurone-kito', repo: 'idd-skill' });
+    }
   }
 });
 

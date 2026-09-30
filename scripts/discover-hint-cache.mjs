@@ -96,7 +96,17 @@ function secretEnv(env) {
     env.GITHUB_ENTERPRISE_TOKEN,
   ].filter((value) => typeof value === 'string');
 }
-function resolveConfig(request, deps, partial) {
+function resolveConfig(
+  request,
+  deps,
+  partial,
+  /**
+   * Whether a credential is needed. A hint read keys on it; the generation
+   * token does not, so an invalidation never spends a (possibly slow) local
+   * credential lookup on a mutation path.
+   */
+  needCredential = true,
+) {
   if (
     partial === 'bypass' &&
     Boolean(request.owner) !== Boolean(request.repo)
@@ -132,16 +142,16 @@ function resolveConfig(request, deps, partial) {
         : ''
   ).toLowerCase();
   if (repository === '') return null;
-  const credentialMaterial = (deps.credential ?? defaultCredentialMaterial)(
-    host,
-  )?.trim();
-  if (!credentialMaterial) return null;
+  const credentialMaterial = needCredential
+    ? ((deps.credential ?? defaultCredentialMaterial)(host)?.trim() ?? '')
+    : '';
+  if (needCredential && credentialMaterial === '') return null;
   return {
     policy,
     host,
     repository,
     credentialMaterial,
-    secrets: [...secretEnv(env), credentialMaterial],
+    secrets: [...secretEnv(env), credentialMaterial].filter(Boolean),
     cwd,
   };
 }
@@ -422,27 +432,38 @@ function meta(
 /**
  * Invalidate every discover hint after an observed local mutation (claim,
  * unclaim, merge, closure). Best effort: it never throws, never blocks the
- * calling helper, and is a no-op when the cache is off or the caller cannot
- * be identified. Writes outside the helper paths are discovered by
- * `--refresh-cache`, the exhaustion refresh, or the hint's max age.
+ * calling helper on a network or credential lookup, and is a no-op when the
+ * cache is off or the repository cannot be named. Pass every identity the
+ * mutation may be keyed under (the pair the helper resolved, and the explicit
+ * arguments or `origin` fallback Discover keyed on); duplicates collapse.
+ * Writes outside the helper paths are discovered by `--refresh-cache`, the
+ * exhaustion refresh, or the hint's max age. Returns whether any generation
+ * token was bumped.
  */
 export function invalidateDiscoverHints(request = {}, deps = {}) {
-  try {
-    const config = resolveConfig(request, deps, 'origin');
-    if (config === null) return false;
-    const token = randomUUID();
-    readThroughGithubApiCache({
-      ...generationInput(config, deps),
-      mode: 'strict-fresh',
-      policy: { ...config.policy, maxAgeMs: config.policy.retentionMs },
-      requestShape: { unit: GENERATION_UNIT },
-      fetch: () => ({ status: 200, body: token }),
-    });
-    // The write is best effort inside the cache, so confirm it landed.
-    return readGeneration(config, deps) === token;
-  } catch {
-    return false;
+  const identities = Array.isArray(request) ? request : [request];
+  const seen = new Set();
+  let bumped = false;
+  for (const identity of identities) {
+    try {
+      const config = resolveConfig(identity, deps, 'origin', false);
+      if (config === null || seen.has(config.repository)) continue;
+      seen.add(config.repository);
+      const token = randomUUID();
+      readThroughGithubApiCache({
+        ...generationInput(config, deps),
+        mode: 'strict-fresh',
+        policy: { ...config.policy, maxAgeMs: config.policy.retentionMs },
+        requestShape: { unit: GENERATION_UNIT },
+        fetch: () => ({ status: 200, body: token }),
+      });
+      // The write is best effort inside the cache, so confirm it landed.
+      if (readGeneration(config, deps) === token) bumped = true;
+    } catch {
+      // Best effort: an invalidation failure must never fail the mutation.
+    }
   }
+  return bumped;
 }
 /**
  * Purge the host-local read cache (the delivered `operation: "purge"`), which

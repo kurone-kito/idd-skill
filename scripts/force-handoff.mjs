@@ -225,7 +225,10 @@ export async function runHandoff(options = {}) {
             `body=${releaseBody}`,
           ]);
       // A released claim changes what a cached Discover hint may list (#3588).
-      invalidateHints(repo ? { owner, repo: name } : {});
+      invalidateHints([
+        { owner, repo: name },
+        repo ? { owner, repo: name } : {},
+      ]);
       const releaseUrl = String(
         releaseResult.html_url ?? releaseResult.url ?? '',
       );
@@ -287,7 +290,7 @@ export async function runHandoff(options = {}) {
         ]);
     // A forced handoff changes claim ownership, so drop cached Discover hints
     // (best effort; #3588).
-    invalidateHints(repo ? { owner, repo: name } : {});
+    invalidateHints([{ owner, repo: name }, repo ? { owner, repo: name } : {}]);
     const commentUrl = String(result.html_url ?? result.url ?? '');
     write(
       [

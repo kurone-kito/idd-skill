@@ -1725,11 +1725,15 @@ speed-up, never a gate.
   touching other cache entries. The token is not secret and is shared by
   every credential on the host and repository, so a mutation made with one
   credential also drops the others' hints; the hints themselves stay
-  credential-isolated. The call
-  is best effort and never blocks the helper, and it keys on an explicit
-  repository argument, else `origin`, like the hint. Writes made outside
-  these helpers, such as a raw `gh` label, body, link, or close change, are
-  discovered by `--refresh-cache`, the exhaustion refresh, or `maxAge`.
+  credential-isolated. Because the token needs no credential, an
+  invalidation never spends a credential lookup on a mutation path. It names
+  every identity the mutation may be keyed under: the repository the helper
+  resolved and the explicit argument (else `origin`) Discover keyed on,
+  which differ for example in a fork whose `gh` default repository is
+  upstream. The call is best effort and never blocks or fails the helper.
+  Writes made outside these helpers, such as a raw `gh` label, body, link,
+  or close change, are discovered by `--refresh-cache`, the exhaustion
+  refresh, or `maxAge`.
 - **Concurrency.** Concurrent hint computations in one worktree on one host
   coalesce onto one enumeration through the same single-flight lease as the
   read cache, and a hint is stale for every reader at the same moment (aged

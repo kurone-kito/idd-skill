@@ -91,7 +91,9 @@ interface RunHandoffOptions {
    * Defaults to the real best-effort invalidation; tests inject a no-op or a
    * spy so they never touch a host cache.
    */
-  invalidateHints?: (identity: { owner?: string; repo?: string }) => void;
+  invalidateHints?: (
+    identities: readonly { owner?: string; repo?: string }[],
+  ) => void;
   /** Sink for the plan-preview / result output; defaults to stdout. Tests
    * inject this to capture and assert on printed output (e.g. the
    * same-successor warning) without touching the real stdout stream. */
@@ -323,7 +325,10 @@ export async function runHandoff(
             `body=${releaseBody}`,
           ]) as PostedCommentPayload);
       // A released claim changes what a cached Discover hint may list (#3588).
-      invalidateHints(repo ? { owner, repo: name } : {});
+      invalidateHints([
+        { owner, repo: name },
+        repo ? { owner, repo: name } : {},
+      ]);
       const releaseUrl = String(
         releaseResult.html_url ?? releaseResult.url ?? '',
       );
@@ -390,7 +395,7 @@ export async function runHandoff(
 
     // A forced handoff changes claim ownership, so drop cached Discover hints
     // (best effort; #3588).
-    invalidateHints(repo ? { owner, repo: name } : {});
+    invalidateHints([{ owner, repo: name }, repo ? { owner, repo: name } : {}]);
     const commentUrl = String(result.html_url ?? result.url ?? '');
     write(
       [
