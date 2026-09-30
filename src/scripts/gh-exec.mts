@@ -911,6 +911,7 @@ function ghApiJsonWithReadCache(
     process.env.GITHUB_ENTERPRISE_TOKEN ?? '',
     credentialMaterial,
   ];
+  let thrown: { error: unknown } | undefined;
   const result = readThroughGithubApiCache({
     classification: 'read',
     mode: request.mode,
@@ -928,13 +929,27 @@ function ghApiJsonWithReadCache(
     },
     derivedInputs: request.derivedInputs ?? null,
     paginated: options.paginate === true,
-    fetch: (conditional) => fetchForReadCache(path, options, conditional),
+    fetch: (conditional) => {
+      thrown = undefined;
+      try {
+        return fetchForReadCache(path, options, conditional);
+      } catch (error) {
+        // A definitive 404/410 reaches the cache so it drops the stored
+        // 200; the original error is rethrown below, so the caller sees
+        // the same failure it would without a cache.
+        const status = deriveGhHttpStatus(error);
+        if (status !== 404 && status !== 410) throw error;
+        thrown = { error };
+        return { status, body: null, incomplete: false };
+      }
+    },
     now: request.now,
     leaseTtlMs: readCacheLeaseTtlMs(options, request),
     workspaceRoot: request.workspaceRoot ?? process.cwd(),
     cwd: process.cwd(),
     defaultDirectory: request.defaultDirectory,
   });
+  if (thrown !== undefined) throw thrown.error;
   return result.body;
 }
 

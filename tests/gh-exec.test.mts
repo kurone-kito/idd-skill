@@ -1868,6 +1868,99 @@ test('ghApiJson readCache reuses one included response for a later hint read (#3
   }
 });
 
+function failsAfterFirstGh(
+  argsFile: string,
+  counterFile: string,
+  stderrLine: string,
+): string {
+  return recordingGh(
+    argsFile,
+    `const counter = ${JSON.stringify(counterFile)};
+const seen = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) : 0;
+fs.writeFileSync(counter, String(seen + 1));
+if (seen === 0) {
+  process.stdout.write('HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}');
+} else {
+  process.stderr.write(${JSON.stringify(`${stderrLine}\n`)});
+  process.exit(1);
+}`,
+  );
+}
+
+test('ghApiJson readCache drops the stored 200 when a strict-fresh read throws a 404 or 410 (#3587)', () => {
+  for (const [status, line] of [
+    [404, 'gh: Not Found (HTTP 404)'],
+    [410, 'gh: Gone (HTTP 410)'],
+  ] as const) {
+    const paths = readCacheFixture();
+    const restore = stubGh(
+      failsAfterFirstGh(paths.argsFile, join(paths.root, 'counter'), line),
+    );
+    try {
+      withGhHostEnv({}, () => {
+        const readCache = {
+          classification: 'read' as const,
+          policy: readCachePolicy(paths.cacheDir),
+          workspaceRoot: paths.workspace,
+          repository: 'o/r',
+          credentialMaterial: 'credential-sentinel',
+          requestShape: { path: 'repos/o/r' },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+        assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+        // The caller still sees the thrown failure it would see uncached.
+        assert.throws(
+          () =>
+            ghApiJson('repos/o/r', {
+              readCache: { ...readCache, mode: 'strict-fresh' },
+            }),
+          new RegExp(`HTTP ${status}`),
+          `${status}`,
+        );
+        assert.deepEqual(cacheEntryNames(paths.cacheDir), [], `${status}`);
+      });
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('ghApiJson readCache keeps the stored 200 when a strict-fresh read throws a 5xx (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    failsAfterFirstGh(
+      paths.argsFile,
+      join(paths.root, 'counter'),
+      'gh: Internal Server Error (HTTP 500)',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const readCache = {
+        classification: 'read' as const,
+        policy: readCachePolicy(paths.cacheDir),
+        workspaceRoot: paths.workspace,
+        repository: 'o/r',
+        credentialMaterial: 'credential-sentinel',
+        requestShape: { path: 'repos/o/r' },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+      assert.throws(
+        () =>
+          ghApiJson('repos/o/r', {
+            readCache: { ...readCache, mode: 'strict-fresh' },
+          }),
+        /HTTP 500/,
+      );
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson readCache stores a paginated aggregate without --include (#3587)', () => {
   const paths = readCacheFixture();
   const restore = stubGh(
