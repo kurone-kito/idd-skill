@@ -492,7 +492,10 @@ keeps telemetry off, so a relative path cannot put the file into the
 working tree. A blank `path` counts as unset and uses the default file.
 Writers take a sibling `<path>.lock` file for the moment of a write, and no
 writer removes another's lock. A writer killed mid-write can leave that
-file behind, and recording then stays off until it is deleted by hand.
+file, and a temporary `.tmp` file, behind. While an orphaned lock exists,
+recording stays off and every wrapped call waits a fraction of a second
+before skipping its record, so delete the lock by hand once the process id
+written in it is gone; deleting a live writer's lock can drop records.
 More than one of GraphQL errors, primary exhaustion, secondary
 throttling, and access denial stays `unknown` rather than guessing a
 subtype. A read or write failure in this retention path does not change

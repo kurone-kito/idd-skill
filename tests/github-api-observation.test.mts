@@ -34,6 +34,7 @@ import {
   resolveGithubApiTelemetryPath,
   setGithubApiTelemetryPolicyForTests,
   summarizeInjectedExchanges,
+  withTelemetryFileLock,
 } from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
@@ -678,13 +679,74 @@ test('a held lock is never taken over, even when it looks old', () => {
     assert.equal(readFileSync(lock, 'utf8'), '4242\n');
     assert.equal(readFileSync(target, 'utf8'), before);
 
-    // Removing the lock by hand restores recording.
+    // A link planted at the lock path is a held lock too, not a file to
+    // write through.
     rmSync(lock);
+    const victim = join(tempRoot, 'victim.txt');
+    writeFileSync(victim, 'keep me\n');
+    let linked = true;
+    try {
+      symlinkSync(victim, lock);
+    } catch {
+      linked = false;
+    }
+    if (linked) {
+      assert.throws(
+        () =>
+          appendRequestObservation(observation, {
+            path: target,
+            maxRecords: 5,
+            lockWaitMs: 60,
+          }),
+        /lock is held/,
+      );
+      assert.equal(readFileSync(victim, 'utf8'), 'keep me\n');
+      assert.equal(readFileSync(target, 'utf8'), before);
+      rmSync(lock);
+    }
+
+    // Removing the lock by hand restores recording.
     appendRequestObservation(observation, { path: target, maxRecords: 5 });
     const lines = readFileSync(target, 'utf8')
       .split('\n')
       .filter((line) => line.trim().length > 0);
     assert.equal(lines.length, 2);
+    assert.equal(existsSync(lock), false);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('a writer removes a lock only while it still holds its own token', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-token-'));
+  const lock = join(tempRoot, 'telemetry.jsonl.lock');
+  try {
+    // The lock names the holder's process id and a random token, and is
+    // removed when the writer is done.
+    let seen = '';
+    withTelemetryFileLock(lock, 60, () => {
+      seen = readFileSync(lock, 'utf8');
+    });
+    assert.match(seen, new RegExp(`^${process.pid}:[0-9a-f]{12}\\n$`));
+    assert.equal(existsSync(lock), false);
+
+    // A lock that was deleted and re-created by someone else while this
+    // writer ran belongs to that writer, so it is left in place.
+    withTelemetryFileLock(lock, 60, () => {
+      rmSync(lock);
+      writeFileSync(lock, 'other-writer\n');
+    });
+    assert.equal(readFileSync(lock, 'utf8'), 'other-writer\n');
+
+    // A failing body still releases the lock it owns.
+    rmSync(lock);
+    assert.throws(
+      () =>
+        withTelemetryFileLock(lock, 60, () => {
+          throw new Error('body failed');
+        }),
+      /body failed/,
+    );
     assert.equal(existsSync(lock), false);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });

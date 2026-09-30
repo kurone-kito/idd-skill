@@ -603,7 +603,11 @@ export function allowlistObservation(
   };
 }
 
-const TELEMETRY_LOCK_WAIT_MS = 2000;
+// Holding the lock covers one small read, temp write, and rename, so a
+// contended writer normally waits a few milliseconds. The wait stays short
+// because a lock left behind by a killed writer makes every wrapped call
+// wait this long before its record is skipped.
+const TELEMETRY_LOCK_WAIT_MS = 250;
 const CLASSIFICATIONS = new Set<RequestClassification>([
   'ok',
   'graphql-errors',
@@ -708,16 +712,20 @@ function sleepMs(milliseconds: number): void {
  * a lock that looks old may belong to a paused writer that would still
  * rename its older snapshot over a newer file, so taking it over could drop
  * records. A crash can therefore leave the lock behind, and recording then
- * stays off until it is deleted by hand (the docs say so). A held lock
- * times out; callers swallow that so a contended write cannot change the
- * gh result.
+ * stays off until it is deleted by hand (the docs say so). The lock holds
+ * the writer's process id and a random token, so an operator can tell an
+ * orphaned lock from a live one, and a writer removes the lock only while
+ * it still holds its own token. A held lock times out; callers swallow that
+ * so a contended write cannot change the gh result.
  */
-function withTelemetryFileLock(
+// audit:ignore-dead-export: reached in production through appendRequestObservation; exported so the lock ownership rules are unit-tested (issue #3585)
+export function withTelemetryFileLock(
   lockPath: string,
   waitMs: number,
   body: () => void,
 ): void {
   const deadline = Date.now() + waitMs;
+  const token = `${process.pid}:${randomBytes(6).toString('hex')}\n`;
   let fd: number | undefined;
   while (fd === undefined) {
     try {
@@ -731,14 +739,27 @@ function withTelemetryFileLock(
       sleepMs(20);
     }
   }
+  let tokenWritten = false;
   try {
+    writeFileSync(fd, token);
+    tokenWritten = true;
     body();
   } finally {
-    closeSync(fd);
     try {
-      unlinkSync(lockPath);
+      closeSync(fd);
     } catch {
-      // Only this writer holds the lock, so a missing file needs no action.
+      // The descriptor is released either way; the lock is still removed.
+    }
+    try {
+      // Without a token this writer just created an empty file, so it is
+      // this writer's to remove; otherwise remove it only while it still
+      // holds this writer's token.
+      if (!tokenWritten || readFileSync(lockPath, 'utf8') === token) {
+        unlinkSync(lockPath);
+      }
+    } catch {
+      // A lock that cannot be read or removed is left for the docs' manual
+      // recovery; nothing more can be done from here.
     }
   }
 }
