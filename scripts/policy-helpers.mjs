@@ -1546,6 +1546,9 @@ export function decideUrgencyDefer(input) {
   if (input.scopeFence) {
     return denyUrgencyDefer('scope-fence');
   }
+  if (input.protectedAuthority) {
+    return denyUrgencyDefer('protected-authority');
+  }
   if (input.awaitingMaintainerDecision) {
     return denyUrgencyDefer('awaiting-maintainer-decision');
   }

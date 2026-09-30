@@ -295,6 +295,7 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
     copilotLabel: null,
     urgency: 'low' as const,
     scopeFence: false,
+    protectedAuthority: false,
     awaitingMaintainerDecision: false,
     acceptedMidFix: false,
     adoptNow: false,
@@ -375,6 +376,34 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
     eligibility: null,
     blockedBy: 'accepted-mid-fix',
   });
+  // A fresh CODEOWNER/required-reviewer item is never deferred, even
+  // before any hold reply exists (awaitingMaintainerDecision is false).
+  for (const mode of ['severity-tiered', 'low', 'low-and-medium'] as const) {
+    for (const e4Severity of ['low', 'medium', 'high'] as const) {
+      assert.deepEqual(
+        decideUrgencyDefer({
+          ...base,
+          mode,
+          e4Severity,
+          urgency: 'very-low',
+          protectedAuthority: true,
+        }),
+        { defer: false, eligibility: null, blockedBy: 'protected-authority' },
+        `${mode}/${e4Severity}`,
+      );
+    }
+  }
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'high',
+      urgency: 'very-low',
+      protectedAuthority: true,
+      awaitingMaintainerDecision: true,
+      acceptedMidFix: true,
+    }),
+    { defer: false, eligibility: null, blockedBy: 'protected-authority' },
+  );
   assert.equal(
     decideUrgencyDefer({
       ...base,

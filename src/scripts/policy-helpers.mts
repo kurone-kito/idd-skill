@@ -2013,6 +2013,7 @@ type UrgencyDeferBlock =
   | 'mode-off'
   | 'path-b'
   | 'scope-fence'
+  | 'protected-authority'
   | 'awaiting-maintainer-decision'
   | 'accepted-mid-fix'
   | 'adopt-now'
@@ -2027,6 +2028,12 @@ interface UrgencyDeferInput {
   copilotLabel: ReviewSeverityTier | null;
   urgency: UrgencyScore | null;
   scopeFence: boolean;
+  /**
+   * The PATH A actor is a CODEOWNER or required reviewer (E6's AMD
+   * exception). Blocks a fresh item before any hold reply is posted.
+   */
+  protectedAuthority: boolean;
+  /** The item already sits in the AMD hold (E5 inconclusive or E6). */
   awaitingMaintainerDecision: boolean;
   acceptedMidFix: boolean;
   adoptNow: boolean;
@@ -2117,6 +2124,9 @@ export function decideUrgencyDefer(
   }
   if (input.scopeFence) {
     return denyUrgencyDefer('scope-fence');
+  }
+  if (input.protectedAuthority) {
+    return denyUrgencyDefer('protected-authority');
   }
   if (input.awaitingMaintainerDecision) {
     return denyUrgencyDefer('awaiting-maintainer-decision');
