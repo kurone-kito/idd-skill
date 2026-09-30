@@ -276,16 +276,16 @@ const INDENTED_CODE_LINE_PATTERN = /^(?: {4}| {0,3}\t)/u;
 const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
 
 /** A stripped line that opens a block other than a plain paragraph line, so
- * the remark paragraph must not read on into it: an ATX heading, a thematic
- * break, a blockquote, a bullet or an ordered item starting at 1 (the only
- * ones CommonMark lets interrupt a paragraph), an HTML block start from
- * `markdown-code.mts`'s CommonMark block-tag list (an inline tag such as
- * `<code>` stays paragraph text), or one of
- * the two bold overview-metadata labels Copilot's v2 overview puts after
- * the remark (`**Review effort:**`, `**Findings:**`).
- * CommonMark would fold the metadata labels into the paragraph as lazy
- * continuation text; every real body separates them with a blank line, and
- * a body that does not must still not report them as the remark. */
+ * the remark paragraph must not read on into it: an ATX heading or setext
+ * underline, a thematic break, a blockquote, a bullet or an ordered item
+ * starting at 1 (the only ones CommonMark lets interrupt a paragraph), an
+ * HTML block start from `markdown-code.mts`'s CommonMark block-tag list (an
+ * inline tag such as `<code>` stays paragraph text), or one of the two bold
+ * overview-metadata labels Copilot's v2 overview puts after the remark
+ * (`**Review effort:**`, `**Findings:**`). CommonMark would fold the metadata
+ * labels into the paragraph as lazy continuation text; every real body
+ * separates them with a blank line, and a body that does not must still not
+ * report them as the remark. */
 const NEW_BLOCK_LINE_PATTERNS: readonly RegExp[] = [
   ATX_HEADING_LINE_PATTERN,
   // A setext underline ends the paragraph it underlines.
@@ -296,6 +296,26 @@ const NEW_BLOCK_LINE_PATTERNS: readonly RegExp[] = [
   MARKDOWN_HTML_BLOCK_START_PATTERN,
   /^ {0,3}\*\*(?:review effort|findings):\*\*/iu,
 ];
+
+/** CommonMark's raw-content HTML blocks (types 1-5): a comment, processing
+ * instruction, declaration, CDATA section, or a `pre`/`script`/`style`/
+ * `textarea` element. They start only at a line start (up to three spaces of
+ * indent), run through the line holding their closer, and an unterminated one
+ * runs to the end of the body, as CommonMark's does. `(?![\s\S])` is the
+ * end of input (with the `m` flag `$` would end at every line). A comment
+ * that is terminated also hides its content mid-line, as inline HTML. Their
+ * content is never rendered as prose, so a label or heading inside one is not
+ * a remark (#3688 review: a multi-line HTML comment hiding a label). */
+const RAW_HTML_BLOCK_PATTERN =
+  /^ {0,3}(?:<!--(?:-?>|[\s\S]*?(?:-->|(?![\s\S])))|<\?[\s\S]*?(?:\?>|(?![\s\S]))|<!\[CDATA\[[\s\S]*?(?:\]\]>|(?![\s\S]))|<![A-Za-z][\s\S]*?(?:>|(?![\s\S]))|<(pre|script|style|textarea)(?=[\s>])[\s\S]*?(?:<\/\1\s*>|(?![\s\S])))[^\r\n]*|<!--[\s\S]*?-->/gim;
+
+/** Blank every raw-content HTML block, keeping line structure and columns
+ * (no `u` flag: a column is a UTF-16 unit, as `String#slice` counts). */
+function maskRawHtmlBlocks(text: string): string {
+  return text.replace(RAW_HTML_BLOCK_PATTERN, (match) =>
+    match.replace(/[^\r\n]/g, ' '),
+  );
+}
 
 /** `true` for a line that ends the running paragraph on its own: a blank
  * line, or a fence line (blanked to exactly `''` in the stripped text while
@@ -389,9 +409,13 @@ export function extractCopilotReviewBodyRemark(
     return null;
   }
   const original = body.split(/\r?\n/);
-  const stripped = stripMarkdownCodeRegions(body).split(/\r?\n/);
-  for (let index = 0; index < stripped.length; index += 1) {
-    const line = stripped[index] ?? '';
+  const strippedText = stripMarkdownCodeRegions(body);
+  const stripped = strippedText.split(/\r?\n/);
+  // Headings and labels are located where raw HTML content is blanked too;
+  // paragraph boundaries still read `stripped`, which keeps block openers.
+  const located = maskRawHtmlBlocks(strippedText).split(/\r?\n/);
+  for (let index = 0; index < located.length; index += 1) {
+    const line = located[index] ?? '';
     let remark: string | null = null;
     if (REMARK_HEADING_PATTERN.test(line)) {
       let first = index + 1;

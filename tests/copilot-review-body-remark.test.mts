@@ -193,6 +193,7 @@ test('the remark paragraph stops at any line that opens another block (#3672)', 
     '<dl>',
     '<figure>',
     '<!-- comment -->',
+
     // The v2 overview metadata that follows a remark; CommonMark would fold
     // these into the paragraph, but they are never the remark.
     '**Review effort:** Lite  ',
@@ -278,6 +279,103 @@ test('a label on an ATX heading line reads only that line (#3672)', () => {
       '### Needs a closer look: Check timeout ###\n\nother',
     ),
     'Check timeout',
+  );
+});
+
+test('a label or heading inside raw HTML content is not a remark (#3672)', () => {
+  // #3688 review: a multi-line HTML comment (or another raw-content block)
+  // renders as nothing or as code, never as prose.
+  for (const body of [
+    '<!--\nNeeds a closer look: hidden\n-->',
+    '<!--\n### Needs a closer look\n\nhidden remark\n-->',
+    '<!-- unterminated\n### Needs a closer look\n\nhidden remark',
+    '<pre>\nNeeds a closer look: shown as code\n</pre>',
+    '<script>\n### Needs a closer look\n\ncode\n</script>',
+    '<style>\nNeeds a closer look: css\n</style>',
+    '<?php\nNeeds a closer look: code ?>',
+    '<![CDATA[\nNeeds a closer look: data\n]]>',
+  ]) {
+    assert.equal(extractCopilotReviewBodyRemark(body), null, body);
+  }
+  // A single-line comment (the v2 marker) and a closed block do not hide a
+  // real remark around them.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '<!-- ccr-overview-v2 -->\n\n### Needs a closer look\n\nThe remark.',
+    ),
+    'The remark.',
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '<!--\nNeeds a closer look: hidden\n-->\n\nNeeds a closer look: real.',
+    ),
+    'real.',
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '<pre>\ncode\n</pre>\n\n### Needs a closer look\n\nThe remark.',
+    ),
+    'The remark.',
+  );
+});
+
+test('raw HTML blocks start at a line start and run through their closing line (#3672)', () => {
+  // `<!-->` and `<!--->` close on their own line.
+  for (const opener of ['<!-->', '<!--->', '<!---->']) {
+    assert.equal(
+      extractCopilotReviewBodyRemark(`${opener}\nNeeds a closer look: real`),
+      'real',
+      opener,
+    );
+  }
+  // The closing line belongs to the block, including text after the closer.
+  assert.equal(
+    extractCopilotReviewBodyRemark('<!--\nx\n-->Needs a closer look: y'),
+    null,
+  );
+  // Mid-line openers are ordinary prose, not blocks, so they hide nothing.
+  for (const prose of [
+    'Overview uses <script> tags.',
+    'Class<?> usage.',
+    'a <!x b',
+    'a <!-- b',
+  ]) {
+    assert.equal(
+      extractCopilotReviewBodyRemark(
+        `${prose}\n\n### Needs a closer look\n\nThe remark.`,
+      ),
+      'The remark.',
+      prose,
+    );
+  }
+  // A terminated comment hides its content even mid-paragraph (inline HTML).
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      'Text <!--\nNeeds a closer look: hidden\n--> end',
+    ),
+    null,
+  );
+  // An astral character before the closer keeps the column arithmetic right.
+  assert.equal(
+    extractCopilotReviewBodyRemark('<?\n\u{1F535}?>Needs a closer look:yes'),
+    null,
+  );
+});
+
+test('a wrapped line that only looks like a table row or definition stays text (#3672)', () => {
+  // Neither a table row without a delimiter row nor a link reference
+  // definition can interrupt a paragraph in CommonMark.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\nSee the note\n[Note]: and this one.\n\nmore',
+    ),
+    'See the note [Note]: and this one.',
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\nUse the pipe\n|| operator here.\n\nmore',
+    ),
+    'Use the pipe || operator here.',
   );
 });
 
