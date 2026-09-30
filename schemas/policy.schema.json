@@ -582,7 +582,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Opt in to local request-lifecycle observations for the shared GitHub transport wrappers. Optional; defaults to false, which leaves argv, parsed results, thrown errors, and exit status unchanged."
+              "description": "Opt in to local request-lifecycle observations for the ghApiJson, ghApiJsonWithHeaders, and ghGraphql wrappers; the generic ghText, ghTextUnbounded, and ghTextAsync runners are not observed. Optional; defaults to false, which leaves argv, parsed results, thrown errors, and exit status unchanged."
             },
             "maxRecords": {
               "type": "integer",
