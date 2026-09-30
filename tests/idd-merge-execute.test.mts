@@ -1636,6 +1636,50 @@ test('a malformed --now returns a one-line usage error instead of throwing, with
   assert.match(result.nowFlagError ?? '', /--now/);
 });
 
+// #3669: the usage synopsis must name every collector flag a caller needs.
+// `--nonce` matters most -- omitting it silently skips the merge-time
+// activation-nonce comparison. (`tests/help-text-flags.test.mts` lists this
+// helper in `EXCLUDED_HELPERS`, so the synopsis is pinned here.)
+test('bin/idd-merge-execute.mjs --help: the synopsis names --nonce, --claimless and --closing-issues (#3669)', () => {
+  const result = spawnHelperBinWithEnvelope('idd-merge-execute.mjs', [
+    '--help',
+  ]);
+  assert.equal(result.status, 0, JSON.stringify(result));
+  const synopsis = result.stdout
+    .split('\n')
+    .filter((line) => line.trimStart().startsWith('node scripts/'));
+  assert.equal(synopsis.length, 2, result.stdout);
+  const [claimBound, claimless] = synopsis;
+  assert.match(claimBound, /\[--nonce <token>\]/);
+  assert.match(claimBound, /\[--closing-issues <n>\[,<n>\.\.\.\]\]/);
+  assert.match(claimless, /--claimless/);
+  assert.doesNotMatch(claimless, /--claim-id/);
+  assert.match(
+    result.stdout,
+    /omitting it, or leaving it empty,\s+silently skips/,
+  );
+});
+
+test('--nonce reaches the collector arguments verbatim (#3669)', () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  const { verdict } = runMergeExecute(
+    [...BASE_ARGS, '--nonce', 'abc123'],
+    capturingDeps,
+  );
+  assert.equal(verdict.ready, true);
+  const at = receivedPassthrough.indexOf('--nonce');
+  assert.ok(at >= 0, JSON.stringify(receivedPassthrough));
+  assert.equal(receivedPassthrough[at + 1], 'abc123');
+});
+
 // #3551 Codex review: with IDD_HELPER_ERROR_ENVELOPE=1, a malformed --now
 // must classify as a usage error (kind "usage"), not a genuine merge-gate
 // failure (kind "gate").
