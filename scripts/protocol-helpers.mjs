@@ -9266,15 +9266,20 @@ export function computePreMergeReadinessBlockers(report) {
   // filing an issue) that this pull request never names. Tested with
   // `!== undefined`, like `closingSet` above, so only a genuinely absent key
   // (an unmigrated caller or unit fixture) skips the gate; a present `null`, a
-  // non-boolean `checked`, or a non-array `items` is malformed evidence and
-  // fails closed to the unverified gate rather than reading as zero
-  // follow-ups.
+  // non-boolean `checked`, a non-array `items`, or a verified section that
+  // does not carry `unverifiedReason: null` (the schema's invariant) is
+  // malformed evidence and fails closed to the unverified gate rather than
+  // reading as zero follow-ups.
   if (report.deferFollowUps !== undefined) {
     const deferFollowUps = preMergeAsRecord(report.deferFollowUps);
     const items = Array.isArray(deferFollowUps.items)
       ? deferFollowUps.items
       : null;
-    if (deferFollowUps.checked !== true || items === null) {
+    if (
+      deferFollowUps.checked !== true ||
+      deferFollowUps.unverifiedReason !== null ||
+      items === null
+    ) {
       const reason =
         typeof deferFollowUps.unverifiedReason === 'string' &&
         deferFollowUps.unverifiedReason
@@ -9298,7 +9303,7 @@ export function computePreMergeReadinessBlockers(report) {
             : '';
         blockers.push({
           gate: 'deferred-followup-unreconciled',
-          detail: `deferred follow-up #${number} (deferred from #${origin}${held}) is not named anywhere on this pull request. If the finding is still deferred, reply on its source review thread with "**Rejected** — deferred to follow-up issue #${number}" and resolve the thread. If it was fixed in this pull request or is no longer needed (or the deferral has no source thread), post a pull request comment naming #${number} and the fix. Either one clears this gate; polling never will. Then return to E1 to refresh the review-watermark, because that new activity keeps review-currency at return-to-e1 until then. Then close the follow-up as not planned through the authoring journal cleanup then abandoned path, but only when this session owns its authoring hold or the hold is older than issueAuthoring.authoringStaleAge; otherwise leave it to the stale-hold path`,
+          detail: `deferred follow-up #${number} (deferred from #${origin}${held}) is not named anywhere on this pull request. Either repair clears this gate; polling never will. (a) If the finding is still deferred, reply on its source review thread with "**Rejected** — deferred to follow-up issue #${number}" and resolve the thread; that needs no authoring ownership, can run at once, and leaves #${number} open. (b) If it was fixed in this pull request or is no longer needed (or the deferral has no source thread), post a pull request comment naming #${number} and the fix, then close #${number} as not planned through the authoring journal cleanup then abandoned path, but only when this session owns its authoring hold or the hold is older than issueAuthoring.authoringStaleAge; otherwise leave it to the stale-hold path. After either repair, return to E1 to refresh the review-watermark, because that new activity keeps review-currency at return-to-e1 until then`,
         });
       }
     }

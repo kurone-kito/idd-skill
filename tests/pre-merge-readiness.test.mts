@@ -15868,6 +15868,8 @@ for (const malformed of [
   { checked: 'yes', items: [] },
   { checked: true, items: 'none' },
   { checked: true, unverifiedReason: null },
+  { checked: true, items: [] },
+  { checked: true, unverifiedReason: undefined, items: [] },
 ]) {
   test(`deferFollowUps blockers: malformed evidence ${JSON.stringify(malformed)} fails closed to unverified, never to zero follow-ups`, () => {
     const blockers = deferBlockers(malformed);
@@ -15900,6 +15902,38 @@ test('buildPreMergeReadinessSummary: an absent deferFollowUps option leaves the 
       .filter((gate) => gate.startsWith('deferred-followup-')),
     ['deferred-followup-unverified'],
   );
+});
+
+test('deferFollowUps blockers: a verified section that still carries an unverifiedReason is inconsistent evidence and fails closed, naming that reason', () => {
+  const blockers = deferBlockers({
+    checked: true,
+    unverifiedReason: 'the follow-up search failed: rate limit',
+    items: [],
+  });
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.gate),
+    ['deferred-followup-unverified'],
+  );
+  assert.match(blockers[0].detail, /rate limit/);
+});
+
+test('deferFollowUps blockers: only repair (b) closes the follow-up; repair (a) keeps it open and needs no authoring ownership', () => {
+  const [blocker] = deferBlockers({
+    checked: true,
+    unverifiedReason: null,
+    items: [
+      { number: 12, heldByAuthoringLabel: true, origin: 7, reconciled: false },
+    ],
+  });
+  const repairA = blocker.detail.indexOf('(a) ');
+  const repairB = blocker.detail.indexOf('(b) ');
+  const close = blocker.detail.indexOf('close #12 as not planned');
+  assert.ok(repairA >= 0 && repairB > repairA, blocker.detail);
+  assert.ok(close > repairB, 'the close step belongs to repair (b) only');
+  const repairAText = blocker.detail.slice(repairA, repairB);
+  assert.match(repairAText, /needs no authoring ownership/);
+  assert.match(repairAText, /leaves #12 open/);
+  assert.doesNotMatch(repairAText, /not planned/);
 });
 
 test('deferFollowUps blockers: a ready report gains exactly one blocker from an unreconciled follow-up and none once it is reconciled', () => {
