@@ -1591,8 +1591,10 @@ and complete the workflow without a Node.js dependency.
 `githubApi.readCache` is an opt-in host-local cache for explicitly
 classified REST reads. The distributed default keeps `enabled` false,
 `maxAge` at `PT5M`, `maxBytes` at 104857600, and `retention` at `PT24H`.
-Leaving the key unset keeps every read live. This repository does not
-enable the cache, and Discover does not use it.
+Leaving the key unset keeps every read live. Discover reaches the cache
+only through the hint layer described in
+[Discover hint cache](#discover-hint-cache); the per-request rules below
+govern `ghApiJson` reads that opt in.
 
 `ghApiJson` consults the cache only when its `readCache` option is set,
 the policy is enabled, and `classification` is `read`. `write`,
@@ -1636,6 +1638,83 @@ neither stored nor logged. Nothing promises that the cache is shared across
 computers. Local policy and permission decisions are not cached. The
 single-flight lease outlives that call's `gh` timeout, and a process
 removes only the lease it acquired.
+
+### Discover hint cache
+
+`discover-roadmap-graph` and `discover-orphan-filter` can serve their whole
+output from a short-lived **hint** built on the read cache above (issue
+`kurone-kito/idd-skill#3588`, which supersedes the cadence-only choice of
+`kurone-kito/idd-skill#2718` for this scope). It is active only when
+`githubApi.readCache.enabled` is `true`. Otherwise behavior is unchanged
+and the output has no `cache` object. Helper-free instructions stay fully
+supported: the hint is an optional speed-up, never a gate.
+
+- **Cached.** The complete report, including any `--with-claim-state` and
+  `--with-readiness` annotations as of hint time, for
+  `githubApi.readCache.maxAge` (default `PT5M`). An unchanged repeat inside
+  that window starts no `gh` process for discovery. Ranking, provenance,
+  diagnostics, effort, and the inputs to session-offset selection are part
+  of the report, so they are served unchanged.
+- **Never cached.** The selected candidate's A3, A3.5, A4, and A4.5
+  checks, the A5 claim gate and the claim post, A1.5 roadmap-closure
+  authority, and forced-handoff evidence always read live. Their own
+  helpers make and count those reads; the `cache` object counts only the
+  discovery enumeration. A hint therefore only ranks: it can list a target
+  claimed, closed, or held after the hint was built (preventive; no
+  observed incident yet), and the live gates reject that target. A claim
+  failure is never stored.
+- **Key.** The helper, its selection arguments (scope, annotation flags,
+  `--current-claim-id`, `--pr`, `--now`, `--autopilot`), the entire loaded
+  policy, the `IDD_*` environment, the worktree path, the repository, the
+  host, the credential context, and a generation token. Any difference is a
+  miss, so a trust, approval, label, floor, or claim-timing change never
+  reuses an old hint. Repository and host resolve without a network call:
+  an explicit `--owner`/`--repo`, else the `origin` remote; the host from
+  `GH_HOST`, then `GITHUB_SERVER_URL`, then the remote (never `gh auth
+  status`); the credential from the read cache's local lookup. An
+  unidentified caller bypasses the cache (`cache.mode` `bypass`).
+- **Controls.** `--no-cache` computes live, reads and stores nothing, and
+  reports `cache.mode` `off`. `--refresh-cache` recomputes, stores the
+  result, and reports `refresh`. `--purge-cache` removes every cached body
+  in the host-local read cache (not only Discover hints) and exits without
+  enumerating; it needs no scope flag. `--no-cache` and `--refresh-cache`
+  are mutually exclusive.
+- **The `cache` object.** Emitted only when the feature is active or a cache
+  flag was passed: `mode` (`hint`, `refresh`, `off`, or `bypass`), `source`
+  (`hint` or `live`), `ageMs`, `maxAgeMs`, `complete`, `enumerations` (`0`
+  for a warm hint), and `exhaustionRefresh`. It is an additive optional
+  property of the union schema.
+- **Exhaustion.** A hint that lists no startable candidate (readiness
+  `startable`, else `claimEligible`, else any leaf; for the orphan filter,
+  an eligible orphan) is recomputed once, strict-fresh, before the result
+  may be treated as exhausted (`exhaustionRefresh` `true`). A failed refresh
+  throws. A live computation that finds nothing is already fresh and owes no
+  second refresh. A caller that rejects a hint-selected candidate at a live
+  gate reruns once with `--refresh-cache` before any no-work, parked, or
+  held classification.
+- **Completeness.** A capped root search, a skipped root, or (orphan filter)
+  any unresolvable reference sets `complete` to `false`. Such a report is
+  returned, never stored, and never proves exhaustion: treat it as
+  unknown/recovery. Throttle, authentication, and timeout failures already
+  throw, so they never report success.
+- **Invalidation.** Claim and unclaim markers posted by `post-idd-marker`,
+  both merge paths of `idd-merge-execute`, the closures and claim releases
+  of `idd-roadmap-audit-execute` and `suitability-close-execute`, and the
+  interactive `force-handoff` bump the generation token, which drops every
+  Discover hint in one step without touching other cache entries. The call
+  is best effort and never blocks the helper. Writes made outside these
+  helpers, such as a raw `gh` label, body, or close change, are discovered by
+  `--refresh-cache`, the exhaustion refresh, or `maxAge`.
+- **Concurrency.** Concurrent hint computations on one host coalesce onto
+  one enumeration through the same single-flight lease as the read cache.
+  Unlike a single request, a Discover enumeration can run for a long time,
+  so a waiter polls a live leader for up to two minutes and never takes the
+  lease from a live process; a dead leader is detected within one poll.
+- **Scope note.** The GitHub adapter's own requests are not individually
+  cached; the hint sits above them, so a warm run skips the adapter
+  entirely. Every session on a host shares the cache and any claim or merge
+  drops the hints, which keeps hints correct at the cost of a lower hit
+  rate under many concurrent sessions.
 
 ## Helper Runtime Profiles
 

@@ -1089,8 +1089,11 @@ widening it to a broader mode this session never selected.
   enumeration failure, unchanged from today's A2 rule; a helper that
   actually errors or exits non-zero is already an A2 enumeration
   failure on the first occurrence.
-- **No caching layer or change-detection pre-check**: this section
-  documents a cadence, not a cache.
+- **Optional hint cache**: this section decides _when_ to re-run.
+  With `githubApi.readCache.enabled`, a re-run inside `maxAge` is served
+  from a hint instead (see the helper-script
+  [Discover hint cache](idd-helper-scripts.md#discover-hint-cache)),
+  which changes only what a re-run costs, never when one is owed.
 
 ## Live Status Digests
 

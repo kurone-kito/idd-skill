@@ -603,7 +603,7 @@
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Opt in to the host-local GitHub REST read cache. Optional; defaults to false. Only a literal true enables it. Enabling this key does not connect Discover."
+              "description": "Opt in to the host-local GitHub REST read cache. Optional; defaults to false. Only a literal true enables it. Enabling it also lets Discover helpers serve a short-lived hint; a hint only ranks and never replaces a live gate."
             },
             "maxAge": {
               "type": "string",
@@ -629,7 +629,7 @@
           "description": "Host-local read cache for explicitly classified REST reads. Optional; omitting it keeps every read live."
         }
       },
-      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations and `readCache` opts in to the host-local REST read cache. Optional; omitting the container keeps telemetry disabled and every read live. Neither key wires Discover or admits requests."
+      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations and `readCache` opts in to the host-local REST read cache. Optional; omitting the container keeps telemetry disabled and every read live. `telemetry` does not wire Discover; an enabled `readCache` lets Discover helpers serve a hint."
     },
     "discover": {
       "type": "object",

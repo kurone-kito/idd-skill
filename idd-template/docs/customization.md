@@ -353,8 +353,10 @@ for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
 `critiqueLoop`, `reviewEscalation`, `approvalSignals`,
 `issueAuthoring`, `labels`, and `githubApi`. Leaving these keys unset
 keeps distributed behavior. `githubApi.readCache` stays off unless
-`enabled` is true. Turning it on does not connect Discover; the
-helper-script read-cache section describes the contract.
+`enabled` is true. Turning it on lets `discover-roadmap-graph` and
+`discover-orphan-filter` serve a short-lived hint of their output (see
+the helper-script Discover hint cache section); a hint only ranks, and
+the selected candidate's live gates never read from it.
 
 `githubApi.telemetry` records local request-lifecycle observations for
 the `ghApiJson`, `ghApiJsonWithHeaders`, and `ghGraphql` wrappers (issue
