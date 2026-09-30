@@ -1419,3 +1419,113 @@ if (mode === 'plain-ok') {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+// #3626: `ghApiJsonWithHeaders` records an observation on success and on
+// failure, but its only other wrapper test runs with telemetry disabled, so a
+// regression in the status/header extraction or in the recorded observation
+// for this wrapper would pass the suite.
+test('ghApiJsonWithHeaders retains the observed status, limit, and resource on success and the classification on failure when telemetry is enabled', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-telemetry-headers-'));
+  const telemetryPath = join(tempRoot, 'telemetry.jsonl');
+  const modePath = join(tempRoot, 'mode.txt');
+  const argsPath = join(tempRoot, 'args.json');
+  const token = 'placeholder-credential-headers';
+  const apiPath = 'repos/secret-owner-yy/secret-repo-yy/issues/7';
+  let restore: (() => void) | undefined;
+  const readRecords = (): RequestObservation[] =>
+    existsSync(telemetryPath)
+      ? readFileSync(telemetryPath, 'utf8')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line) as RequestObservation)
+      : [];
+  const setMode = (mode: string): void => {
+    writeFileSync(modePath, `${mode}\n`);
+  };
+  try {
+    setGithubApiTelemetryPolicyForTests({
+      enabled: true,
+      maxRecords: 20,
+      path: telemetryPath,
+    });
+    restore = stubExecutable(
+      'gh',
+      `
+const fs = require('node:fs');
+const mode = fs.readFileSync(${JSON.stringify(modePath)}, 'utf8').trim();
+fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));
+function envelope(status, extra, body) {
+  process.stdout.write('HTTP/2 ' + status + '\\n' + extra + '\\n\\n' + body);
+}
+if (mode === 'ok') {
+  envelope(201, 'x-ratelimit-remaining: 41\\nx-ratelimit-resource: core\\nx-ratelimit-reset: 1700000300', '{"n":9}');
+} else if (mode === 'rate') {
+  envelope(403, 'x-ratelimit-remaining: 0\\nx-ratelimit-resource: core\\nx-ratelimit-reset: 1700000400', '{"message":"API rate limit exceeded"}');
+  process.stderr.write(${JSON.stringify(`token=${token}\nAPI rate limit exceeded (HTTP 403)\n`)});
+  process.exit(1);
+} else if (mode === 'secondary') {
+  envelope(403, 'x-ratelimit-remaining: 5', '{"message":"You have exceeded a secondary rate limit. Please wait."}');
+  process.stderr.write('gh: You have exceeded a secondary rate limit (HTTP 403)\\n');
+  process.exit(1);
+} else {
+  process.stderr.write('unexpected mode ' + mode);
+  process.exit(2);
+}
+`,
+    );
+
+    setMode('ok');
+    const result = ghApiJsonWithHeaders(apiPath);
+    assert.deepEqual(result.data, { n: 9 });
+    assert.deepEqual(
+      (JSON.parse(readFileSync(argsPath, 'utf8')) as string[]).filter(
+        (arg) => arg === '--include',
+      ),
+      ['--include'],
+    );
+    const records = readRecords();
+    assert.equal(records.length, 1);
+    const [success] = records;
+    // 201, not the ubiquitous 200, so a constant cannot pass for extraction.
+    assert.equal(success.status, 201);
+    assert.equal(success.remaining, 41);
+    assert.equal(success.resource, 'core');
+    assert.equal(success.reset, 1700000300);
+    assert.equal(success.classification, 'ok');
+    assert.equal(success.commandInvocationCount, 1);
+    assert.equal(success.retryAttempts, 0);
+
+    setMode('rate');
+    assert.throws(() => ghApiJsonWithHeaders(apiPath));
+    const afterRate = readRecords();
+    assert.equal(afterRate.length, 2);
+    const primary = afterRate[1];
+    assert.equal(primary.classification, 'primary-exhaustion');
+    assert.equal(primary.status, 403);
+    assert.equal(primary.signals.primaryExhaustion, true);
+    assert.equal(primary.signals.secondaryThrottling, false);
+
+    setMode('secondary');
+    assert.throws(() => ghApiJsonWithHeaders(apiPath));
+    const afterSecondary = readRecords();
+    assert.equal(afterSecondary.length, 3);
+    const secondary = afterSecondary[2];
+    assert.equal(secondary.classification, 'secondary-throttling');
+    assert.equal(secondary.status, 403);
+    assert.equal(secondary.signals.secondaryThrottling, true);
+    assert.equal(secondary.signals.primaryExhaustion, false);
+
+    // Redaction: neither the request path nor the credential in the stderr
+    // reaches the retained file.
+    const retained = readFileSync(telemetryPath, 'utf8');
+    assert.equal(retained.includes(apiPath), false);
+    assert.equal(retained.includes('secret-owner-yy'), false);
+    assert.equal(retained.includes(token), false);
+  } finally {
+    restore?.();
+    setGithubApiTelemetryPolicyForTests(null);
+    resetGithubApiTelemetryPolicyCacheForTests();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
