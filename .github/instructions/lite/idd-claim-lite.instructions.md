@@ -133,7 +133,7 @@ Pass `--worktree <path>` once the B1 worktree exists.
 | Top-level `state` / `action` | Meaning |
 | --- | --- |
 | `already_owned` / `keep` | Confirmed — see the two cases below |
-| `owner_evidence_required` / `stop` | Retry once with `--worktree <path>`; still returned → Stop-and-ask (not a competitor); forced-handoff successor: `docs/idd-resume-detail.md` §FH |
+| `owner_evidence_required` / `stop` | Retry once with `--worktree <path>`; still returned → Stop-and-ask (not a competitor), unless a forced-handoff successor: `docs/idd-resume-detail.md` §FH |
 | anything else | Not yours — forced-handoff: Stop-and-ask; else fall through below |
 <!-- dprint-ignore-end -->
 

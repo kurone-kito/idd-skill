@@ -92,10 +92,12 @@ instance. Every other `owner_evidence_required` case keeps "stop", and §LWR
 does not apply: it recovers a stale or released claim's occupied worktree,
 not a live forced-handoff claim. Apply this only when all of these hold:
 
-- The routing call passed this session's `--claim-id`, `--nonce`,
-  `--worktree W` and `--fresh-claim-gate`, and
+- A routing call that passed this session's `--claim-id` and `--worktree W`
+  returned `owner_evidence_required`, and
   `evidence.forced_handoff.new_claim_id` equals this session's claim-id while
-  `old_claim_id` does not. Pass `evidence.forced_handoff.new_agent_id` as
+  `old_claim_id` does not (the four-flag call below adds `--nonce` and
+  `--fresh-claim-gate` once the nonce steps are done). Pass
+  `evidence.forced_handoff.new_agent_id` as
   `--agent-id` on every call below: it usually equals the displaced
   agent-id, but a marker may name a distinct successor id, and a lock or
   record written under another agent-id leaves routing at
@@ -103,7 +105,8 @@ not a live forced-handoff claim. Apply this only when all of these hold:
 - `evidence.activation_nonce_winner` is non-null and equals this session's
   nonce, after the nonce steps of `idd-claim.instructions.md` (its
   Activation-nonce format and Claim verification sections: post the nonce,
-  wait `claim.verifySettleDelay`, confirm the winner). A nonce marker that
+  wait `claim.verifySettleDelay`, confirm the winner, including the label and
+  authoring-hold guard it repeats around that step). A nonce marker that
   is not yet visible looks the same as agreement in a bare
   `owner_evidence_required`, so check the winner again immediately before
   the takeover.
@@ -114,11 +117,12 @@ not a live forced-handoff claim. Apply this only when all of these hold:
   (claim-lock section) apply.
 - `W` comes from `git worktree list --porcelain`: exactly one linked
   worktree for the claimed branch, showing `branch refs/heads/<branch>` and
-  neither `prunable` nor `locked`. A `detached` record (a rebase left by the
-  dead predecessor shows only that) while routing still says
-  `owner_evidence_required` means stop. `git -C W symbolic-ref --quiet
---short HEAD` must print the branch (that is the routing check itself), and
-  none of `git -C W rev-parse --git-path rebase-merge`, `rebase-apply`,
+  neither `prunable` nor `locked`. If no record names the claimed branch
+  while routing still says `owner_evidence_required` (a worktree left
+  mid-rebase by the dead predecessor lists only `detached`), stop.
+  `git -C W symbolic-ref --quiet --short HEAD` must print the branch (that
+  is the routing check itself), and none of
+  `git -C W rev-parse --git-path rebase-merge`, `rebase-apply`,
   `MERGE_HEAD` or `BISECT_START` may name an existing path (they live in the
   worktree's own git directory, not in `W/.git`, which is a file there). A
   worktree left mid-rebase lets the takeover succeed while routing still
@@ -129,10 +133,11 @@ not a live forced-handoff claim. Apply this only when all of these hold:
   Otherwise do not run `--takeover`: report to the operator, and retry Step
   1 after `W` has been cleaned up.
 - `claim-lock --check --worktree W` shows a holder (`holder.claimId`) equal
-  to `old_claim_id`. If it already shows this session's claim-id (a takeover
-  done earlier), skip the takeover and only record the claim identity; if no
-  lock exists (`present` is false), use the normal `--acquire`. Any other
-  holder means stop.
+  to `old_claim_id`. If it already shows this session's claim-id and
+  agent-id (a takeover done earlier), skip the takeover and only record the
+  claim identity; if no lock exists (`present` is false), use the normal
+  `--acquire`. Any other holder, including this session's claim-id under
+  another agent-id, means stop.
 
 The recommended order (it differed between the sessions that hit the stop;
 treat it as recommended, not observed): adopt the marker's agent-id and

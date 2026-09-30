@@ -87,7 +87,7 @@ On helper-enabled profiles, run the Claim-state command above
 | Helper `state` / `action`          | Action                                                         |
 | ---------------------------------- | -------------------------------------------------------------- |
 | `already_owned` / `keep`           | Keep same `{claim-id}` → Step 2                                |
-| `owner_evidence_required` / `stop` | Retry `--worktree <path>` once; else STOP (§FH if successor)   |
+| `owner_evidence_required` / `stop` | Retry `--worktree <path>` once; else STOP unless §FH successor |
 | `unclaimed` / `re_claim`           | Fresh A5 claim → Step 2                                        |
 | `stale` / `takeover`               | Forced-handoff: retry below; else A5 takeover                  |
 | `non_inheritable` / `stop`         | Forced-handoff: retry below; else STOP — live competitor claim |
