@@ -153,27 +153,117 @@ test('keeps a leading code span of the remark text intact (#3672)', () => {
   );
 });
 
-// The first assertion below pins CommonMark's lazy continuation on purpose: a
-// `**Review effort:**` line with no blank line before it is paragraph text,
-// so the extractor keeps it. Every real corpus body has that blank line.
-test('joins a wrapped paragraph with single spaces and stops at the next block (#3672)', () => {
+test('joins a wrapped paragraph with single spaces (#3672)', () => {
   assert.equal(
     extractCopilotReviewBodyRemark(
-      '### Needs a closer look\n\nFirst line,  \nsecond line.\n**Review effort:** Lite\n\nlater',
+      '### Needs a closer look\n\nFirst line,  \nsecond line.\n\nlater',
     ),
-    'First line, second line. **Review effort:** Lite',
+    'First line, second line.',
   );
   assert.equal(
     extractCopilotReviewBodyRemark(
-      '### Needs a closer look\n\nThe remark.\n### Next section\n\nother',
+      'Needs a closer look: First line,\nsecond line.\n\nlater',
     ),
-    'The remark.',
+    'First line, second line.',
+  );
+});
+
+test('the remark paragraph stops at any line that opens another block (#3672)', () => {
+  for (const next of [
+    '### Next section',
+    '---',
+    '***',
+    '___',
+    '* * *',
+    '> quoted',
+    '- bullet',
+    '* bullet',
+    '+ bullet',
+    '1. ordered',
+    '1) ordered',
+    '<details>',
+    '</details>',
+    '<summary>x</summary>',
+    '<div>',
+    '<table>',
+    '<!-- comment -->',
+    // The v2 overview metadata that follows a remark; CommonMark would fold
+    // these into the paragraph, but they are never the remark.
+    '**Review effort:** Lite  ',
+    '**Findings:** None',
+  ]) {
+    assert.equal(
+      extractCopilotReviewBodyRemark(
+        `### Needs a closer look\n\nThe remark.\n${next}\n\nafter`,
+      ),
+      'The remark.',
+      next,
+    );
+    assert.equal(
+      extractCopilotReviewBodyRemark(
+        `Needs a closer look: The remark.\n${next}\n\nafter`,
+      ),
+      'The remark.',
+      next,
+    );
+    // A heading with no remark text of its own reads nothing from the block
+    // that follows it.
+    assert.equal(
+      extractCopilotReviewBodyRemark(`### Needs a closer look\n${next}`),
+      null,
+      next,
+    );
+  }
+});
+
+test('a wrapped remark line that only looks like a block opener stays text (#3672)', () => {
+  // Only block starts that CommonMark lets interrupt a paragraph end it: a
+  // year with a period, a later ordered number, and an inline HTML tag do not.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\nFixed in\n2026. Not before.\n\nlater',
+    ),
+    'Fixed in 2026. Not before.',
   );
   assert.equal(
     extractCopilotReviewBodyRemark(
-      '### Needs a closer look\n\nThe remark.\n<details>\n<summary>x</summary>\n</details>',
+      'Needs a closer look: Wraps here\n<code>foo</code> is used.\n\nlater',
     ),
-    'The remark.',
+    'Wraps here <code>foo</code> is used.',
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\n<code>foo</code> is wrong.\n\nlater',
+    ),
+    '<code>foo</code> is wrong.',
+  );
+});
+
+test('an inline label with no same-line text is not a remark (#3672)', () => {
+  // #3688 review: the label alone says nothing about which later line is
+  // the remark, so it must never absorb an adjacent or following paragraph.
+  for (const body of [
+    'Needs a closer look:\nAn adjacent line.',
+    'Needs a closer look:\n\nA following paragraph.',
+    '**Needs a closer look:**\n**Review effort:** Lite  \n**Findings:** None',
+    '### Needs a closer look:\n\nA paragraph under a colon heading.',
+    '\u{1F535} Needs a closer look:   \n\nUnrelated.',
+    // A leftover emphasis mark is not text.
+    '*Needs a closer look:*\nAn adjacent line.',
+    '_Needs a closer look:_\nAn adjacent line.',
+    '***Needs a closer look:***\nAn adjacent line.',
+    '**Needs a closer look:** **\nAn adjacent line.',
+    '*Needs a closer look:*\n\nUnrelated paragraph.',
+    'Needs a closer look: *\n\nx',
+  ]) {
+    assert.equal(extractCopilotReviewBodyRemark(body), null, body);
+  }
+  // A later real remark is still found past a bare label.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      'Needs a closer look:\n\nFirst.\n\nNeeds a closer look: Real one.',
+    ),
+    'Real one.',
   );
 });
 

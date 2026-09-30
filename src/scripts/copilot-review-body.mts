@@ -259,12 +259,31 @@ const REMARK_HEADING_PATTERN =
  * `*`, `+`), quote, or emphasis characters, for example
  * `**Needs a closer look:** text`. Four or more leading spaces (an indented
  * code block) never match. Matches the label and its separator only; the
- * remark text is whatever follows on the line. */
+ * remark text is whatever follows on the line, and a label with no same-line
+ * text is not a remark. */
 const REMARK_INLINE_LABEL_PATTERN =
-  /^ {0,3}(?:[>#*_+-][ \t>#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:\*\*|__)?[ \t]*/iu;
+  /^ {0,3}(?:[>#*_+-][ \t>#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?[ \t]*/iu;
 
-const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
-const DETAILS_TAG_LINE_PATTERN = /^ {0,3}<\/?details(?:[ \t>]|$)/iu;
+const HAS_TEXT_PATTERN = /[\p{L}\p{N}]/u;
+
+/** A stripped line that opens a block other than a plain paragraph line, so
+ * the remark paragraph must not read on into it: an ATX heading, a thematic
+ * break, a blockquote, a bullet or an ordered item starting at 1 (the only
+ * ones CommonMark lets interrupt a paragraph), a block-level HTML tag or
+ * comment (an inline tag such as `<code>` stays paragraph text), or one of
+ * the two bold overview-metadata labels Copilot's v2 overview puts after
+ * the remark (`**Review effort:**`, `**Findings:**`).
+ * CommonMark would fold the metadata labels into the paragraph as lazy
+ * continuation text; every real body separates them with a blank line, and
+ * a body that does not must still not report them as the remark. */
+const NEW_BLOCK_LINE_PATTERNS: readonly RegExp[] = [
+  /^ {0,3}#{1,6}(?:[ \t]|$)/u,
+  /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/u,
+  /^ {0,3}>/u,
+  /^ {0,3}(?:[-+*]|1[.)])(?:[ \t]|$)/u,
+  /^ {0,3}<(?:\/?(?:details|summary|div|p|pre|hr|blockquote|table|thead|tbody|tfoot|tr|td|th|ul|ol|li|h[1-6])(?:[ \t>/]|$)|!|\?)/iu,
+  /^ {0,3}\*\*(?:review effort|findings):\*\*/iu,
+];
 
 /** `true` for a line that ends the running paragraph on its own: a blank
  * line, or a fence line (blanked to exactly `''` in the stripped text while
@@ -277,10 +296,7 @@ function endsRemarkParagraph(original: string, stripped: string): boolean {
 
 /** `true` when a stripped line opens a new block that ends a paragraph. */
 function startsNewBlock(stripped: string): boolean {
-  return (
-    ATX_HEADING_LINE_PATTERN.test(stripped) ||
-    DETAILS_TAG_LINE_PATTERN.test(stripped)
-  );
+  return NEW_BLOCK_LINE_PATTERNS.some((pattern) => pattern.test(stripped));
 }
 
 /** Reads one paragraph from the ORIGINAL lines, starting at `start` (the
@@ -374,7 +390,13 @@ export function extractCopilotReviewBodyRemark(
       }
     } else {
       const label = REMARK_INLINE_LABEL_PATTERN.exec(line);
-      if (label) {
+      // The label needs same-line text (a letter or digit, so a stray
+      // emphasis mark does not count): a bare label followed by another line
+      // says nothing about which line is the remark (#3688 review).
+      if (
+        label &&
+        HAS_TEXT_PATTERN.test((original[index] ?? '').slice(label[0].length))
+      ) {
         remark = readRemarkParagraph(
           original,
           stripped,
