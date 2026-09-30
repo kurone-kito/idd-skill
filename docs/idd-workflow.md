@@ -588,8 +588,9 @@ the
 A local runtime may also inherit `issueAuthoring.adversarialReview.delegate`
 from the same optional user-global file the critique delegate uses when the
 repository leaves the repo-local field genuinely absent. A GitHub-hosted or
-other remote agent surface has no operator home directory, and the helper skips
-this layer there. The file path and the qualified-root rule are the ones in
+other remote agent surface is not meant to consult this layer, but the helper
+detects only `GITHUB_ACTIONS=true` on its own; pass `--no-user-global` on any
+other remote surface. The file path and the qualified-root rule are the ones in
 [User-global critique delegate default](#user-global-critique-delegate-default)
 (`$XDG_CONFIG_HOME/idd-skill/config.json`, falling back to
 `$HOME/.config/idd-skill/config.json`); a missing, unreadable, invalid-JSON, or
