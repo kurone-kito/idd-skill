@@ -181,22 +181,21 @@ scope-fenced item, an Accepted item mid-fix
   Medium — High never eligible). A null urgency still defers. Clause:
   `adopt-now: no; severity <tier>[, Copilot <label>]`.
 - **`severity-tiered`** replaces that allowlist from round 1. Judge
-  validity and E4 severity first (a claim false on evidence is
-  Rejected), then urgency by the fix's marginal review-wave cost:
-  `very-low` < `low` < `medium` < `high`. The matrix decides;
-  regression, unmet requirements, correctness, and safety never
-  override it. `very-low`:
-  wording/formatting only; `low`: extra tests, comments, or naming for
+  validity and E4 severity (a claim false on evidence is Rejected), then
+  urgency by the fix's marginal review-wave cost: `very-low` < `low` <
+  `medium` < `high`. The matrix decides; regression, unmet requirements,
+  correctness, and safety never override. `very-low`: wording/formatting
+  changing no behavior; `low`: extra tests, comments, or naming for
   already-correct behavior; `medium`: local maintainability, or a
-  correctness risk short of `high`; `high`: an adopt-now (a)-(c) condition.
-  Unknown E4 severity counts as Medium; the floor only raises.
-  Unscored urgency never defers. High defers only at `very-low`
-  (Accept forced does not win); Medium or unknown, not at `high`; Low
-  at every scored urgency. Clause:
-  `urgency <level>; severity <tier>[, Copilot <label>]`.
+  correctness risk short of `high`; `high`: an adopt-now (a)-(c)
+  condition. Unknown E4 severity counts as Medium; the floor only
+  raises. Unscored urgency never defers. High defers only at `very-low`
+  (Accept forced does not win); Medium or unknown, not at `high`; Low at
+  every scored urgency. Clause: `urgency <level>; severity <tier>[,
+  Copilot <label>]`.
 
-Bundle every item deferred in one E5 pass into one follow-up issue
-(E6; do not append). Each keeps an AC bullet, exactly one
+Bundle one E5 pass's deferred items into one follow-up issue (E6; do
+not append). Each keeps an AC bullet, exactly one
 `Refs #<originating-issue>` line, and the
 `<!-- {{PROJECT_MARKER_PREFIX}}-authoring-defer-source: review-fix-loop-cutoff -->`
 marker, then issue-authoring's Stage 2 narrow auto-release, not the Stage 1

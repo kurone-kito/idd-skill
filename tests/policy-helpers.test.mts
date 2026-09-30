@@ -478,6 +478,33 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
     eligibility: 'medium',
     blockedBy: 'above-ceiling',
   });
+  // The Copilot label only raises eligibility over a known E4 tier.
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      e4Severity: 'low',
+      copilotLabel: 'medium',
+    }),
+    { defer: false, eligibility: 'medium', blockedBy: 'above-ceiling' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'medium',
+      copilotLabel: 'high',
+    }),
+    { defer: false, eligibility: 'high', blockedBy: 'above-ceiling' },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...binary,
+      mode: 'low-and-medium',
+      e4Severity: 'low',
+      copilotLabel: 'medium',
+    }),
+    { defer: true, eligibility: 'medium', blockedBy: null },
+  );
   for (const mode of ['low', 'low-and-medium'] as const) {
     for (const copilotLabel of [null, 'low', 'medium', 'high'] as const) {
       assert.deepEqual(
@@ -528,11 +555,10 @@ test('the triage defer section keeps condition (c) and the urgency matrix', () =
     'instead of normal judgment',
     'defect in shipped behavior — code, helper output, CI result, or instruction text that changes what an agent does',
     'excluding wording/clarity polish and extra test coverage for already-working behavior',
-    'Judge validity and E4 severity first',
-    'a claim false on evidence is Rejected',
+    'Judge validity and E4 severity (a claim false on evidence is Rejected)',
     "the fix's marginal review-wave cost",
-    'never override it',
-    'wording/formatting only',
+    'never override.',
+    'wording/formatting changing no behavior',
     'extra tests, comments, or naming for already-correct behavior',
     'a correctness risk short of `high`',
     'an adopt-now (a)-(c) condition',
@@ -541,6 +567,7 @@ test('the triage defer section keeps condition (c) and the urgency matrix', () =
     'unknown severity never defers here',
     'counts as Medium',
     'never PATH B',
+    'CODEOWNER/required-reviewer item',
     'Accept forced does not win',
     'High never eligible',
     'a missing, failed, or incomplete fetch fails closed',
