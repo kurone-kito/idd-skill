@@ -25,6 +25,7 @@ import {
   type GithubApiReadClassification,
   type ReadThroughGithubApiCacheInput,
   readThroughGithubApiCache,
+  resolveCanonicalPath,
 } from '../src/scripts/github-api-read-cache.mts';
 
 const MARKER = '.idd-github-api-read-cache';
@@ -1156,6 +1157,61 @@ test('a non-empty foreign directory is not adopted or chmod-ed', {
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
+});
+
+test('a component a concurrent cold start creates is retried, not treated as dangling', () => {
+  const enoent = () => Object.assign(new Error('missing'), { code: 'ENOENT' });
+  const target = join(sep, 'cache-root', 'new-cache');
+  let realpathCalls = 0;
+  // The first realpath misses, then a peer creates the directory before
+  // the lstat: a real directory, so the second realpath succeeds.
+  const raced = resolveCanonicalPath(target, {
+    realpathSync(path: string): string {
+      realpathCalls += 1;
+      if (realpathCalls === 1) throw enoent();
+      return path;
+    },
+    lstatSync: () => ({ isSymbolicLink: () => false }),
+  });
+  assert.equal(raced, target);
+  assert.equal(realpathCalls, 2);
+  // A component that exists as a symlink but does not resolve is dangling.
+  assert.equal(
+    resolveCanonicalPath(target, {
+      realpathSync(): string {
+        throw enoent();
+      },
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+    }),
+    null,
+  );
+  // A create/delete loop cannot spin forever.
+  let spins = 0;
+  assert.equal(
+    resolveCanonicalPath(target, {
+      realpathSync(): string {
+        spins += 1;
+        throw enoent();
+      },
+      lstatSync: () => ({ isSymbolicLink: () => false }),
+    }),
+    null,
+  );
+  assert.ok(spins > 1 && spins < 32);
+  // A genuinely missing suffix is appended to the nearest existing ancestor.
+  const existingRoot = join(sep, 'exists');
+  assert.equal(
+    resolveCanonicalPath(join(existingRoot, 'a', 'b'), {
+      realpathSync(path: string): string {
+        if (path === existingRoot) return existingRoot;
+        throw enoent();
+      },
+      lstatSync(): never {
+        throw enoent();
+      },
+    }),
+    join(existingRoot, 'a', 'b'),
+  );
 });
 
 test('a cache path under a dangling symlink is unsafe, not followed', {

@@ -306,25 +306,41 @@ function comparePath(path: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+interface CanonicalFs {
+  realpathSync(path: string): string;
+  lstatSync(path: string): { isSymbolicLink(): boolean };
+}
+
+const MAX_CANONICAL_RETRIES = 8;
+
 /**
  * Resolve the physical location of `path`, canonicalizing the nearest
  * existing ancestor and appending the missing suffix so a not-yet-created
  * cache directory is judged where `mkdir` will really create it. Returns
  * `null` (unsafe) when a component cannot be resolved, including a
  * dangling symlink that `mkdir -p` would follow to an unchecked place.
+ * A component a concurrent cold start creates between the failed
+ * `realpath` and the `lstat` is not a dangling symlink: retry, bounded.
  */
-function canonicalPath(path: string): string | null {
+// audit:ignore-dead-export: the fs seam exists so the concurrent-create race has a deterministic regression test
+export function resolveCanonicalPath(
+  path: string,
+  fs: CanonicalFs = { realpathSync, lstatSync },
+): string | null {
   let existing = resolve(path);
   const suffix: string[] = [];
+  let retries = 0;
   for (;;) {
     try {
-      return join(realpathSync(existing), ...suffix);
+      return join(fs.realpathSync(existing), ...suffix);
     } catch (error) {
       const code = errorCode(error);
       if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
       try {
-        lstatSync(existing);
-        return null;
+        if (fs.lstatSync(existing).isSymbolicLink()) return null;
+        retries += 1;
+        if (retries > MAX_CANONICAL_RETRIES) return null;
+        continue;
       } catch (lstatError) {
         if (errorCode(lstatError) !== 'ENOENT') return null;
       }
@@ -361,7 +377,7 @@ function isUnsafeDirectory(
   anchors: readonly string[],
 ): boolean {
   if (!isAbsolute(candidate)) return true;
-  const real = canonicalPath(candidate);
+  const real = resolveCanonicalPath(candidate);
   if (real === null) return true;
   const paths = [comparePath(candidate)];
   if (real !== resolve(candidate)) paths.push(comparePath(real));
@@ -369,7 +385,7 @@ function isUnsafeDirectory(
     if (isFilesystemRoot(path)) return true;
     for (const anchor of anchors) {
       const resolvedAnchor = comparePath(
-        canonicalPath(anchor) ?? resolve(anchor),
+        resolveCanonicalPath(anchor) ?? resolve(anchor),
       );
       if (path === resolvedAnchor || isAncestor(path, resolvedAnchor)) {
         return true;
