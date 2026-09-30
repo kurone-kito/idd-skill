@@ -1873,13 +1873,13 @@
     },
     "deferFollowUps": {
       "type": "object",
-      "description": "#3624: the deferred-follow-up merge-gate evidence. A follow-up is an open issue carrying the review-fix-loop-cutoff defer-source marker whose sole Refs line names this PR's origin issue (the claimed issue or a same-repo closing issue). It is reconciled when the PR body, a conversation comment, a review body or any review-thread comment (resolved ones included) names it as #N, <owner>/<repo>#N or a full issue URL. Optional so older reports stay valid, but a real collectPreMergeReadiness run always emits it. An unreconciled item adds a deferred-followup-unreconciled blocker; checked=false adds a deferred-followup-unverified blocker and never reads as zero follow-ups.",
+      "description": "#3624: the deferred-follow-up merge-gate evidence. A follow-up is an open issue carrying the review-fix-loop-cutoff defer-source marker whose sole Refs line names this PR's origin issue (the claimed issue or a same-repo closing issue). It is reconciled when the PR body, a conversation comment, a review body or any review-thread comment (resolved ones included) names it as #N, <owner>/<repo>#N or a full issue URL; a trusted IDD-operational comment such as the live status digest never counts. Optional so older reports stay valid, but a real collectPreMergeReadiness run always emits it. An unreconciled item adds a deferred-followup-unreconciled blocker; checked=false adds a deferred-followup-unverified blocker and never reads as zero follow-ups.",
       "required": ["checked", "unverifiedReason", "items"],
       "additionalProperties": false,
       "properties": {
         "checked": {
           "type": "boolean",
-          "description": "True when the follow-up set was enumerated completely (or there is no origin issue, so no search ran). False when the search failed, returned a non-array result, or returned at least the search result cap and may be truncated."
+          "description": "True when the follow-up set was enumerated completely (or there is no origin issue, so no search ran). False when the search failed, returned a non-array result, returned a result entry without a usable number, state or body, or returned at least the search result cap and may be truncated."
         },
         "unverifiedReason": {
           "type": ["string", "null"],
