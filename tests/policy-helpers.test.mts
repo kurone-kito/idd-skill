@@ -458,6 +458,39 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
     }).defer,
     true,
   );
+  // Accept forced does not win: severity-tiered ignores adoptNow, so the
+  // riskiest cell (High at very-low) defers even when an adopt-now
+  // condition holds, and adoptNow never rescues a cell the matrix blocks.
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'high',
+      urgency: 'very-low',
+      adoptNow: true,
+    }),
+    { defer: true, eligibility: 'high', blockedBy: null },
+  );
+  for (const urgency of ['low', 'medium', 'high'] as const) {
+    assert.deepEqual(
+      decideUrgencyDefer({
+        ...base,
+        e4Severity: 'high',
+        urgency,
+        adoptNow: true,
+      }),
+      { defer: false, eligibility: 'high', blockedBy: 'matrix' },
+      `high/${urgency}/adoptNow`,
+    );
+  }
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'medium',
+      urgency: 'high',
+      adoptNow: true,
+    }),
+    { defer: false, eligibility: 'medium', blockedBy: 'matrix' },
+  );
   const binary = { ...base, mode: 'low' as const, urgency: null };
   assert.deepEqual(decideUrgencyDefer({ ...binary, e4Severity: 'high' }), {
     defer: false,
