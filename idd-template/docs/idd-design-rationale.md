@@ -1064,6 +1064,70 @@ marker, its `Refs #<N>` reference is resolved the same way an ordinary
 `Blocked by #<N>` line is — excluded from Discover while `#<N>` stays
 open. An unmarked issue's `Refs` lines are completely unaffected.
 
+#### Reconciling the deferred follow-up with its pull request (kurone-kito/idd-skill#3624)
+
+E5 defers a finding by filing one follow-up issue, and the source review
+thread then gets a `**Rejected** — deferred to follow-up issue #<n>`
+reply. The reply needs the issue number, so it can only be posted after
+the follow-up exists. That order fails toward a duplicate, never toward
+a lost finding: replying first would leave a resolved thread naming a
+follow-up nobody created. Filing is several non-atomic remote writes
+(journal record, issue creation, identity record, owner marker, member
+record) and the reply comes after all of them, so nothing reconciled the
+two halves when a session stopped between them.
+
+Observed 2026-09-29 to 2026-09-30, follow-up #3615 for the pull request
+that implemented #3591 (#3604). Copilot opened a review thread at 16:12Z.
+The first session filed #3615 for it and posted its owner marker at
+16:54:20Z, but the journal record stayed `pending` and the deferral reply
+was never posted. After a forced handoff the successor saw an unreplied
+thread, judged it fresh, and fixed it in the pull request itself; nothing
+pointed it at #3615. When the pull request merged and #3591 closed, the
+`Refs #3591` line stopped holding marked follow-ups back in Discover
+(#2877), so only the authoring label still kept #3615 out of Discover,
+although it described work already delivered. It was closed by hand as
+not planned. The successor's own follow-up for the same pull request
+(#3617) carried its reply, so the sequence works when uninterrupted.
+
+Frequency, from a GitHub search over the marker text on 2026-09-30 (the
+search index may undercount): 17 issues carry the marker since
+2026-09-10. Two are excluded, #3398 (its findings came from an E2 critique
+pass, so no thread exists) and #3394 (no parseable `Refs` line). Of the
+remaining 15, 14 have a matching `deferred to follow-up issue` reply on
+the originating pull request and #3615 is the one that does not. That is
+one confirmed incident in 15, so low frequency, but nothing automated
+would ever catch it: F3's unresolved-thread gate only forces someone to
+answer the thread, not to notice the follow-up.
+
+Decision: `pre-merge-readiness` reports every open marked follow-up whose
+sole `Refs` line names the pull request's origin issue as `deferFollowUps`,
+and F3 blocks on `deferred-followup-unreconciled` until the pull request
+names it (body, conversation comment, review body, or any review-thread
+comment, resolved ones included), and on `deferred-followup-unverified`
+when the follow-up set cannot be enumerated completely. Either repair
+clears the first gate: a reply on the source thread when the finding is
+still deferred, or a pull request comment when it was fixed in the pull
+request or is no longer needed. Any author counts, because this proves the
+pull request names the follow-up, not that the choice was right. A trusted
+IDD-operational comment is the exception: the live status digest lists the
+open blockers, this gate's own follow-up number included, so counting it would
+let the digest entry for the blocker clear the blocker (preventive; no
+observed incident yet).
+
+Rejected alternatives:
+
+- **Reply-first ordering.** It leaves a resolved thread naming a follow-up
+  nobody created, which is worse than a duplicate follow-up.
+- **Detecting the gap at successor resume or E1.** It needs an instruction
+  pointer that the bundles at the context ceiling cannot hold, and it only
+  helps when a successor exists.
+- **Clearing only on the exact reply format.** A fix made in the pull
+  request is a valid outcome that never produces that reply, so requiring
+  it would force a false "deferred" reply.
+- **Enumerating through the origin issue's timeline.** It pages through
+  every comment event of the origin issue, where the marker search is one
+  call.
+
 #### 2026-09-15 recalibration to 12, using a month of real data (kurone-kito/idd-skill#2999)
 
 After a month of historical review-fix-loop data accumulated in this

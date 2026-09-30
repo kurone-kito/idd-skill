@@ -21,12 +21,15 @@ import {
 } from '../src/scripts/marker-helpers.mts';
 import {
   collectPreMergeReadiness,
+  computeDeferFollowUps,
   fetchBranchRulesets,
   fetchGovernanceJson,
+  mentionsIssue,
   normalizeStatusCheckRollupEntry,
   parseArgs,
   renderCliUsageError,
   resolveDeclarationActiveSince,
+  resolveDeferMarkerPrefix,
   resolveEligibleCodeownerUserLogins,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
@@ -71,6 +74,7 @@ import {
   createFakeProviderAdapter,
   type FakeProviderFixture,
 } from '../src/scripts/provider-adapter-fake.mts';
+import { GH_SEARCH_RESULT_CAP } from '../src/scripts/provider-adapter-github.mts';
 import type {
   ProviderComment,
   ProviderPort,
@@ -15454,4 +15458,953 @@ test("#2911 (Codex review, PR #2915, round 7, P2): a marker that expires mid-run
   );
   assert.equal(staleSelfWaiverOf(summary).stale, true);
   assert.equal(staleSelfWaiverOf(summary).reason, 'expired');
+});
+
+// ---------------------------------------------------------------------------
+// #3624: deferred-follow-up merge gates. A review finding deferred under
+// `critiqueLoop.deferAfterRounds` / `critiqueLoop.deferByUrgency` is filed as
+// one follow-up issue (defer-source marker + one `Refs` line naming the
+// origin issue) and its source thread gets a "deferred to follow-up issue #N"
+// reply. Nothing reconciled the two halves when a session stopped between
+// them, so the pre-merge check now reports every open marked follow-up the
+// pull request never names.
+// ---------------------------------------------------------------------------
+
+const DEFER_TEST_MARKER =
+  '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->';
+
+function followUpBody(
+  refsLine: string | null,
+  options: { marker?: string | null } = {},
+): string {
+  const marker =
+    options.marker === undefined ? DEFER_TEST_MARKER : options.marker;
+  return [
+    '<!-- idd-skill-authoring-publication: target=t; anchor=t; set=s; session=x; token=k -->',
+    marker,
+    '',
+    refsLine,
+    '',
+    '## Background',
+    '',
+    'A deferred review finding.',
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
+}
+
+function deferHit(
+  number: number,
+  overrides: {
+    body?: string;
+    state?: unknown;
+    labels?: unknown;
+  } = {},
+) {
+  return {
+    number,
+    state: overrides.state === undefined ? 'open' : overrides.state,
+    labels:
+      overrides.labels === undefined
+        ? [{ name: 'status:authoring' }]
+        : overrides.labels,
+    body: overrides.body ?? followUpBody('Refs #7'),
+  };
+}
+
+function deferEvidence(input: {
+  hits?: unknown[];
+  error?: string;
+  origins?: number[];
+  mentionTexts?: string[];
+  prefix?: string;
+  label?: string;
+}) {
+  const fixture: FakeProviderFixture = {
+    searchResults: input.hits ?? [],
+    ...(input.error === undefined
+      ? {}
+      : { searchOpenWorkItemsError: input.error }),
+  };
+  const port = createFakeProviderAdapter(fixture);
+  const evidence = computeDeferFollowUps({
+    port,
+    owner: 'o',
+    repo: 'r',
+    markerPrefix: input.prefix ?? 'idd-skill',
+    authoringLabelName: input.label ?? 'status:authoring',
+    originIssueNumbers: input.origins ?? [7],
+    mentionTexts: input.mentionTexts ?? [],
+  });
+  return { evidence, readCalls: fixture.readCalls ?? [] };
+}
+
+test('mentionsIssue: a bare #N, a code-span #N, a same-repository qualified reference, and a same-repository issue URL all name the issue', () => {
+  for (const text of [
+    'deferred to #3615',
+    'Refs #3615.',
+    '(#3615)',
+    'see `#3615` for the follow-up',
+    'o/r#3615',
+    'O/R#3615',
+    'https://github.com/o/r/issues/3615',
+    'https://ghe.example.com/o/r/issues/3615#issuecomment-99',
+    'https://GITHUB.com/O/R/issues/3615',
+  ]) {
+    assert.equal(mentionsIssue(text, 3615, 'o', 'r'), true, text);
+  }
+});
+
+test('mentionsIssue: a longer number, another repository, or an unrelated token never names the issue', () => {
+  for (const text of [
+    '#36150',
+    '#361',
+    'other/repo#3615',
+    'o/r2#3615',
+    'x#3615',
+    'issue-#3615',
+    'https://github.com/other/repo/issues/3615',
+    'https://github.com/o/r2/issues/3615',
+    'https://github.com/o/r/issues/36150',
+    'https://github.com/o/r/pull/3615',
+    '',
+  ]) {
+    assert.equal(mentionsIssue(text, 3615, 'o', 'r'), false, text);
+  }
+});
+
+test('resolveDeferMarkerPrefix: the trusted config markerPrefix, defaulting to idd-skill for an absent, blank, or non-string value', () => {
+  assert.equal(resolveDeferMarkerPrefix({ markerPrefix: ' acme ' }), 'acme');
+  for (const config of [null, undefined, {}, { markerPrefix: '  ' }]) {
+    assert.equal(resolveDeferMarkerPrefix(config), 'idd-skill');
+  }
+  assert.equal(resolveDeferMarkerPrefix({ markerPrefix: 42 }), 'idd-skill');
+});
+
+test('computeDeferFollowUps: no origin issue is a verified empty result and performs no search', () => {
+  const { evidence, readCalls } = deferEvidence({
+    origins: [],
+    hits: [deferHit(12)],
+  });
+  assert.deepEqual(evidence, {
+    checked: true,
+    unverifiedReason: null,
+    items: [],
+  });
+  assert.deepEqual(readCalls, []);
+});
+
+test('computeDeferFollowUps: exactly one strict search bounded by the shared result cap, carrying the marker prefix', () => {
+  const { evidence, readCalls } = deferEvidence({
+    origins: [7, 8],
+    hits: [deferHit(12)],
+    prefix: 'idd-skill',
+  });
+  assert.equal(readCalls.length, 1);
+  assert.deepEqual(readCalls[0], {
+    method: 'searchOpenWorkItems',
+    args: [
+      {
+        matchBody: 'idd-skill-authoring-defer-source',
+        fields: ['number', 'body', 'labels', 'state'],
+        limit: GH_SEARCH_RESULT_CAP,
+        strict: true,
+      },
+    ],
+  });
+  assert.deepEqual(evidence.items, [
+    { number: 12, heldByAuthoringLabel: true, origin: 7, reconciled: false },
+  ]);
+});
+
+test('computeDeferFollowUps: an open marked follow-up is reconciled only when a text names it', () => {
+  const unreconciled = deferEvidence({
+    hits: [deferHit(12)],
+    mentionTexts: ['Closes #7', 'unrelated #120 and #1'],
+  });
+  assert.equal(unreconciled.evidence.items[0].reconciled, false);
+  const reconciled = deferEvidence({
+    hits: [deferHit(12)],
+    mentionTexts: ['nothing', 'deferred to follow-up issue #12'],
+  });
+  assert.equal(reconciled.evidence.items[0].reconciled, true);
+});
+
+test('computeDeferFollowUps: a follow-up is never attributed when it lacks the marker, keeps it only in a code region, or has a missing or ambiguous or unrelated Refs line', () => {
+  const excluded = [
+    deferHit(20, { body: followUpBody('Refs #7', { marker: null }) }),
+    deferHit(21, {
+      body: followUpBody('Refs #7', {
+        marker: `\`${DEFER_TEST_MARKER}\``,
+      }),
+    }),
+    deferHit(22, {
+      body: followUpBody('Refs #7', {
+        marker: `\`\`\`\n${DEFER_TEST_MARKER}\n\`\`\``,
+      }),
+    }),
+    deferHit(23, { body: followUpBody('Refs #99') }),
+    deferHit(24, { body: followUpBody(null) }),
+    deferHit(25, { body: followUpBody('Refs #7\nRefs #8') }),
+    deferHit(26, { body: followUpBody('Refs #7, #8') }),
+    deferHit(27, {
+      body: followUpBody('Refs #7 (background; originating issue #8)'),
+    }),
+  ];
+  const { evidence } = deferEvidence({ hits: excluded, origins: [7] });
+  assert.deepEqual(evidence, {
+    checked: true,
+    unverifiedReason: null,
+    items: [],
+  });
+});
+
+test('computeDeferFollowUps: only an open follow-up counts, matching the state case-insensitively', () => {
+  const { evidence } = deferEvidence({
+    hits: [
+      deferHit(30, { state: 'closed' }),
+      deferHit(31, { state: 'CLOSED' }),
+      deferHit(34, { state: 'open' }),
+      deferHit(35, { state: 'OPEN' }),
+    ],
+  });
+  assert.deepEqual(
+    evidence.items.map((item) => item.number),
+    [34, 35],
+  );
+});
+
+// A result entry the search returned without a usable identity or state cannot
+// be told from a real follow-up, so silently skipping it would let a marked
+// follow-up drop out and the check read as a verified empty result.
+for (const [label, entry] of [
+  ['a string entry', 'oops'],
+  ['a null entry', null],
+  ['an array entry', []],
+  ['an entry with no number', { ...deferHit(30), number: undefined }],
+  ['an entry with a string number', { ...deferHit(30), number: '30' }],
+  ['an entry with a zero number', deferHit(0)],
+  ['an entry with a fractional number', deferHit(30.5)],
+  ['an entry with a null state', deferHit(30, { state: null })],
+  ['an entry with a numeric state', deferHit(30, { state: 5 })],
+  ['an entry with no state', { ...deferHit(30), state: undefined }],
+  ['an entry with an object body', { ...deferHit(30), body: {} }],
+] as [string, unknown][]) {
+  test(`computeDeferFollowUps: ${label} fails the whole check closed, even beside a valid follow-up`, () => {
+    const { evidence } = deferEvidence({ hits: [deferHit(12), entry] });
+    assert.equal(evidence.checked, false);
+    assert.match(
+      evidence.unverifiedReason ?? '',
+      /without a usable number, state, or body/,
+    );
+    assert.deepEqual(evidence.items, []);
+  });
+}
+
+test('computeDeferFollowUps: an entry with a null or absent body is skipped, not malformed', () => {
+  const { evidence } = deferEvidence({
+    hits: [
+      deferHit(12),
+      { ...deferHit(30), body: null },
+      { ...deferHit(31), body: undefined },
+    ],
+  });
+  assert.equal(evidence.checked, true);
+  assert.deepEqual(
+    evidence.items.map((item) => item.number),
+    [12],
+  );
+});
+
+test('computeDeferFollowUps: a Refs line naming any origin issue attributes it, and each item records its own origin', () => {
+  const { evidence } = deferEvidence({
+    origins: [7, 8],
+    hits: [
+      deferHit(40, { body: followUpBody('Refs #8') }),
+      deferHit(41, { body: followUpBody('Refs #7') }),
+    ],
+  });
+  assert.deepEqual(
+    evidence.items.map((item) => [item.number, item.origin]),
+    [
+      [40, 8],
+      [41, 7],
+    ],
+  );
+});
+
+test('computeDeferFollowUps: heldByAuthoringLabel reads object or string labels, case-insensitively, and is false without the configured label', () => {
+  const held = (labels: unknown, label = 'status:authoring') =>
+    deferEvidence({ hits: [deferHit(50, { labels })], label }).evidence.items[0]
+      .heldByAuthoringLabel;
+  assert.equal(held([{ name: 'Status:Authoring' }]), true);
+  assert.equal(held(['status:authoring']), true);
+  assert.equal(held([{ name: 'enhancement' }]), false);
+  assert.equal(held([]), false);
+  assert.equal(held('not-an-array'), false);
+  assert.equal(held([{ name: 'hold' }], 'hold'), true);
+});
+
+test('computeDeferFollowUps: items are sorted by issue number and a repeated hit is counted once', () => {
+  const { evidence } = deferEvidence({
+    hits: [deferHit(9), deferHit(3), deferHit(9), deferHit(6)],
+  });
+  assert.deepEqual(
+    evidence.items.map((item) => item.number),
+    [3, 6, 9],
+  );
+});
+
+test('computeDeferFollowUps: a custom marker prefix recognizes only its own marker', () => {
+  const acme = '<!-- acme-authoring-defer-source: review-fix-loop-cutoff -->';
+  const { evidence, readCalls } = deferEvidence({
+    prefix: 'acme',
+    hits: [
+      deferHit(60, { body: followUpBody('Refs #7', { marker: acme }) }),
+      deferHit(61),
+    ],
+  });
+  assert.deepEqual(
+    evidence.items.map((item) => item.number),
+    [60],
+  );
+  assert.equal(
+    (readCalls[0].args[0] as { matchBody: string }).matchBody,
+    'acme-authoring-defer-source',
+  );
+});
+
+test('computeDeferFollowUps: a search that throws is unverified with its cause, never an empty successful result', () => {
+  const { evidence } = deferEvidence({
+    error: 'gh: API rate limit exceeded\nsecond line',
+    hits: [deferHit(12)],
+  });
+  assert.equal(evidence.checked, false);
+  assert.match(evidence.unverifiedReason ?? '', /rate limit exceeded/);
+  assert.doesNotMatch(evidence.unverifiedReason ?? '', /second line/);
+  assert.deepEqual(evidence.items, []);
+});
+
+test('computeDeferFollowUps: a non-array result is unverified', () => {
+  const port = createFakeProviderAdapter({});
+  const evidence = computeDeferFollowUps({
+    port: {
+      ...port,
+      searchOpenWorkItems: () => ({ message: 'rate limited' }) as never,
+    },
+    owner: 'o',
+    repo: 'r',
+    markerPrefix: 'idd-skill',
+    authoringLabelName: 'status:authoring',
+    originIssueNumbers: [7],
+    mentionTexts: [],
+  });
+  assert.equal(evidence.checked, false);
+  assert.match(evidence.unverifiedReason ?? '', /non-array/);
+});
+
+test('computeDeferFollowUps: a result at the search cap is unverified, one below it is verified', () => {
+  const filler = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      number: 1000 + index,
+      state: 'open',
+      labels: [],
+      body: '',
+    }));
+  const atCap = deferEvidence({ hits: filler(GH_SEARCH_RESULT_CAP) });
+  assert.equal(atCap.evidence.checked, false);
+  assert.match(atCap.evidence.unverifiedReason ?? '', /cap/);
+  const belowCap = deferEvidence({ hits: filler(GH_SEARCH_RESULT_CAP - 1) });
+  assert.equal(belowCap.evidence.checked, true);
+});
+
+/** The smallest report `computePreMergeReadinessBlockers` needs to evaluate
+ * the deferred-follow-up gates alone; callers filter by gate name. */
+function deferBlockers(deferFollowUps: unknown) {
+  const report: Record<string, unknown> =
+    deferFollowUps === undefined ? {} : { deferFollowUps };
+  return computePreMergeReadinessBlockers(report).filter((blocker) =>
+    blocker.gate.startsWith('deferred-followup-'),
+  );
+}
+
+test('deferFollowUps blockers: an absent section adds no blocker, so every earlier report and fixture stays valid', () => {
+  assert.deepEqual(deferBlockers(undefined), []);
+});
+
+test('deferFollowUps blockers: a verified section with no items, or only reconciled items, adds no blocker', () => {
+  assert.deepEqual(
+    deferBlockers({ checked: true, unverifiedReason: null, items: [] }),
+    [],
+  );
+  assert.deepEqual(
+    deferBlockers({
+      checked: true,
+      unverifiedReason: null,
+      items: [
+        {
+          number: 12,
+          heldByAuthoringLabel: true,
+          origin: 7,
+          reconciled: true,
+        },
+      ],
+    }),
+    [],
+  );
+});
+
+test('deferFollowUps blockers: one deferred-followup-unreconciled blocker per unreconciled item, in item order, naming the follow-up and both repairs', () => {
+  const blockers = deferBlockers({
+    checked: true,
+    unverifiedReason: null,
+    items: [
+      { number: 12, heldByAuthoringLabel: true, origin: 7, reconciled: false },
+      { number: 13, heldByAuthoringLabel: false, origin: 7, reconciled: true },
+      { number: 14, heldByAuthoringLabel: false, origin: 8, reconciled: false },
+    ],
+  });
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.gate),
+    ['deferred-followup-unreconciled', 'deferred-followup-unreconciled'],
+  );
+  const [first, second] = blockers;
+  assert.match(first.detail, /#12/);
+  assert.match(first.detail, /deferred from #7/);
+  assert.match(first.detail, /still under its authoring hold/);
+  assert.match(
+    first.detail,
+    /\*\*Rejected\*\* — deferred to follow-up issue #12/,
+  );
+  assert.match(first.detail, /post a pull request comment naming #12/);
+  assert.match(first.detail, /issueAuthoring\.authoringStaleAge/);
+  assert.match(first.detail, /return to E1/);
+  assert.match(second.detail, /#14/);
+  assert.match(second.detail, /deferred from #8/);
+  assert.doesNotMatch(second.detail, /still under its authoring hold/);
+});
+
+test('deferFollowUps blockers: an unverified section adds only deferred-followup-unverified, carrying the cause', () => {
+  const blockers = deferBlockers({
+    checked: false,
+    unverifiedReason: 'the follow-up search failed: rate limit',
+    items: [
+      { number: 12, heldByAuthoringLabel: false, origin: 7, reconciled: false },
+    ],
+  });
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.gate),
+    ['deferred-followup-unverified'],
+  );
+  assert.match(blockers[0].detail, /rate limit/);
+  assert.match(blockers[0].detail, /never reads as zero follow-ups/);
+});
+
+for (const malformed of [
+  null,
+  'checked',
+  [],
+  {},
+  { checked: 'yes', items: [] },
+  { checked: true, items: 'none' },
+  { checked: true, unverifiedReason: null },
+  { checked: true, items: [] },
+  { checked: true, unverifiedReason: undefined, items: [] },
+]) {
+  test(`deferFollowUps blockers: malformed evidence ${JSON.stringify(malformed)} fails closed to unverified, never to zero follow-ups`, () => {
+    const blockers = deferBlockers(malformed);
+    assert.deepEqual(
+      blockers.map((blocker) => blocker.gate),
+      ['deferred-followup-unverified'],
+    );
+    assert.match(blockers[0].detail, /missing or malformed/);
+  });
+}
+
+test('buildPreMergeReadinessSummary: an absent deferFollowUps option leaves the key out, and an explicit null is embedded and fails closed to unverified', () => {
+  const summaryFor = (options: Record<string, unknown>) =>
+    buildPreMergeReadinessSummary(
+      { prHeadSha: 'a'.repeat(40), comments: [] },
+      { now: '2026-08-02T00:05:00Z', ...options },
+    );
+  const absent = summaryFor({});
+  assert.equal('deferFollowUps' in absent, false);
+  assert.ok(
+    !(absent.blockers as { gate: string }[]).some((blocker) =>
+      blocker.gate.startsWith('deferred-followup-'),
+    ),
+  );
+  const nulled = summaryFor({ deferFollowUps: null });
+  assert.equal('deferFollowUps' in nulled, true);
+  assert.deepEqual(
+    (nulled.blockers as { gate: string }[])
+      .map((blocker) => blocker.gate)
+      .filter((gate) => gate.startsWith('deferred-followup-')),
+    ['deferred-followup-unverified'],
+  );
+});
+
+test('deferFollowUps blockers: a verified section that still carries an unverifiedReason is inconsistent evidence and fails closed, naming that reason', () => {
+  const blockers = deferBlockers({
+    checked: true,
+    unverifiedReason: 'the follow-up search failed: rate limit',
+    items: [],
+  });
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.gate),
+    ['deferred-followup-unverified'],
+  );
+  assert.match(blockers[0].detail, /rate limit/);
+});
+
+test('deferFollowUps blockers: only repair (b) closes the follow-up; repair (a) keeps it open and needs no authoring ownership', () => {
+  const [blocker] = deferBlockers({
+    checked: true,
+    unverifiedReason: null,
+    items: [
+      { number: 12, heldByAuthoringLabel: true, origin: 7, reconciled: false },
+    ],
+  });
+  const repairA = blocker.detail.indexOf('(a) ');
+  const repairB = blocker.detail.indexOf('(b) ');
+  const close = blocker.detail.indexOf('close #12 as not planned');
+  assert.ok(repairA >= 0 && repairB > repairA, blocker.detail);
+  assert.ok(close > repairB, 'the close step belongs to repair (b) only');
+  const repairAText = blocker.detail.slice(repairA, repairB);
+  assert.match(repairAText, /needs no authoring ownership/);
+  assert.match(repairAText, /leaves #12 open/);
+  assert.doesNotMatch(repairAText, /not planned/);
+});
+
+test('deferFollowUps blockers: a ready report gains exactly one blocker from an unreconciled follow-up and none once it is reconciled', () => {
+  const ready = {
+    prHeadSha: 'a'.repeat(40),
+    reviewCurrency: { comparisonRoute: 'proceed', comparisonReason: 'match' },
+    threads: { actionableCount: 0 },
+    advisoryWait: { f3Outcome: 'SATISFIED' },
+    ci: {
+      status: 'success',
+      requiredChecksPassing: true,
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'all-passing',
+      discardedNonPassingRequiredChecks: [],
+    },
+    reviewerStates: {
+      requiredApprovalsSatisfied: true,
+      codeownerApprovalSatisfied: true,
+      codeownerSelfApproval: { status: 'not_applicable' },
+    },
+    claim: { matchesExpectedClaim: true, reason: 'match' },
+    dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
+  };
+  assert.deepEqual(computePreMergeReadinessBlockers(ready), []);
+  const item = {
+    number: 12,
+    heldByAuthoringLabel: false,
+    origin: 7,
+    reconciled: false,
+  };
+  const blocked = computePreMergeReadinessBlockers({
+    ...ready,
+    deferFollowUps: { checked: true, unverifiedReason: null, items: [item] },
+  });
+  assert.deepEqual(
+    blocked.map((blocker) => blocker.gate),
+    ['deferred-followup-unreconciled'],
+  );
+  assert.deepEqual(
+    computePreMergeReadinessBlockers({
+      ...ready,
+      deferFollowUps: {
+        checked: true,
+        unverifiedReason: null,
+        items: [{ ...item, reconciled: true }],
+      },
+    }),
+    [],
+  );
+});
+
+// --- #3624: the collector wires the follow-up evidence end to end -----------
+
+/** A non-claimless fake-provider fixture (claim issue 7, PR 1) with room for
+ * every text the deferred-follow-up check reads. */
+function deferCollectorFixture(
+  overrides: {
+    body?: string;
+    comments?: string[];
+    reviewBodies?: string[];
+    threads?: { resolved: boolean; body: string }[];
+    searchResults?: unknown[];
+    searchOpenWorkItemsError?: string;
+    closingIssuesReferences?: unknown[];
+  } = {},
+) {
+  const fixture: FakeProviderFixture = {
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: overrides.closingIssuesReferences ?? [
+          { number: 7 },
+        ],
+        body: overrides.body ?? 'Closes #7',
+      },
+    },
+    comments: {
+      1: (overrides.comments ?? []).map((body, index) => ({
+        id: 900 + index,
+        body,
+        createdAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-01T00:00:00Z',
+        authorLogin: 'commenter',
+      })),
+    },
+    reviews: {
+      1: (overrides.reviewBodies ?? []).map((body, index) => ({
+        id: 800 + index,
+        state: 'COMMENTED',
+        user: { login: 'reviewer-user' },
+        submitted_at: '2026-08-01T00:00:00Z',
+        commit_id: 'a'.repeat(40),
+        body,
+      })),
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: {
+      1: (overrides.threads ?? []).map((thread, index) => ({
+        id: `RT_${index}`,
+        isResolved: thread.resolved,
+        comments: [
+          {
+            body: thread.body,
+            createdAt: '2026-08-01T00:00:00Z',
+            updatedAt: '2026-08-01T00:00:00Z',
+            authorLogin: 'reviewer-user',
+            pullRequestReviewId: null,
+          },
+        ],
+      })),
+    },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    searchResults: overrides.searchResults ?? [deferHit(12)],
+    ...(overrides.searchOpenWorkItemsError === undefined
+      ? {}
+      : { searchOpenWorkItemsError: overrides.searchOpenWorkItemsError }),
+  };
+  return { fixture, port: createFakeProviderAdapter(fixture) };
+}
+
+function collectDeferReport(
+  port: ProviderPort,
+  args: string[] = ['--claim-issue', '7'],
+  config: unknown = {},
+) {
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      ...args,
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-02T00:00:00Z',
+    ],
+    () => port,
+    () => config as never,
+  );
+  return {
+    report,
+    evidence: report.deferFollowUps as {
+      checked: boolean;
+      unverifiedReason: string | null;
+      items: { number: number; reconciled: boolean; origin: number }[];
+    },
+    gates: (report.blockers as { gate: string; detail: string }[]).map(
+      (blocker) => blocker.gate,
+    ),
+  };
+}
+
+test('collectPreMergeReadiness: an open marked follow-up the PR never names blocks with deferred-followup-unreconciled, from one search and one snapshot read', () => {
+  const { fixture, port } = deferCollectorFixture();
+  const { report, evidence, gates } = collectDeferReport(port);
+  assert.equal(evidence.checked, true);
+  assert.deepEqual(
+    evidence.items.map((item) => [item.number, item.reconciled, item.origin]),
+    [[12, false, 7]],
+  );
+  assert.ok(gates.includes('deferred-followup-unreconciled'), gates.join());
+  assert.ok(!gates.includes('deferred-followup-unverified'));
+  const blocker = (report.blockers as { gate: string; detail: string }[]).find(
+    (entry) => entry.gate === 'deferred-followup-unreconciled',
+  );
+  assert.match(blocker?.detail ?? '', /#12/);
+  assert.match(blocker?.detail ?? '', /authoringStaleAge/);
+  assert.equal(report.ready, false);
+  // Exactly one enumeration read, and the PR body arrives on the one existing
+  // readiness snapshot read rather than a request of its own.
+  const calls = fixture.readCalls ?? [];
+  assert.equal(
+    calls.filter((call) => call.method === 'searchOpenWorkItems').length,
+    1,
+  );
+  assert.equal(
+    calls.filter((call) => call.method === 'getChangeRequestReadinessSnapshot')
+      .length,
+    1,
+  );
+  assert.equal(calls.length, 2);
+});
+
+const RECONCILING_SOURCES: [
+  string,
+  Parameters<typeof deferCollectorFixture>[0],
+][] = [
+  ['the PR body', { body: 'Closes #7\n\nDeferred a finding to #12.' }],
+  ['a conversation comment', { comments: ['deferred to follow-up #12'] }],
+  ['a review body', { reviewBodies: ['see the follow-up in o/r#12'] }],
+  [
+    'an unresolved review-thread comment',
+    {
+      threads: [{ resolved: false, body: '**Rejected** — deferred to #12' }],
+    },
+  ],
+  [
+    'a resolved review-thread comment',
+    {
+      threads: [
+        {
+          resolved: true,
+          body: '**Rejected** — deferred to follow-up issue #12 (see https://github.com/o/r/issues/12)',
+        },
+      ],
+    },
+  ],
+];
+
+for (const [label, overrides] of RECONCILING_SOURCES) {
+  test(`collectPreMergeReadiness: naming the follow-up in ${label} reconciles it and adds no deferred-follow-up blocker`, () => {
+    const { port } = deferCollectorFixture(overrides);
+    const { evidence, gates } = collectDeferReport(port);
+    assert.deepEqual(
+      evidence.items.map((item) => [item.number, item.reconciled]),
+      [[12, true]],
+    );
+    assert.ok(
+      !gates.some((gate) => gate.startsWith('deferred-followup-')),
+      gates.join(),
+    );
+  });
+}
+
+const DEFER_DIGEST_COMMENT =
+  '<!-- idd-live-status: current -->\n\nOpen blockers: deferred-followup-unreconciled #12';
+
+test('collectPreMergeReadiness: a trusted live status digest that lists the follow-up as an open blocker does not reconcile it', () => {
+  const { port } = deferCollectorFixture({ comments: [DEFER_DIGEST_COMMENT] });
+  const { evidence, gates } = collectDeferReport(port, [
+    '--claim-issue',
+    '7',
+    '--trusted-marker-logins',
+    'commenter',
+  ]);
+  assert.equal(evidence.items[0].reconciled, false);
+  assert.ok(gates.includes('deferred-followup-unreconciled'), gates.join());
+});
+
+test('collectPreMergeReadiness: a digest-shaped comment from an untrusted author is ordinary text and still counts as naming the follow-up', () => {
+  const { port } = deferCollectorFixture({ comments: [DEFER_DIGEST_COMMENT] });
+  const { evidence } = collectDeferReport(port);
+  assert.equal(evidence.items[0].reconciled, true);
+});
+
+test('collectPreMergeReadiness: a number that only resembles the follow-up (#120, another repository) does not reconcile it', () => {
+  const { port } = deferCollectorFixture({
+    body: 'Closes #7 and #120',
+    comments: ['other/repo#12 is unrelated'],
+  });
+  const { evidence } = collectDeferReport(port);
+  assert.equal(evidence.items[0].reconciled, false);
+});
+
+test('collectPreMergeReadiness: --claimless has no origin issue, so it performs no enumeration read and adds no deferred-follow-up blocker', () => {
+  const { fixture, port } = deferCollectorFixture({
+    closingIssuesReferences: [],
+  });
+  const { evidence, gates } = collectDeferReport(port, ['--claimless']);
+  assert.deepEqual(evidence, {
+    checked: true,
+    unverifiedReason: null,
+    items: [],
+  });
+  assert.ok(!gates.some((gate) => gate.startsWith('deferred-followup-')));
+  assert.deepEqual(
+    (fixture.readCalls ?? []).map((call) => call.method),
+    ['getChangeRequestReadinessSnapshot'],
+  );
+});
+
+test('collectPreMergeReadiness: an out-of-loop --claimless PR that carries closing references still has no origin issue and performs no enumeration read', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 1,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const base = outOfLoopFakePort({
+    prComments: [
+      {
+        id: 1,
+        body: markerBody,
+        createdAt: '2026-07-01T00:00:01Z',
+        updatedAt: '2026-07-01T00:00:01Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
+      },
+    ],
+  });
+  let searches = 0;
+  const port: ProviderPort = {
+    ...base,
+    searchOpenWorkItems: () => {
+      searches += 1;
+      return [deferHit(12)];
+    },
+  };
+  const report = collectPreMergeReadiness(
+    OUT_OF_LOOP_ARGV,
+    () => port,
+    () => ({}),
+  );
+  assert.equal(searches, 0);
+  assert.deepEqual(report.deferFollowUps, {
+    checked: true,
+    unverifiedReason: null,
+    items: [],
+  });
+  assert.ok(
+    !(report.blockers as { gate: string }[]).some((blocker) =>
+      blocker.gate.startsWith('deferred-followup-'),
+    ),
+  );
+});
+
+test('collectPreMergeReadiness: a follow-up whose Refs names an unrelated issue, lacks the marker, or is closed never blocks, even when the PR closes nothing', () => {
+  const { port } = deferCollectorFixture({
+    closingIssuesReferences: [],
+    searchResults: [
+      deferHit(20, { body: followUpBody('Refs #99') }),
+      deferHit(21, { body: followUpBody('Refs #7', { marker: null }) }),
+      deferHit(22, { state: 'closed' }),
+    ],
+  });
+  const { evidence, gates } = collectDeferReport(port);
+  assert.deepEqual(evidence, {
+    checked: true,
+    unverifiedReason: null,
+    items: [],
+  });
+  assert.ok(!gates.some((gate) => gate.startsWith('deferred-followup-')));
+});
+
+test('collectPreMergeReadiness: a follow-up that names any same-repository closing issue is attributed to that origin', () => {
+  const { port } = deferCollectorFixture({
+    closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+    searchResults: [deferHit(30, { body: followUpBody('Refs #8') })],
+  });
+  const { evidence } = collectDeferReport(port);
+  assert.deepEqual(
+    evidence.items.map((item) => [item.number, item.origin]),
+    [[30, 8]],
+  );
+});
+
+test('collectPreMergeReadiness: a failing search is unverified with its cause, adds deferred-followup-unverified, and never reads as zero follow-ups', () => {
+  const { port } = deferCollectorFixture({
+    searchOpenWorkItemsError: 'gh: HTTP 403: API rate limit exceeded',
+  });
+  const { report, evidence, gates } = collectDeferReport(port);
+  assert.equal(evidence.checked, false);
+  assert.match(evidence.unverifiedReason ?? '', /rate limit exceeded/);
+  assert.deepEqual(evidence.items, []);
+  assert.ok(gates.includes('deferred-followup-unverified'));
+  assert.ok(!gates.includes('deferred-followup-unreconciled'));
+  assert.equal(report.ready, false);
+});
+
+test('collectPreMergeReadiness: a search result at the cap is unverified', () => {
+  const { port } = deferCollectorFixture({
+    searchResults: Array.from({ length: GH_SEARCH_RESULT_CAP }, (_, index) => ({
+      number: 2000 + index,
+      state: 'open',
+      labels: [],
+      body: '',
+    })),
+  });
+  const { evidence, gates } = collectDeferReport(port);
+  assert.equal(evidence.checked, false);
+  assert.ok(gates.includes('deferred-followup-unverified'));
+});
+
+test('collectPreMergeReadiness: the trusted config markerPrefix and authoring label name drive the search and the held flag', () => {
+  const acme = '<!-- acme-authoring-defer-source: review-fix-loop-cutoff -->';
+  const { fixture, port } = deferCollectorFixture({
+    searchResults: [
+      deferHit(40, {
+        body: followUpBody('Refs #7', { marker: acme }),
+        labels: [{ name: 'hold' }],
+      }),
+      deferHit(41),
+    ],
+  });
+  const { evidence } = collectDeferReport(port, ['--claim-issue', '7'], {
+    markerPrefix: 'acme',
+    issueAuthoring: { authoringLabelName: 'hold' },
+  });
+  assert.deepEqual(
+    evidence.items.map((item) => item.number),
+    [40],
+  );
+  const search = (fixture.readCalls ?? []).find(
+    (call) => call.method === 'searchOpenWorkItems',
+  );
+  assert.ok(search, 'expected one enumeration read');
+  assert.equal(
+    (search.args[0] as { matchBody: string }).matchBody,
+    'acme-authoring-defer-source',
+  );
+  const held = (
+    evidence as unknown as { items: { heldByAuthoringLabel: boolean }[] }
+  ).items[0].heldByAuthoringLabel;
+  assert.equal(held, true);
+});
+
+test('collectPreMergeReadiness: an empty search adds no deferred-follow-up gate and the report carries a verified empty section', () => {
+  const { port } = deferCollectorFixture({ searchResults: [] });
+  const { evidence, gates } = collectDeferReport(port);
+  assert.deepEqual(evidence, {
+    checked: true,
+    unverifiedReason: null,
+    items: [],
+  });
+  assert.ok(!gates.some((gate) => gate.startsWith('deferred-followup-')));
 });

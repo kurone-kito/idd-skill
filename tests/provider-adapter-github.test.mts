@@ -2251,6 +2251,110 @@ test('searchOpenWorkItems builds the body-marker-search args', () => {
   ]);
 });
 
+test('searchOpenWorkItems keeps mapping empty output, null, and a non-array to an empty list when not strict', () => {
+  for (const output of ['', 'null', '{"message":"API rate limit exceeded"}']) {
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: () => output }),
+    );
+    assert.deepEqual(
+      port.searchOpenWorkItems({ fields: ['number'], limit: 1000 }),
+      [],
+      output,
+    );
+  }
+});
+
+test('searchOpenWorkItems strict returns a JSON array, including an empty one, unchanged (#3624)', () => {
+  for (const [output, expected] of [
+    ['[]', []],
+    ['[{"number":5}]', [{ number: 5 }]],
+  ] as const) {
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: () => output }),
+    );
+    assert.deepEqual(
+      port.searchOpenWorkItems({
+        fields: ['number'],
+        limit: 1000,
+        strict: true,
+      }),
+      expected,
+    );
+  }
+});
+
+test('searchOpenWorkItems strict throws on empty output, null, a non-array response, and unparseable output instead of returning no hits (#3624)', () => {
+  for (const output of [
+    '',
+    '   ',
+    'null',
+    '{"message":"API rate limit exceeded"}',
+    'not json',
+  ]) {
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: () => output }),
+    );
+    assert.throws(
+      () =>
+        port.searchOpenWorkItems({
+          fields: ['number'],
+          limit: 1000,
+          strict: true,
+        }),
+      Error,
+      JSON.stringify(output),
+    );
+  }
+});
+
+test('searchOpenWorkItems strict raises the output buffer above the 1 MiB default; a lenient search keeps the default (#3624)', () => {
+  const seen: (number | undefined)[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (_args, options) => {
+        seen.push(options?.maxBuffer);
+        return '[]';
+      },
+    }),
+  );
+  port.searchOpenWorkItems({ fields: ['number'], limit: 1000 });
+  port.searchOpenWorkItems({ fields: ['number'], limit: 1000, strict: true });
+  assert.equal(seen[0], undefined, 'lenient search leaves maxBuffer alone');
+  assert.ok(
+    typeof seen[1] === 'number' && seen[1] > 1024 * 1024,
+    `strict search must lift the 1 MiB default, got ${String(seen[1])}`,
+  );
+});
+
+test('searchOpenWorkItems strict lets a gh failure propagate instead of reading it as no hits (#3624)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw new Error('gh: HTTP 403: API rate limit exceeded');
+      },
+    }),
+  );
+  assert.throws(
+    () =>
+      port.searchOpenWorkItems({
+        fields: ['number'],
+        limit: 1000,
+        strict: true,
+      }),
+    /API rate limit exceeded/,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // #2267 additions below.
 // ---------------------------------------------------------------------------
@@ -2711,7 +2815,7 @@ test('getChangeRequestRequestedReviewerLoginsGraphql never throws, returning nul
   assert.equal(port.getChangeRequestRequestedReviewerLoginsGraphql(7), null);
 });
 
-test('getChangeRequestReadinessSnapshot maps all nine fields from a single pr view call', () => {
+test('getChangeRequestReadinessSnapshot maps all ten fields from a single pr view call', () => {
   let capturedArgs: string[] | undefined;
   const port = createGithubProviderAdapter(
     'o',
@@ -2729,6 +2833,7 @@ test('getChangeRequestReadinessSnapshot maps all nine fields from a single pr vi
           mergeable: 'MERGEABLE',
           mergeStateStatus: 'CLEAN',
           closingIssuesReferences: { nodes: [] },
+          body: 'Closes #7',
         });
       },
     }),
@@ -2743,13 +2848,39 @@ test('getChangeRequestReadinessSnapshot maps all nine fields from a single pr vi
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
     closingIssuesReferences: { nodes: [] },
+    body: 'Closes #7',
   });
   assert.ok(capturedArgs?.includes('-R'));
   assert.ok(
     capturedArgs?.includes(
-      'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences',
+      'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,body',
     ),
   );
+});
+
+test('getChangeRequestReadinessSnapshot reports an absent or null pull request body as an empty string (#3624)', () => {
+  for (const body of [undefined, null]) {
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () =>
+          JSON.stringify({
+            headRefOid: 'deadbeef',
+            baseRefName: 'main',
+            url: 'https://example.invalid/pull/7',
+            author: { login: 'contributor' },
+            reviewDecision: null,
+            statusCheckRollup: [],
+            mergeable: 'MERGEABLE',
+            mergeStateStatus: 'CLEAN',
+            closingIssuesReferences: [],
+            ...(body === undefined ? {} : { body }),
+          }),
+      }),
+    );
+    assert.equal(port.getChangeRequestReadinessSnapshot(7).body, '');
+  }
 });
 
 test('getChangeRequestBranchAndChecks paginates the rollup and preserves workflow identity', () => {

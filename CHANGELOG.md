@@ -16,6 +16,12 @@ discipline and has no tag.
 
 ### Added
 
+- `pre-merge-readiness` reports `deferFollowUps`, and F3 now blocks on
+  `deferred-followup-unreconciled` when an open follow-up deferred from the
+  pull request's origin issue is never named on the pull request, and on
+  `deferred-followup-unverified` when that follow-up search cannot be
+  completed (#3624). It adds one search read per invocation when a claim
+  issue is given, and needs no configuration.
 - `critiqueLoop.deferByUrgency` accepts `severity-tiered`, so a PATH A
   finding can be deferred by an urgency score. High defers only at
   `very-low`. `low` and `low-and-medium` are unchanged, except that in

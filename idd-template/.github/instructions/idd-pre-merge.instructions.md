@@ -111,7 +111,8 @@ error (e.g. missing `--claim-issue`/`--claimless`) carries a `hint` —
 fix before retrying; a live `gh` lookup failure lacks one — use
 judgment (calls can fail transiently). Conflating either `{error}`
 shape with not-ready-yet (kurone-kito/idd-skill#2707) turns a real
-failure into a silent stall.
+failure into a silent stall. A `deferred-followup-unreconciled` blocker
+never clears by polling: follow its `detail`.
 
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
