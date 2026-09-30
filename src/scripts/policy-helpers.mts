@@ -78,7 +78,18 @@ interface GithubApiReadCachePolicy {
   directory?: string;
 }
 
+/**
+ * `githubApi.telemetry` (#3585): local request-lifecycle observations for
+ * the owned GitHub transport wrappers. Off unless `enabled` is exactly true.
+ */
+interface GithubApiTelemetryPolicy {
+  enabled: boolean;
+  maxRecords: number;
+  path: string | null;
+}
+
 interface GithubApiPolicy {
+  telemetry: GithubApiTelemetryPolicy;
   readCache: GithubApiReadCachePolicy;
 }
 
@@ -521,6 +532,7 @@ interface RawConfig {
   localValidationEvidence?: { maxAge?: unknown };
   providerHealth?: { minCorroboratingPrs?: unknown; samplingWindow?: unknown };
   githubApi?: {
+    telemetry?: { enabled?: unknown; maxRecords?: unknown; path?: unknown };
     readCache?: {
       enabled?: unknown;
       maxAge?: unknown;
@@ -758,9 +770,16 @@ export const POLICY_DEFAULTS = Object.freeze({
     minCorroboratingPrs: 2,
     samplingWindow: 'PT24H',
   }) as Readonly<ProviderHealthPolicy>,
-  // #3587: disabled unless `enabled` is exactly true. `directory` is not an
-  // own key until an operator sets a non-empty string.
+  // #3585 / #3587: `telemetry` and `readCache` are both disabled unless
+  // `enabled` is exactly true, so absent or false leaves the GitHub transport
+  // wrappers unchanged. `readCache.directory` is not an own key until an
+  // operator sets a non-empty string.
   githubApi: Object.freeze({
+    telemetry: Object.freeze({
+      enabled: false,
+      maxRecords: 100,
+      path: null,
+    }),
     readCache: Object.freeze({
       enabled: false,
       maxAge: 'PT5M',
@@ -964,6 +983,18 @@ export function normalizePolicyConfig(config: unknown) {
     c?.providerHealth?.minCorroboratingPrs,
     POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
   );
+  const telemetryPath = c?.githubApi?.telemetry?.path;
+  const telemetry: GithubApiTelemetryPolicy = {
+    enabled: c?.githubApi?.telemetry?.enabled === true,
+    maxRecords: parsePositiveInteger(
+      c?.githubApi?.telemetry?.maxRecords,
+      POLICY_DEFAULTS.githubApi.telemetry.maxRecords,
+    ),
+    path:
+      typeof telemetryPath === 'string' && telemetryPath.trim().length > 0
+        ? telemetryPath.trim()
+        : null,
+  };
   const providerHealth: ProviderHealthPolicy = {
     minCorroboratingPrs:
       rawMinCorroboratingPrs >= 2
@@ -1000,7 +1031,7 @@ export function normalizePolicyConfig(config: unknown) {
   ) {
     readCache.directory = rawReadCacheDirectory.trim();
   }
-  const githubApi: GithubApiPolicy = { readCache };
+  const githubApi: GithubApiPolicy = { telemetry, readCache };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured

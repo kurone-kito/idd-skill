@@ -360,9 +360,16 @@ export const POLICY_DEFAULTS = Object.freeze({
     minCorroboratingPrs: 2,
     samplingWindow: 'PT24H',
   }),
-  // #3587: disabled unless `enabled` is exactly true. `directory` is not an
-  // own key until an operator sets a non-empty string.
+  // #3585 / #3587: `telemetry` and `readCache` are both disabled unless
+  // `enabled` is exactly true, so absent or false leaves the GitHub transport
+  // wrappers unchanged. `readCache.directory` is not an own key until an
+  // operator sets a non-empty string.
   githubApi: Object.freeze({
+    telemetry: Object.freeze({
+      enabled: false,
+      maxRecords: 100,
+      path: null,
+    }),
     readCache: Object.freeze({
       enabled: false,
       maxAge: 'PT5M',
@@ -546,6 +553,18 @@ export function normalizePolicyConfig(config) {
     c?.providerHealth?.minCorroboratingPrs,
     POLICY_DEFAULTS.providerHealth.minCorroboratingPrs,
   );
+  const telemetryPath = c?.githubApi?.telemetry?.path;
+  const telemetry = {
+    enabled: c?.githubApi?.telemetry?.enabled === true,
+    maxRecords: parsePositiveInteger(
+      c?.githubApi?.telemetry?.maxRecords,
+      POLICY_DEFAULTS.githubApi.telemetry.maxRecords,
+    ),
+    path:
+      typeof telemetryPath === 'string' && telemetryPath.trim().length > 0
+        ? telemetryPath.trim()
+        : null,
+  };
   const providerHealth = {
     minCorroboratingPrs:
       rawMinCorroboratingPrs >= 2
@@ -582,7 +601,7 @@ export function normalizePolicyConfig(config) {
   ) {
     readCache.directory = rawReadCacheDirectory.trim();
   }
-  const githubApi = { readCache };
+  const githubApi = { telemetry, readCache };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured

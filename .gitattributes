@@ -54,6 +54,7 @@ scripts/force-handoff.mjs linguist-generated=true
 scripts/forced-handoff-marker.mjs linguist-generated=true
 scripts/gh-exec.mjs linguist-generated=true
 scripts/gh-http-status.mjs linguist-generated=true
+scripts/github-api-observation.mjs linguist-generated=true
 scripts/github-api-read-cache.mjs linguist-generated=true
 scripts/helper-cli-runner.mjs linguist-generated=true
 scripts/helper-flag-drift.mjs linguist-generated=true
