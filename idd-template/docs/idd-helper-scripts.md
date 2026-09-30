@@ -1553,15 +1553,19 @@ complete trusted base; otherwise it performs one real fetch. A second
 a 304 on that path is an unpersisted miss. Errors, throttles, and
 incomplete collections are not stored. A paginated body accepted only
 because `allowStatuses` tolerated `gh`'s exit status is incomplete and
-is not stored.
+is not stored. A 404 or 410 removes the stored entry for the same
+context; 401, 403, 429, and 5xx leave it.
 
 The directory is per-user and OS-local: `XDG_CACHE_HOME` or `~/.cache`
 on Linux, `~/Library/Caches` on macOS, and `LOCALAPPDATA` on Windows.
 `directory` may override it. Files stay private to the user. An
 unwritable directory or a loose permission mode degrades to a live read
 and does not return the stored body. Purge deletes only regular entry
-files under that cache. It refuses a filesystem root, the workspace, an
-ancestor of the workspace, and a symlinked cache root. Entries are
+files, and orphaned temp files whose writer has exited, under that
+cache; without `directory` it targets the default location. The cache
+refuses a filesystem root, the workspace, an ancestor of the workspace,
+a symlinked cache root, and an existing directory that holds anything
+besides its own layout. Entries are
 partitioned by API host, a hash of the credential context, repository,
 request shape (including the request body), schema version, and a hash
 of derived inputs. The host is `GH_HOST`, otherwise the host from
@@ -1571,9 +1575,11 @@ Several configured hosts and no `GH_HOST` skip the cache. For
 credential is `GH_TOKEN` or `GITHUB_TOKEN` when set. For a GitHub
 Enterprise Server host it is `GH_ENTERPRISE_TOKEN` or
 `GITHUB_ENTERPRISE_TOKEN` when set. Otherwise it is the token from
-`gh auth token` for that host. A failed lookup stays uncached. A
-caller-supplied `requestShape` does not replace the path, arguments,
-pagination flag, or request body in the cache identity. Raw tokens are
+`gh auth token` for that host. A failed lookup, or blank credential
+material or host, stays uncached. A caller-supplied `requestShape` does
+not replace the path, arguments, pagination flag, or request body in
+the cache identity, and a shape that plain JSON cannot represent skips
+the cache. Raw tokens are
 neither stored nor logged. Nothing promises that the cache is shared across
 computers. Local policy and permission decisions are not cached. The
 single-flight lease outlives that call's `gh` timeout, and a process
