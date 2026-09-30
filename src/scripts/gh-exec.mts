@@ -710,7 +710,9 @@ export function combineOwnerRepoFlags(args: {
 function appendPaginatedNdjsonLine(items: unknown[], bytes: Buffer): boolean {
   const text = bytes.toString('utf8').replace(/\r$/, '').trim();
   if (!text) return false;
-  items.push(...parsePaginatedGhNdjson(text));
+  // A loop, not `push(...rows)`: a single array line with over ~130k
+  // elements overflows the call stack when spread into arguments.
+  for (const row of parsePaginatedGhNdjson(text)) items.push(row);
   return text.startsWith('{') || text.startsWith('[');
 }
 
@@ -758,12 +760,20 @@ function parsePaginatedNdjsonFile(
   return { items, jsonShaped };
 }
 
-function ghCommandFailure(status: number, stderr: string): Error {
+function ghCommandFailure(status: number, stderr: string, stdout = ''): Error {
   const error = new Error(`gh command failed: ${stderr.trim()}`);
   Object.defineProperty(error, 'status', {
     value: status,
     enumerable: false,
   });
+  // `deriveGhHttpStatus` falls back to a JSON body's `status` field when
+  // stderr carries none (#3335); an execFileSync error kept `.stdout` for it.
+  if (stdout.length > 0) {
+    Object.defineProperty(error, 'stdout', {
+      value: stdout,
+      enumerable: false,
+    });
+  }
   if (stderr.length > 0) {
     Object.defineProperty(error, 'stderr', {
       value: stderr,
@@ -1345,6 +1355,50 @@ function paginatedStreamError(status: PaginatedCaptureStatus): Error {
   return tagGhCommandError(error);
 }
 
+/** Largest stdout that can still be kept as a failed call's JSON error body. */
+const PAGINATED_ERROR_BODY_MAX_BYTES = 64 * 1024;
+
+/**
+ * The captured stdout, but only when it is gh's own JSON error body: the
+ * whole output is one small JSON object with a string `message` and a
+ * three-digit `status` (e.g. `{"message":"Not Found","status":"404"}`).
+ * `deriveGhHttpStatus` scans an error's `stdout` for that `status` when
+ * stderr carries none (#3335). On this path stdout otherwise holds earlier
+ * pages' data rows, which are user content (comment and issue bodies); the
+ * status and wording scanners must never read those, or text like
+ * "(HTTP 404)" inside a comment would reclassify a transport failure
+ * (CodeRabbit-style critique, PR #3605). Returns '' for anything else.
+ */
+function readPaginatedErrorBody(filePath: string): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, 'r');
+    const buffer = Buffer.alloc(PAGINATED_ERROR_BODY_MAX_BYTES + 1);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    if (read === 0 || read > PAGINATED_ERROR_BODY_MAX_BYTES) return '';
+    const text = buffer.subarray(0, read).toString('utf8').trim();
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return '';
+    }
+    const body = parsed as { message?: unknown; status?: unknown };
+    return typeof body.message === 'string' &&
+      /^\d{3}$/.test(String(body.status ?? ''))
+      ? text
+      : '';
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Nothing more to release.
+      }
+    }
+  }
+}
+
 /**
  * Best-effort removal of the capture's temp directory. A worker that is
  * still terminating can hold a file open (Windows refuses to remove it),
@@ -1467,10 +1521,12 @@ function readPaginatedGhApi(
       if (error instanceof GhPaginatedResponseLimitError) throw error;
       const status = Number(capture.status ?? -1);
       // A zero exit with a malformed body stays a parse failure. Status 0
-      // is a successful gh exit, so it stays off the allow-listed
-      // failure path.
-      if (status !== 0 && !options.allowStatuses.includes(status)) {
-        throw ghCommandFailure(status, stderr);
+      // is a successful gh exit, so it stays off the gh failure path. A
+      // non-zero exit is a tagged gh failure whether or not the status is
+      // allow-listed: an allow-listed status only tolerates a JSON-shaped
+      // body, and this body did not parse (matching the execFileSync path).
+      if (status !== 0) {
+        throw ghCommandFailure(status, stderr, readPaginatedErrorBody(outPath));
       }
       throw error;
     }
@@ -1481,7 +1537,7 @@ function readPaginatedGhApi(
       if (options.allowStatuses.includes(status) && parsed.jsonShaped) {
         return parsed.items;
       }
-      throw ghCommandFailure(status, stderr);
+      throw ghCommandFailure(status, stderr, readPaginatedErrorBody(outPath));
     }
     return parsed.items;
   } finally {

@@ -35,6 +35,7 @@ import {
   viewerLoginFailureIsGraphqlEligible,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
+import { deriveGhHttpStatus } from '../src/scripts/gh-http-status.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -1121,8 +1122,8 @@ function processIsAlive(pid: number): boolean {
 function stubSigtermIgnoringGh(pidPath: string, output: string): () => void {
   return stubGh(`
 const fs = require('node:fs');
-fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 ${output}
 setTimeout(() => process.exit(0), 60_000);
 `);
@@ -1150,8 +1151,10 @@ test(
       `process.stdout.write('{"id":1}\\n');`,
     );
     try {
+      // The timeout has to outlast the stub's start-up, or SIGTERM would
+      // arrive before it has recorded its pid (a slow runner).
       assert.throws(
-        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 300 }),
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 1_000 }),
         (error: unknown) => {
           assert.equal((error as { code?: unknown }).code, 'ETIMEDOUT');
           return true;
@@ -1228,6 +1231,121 @@ for (let i = 0; i < 10; i += 1) process.stdout.write(chunk);`,
     }
   },
 );
+
+test('ghApiJson (paginated) throws a tagged gh failure for an allow-listed status with a non-JSON body (#3597)', () => {
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeSync(1, 'Not Found\\n');
+fs.writeSync(2, 'gh: Not Found (HTTP 404)\\n');
+process.exit(1);
+`);
+  try {
+    assert.throws(
+      () =>
+        ghApiJson('repos/o/r/issues', { paginate: true, allowStatuses: [1] }),
+      (error: unknown) => {
+        assert.equal(error instanceof SyntaxError, false);
+        assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
+        assert.equal((error as { status?: unknown }).status, 1);
+        assert.match(
+          String((error as { stderr?: unknown }).stderr),
+          /HTTP 404/,
+        );
+        assert.equal(deriveGhHttpStatus(error), 404);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) keeps the stdout JSON body on a failure so its status can be derived (#3597)', () => {
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeSync(1, '{"message":"Forbidden","status":"403"}\\n');
+fs.writeSync(2, 'gh: something odd\\n');
+process.exit(1);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true }),
+      (error: unknown) => {
+        assert.match(
+          String((error as { stdout?: unknown }).stdout),
+          /"status":"403"/,
+        );
+        assert.equal(deriveGhHttpStatus(error), 403);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) never keeps earlier data rows as the failure stdout (#3597)', () => {
+  // A comment body that quotes a gh status must not turn a later transport
+  // failure into a 404 (or a 65 KB error message).
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeSync(1, JSON.stringify({ id: 1, body: 'see (HTTP 404) in the log', status: '404' }) + '\\n');
+fs.writeSync(1, JSON.stringify({ id: 2, body: 'gh: Not Found (HTTP 404)' }) + '\\n');
+fs.writeSync(2, 'error connecting to api.github.com\\n');
+process.exit(1);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues/1/comments', { paginate: true }),
+      (error: unknown) => {
+        assert.equal((error as { stdout?: unknown }).stdout, undefined);
+        assert.equal(deriveGhHttpStatus(error), null);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) parses a single line holding a very large JSON array (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'array-line.json');
+  const count = 150_000;
+  writeFileSync(
+    fixturePath,
+    `[${Array.from({ length: count }, (_, id) => id).join(',')}]\n`,
+  );
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    const items = ghApiJson('repos/o/r/issues', { paginate: true });
+    assert.equal(Array.isArray(items) && items.length, count);
+    assert.equal((items as number[])[count - 1], count - 1);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) parses CRLF rows with multibyte text across read boundaries and no trailing newline (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'rows.ndjson');
+  const rows = Array.from({ length: 6_000 }, (_, id) => ({
+    id,
+    name: `日本語テスト𠮷-${id}`,
+  }));
+  writeFileSync(
+    fixturePath,
+    rows.map((row) => JSON.stringify(row)).join('\r\n'),
+  );
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues', { paginate: true }), rows);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test('ghApiJson (paginated) treats a timeout past the timer range as the longest delay (#3597)', () => {
   // `setTimeout` fires after 1 ms for a delay past 2^31-1, which would
