@@ -69,6 +69,12 @@ export interface DiscoverHintDeps {
   policy?: GithubApiReadCacheRuntimePolicy;
   /** The `origin` remote URL; defaults to `git remote get-url origin`. */
   originUrl?: () => string | undefined;
+  /**
+   * Whether `gh`'s current repository is provably `origin` without a network
+   * call. Defaults to inspecting the local remotes and `gh` set-default
+   * config; a hint keyed by `origin` is only trustworthy when this holds.
+   */
+  ghDefaultIsOrigin?: () => boolean;
   /** Credential material for a host; defaults to the delivered lookup. */
   credential?: (host: string) => string | undefined;
   now?: () => number;
@@ -171,6 +177,34 @@ export function parseRemoteUrl(url: string): RemoteIdentity | null {
   return { host: host.toLowerCase(), owner, repo };
 }
 
+/**
+ * Whether `gh`'s "current repository" is `origin`, decided from local state
+ * only: there is exactly one remote, or `gh repo set-default` marked `origin`
+ * as the base (`remote.origin.gh-resolved` is `base`). With several remotes and
+ * no such mark, `gh` may resolve a different repository (a fork's upstream),
+ * so an `origin`-keyed hint could describe the wrong repository.
+ */
+export function originIsGhDefault(cwd: string): boolean {
+  const git = (args: string[]): string | undefined => {
+    try {
+      return execFileSync('git', args, {
+        cwd,
+        encoding: 'utf8',
+        timeout: 2_000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      return undefined;
+    }
+  };
+  const resolved = git(['config', '--get', 'remote.origin.gh-resolved']);
+  if (resolved === 'base') return true;
+  // Any other resolved value means `gh` was pointed elsewhere.
+  if (resolved !== undefined && resolved !== '') return false;
+  const remotes = (git(['remote']) ?? '').split('\n').filter(Boolean);
+  return remotes.length === 1 && remotes[0] === 'origin';
+}
+
 function defaultOriginUrl(cwd: string): string | undefined {
   try {
     const raw = execFileSync('git', ['remote', 'get-url', 'origin'], {
@@ -265,6 +299,17 @@ function resolveConfig(
         : ''
   ).toLowerCase();
   if (repository === '') return null;
+  // An `origin`-derived repository names what the helper enumerates only when
+  // `gh`'s current repository is `origin` too. A read that cannot prove that
+  // bypasses the cache; an invalidation does not care (an extra one is
+  // harmless).
+  if (
+    !explicit &&
+    partial === 'bypass' &&
+    !(deps.ghDefaultIsOrigin ?? (() => originIsGhDefault(cwd)))()
+  ) {
+    return null;
+  }
   const credentialMaterial = needCredential
     ? ((deps.credential ?? defaultCredentialMaterial)(host)?.trim() ?? '')
     : '';

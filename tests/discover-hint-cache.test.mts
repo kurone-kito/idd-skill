@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +18,7 @@ import {
   type DiscoverHintRequest,
   invalidateDiscoverHints,
   noteDiscoveryIncomplete,
+  originIsGhDefault,
   parseRemoteUrl,
   purgeDiscoverHints,
   readDiscoverHint,
@@ -58,6 +60,7 @@ function fixture(overrides: Partial<DiscoverHintDeps> = {}): Fixture {
         directory: cacheDir,
       },
       originUrl: () => 'https://github.com/o/r.git',
+      ghDefaultIsOrigin: () => true,
       credential: () => 'hint-credential-token',
       now: () => clock.now,
       ...overrides,
@@ -952,5 +955,75 @@ test('an invalidation may name several identities and drops each one', async () 
     assert.equal(calls(), 4);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('an origin-keyed hint bypasses the cache when gh may resolve another repository', async () => {
+  const fx = fixture({ ghDefaultIsOrigin: () => false });
+  const { compute, calls } = counter([{ leaves: [1] }]);
+  try {
+    const first = await readDiscoverHint(request(fx, compute));
+    const second = await readDiscoverHint(request(fx, compute));
+    assert.equal('cache' in first, false);
+    assert.equal('cache' in second, false);
+    assert.equal(calls(), 2);
+    assert.equal(existsSync(join(fx.cacheDir, 'entries')), false);
+    // A complete explicit pair names the repository itself, so it is cached.
+    await readDiscoverHint(request(fx, compute, { owner: 'x', repo: 'y' }));
+    const warm = await readDiscoverHint(
+      request(fx, compute, { owner: 'x', repo: 'y' }),
+    );
+    assert.equal(warm.cache?.source, 'hint');
+    // An invalidation does not need that proof: an extra one is harmless.
+    assert.equal(invalidateDiscoverHints({}, fx.deps), true);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+function gitRepo(root: string, remotes: Record<string, string>): string {
+  const dir = join(root, `repo-${Object.keys(remotes).join('-') || 'none'}`);
+  mkdirSync(dir);
+  execFileSync('git', ['init', '-q', dir]);
+  for (const [name, url] of Object.entries(remotes)) {
+    execFileSync('git', ['remote', 'add', name, url], { cwd: dir });
+  }
+  return dir;
+}
+
+test('origin is the gh default only when local state proves it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-gh-default-'));
+  try {
+    const single = gitRepo(root, { origin: 'https://github.com/o/r.git' });
+    assert.equal(originIsGhDefault(single), true);
+
+    const fork = gitRepo(root, {
+      origin: 'https://github.com/me/r.git',
+      upstream: 'https://github.com/o/r.git',
+    });
+    assert.equal(originIsGhDefault(fork), false);
+
+    // `gh repo set-default` marking origin as the base proves it again.
+    execFileSync('git', ['config', 'remote.origin.gh-resolved', 'base'], {
+      cwd: fork,
+    });
+    assert.equal(originIsGhDefault(fork), true);
+
+    // Any other resolved value points gh elsewhere.
+    execFileSync('git', ['config', 'remote.origin.gh-resolved', 'o/r'], {
+      cwd: fork,
+    });
+    assert.equal(originIsGhDefault(fork), false);
+    execFileSync('git', ['config', 'remote.origin.gh-resolved', 'o/r'], {
+      cwd: single,
+    });
+    assert.equal(originIsGhDefault(single), false);
+
+    // No repository at all cannot prove anything.
+    const plain = join(root, 'plain');
+    mkdirSync(plain);
+    assert.equal(originIsGhDefault(plain), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

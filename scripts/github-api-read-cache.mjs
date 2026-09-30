@@ -1241,9 +1241,11 @@ async function waitForLeaderAsync(ctx, maxWaitMs, sleep) {
 }
 function defaultLeaseHeartbeat(ctx) {
   return (renew) => {
+    // A fraction of the effective threshold, so even a short caller-supplied
+    // one is renewed before it lapses.
     const timer = setInterval(
       renew,
-      Math.max(1_000, Math.floor(ctx.leaseTtlMs / 4)),
+      Math.max(1, Math.floor(ctx.leaseTtlMs / 4)),
     );
     timer.unref?.();
     return () => clearInterval(timer);

@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -2311,6 +2311,35 @@ test('a heartbeat that fails to start or stop still releases the async lease', a
     }));
     assert.equal(recovered.cache, 'hit');
   } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('the default heartbeat renews at a fraction of even a short stale threshold', async () => {
+  const paths = tempRoot();
+  const delays: number[] = [];
+  const fakeTimer = { unref: () => fakeTimer };
+  const setIntervalMock = mock.method(globalThis, 'setInterval', ((
+    _fn: unknown,
+    delay?: number,
+  ) => {
+    delays.push(delay as number);
+    return fakeTimer;
+  }) as unknown as typeof setInterval);
+  const clearIntervalMock = mock.method(
+    globalThis,
+    'clearInterval',
+    (() => {}) as unknown as typeof clearInterval,
+  );
+  try {
+    await readThroughAsync(paths, async () => ({ status: 200, body: {} }), {
+      leaseTtlMs: 2_000,
+    });
+    // A quarter of the threshold, not clamped up past it.
+    assert.deepEqual(delays, [500]);
+  } finally {
+    setIntervalMock.mock.restore();
+    clearIntervalMock.mock.restore();
     rmSync(paths.root, { recursive: true, force: true });
   }
 });

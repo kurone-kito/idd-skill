@@ -1684,9 +1684,12 @@ speed-up, never a gate.
   appears only with a flag). So does a half-given identity (`--owner`
   without `--repo`, or the reverse): the helper fills the missing half from
   `gh repo view`, which the hint layer never calls, so it could not name
-  what was enumerated. A clone whose `origin` differs from `gh`'s default
-  repository (for example a fork) keys hints by `origin`; pass the same
-  `--owner`/`--repo` to every helper there so hints and invalidation agree.
+  what was enumerated. An `origin`-derived repository is trusted only when
+  `gh`'s current repository is provably `origin` from local state (a single
+  remote, or `gh repo set-default` marking `origin` as the base); a clone
+  with several remotes and no such mark, such as a fork whose default
+  repository is upstream, bypasses the cache unless `--owner` and `--repo`
+  are given.
 - **Controls.** `--no-cache` computes live, reads and stores nothing, and
   reports `cache.mode` `off`. `--refresh-cache` recomputes, stores the
   result, and reports `refresh`. `--purge-cache` removes every cached body

@@ -97,6 +97,7 @@ function fixture(): Fixture {
         directory: cacheDir,
       },
       originUrl: () => 'https://github.com/o/r.git',
+      ghDefaultIsOrigin: () => true,
       credential: () => 'integration-token',
     },
   };
