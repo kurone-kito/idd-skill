@@ -42,13 +42,17 @@ jobs:
   pnpm-boundary:
     # Imported from kurone-kito/pnpm-project-template push workflow shape
     # and adapted as a reusable workflow with repository-specific guards.
-    runs-on: ${{ inputs.runner || 'ubuntu-slim' }}
-    # Observed 2026-09-25, the required job sat in a roughly 6 to 10
-    # minute band. Run 36163057010 job 108164078287 was cancelled at
-    # the 10-minute cap. A same-day success, run 36167309736, took
-    # about 9m36s. Twenty minutes bounds a hang. It is not a
-    # performance target and it is not permission to let the suite
-    # grow without a new measurement.
+    # Differs from the input default: own lanes must avoid slim's 15m cap.
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    # GitHub's 15-minute job cap applies to a single-CPU runner such as
+    # ubuntu-slim, so a larger value never took effect there. Observed
+    # 2026-09-30, run 36740857345: jobs 109974568013, 109983868974 and
+    # 109990619661 were each cancelled at 15m0s although this value was
+    # already 20 (the #3473 raise from 10, after run 36163057010 job
+    # 108164078287 was cancelled at the old 10-minute cap on 2026-09-25).
+    # On ubuntu-latest this value is effective. Twenty minutes bounds a
+    # hang. It is not a performance target and it is not permission to
+    # let the suite grow without a new measurement.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
