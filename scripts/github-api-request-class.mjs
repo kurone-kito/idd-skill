@@ -173,7 +173,6 @@ function apiDescription(args) {
   return { classification: 'write', resource, ...base };
 }
 /** Describe one `gh` argument vector. Never throws. */
-// audit:ignore-dead-export: wired into the gh-exec transport gate in the next commit of issue #3586
 export function describeGhRequest(args) {
   const group = args[0];
   if (group === 'api') return apiDescription(args);

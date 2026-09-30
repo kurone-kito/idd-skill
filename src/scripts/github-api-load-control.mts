@@ -1182,7 +1182,6 @@ function prepare(
  * the request runs uncoordinated (disabled, unverified identity, or a
  * storage problem) and throws the refusal error when it must not run.
  */
-// audit:ignore-dead-export: wired into the gh-exec transport gate in the next commit of issue #3586
 export function admitRequestSync(
   identity: LoadControlIdentity,
   policy: GithubApiLoadControlRuntimePolicy,
@@ -1213,7 +1212,6 @@ export function admitRequestSync(
  * blocking wait, so this process's own in-flight requests keep completing
  * and releasing their leases while this one waits.
  */
-// audit:ignore-dead-export: wired into the gh-exec transport gate in the next commit of issue #3586
 export async function admitRequest(
   identity: LoadControlIdentity,
   policy: GithubApiLoadControlRuntimePolicy,

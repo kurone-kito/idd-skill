@@ -94,7 +94,6 @@ export function findLoadControlRefusal(
 }
 
 /** True when the request was refused before any `gh` process was started. */
-// audit:ignore-dead-export: wired into withBoundedRetry and the write-recovery paths in later commits of issue #3586
 export function isNotDispatchedRefusal(error: unknown): boolean {
   return findLoadControlRefusal(error) !== undefined;
 }
@@ -106,7 +105,6 @@ export function isNotDispatchedRefusal(error: unknown): boolean {
  * along so a helper still classifies the failure as `transport`. A no-op for
  * every other original error.
  */
-// audit:ignore-dead-export: wired into the error-rebuilding wrappers in later commits of issue #3586
 export function preserveLoadControlRefusal<T extends Error>(
   wrapper: T,
   original: unknown,

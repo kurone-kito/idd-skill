@@ -208,7 +208,6 @@ function apiDescription(args: readonly string[]): GhRequestDescription {
 }
 
 /** Describe one `gh` argument vector. Never throws. */
-// audit:ignore-dead-export: wired into the gh-exec transport gate in the next commit of issue #3586
 export function describeGhRequest(
   args: readonly string[],
 ): GhRequestDescription {
