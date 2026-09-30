@@ -731,15 +731,18 @@ test('a writer removes a lock only while it still holds its own token', () => {
     assert.equal(existsSync(lock), false);
 
     // A lock that was deleted and re-created by someone else while this
-    // writer ran belongs to that writer, so it is left in place.
-    withTelemetryFileLock(lock, 60, () => {
+    // writer ran belongs to that writer, so it is left in place. Windows
+    // does not let a file that is open be deleted, so this part is POSIX-only.
+    if (process.platform !== 'win32') {
+      withTelemetryFileLock(lock, 60, () => {
+        rmSync(lock);
+        writeFileSync(lock, 'other-writer\n');
+      });
+      assert.equal(readFileSync(lock, 'utf8'), 'other-writer\n');
       rmSync(lock);
-      writeFileSync(lock, 'other-writer\n');
-    });
-    assert.equal(readFileSync(lock, 'utf8'), 'other-writer\n');
+    }
 
     // A failing body still releases the lock it owns.
-    rmSync(lock);
     assert.throws(
       () =>
         withTelemetryFileLock(lock, 60, () => {
@@ -799,7 +802,9 @@ test('concurrent appends keep every observation', async () => {
       'const status = Number(process.env.OBSERVATION_STATUS);',
       'appendRequestObservation(',
       '  observeGhSuccess({ status, data: { ok: true } }),',
-      '  { path: process.env.TELEMETRY_PATH ?? "", maxRecords: 10 },',
+      // A long wait keeps the test from depending on the short production
+      // lock wait when the runner is loaded.
+      '  { path: process.env.TELEMETRY_PATH ?? "", maxRecords: 10, lockWaitMs: 10000 },',
       ');',
       '',
     ].join('\n'),
