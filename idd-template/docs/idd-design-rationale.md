@@ -1162,15 +1162,25 @@ at `very-low`. Medium, including unknown severity, defers at
 `very-low`, `low`, or `medium`. Low defers at every scored urgency.
 An unscored urgency does not defer. `low` and `low-and-medium` still
 never defer High, so the hearing bullet above applies to those two
-modes only.
+modes only. That bullet's condition (d), piggybacking on an already
+certain push, belongs to the binary allowlist and has no counterpart
+here: the matrix alone decides.
 
-PR #3550 and PR #3574 are why that High cell exists. On 2026-09-28
-those pull requests had review submissions on many distinct commits:
-PR #3550 had Copilot on 94, Codex on 79, and CodeRabbit on 4;
-PR #3574 had Copilot on 95, Codex on 82, and CodeRabbit on 4. Those
-counts are re-evaluation waves, not unique findings. Copilot's
+PR #3550 and PR #3574 motivated the High cell as context only; neither
+is a dependency. On 2026-09-28 those pull requests had review
+submissions on many distinct commits: PR #3550 had Copilot on 94,
+Codex on 79, and CodeRabbit on 4; PR #3574 had Copilot on 95, Codex on
+82, and CodeRabbit on 4. Those counts show repeated re-evaluation.
+They are not the number of unique findings, and they carry no
+severity breakdown or per-finding marginal wave cost, so they cannot
+show how often a High finding was truly `very-low` urgency.
+
+Two review-history observations shaped the wording instead. Copilot's
 overview on PR #3550 reported no findings on `fcc6e1620` before Codex
-reported three safety findings on that same commit.
+reported three safety findings on that same commit, so E4/E5 must
+inspect every actionable PATH A finding even when an overview is
+empty. PR #3574 drew repeated Medium correctness findings during its
+review cycle.
 
 ### review-ack worked example
 
