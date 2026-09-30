@@ -20,6 +20,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  chmodSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -305,12 +306,24 @@ function ensureOwnDirectory(path: string): void {
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       storageFailure('load control path is not a real directory');
     }
-    if (
-      process.platform !== 'win32' &&
-      typeof process.getuid === 'function' &&
-      stat.uid !== process.getuid()
-    ) {
-      storageFailure('load control directory belongs to another user');
+    if (process.platform !== 'win32') {
+      if (
+        typeof process.getuid === 'function' &&
+        stat.uid !== process.getuid()
+      ) {
+        storageFailure('load control directory belongs to another user');
+      }
+      // A directory that already existed may be group- or world-accessible,
+      // which would let another local user forge a lease or a cooldown.
+      // Tighten it to owner-only, and fail open if that cannot be done.
+      if ((stat.mode & 0o077) !== 0) {
+        chmodSync(path, DIR_MODE);
+        if ((lstatSync(path).mode & 0o077) !== 0) {
+          storageFailure(
+            'load control directory is group- or world-accessible',
+          );
+        }
+      }
     }
   } catch (error) {
     if (error instanceof LoadControlStorageError) throw error;

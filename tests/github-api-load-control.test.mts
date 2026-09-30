@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -1571,6 +1573,28 @@ test('a rate-limit error inside a successful GraphQL response starts the shared 
       assert.equal(eventFiles(h2).length, 0);
     } finally {
       h2.cleanup();
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('a pre-existing state directory that others can access is tightened to owner-only before use', {
+  skip: process.platform === 'win32',
+}, () => {
+  const h = harness();
+  try {
+    const scope = scopeDir(h);
+    const slots = slotsDir(h);
+    const cooldown = join(scope, 'cooldown');
+    for (const path of [scope, slots, cooldown]) {
+      mkdirSync(path, { recursive: true });
+      chmodSync(path, 0o777);
+    }
+    const gate = admitRead(h);
+    gate.release();
+    for (const path of [scope, slots, cooldown]) {
+      assert.equal(statSync(path).mode & 0o077, 0, `${path} is owner-only`);
     }
   } finally {
     h.cleanup();
