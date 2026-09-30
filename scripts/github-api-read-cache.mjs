@@ -6,8 +6,9 @@
 //
 // Opt-in host-local read cache for explicitly classified GitHub REST
 // reads. Callers that do not opt in never reach this module, and Discover
-// is not wired here. Credential material is hashed into the cache key and
-// is never written into an entry, a lease, or a log line.
+// reaches it only through discover-hint-cache.mts. Credential material is
+// hashed into the cache key and is never written into an entry, a lease, or
+// a log line.
 import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync,
@@ -1033,6 +1034,70 @@ function executeCached(ctx) {
   return coalesce(ctx);
 }
 /**
+ * Decide whether a read may touch the cache and, when it may, build its
+ * context. Shared by the sync and async entry points so both apply the
+ * same bypass, identity, and directory rules.
+ */
+function prepareRead(input, fetch, sleep) {
+  const anchors = anchorsFor(input);
+  const storage = createStorage(input.storage);
+  if (input.classification !== 'read' || input.policy.enabled !== true) {
+    return { kind: 'bypass' };
+  }
+  // A blank credential or host would hash into a context shared by every
+  // caller that omits it, so an unidentified caller never touches the cache.
+  if (isBlank(input.credentialMaterial) || isBlank(input.host)) {
+    return { kind: 'bypass' };
+  }
+  let entryId;
+  try {
+    entryId = entryIdFor(input);
+  } catch (error) {
+    if (!(error instanceof CacheKeyError)) throw error;
+    return { kind: 'bypass' };
+  }
+  let root;
+  try {
+    root = resolveReadDirectory(input, anchors);
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+    return { kind: 'degraded', entryId };
+  }
+  return {
+    kind: 'ready',
+    ctx: {
+      storage,
+      now: input.now ?? Date.now,
+      sleep,
+      leaseTtlMs: positiveMs(
+        input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS,
+        DEFAULT_LEASE_TTL_MS,
+      ),
+      isPidAlive: input.isPidAlive ?? defaultIsPidAlive,
+      pid: input.pid ?? process.pid,
+      anchors,
+      maxBytes: boundedBytes(input.policy.maxBytes),
+      entryId,
+      root,
+      // The credential itself is always a secret: a response that echoes it
+      // must never be persisted, even when the caller passed no
+      // secretMaterial.
+      secrets: [
+        input.credentialMaterial,
+        ...(input.secretMaterial ?? []),
+      ].filter((secret) => secret.length > 0),
+      host: normalizeHost(input.host),
+      repository: input.repository.trim(),
+      paginated: input.paginated === true,
+      mode: normalizeMode(input.mode),
+      maxAgeMs: positiveMs(input.policy.maxAgeMs, 5 * 60 * 1000),
+      retentionMs: positiveMs(input.policy.retentionMs, 24 * 60 * 60 * 1000),
+      fetch,
+      heldLease: null,
+    },
+  };
+}
+/**
  * Read through the host-local GitHub API cache, or purge its entries.
  *
  * Non-read classifications and a disabled policy fetch once and do not
@@ -1041,9 +1106,9 @@ function executeCached(ctx) {
  * after the single-flight lease is released and are not stored.
  */
 export function readThroughGithubApiCache(input) {
-  const anchors = anchorsFor(input);
-  const storage = createStorage(input.storage);
   if (input.operation === 'purge') {
+    const anchors = anchorsFor(input);
+    const storage = createStorage(input.storage);
     try {
       const root = normalizedRoot(purgeTarget(input)) ?? '';
       return purgeDirectory(
@@ -1065,60 +1130,142 @@ export function readThroughGithubApiCache(input) {
       throw error;
     }
   }
-  if (input.classification !== 'read' || input.policy.enabled !== true) {
-    return liveResult(input.fetch, 'bypass');
+  const prepared = prepareRead(input, input.fetch, input.sleep ?? sleepSync);
+  if (prepared.kind === 'bypass') return liveResult(input.fetch, 'bypass');
+  if (prepared.kind === 'degraded') {
+    return liveResult(input.fetch, 'degraded', prepared.entryId);
   }
-  // A blank credential or host would hash into a context shared by every
-  // caller that omits it, so an unidentified caller never touches the cache.
-  if (isBlank(input.credentialMaterial) || isBlank(input.host)) {
-    return liveResult(input.fetch, 'bypass');
-  }
-  let entryId;
   try {
-    entryId = entryIdFor(input);
-  } catch (error) {
-    if (!(error instanceof CacheKeyError)) throw error;
-    return liveResult(input.fetch, 'bypass');
-  }
-  let root;
-  try {
-    root = resolveReadDirectory(input, anchors);
+    return executeCached(prepared.ctx);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
-    return liveResult(input.fetch, 'degraded', entryId);
+    return liveResult(input.fetch, 'degraded', prepared.ctx.entryId);
   }
-  const ctx = {
-    storage,
-    now: input.now ?? Date.now,
-    sleep: input.sleep ?? sleepSync,
-    leaseTtlMs: positiveMs(
-      input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS,
-      DEFAULT_LEASE_TTL_MS,
-    ),
-    isPidAlive: input.isPidAlive ?? defaultIsPidAlive,
-    pid: input.pid ?? process.pid,
-    anchors,
-    maxBytes: boundedBytes(input.policy.maxBytes),
-    entryId,
-    root,
-    // The credential itself is always a secret: a response that echoes it
-    // must never be persisted, even when the caller passed no secretMaterial.
-    secrets: [input.credentialMaterial, ...(input.secretMaterial ?? [])].filter(
-      (secret) => secret.length > 0,
-    ),
-    host: normalizeHost(input.host),
-    repository: input.repository.trim(),
-    paginated: input.paginated === true,
-    mode: normalizeMode(input.mode),
-    maxAgeMs: positiveMs(input.policy.maxAgeMs, 5 * 60 * 1000),
-    retentionMs: positiveMs(input.policy.retentionMs, 24 * 60 * 60 * 1000),
-    fetch: input.fetch,
-    heldLease: null,
+}
+/** Longest an async waiter polls a live leader before computing itself. */
+const DEFAULT_ASYNC_MAX_WAIT_MS = 120_000;
+/** Hard age past which even a live-looking async lease is treated as stale. */
+const DEFAULT_ASYNC_LEASE_TTL_MS = 600_000;
+function sleepAsync(ms) {
+  return new Promise((done) => setTimeout(done, ms));
+}
+async function liveResultAsync(fetch, cache, entryId) {
+  const result = await fetch({});
+  return {
+    body: result.body,
+    status: result.status,
+    cache,
+    fetched: true,
+    ...(entryId ? { entryId } : {}),
   };
+}
+async function leaderFetchAsync(ctx, fetch) {
+  const startedAt = ctx.now();
+  if (ctx.mode === 'hint') {
+    const fresh = freshRecord(ctx);
+    if (fresh) return hitResult(fresh, ctx.entryId);
+  }
+  const result = await fetch({});
+  invalidateOnMissing(ctx, result, startedAt);
   try {
-    return executeCached(ctx);
+    publish(ctx, result, startedAt);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
-    return liveResult(input.fetch, 'degraded', entryId);
+  }
+  return fromFetch(result, 'miss', ctx.entryId);
+}
+async function waitForLeaderAsync(ctx, maxWaitMs, sleep) {
+  const started = ctx.now();
+  for (;;) {
+    const fresh = freshRecord(ctx);
+    if (fresh) return fresh;
+    const lease = readLease(ctx);
+    if (lease === null) return freshRecord(ctx);
+    if (lease === 'stale' || leaseIsStale(ctx, lease)) {
+      discardObservedLease(ctx, lease);
+      return null;
+    }
+    if (ctx.now() - started >= maxWaitMs) return null;
+    await sleep(POLL_MS);
+  }
+}
+async function coalesceAsync(ctx, fetch, sleep, maxWaitMs) {
+  const fresh = freshRecord(ctx);
+  if (fresh) return hitResult(fresh, ctx.entryId);
+  if (tryAcquire(ctx)) {
+    try {
+      return await leaderFetchAsync(ctx, fetch);
+    } finally {
+      releaseLease(ctx);
+    }
+  }
+  const waited = await waitForLeaderAsync(ctx, maxWaitMs, sleep);
+  if (waited) return hitResult(waited, ctx.entryId);
+  if (tryAcquire(ctx)) {
+    try {
+      return await leaderFetchAsync(ctx, fetch);
+    } finally {
+      releaseLease(ctx);
+    }
+  }
+  return liveResultAsync(fetch, 'degraded', ctx.entryId);
+}
+async function strictFreshAsync(ctx, fetch) {
+  const startedAt = ctx.now();
+  const result = await fetch({});
+  invalidateOnMissing(ctx, result, startedAt);
+  try {
+    publish(ctx, result, startedAt);
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+  }
+  return fromFetch(result, 'miss', ctx.entryId);
+}
+/**
+ * Async twin of {@link readThroughGithubApiCache} for `hint` and
+ * `strict-fresh` reads whose producer is asynchronous (a whole helper
+ * enumeration rather than one REST call). It applies the same bypass,
+ * identity, freshness, secret, size, and `incomplete` rules and holds the
+ * same cross-process single-flight lease across the whole computation. A
+ * leader that died is detected by its pid; a live one is waited on up to
+ * `leaseMaxWaitMs` and never robbed, so a long enumeration is not
+ * duplicated. Fetch failures propagate after the lease is released and are
+ * never stored.
+ */
+export async function readThroughGithubApiCacheAsync(input) {
+  const { fetch, sleep, leaseMaxWaitMs, ...rest } = input;
+  const prepared = prepareRead(
+    {
+      ...rest,
+      leaseTtlMs: rest.leaseTtlMs ?? DEFAULT_ASYNC_LEASE_TTL_MS,
+    },
+    () => {
+      throw new Error('the async cache path never calls the sync fetch');
+    },
+    () => {
+      throw new Error('the async cache path never calls the sync sleep');
+    },
+  );
+  if (prepared.kind === 'bypass') return liveResultAsync(fetch, 'bypass');
+  if (prepared.kind === 'degraded') {
+    return liveResultAsync(fetch, 'degraded', prepared.entryId);
+  }
+  const { ctx } = prepared;
+  try {
+    prepareRoot(ctx);
+    if (input.mode === 'strict-fresh')
+      return await strictFreshAsync(ctx, fetch);
+    return await coalesceAsync(
+      ctx,
+      fetch,
+      sleep ?? sleepAsync,
+      positiveMs(
+        leaseMaxWaitMs ?? DEFAULT_ASYNC_MAX_WAIT_MS,
+        DEFAULT_ASYNC_MAX_WAIT_MS,
+      ),
+    );
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+    return liveResultAsync(fetch, 'degraded', ctx.entryId);
   }
 }

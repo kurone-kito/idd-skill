@@ -23,8 +23,10 @@ import {
   type GithubApiCacheFetchRequest,
   type GithubApiCacheFetchResult,
   type GithubApiReadClassification,
+  type ReadThroughGithubApiCacheAsyncInput,
   type ReadThroughGithubApiCacheInput,
   readThroughGithubApiCache,
+  readThroughGithubApiCacheAsync,
   resolveCanonicalPath,
 } from '../src/scripts/github-api-read-cache.mts';
 
@@ -1867,5 +1869,245 @@ test('purge refuses a symlinked cache root', () => {
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
     rmSync(real, { recursive: true, force: true });
+  }
+});
+
+function readThroughAsync(
+  paths: { cacheDir: string; workspace: string },
+  fetch: ReadThroughGithubApiCacheAsyncInput['fetch'],
+  overrides: Partial<ReadThroughGithubApiCacheAsyncInput> = {},
+) {
+  return readThroughGithubApiCacheAsync({
+    classification: 'read',
+    policy: policy(paths.cacheDir),
+    host: 'github.com',
+    repository: 'o/r',
+    credentialMaterial: 'credential-material-token',
+    requestShape: { unit: 'async-report' },
+    workspaceRoot: paths.workspace,
+    cwd: paths.workspace,
+    fetch,
+    ...overrides,
+  });
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+} {
+  let resolvePromise!: (value: T) => void;
+  let rejectPromise!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolvePromise = done;
+    rejectPromise = fail;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
+function leaseNames(cacheDir: string): string[] {
+  const leases = join(cacheDir, 'leases');
+  return existsSync(leases) ? readdirSync(leases) : [];
+}
+
+test('an async hint read stores a report and the next read is a hit', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return { status: 200, body: { report: 'r' } };
+  };
+  try {
+    const first = await readThroughAsync(paths, fetch);
+    const second = await readThroughAsync(paths, fetch);
+    assert.equal(calls, 1);
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+    assert.equal(second.fetched, false);
+    assert.deepEqual(second.body, { report: 'r' });
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('two concurrent in-process async reads coalesce onto one fetch', async () => {
+  const paths = tempRoot();
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let calls = 0;
+  const fetch = () => {
+    calls += 1;
+    return gate.promise;
+  };
+  try {
+    const leader = readThroughAsync(paths, fetch);
+    const waiter = readThroughAsync(paths, fetch);
+    // The leader holds the lease before its first await, so the waiter
+    // cannot also lead.
+    assert.equal(leaseNames(paths.cacheDir).length, 1);
+    gate.resolve({ status: 200, body: { report: 'shared' } });
+    const [led, waited] = await Promise.all([leader, waiter]);
+    assert.equal(calls, 1);
+    assert.equal(led.cache, 'miss');
+    assert.equal(waited.cache, 'hit');
+    assert.deepEqual(waited.body, { report: 'shared' });
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async waiter never steals a lease from a live leader', async () => {
+  const paths = tempRoot();
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let leaderCalls = 0;
+  let waiterCalls = 0;
+  try {
+    const leader = readThroughAsync(paths, () => {
+      leaderCalls += 1;
+      return gate.promise;
+    });
+    const waited = await readThroughAsync(
+      paths,
+      async () => {
+        waiterCalls += 1;
+        return { status: 200, body: { report: 'own' } };
+      },
+      { leaseMaxWaitMs: 60 },
+    );
+    assert.equal(waited.cache, 'degraded');
+    assert.equal(waiterCalls, 1);
+    assert.equal(leaseNames(paths.cacheDir).length, 1);
+    gate.resolve({ status: 200, body: { report: 'lead' } });
+    const led = await leader;
+    assert.equal(led.cache, 'miss');
+    assert.equal(leaderCalls, 1);
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async read takes over a lease whose leader died', async () => {
+  const paths = tempRoot();
+  try {
+    const seeded = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { report: 'old' } }),
+      { mode: 'strict-fresh' },
+    );
+    const entry = join(paths.cacheDir, 'entries', `${seeded.entryId}.json`);
+    unlinkSync(entry);
+    writeFileSync(
+      join(paths.cacheDir, 'leases', `${seeded.entryId}.json`),
+      JSON.stringify({ pid: 999_999, createdAt: Date.now(), token: 'dead' }),
+      { mode: 0o600 },
+    );
+    let calls = 0;
+    const taken = await readThroughAsync(
+      paths,
+      async () => {
+        calls += 1;
+        return { status: 200, body: { report: 'new' } };
+      },
+      { isPidAlive: (pid) => pid !== 999_999 },
+    );
+    assert.equal(calls, 1);
+    assert.equal(taken.cache, 'miss');
+    assert.deepEqual(taken.body, { report: 'new' });
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async strict-fresh read always fetches and refreshes the entry', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return { status: 200, body: { n: calls } };
+  };
+  try {
+    await readThroughAsync(paths, fetch);
+    const fresh = await readThroughAsync(paths, fetch, {
+      mode: 'strict-fresh',
+    });
+    assert.equal(calls, 2);
+    assert.equal(fresh.cache, 'miss');
+    const hit = await readThroughAsync(paths, fetch);
+    assert.equal(hit.cache, 'hit');
+    assert.deepEqual(hit.body, { n: 2 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async incomplete or oversized result is returned but never stored', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  try {
+    const incomplete = () => async () => {
+      calls += 1;
+      return { status: 200, body: { part: true }, incomplete: true };
+    };
+    await readThroughAsync(paths, incomplete());
+    await readThroughAsync(paths, incomplete());
+    assert.equal(calls, 2);
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+
+    const oversize = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { blob: 'x'.repeat(4096) } }),
+      { policy: policy(paths.cacheDir, { maxBytes: 512 }) },
+    );
+    assert.equal(oversize.cache, 'miss');
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async fetch failure propagates, is not stored, and frees the lease', async () => {
+  const paths = tempRoot();
+  try {
+    await assert.rejects(
+      readThroughAsync(paths, async () => {
+        throw new Error('boom');
+      }),
+      /boom/,
+    );
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+    const recovered = await readThroughAsync(paths, async () => ({
+      status: 200,
+      body: { ok: true },
+    }));
+    assert.equal(recovered.cache, 'miss');
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async read bypasses a disabled policy and a blank credential', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return { status: 200, body: { n: calls } };
+  };
+  try {
+    const disabled = await readThroughAsync(paths, fetch, {
+      policy: policy(paths.cacheDir, { enabled: false }),
+    });
+    const blank = await readThroughAsync(paths, fetch, {
+      credentialMaterial: '  ',
+    });
+    assert.equal(disabled.cache, 'bypass');
+    assert.equal(blank.cache, 'bypass');
+    assert.equal(calls, 2);
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
   }
 });
