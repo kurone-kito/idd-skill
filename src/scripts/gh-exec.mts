@@ -78,6 +78,14 @@ import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
  * error already carries the tag, or is not an object at all (a rejection
  * reason that is not an `Error`, defensively).
  */
+function isTaggedGhCommandError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    Object.hasOwn(error, 'ghCommand')
+  );
+}
+
 export function tagGhCommandError<T>(error: T): T {
   if (
     error &&
@@ -2216,9 +2224,14 @@ function executeGhApiJson(
         allowStatuses,
       });
     } catch (error) {
-      recordTransportObservation(() =>
-        observeGhFailure(failureEvidence(error, true), { paginated: true }),
-      );
+      // Only a failure of the gh run is a request outcome, as on the
+      // execFileSync path: a body that fails to parse after a clean exit,
+      // or a temp-dir error, carries no gh tag and is not recorded.
+      if (isTaggedGhCommandError(error)) {
+        recordTransportObservation(() =>
+          observeGhFailure(failureEvidence(error, true), { paginated: true }),
+        );
+      }
       throw error;
     }
     // A tolerated failure is recorded as a failure, from its stderr only:
