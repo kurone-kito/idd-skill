@@ -1420,30 +1420,35 @@ default below is unchanged.
   `--all-roadmaps`, and it never changes a complete report.
   - **Progress (stderr).** One JSON object per line, keyed by `iddProgress`
     (stderr can also carry plain-text warnings, so filter on that key):
-    `{"iddProgress": {"helper", "event", "phase", "unit", "completed",`
-    `"known", "leavesKnown", "elapsedMs"}}`, plus `reason` on
-    `interrupted`. `event` is `start`, `progress`, `complete`, or
-    `interrupted`. `phase` is `root-discovery`, `traversal` (unit `roots`),
-    `claim-state` (unit `leaves`), or `readiness` (unit `leaves`, one batch
-    that reports only its edges). Phase edges always print and in-phase
-    updates print at most once every two seconds, so output is bounded by
-    the number of phases and the elapsed time, never by the number of
-    requests. `known` is `null` until a phase knows its own size (never `0`
-    for "unknown"); `leavesKnown` counts discovered candidates, not
-    claimable ones. A line holds only enums and integers: never a title,
-    body, comment, token, or error text. Progress is event-driven, so a
-    single blocked request prints nothing until it returns; a warm hint hit
-    or a coalesced follower runs no scan and prints none.
+
+    ```json
+    {"iddProgress":{"helper":"discover-roadmap-graph","event":"progress","phase":"claim-state","unit":"leaves","completed":12,"known":19,"leavesKnown":19,"elapsedMs":8123}}
+    ```
+
+    An `interrupted` line adds `reason`. `event` is `start`, `progress`,
+    `complete`, or `interrupted`. `phase` is `root-discovery`, `traversal`
+    (unit `roots`), `claim-state` (unit `leaves`), or `readiness` (unit
+    `leaves`, one batch that reports only its edges). Phase edges always
+    print and in-phase updates print at most once every two seconds, so
+    output is bounded by the number of phases and the elapsed time, never by
+    the number of requests. `known` is `null` until a phase knows its own
+    size (never `0` for "unknown"); `leavesKnown` counts discovered
+    candidates, not claimable ones. A line holds only enums and integers:
+    never a title, body, comment, token, or error text. Progress is
+    event-driven, so a single blocked request prints nothing until it
+    returns; a warm hint hit or a coalesced follower runs no scan and prints
+    none.
   - **Incomplete result (stdout, exit `75`).** When a rate limit, a request
     timeout, or a load-control admission deadline interrupts the scan, the
     helper prints this instead of a report and exits `75` (sysexits
     `EX_TEMPFAIL`; see the error envelope above for how it is reported):
-    `{ "mode": "all-roadmaps", "status": "incomplete", "incomplete": {`
-    `"reason", "phase", "lastCompletedPhase", "counts": { "unit",`
-    `"completed", "known", "leavesKnown" }, "retryAt", "retryAtSource",`
-    `"exhausted": false, "recovery": { "safeToRerun": true,`
-    `"sameArguments": true, "notBefore", "arguments" } } }` (an additive
-    `cache` object can follow; its `complete` is `false`). `reason` is
+
+    ```json
+    {"mode":"all-roadmaps","status":"incomplete","incomplete":{"reason":"rate-limit","phase":"claim-state","lastCompletedPhase":"traversal","counts":{"unit":"leaves","completed":12,"known":19,"leavesKnown":19},"retryAt":"2026-10-01T03:15:00.000Z","retryAtSource":"server","exhausted":false,"recovery":{"safeToRerun":true,"sameArguments":true,"notBefore":"2026-10-01T03:15:00.000Z","arguments":["--all-roadmaps","--with-progress"]}}}
+    ```
+
+    An additive `cache` object can follow (its `complete` is `false`).
+    `arguments` is optional. `reason` is
     `rate-limit` (a real throttle, or a load-control cooldown refusal even
     when its wait deadline expired), `timeout`, or `deadline` (the
     admission wait expired while another local process held every slot).
@@ -1452,9 +1457,8 @@ default below is unchanged.
     (capped at one hour), and are `null` otherwise. Any other failure
     (authentication, a 5xx, a network error that `gh` itself reports, a
     missing issue, a defect) still throws as it always did, and without the
-    flag nothing changes. The result has no
-    `roots`, `leaves`, or `summary`, and
-    `schemas/discover-roadmap-incomplete.schema.json` (not the union
+    flag nothing changes. The result has no `roots`, `leaves`, or `summary`,
+    and `schemas/discover-roadmap-incomplete.schema.json` (not the union
     schema) describes it. A run killed from outside (a wrapper's
     `timeout`, SIGTERM, or Ctrl-C) prints no result at all.
   - **Incomplete is not exhausted.** A complete scan that found nothing
