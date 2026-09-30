@@ -811,6 +811,63 @@ test('no gh configuration at all means github.com', () => {
   });
 });
 
+test('hosts.yml with a BOM or quoted keys still lists its hosts, and an unfamiliar non-empty file is unresolved', () => {
+  const f = fixture();
+  withCleanHostEnv(() => {
+    const config = process.env.GH_CONFIG_DIR as string;
+    mkdirSync(config, { recursive: true });
+    writeFileSync(
+      join(config, 'hosts.yml'),
+      '\uFEFF"ghe.example.com":\r\n    user: octocat\r\n',
+    );
+    f.enableResolving();
+    ghText(['api', 'user']);
+    assert.deepEqual(readdirSync(f.state), [
+      loadControlScopeName({
+        host: 'ghe.example.com',
+        credentialMaterial: 'token-for-ghe.example.com',
+      }),
+    ]);
+
+    // A non-empty file this parser cannot read is not "no hosts": guessing
+    // github.com could share a scope with the wrong host.
+    setGithubApiLoadControlForTests(null);
+    rmSync(f.state, { recursive: true, force: true });
+    writeFileSync(join(config, 'hosts.yml'), '  - unfamiliar layout\n');
+    f.enableResolving();
+    assert.equal(ghText(['api', 'user']), '{"ok":true}');
+    assert.equal(existsSync(f.state), false, 'unresolved host: uncoordinated');
+  });
+});
+
+test('the gh config directory follows GH_CONFIG_DIR, then XDG_CONFIG_HOME', () => {
+  const f = fixture();
+  withCleanHostEnv(() => {
+    const savedDir = process.env.GH_CONFIG_DIR;
+    const savedXdg = process.env.XDG_CONFIG_HOME;
+    delete process.env.GH_CONFIG_DIR;
+    process.env.XDG_CONFIG_HOME = join(f.root, 'xdg-config');
+    try {
+      mkdirSync(join(f.root, 'xdg-config', 'gh'), { recursive: true });
+      writeFileSync(
+        join(f.root, 'xdg-config', 'gh', 'hosts.yml'),
+        'ghe.example.com:\n    user: octocat\n',
+      );
+      f.enableResolving();
+      ghText(['api', 'user']);
+      assert.deepEqual(
+        f.calls().filter((call) => call[0] === 'auth'),
+        [['auth', 'token', '--hostname', 'ghe.example.com']],
+      );
+    } finally {
+      if (savedDir === undefined) delete process.env.GH_CONFIG_DIR;
+      else process.env.GH_CONFIG_DIR = savedDir;
+      if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = savedXdg;
+    }
+  });
+});
+
 test('a rate-limit error inside a successful GraphQL response starts the cooldown through ghGraphql', () => {
   const f = fixture();
   f.enable({ maxWaitMs: 1_000 });

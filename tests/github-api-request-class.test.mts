@@ -240,3 +240,51 @@ test('describeGhRequest reads the host of a HOST/OWNER/REPO repo flag, never a b
     },
   );
 });
+
+test('describeGhRequest reads the host of a URL-form repo flag', () => {
+  assert.deepEqual(
+    describeGhRequest(['issue', 'list', '-R', 'https://ghes.example.com/o/r']),
+    { classification: 'read', host: 'ghes.example.com' },
+  );
+});
+
+test('describeGhRequest scopes a full-URL api endpoint to the host gh authenticates against', () => {
+  assert.deepEqual(
+    describeGhRequest(['api', 'https://api.github.com/repos/o/r']),
+    {
+      classification: 'read',
+      resource: 'core',
+      host: 'github.com',
+    },
+  );
+  assert.deepEqual(
+    describeGhRequest([
+      'api',
+      'https://api.github.com/graphql',
+      '-f',
+      'query={ viewer { login } }',
+    ]),
+    { classification: 'read', resource: 'graphql', host: 'github.com' },
+  );
+  assert.deepEqual(
+    describeGhRequest([
+      'api',
+      'https://ghes.example.com/api/v3/search/issues?q=x',
+    ]),
+    { classification: 'read', resource: 'search', host: 'ghes.example.com' },
+  );
+  assert.deepEqual(
+    describeGhRequest(['api', 'https://api.acme.ghe.com/repos/o/r']),
+    { classification: 'read', resource: 'core', host: 'acme.ghe.com' },
+  );
+  assert.equal(
+    describeGhRequest([
+      'api',
+      'https://api.github.com/repos/o/r',
+      '--hostname',
+      'other.example.com',
+    ]).host,
+    'other.example.com',
+    'an explicit --hostname wins',
+  );
+});

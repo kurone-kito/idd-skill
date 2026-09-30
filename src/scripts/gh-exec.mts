@@ -294,34 +294,41 @@ function loadLoadControlPolicy(): GithubApiLoadControlRuntimePolicy {
 }
 
 /**
- * The verified host and credential a request would run with, looked up
- * once per host and credential environment. It uses `gh auth token` only,
- * never `gh auth status`, so resolving an identity makes no API request.
- * `null` means unverified: the request runs uncoordinated.
+ * `gh`'s configuration directory, in the order `gh` itself resolves it:
+ * `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `APPDATA` on Windows, then
+ * `~/.config`.
  */
+function ghConfigDirectory(env: NodeJS.ProcessEnv): string {
+  const explicit = env.GH_CONFIG_DIR?.trim();
+  if (explicit) return explicit;
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(xdg, 'gh');
+  const appData = env.APPDATA?.trim();
+  if (process.platform === 'win32' && appData) {
+    return join(appData, 'GitHub CLI');
+  }
+  return join(homedir(), '.config', 'gh');
+}
+
 /**
  * The hosts the local `gh` configuration lists (`hosts.yml` in `gh`'s config
- * directory), lower-cased. No file means none. Read once per path; `null`
- * for a file that exists but cannot be read.
+ * directory), lower-cased. No file means none. Read once per path. `null`
+ * (unresolved) for a file that cannot be read, and for a non-empty file
+ * that yields no host: an unfamiliar layout must not read as "none
+ * configured", which would fall to github.com.
  */
 function configuredGhHosts(env: NodeJS.ProcessEnv): string[] | null {
-  const directory =
-    env.GH_CONFIG_DIR?.trim() ||
-    (process.platform === 'win32'
-      ? join(
-          env.APPDATA?.trim() || join(homedir(), 'AppData', 'Roaming'),
-          'GitHub CLI',
-        )
-      : join(env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config'), 'gh'));
-  const path = join(directory, 'hosts.yml');
+  const path = join(ghConfigDirectory(env), 'hosts.yml');
   if (ghConfiguredHostsMemo.has(path)) {
     return ghConfiguredHostsMemo.get(path) ?? null;
   }
   let hosts: string[] | null;
   try {
+    const text = readFileSync(path, 'utf8').replace(/^\uFEFF/, '');
     hosts = [
-      ...readFileSync(path, 'utf8').matchAll(/^([A-Za-z0-9][\w.-]*):/gm),
-    ].map((match) => match[1].toLowerCase());
+      ...text.matchAll(/^(?:"([^"\s]+)"|'([^'\s]+)'|([A-Za-z0-9][\w.-]*)):/gm),
+    ].map((match) => (match[1] ?? match[2] ?? match[3]).toLowerCase());
+    if (hosts.length === 0 && text.trim() !== '') hosts = null;
   } catch (error) {
     hosts = (error as { code?: unknown } | null)?.code === 'ENOENT' ? [] : null;
   }
@@ -353,6 +360,12 @@ function resolveLoadControlHost(
   return apiCall ? 'github.com' : null;
 }
 
+/**
+ * The verified host and credential a request would run with, looked up
+ * once per host and credential environment. It uses `gh auth token` only,
+ * never `gh auth status`, so resolving an identity makes no API request.
+ * `null` means unverified: the request runs uncoordinated.
+ */
 function loadControlIdentityInputs(
   hostHint: string | undefined,
   apiCall: boolean,

@@ -148,6 +148,32 @@ function parseApiArgs(args: readonly string[]): ParsedApiArgs {
   return parsed;
 }
 
+/**
+ * A full-URL endpoint names its own host, and the API host maps back to the
+ * host `gh` authenticates against: `api.github.com` is github.com, and a
+ * GitHub Enterprise Server URL carries an `/api/v3` or `/api/graphql`
+ * prefix on its own host.
+ */
+function parseApiUrl(
+  endpoint: string,
+): { path: string; host: string } | undefined {
+  if (!/^https?:\/\//i.test(endpoint)) return undefined;
+  try {
+    const url = new URL(endpoint);
+    let host = url.host.toLowerCase();
+    if (host === 'api.github.com') host = 'github.com';
+    else if (host.startsWith('api.') && host.endsWith('.ghe.com')) {
+      host = host.slice('api.'.length);
+    }
+    const path = url.pathname
+      .replace(/^\/api\/v3(?=\/|$)/, '')
+      .replace(/^\/api\/graphql$/, '/graphql');
+    return { path: path.replace(/^\/+/, '').toLowerCase(), host };
+  } catch {
+    return undefined;
+  }
+}
+
 function endpointPath(endpoint: string): string {
   return endpoint.replace(/^\/+/, '').split('?')[0]?.toLowerCase() ?? '';
 }
@@ -180,11 +206,17 @@ function graphqlClassification(parsed: ParsedApiArgs): GhRequestClassification {
 
 function apiDescription(args: readonly string[]): GhRequestDescription {
   const parsed = parseApiArgs(args);
-  const base = parsed.host ? { host: parsed.host } : {};
   if (!parsed.endpoint) {
-    return { classification: 'unclassified', ...base };
+    return {
+      classification: 'unclassified',
+      ...(parsed.host ? { host: parsed.host } : {}),
+    };
   }
-  const resource = restResource(endpointPath(parsed.endpoint));
+  const url = parseApiUrl(parsed.endpoint);
+  // An explicit --hostname still wins over the URL's own host.
+  const host = parsed.host ?? url?.host;
+  const base = host ? { host } : {};
+  const resource = restResource(url ? url.path : endpointPath(parsed.endpoint));
   if (resource === 'graphql') {
     return { classification: graphqlClassification(parsed), resource, ...base };
   }
@@ -224,6 +256,14 @@ function repoFlagHost(args: readonly string[]): string | undefined {
       value = arg.startsWith('-R=') ? arg.slice(3) : arg.slice(2);
     }
     if (value === undefined) continue;
+    if (/^https?:\/\//i.test(value)) {
+      // The URL form of a repository: its host is the request's host.
+      try {
+        return new URL(value).host.toLowerCase();
+      } catch {
+        return undefined;
+      }
+    }
     const segments = value.split('/');
     if (segments.length >= 3 && segments[0]) return segments[0].toLowerCase();
   }

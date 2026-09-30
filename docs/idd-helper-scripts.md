@@ -1672,19 +1672,20 @@ repositories is the largest `maxConcurrent` any of them configures.
 State is scoped by a hash of the API host and the credential the request would
 use, so separate hosts and separate credentials never share admission or
 cooldown, and no raw credential is written. The host is the one the request
-names (`--hostname`, the `HOST` of a `HOST/OWNER/REPO` repo flag, `GH_HOST`,
-or an Actions `GITHUB_SERVER_URL`), else `gh`'s own default: the single host
-in its configuration, or github.com when none is configured. With several
+names (`--hostname`, the host of a full-URL `gh api` endpoint, the `HOST` of a
+`HOST/OWNER/REPO` or URL-form repo flag, `GH_HOST`, or an Actions
+`GITHUB_SERVER_URL`), else `gh`'s own default from its `hosts.yml`: the single
+configured host, or github.com when none is configured. With several
 configured hosts, `gh api` falls to github.com as `gh` does, but a
 higher-level subcommand takes its host from the git remote, which is not
-visible here, so it runs uncoordinated. The credential is the same one the
-read cache resolves, looked up once per process and host with `gh auth token`
-(never `gh auth status`, so resolving it makes no API request; an async
-caller's first lookup does not block the event loop, and a burst of first
-calls shares one lookup). A request whose host or credential cannot be
-verified runs uncoordinated instead of borrowing another scope, and so does a
-state directory that cannot be used. Nothing is refused for a coordination
-fault, only for evidence.
+visible here, so it runs uncoordinated, as does a `hosts.yml` this layer
+cannot read. The credential is the same one the read cache resolves, looked up
+once per process and host with `gh auth token` (never `gh auth status`, so
+resolving it makes no API request; an async caller's first lookup does not
+block the event loop, and a burst of first calls shares one lookup). A request
+whose host or credential cannot be verified runs uncoordinated instead of
+borrowing another scope, and so does a state directory that cannot be used.
+Nothing is refused for a coordination fault, only for evidence.
 
 ### Which requests are admitted
 
@@ -1758,17 +1759,19 @@ stop the sessions and delete the state directory.
 
 ### Cooldown
 
-A failed request, or a successful GraphQL response that carries a
-`RATE_LIMITED` error, is read through the request observations (issue
-`#3585`) plus one more check. It is a throttle when it reads as a
-secondary limit, is an HTTP 429, carries a `retry-after`, has a GraphQL
-`RATE_LIMITED` error, or says `API rate limit already exceeded` (issue
-`#3560`). A per-resource primary cooldown starts only for a reading of
-`remaining: 0` with its resource, or for explicit primary wording on a
-request that names its own resource, and it never blocks another
-resource or a request that names none. Every other throttle, including
-one nothing can attribute, is shared by REST and GraphQL and by every
-resource.
+A failed request, or a successful buffered GraphQL response that carries a
+`RATE_LIMITED` error, is read through the request observations (issue `#3585`)
+plus one more check. It is a throttle when it reads as a secondary limit, is
+an HTTP 429, carries a `retry-after`, has a GraphQL `RATE_LIMITED` error, or
+says `API rate limit already exceeded` (issue `#3560`). A per-resource primary
+cooldown starts only for a reading of `remaining: 0` with its resource, or for
+explicit primary wording on a request that names its own resource, and it
+never blocks another resource or a request that names none. Any
+secondary-limit reading, including a `retry-after` or the abuse-detection
+wording, beats a `remaining: 0` in the same failure. Every other throttle,
+including one nothing can attribute, is shared by REST and GraphQL and by
+every resource. The unbounded and paginated readers do not inspect a
+successful response.
 
 A server `retry-after`, or a primary reset, is honored up to one hour. Without
 timing the cooldown is 60 seconds, doubling per consecutive throttle up to 15
