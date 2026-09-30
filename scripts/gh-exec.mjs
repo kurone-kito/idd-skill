@@ -473,10 +473,12 @@ function parseIncludedHeadBlock(headerBlock) {
  * may enter a record. Null when the output carries no usable header block.
  */
 function readIncludedEnvelopeHead(raw) {
-  const start = raw.trimStart();
-  const blankLine = start.search(/\r?\n\r?\n/);
+  // Not trimmed: `gh` starts its output with the status line, so an output
+  // that begins with blank lines has no head, and trimming them would let a
+  // header-shaped body that follows pass for one.
+  const blankLine = raw.search(/\r?\n\r?\n/);
   if (blankLine < 0) return null;
-  return parseIncludedHeadBlock(start.slice(0, blankLine));
+  return parseIncludedHeadBlock(raw.slice(0, blankLine));
 }
 function parseIncludedGhApiEnvelope(raw) {
   const sections = raw.split(/\r?\n\r?\n/);

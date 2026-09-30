@@ -3625,6 +3625,39 @@ for (const wrapper of UNPARSABLE_PATHS.filter((candidate) =>
   }
 }
 
+// `gh` starts its output with the status line. An output that begins with
+// blank lines has no head, and a header-shaped body after them must not pass
+// for one (a review of the first revision, which trimmed leading whitespace).
+for (const wrapper of UNPARSABLE_PATHS.filter((candidate) =>
+  ['ghApiJson (non-paginated)', 'ghApiJsonWithHeaders'].includes(
+    candidate.name,
+  ),
+)) {
+  test(`${wrapper.name} does not read a header-shaped body after leading blank lines as the response head (#3616)`, () => {
+    const secretToken = UNPARSABLE_STDOUT_SECRET.split(' ')[0];
+    withUnparsableStub(
+      `\n\nHTTP/1.1 429 Too Many Requests\nx-ratelimit-resource: ${secretToken}\nretry-after: 9\nx-ratelimit-remaining: 0\n\nnot-json`,
+      (telemetryPath) => {
+        setGithubApiTelemetryPolicyForTests({
+          enabled: true,
+          maxRecords: 20,
+          path: telemetryPath,
+        });
+        assert.throws(() => wrapper.invoke(), Error);
+        const records = readObservations(telemetryPath);
+        assert.equal(records.length, 1);
+        assert.equal(records[0].status, 'unknown');
+        assert.equal(records[0].resource, 'unknown');
+        assert.equal(records[0].classification, 'ok');
+        const retained = readFileSync(telemetryPath, 'utf8');
+        for (const leak of [secretToken, '429', 'retry-after']) {
+          assert.equal(retained.includes(leak), false, leak);
+        }
+      },
+    );
+  });
+}
+
 test('the paginated and GraphQL paths record an unknown status and unknown counts for an unparsable body (#3616)', () => {
   for (const name of ['ghApiJson (paginated)', 'ghGraphql']) {
     const wrapper = UNPARSABLE_PATHS.find(
