@@ -16026,6 +16026,94 @@ test('buildPreMergeReadinessSummary: an absent deferFollowUps option leaves the 
   );
 });
 
+// #3633: the section's own shape was already validated, but each item's
+// `reconciled` was honored without checking the item, so `{ reconciled: true }`
+// passed and an empty item blocked as follow-up `#?`.
+const WELL_FORMED_ITEM = {
+  number: 12,
+  heldByAuthoringLabel: false,
+  origin: 7,
+  reconciled: false,
+};
+for (const [label, item] of [
+  ['only reconciled', { reconciled: true }],
+  ['empty', {}],
+  ['null', null],
+  ['a string', 'item'],
+  ['an array', []],
+  ['a string number', { ...WELL_FORMED_ITEM, number: '12' }],
+  ['a zero number', { ...WELL_FORMED_ITEM, number: 0 }],
+  ['a negative number', { ...WELL_FORMED_ITEM, number: -12 }],
+  ['a zero origin', { ...WELL_FORMED_ITEM, origin: 0 }],
+  ['a fractional origin', { ...WELL_FORMED_ITEM, origin: 7.5 }],
+  ['a string origin', { ...WELL_FORMED_ITEM, origin: '7' }],
+  ['a non-boolean reconciled', { ...WELL_FORMED_ITEM, reconciled: 'true' }],
+  ['a missing reconciled', { ...WELL_FORMED_ITEM, reconciled: undefined }],
+  [
+    'a non-boolean heldByAuthoringLabel',
+    { ...WELL_FORMED_ITEM, heldByAuthoringLabel: 1 },
+  ],
+] as [string, unknown][]) {
+  test(`deferFollowUps blockers: an item that is ${label} makes the whole section unverified, never a per-item blocker or a pass`, () => {
+    const blockers = deferBlockers({
+      checked: true,
+      unverifiedReason: null,
+      items: [{ ...WELL_FORMED_ITEM, reconciled: true }, item],
+    });
+    assert.deepEqual(
+      blockers.map((blocker) => blocker.gate),
+      ['deferred-followup-unverified'],
+    );
+    assert.match(blockers[0].detail, /evidence items\[1\] is malformed/);
+  });
+  // The item alone, at index 0: the spec's literal scenario, and the one a
+  // `> 0` off-by-one in the position check would let through.
+  test(`deferFollowUps blockers: a sole item that is ${label} is unverified evidence, never a pass`, () => {
+    const blockers = deferBlockers({
+      checked: true,
+      unverifiedReason: null,
+      items: [item],
+    });
+    assert.deepEqual(
+      blockers.map((blocker) => blocker.gate),
+      ['deferred-followup-unverified'],
+    );
+    assert.match(blockers[0].detail, /evidence items\[0\] is malformed/);
+  });
+}
+
+test('deferFollowUps blockers: a malformed item never masks the real cause of unverified evidence', () => {
+  const [blocker] = deferBlockers({
+    checked: false,
+    unverifiedReason: null,
+    items: [{}],
+  });
+  assert.equal(blocker.gate, 'deferred-followup-unverified');
+  assert.match(blocker.detail, /missing or malformed/);
+  assert.doesNotMatch(blocker.detail, /items\[0\]/);
+});
+
+test('deferFollowUps blockers: well-formed items keep their behavior for both reconciled values, and the position names the first malformed item', () => {
+  assert.deepEqual(
+    deferBlockers({
+      checked: true,
+      unverifiedReason: null,
+      items: [
+        { ...WELL_FORMED_ITEM, reconciled: true },
+        { ...WELL_FORMED_ITEM, number: 13, reconciled: false },
+      ],
+    }).map((blocker) => blocker.gate),
+    ['deferred-followup-unreconciled'],
+  );
+  const [blocker] = deferBlockers({
+    checked: true,
+    unverifiedReason: null,
+    items: [WELL_FORMED_ITEM, WELL_FORMED_ITEM, {}, null],
+  });
+  assert.equal(blocker.gate, 'deferred-followup-unverified');
+  assert.match(blocker.detail, /evidence items\[2\] is malformed/);
+});
+
 test('deferFollowUps blockers: a verified section that still carries an unverifiedReason is inconsistent evidence and fails closed, naming that reason', () => {
   const blockers = deferBlockers({
     checked: true,
