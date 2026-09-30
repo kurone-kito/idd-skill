@@ -4546,6 +4546,20 @@ still fails closed:
   (exits non-zero, no `gh` call) when passed without `--from-pr`, since manual
   mode already supplies `--head-sha` directly with nothing to compare it
   against.
+- `--from-pr` deferral with no required check (kurone-kito/idd-skill#3670):
+  when no required check is configured, the present runs decide CI, so a
+  failing present run — or one the advisory-convergence downgrade blocks even
+  though it is green — defers the watermark. The refusal then says `has no
+  required check configured, so its present runs decide CI`, names the
+  blocking run(s) (at most five, then `and N more`; or, with none to name,
+  such as a still-running or cancelled-only set, says the runs are not all
+  passing yet), and gives the
+  deferral path: in E1 Step 2 this is a deferral, not a deadlock — continue to
+  E3 (an empty list routes through E15/E14 and back to E1), then re-run
+  `--from-pr` at E1 Step 2 once the present runs no longer block. A configured
+  required check keeps the `required checks are not passing` text. The
+  predicate and the defer decision are unchanged: only the `reason` text
+  differs, and the reason code stays internal.
 - `--from-pr` unaddressed-activity warning (`warnings`, kurone-kito/idd-skill#1833,
   kurone-kito/idd-skill#3482):
   the JSON envelope (dry-run and `--apply` alike) carries an optional
@@ -5139,6 +5153,18 @@ reflexively as any other CLI option.
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
   `claim`, `branchCurrency`, and optional `dispositionEvidence`
+- Disposition-evidence `hint` (kurone-kito/idd-skill#3670): a
+  `missingThreads[]` entry for `missing-fresh-disposition` or
+  `unresolved-without-fresh-disposition` carries an optional `hint` naming the
+  reply that clears it — a new marker-first `**Accepted**` or `**Rejected**`
+  reply after the newest non-disposition comment on the thread. A plain-prose
+  correction counts as feedback, and an edited disposition never counts. If
+  the newest comment is a no-new-content advisory-bot reply that reappears
+  after every reply, the hint says to post a hold comment instead. The hint is
+  omitted when the entry has `ackOnlyPostDisposition: true` (that case follows
+  the courtesy-ack convergence rule, not a re-posted reply) and on
+  `incomplete-thread-comments`, and it never changes `route`, `reason`, or any
+  count. It mirrors `missingRegularComments[].hint`
 - **Secondary-bot settlement is fail-closed** (#3261). When
   `advisoryWait.secondaryQuietWindow`/`secondaryBotLogin(s)` are
   configured, `secondaryQuietWindow` only shortens to the short settled
