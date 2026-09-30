@@ -48,6 +48,7 @@ import {
 } from './helper-cli-runner.mts';
 import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
+import { NOW_FLAG_USAGE_MESSAGE, normalizeNowFlag } from './marker-helpers.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
@@ -1365,6 +1366,10 @@ async function runCli(): Promise<HelperCliResult> {
       new Error('--no-cache cannot be combined with --refresh-cache'),
     );
   }
+  // #3675: a malformed --now is a usage error before any policy or network
+  // read, exactly like the other helpers that route it through
+  // normalizeNowFlag.
+  resolveClaimStateNow(args);
   const policy = loadPolicy(args.policy);
 
   // The whole output is the cached unit (#3588): a warm hint skips the open
@@ -1409,6 +1414,7 @@ export function buildOrphanClaimState(
     'claimTiming' | 'trustedMarkerActors' | 'forcedHandoff'
   >,
   currentClaimId: string,
+  nowIso?: string,
 ): ClaimStateResolution {
   return buildClaimStateResolution(
     port,
@@ -1418,7 +1424,29 @@ export function buildOrphanClaimState(
       forcedHandoff: policy.forcedHandoff,
     },
     currentClaimId,
+    nowIso,
   );
+}
+
+/**
+ * The clock `--now` sets for the claim-state annotation (#3675). Only
+ * meaningful with `--with-claim-state`: without it, or with an empty value
+ * (treated as not provided), this returns `undefined` and leaves the raw
+ * `--now` to the other readers of it. A value {@link normalizeNowFlag}
+ * rejects is a usage error.
+ */
+export function resolveClaimStateNow(args: {
+  withClaimState: boolean;
+  now: string;
+}): string | undefined {
+  if (!args.withClaimState || !args.now) {
+    return undefined;
+  }
+  const normalized = normalizeNowFlag(args.now);
+  if (normalized === null) {
+    throw markCliUsageError(new Error(NOW_FLAG_USAGE_MESSAGE));
+  }
+  return normalized;
 }
 
 /**
@@ -1459,7 +1487,12 @@ async function produceOutput(
   // fetch is made and the output is byte-stable (mirrors
   // discover-roadmap-graph's own CLI wiring).
   const claimState = args.withClaimState
-    ? buildOrphanClaimState(port, policy, args.currentClaimId)
+    ? buildOrphanClaimState(
+        port,
+        policy,
+        args.currentClaimId,
+        resolveClaimStateNow(args),
+      )
     : undefined;
 
   // #2243: always resolved (unlike claimState above) -- the triage-verdict
@@ -1761,6 +1794,9 @@ heartbeatOverdue is true when the latest valid claimed-by/heartbeat
 created_at is at or past claimTiming.heartbeatInterval with no later trusted
 heartbeat; false otherwise, including whenever present is false. It is
 PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
+--now <ISO8601> (with --with-claim-state) sets the clock the annotation
+measures claim age against, for a reproducible run; it must be an ISO 8601
+date-time with a Z or numeric UTC offset, and anything else is a usage error.
 --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
 each activeClaim (true only when the active claim's claimId equals <id> and
 the current worktree's claim lock plus generated-tokens record confirm the

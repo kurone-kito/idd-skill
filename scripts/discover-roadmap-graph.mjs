@@ -1906,8 +1906,15 @@ function currentSessionOwnsOccupiedWorktree(
  * resolution from its own parsed policy/args instead of re-implementing this
  * wiring. `policy` intentionally takes the *raw* parsed config shape (as
  * returned by this file's own `loadPolicy`), not a normalized/flattened view.
+ * `nowIso` (#3675) overrides the wall clock for the annotation; a caller
+ * passes only an already-normalized ISO 8601 value.
  */
-export function buildClaimStateResolution(port, policy, currentClaimId) {
+export function buildClaimStateResolution(
+  port,
+  policy,
+  currentClaimId,
+  nowIso,
+) {
   const staleAgeMs =
     parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ?? DEFAULT_STALE_AGE_MS;
   const heartbeatIntervalMs =
@@ -1923,7 +1930,7 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
     heartbeatIntervalMs,
-    nowIso: new Date().toISOString(),
+    nowIso: nowIso ?? new Date().toISOString(),
     currentClaimId: currentClaimIdValue,
     currentSessionAgentId: currentSessionEvidence?.agentId ?? null,
     currentSessionWorktreePath: currentSessionEvidence?.worktreePath ?? null,

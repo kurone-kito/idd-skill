@@ -14,12 +14,16 @@ import {
   filterOrphanIssues,
   getOrphanFirstPolicy,
   loadPolicy,
+  resolveClaimStateNow,
 } from '../src/scripts/discover-orphan-filter.mts';
 import { classifyIssue as classifyGraphIssue } from '../src/scripts/discover-roadmap-graph.mts';
-import { renderForcedHandoffComment } from '../src/scripts/marker-helpers.mts';
+import {
+  NOW_FLAG_USAGE_MESSAGE,
+  renderForcedHandoffComment,
+} from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
-import { stubExecutable } from './test-utils.mts';
+import { spawnHelperBinWithEnvelope, stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const existingFooPath = resolve(process.cwd(), 'src/scripts/foo.mts');
@@ -2303,6 +2307,104 @@ test('a human-gated policy makes the annotation follow a handoff successor (#367
     );
     assert.equal(orphan701?.activeClaim?.claimId, expectedClaimId);
     assert.equal(orphan701?.activeClaim?.stale, expectedStale);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #3675: --now sets the claim-state annotation's clock.
+// ---------------------------------------------------------------------------
+
+test('resolveClaimStateNow returns the normalized clock only with --with-claim-state (#3675)', () => {
+  assert.equal(
+    resolveClaimStateNow({
+      withClaimState: true,
+      now: '2026-06-25T21:00:00+09:00',
+    }),
+    '2026-06-25T12:00:00Z',
+  );
+  // Not used without the annotation, and never validated there.
+  assert.equal(
+    resolveClaimStateNow({ withClaimState: false, now: 'not a date' }),
+    undefined,
+  );
+  // An empty value is "not provided".
+  assert.equal(
+    resolveClaimStateNow({ withClaimState: true, now: '' }),
+    undefined,
+  );
+});
+
+test('resolveClaimStateNow rejects a malformed --now as a usage error (#3675)', () => {
+  for (const now of ['Sep 27 2026', '2026-09-27', '2026-02-30T00:00:00Z']) {
+    assert.throws(() => resolveClaimStateNow({ withClaimState: true, now }), {
+      message: NOW_FLAG_USAGE_MESSAGE,
+    });
+  }
+});
+
+test('--now moves stale for the claim annotation (#3675)', async () => {
+  const comments = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', '2026-06-24T12:00:00Z')]],
+  ]);
+  const { resolution: base } = buildClaimState(comments);
+  const policy = loadPolicyFromConfig({});
+
+  for (const [now, expectedStale] of [
+    ['2026-06-25T11:00:00Z', false],
+    ['2026-06-25T13:00:00Z', true],
+  ] as const) {
+    const claimState = buildOrphanClaimState(
+      createFakeProviderAdapter({}),
+      policy,
+      '',
+      resolveClaimStateNow({ withClaimState: true, now }),
+    );
+    assert.equal(claimState.nowIso, now);
+
+    const result = await filterOrphanIssues(claimOrphanIssues(), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      claimState: {
+        ...claimState,
+        loadComments: base.loadComments,
+        isTrustedAuthor: base.isTrustedAuthor,
+        inspectLocalWorktree: () => ({
+          status: 'absent' as const,
+          paths: [],
+          reason: null,
+        }),
+      },
+    });
+
+    const orphan701 = new Map(result.orphans.map((o) => [o.number, o])).get(
+      701,
+    );
+    assert.equal(orphan701?.activeClaim?.stale, expectedStale, now);
+  }
+});
+
+test('CLI: a malformed --now with --with-claim-state is a usage error before any gh call (#3675)', () => {
+  // Every gh invocation fails loudly, so a pass proves the check ran before
+  // the repository lookup or any read.
+  const restore = stubExecutable(
+    'gh',
+    `process.stderr.write("unexpected gh invocation: " + process.argv.slice(2).join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  try {
+    const result = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      ['--with-claim-state', '--now', 'Sep 27 2026'],
+    );
+    assert.equal(result.status, 1, JSON.stringify(result));
+    assert.match(result.stderr, /--now must be an ISO 8601 date-time/u);
+    assert.doesNotMatch(result.stderr, /unexpected gh invocation/u);
+    // The helper's usage-error shape, like an invalid --pr.
+    assert.equal(result.envelope?.kind, 'usage', JSON.stringify(result));
+    assert.equal(result.envelope?.exitCode, 1);
+  } finally {
+    restore();
   }
 });
 
