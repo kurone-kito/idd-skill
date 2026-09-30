@@ -462,10 +462,12 @@ directly to its contract.
 arguments, parsed return values, thrown errors, and process exit. Only
 those three wrappers record observations: requests made through the
 generic `ghText`, `ghTextUnbounded`, and `ghTextAsync` runners, including
-`gh api` calls a helper makes that way, and the opt-in read cache's own
-revalidation fetch, are not observed. Setting
-`enabled` to true appends allowlisted observations to a local JSON Lines
-file. The default file name is `github-api-telemetry.jsonl`:
+`gh api` calls a helper makes that way, are not observed. A single-request
+fetch through the opt-in read cache (a miss, a revalidation, or a 404) is
+not observed either: a cache hit makes no request, and a paginated cache
+miss is observed like any paginated call. Setting `enabled` to true
+appends allowlisted observations to a local JSON Lines file. The default
+file name is `github-api-telemetry.jsonl`:
 
 ```text
 ~/.local/state/idd-skill/github-api-telemetry.jsonl

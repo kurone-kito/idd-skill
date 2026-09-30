@@ -465,9 +465,11 @@ export interface GhApiJsonOptions {
   timeout?: number;
   /**
    * Opt-in host-local read cache. When omitted, `ghApiJson` keeps the
-   * historical uncached `gh api` invocation, including its argv. A
-   * non-read classification or a disabled `githubApi.readCache` policy
-   * also keeps that uncached path and does not create a cache directory.
+   * historical uncached `gh api` invocation, including its argv (except
+   * that opt-in `githubApi.telemetry` adds `--include` to a non-paginated
+   * call). A non-read classification or a disabled `githubApi.readCache`
+   * policy also keeps that uncached path and does not create a cache
+   * directory.
    */
   readCache?: GhApiJsonReadCacheOptions;
 }

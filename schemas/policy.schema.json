@@ -592,7 +592,7 @@
             "path": {
               "type": "string",
               "minLength": 1,
-              "description": "Local JSONL file for retained observations. Optional; when enabled and omitted, the file is ~/.local/state/idd-skill/github-api-telemetry.jsonl. A configured path must be absolute or start with ~/ (the home directory); any other value keeps telemetry off. The file is not created while telemetry is disabled. A file that already holds anything other than these records is left untouched and nothing is recorded."
+              "description": "Local JSONL file for retained observations. Optional; when enabled and omitted, the file is ~/.local/state/idd-skill/github-api-telemetry.jsonl. A configured path must be absolute or start with ~/ (the home directory); any other non-blank value keeps telemetry off, and a blank value counts as unset and uses the default file. The file is not created while telemetry is disabled. A file that already holds anything other than these records is left untouched and nothing is recorded."
             }
           },
           "description": "Local-only retention for safe request-cost observations. Defaults off. Records omit credentials, request and query text, issue and comment bodies, and environment dumps."

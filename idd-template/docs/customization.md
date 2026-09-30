@@ -359,10 +359,12 @@ helper-script read-cache section describes the contract.
 `githubApi.telemetry` records local request-lifecycle observations for
 the `ghApiJson`, `ghApiJsonWithHeaders`, and `ghGraphql` wrappers (issue
 `kurone-kito/idd-skill#3585`). Requests that helpers make through the
-generic `gh` text runners, and the read cache's own revalidation
-fetch, are not observed. The default is off. While
-off, command arguments, parsed results, thrown errors, and the process
-exit stay unchanged. While on, each record keeps HTTP
+generic `gh` text runners are not observed, and neither is a
+single-request fetch through the read cache (a cache hit makes no
+request, and a paginated cache miss is observed like any paginated
+call). The default is off. While off, command arguments, parsed
+results, thrown errors, and the process exit stay unchanged. While on,
+each record keeps HTTP
 status, the rate-limit header fields, GraphQL query cost when the query
 selects `rateLimit` with `cost`, and separate command, retry, and
 injected page counts. It omits credentials, query text, issue and
