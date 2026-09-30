@@ -2016,6 +2016,7 @@ type UrgencyDeferBlock =
   | 'protected-authority'
   | 'awaiting-maintainer-decision'
   | 'accepted-mid-fix'
+  | 'unknown-severity'
   | 'adopt-now'
   | 'above-ceiling'
   | 'unknown-urgency'
@@ -2110,7 +2111,8 @@ function severityTieredDefers(
  * applies it; this module has no production caller. Check order fails
  * closed toward not deferring. `severity-tiered` ignores `adoptNow` and
  * treats an unknown E4 tier as Medium before the Copilot floor, which
- * only raises eligibility. `low` and `low-and-medium` do not.
+ * only raises eligibility. `low` and `low-and-medium` do not: they need
+ * a known E4 tier, and the floor never stands in for it.
  */
 // audit:ignore-dead-export: E4/E5 applies this matrix from instruction text; tests lock every cell and there is no helper caller
 export function decideUrgencyDefer(
@@ -2150,8 +2152,11 @@ export function decideUrgencyDefer(
     return { defer: true, eligibility, blockedBy: null };
   }
 
-  const eligibility = higherSeverity(e4, copilot);
-  if (eligibility === null || eligibility === 'high') {
+  if (e4 === null) {
+    return denyUrgencyDefer('unknown-severity');
+  }
+  const eligibility = higherSeverity(e4, copilot) ?? e4;
+  if (eligibility === 'high') {
     return denyUrgencyDefer('above-ceiling', eligibility);
   }
   if (input.adoptNow) {

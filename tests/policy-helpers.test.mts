@@ -478,14 +478,20 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
     eligibility: 'medium',
     blockedBy: 'above-ceiling',
   });
-  assert.deepEqual(
-    decideUrgencyDefer({ ...binary, e4Severity: null, copilotLabel: null }),
-    { defer: false, eligibility: null, blockedBy: 'above-ceiling' },
-  );
-  assert.deepEqual(
-    decideUrgencyDefer({ ...binary, e4Severity: null, copilotLabel: 'low' }),
-    { defer: true, eligibility: 'low', blockedBy: null },
-  );
+  for (const mode of ['low', 'low-and-medium'] as const) {
+    for (const copilotLabel of [null, 'low', 'medium', 'high'] as const) {
+      assert.deepEqual(
+        decideUrgencyDefer({
+          ...binary,
+          mode,
+          e4Severity: null,
+          copilotLabel,
+        }),
+        { defer: false, eligibility: null, blockedBy: 'unknown-severity' },
+        `${mode}/${copilotLabel}`,
+      );
+    }
+  }
   assert.deepEqual(
     decideUrgencyDefer({
       ...binary,
