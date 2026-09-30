@@ -100,6 +100,10 @@ Before you publish a ready issue, confirm:
 
 ## Mechanical pre-publish gate
 
+Run the completed-draft adversarial review in
+[contract.md](contract.md#completed-draft-adversarial-review) before
+this linter. The linter then runs on the reviewed body.
+
 Before you publish a drafted **ready orphan, roadmap, or child** body,
 run the `audit-authored-issue` linter against it when a helper runtime
 is available. It mechanically catches shape and marker mistakes — a
@@ -662,8 +666,9 @@ verification shape, not a rigid edit order.
 
 ## Publication boundary
 
-Publish each `ready` body directly under the authoring hold once it
-passes the mechanical gate and the critique pass — this is the default
+Publish each `ready`, `needs-decision`, or `blocked-by-human` body
+directly under the authoring hold once the completed-draft adversarial
+review and then the mechanical gate have passed. This is the default
 outcome of drafting, and it needs no separate publish approval. Stop
 after publishing (and applying/creating the authoring label) unless
 the user also separately requests release from the authoring hold —
