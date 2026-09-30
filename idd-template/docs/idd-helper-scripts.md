@@ -1657,8 +1657,10 @@ for a configured directory. This check reads an ACL and never changes
 one or deletes anything: it gates each read and write, so entries stored
 while the directory was private stay on disk if its ACL is later
 loosened, and the degrade to live reads does not protect them; tighten
-the ACL or remove the directory yourself. It does not notice a different
-owner, who keeps implicit permission to rewrite the ACL.
+the ACL or remove the directory yourself. Only the directory's own ACL
+is read, not each stored entry's, which inherit it when the cache
+creates them. It does not notice a different owner, who keeps implicit
+permission to rewrite the ACL.
 
 Entries are
 partitioned by API host, a hash of the credential context, repository,
