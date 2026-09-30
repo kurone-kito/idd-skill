@@ -187,6 +187,26 @@ in §CSA before those commits are pushed or bundled into a PR. The
 displaced session is by definition unreachable, so its own planning
 comment can never substitute for this independent check.
 
+**Inherited plan comment** — The displaced session may also have posted a B2
+plan. Where it left no commits there is nothing for §CSA to audit; where it
+left commits, §CSA covers them but not the plan. `idd-work.instructions.md`'s
+B3 self-check accepts only the refined, post-critique plan, and a successor
+cannot observe whether the predecessor's critique pass ran. On the no-PR
+route that enters B3 (a dirty worktree) the successor therefore treats the
+inherited comment as an unverified draft: it re-verifies the plan against
+the issue and the code, runs its own critique pass, posts a refined plan
+before entering B3, and adds that comment to `Authoritative by` alongside
+the evidence §FH and Step 2 require. It never relies on the predecessor's
+critique having run. The same holds after an ordinary stale takeover. The
+no-PR rows that route to B2 draft their own plan anyway. The routes that
+skip both B2 and B3 (a clean worktree with unpushed commits and §W8 with
+unpushed commits go to D1, and §W7 resumes from C1) have no B3 self-check
+to satisfy, so the successor does not rely on the inherited plan there.
+Reported 2026-09-30 in `kurone-kito/dotfiles`
+(the round for issue `dotfiles#530`): the successor did this as a judgment
+call. Its two failure modes are building on an unreviewed draft and redoing
+reviewed work (preventive; no observed incident yet).
+
 ## §MC — F4 Cleanup Routing for a Merged or Closed Issue
 
 Applies to Step 1's merged-PR and closed-issue rows in
