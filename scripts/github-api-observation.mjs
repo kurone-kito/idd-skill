@@ -88,6 +88,24 @@ function graphqlRoot(value) {
   }
   return value;
 }
+/**
+ * The messages and types of a GraphQL `errors` array, joined. These are the
+ * server's failure text, unlike the `data` subtree, which can quote issue
+ * and comment content.
+ */
+function graphqlErrorText(root) {
+  const errors = graphqlRoot(root)?.errors;
+  if (!Array.isArray(errors)) return '';
+  return errors
+    .map((entry) => {
+      const item = entry;
+      return [item?.type, item?.message]
+        .filter((value) => typeof value === 'string')
+        .join(' ');
+    })
+    .filter((line) => line.length > 0)
+    .join('\n');
+}
 function parseJsonObject(text) {
   const start = text.indexOf('{');
   if (start < 0) return null;
@@ -282,25 +300,35 @@ export function observeGhFailure(error, counts = {}) {
   const candidate = error;
   const stderrText = candidate?.stderr == null ? '' : String(candidate.stderr);
   const stdoutText = candidate?.stdout == null ? '' : String(candidate.stdout);
+  const graphql = counts.graphql === true;
+  // The JSON body is on stdout; gh's own stderr text can hold a `{`.
+  const graphqlBody = graphql
+    ? (parseJsonObject(stdoutText) ?? parseJsonObject(stderrText))
+    : undefined;
   // Only the captured streams are evidence. `error.message` embeds the
   // full argv (`-f body=...`, `-f query=...`), so request text must not
-  // drive the recorded status or classification.
-  const scanned = [stderrText, stdoutText]
+  // drive the recorded status or classification. A GraphQL response body
+  // also carries user content under `data` (issue and comment text) next
+  // to `errors`, so for GraphQL only stderr and the error messages count.
+  const scanned = [
+    stderrText,
+    graphql ? graphqlErrorText(graphqlBody) : stdoutText,
+  ]
     .filter((value) => value.length > 0)
     .join('\n');
   const fields = classifyFields({
-    status: deriveGhHttpStatus({ stderr: stderrText, stdout: stdoutText }),
+    status: deriveGhHttpStatus(
+      graphql
+        ? { stderr: stderrText }
+        : { stderr: stderrText, stdout: stdoutText },
+    ),
     resourceToken: readHeaderLine(scanned, 'x-ratelimit-resource'),
     remaining: integerToken(readHeaderLine(scanned, 'x-ratelimit-remaining')),
     reset: integerToken(readHeaderLine(scanned, 'x-ratelimit-reset')),
     retryAfter: integerToken(readHeaderLine(scanned, 'retry-after')),
     bodyText: scanned,
-    // The JSON body is on stdout; gh's own stderr text can hold a `{`.
-    graphqlBody:
-      counts.graphql === true
-        ? (parseJsonObject(stdoutText) ?? parseJsonObject(scanned))
-        : undefined,
-    interpretGraphql: counts.graphql === true,
+    graphqlBody,
+    interpretGraphql: graphql,
     scanWording: true,
     transportSucceeded: false,
   });

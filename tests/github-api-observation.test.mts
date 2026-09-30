@@ -371,6 +371,56 @@ test('failure classification reads the captured streams, not the argv', () => {
   assert.equal(messageWording.signals.primaryExhaustion, false);
 });
 
+test('GraphQL failure evidence excludes the response data', () => {
+  const quoted = observeGhFailure(
+    {
+      stderr: 'gh: Could not resolve to a User with the login of nobody.\n',
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [
+                  { body: 'we hit a secondary rate limit before (HTTP 403)' },
+                ],
+              },
+            },
+          },
+        },
+        errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a User' }],
+      }),
+    },
+    { graphql: true },
+  );
+  assert.equal(quoted.status, 'unknown');
+  assert.equal(quoted.httpRequestCount, 'unknown');
+  assert.equal(quoted.signals.secondaryThrottling, false);
+  assert.equal(quoted.signals.primaryExhaustion, false);
+  assert.equal(quoted.classification, 'graphql-errors');
+
+  const statusInData = observeGhFailure(
+    {
+      stderr: 'gh: boom\n',
+      stdout: '{"data":{"x":{"status":"404"}},"errors":[{"message":"boom"}]}',
+    },
+    { graphql: true },
+  );
+  assert.equal(statusInData.status, 'unknown');
+  assert.equal(statusInData.httpRequestCount, 'unknown');
+
+  // The error messages themselves are still evidence.
+  const messageWording = observeGhFailure(
+    {
+      stderr: 'gh: request failed\n',
+      stdout:
+        '{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}',
+    },
+    { graphql: true },
+  );
+  assert.equal(messageWording.signals.primaryExhaustion, true);
+  assert.equal(messageWording.signals.graphqlErrors, true);
+});
+
 test('a GraphQL errors body on stdout survives a brace in stderr', () => {
   const observed = observeGhFailure(
     {
@@ -841,6 +891,15 @@ if (mode === 'plain-ok') {
       data: { ok: true, rateLimit: { cost: 2, remaining: 0 } },
     }),
   )});
+} else if (mode === 'graphql-fail-body') {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: { note: 'quoted secondary rate limit text (HTTP 403)' },
+      errors: [{ type: 'NOT_FOUND', message: 'Could not resolve' }],
+    }),
+  )});
+  process.stderr.write('gh: Could not resolve\\n');
+  process.exit(1);
 } else if (mode === 'graphql-no-cost') {
   process.stdout.write(${JSON.stringify(
     JSON.stringify({
@@ -1067,6 +1126,17 @@ if (mode === 'plain-ok') {
     assert.equal(last.classification, 'primary-exhaustion');
     assert.equal(last.signals.secondaryThrottling, false);
     assert.equal(last.graphqlCost, 2);
+    assert.equal(last.httpRequestCount, 'unknown');
+
+    // Real gh exits non-zero with the response body on stdout. User content
+    // under `data` must not classify the failure.
+    setMode('graphql-fail-body');
+    assert.throws(() => ghGraphql(graphqlQuery, {}));
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'graphql-errors');
+    assert.equal(last.status, 'unknown');
+    assert.equal(last.signals.secondaryThrottling, false);
     assert.equal(last.httpRequestCount, 'unknown');
 
     setMode('graphql-no-cost');
