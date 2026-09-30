@@ -9537,20 +9537,28 @@ export function summarizeRequiredChecks(
   };
 }
 
-// Conclusion over *all* present check runs (waiver-covered runs count as
-// skipped), used for the F2 fallback when no required checks are configured:
-// an unprotected branch must not satisfy CI vacuously, so the gate inspects the
-// real run conclusions instead.
-export function resolvePresentRunConclusion(
-  normalizedChecks: {
-    name: string;
-    state: string;
-    completedAt: string;
-    coveredByWaiver: boolean;
-    type: string;
-    workflowName: string;
-    workflowPath: string;
-  }[],
+// The two answers the present-run fallback gives about one set of checks: the
+// `conclusion` F2 consults when no required checks are configured, and the
+// names of the runs that make it `some-failing`. Computed together so the names
+// can never drift from the conclusion (#3670).
+interface PresentRunClassification {
+  conclusion: string;
+  blockingNames: string[];
+}
+
+/** One present check run in the shape the present-run fallback classifies. */
+type NormalizedPresentRun = {
+  name: string;
+  state: string;
+  completedAt: string;
+  coveredByWaiver: boolean;
+  type: string;
+  workflowName: string;
+  workflowPath: string;
+};
+
+function classifyPresentRuns(
+  normalizedChecks: NormalizedPresentRun[],
   // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
   // check NAMES this collection pass could not fully resolve real
   // `workflowPath` producer identity for -- see `identityUnresolvedCheckNames`
@@ -9563,21 +9571,41 @@ export function resolvePresentRunConclusion(
   // `workflowPath` producer key -- reopening the exact bypass #2919 exists
   // to close, on an unprotected branch, even though the PRIMARY
   // required-check gate (`summarizeRequiredChecks`'s own `status`) is
-  // already fixed. Default empty set is backward compatible: every caller
-  // that omits it (none of them do after this fix, but a future direct
-  // caller might) sees unchanged pre-#2919 behavior.
-  identityUnresolvedCheckNames: ReadonlySet<string> = new Set(),
-): string {
+  // already fixed.
+  identityUnresolvedCheckNames: ReadonlySet<string>,
+): PresentRunClassification {
   if (normalizedChecks.length === 0) {
-    return 'none';
+    return { conclusion: 'none', blockingNames: [] };
   }
-  if (
-    identityUnresolvedCheckNames.size > 0 &&
-    normalizedChecks.some((check) =>
-      identityUnresolvedCheckNames.has(check.name),
-    )
-  ) {
-    // `'some-failing'`, not `'pending'`: the `#2714` comment above maps a
+  const identityBlockedNames =
+    identityUnresolvedCheckNames.size > 0
+      ? normalizedChecks
+          .filter((check) => identityUnresolvedCheckNames.has(check.name))
+          .map((check) => check.name)
+      : [];
+  const effective = normalizedChecks.map((check) =>
+    check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
+  );
+  const classification = classifyCiChecks(effective);
+  const failedChecks =
+    classification.status === 'failed' ? (classification.failed ?? []) : [];
+  const unknownChecks =
+    classification.status === 'unknown' ? (classification.unknown ?? []) : [];
+  // An identity-unresolved name and an independently failed run are two
+  // separate causes of `some-failing`; report both.
+  const blocking = new Set<string>(identityBlockedNames);
+  for (const check of failedChecks) {
+    blocking.add(String(check.name ?? ''));
+  }
+  for (const check of unknownChecks) {
+    if (check.state !== 'CANCELLED') {
+      blocking.add(String(check.name ?? ''));
+    }
+  }
+  blocking.delete('');
+  const blockingNames = [...blocking].sort();
+  if (identityBlockedNames.length > 0) {
+    // `'some-failing'`, not `'pending'`: the `#2714` comment below maps a
     // lone CANCELLED-with-no-successor instance to `'pending'` because
     // that shape is a plausible rerun-in-progress candidate that can
     // reasonably resolve on its own without operator action. An
@@ -9587,17 +9615,13 @@ export function resolvePresentRunConclusion(
     // follows the conservative `'some-failing'` default every other
     // genuinely unrecognized-state `unknown` cause already gets, not the
     // narrower CANCELLED carve-out.
-    return 'some-failing';
+    return { conclusion: 'some-failing', blockingNames };
   }
-  const effective = normalizedChecks.map((check) =>
-    check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
-  );
-  const classification = classifyCiChecks(effective);
   if (classification.status === 'success') {
-    return 'all-passing';
+    return { conclusion: 'all-passing', blockingNames: [] };
   }
   if (classification.status === 'pending') {
-    return 'pending';
+    return { conclusion: 'pending', blockingNames: [] };
   }
   // #2714: a lone CANCELLED instance with no same-producer successor to
   // dedup against lands in classifyCiChecks's residual `unknown` bucket --
@@ -9610,14 +9634,46 @@ export function resolvePresentRunConclusion(
   // to avoid. Scoped to CANCELLED-only `unknown` entries: an `unknown`
   // bucket containing any other, genuinely unrecognized state stays
   // 'some-failing', the conservative default.
-  const unknownChecks = classification.unknown ?? [];
   if (
     classification.status === 'unknown' &&
     unknownChecks.every((check) => check.state === 'CANCELLED')
   ) {
-    return 'pending';
+    return { conclusion: 'pending', blockingNames: [] };
   }
-  return 'some-failing';
+  return { conclusion: 'some-failing', blockingNames };
+}
+
+// Conclusion over *all* present check runs (waiver-covered runs count as
+// skipped), used for the F2 fallback when no required checks are configured:
+// an unprotected branch must not satisfy CI vacuously, so the gate inspects the
+// real run conclusions instead.
+export function resolvePresentRunConclusion(
+  normalizedChecks: NormalizedPresentRun[],
+  // See `classifyPresentRuns` for the `identityUnresolvedCheckNames` rationale
+  // (kurone-kito/idd-skill#2919): an unresolved producer identity fails this
+  // fallback closed. The default empty set keeps every caller that omits it on
+  // the unchanged pre-#2919 behavior.
+  identityUnresolvedCheckNames: ReadonlySet<string> = new Set(),
+): string {
+  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
+    .conclusion;
+}
+
+/**
+ * The sorted names of the present runs that make
+ * {@link resolvePresentRunConclusion} `some-failing`, and `[]` for every other
+ * conclusion (#3670). A run the advisory-convergence downgrade blocks is
+ * included even when its own state is green, so callers name these runs as
+ * blocking rather than failing. A run with no name cannot be named, so it is
+ * left out: for named checks the result is non-empty exactly when the
+ * conclusion is `some-failing`.
+ */
+export function listBlockingPresentRunNames(
+  normalizedChecks: NormalizedPresentRun[],
+  identityUnresolvedCheckNames: ReadonlySet<string> = new Set(),
+): string[] {
+  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
+    .blockingNames;
 }
 
 export function resolveCodeownersForFiles(

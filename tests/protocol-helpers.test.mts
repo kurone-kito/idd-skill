@@ -15,11 +15,13 @@ import {
   hasTrustedReviewAckAfter,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
+  listBlockingPresentRunNames,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   orderClaimEvents,
   resolveActiveClaim,
   resolveActiveClaimForWriteGate,
   resolveLatestReviewWatermark,
+  resolvePresentRunConclusion,
   summarizeAdvisoryWaitMarkers,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
@@ -4927,4 +4929,105 @@ test('resolveActiveClaimForWriteGate ignores an edited trusted forced-handoff ma
   });
   assert.equal(active?.claimId, 'claim-old');
   assert.equal(active?.agentId, 'agent-old');
+});
+
+// --- #3670: the names behind a `some-failing` present-run conclusion ---------
+
+function presentRun(name: string, state: string, coveredByWaiver = false) {
+  return {
+    name,
+    state,
+    completedAt: '2026-06-25T11:00:00Z',
+    coveredByWaiver,
+    type: 'check-run',
+    workflowName: 'ci',
+    workflowPath: `.github/workflows/${name}.yml`,
+  };
+}
+
+test('listBlockingPresentRunNames is non-empty exactly when the present-run conclusion is some-failing', () => {
+  const scenarios: {
+    label: string;
+    checks: ReturnType<typeof presentRun>[];
+    identityUnresolved?: string[];
+    conclusion: string;
+    names: string[];
+  }[] = [
+    { label: 'no runs', checks: [], conclusion: 'none', names: [] },
+    {
+      label: 'all passing',
+      checks: [presentRun('a', 'SUCCESS'), presentRun('b', 'SKIPPED')],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'pending',
+      checks: [presentRun('a', 'IN_PROGRESS'), presentRun('b', 'SUCCESS')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'cancelled only',
+      checks: [presentRun('a', 'CANCELLED'), presentRun('b', 'SUCCESS')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'failed',
+      checks: [presentRun('b', 'FAILURE'), presentRun('a', 'SUCCESS')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'failed beside a cancelled run',
+      checks: [presentRun('a', 'CANCELLED'), presentRun('b', 'TIMED_OUT')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'unrecognized state beside a cancelled run',
+      checks: [presentRun('a', 'CANCELLED'), presentRun('b', 'MYSTERY')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'a waiver-covered failure',
+      checks: [presentRun('a', 'FAILURE', true), presentRun('b', 'SUCCESS')],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'identity-unresolved name on a green run',
+      checks: [presentRun('a', 'SUCCESS'), presentRun('b', 'SUCCESS')],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'identity-unresolved name plus an independent failure',
+      checks: [presentRun('a', 'SUCCESS'), presentRun('b', 'FAILURE')],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a', 'b'],
+    },
+    {
+      label: 'identity-unresolved name that is not present',
+      checks: [presentRun('b', 'SUCCESS')],
+      identityUnresolved: ['a'],
+      conclusion: 'all-passing',
+      names: [],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const unresolved = new Set(scenario.identityUnresolved ?? []);
+    const conclusion = resolvePresentRunConclusion(scenario.checks, unresolved);
+    const names = listBlockingPresentRunNames(scenario.checks, unresolved);
+    assert.equal(conclusion, scenario.conclusion, scenario.label);
+    assert.deepEqual(names, scenario.names, scenario.label);
+    assert.equal(
+      names.length > 0,
+      conclusion === 'some-failing',
+      `${scenario.label}: names are non-empty exactly when some-failing`,
+    );
+  }
 });
