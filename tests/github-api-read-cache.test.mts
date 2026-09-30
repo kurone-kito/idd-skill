@@ -745,6 +745,41 @@ test('a dot-dot after a symlink is judged where the OS resolves it', {
   }
 });
 
+test('losing the cold marker race still contends for the lease', () => {
+  const paths = tempRoot();
+  let fetches = 0;
+  let lostRace = false;
+  try {
+    const result = readThrough(
+      paths,
+      () => {
+        fetches += 1;
+        return { status: 200, body: { ok: true } };
+      },
+      {
+        storage: {
+          writeExclusive(path: string, data: string): void {
+            if (path.endsWith(MARKER) && !lostRace) {
+              lostRace = true;
+              // Another cold process wins the marker between lstat and wx.
+              writeFileSync(path, 'idd-github-api-read-cache\n', {
+                mode: 0o600,
+              });
+            }
+            writeFileSync(path, data, { flag: 'wx', mode: 0o600 });
+          },
+        },
+      },
+    );
+    assert.equal(lostRace, true);
+    assert.equal(result.cache, 'miss');
+    assert.equal(fetches, 1);
+    assert.equal(entryNames(paths.cacheDir).length, 1);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a non-empty foreign directory is not adopted or chmod-ed', {
   skip: process.platform === 'win32',
 }, () => {

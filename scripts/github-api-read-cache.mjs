@@ -393,7 +393,16 @@ function prepareRoot(ctx) {
     throw new CacheStorageError('refusing to use a symlinked cache marker');
   }
   if (!markerStat) {
-    ctx.storage.writeExclusive(marker, 'idd-github-api-read-cache\n');
+    try {
+      ctx.storage.writeExclusive(marker, 'idd-github-api-read-cache\n');
+    } catch (error) {
+      // A concurrent cold start created it first; validate that marker.
+      if (errorCode(error) !== 'EEXIST') throw error;
+    }
+    const placed = tryLstat(ctx.storage, marker);
+    if (!placed || placed.isSymbolicLink() || !placed.isFile()) {
+      throw new CacheStorageError('cache marker is not a regular file');
+    }
   }
   ctx.storage.chmod(marker, FILE_MODE);
   assertPrivate(ctx.storage, marker, 'file');
