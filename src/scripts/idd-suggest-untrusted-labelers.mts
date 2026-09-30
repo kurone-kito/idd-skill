@@ -229,17 +229,16 @@ export interface UntrustedLabelerSweepDeps {
  * to several MB of stdout for `execFileSync` to buffer.
  *
  * Deliberately **not** `ghApiJson(path, { paginate: true })`: that call
- * walks every page inside one `gh` subprocess via its own synchronous
- * `execFileSync`, whose `GhApiJsonOptions` exposes no `maxBuffer`
- * override (only the async `ghTextAsync`'s `GhTextAsyncOptions` does)
- * -- so even a well-projected single `--paginate` call is hard-capped
- * at Node's default 1 MiB *total* accumulated stdout across every
- * page, with no override available through this repository's sync
- * `gh`-exec primitives. This helper's
+ * walks every page inside one `gh` subprocess, and its *total*
+ * accumulated stdout across every page is capped at
+ * `GH_API_PAGINATED_MAX_BYTES` (8 MiB, see `gh-exec.mts`); a call that
+ * passes the ceiling fails closed with a structured error instead of
+ * returning a partial list. This helper's
  * sweep is repository-wide and unbounded by design (unlike every other
  * paginated caller in this repository, which is PR/issue-scoped and
  * bounded in practice to a few pages -- see `DEFAULT_GH_PAGINATED_TIMEOUT_MS`'s
- * own doc comment in `gh-exec.mts`), so this fetches one page at a time
+ * own doc comment in `gh-exec.mts`), so one call could pass that ceiling
+ * and would then return nothing. This fetches one page at a time
  * instead: each page's stdout is independently bounded (a few KB after
  * projection), and {@link sweepUntrustedLabelerCandidates} below never
  * retains a page's raw events past its own counting pass.

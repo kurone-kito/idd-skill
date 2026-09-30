@@ -5659,11 +5659,11 @@ same as `AW4`/`AW5`.
   the current repository via `gh repo view` auto-detection.
 - Pages manually (`page=1,2,...` with `per_page=100`), not via `gh api
   --paginate` in one subprocess call: the repository-level endpoint
-  embeds the full parent `issue` object in every event, and `gh`'s
-  synchronous execution path this repository's helpers share exposes no
-  `maxBuffer` override, so an unbounded repository-wide sweep pages one
-  request at a time instead of risking a single oversized buffered
-  response.
+  embeds the full parent `issue` object in every event, and a single
+  paginated `ghApiJson` call fails closed once its accumulated stdout
+  passes the 8 MiB response ceiling, so an unbounded repository-wide
+  sweep pages one request at a time instead of risking a single call
+  that exceeds that ceiling.
 - **Read-only, unconditionally**: performs no write operation of any
   kind — no `.github/idd/config.json` edit, no GitHub mutation (no
   label change, no comment, no other write call). It only proposes

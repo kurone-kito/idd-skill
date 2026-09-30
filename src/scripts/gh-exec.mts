@@ -1034,7 +1034,8 @@ function linuxCmdlineArgv0IsGh(cmdline: string): boolean {
  * Signal `pid` only when it is this capture's `gh`. On Linux that means
  * argv0's basename is exactly `gh`; other platforms, and a Linux host
  * whose `/proc` read fails, still signal. Checked again before each
- * signal so a pid recycled during the escalation wait is never hit.
+ * signal, so on Linux a pid recycled during the escalation wait is not
+ * signaled.
  */
 function signalPaginatedGhChild(
   pid: number,

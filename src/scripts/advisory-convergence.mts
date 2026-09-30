@@ -3269,7 +3269,9 @@ function isPaginatedResponseLimitError(error: unknown): boolean {
  * documents under heavy concurrent load) or a 5xx. A definitive 4xx
  * (not-found, forbidden, unauthorized, etc.) is a permanent rejection a
  * retry cannot fix, so it rethrows immediately instead of wasting the
- * attempt budget.
+ * attempt budget. A paginated response-limit failure (#3597) also has no
+ * HTTP status but is just as deterministic, so it rethrows immediately
+ * too (see `isPaginatedResponseLimitError`).
  *
  * Deliberately self-contained (reuses this file's own `sleepSync`, does
  * NOT import `gh-exec.mts`'s async `withBoundedRetry`): this file is
