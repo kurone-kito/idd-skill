@@ -557,6 +557,41 @@ test('errors, throttles, and incomplete collections are not stored', () => {
   }
 });
 
+test('a response echoing the credential material is never stored, even without secretMaterial', () => {
+  const paths = tempRoot();
+  const credentialMaterial = 'ghp_credential_material_sentinel';
+  let fetches = 0;
+  try {
+    const result = readThrough(
+      paths,
+      () => {
+        fetches += 1;
+        return { status: 200, body: { echoed: credentialMaterial } };
+      },
+      { credentialMaterial },
+    );
+    assert.equal(result.cache, 'miss');
+    assert.deepEqual(entryNames(paths.cacheDir), []);
+    readThrough(
+      paths,
+      () => {
+        fetches += 1;
+        return { status: 200, body: { echoed: credentialMaterial } };
+      },
+      { credentialMaterial },
+    );
+    assert.equal(fetches, 2);
+    const onDisk = existsSync(join(paths.cacheDir, 'entries'))
+      ? readdirSync(join(paths.cacheDir, 'entries')).map((name) =>
+          readFileSync(join(paths.cacheDir, 'entries', name), 'utf8'),
+        )
+      : [];
+    assert.equal(onDisk.join('').includes(credentialMaterial), false);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a response containing declared secret material is not stored', () => {
   const paths = tempRoot();
   let fetches = 0;

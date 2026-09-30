@@ -1086,7 +1086,11 @@ export function readThroughGithubApiCache(input) {
     maxBytes: boundedBytes(input.policy.maxBytes),
     entryId,
     root,
-    secrets: (input.secretMaterial ?? []).filter((secret) => secret.length > 0),
+    // The credential itself is always a secret: a response that echoes it
+    // must never be persisted, even when the caller passed no secretMaterial.
+    secrets: [input.credentialMaterial, ...(input.secretMaterial ?? [])].filter(
+      (secret) => secret.length > 0,
+    ),
     host: normalizeHost(input.host),
     repository: input.repository.trim(),
     paginated: input.paginated === true,
