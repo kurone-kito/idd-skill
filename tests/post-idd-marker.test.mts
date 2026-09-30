@@ -5658,25 +5658,31 @@ test('--prior-* flags must be passed together and only with --operation-local (#
 });
 
 test('--prior-max-activity-at accepts only none or a canonical UTC timestamp (#3592)', () => {
-  // Validation runs before any network call, so no `gh` stub is needed: a bad
-  // value must be a usage error, not a confusing "newly actionable activity"
-  // refusal produced by an unordered comparison.
-  for (const bad of ['zzz', '2026-06-25', '2026-06-25T19:44:00+09:00']) {
-    const result = runWatermarkCli([
-      '--operation-local',
-      '--prior-head-sha',
-      SHA,
-      '--prior-total-item-count',
-      '1',
-      '--prior-max-activity-at',
-      bad,
-    ]);
-    assert.equal(result.status, 1, `expected exit 1 for ${bad}`);
-    assert.match(
-      result.stderr,
-      /--prior-max-activity-at must be none or a canonical UTC timestamp/,
-    );
-    assert.equal(result.stdout, '');
+  // Validation must run before any network call, so a `gh` that fails on any
+  // invocation proves it: a bad value is a usage error, not a confusing
+  // "newly actionable activity" refusal produced by an unordered comparison.
+  const restore = stubGhNeverCalled();
+  try {
+    for (const bad of ['zzz', '2026-06-25', '2026-06-25T19:44:00+09:00']) {
+      const result = runWatermarkCli([
+        '--operation-local',
+        '--prior-head-sha',
+        SHA,
+        '--prior-total-item-count',
+        '1',
+        '--prior-max-activity-at',
+        bad,
+      ]);
+      assert.equal(result.status, 1, `expected exit 1 for ${bad}`);
+      assert.match(
+        result.stderr,
+        /--prior-max-activity-at must be none or a canonical UTC timestamp/,
+      );
+      assert.doesNotMatch(result.stderr, /unexpected gh invocation/);
+      assert.equal(result.stdout, '');
+    }
+  } finally {
+    restore();
   }
 });
 
@@ -5727,6 +5733,7 @@ test('--operation-local CLI defers with the capture and never posts while requir
       ]);
       assert.equal(result.status, 0, result.stderr);
       const envelope = JSON.parse(result.stdout);
+      assert.deepEqual(validate(envelope, schema), []);
       assert.equal(envelope.mode, 'dry-run');
       assert.equal(envelope.type, 'watermark');
       assert.equal(envelope.target, 'pr');
@@ -5777,6 +5784,7 @@ test('--operation-local CLI refuses a --prior-head-sha for another HEAD with the
         new RegExp(`stored prior boundary is for HEAD ${otherHead}`),
       );
       const envelope = JSON.parse(result.stdout);
+      assert.deepEqual(validate(envelope, schema), []);
       assert.equal(envelope.operationLocal.decision, 'refuse');
       assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
     }
