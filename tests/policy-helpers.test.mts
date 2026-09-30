@@ -254,7 +254,7 @@ test('parseIsoDurationToMs parses supported ISO durations', () => {
   assert.equal(parseIsoDurationToMs('invalid'), null);
 });
 
-test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medium', () => {
+test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medium / severity-tiered', () => {
   assert.equal(POLICY_DEFAULTS.critiqueLoop.deferByUrgency, 'off');
   assert.equal(normalizePolicyConfig({}).critiqueLoop.deferByUrgency, 'off');
   assert.equal(
@@ -588,7 +588,7 @@ test('the triage defer section keeps condition (c) and the urgency matrix', () =
     'instead of normal judgment',
     'defect in shipped behavior — code, helper output, CI result, or instruction text that changes what an agent does',
     'excluding wording/clarity polish and extra test coverage for already-working behavior',
-    'Judge validity and E4 severity (a claim false on evidence is Rejected)',
+    'Judge validity and E4 severity (a false claim is Rejected)',
     "the fix's marginal review-wave cost",
     'never override.',
     'wording/formatting changing no behavior',
@@ -601,7 +601,7 @@ test('the triage defer section keeps condition (c) and the urgency matrix', () =
     'the floor only raises',
     'Unscored urgency never defers',
     'null urgency still defers',
-    'unknown severity never defers here',
+    'unknown severity never defers in these modes',
     'counts as Medium',
     'never PATH B',
     'CODEOWNER/required-reviewer item',

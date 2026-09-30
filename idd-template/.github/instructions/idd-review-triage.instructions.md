@@ -167,7 +167,7 @@ scope-fenced item, an Accepted item mid-fix
   Eligibility is the higher of the E4 tier and Copilot's label — the
   `alt="<Level> severity"` text next to its `#discussion_r<id>` link
   in the Open section of any `<!-- ccr-overview-v2 -->` review. The
-  floor never replaces E4's tier: unknown severity never defers here.
+  floor never replaces E4's tier: unknown severity never defers in these modes.
   **Adopt-now** (never eligible) when any holds: (a) a regression this PR's diff
   introduced relative to its merge base; (b) the claimed issue's
   acceptance criteria or requirement are unmet; (c) a
@@ -181,9 +181,9 @@ scope-fenced item, an Accepted item mid-fix
   Medium — High never eligible). A null urgency still defers. Clause:
   `adopt-now: no; severity <tier>[, Copilot <label>]`.
 - **`severity-tiered`** replaces that allowlist from round 1. Judge
-  validity and E4 severity (a claim false on evidence is Rejected), then
-  urgency by the fix's marginal review-wave cost: `very-low` < `low` <
-  `medium` < `high`. The matrix decides; regression, unmet requirements,
+  validity and E4 severity (a false claim is Rejected), then urgency by
+  the fix's marginal review-wave cost: `very-low` < `low` < `medium` <
+  `high`. The matrix decides; regression, unmet requirements,
   correctness, and safety never override. `very-low`: wording/formatting
   changing no behavior; `low`: extra tests, comments, or naming for
   already-correct behavior; `medium`: local maintainability, or a
