@@ -4712,8 +4712,10 @@ reflexively as any other CLI option.
   entry. It is `reconciled` when the PR body, a conversation comment, a
   review body, or any review-thread comment (resolved threads included)
   names it as `#N`, `<owner>/<repo>#N`, or a full issue URL for this
-  repository; any author counts, since this proves the PR names the
-  follow-up, not that the deferral was right. A trusted IDD-operational
+  repository (a number followed by a word character such as `#12abc`, or an
+  HTML character reference such as `&#12;`, is not a mention); any author
+  counts, since this proves the PR names the follow-up, not that the
+  deferral was right. A trusted IDD-operational
   comment such as the live status digest never counts, because it only
   lists this gate's own blocker. The check makes exactly one
   strict `gh search issues` read per invocation (bounded by the shared
@@ -4736,7 +4738,10 @@ reflexively as any other CLI option.
   response, returned a result entry without a usable `number`, `state`, or
   `body`, or returned at least the result cap so it may be truncated) is a
   `deferred-followup-unverified` blocker carrying `unverifiedReason`; so is
-  a `checked: true` section whose `unverifiedReason` is not `null`. It
+  a `checked: true` section whose `unverifiedReason` is not `null` or whose
+  items are not all well formed (a positive integer `number` and `origin`,
+  boolean `heldByAuthoringLabel` and `reconciled`), the reason naming the
+  first malformed item's position. It
   fails closed and never reads as zero follow-ups. A transient failure such
   as a rate limit usually clears on the next invocation; a persistent one
   needs its cause fixed. A
