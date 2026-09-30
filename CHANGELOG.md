@@ -16,6 +16,11 @@ discipline and has no tag.
 
 ### Added
 
+- On Windows the host-local read cache now verifies that a configured
+  `githubApi.readCache.directory` grants access only to the current user,
+  `SYSTEM`, and Administrators (read by SID with `whoami` and `icacls`), and
+  degrades to a live read otherwise or when the ACL cannot be read; the
+  default `LOCALAPPDATA` location stays trusted (#3623).
 - `discover-roadmap-graph` and `discover-orphan-filter` can serve their whole
   output from a short-lived hint when `githubApi.readCache.enabled` is true,
   so an unchanged repeat within `maxAge` starts no discovery request (#3588).
