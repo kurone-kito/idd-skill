@@ -485,14 +485,19 @@ completion.
      documented above, where an unrelated `#M` reference ends up
      adjacent to a recognized keyword elsewhere in the body. Edit the
      PR body to separate the keyword from that `#M` reference.
-   - **A missing entry** (a deliberate multi-issue-close target absent
-     from `closingIssuesReferences`) means its keyword did not
-     register — apply the same edit-and-recheck path as step 4 for
-     that issue number.
+   - **A missing entry** (a deliberate closing target absent from
+     `closingIssuesReferences`) whose keyword matches step 3's regex for
+     that number is GitHub's asynchronous registration
+     (`kurone-kito/idd-skill#3632`), not a body defect: do not edit the
+     body, toggle draft, or close and reopen; continue to D4 and poll
+     `gh pr view <pr-number> --json closingIssuesReferences` while F2's
+     `closing-set` gate waits. If the keyword is absent, or the entry is
+     still missing 4 hours after the PR's `createdAt`, apply step 4's
+     edit-and-recheck path.
 
-   Repeat this step once after either fix. If it still fails, post a
-   hold note on the issue citing the PR URL and stop. Do not proceed to
-   D4.
+   Repeat this step once after any edit. If it still fails (pending
+   registration excepted), post a hold note on the issue citing the PR
+   URL and stop. Do not proceed to D4.
 
 7. **Scan the branch's own commit messages**: GitHub's merge-time
    closing-keyword scan reads commit subjects and bodies as well as the
