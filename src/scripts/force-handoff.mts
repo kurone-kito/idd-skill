@@ -14,6 +14,7 @@ import {
   readForcedHandoffMode,
   resolveTrustedCollaboratorMarkerLogins,
 } from './collaborator-permission.mts';
+import { invalidateDiscoverHints } from './discover-hint-cache.mts';
 import { planHandoff } from './forced-handoff-marker.mts';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
@@ -314,6 +315,10 @@ export async function runHandoff(
             '-f',
             `body=${releaseBody}`,
           ]) as PostedCommentPayload);
+      if (!postComment) {
+        // A released claim changes what a cached Discover hint may list (#3588).
+        invalidateDiscoverHints({ owner, repo: name });
+      }
       const releaseUrl = String(
         releaseResult.html_url ?? releaseResult.url ?? '',
       );
@@ -378,6 +383,11 @@ export async function runHandoff(
           `body=${plan.markerBody}`,
         ]) as PostedCommentPayload);
 
+    if (!postComment) {
+      // A forced handoff changes claim ownership, so drop cached Discover
+      // hints (best effort; #3588).
+      invalidateDiscoverHints({ owner, repo: name });
+    }
     const commentUrl = String(result.html_url ?? result.url ?? '');
     write(
       [

@@ -13,6 +13,7 @@
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
 import { execFileSync } from 'node:child_process';
+import { invalidateDiscoverHints } from './discover-hint-cache.mjs';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -235,19 +236,23 @@ const defaultDeps = {
   mergePr: (prNumber, headSha, repoRef) => {
     const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
     // Always a merge commit — never squash/rebase. Bind to the head.
-    return createGithubProviderAdapter(owner, repo).mergeChangeRequestAtRepo(
+    const merged = createGithubProviderAdapter(
       owner,
       repo,
-      prNumber,
-      headSha,
-    );
+    ).mergeChangeRequestAtRepo(owner, repo, prNumber, headSha);
+    // A merge closes issues, so drop cached Discover hints (best effort;
+    // #3588).
+    invalidateDiscoverHints({ owner, repo });
+    return merged;
   },
   mergePrAdmin: (prNumber, headSha, repoRef) => {
     const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
-    return createGithubProviderAdapter(
+    const merged = createGithubProviderAdapter(
       owner,
       repo,
     ).mergeChangeRequestAdminAtRepo(owner, repo, prNumber, headSha);
+    invalidateDiscoverHints({ owner, repo });
+    return merged;
   },
   // #3252: always a trusted-ref remote read, scoped to `repoRef` when set
   // or the current-directory repo otherwise (`resolveOwnerRepoFromRef`

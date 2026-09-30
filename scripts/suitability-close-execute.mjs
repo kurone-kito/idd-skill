@@ -23,6 +23,7 @@
 // stale / non-owned claim, or when the fresh re-evaluation no longer finds a
 // high-confidence signal.
 import { parseCliArgs } from './cli-args.mjs';
+import { invalidateDiscoverHints } from './discover-hint-cache.mjs';
 import { isClaimStaleByAge } from './discover-roadmap-graph.mjs';
 import {
   DEFAULT_BUNDLE_IDS,
@@ -465,9 +466,13 @@ function createProductionDeps(args) {
       // candidate's own files) -- 'completed' matches that semantics and
       // idd-roadmap-audit-execute.mts's own closeReason convention.
       port.closeWorkItem(issueNumber, 'completed');
+      // A closed issue changes what a cached Discover hint may list, so drop
+      // the hints (best effort; #3588).
+      invalidateDiscoverHints({ owner, repo });
     },
     releaseClaim: (issueNumber, fields) => {
       port.postWorkItemComment(issueNumber, renderUnclaimedByMarker(fields));
+      invalidateDiscoverHints({ owner, repo });
     },
     now: () => args.now || new Date().toISOString(),
     staleAgeMs,

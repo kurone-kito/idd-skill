@@ -227,12 +227,15 @@ function resolveConfig(
     remote?.host ||
     '';
   if (host === '') return null;
-  const repository =
+  // GitHub owner and repository names are case-insensitive, so a mutation
+  // helper's resolved name and Discover's origin-derived name must agree.
+  const repository = (
     request.owner && request.repo
       ? `${request.owner}/${request.repo}`
       : remote
         ? `${remote.owner}/${remote.repo}`
-        : '';
+        : ''
+  ).toLowerCase();
   if (repository === '') return null;
   const credentialMaterial = (deps.credential ?? defaultCredentialMaterial)(
     host,

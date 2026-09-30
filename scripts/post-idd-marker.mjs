@@ -22,6 +22,7 @@ import {
   requiredCiHeadAgreementFromSummary,
 } from './ci-wait-state.mjs';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mjs';
+import { invalidateDiscoverHints } from './discover-hint-cache.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
@@ -2423,6 +2424,12 @@ function main() {
   const owner = args.owner || applyCurrentRepo?.owner || '';
   const repo = args.repo || applyCurrentRepo?.repo || '';
   const posted = postMarker(owner, repo, number, body);
+  if (args.type === 'claim' || args.type === 'unclaim') {
+    // A claim or unclaim changes what a cached Discover hint may list, so
+    // drop the hints (best effort; #3588). Other marker types leave claim
+    // state alone and must not flush the shared cache.
+    invalidateDiscoverHints({ owner: args.owner, repo: args.repo });
+  }
   if (isHideAtPostTimeMarkerType(args.type)) {
     hideSupersededPostTimeMarkers(
       args.type,

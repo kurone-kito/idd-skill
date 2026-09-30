@@ -699,3 +699,117 @@ test('CLI orphan filter: the feature off leaves the output free of a cache objec
     rmSync(fx.root, { recursive: true, force: true });
   }
 });
+
+// ---- local-mutation invalidation through the helper paths ----
+
+/** The graph stub plus a comment POST that echoes the body it was sent. */
+const MUTATION_STUB = (logPath: string) =>
+  GH_STUB(logPath).replace(
+    'process.stderr.write("unexpected gh invocation',
+    `if (args[0] === "api" && args.includes("POST")) {
+  const body = JSON.parse(require("node:fs").readFileSync(0, "utf8")).body;
+  process.stdout.write("HTTP/2.0 201 Created\\r\\ncontent-type: application/json\\r\\n\\r\\n" + JSON.stringify({ id: 1, html_url: "https://example.test/c/1", body }));
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation`,
+  );
+
+const MARKER_SCRIPT = 'post-idd-marker.mjs';
+
+function postMarkerArgs(type: string, extra: string[]): string[] {
+  return [
+    '--type',
+    type,
+    '--target',
+    'issue',
+    '700',
+    '--owner',
+    'kurone-kito',
+    '--repo',
+    'idd-skill',
+    '--agent-id',
+    'agent-a',
+    '--claim-id',
+    'claim-1',
+    '--timestamp',
+    '2026-09-30T00:00:00Z',
+    ...extra,
+    '--apply',
+  ];
+}
+
+test('CLI: an unclaim drops the cached hints but a non-claim marker does not', () => {
+  const fx = cliFixture(true, MUTATION_STUB);
+  try {
+    runCli(fx, ['--issue', '700']);
+    const warm = runCli(fx, ['--issue', '700']);
+    assert.equal(JSON.parse(warm.stdout).cache.source, 'hint');
+
+    const nonce = runCli(
+      fx,
+      postMarkerArgs('activation-nonce', ['--nonce', 'n-1']),
+      MARKER_SCRIPT,
+    );
+    assert.equal(nonce.status, 0, nonce.stderr);
+    const stillWarm = runCli(fx, ['--issue', '700']);
+    assert.equal(JSON.parse(stillWarm.stdout).cache.source, 'hint');
+
+    const unclaim = runCli(fx, postMarkerArgs('unclaim', []), MARKER_SCRIPT);
+    assert.equal(unclaim.status, 0, unclaim.stderr);
+    const after = runCli(fx, ['--issue', '700']);
+    assert.equal(JSON.parse(after.stdout).cache.source, 'live');
+    assert.equal(JSON.parse(after.stdout).cache.enumerations, 1);
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('CLI: a claim marker dry run posts nothing and keeps the hints', () => {
+  const fx = cliFixture(true, MUTATION_STUB);
+  try {
+    runCli(fx, ['--issue', '700']);
+    const args = postMarkerArgs('unclaim', []).filter(
+      (arg) => arg !== '--apply',
+    );
+    const dry = runCli(fx, args, MARKER_SCRIPT);
+    assert.equal(dry.status, 0, dry.stderr);
+    const after = runCli(fx, ['--issue', '700']);
+    assert.equal(JSON.parse(after.stdout).cache.source, 'hint');
+  } finally {
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+// Static guard: every helper that closes an issue, merges a PR, or posts a
+// claim/unclaim marker must drop the cached hints, so a new mutating path
+// cannot silently leave a stale hint serving a claimed or closed target.
+test('every mutating helper path invalidates the discover hints', () => {
+  const scriptsDir = join(REPO_ROOT, 'src', 'scripts');
+  const mutators = /\.(?:closeWorkItem|mergeChangeRequest(?:Admin)?AtRepo)\(/;
+  const missing: string[] = [];
+  for (const name of readdirSync(scriptsDir)) {
+    if (!name.endsWith('.mts') || name.startsWith('provider-')) continue;
+    const source = readFileSync(join(scriptsDir, name), 'utf8');
+    if (mutators.test(source) && !source.includes('invalidateDiscoverHints(')) {
+      missing.push(name);
+    }
+  }
+  assert.deepEqual(missing, []);
+  const expectedHooks: Record<string, number> = {
+    'post-idd-marker.mts': 1,
+    'idd-merge-execute.mts': 2,
+    'idd-roadmap-audit-execute.mts': 2,
+    'suitability-close-execute.mts': 2,
+    'force-handoff.mts': 2,
+  };
+  for (const [name, count] of Object.entries(expectedHooks)) {
+    const source = readFileSync(join(scriptsDir, name), 'utf8');
+    assert.equal(
+      source.split('invalidateDiscoverHints(').length - 1,
+      count,
+      `${name} should call invalidateDiscoverHints ${count} time(s)`,
+    );
+  }
+});
