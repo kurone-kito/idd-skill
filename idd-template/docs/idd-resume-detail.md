@@ -98,10 +98,12 @@ not a live forced-handoff claim. Apply this only when all of these hold:
   `old_claim_id` does not (the four-flag call below adds `--nonce` and
   `--fresh-claim-gate` once the nonce steps are done). Pass
   `evidence.forced_handoff.new_agent_id` as
-  `--agent-id` on every call below: it usually equals the displaced
-  agent-id, but a marker may name a distinct successor id, and a lock or
-  record written under another agent-id leaves routing at
-  `owner_evidence_required` (preventive; no observed incident yet).
+  `--agent-id` on the `claim-lock` calls below that take it
+  (`--record-tokens` and `--acquire`; `--check` and the routing helper take
+  none): it usually equals the displaced agent-id, but a marker may name a
+  distinct successor id, and a lock or record written under another
+  agent-id leaves routing at `owner_evidence_required` (preventive; no
+  observed incident yet).
 - `evidence.activation_nonce_winner` is non-null and equals this session's
   nonce, after the nonce steps of `idd-claim.instructions.md` (its
   Activation-nonce format and Claim verification sections: post the nonce,
