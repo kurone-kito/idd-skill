@@ -384,6 +384,88 @@ test('a refused retry after a failed first create keeps the dispatched failure a
   assert.match((result.postFailure as Error).message, /HTTP 502/);
 });
 
+function oneCodexPlannedDisposition(
+  reason: 'Codex no-find result' | 'summary walkthrough',
+): DispositionPlan {
+  return {
+    headSha: 'abc1234',
+    planned: [
+      {
+        noticeId: 202,
+        botLogin: 'chatgpt-codex-connector[bot]',
+        reason,
+        body: 'disposition body issuecomment-202',
+      },
+    ],
+    skipped: [],
+  };
+}
+
+test('a refused Codex revalidation read is a failure, never a stale skip', () => {
+  for (const reason of [
+    'Codex no-find result',
+    'summary walkthrough',
+  ] as const) {
+    let posts = 0;
+    const refuse = () => {
+      throw refusal('cooldown', '2026-09-30T10:00:00.000Z');
+    };
+    const deps: ApplyDispositionPlanDeps = {
+      revalidateClaim: () => true,
+      revalidateCodexNoFindStillCurrent: refuse,
+      revalidateCodexSummaryStillComplete: refuse,
+      postDisposition: () => {
+        posts += 1;
+        return { id: 1 };
+      },
+      recoverPostedDisposition: () => null,
+      knownViewerCommentIds: new Set(),
+    };
+    const result = applyDispositionPlan(
+      oneCodexPlannedDisposition(reason),
+      deps,
+    );
+    assert.equal(
+      posts,
+      0,
+      `${reason}: nothing is posted on an unconfirmed state`,
+    );
+    assert.deepEqual(result.staleSkipped, [], reason);
+    assert.equal(result.failed.length, 1, reason);
+    assert.match(result.failed[0].error, /codex revalidation not dispatched/);
+    assert.equal(isNotDispatchedRefusal(result.postFailure), true, reason);
+  }
+});
+
+test('a refused Codex revalidation before the retry keeps the dispatched failure', () => {
+  let posts = 0;
+  let revalidations = 0;
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    revalidateCodexNoFindStillCurrent: () => {
+      revalidations += 1;
+      if (revalidations === 2) throw refusal();
+      return true;
+    },
+    postDisposition: () => {
+      posts += 1;
+      throw new Error('gh: Server Error (HTTP 502)');
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(
+    oneCodexPlannedDisposition('Codex no-find result'),
+    deps,
+  );
+  assert.equal(posts, 1, 'the retry never ran');
+  assert.deepEqual(result.staleSkipped, []);
+  assert.match(result.failed[0].error, /HTTP 502/);
+  assert.match(result.failed[0].error, /; codex revalidation not dispatched/);
+  assert.equal(isNotDispatchedRefusal(result.postFailure), false);
+  assert.match((result.postFailure as Error).message, /HTTP 502/);
+});
+
 test('a refused claim revalidation keeps the report of what was already posted', () => {
   const plan: DispositionPlan = {
     headSha: 'abc1234',

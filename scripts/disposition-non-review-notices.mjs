@@ -903,6 +903,21 @@ export function applyDispositionPlan(plan, deps) {
     let lastThrown = null;
     let becameStale = false;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
+      // #3586: host-local load control refused a request of this loop before
+      // it was sent. On the first attempt nothing at all was sent, so the
+      // refusal is the classified failure. On a later attempt an earlier
+      // POST was dispatched and may have landed: that failure stays the
+      // classified one, and the refusal is only appended to the report, so
+      // it never claims that nothing was sent.
+      const noteRefusal = (refusal, what) => {
+        const text = `${what} not dispatched: ${refusal instanceof Error ? refusal.message : String(refusal)}`;
+        if (attempt === 0) {
+          lastThrown = refusal;
+          lastError = text;
+        } else {
+          lastError = `${lastError}; ${text}`;
+        }
+      };
       // #2695 (Codex review, P1 follow-up): re-checked immediately before
       // EACH actual POST attempt, not once before the retry loop -- a failed
       // first attempt plus recovery lookup both take real network time, long
@@ -921,7 +936,13 @@ export function applyDispositionPlan(plan, deps) {
             item,
             plan.headSha,
           );
-        } catch {
+        } catch (revalidationError) {
+          if (isNotDispatchedRefusal(revalidationError)) {
+            // Unconfirmed, not stale: nothing is posted, and it is reported
+            // as a failure rather than dropped as a skip.
+            noteRefusal(revalidationError, 'codex revalidation');
+            break;
+          }
           stillComplete = false;
         }
         if (!stillComplete) {
@@ -939,7 +960,11 @@ export function applyDispositionPlan(plan, deps) {
               item,
               plan.headSha,
             );
-          } catch {
+          } catch (revalidationError) {
+            if (isNotDispatchedRefusal(revalidationError)) {
+              noteRefusal(revalidationError, 'codex revalidation');
+              break;
+            }
             stillCurrent = false;
           }
         }
@@ -956,24 +981,15 @@ export function applyDispositionPlan(plan, deps) {
         // generic 'unknown error' -- coerce it the same way the rest of this
         // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
         // rerun-advisory-convergence.mts).
-        const message = error instanceof Error ? error.message : String(error);
         // #3586: host-local load control refused the create before any
         // request was sent. Nothing can have landed, so there is nothing to
         // recover, and a second attempt would only be refused again.
         if (isNotDispatchedRefusal(error)) {
-          if (lastThrown === null) {
-            lastThrown = error;
-            lastError = message;
-          } else {
-            // The retry was refused, but an earlier attempt was dispatched
-            // and may have landed. That earlier failure stays the classified
-            // one, so the report never claims that nothing was sent.
-            lastError = `${lastError}; retry not dispatched: ${message}`;
-          }
+          noteRefusal(error, attempt === 0 ? 'create' : 'retry');
           break;
         }
         lastThrown = error;
-        lastError = message;
+        lastError = error instanceof Error ? error.message : String(error);
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
         // double-post.
