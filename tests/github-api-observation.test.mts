@@ -932,15 +932,17 @@ test('a configured telemetry path is expanded or rejected', () => {
   }
 });
 
-test('a paginated read records a failure only when the gh run itself failed (#3597)', () => {
+test('a paginated read records a failed gh run as a failure and an unparsable clean exit as an observation (#3597, #3616)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-telemetry-'));
   const telemetryPath = join(tempRoot, 'telemetry.jsonl');
-  const readCount = (): number =>
+  const readLines = (): RequestObservation[] =>
     existsSync(telemetryPath)
       ? readFileSync(telemetryPath, 'utf8')
           .split('\n')
-          .filter((line) => line.trim().length > 0).length
-      : 0;
+          .filter((line) => line.trim().length > 0)
+          .map((line) => JSON.parse(line) as RequestObservation)
+      : [];
+  const readCount = (): number => readLines().length;
   let restore: (() => void) | undefined;
   try {
     setGithubApiTelemetryPolicyForTests({
@@ -948,15 +950,20 @@ test('a paginated read records a failure only when the gh run itself failed (#35
       maxRecords: 10,
       path: telemetryPath,
     });
-    // A clean exit whose body does not parse is not a GitHub request
-    // failure, and gh's own exit status is not to blame for it.
+    // A clean exit whose body does not parse is not a gh failure, and gh's
+    // own exit status is not to blame for it, so it is not recorded as one.
+    // It still consumed a request, so it is recorded as an observation with
+    // no status (#3616), once.
     restore = stubExecutable('gh', `process.stdout.write('not json\\n');`);
     assert.throws(() =>
       ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
     );
     restore();
-    assert.equal(readCount(), 0);
-    // A gh that exits non-zero is recorded, once.
+    assert.equal(readCount(), 1);
+    const [parseRecord] = readLines();
+    assert.equal(parseRecord.classification, 'ok');
+    assert.equal(parseRecord.status, 'unknown');
+    // A gh that exits non-zero is recorded as a failure, once more.
     restore = stubExecutable(
       'gh',
       `process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1);`,
@@ -964,7 +971,8 @@ test('a paginated read records a failure only when the gh run itself failed (#35
     assert.throws(() =>
       ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
     );
-    assert.equal(readCount(), 1);
+    assert.equal(readCount(), 2);
+    assert.equal(readLines()[1].status, 404);
   } finally {
     restore?.();
     setGithubApiTelemetryPolicyForTests(null);
