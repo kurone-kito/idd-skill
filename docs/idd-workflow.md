@@ -563,9 +563,15 @@ create an issue, update a body, change a label, or append a marker. An
 existing held issue keeps its label and previous body. A failure is
 never a clean review.
 
-The reviewer returns a findings list only. Prefer a non-context-inheriting
-reviewer. issue #3448 records the observed risk that a context-inheriting
-no-mutation dispatch still publishes. Bound the delegated command with
+The reviewer must be read-only and returns a findings list only: it must
+not create or update issues, change labels, or append markers. That is a
+trust-based contract, not an enforced sandbox, because the configured
+command runs in the caller's environment as executable configuration.
+Prefer a non-context-inheriting reviewer, and use a read-only capability
+or sandbox where the harness offers one.
+kurone-kito/idd-skill#3448 records the observed risk that a
+context-inheriting no-mutation dispatch still publishes. Bound the
+delegated command with
 `issueAuthoring.adversarialReview.waitCeiling`
 (default `PT20M`) through the caller's own wait and cleanup. Do not wrap
 the configured command in a timeout utility. The ceiling does not read
