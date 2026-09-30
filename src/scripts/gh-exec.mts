@@ -459,6 +459,19 @@ export interface GhApiJsonWithHeadersResult {
   headers: Record<string, string>;
 }
 
+/**
+ * The failure evidence to record for an observation. A paginated call's
+ * stdout is partial page data, not an error body, so only its stderr counts
+ * as evidence; a scan of the pages could read a title or comment quoting a
+ * rate-limit message as a real signal. Every other call keeps the whole
+ * captured error, whose stdout carries the failure body.
+ */
+function failureEvidence(error: unknown, paginated: boolean): unknown {
+  return paginated
+    ? { stderr: (error as { stderr?: unknown } | null)?.stderr }
+    : error;
+}
+
 function recordTransportObservation(build: () => RequestObservation): void {
   try {
     if (!telemetryIsEnabled()) return;
@@ -786,7 +799,9 @@ export function ghApiJson(
     const status = Number(failure?.status ?? -1);
     if (!allowStatuses.includes(status)) {
       recordTransportObservation(() =>
-        observeGhFailure(error, { paginated: paginate }),
+        observeGhFailure(failureEvidence(error, paginate), {
+          paginated: paginate,
+        }),
       );
       throw tagGhCommandError(error);
     }
@@ -827,7 +842,9 @@ export function ghApiJson(
     }
     if (!/^\s*[[{]/.test(stdout)) {
       recordTransportObservation(() =>
-        observeGhFailure(error, { paginated: paginate }),
+        observeGhFailure(failureEvidence(error, paginate), {
+          paginated: paginate,
+        }),
       );
       throw tagGhCommandError(error);
     }

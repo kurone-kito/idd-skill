@@ -851,6 +851,10 @@ if (mode === 'plain-ok') {
   process.stdout.write('{"partial":1}\\n');
   process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n');
   process.exit(1);
+} else if (mode === 'paginated-fail-body') {
+  process.stdout.write('{"body":"hit API rate limit exceeded"}\\n');
+  process.stderr.write('gh: Server Error (HTTP 500)\\n');
+  process.exit(1);
 } else if (mode === 'allow-paginated-body') {
   process.stdout.write('{"body":"hit API rate limit exceeded"}\\n');
   process.stderr.write('gh: Server Error (HTTP 500)\\n');
@@ -1071,7 +1075,15 @@ if (mode === 'plain-ok') {
     assert.equal(last.httpRequestCount, 'unknown');
 
     // Page data on stdout is not failure evidence, so quota wording inside
-    // it must not classify the record.
+    // it must not classify the record, whether or not the exit is tolerated.
+    setMode('paginated-fail-body');
+    assert.throws(() => ghApiJson(apiPath, { paginate: true }));
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.status, 500);
+    assert.equal(last.signals.primaryExhaustion, false);
+    assert.equal(last.classification, 'unknown');
+
     setMode('allow-paginated-body');
     assert.deepEqual(
       ghApiJson(apiPath, { paginate: true, allowStatuses: [1] }),
