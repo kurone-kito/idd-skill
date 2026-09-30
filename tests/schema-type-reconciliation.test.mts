@@ -447,6 +447,7 @@ export const discoverRoadmapUnionKeys = [
   'leaves',
   'diagnostics',
   'summary',
+  'cache',
 ] as const satisfies readonly (keyof RoadmapGraphUnionReport)[];
 
 export const iddMergeExecuteKeys = [
@@ -1070,6 +1071,15 @@ const discoverRoadmapUnionFixture = {
     cycleCount: 0,
     inaccessibleReferenceCount: 0,
     unresolvedReferenceCount: 0,
+  },
+  cache: {
+    mode: 'hint',
+    source: 'hint',
+    ageMs: 60000,
+    maxAgeMs: 300000,
+    complete: true,
+    enumerations: 0,
+    exhaustionRefresh: false,
   },
 } satisfies RoadmapGraphUnionReport;
 

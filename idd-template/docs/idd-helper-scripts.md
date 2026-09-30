@@ -1591,8 +1591,10 @@ and complete the workflow without a Node.js dependency.
 `githubApi.readCache` is an opt-in host-local cache for explicitly
 classified REST reads. The distributed default keeps `enabled` false,
 `maxAge` at `PT5M`, `maxBytes` at 104857600, and `retention` at `PT24H`.
-Leaving the key unset keeps every read live. This repository does not
-enable the cache, and Discover does not use it.
+Leaving the key unset keeps every read live. Discover reaches the cache
+only through the hint layer described in
+[Discover hint cache](#discover-hint-cache); the per-request rules below
+govern `ghApiJson` reads that opt in.
 
 `ghApiJson` consults the cache only when its `readCache` option is set,
 the policy is enabled, and `classification` is `read`. `write`,
@@ -1636,6 +1638,126 @@ neither stored nor logged. Nothing promises that the cache is shared across
 computers. Local policy and permission decisions are not cached. The
 single-flight lease outlives that call's `gh` timeout, and a process
 removes only the lease it acquired.
+
+### Discover hint cache
+
+`discover-roadmap-graph` and `discover-orphan-filter` can serve their whole
+output from a short-lived **hint** built on the read cache above (issue
+`kurone-kito/idd-skill#3588`, which supersedes the cadence-only choice of
+`kurone-kito/idd-skill#2718` for this scope). It is active only when
+`githubApi.readCache.enabled` is `true` in the working directory's
+`.github/idd/config.json` (`--policy` does not affect activation).
+Otherwise behavior is unchanged and the output has no `cache` object.
+Helper-free instructions stay fully supported: the hint is an optional
+speed-up, never a gate.
+
+- **Cached.** The complete report, including any `--with-claim-state` and
+  `--with-readiness` annotations as of hint time, for
+  `githubApi.readCache.maxAge` (default `PT5M`), measured from the start of
+  the enumeration that produced it. An unchanged repeat inside that window
+  starts no `gh` process for discovery. Ranking, provenance, diagnostics,
+  effort, and the inputs to session-offset selection are part of the report,
+  so they are served unchanged.
+- **Never cached.** The selected candidate's A3, A3.5, A4, and A4.5
+  checks, the A5 claim gate and the claim post, A1.5 roadmap-closure
+  authority, and forced-handoff evidence always read live. Those runs make
+  their own reads (observable with `githubApi.telemetry`); the `cache`
+  object counts only the discovery enumeration, so the two are never mixed.
+  A hint therefore only ranks: it can list a target claimed, closed, or held
+  after the hint was built (preventive; no observed incident yet), and the
+  live gates reject that target. A claim failure is never stored.
+- **Key.** The helper, its selection arguments (scope, annotation flags,
+  `--current-claim-id`, `--pr`, `--now`, `--autopilot`), the entire loaded
+  policy, the trust-related `IDD_*` variables (`IDD_TRUSTED_MARKER_ACTORS`,
+  `IDD_TRUST_COLLABORATOR_MARKERS`, `IDD_ADVISORY_BOT_LOGINS`,
+  `IDD_AGENT_LOGINS`), the worktree path, the repository, the host, the
+  credential context, and a generation token. Any difference is a miss, so a
+  trust, approval, label, floor, or claim-timing change never reuses an old
+  hint. Repository and host resolve without a network call: an explicit
+  `--owner`/`--repo` (a complete pair needs no `origin`), else the `origin`
+  remote (compared case-insensitively); the host from `GH_HOST`, then
+  `GITHUB_SERVER_URL`, then the remote, then `github.com` for a complete
+  explicit pair (never `gh auth status`; an unauthenticated guess fails the
+  credential lookup and bypasses the cache); the credential from the read
+  cache's local lookup. An unidentified caller bypasses the cache and,
+  unless a cache flag was passed, reports nothing (`cache.mode` `bypass`
+  appears only with a flag). So does a half-given identity (`--owner`
+  without `--repo`, or the reverse): the helper fills the missing half from
+  `gh repo view`, which the hint layer never calls, so it could not name
+  what was enumerated. An `origin`-derived repository is trusted only when
+  `gh`'s current repository is provably `origin` from local state (a single
+  remote, or `gh repo set-default` marking `origin` as the base); a clone
+  with several remotes and no such mark, such as a fork whose default
+  repository is upstream, bypasses the cache unless `--owner` and `--repo`
+  are given.
+- **Controls.** `--no-cache` computes live, reads and stores nothing, and
+  reports `cache.mode` `off`. `--refresh-cache` recomputes, stores the
+  result, and reports `refresh`. `--purge-cache` removes every cached body
+  in the host-local read cache (not only Discover hints), prints
+  `{"cache": {"mode": "purge", "cache": "purged", "removed": N}}` (`cache`
+  is `refused` when the directory is unsafe), and exits without
+  enumerating; it needs no scope flag. `--no-cache` and `--refresh-cache`
+  are mutually exclusive.
+- **The `cache` object.** Emitted only when the feature is active or a cache
+  flag was passed: `mode` (`hint`, `refresh`, `off`, or `bypass`), `source`
+  (`hint` or `live`), `ageMs`, `maxAgeMs`, `complete`, `enumerations` (`0`
+  for a warm hint), and `exhaustionRefresh`. It is an additive optional
+  property of the union schema.
+- **Exhaustion.** A hint that lists no startable candidate (readiness
+  `startable`, else `claimEligible`, else any leaf; for the orphan filter,
+  an eligible orphan) is recomputed once, strict-fresh, before the result
+  may be treated as exhausted (`exhaustionRefresh` `true`). A failed refresh
+  throws. A live computation that finds nothing, or a report a concurrent
+  peer just computed for this call, is already fresh and owes no second
+  refresh. A caller that rejects a hint-selected candidate at a live gate
+  reruns once with `--refresh-cache` before any no-work, parked, or held
+  classification, and does the same when re-enumerating after A1.5 closes
+  or links a roadmap through a raw `gh` write.
+- **Completeness.** A capped root search or a skipped root sets `complete`
+  to `false`. Such a report is returned, never stored, and never proves
+  exhaustion: an incomplete refresh is unknown/recovery, not no-work.
+  Throttle, authentication, and timeout failures already throw, so they never
+  report success. The orphan filter keeps reporting an unresolvable
+  reference as it always has (`counts.unresolvable`); that does not mark the
+  report incomplete.
+- **Invalidation.** Claim and unclaim markers posted by `post-idd-marker`,
+  both merge paths of `idd-merge-execute`, the closures and claim releases
+  of `idd-roadmap-audit-execute` and `suitability-close-execute`, and the
+  interactive `force-handoff` (after any successful post) bump the
+  generation token, which drops every Discover hint in one step without
+  touching other cache entries. The token is not secret and is shared by
+  every credential on the host and repository, so a mutation made with one
+  credential also drops the others' hints; the hints themselves stay
+  credential-isolated. Because the token needs no credential, an
+  invalidation never spends a credential lookup on a mutation path. It names
+  every identity the mutation may be keyed under: the repository the helper
+  resolved and the explicit argument (else `origin`) Discover keyed on,
+  which differ for example in a fork whose `gh` default repository is
+  upstream. The call is best effort and never fails the helper; it does no
+  network or credential lookup, only at most one bounded local `git remote`
+  call. Writes made outside these helpers, such as a raw `gh` label, body,
+  link, or close change, are discovered by `--refresh-cache`, the exhaustion
+  refresh, or `maxAge`.
+- **Concurrency.** Concurrent hint computations in one worktree on one host
+  coalesce onto one enumeration through the same single-flight lease as the
+  read cache, and a hint is stale for every reader at the same moment (aged
+  from the start of its enumeration), so a stale hint sends one reader to
+  recompute rather than a herd. Unlike a single request, a Discover
+  enumeration can run for a long time, so a waiter polls a live leader for
+  up to two minutes and does not take the lease from a live process. A live
+  leader renews its lease while it computes, through a heartbeat file of its
+  own so a renewal never rewrites a lease another process has taken over,
+  and an enumeration longer than the ten-minute stale threshold keeps it; a
+  lease that stops being renewed for that long is stale (for example a
+  crashed leader whose process id was reused). A dead leader is detected
+  within one poll. An incomplete result is not stored, so its waiters then
+  compute for themselves.
+- **Scope note.** The GitHub adapter's own requests are not individually
+  cached; the hint sits above them, so a warm run skips the adapter
+  entirely. Hints are keyed by worktree, so sessions in different worktrees
+  do not share them, and any claim or merge on the host drops every hint.
+  That keeps hints correct at the cost of a lower hit rate under many
+  concurrent sessions.
 
 ## Helper Runtime Profiles
 

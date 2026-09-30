@@ -221,9 +221,11 @@ reached only when every active discovery path returns zero: both paths
 for `orphan-first` and `roadmap-first` (orphan + roadmap fallback,
 either order); just the roadmap path for `roadmap`.
 
-**Claim-state annotation (optional).** `discover-orphan-filter`
-accepts `--with-claim-state` (plus `--current-claim-id`), mirroring
-`discover-roadmap-graph`'s flag of the same name — see
+**Helper flags (optional).** Both helpers accept `--with-claim-state`. A
+`cache.source: hint` only ranks: the pick must pass live A3–A5. If they
+reject it, rerun once with `--refresh-cache` before any no-work/parked/held
+call (the helper already refreshes an empty hint once); an incomplete
+refresh (`cache.complete: false`) is unknown/recovery. See
 `docs/idd-helper-scripts.md`.
 
 ## A1 — Find the roadmap
@@ -234,15 +236,14 @@ by its `idd-skill-roadmap-id` marker. Under `roadmap` or
 `roadmap-first` scope, this is **trigger (c)**: fall back to **A0-O**
 instead.
 
-**Autopilot cross-roadmap mode (optional, additive).** When several
-roadmaps run in parallel and the active autopilot-suitable work may live
-under **sibling** epics, do not commit to a single umbrella here. Instead,
-enumerate the open execution leaves across **all** open roadmap roots via
-A2's per-root A1.5 audit, then carry the top-ranked candidate through the
-normal A3/A4/A4.5/A5 gates. This is additive: the
-single-root selection above stays the default; orphan-first filtering
-still applies only to true orphans, since cross-roadmap leaves are
-reached via a parent roadmap's task list and never carry their own
+**Autopilot cross-roadmap mode (optional, additive).** When parallel
+roadmaps may leave autopilot-suitable work under **sibling** epics, do not
+commit to one umbrella. Enumerate the open execution leaves across **all**
+open roadmap roots via A2's per-root A1.5 audit, then carry the top-ranked
+candidate through the normal A3/A4/A4.5/A5 gates. The single-root
+selection above stays the default; orphan-first filtering still applies
+only to true orphans, since cross-roadmap leaves come from a parent
+roadmap's task list and never carry their own
 `idd-skill-roadmap-id` marker.
 
 **Legacy roots**: `--all-roadmaps` finds roots only by
@@ -349,12 +350,10 @@ node, not only the first — the same rule the cross-roadmap union
 below already applies to a leaf reachable from several roadmap
 roots.
 
-**Helper read timing.** The `discover-roadmap-graph` helper (see
-[IDD helper script evaluation](../../docs/idd-helper-scripts.md)) is
-long-running on large graphs, emitting the whole graph in one final
-stdout write. Redirect stdout to a file and wait for process exit before
-parsing — a zero-byte or mid-run read is **"still running," not** an A2
-enumeration failure.
+**Helper read timing.** `discover-roadmap-graph` is slow on large graphs
+and writes its whole graph once at exit. Redirect stdout to a file and
+wait for exit — a zero-byte or mid-run read is **"still running," not** an
+A2 failure.
 
 Report every A2 execution candidate with its provenance paths (e.g.
 `#222 → #228 → #257`), any open roadmap nodes, cycles, duplicate
@@ -364,15 +363,15 @@ references, and unresolvable references before passing to A3.
 the cross-roadmap mode, take the de-duplicated **union** of open
 execution leaves from **each** open root (`sourceRoots` provenance).
 `--all-roadmaps` emits only this **raw** ranked union; it does not run
-A1.5. Once per `--all-roadmaps` re-enumeration, audit each root via
-A1.5 **before** adding its leaves (re-enumerate after close/link). Drop
-a root that itself has a blocked-by-human or needs-decision label, or
-whose A1.5 outcome is a non-autonomous-gap; descendant blockers still
-continue to A2. Omit a leaf whose `sourceRoots` are all dropped. Do
-not invoke A0-O / trigger (d) for a dropped root; continue auditing
-remaining roots. Close only after A1.5's written checks, not helper
-`ready: true`. Any other A1.5 outcome that continues to A2 still unions
-that root.
+A1.5. Once per `--all-roadmaps` re-enumeration, audit each root via A1.5
+**before** adding its leaves (re-enumerate with `--refresh-cache` after
+close/link). Drop a root that itself has a blocked-by-human or
+needs-decision label, or whose A1.5 outcome is a non-autonomous-gap;
+descendant blockers still continue to A2. Omit a leaf whose
+`sourceRoots` are all dropped. Do not invoke A0-O / trigger (d) for a
+dropped root; continue auditing remaining roots. Close only after A1.5's
+written checks, not helper `ready: true`. Any other A1.5 outcome that
+continues to A2 still unions that root.
 Then rank as in A4 Step 2. Score is advisory — A3/A4/A4.5/A5 still run
 on the selected candidate.
 
