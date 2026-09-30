@@ -2337,6 +2337,37 @@ test('two concurrent in-process async reads coalesce onto one fetch', async () =
   }
 });
 
+test('an async waiter keeps an empty lease through the settle window before it takes over', async () => {
+  const paths = tempRoot();
+  try {
+    const first = await readThroughAsync(paths, async () => ({
+      status: 200,
+      body: { primed: true },
+    }));
+    unlinkSync(join(paths.cacheDir, 'entries', `${first.entryId}.json`));
+    const lease = join(paths.cacheDir, 'leases', `${first.entryId}.json`);
+    writeFileSync(lease, '');
+    const clock = steppedClock(25);
+    const present: boolean[] = [];
+    const result = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { n: 8 } }),
+      {
+        now: clock.now,
+        sleep: async (ms) => {
+          present.push(existsSync(lease));
+          clock.sleep(ms);
+        },
+      },
+    );
+    assert.deepEqual(present, [true, true, true, true]);
+    assert.equal(result.cache, 'miss');
+    assert.deepEqual(result.body, { n: 8 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('an async waiter never steals a lease from a live leader', async () => {
   const paths = tempRoot();
   const gate = deferred<GithubApiCacheFetchResult>();
