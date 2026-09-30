@@ -33,7 +33,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, hostname as osHostname, uptime as osUptime } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import {
@@ -155,12 +155,24 @@ export function defaultLoadControlDirectory(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  // A relative base would resolve against each caller's working directory,
+  // so separate worktrees would stop sharing state and could create it
+  // inside a workspace. The XDG specification says to ignore a relative
+  // value (the read cache refuses one instead): use the per-user default.
+  const absolute = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (!trimmed) return undefined;
+    return (platform === 'win32' ? win32 : posix).isAbsolute(trimmed)
+      ? trimmed
+      : undefined;
+  };
   if (platform === 'win32') {
     const base =
-      env.LOCALAPPDATA?.trim() || join(homedir(), 'AppData', 'Local');
+      absolute(env.LOCALAPPDATA) ?? join(homedir(), 'AppData', 'Local');
     return join(base, 'idd-skill', 'github-api-load-control');
   }
-  const base = env.XDG_STATE_HOME?.trim() || join(homedir(), '.local', 'state');
+  const base =
+    absolute(env.XDG_STATE_HOME) ?? join(homedir(), '.local', 'state');
   return join(base, 'idd-skill', 'github-api-load-control');
 }
 
@@ -551,6 +563,14 @@ export interface AdmissionLease {
   readonly token: string;
 }
 
+/**
+ * Tokens of the leases this process holds right now. A lease file names its
+ * holder by pid, and where no start time is readable (anywhere but Linux) a
+ * dead holder's recycled pid cannot be told from this process, so "this
+ * process's lease" must never rest on the pid alone.
+ */
+const heldTokens = new Set<string>();
+
 function releaseLeaseFile(ctx: Context, lease: AdmissionLease): void {
   const entry: SlotEntry = {
     slot: lease.slot,
@@ -566,18 +586,24 @@ function releaseLeaseFile(ctx: Context, lease: AdmissionLease): void {
     const current = readLease(ctx, entry).record;
     // Only mark the file this process wrote. The highest-generation file is
     // kept, marked released, so an acquirer always sees where to continue.
-    if (current?.token !== lease.token) return;
+    if (current?.token !== lease.token) {
+      heldTokens.delete(lease.token);
+      return;
+    }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         writeAtomic(path, released);
+        heldTokens.delete(lease.token);
         return;
       } catch {
         // A concurrent reader can hold the file open on Windows; try again.
       }
     }
     unlinkSync(path);
+    heldTokens.delete(lease.token);
   } catch {
-    // A lease that cannot be marked stays until its process is gone.
+    // A lease that cannot be marked stays until its process is gone, and
+    // its token stays with it: it is still a lease this process holds.
   }
 }
 
@@ -651,6 +677,9 @@ function trySlot(ctx: Context, slot: number): SlotAttempt {
     }
     if (published === 'exists') continue;
     const lease: AdmissionLease = { slot, generation, token };
+    // Registered as soon as the file exists, so a fault below cannot leave
+    // an unreleased lease of this process that it no longer recognizes.
+    heldTokens.add(token);
     const own = readLease(ctx, {
       slot,
       generation,
@@ -689,7 +718,15 @@ function onlyThisProcessBlocks(ctx: Context): boolean {
     for (const entry of listSlot(ctx, slot)) {
       const lease = readLease(ctx, entry);
       if (!isLive(ctx, lease)) continue;
-      if (lease.record?.pid !== ctx.pid) return false;
+      // The pid alone is not proof: after pid reuse a stale lease of a dead
+      // process would pass for this one, so the lease must also be one this
+      // process holds.
+      if (
+        lease.record?.pid !== ctx.pid ||
+        !heldTokens.has(lease.record.token)
+      ) {
+        return false;
+      }
       own = true;
     }
     if (!own) return false;

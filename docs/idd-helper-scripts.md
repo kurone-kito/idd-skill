@@ -1786,15 +1786,16 @@ directory, no extra process, and no change to a result or an error.
 This repository does not enable it yet.
 
 The state lives in one per-user directory: `XDG_STATE_HOME` or
-`~/.local/state` on Linux and macOS, `LOCALAPPDATA` on Windows, under
+`~/.local/state` on Linux and macOS, `LOCALAPPDATA` on Windows (a relative
+value is ignored, so state never depends on the working directory), under
 `idd-skill/github-api-load-control`. Every process of the same operating
-system user, in any repository or worktree that enables the policy,
-reads and writes the same files. It is a single-machine control. It does
-not coordinate separate computers, a container with its own hostname or
-process namespace (leases are kept per hostname and namespace, so another
-one's are never seen), or another tool using the same account, and it
-claims no global rate-limit guarantee. The effective concurrency across
-repositories is the largest `maxConcurrent` any of them configures.
+system user, in any repository or worktree that enables the policy, reads and
+writes the same files. It is a single-machine control. It does not coordinate
+separate computers, a container with its own hostname or process namespace
+(leases are kept per hostname and namespace, so another one's are never seen),
+or another tool using the same account, and it claims no global rate-limit
+guarantee. The effective concurrency across repositories is the largest
+`maxConcurrent` any of them configures.
 
 State is scoped by a hash of the API host and the credential the request would
 use, so separate hosts and separate credentials never share admission or
@@ -1814,11 +1815,13 @@ existing state directory that other users can access is tightened to
 owner-only before use, and one that cannot be made private makes the request
 run uncoordinated; a filesystem that stores no POSIX modes (a Windows mount
 under WSL) cannot enforce that guarantee, so keep the state root on a native
-one. A state root reached through a symlink is used only when its target is
-already private, and is never chmod-ed. A request whose host or credential
-cannot be verified runs uncoordinated instead of borrowing another scope, and
-so does a state directory that cannot be used. Nothing is refused for a
-coordination fault, only for evidence.
+one. A state root that is itself a symlink is used only when its target is
+already private, and is never chmod-ed; the directories above the root, such
+as a relocated `XDG_STATE_HOME`, are the operator's own environment and are
+not inspected. A request whose host or credential cannot be verified runs
+uncoordinated instead of borrowing another scope, and so does a state
+directory that cannot be used. Nothing is refused for a coordination fault,
+only for evidence.
 
 ### Which requests are admitted
 
@@ -1845,20 +1848,20 @@ classifier never infers a quota cost and `rate_limit` is never polled.
 Serial is the default.
 
 - A read waits for a slot, and for a cooldown, at most as long as its
-  `admissionDeadlineMs` option (default `maxWait`, at most ten minutes).
-  An explicit `timeout` bounds the wait plus the spawn: the wait may use at
-  most half of it and the spawn gets the remainder. The one-time identity
-  lookup described above (local, at most ten seconds, once per process and
-  host, and skipped when a token variable is set) runs before that budget
-  starts and is not counted in it. Async callers wait on
-  a timer, so a request already running in the same process keeps
-  completing and releasing its slot. A synchronous caller whose every
-  blocking slot is held only by this process's own async leases rides on
-  them (one request over the bound) instead of waiting for a release that
-  its blocked event loop could not run; a slot another process holds is
-  waited for as usual. Waiters are unordered pollers bounded by their
-  deadline, not a queue. A known cooldown end beyond the deadline refuses
-  at once without sleeping.
+  `admissionDeadlineMs` option (default `maxWait`, at most ten minutes). An
+  explicit `timeout` bounds the wait plus the spawn: the wait may use at most
+  half of it and the spawn gets the remainder. The one-time identity lookup
+  described above (local, at most ten seconds, once per process and host, and
+  skipped when a token variable is set) runs before that budget starts and is
+  not counted in it. Async callers wait on a timer, so a request already
+  running in the same process keeps completing and releasing its slot. A
+  synchronous caller whose every blocking slot is held only by leases this
+  process itself holds (a lease file that merely carries its pid does not
+  count) rides on them (one request over the bound) instead of waiting for a
+  release that its blocked event loop could not run; a slot another process
+  holds is waited for as usual. Waiters are unordered pollers bounded by their
+  deadline, not a queue. A known cooldown end beyond the deadline refuses at
+  once without sleeping.
 - A write or unclassified request is admitted now or refused. It is never
   queued, never delayed, and never retried by this layer, and delayed
   dispatch is not implemented, so a refused write is only sent if the

@@ -302,6 +302,26 @@ test('the default state directory follows XDG_STATE_HOME, LOCALAPPDATA, then the
   );
 });
 
+test('a relative XDG_STATE_HOME or LOCALAPPDATA is ignored, so state never depends on the working directory', () => {
+  for (const relative of ['state', './state', '../state', ' state ']) {
+    assert.match(
+      defaultLoadControlDirectory(
+        { XDG_STATE_HOME: relative },
+        'linux',
+      ).replaceAll('\\', '/'),
+      /\.local\/state\/idd-skill\/github-api-load-control$/,
+      relative,
+    );
+  }
+  assert.match(
+    defaultLoadControlDirectory({ LOCALAPPDATA: 'local' }, 'win32').replaceAll(
+      '\\',
+      '/',
+    ),
+    /AppData\/Local\/idd-skill\/github-api-load-control$/,
+  );
+});
+
 // -- admission ------------------------------------------------------------------
 
 test('serial admission holds one slot and a waiting read is admitted once it is released', () => {
@@ -1536,6 +1556,65 @@ test('a synchronous request joins its own lease only when every blocker is this 
     own2.release();
     own.release();
   } finally {
+    h.cleanup();
+  }
+});
+
+test('a stale lease that only shares this pid is not this process, so a synchronous request does not ride it', () => {
+  const h = harness();
+  try {
+    // Where no start time is readable, a dead holder's recycled pid looks
+    // alive and equal to ours. Nothing in this process holds the lease, so
+    // riding it would run a request beyond the bound.
+    plantLease(h, 1, liveRecord(1111));
+    const { detail } = refusalOf(() =>
+      admitRequestSync(
+        IDENTITY,
+        POLICY,
+        { classification: 'read', deadlineMs: 100 },
+        h.runtime({ pid: 1111 }),
+      ),
+    );
+    assert.equal(detail.outcome, 'deadline-expired');
+    assert.ok(h.slept.length > 0, 'it waited instead of joining');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('a lease this process could not mark released is still its own, so a synchronous request rides it', async (t) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('needs a directory this user cannot write');
+    return;
+  }
+  const h = harness();
+  const dir = slotsDir(h);
+  try {
+    const own = await admitRequest(
+      IDENTITY,
+      POLICY,
+      { classification: 'read' },
+      h.runtime(),
+    );
+    assert.ok(own);
+    // Neither the released marker nor the unlink fallback can be written, so
+    // the lease stays live under this pid. It is still this process's own:
+    // forgetting it would turn a synchronous read into a wait that can only
+    // end at its deadline.
+    chmodSync(dir, 0o500);
+    own.release();
+    const joined = admitRequestSync(
+      IDENTITY,
+      POLICY,
+      { classification: 'read', deadlineMs: 60_000 },
+      h.runtime(),
+    );
+    assert.ok(joined);
+    assert.equal(joined.joined, true);
+    assert.deepEqual(h.slept, []);
+    joined.release();
+  } finally {
+    chmodSync(dir, 0o700);
     h.cleanup();
   }
 });
