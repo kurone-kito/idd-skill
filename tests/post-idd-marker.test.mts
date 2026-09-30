@@ -941,7 +941,17 @@ process.exit(1);
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: { ...process.env },
+        // A claim marker also drops the Discover hints (#3588). This
+        // repository's config enables the hint cache, so give the helper a
+        // credential (no `gh auth token` call to pollute the recorded argv)
+        // and a throwaway cache location.
+        env: {
+          ...process.env,
+          GH_TOKEN: 'post-idd-marker-test-token',
+          HOME: tempRoot,
+          XDG_CACHE_HOME: join(tempRoot, 'xdg-cache'),
+          LOCALAPPDATA: join(tempRoot, 'local-app-data'),
+        },
       },
     );
 
