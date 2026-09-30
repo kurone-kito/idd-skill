@@ -996,6 +996,44 @@ test('purge removes only regular entry files and refuses unsafe roots', () => {
   }
 });
 
+test('purge without an override targets the default directory, never a fallback for a refused one', () => {
+  const paths = tempRoot();
+  const fallback = join(paths.root, 'default');
+  mkdirSync(fallback);
+  try {
+    const read = readThrough(paths, okBody({ ok: true }), {
+      policy: policy(''),
+      defaultDirectory: fallback,
+    });
+    assert.equal(read.cache, 'miss');
+    assert.equal(entryNames(fallback).length, 1);
+    const purged = readThrough(paths, okBody(null), {
+      operation: 'purge',
+      policy: policy(''),
+      defaultDirectory: fallback,
+    });
+    assert.equal(purged.cache, 'purged');
+    assert.equal(purged.removed, 1);
+    assert.deepEqual(entryNames(fallback), []);
+
+    readThrough(paths, okBody({ ok: true }), {
+      policy: policy(''),
+      defaultDirectory: fallback,
+    });
+    // An explicit override that is refused purges nothing and does not
+    // fall back to the default directory.
+    const refused = readThrough(paths, okBody(null), {
+      operation: 'purge',
+      policy: policy(paths.workspace),
+      defaultDirectory: fallback,
+    });
+    assert.equal(refused.cache, 'refused');
+    assert.equal(entryNames(fallback).length, 1);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('an unsafe directory override falls back instead of writing the workspace', () => {
   const paths = tempRoot();
   const fallback = join(paths.root, 'fallback');

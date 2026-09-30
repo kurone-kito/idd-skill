@@ -1233,6 +1233,20 @@ function purgeDirectory(
   return { body: null, status: 0, cache: 'purged', fetched: false, removed };
 }
 
+/**
+ * The directory a purge targets. An explicit override is used as given,
+ * never replaced by a fallback, so a refused override purges nothing.
+ * Without one, purge follows the same order reads use (injected default,
+ * then the per-user OS location) so the default cache can be purged too.
+ */
+function purgeTarget(input: ReadThroughGithubApiCacheInput): string {
+  const configured = input.policy.directory?.trim() ?? '';
+  if (configured.length > 0) return configured;
+  const injected = input.defaultDirectory?.trim() ?? '';
+  if (injected.length > 0) return injected;
+  return defaultCacheDirectory(process.env, process.platform);
+}
+
 function anchorsFor(input: ReadThroughGithubApiCacheInput): string[] {
   const cwd = input.cwd ?? process.cwd();
   const anchors = [cwd];
@@ -1262,8 +1276,8 @@ export function readThroughGithubApiCache(
   const anchors = anchorsFor(input);
   const storage = createStorage(input.storage);
   if (input.operation === 'purge') {
-    const root = normalizedRoot(input.policy.directory?.trim() ?? '') ?? '';
     try {
+      const root = normalizedRoot(purgeTarget(input)) ?? '';
       return purgeDirectory(
         storage,
         root,
