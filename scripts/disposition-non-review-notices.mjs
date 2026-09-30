@@ -41,6 +41,7 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
+import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   buildHelperErrorEnvelope,
@@ -860,7 +861,24 @@ export function applyDispositionPlan(plan, deps) {
   let postFailure = null;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
-    if (!deps.revalidateClaim()) {
+    let claimHeld;
+    try {
+      claimHeld = deps.revalidateClaim();
+    } catch (revalidationError) {
+      if (!isNotDispatchedRefusal(revalidationError)) throw revalidationError;
+      // #3586: the claim re-read was refused, so the claim is unverified.
+      // Post nothing more, and keep the report of what this run already
+      // posted instead of letting the refusal escape past it.
+      for (const remaining of plan.planned.slice(index)) {
+        failed.push({
+          noticeId: remaining.noticeId,
+          error: `claim revalidation not dispatched: ${revalidationError.message}`,
+        });
+      }
+      postFailure ??= revalidationError;
+      break;
+    }
+    if (!claimHeld) {
       // Claim lost mid-loop: stop writing and surface the current AND all
       // remaining notices as failed rather than posting them under a claim we
       // no longer hold, so the apply report names every notice left
@@ -940,13 +958,27 @@ export function applyDispositionPlan(plan, deps) {
         // rerun-advisory-convergence.mts).
         lastThrown = error;
         lastError = error instanceof Error ? error.message : String(error);
+        // #3586: host-local load control refused the create before any
+        // request was sent. Nothing can have landed, so there is nothing to
+        // recover, and a second attempt would only be refused again.
+        if (isNotDispatchedRefusal(error)) break;
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
         // double-post.
-        posted = deps.recoverPostedDisposition(
-          item.body,
-          knownViewerCommentIds,
-        );
+        try {
+          posted = deps.recoverPostedDisposition(
+            item.body,
+            knownViewerCommentIds,
+          );
+        } catch (recoveryError) {
+          if (!isNotDispatchedRefusal(recoveryError)) throw recoveryError;
+          // #3586: the recovery read itself was refused, so whether the
+          // create landed is unknown. Report the create's own failure (never
+          // a claim that nothing was sent) and stop: a second POST could
+          // double-post.
+          lastError = `${lastError}; recovery read not dispatched: ${recoveryError.message}`;
+          break;
+        }
       }
     }
     if (becameStale) {
@@ -986,7 +1018,7 @@ function writeStderrSync(text) {
     written += writeSync(2, buffer, written, buffer.length - written);
   }
 }
-function exitClassified(code, kind, message, httpStatus = null) {
+function exitClassified(code, kind, message, httpStatus = null, refusal = {}) {
   if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
     // Synchronous: process.exit drops a pending async stderr write, which
     // would truncate this envelope line.
@@ -996,6 +1028,8 @@ function exitClassified(code, kind, message, httpStatus = null) {
           kind,
           message,
           httpStatus,
+          ...(refusal.notDispatched ? { notDispatched: true } : {}),
+          ...(refusal.retryAt ? { retryAt: refusal.retryAt } : {}),
         }),
       )}\n`,
     );
@@ -1256,5 +1290,11 @@ function main() {
           ? 'one or more dispositions failed'
           : '',
     ghFailure ? ghFailure.httpStatus : null,
+    ghFailure
+      ? {
+          notDispatched: ghFailure.notDispatched,
+          retryAt: ghFailure.retryAt,
+        }
+      : {},
   );
 }

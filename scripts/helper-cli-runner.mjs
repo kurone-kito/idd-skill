@@ -33,6 +33,7 @@
 // is printed, so it cannot append anything after it).
 import { writeSync } from 'node:fs';
 import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mjs';
+import { findOwnLoadControlRefusal } from './github-api-refusal.mjs';
 /** The environment variable that opts a migrated helper into the error
  * envelope (see module header). Unset or any value other than `'1'` keeps
  * today's unmigrated behavior. */
@@ -202,10 +203,32 @@ export function classifyHelperError(error) {
       };
     }
     if (isGhCommandError(candidate)) {
+      // Only an error that IS a refusal says nothing was sent. One that
+      // wraps a refused read (a failed write whose reconciliation was
+      // refused) may still have landed, so it stays a plain transport
+      // failure.
+      const refusal =
+        candidate === error ? findOwnLoadControlRefusal(candidate) : undefined;
+      if (refusal) {
+        // Not a maybe-landed transport failure: no process was started.
+        return {
+          kind: 'transport',
+          message: ghCommandErrorMessage(candidate),
+          httpStatus: null,
+          notDispatched: true,
+          ...(refusal.retryAt ? { retryAt: refusal.retryAt } : {}),
+        };
+      }
       const httpStatus = deriveGhHttpStatus(candidate);
       return {
         kind: httpStatus === 404 ? 'not-found' : 'transport',
-        message: ghCommandErrorMessage(candidate),
+        // A refusal deeper in the chain belongs to a read that a composite
+        // error wraps (an earlier write failed): the composite's own message
+        // names that write, and the refusal text would hide it.
+        message:
+          candidate !== error && findOwnLoadControlRefusal(candidate)
+            ? errorMessage(error)
+            : ghCommandErrorMessage(candidate),
         httpStatus,
       };
     }
@@ -222,6 +245,8 @@ export function buildHelperErrorEnvelope(helperName, exitCode, classified) {
       exitCode,
       message: classified.message,
       httpStatus: classified.httpStatus,
+      ...(classified.notDispatched ? { notDispatched: true } : {}),
+      ...(classified.retryAt ? { retryAt: classified.retryAt } : {}),
     },
   };
 }
@@ -240,6 +265,8 @@ function normalizeOutcome(helperName, outcome) {
     message:
       outcome.message ?? `${helperName} exited with code ${outcome.exitCode}`,
     httpStatus: outcome.httpStatus ?? null,
+    ...(outcome.notDispatched ? { notDispatched: true } : {}),
+    ...(outcome.retryAt ? { retryAt: outcome.retryAt } : {}),
   };
 }
 function isEnvelopeEnabled(env) {
@@ -441,6 +468,8 @@ function handleOutcome(helperName, io, outcome) {
     kind: normalized.kind,
     message: normalized.message,
     httpStatus: normalized.httpStatus,
+    ...(normalized.notDispatched ? { notDispatched: true } : {}),
+    ...(normalized.retryAt ? { retryAt: normalized.retryAt } : {}),
   });
   if (line !== null) {
     io.writeStderrQueued(line);

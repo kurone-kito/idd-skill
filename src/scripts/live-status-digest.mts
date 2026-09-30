@@ -20,6 +20,7 @@ import {
   ghApiJson,
   ghText,
 } from './gh-exec.mts';
+import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -792,7 +793,8 @@ function runDuplicateDigestRepair(input: DuplicateDigestRepairInput): void {
     try {
       patchRepairComment(owner, repo, retirement.id, retiredBody);
     } catch (error) {
-      const reconciliation = reconcileRepairRetirementMutation(
+      const reconciliation = reconcileFailedRetirement(
+        error,
         owner,
         repo,
         targetType,
@@ -1110,6 +1112,40 @@ function fetchRepairComment(
   return { body: String(payload.body ?? '') };
 }
 
+/**
+ * What a failed retirement PATCH leaves to reconcile. A load-control
+ * refusal (#3586) sent nothing, so there is no ambiguous mutation to look
+ * for: report the hold without rereading. Any other failure may have
+ * landed and is reconciled against live state.
+ */
+// audit:ignore-dead-export: reached in production from the retirement loop; exported so the refusal branch is unit-tested (issue #3586)
+export function reconcileFailedRetirement(
+  error: unknown,
+  owner: string,
+  repo: string,
+  targetType: 'issue' | 'pr',
+  targetNumber: number,
+  commentId: string,
+  retiredBody: string,
+): ReturnType<typeof reconcileRepairRetirementMutation> {
+  if (isNotDispatchedRefusal(error)) {
+    return {
+      retired: false,
+      detail:
+        'not dispatched: the retirement was refused before any request was sent',
+      postflight: null,
+    };
+  }
+  return reconcileRepairRetirementMutation(
+    owner,
+    repo,
+    targetType,
+    targetNumber,
+    commentId,
+    retiredBody,
+  );
+}
+
 function reconcileRepairRetirementMutation(
   owner: string,
   repo: string,
@@ -1317,7 +1353,8 @@ function findRepairEvidenceComment(
   return comment?.id == null ? null : { id: comment.id };
 }
 
-function postRepairEvidenceWithReconciliation(
+// audit:ignore-dead-export: reached in production from the repair path; exported so the refusal branch is unit-tested (issue #3586)
+export function postRepairEvidenceWithReconciliation(
   owner: string,
   repo: string,
   number: number,
@@ -1335,6 +1372,9 @@ function postRepairEvidenceWithReconciliation(
       'evidence write returned no comment id; response outcome is ambiguous',
     );
   } catch (error) {
+    // #3586: a load-control refusal sent nothing, so there is nothing to
+    // reconcile and no comment to look for.
+    if (isNotDispatchedRefusal(error)) throw error;
     writeError = error as Error;
   }
 

@@ -70,6 +70,21 @@ export function findLoadControlRefusal(error) {
   }
   return undefined;
 }
+/**
+ * The refusal detail carried by `error` itself, never by an error further
+ * down its `cause` chain. A composite error that merely wraps a refused
+ * read (an earlier write failed and its reconciliation read was refused)
+ * says nothing about whether that write landed, so it must not read as
+ * "nothing was sent".
+ */
+export function findOwnLoadControlRefusal(error) {
+  if (error === null || typeof error !== 'object') return undefined;
+  const holder = error;
+  const detail = holder[DETAIL_KEY];
+  return holder.notDispatched === true && detail && typeof detail === 'object'
+    ? detail
+    : undefined;
+}
 /** True when the request was refused before any `gh` process was started. */
 export function isNotDispatchedRefusal(error) {
   return findLoadControlRefusal(error) !== undefined;
@@ -78,11 +93,13 @@ export function isNotDispatchedRefusal(error) {
  * Carry a refusal onto an error a wrapper had to rebuild. The tags are
  * copied, not linked through `cause`: a `cause` would make Node print the
  * original when the rebuilt error goes uncaught. The `ghCommand` tag comes
- * along so a helper still classifies the failure as `transport`. A no-op for
- * every other original error.
+ * along so a helper still classifies the failure as `transport`. Only an
+ * original that IS the refusal is carried: a composite that merely wraps a
+ * refused read must not gain a "nothing was sent" claim it cannot make. A
+ * no-op for every other original error.
  */
 export function preserveLoadControlRefusal(wrapper, original) {
-  const detail = findLoadControlRefusal(original);
+  const detail = findOwnLoadControlRefusal(original);
   if (detail === undefined) return wrapper;
   defineHidden(wrapper, 'notDispatched', true);
   defineHidden(wrapper, DETAIL_KEY, detail);
