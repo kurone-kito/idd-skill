@@ -16,6 +16,7 @@ import {
   type AdvisoryConvergenceDeps,
   type AdvisoryConvergenceInputs,
   type AdvisoryConvergenceOptions,
+  type AdvisoryConvergenceVerdict,
   classifyClaimCandidateAmbiguity,
   classifyCopilotAuthoredThreadIds,
   classifyPendingReviewWatch,
@@ -44,6 +45,7 @@ import {
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   verifySelfReferentialBootstrapWaiverRun,
   viewerProbeGhOptions,
+  watchPendingReviewFromGitHub,
   writeAdvisoryConvergenceCliOutput,
 } from '../src/scripts/advisory-convergence.mts';
 import {
@@ -60,7 +62,7 @@ import {
   summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
-import { spawnHelperBinWithEnvelope } from './test-utils.mts';
+import { spawnHelperBinWithEnvelope, stubExecutable } from './test-utils.mts';
 
 const SCHEMA = loadJson('schemas/advisory-convergence.schema.json');
 
@@ -7097,6 +7099,431 @@ test('pending-review fingerprint changes on HEAD movement, a new review, and a b
     ),
     'changed',
   );
+});
+
+// kurone-kito/idd-skill#3591 AC 3: the pending-review watch only reads the PR
+// HEAD and its review list, so each same-HEAD activity class below is
+// invisible to it -- the stub keeps reporting `unchanged`. Every fixture pairs
+// a still-pending initial verdict with a terminal recheck whose full evidence
+// differs by exactly that one class, and asserts the returned verdict is the
+// terminal collection's, never the cached initial one. The stub stands in for
+// the real watch's blindness to these classes: it proves the poll wiring and
+// the verdict logic, while the default watch's own HEAD/review contract is
+// covered by the gh-stubbed tests below and the exact skip timing by the
+// 'unchanged pending-review watches skip rich collection' test above.
+interface BlindWatchStep {
+  inputs: AdvisoryConvergenceInputs;
+  options: AdvisoryConvergenceOptions;
+}
+
+function runPollWithBlindWatch(steps: BlindWatchStep[]) {
+  let index = 0;
+  let collects = 0;
+  let watches = 0;
+  const deps: AdvisoryConvergenceDeps = {
+    collect: () => {
+      collects += 1;
+      const step = steps[Math.min(index, steps.length - 1)];
+      if (index < steps.length - 1) index += 1;
+      return step;
+    },
+    watchPendingReview: (_argv, previous) => {
+      watches += 1;
+      return { kind: 'unchanged', fingerprint: previous ?? 'baseline' };
+    },
+  };
+  const { sleep, now } = fakeClock();
+  const result = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  return { ...result, collects, watches };
+}
+
+function blindWatchThread(
+  id: string,
+  {
+    isResolved = false,
+    replyEditedAt,
+  }: {
+    isResolved?: boolean;
+    replyEditedAt?: string | null;
+  } = {},
+) {
+  const replies =
+    replyEditedAt === undefined
+      ? []
+      : [
+          {
+            author: { login: TRUSTED },
+            body: '**Rejected** — not applicable to this change.',
+            createdAt: RECENT,
+            updatedAt: RECENT,
+            lastEditedAt: replyEditedAt,
+          },
+        ];
+  return {
+    id,
+    isResolved,
+    comments: {
+      nodes: [
+        {
+          author: { login: COPILOT_LOGIN },
+          body: 'nit: consider extracting this into a helper',
+          createdAt: OLD,
+          updatedAt: OLD,
+        },
+        ...replies,
+      ],
+    },
+  };
+}
+
+const BLIND_WATCH_CASES: {
+  label: string;
+  initial: BlindWatchStep;
+  terminal: BlindWatchStep;
+  check: (verdict: AdvisoryConvergenceVerdict) => void;
+}[] = [
+  {
+    label: 'a same-HEAD comment edited in place',
+    initial: {
+      inputs: baseInputs({
+        threads: [blindWatchThread('PRT_EDIT', { replyEditedAt: null })],
+      }),
+      options: baseOptions(),
+    },
+    terminal: {
+      inputs: baseInputs({
+        threads: [blindWatchThread('PRT_EDIT', { replyEditedAt: RECENT })],
+      }),
+      options: baseOptions(),
+    },
+    check: (verdict) => {
+      assert.deepEqual(verdict.threads.blockingIds, ['PRT_EDIT']);
+    },
+  },
+  {
+    label: 'a late finding thread on the same HEAD',
+    initial: { inputs: baseInputs(), options: baseOptions() },
+    terminal: {
+      inputs: baseInputs({ threads: [blindWatchThread('PRT_LATE')] }),
+      options: baseOptions(),
+    },
+    check: (verdict) => {
+      assert.deepEqual(verdict.threads.blockingIds, ['PRT_LATE']);
+    },
+  },
+  {
+    label: 'a resolved thread that was reopened',
+    initial: {
+      inputs: baseInputs({
+        threads: [blindWatchThread('PRT_REOPEN', { isResolved: true })],
+      }),
+      options: baseOptions(),
+    },
+    terminal: {
+      inputs: baseInputs({
+        threads: [blindWatchThread('PRT_REOPEN', { isResolved: false })],
+      }),
+      options: baseOptions(),
+    },
+    check: (verdict) => {
+      assert.deepEqual(verdict.threads.blockingIds, ['PRT_REOPEN']);
+    },
+  },
+  {
+    label: 'a changed check-suite observation that moves the deadline clock',
+    initial: { inputs: baseInputs(), options: baseOptions() },
+    terminal: {
+      inputs: baseInputs(),
+      options: baseOptions({ headObservedAt: OLD }),
+    },
+    check: (verdict) => {
+      assert.equal(verdict.deadline.passed, true);
+    },
+  },
+  {
+    label: 'a changed trust configuration',
+    initial: {
+      inputs: baseInputs({
+        threads: [blindWatchThread('PRT_TRUST', { replyEditedAt: null })],
+      }),
+      options: baseOptions(),
+    },
+    terminal: {
+      inputs: baseInputs({
+        threads: [blindWatchThread('PRT_TRUST', { replyEditedAt: null })],
+      }),
+      options: baseOptions({ trustedMarkerLogins: [] }),
+    },
+    check: (verdict) => {
+      assert.deepEqual(verdict.threads.blockingIds, ['PRT_TRUST']);
+    },
+  },
+];
+
+for (const { label, initial, terminal, check } of BLIND_WATCH_CASES) {
+  test(`#3591 AC 3: ${label} is observed by the terminal full collection while the watch stays unchanged`, () => {
+    const { verdict, exitCode, collects, watches } = runPollWithBlindWatch([
+      initial,
+      terminal,
+    ]);
+    // The initial verdict is still-pending only, so the poll starts; the
+    // terminal recheck is the second (and last) full collection.
+    assert.equal(collects, 2);
+    assert.ok(watches >= 2);
+    assert.ok(verdict);
+    assertValidVerdict(verdict);
+    assert.equal(verdict.ready, false);
+    assert.equal(exitCode, 1);
+    check(verdict);
+  });
+}
+
+// Reads the scenario the fake `gh` should serve from a file the test rewrites
+// between watch calls, so one installed stub can answer successive reads
+// differently. The stub answers only the two calls the default watch makes
+// (`gh pr view` for the HEAD and the paginated REST review list) and fails
+// any other call loudly.
+const DEFAULT_WATCH_GH_STUB = `
+const fs = require('node:fs');
+const scenario = JSON.parse(fs.readFileSync(process.env.IDD_WATCH_STUB_SCENARIO, 'utf8'));
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.IDD_WATCH_STUB_CALLS, args.join(' ') + '\\n');
+const after = (flag) => args[args.indexOf(flag) + 1];
+if (args[0] === 'pr' && args[1] === 'view') {
+  const fields = String(after('--json')).split(',');
+  if (args[2] !== '1234' || after('-R') !== 'example-owner/example-repo' || !fields.includes('headRefOid')) {
+    process.stderr.write('unexpected pr view argv: ' + args.join(' ') + '\\n');
+    process.exit(1);
+  }
+  if (scenario.headFails) {
+    process.stderr.write('gh: pr view failed\\n');
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ headRefOid: scenario.head, author: { login: 'someone' } }));
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'repos/example-owner/example-repo/pulls/1234/reviews') {
+  if (!args.includes('--paginate')) {
+    process.stderr.write('unexpected reviews argv: ' + args.join(' ') + '\\n');
+    process.exit(1);
+  }
+  if (scenario.reviewsFail) {
+    process.stderr.write('gh: reviews failed\\n');
+    process.exit(1);
+  }
+  process.stdout.write(scenario.reviews.map((row) => JSON.stringify(row)).join('\\n') + '\\n');
+  process.exit(0);
+}
+process.stderr.write('unexpected gh call: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+
+function withDefaultWatchGhStub(
+  run: (
+    setScenario: (scenario: Record<string, unknown>) => void,
+    ghCalls: () => string[],
+  ) => void,
+): void {
+  const restoreGh = stubExecutable('gh', DEFAULT_WATCH_GH_STUB);
+  const previousScenario = process.env.IDD_WATCH_STUB_SCENARIO;
+  const previousCalls = process.env.IDD_WATCH_STUB_CALLS;
+  let dir: string | undefined;
+  try {
+    dir = mkdtempSync(join(tmpdir(), 'idd-default-watch-'));
+    const scenarioPath = join(dir, 'scenario.json');
+    const callsPath = join(dir, 'calls.log');
+    writeFileSync(callsPath, '');
+    process.env.IDD_WATCH_STUB_SCENARIO = scenarioPath;
+    process.env.IDD_WATCH_STUB_CALLS = callsPath;
+    run(
+      (scenario) => {
+        writeFileSync(scenarioPath, JSON.stringify(scenario));
+      },
+      () => readFileSync(callsPath, 'utf8').split('\n').filter(Boolean),
+    );
+  } finally {
+    restoreGh();
+    for (const [name, value] of [
+      ['IDD_WATCH_STUB_SCENARIO', previousScenario],
+      ['IDD_WATCH_STUB_CALLS', previousCalls],
+    ] as const) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const DEFAULT_WATCH_ARGV = [
+  '--pr',
+  '1234',
+  '--owner',
+  'example-owner',
+  '--repo',
+  'example-repo',
+];
+
+function defaultWatchReview(id: number, body = 'looks fine') {
+  return {
+    id,
+    user: { login: 'copilot-pull-request-reviewer[bot]' },
+    state: 'COMMENTED',
+    commit_id: HEAD,
+    submitted_at: '2026-09-28T00:00:00Z',
+    body,
+  };
+}
+
+test('the default pending-review watch reports unchanged for the same HEAD and reviews, then changed once a review or HEAD moves', () => {
+  withDefaultWatchGhStub((setScenario) => {
+    setScenario({ head: HEAD, reviews: [defaultWatchReview(7)] });
+    const first = watchPendingReviewFromGitHub(DEFAULT_WATCH_ARGV, null);
+    assert.equal(first.kind, 'unchanged');
+    assert.equal(first.reviews?.length, 1);
+    assert.equal(
+      (JSON.parse(first.fingerprint ?? 'null') as { headSha: string }).headSha,
+      HEAD,
+    );
+
+    const again = watchPendingReviewFromGitHub(
+      DEFAULT_WATCH_ARGV,
+      first.fingerprint,
+    );
+    assert.equal(again.kind, 'unchanged');
+
+    setScenario({
+      head: HEAD,
+      reviews: [defaultWatchReview(7), defaultWatchReview(8, 'a new review')],
+    });
+    const arrived = watchPendingReviewFromGitHub(
+      DEFAULT_WATCH_ARGV,
+      first.fingerprint,
+    );
+    assert.equal(arrived.kind, 'changed');
+    assert.equal(arrived.reviews?.length, 2);
+
+    setScenario({ head: OTHER_SHA, reviews: [defaultWatchReview(7)] });
+    const moved = watchPendingReviewFromGitHub(
+      DEFAULT_WATCH_ARGV,
+      first.fingerprint,
+    );
+    assert.equal(moved.kind, 'changed');
+
+    setScenario({ head: HEAD, reviews: [defaultWatchReview(7, 'edited')] });
+    const edited = watchPendingReviewFromGitHub(
+      DEFAULT_WATCH_ARGV,
+      first.fingerprint,
+    );
+    assert.equal(edited.kind, 'changed');
+  });
+});
+
+test('the default pending-review watch reports unknown, never an empty success, for a failing HEAD read, a blank HEAD, a failing review list, or a missing --pr', () => {
+  withDefaultWatchGhStub((setScenario, ghCalls) => {
+    const unknownWatch = { kind: 'unknown', fingerprint: null };
+
+    setScenario({ head: HEAD, reviews: [], headFails: true });
+    assert.deepEqual(
+      watchPendingReviewFromGitHub(DEFAULT_WATCH_ARGV, 'previous'),
+      unknownWatch,
+    );
+
+    setScenario({ head: '   ', reviews: [defaultWatchReview(7)] });
+    assert.deepEqual(
+      watchPendingReviewFromGitHub(DEFAULT_WATCH_ARGV, 'previous'),
+      unknownWatch,
+    );
+
+    setScenario({ head: HEAD, reviews: [], reviewsFail: true });
+    assert.deepEqual(
+      watchPendingReviewFromGitHub(DEFAULT_WATCH_ARGV, 'previous'),
+      unknownWatch,
+    );
+
+    // A missing --pr must short-circuit before any gh call; a stub that
+    // rejects the resulting malformed argv would otherwise mask a removed
+    // guard behind the generic failure path.
+    setScenario({ head: HEAD, reviews: [defaultWatchReview(7)] });
+    const callsBefore = ghCalls().length;
+    assert.deepEqual(
+      watchPendingReviewFromGitHub(['--owner', 'o', '--repo', 'r'], 'previous'),
+      unknownWatch,
+    );
+    assert.equal(ghCalls().length, callsBefore);
+  });
+});
+
+function runPollWithThrowingWatch(throwsFrom: number) {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [] })],
+    baseOptions(),
+  );
+  let watches = 0;
+  const previousFingerprints: (string | null)[] = [];
+  deps.watchPendingReview = (_argv, previous) => {
+    watches += 1;
+    previousFingerprints.push(previous);
+    if (watches < throwsFrom) {
+      return { kind: 'unchanged', fingerprint: 'baseline' };
+    }
+    throw new Error('watch transport failure');
+  };
+  const { sleep, now } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    { maxWaitMs: 20_000, pollIntervalMs: 7_500, sleep, now },
+  );
+  return {
+    verdict,
+    exitCode,
+    collects: collectCalls(),
+    watches,
+    previousFingerprints,
+  };
+}
+
+test('a pending-review watch that throws on the opening anchor is unknown, so every in-budget tick collects and none becomes ready', () => {
+  const { verdict, exitCode, collects, watches, previousFingerprints } =
+    runPollWithThrowingWatch(1);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.deepEqual(verdict?.reasons, [
+    'copilot has not reviewed this pull request yet',
+  ]);
+  // With no baseline the loop never skips a collection: the initial verdict
+  // plus two in-budget rechecks, exactly as when no watch is injected.
+  assert.ok(watches >= 1);
+  // No anchor was ever taken, so no call is handed a baseline fingerprint.
+  assert.ok(previousFingerprints.every((previous) => previous === null));
+  assert.equal(collects, 3);
+});
+
+test('a pending-review watch that anchors and then throws on a later tick is unknown, so that tick collects instead of skipping', () => {
+  const { verdict, exitCode, collects, watches, previousFingerprints } =
+    runPollWithThrowingWatch(2);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict?.ready, false);
+  assert.deepEqual(verdict?.reasons, [
+    'copilot has not reviewed this pull request yet',
+  ]);
+  // Anchor (unchanged), then the first tick's watch throws. Were the throw
+  // treated as unchanged, that tick would skip and only the terminal recheck
+  // would collect (2 collections); unknown evidence collects at once and
+  // drops the baseline, so the last in-budget tick collects too (3).
+  assert.ok(watches >= 2);
+  // The opening anchor was adopted as the baseline: the first tick's watch
+  // is handed it, which a rejected anchor would not do.
+  assert.equal(previousFingerprints[0], null);
+  assert.equal(previousFingerprints[1], 'baseline');
+  assert.equal(collects, 3);
 });
 
 test('runAdvisoryConvergenceWithPoll: pollIntervalMs >= maxWaitMs yields zero re-checks, not an over-budget one', () => {
