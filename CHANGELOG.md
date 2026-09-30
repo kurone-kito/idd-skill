@@ -65,6 +65,16 @@ discipline and has no tag.
 - A failed fetch in the roadmap traversal's concurrent crawl now stops the
   other workers from starting new items, so an interrupted scan no longer
   keeps sending requests into a throttled API (#3598).
+- The `idd-advisory-convergence-self-waiver` job now holds `actions: read`,
+  in the dogfooded workflow and in its `idd-template/` copy. A private
+  adopter repository reported that its `gh pr view --json statusCheckRollup`
+  read failed with `Resource not accessible by integration` on every pull
+  request that touched an allowlisted path, so the bootstrap waiver could
+  not be posted.
+  The likely cause is that this request also selects each check suite's
+  workflow run, an Actions resource; it is not proven, because no A/B probe
+  was run. Adopters who copied the workflow should add the scope to their
+  own copy (#3683).
 
 ## [0.13.0] - 2026-09-27
 
