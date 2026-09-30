@@ -16,15 +16,17 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
   type GithubApiCacheFetchRequest,
   type GithubApiCacheFetchResult,
   type GithubApiReadClassification,
+  type ReadThroughGithubApiCacheAsyncInput,
   type ReadThroughGithubApiCacheInput,
   readThroughGithubApiCache,
+  readThroughGithubApiCacheAsync,
   resolveCanonicalPath,
 } from '../src/scripts/github-api-read-cache.mts';
 
@@ -1867,5 +1869,516 @@ test('purge refuses a symlinked cache root', () => {
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
     rmSync(real, { recursive: true, force: true });
+  }
+});
+
+function readThroughAsync(
+  paths: { cacheDir: string; workspace: string },
+  fetch: ReadThroughGithubApiCacheAsyncInput['fetch'],
+  overrides: Partial<ReadThroughGithubApiCacheAsyncInput> = {},
+) {
+  return readThroughGithubApiCacheAsync({
+    classification: 'read',
+    policy: policy(paths.cacheDir),
+    host: 'github.com',
+    repository: 'o/r',
+    credentialMaterial: 'credential-material-token',
+    requestShape: { unit: 'async-report' },
+    workspaceRoot: paths.workspace,
+    cwd: paths.workspace,
+    fetch,
+    ...overrides,
+  });
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+} {
+  let resolvePromise!: (value: T) => void;
+  let rejectPromise!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolvePromise = done;
+    rejectPromise = fail;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
+function leaseNames(cacheDir: string): string[] {
+  const leases = join(cacheDir, 'leases');
+  return existsSync(leases) ? readdirSync(leases) : [];
+}
+
+test('an async hint read stores a report and the next read is a hit', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return { status: 200, body: { report: 'r' } };
+  };
+  try {
+    const first = await readThroughAsync(paths, fetch);
+    const second = await readThroughAsync(paths, fetch);
+    assert.equal(calls, 1);
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+    assert.equal(second.fetched, false);
+    assert.equal(second.coalesced, undefined);
+    assert.deepEqual(second.body, { report: 'r' });
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('two concurrent in-process async reads coalesce onto one fetch', async () => {
+  const paths = tempRoot();
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let calls = 0;
+  const fetch = () => {
+    calls += 1;
+    return gate.promise;
+  };
+  try {
+    const leader = readThroughAsync(paths, fetch);
+    const waiter = readThroughAsync(paths, fetch);
+    // The leader holds the lease before its first await, so the waiter
+    // cannot also lead.
+    assert.equal(leaseNames(paths.cacheDir).length, 1);
+    gate.resolve({ status: 200, body: { report: 'shared' } });
+    const [led, waited] = await Promise.all([leader, waiter]);
+    assert.equal(calls, 1);
+    assert.equal(led.cache, 'miss');
+    assert.equal(waited.cache, 'hit');
+    // Only the waiter is served a peer's just-finished computation.
+    assert.equal(waited.coalesced, true);
+    assert.equal(led.coalesced, undefined);
+    assert.deepEqual(waited.body, { report: 'shared' });
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async waiter never steals a lease from a live leader', async () => {
+  const paths = tempRoot();
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let leaderCalls = 0;
+  let waiterCalls = 0;
+  try {
+    const leader = readThroughAsync(paths, () => {
+      leaderCalls += 1;
+      return gate.promise;
+    });
+    const waited = await readThroughAsync(
+      paths,
+      async () => {
+        waiterCalls += 1;
+        return { status: 200, body: { report: 'own' } };
+      },
+      { leaseMaxWaitMs: 60 },
+    );
+    assert.equal(waited.cache, 'degraded');
+    assert.equal(waiterCalls, 1);
+    assert.equal(leaseNames(paths.cacheDir).length, 1);
+    gate.resolve({ status: 200, body: { report: 'lead' } });
+    const led = await leader;
+    assert.equal(led.cache, 'miss');
+    assert.equal(leaderCalls, 1);
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async read takes over a lease whose leader died', async () => {
+  const paths = tempRoot();
+  try {
+    const seeded = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { report: 'old' } }),
+      { mode: 'strict-fresh' },
+    );
+    const entry = join(paths.cacheDir, 'entries', `${seeded.entryId}.json`);
+    unlinkSync(entry);
+    writeFileSync(
+      join(paths.cacheDir, 'leases', `${seeded.entryId}.json`),
+      JSON.stringify({ pid: 999_999, createdAt: Date.now(), token: 'dead' }),
+      { mode: 0o600 },
+    );
+    let calls = 0;
+    const taken = await readThroughAsync(
+      paths,
+      async () => {
+        calls += 1;
+        return { status: 200, body: { report: 'new' } };
+      },
+      { isPidAlive: (pid) => pid !== 999_999 },
+    );
+    assert.equal(calls, 1);
+    assert.equal(taken.cache, 'miss');
+    assert.deepEqual(taken.body, { report: 'new' });
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async strict-fresh read always fetches and refreshes the entry', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return { status: 200, body: { n: calls } };
+  };
+  try {
+    await readThroughAsync(paths, fetch);
+    const fresh = await readThroughAsync(paths, fetch, {
+      mode: 'strict-fresh',
+    });
+    assert.equal(calls, 2);
+    assert.equal(fresh.cache, 'miss');
+    const hit = await readThroughAsync(paths, fetch);
+    assert.equal(hit.cache, 'hit');
+    assert.deepEqual(hit.body, { n: 2 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async incomplete or oversized result is returned but never stored', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  try {
+    const incomplete = () => async () => {
+      calls += 1;
+      return { status: 200, body: { part: true }, incomplete: true };
+    };
+    await readThroughAsync(paths, incomplete());
+    await readThroughAsync(paths, incomplete());
+    assert.equal(calls, 2);
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+
+    const oversize = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { blob: 'x'.repeat(4096) } }),
+      { policy: policy(paths.cacheDir, { maxBytes: 512 }) },
+    );
+    assert.equal(oversize.cache, 'miss');
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async fetch failure propagates, is not stored, and frees the lease', async () => {
+  const paths = tempRoot();
+  try {
+    await assert.rejects(
+      readThroughAsync(paths, async () => {
+        throw new Error('boom');
+      }),
+      /boom/,
+    );
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+    const recovered = await readThroughAsync(paths, async () => ({
+      status: 200,
+      body: { ok: true },
+    }));
+    assert.equal(recovered.cache, 'miss');
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async read bypasses a disabled policy and a blank credential', async () => {
+  const paths = tempRoot();
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    return { status: 200, body: { n: calls } };
+  };
+  try {
+    const disabled = await readThroughAsync(paths, fetch, {
+      policy: policy(paths.cacheDir, { enabled: false }),
+    });
+    const blank = await readThroughAsync(paths, fetch, {
+      credentialMaterial: '  ',
+    });
+    assert.equal(disabled.cache, 'bypass');
+    assert.equal(blank.cache, 'bypass');
+    assert.equal(calls, 2);
+    assert.equal(entryNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async hint ages from the start of its fetch, the sync read from its storage', async () => {
+  const paths = tempRoot();
+  const clock = { now: 1_800_000_000_000 };
+  const now = () => clock.now;
+  try {
+    // The fetch itself takes 100 s, so the record is stored at t+100 s.
+    await readThroughAsync(
+      paths,
+      async () => {
+        clock.now += 100_000;
+        return { status: 200, body: { report: 'slow' } };
+      },
+      { now },
+    );
+    // 250 s after storage but 350 s after the fetch began; maxAge is 300 s.
+    clock.now += 250_000;
+    let calls = 0;
+    const again = await readThroughAsync(
+      paths,
+      async () => {
+        calls += 1;
+        return { status: 200, body: { report: 'fresh' } };
+      },
+      { now },
+    );
+    assert.equal(calls, 1);
+    assert.equal(again.cache, 'miss');
+    // The sync path still measures from storage: its own record is fresh.
+    const syncPaths = tempRoot();
+    try {
+      readThrough(
+        syncPaths,
+        () => {
+          clock.now += 100_000;
+          return { status: 200, body: { n: 1 } };
+        },
+        { now },
+      );
+      clock.now += 250_000;
+      const hit = readThrough(
+        syncPaths,
+        () => ({ status: 200, body: { n: 2 } }),
+        { now },
+      );
+      assert.equal(hit.cache, 'hit');
+    } finally {
+      rmSync(syncPaths.root, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A leader whose fetch outlives the stale threshold, and a second caller that
+ * arrives once that threshold has passed since the lease was created. The
+ * clock, the poll sleep, and the heartbeat are all injected, so the timeline
+ * is exact.
+ */
+async function longLeaderScenario(renew: boolean) {
+  const paths = tempRoot();
+  const clock = { now: 1_800_000_000_000 };
+  const now = () => clock.now;
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let heartbeat: (() => void) | null = null;
+  let stopped = 0;
+  try {
+    const leader = readThroughAsync(paths, () => gate.promise, {
+      now,
+      leaseTtlMs: 1_000,
+      startLeaseHeartbeat: (fn) => {
+        heartbeat = fn;
+        return () => {
+          stopped += 1;
+        };
+      },
+    });
+    clock.now += 800;
+    if (renew) (heartbeat as (() => void) | null)?.();
+    clock.now += 800;
+    let waiterCalls = 0;
+    const waiter = await readThroughAsync(
+      paths,
+      async () => {
+        waiterCalls += 1;
+        return { status: 200, body: { report: 'waiter' } };
+      },
+      {
+        now,
+        leaseTtlMs: 1_000,
+        leaseMaxWaitMs: 100,
+        sleep: async (ms) => {
+          clock.now += ms;
+        },
+        startLeaseHeartbeat: () => () => {},
+      },
+    );
+    const leaseStillHeld =
+      leaseNames(paths.cacheDir).filter((name) => name.endsWith('.json'))
+        .length === 1;
+    gate.resolve({ status: 200, body: { report: 'leader' } });
+    await leader;
+    return { waiter, waiterCalls, leaseStillHeld, stopped };
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+}
+
+test('a live async leader renews its lease and is not stolen from past the stale threshold', async () => {
+  const kept = await longLeaderScenario(true);
+  assert.equal(kept.waiter.cache, 'degraded');
+  assert.equal(kept.waiterCalls, 1);
+  assert.equal(kept.leaseStillHeld, true);
+  assert.equal(kept.stopped, 1);
+});
+
+test('without a heartbeat the same async lease ages out and is taken over', async () => {
+  const stolen = await longLeaderScenario(false);
+  assert.equal(stolen.waiter.cache, 'miss');
+  assert.equal(stolen.waiterCalls, 1);
+});
+
+test("a stale leader's heartbeat never overwrites a lease taken over since", async () => {
+  const paths = tempRoot();
+  const gate = deferred<GithubApiCacheFetchResult>();
+  let heartbeat: (() => void) | null = null;
+  try {
+    const leader = readThroughAsync(paths, () => gate.promise, {
+      startLeaseHeartbeat: (fn) => {
+        heartbeat = fn;
+        return () => {};
+      },
+    });
+    const leases = join(paths.cacheDir, 'leases');
+    const leaseFile = readdirSync(leases).find((name) =>
+      name.endsWith('.json'),
+    ) as string;
+    // A waiter judged the leader dead and took the lease over.
+    const takeover = JSON.stringify({
+      pid: process.pid,
+      createdAt: Date.now(),
+      mode: 'hint',
+      token: 'takeover-token',
+    });
+    writeFileSync(join(leases, leaseFile), takeover, { mode: 0o600 });
+    // The old leader's heartbeat fires late.
+    (heartbeat as (() => void) | null)?.();
+    assert.equal(readFileSync(join(leases, leaseFile), 'utf8'), takeover);
+    assert.equal(
+      readdirSync(leases).filter((name) => name.endsWith('.hb')).length,
+      1,
+    );
+    gate.resolve({ status: 200, body: { report: 'late' } });
+    await leader;
+    // Releasing removes the old leader's own heartbeat and leaves the new
+    // leader's lease alone.
+    assert.equal(readFileSync(join(leases, leaseFile), 'utf8'), takeover);
+    assert.equal(
+      readdirSync(leases).filter((name) => name.endsWith('.hb')).length,
+      0,
+    );
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a heartbeat that fails to start or stop still releases the async lease', async () => {
+  const paths = tempRoot();
+  try {
+    await assert.rejects(
+      readThroughAsync(paths, async () => ({ status: 200, body: {} }), {
+        startLeaseHeartbeat: () => {
+          throw new Error('cannot start the heartbeat');
+        },
+      }),
+      /cannot start the heartbeat/,
+    );
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+    await assert.rejects(
+      readThroughAsync(paths, async () => ({ status: 200, body: {} }), {
+        startLeaseHeartbeat: () => () => {
+          throw new Error('cannot stop the heartbeat');
+        },
+      }),
+      /cannot stop the heartbeat/,
+    );
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+    // The fetch had already published before the stop failed, so the next
+    // read is served from it rather than blocked behind a stranded lease.
+    const recovered = await readThroughAsync(paths, async () => ({
+      status: 200,
+      body: { ok: true },
+    }));
+    assert.equal(recovered.cache, 'hit');
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('the default heartbeat renews at a fraction of even a short stale threshold', async () => {
+  const paths = tempRoot();
+  const delays: number[] = [];
+  const fakeTimer = { unref: () => fakeTimer };
+  const setIntervalMock = mock.method(globalThis, 'setInterval', ((
+    _fn: unknown,
+    delay?: number,
+  ) => {
+    delays.push(delay as number);
+    return fakeTimer;
+  }) as unknown as typeof setInterval);
+  const clearIntervalMock = mock.method(
+    globalThis,
+    'clearInterval',
+    (() => {}) as unknown as typeof clearInterval,
+  );
+  try {
+    await readThroughAsync(paths, async () => ({ status: 200, body: {} }), {
+      leaseTtlMs: 2_000,
+    });
+    // A quarter of the threshold, not clamped up past it.
+    assert.deepEqual(delays, [500]);
+  } finally {
+    setIntervalMock.mock.restore();
+    clearIntervalMock.mock.restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an unsafe lease token is never turned into a path outside the leases directory', async () => {
+  const paths = tempRoot();
+  try {
+    const seeded = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { report: 'old' } }),
+      { mode: 'strict-fresh' },
+    );
+    unlinkSync(join(paths.cacheDir, 'entries', `${seeded.entryId}.json`));
+    // A file a traversing token would reach from the leases directory, just
+    // outside the cache root (which must hold nothing foreign).
+    const victim = join(paths.cacheDir, '..', 'victim.hb');
+    writeFileSync(victim, '1', { mode: 0o600 });
+    const lease = join(paths.cacheDir, 'leases', `${seeded.entryId}.json`);
+    writeFileSync(
+      lease,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: Date.now(),
+        mode: 'hint',
+        token: '/../../../victim',
+      }),
+      { mode: 0o600 },
+    );
+    let calls = 0;
+    const result = await readThroughAsync(paths, async () => {
+      calls += 1;
+      return { status: 200, body: { report: 'new' } };
+    });
+    // The record is untrustworthy, so it is stale and replaced, not honored.
+    assert.equal(calls, 1);
+    assert.equal(result.cache, 'miss');
+    assert.equal(readFileSync(victim, 'utf8'), '1');
+    assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
   }
 });

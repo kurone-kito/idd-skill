@@ -873,6 +873,24 @@ test('githubApi telemetry defaults off and trims an enabled path', () => {
   assert.equal(ignored.githubApi.telemetry.path, null);
 });
 
+// #3626: the empty string and a whitespace-only path both count as unset (the
+// schema accepts them and the default file is used), and an enabled policy
+// keeps its other settings.
+for (const [label, blank] of [
+  ['an empty string', ''],
+  ['a whitespace-only string', '   '],
+  ['a tab and newline', '\t\n'],
+] as const) {
+  test(`normalizePolicyConfig treats ${label} as an unset telemetry path`, () => {
+    const policy = normalizePolicyConfig({
+      githubApi: { telemetry: { enabled: true, maxRecords: 7, path: blank } },
+    });
+    assert.equal(policy.githubApi.telemetry.enabled, true);
+    assert.equal(policy.githubApi.telemetry.maxRecords, 7);
+    assert.equal(policy.githubApi.telemetry.path, null);
+  });
+}
+
 test('a configured telemetry path is expanded or rejected', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-path-'));
   const relative = 'idd-relative-telemetry-3585.jsonl';
@@ -932,15 +950,17 @@ test('a configured telemetry path is expanded or rejected', () => {
   }
 });
 
-test('a paginated read records a failure only when the gh run itself failed (#3597)', () => {
+test('a paginated read records a failed gh run as a failure and an unparsable clean exit as an observation (#3597, #3616)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-telemetry-'));
   const telemetryPath = join(tempRoot, 'telemetry.jsonl');
-  const readCount = (): number =>
+  const readLines = (): RequestObservation[] =>
     existsSync(telemetryPath)
       ? readFileSync(telemetryPath, 'utf8')
           .split('\n')
-          .filter((line) => line.trim().length > 0).length
-      : 0;
+          .filter((line) => line.trim().length > 0)
+          .map((line) => JSON.parse(line) as RequestObservation)
+      : [];
+  const readCount = (): number => readLines().length;
   let restore: (() => void) | undefined;
   try {
     setGithubApiTelemetryPolicyForTests({
@@ -948,15 +968,20 @@ test('a paginated read records a failure only when the gh run itself failed (#35
       maxRecords: 10,
       path: telemetryPath,
     });
-    // A clean exit whose body does not parse is not a GitHub request
-    // failure, and gh's own exit status is not to blame for it.
+    // A clean exit whose body does not parse is not a gh failure, and gh's
+    // own exit status is not to blame for it, so it is not recorded as one.
+    // It still consumed a request, so it is recorded as an observation with
+    // no status (#3616), once.
     restore = stubExecutable('gh', `process.stdout.write('not json\\n');`);
     assert.throws(() =>
       ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
     );
     restore();
-    assert.equal(readCount(), 0);
-    // A gh that exits non-zero is recorded, once.
+    assert.equal(readCount(), 1);
+    const [parseRecord] = readLines();
+    assert.equal(parseRecord.classification, 'ok');
+    assert.equal(parseRecord.status, 'unknown');
+    // A gh that exits non-zero is recorded as a failure, once more.
     restore = stubExecutable(
       'gh',
       `process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1);`,
@@ -964,7 +989,8 @@ test('a paginated read records a failure only when the gh run itself failed (#35
     assert.throws(() =>
       ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
     );
-    assert.equal(readCount(), 1);
+    assert.equal(readCount(), 2);
+    assert.equal(readLines()[1].status, 404);
   } finally {
     restore?.();
     setGithubApiTelemetryPolicyForTests(null);
@@ -1641,6 +1667,116 @@ test('retained records keep their classification across the graphql-throttled ad
       'ok',
     ]);
   } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// #3626: `ghApiJsonWithHeaders` records an observation on success and on
+// failure, but its only other wrapper test runs with telemetry disabled, so a
+// regression in the status/header extraction or in the recorded observation
+// for this wrapper would pass the suite.
+test('ghApiJsonWithHeaders retains the observed status, limit, and resource on success and the classification on failure when telemetry is enabled', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-telemetry-headers-'));
+  const telemetryPath = join(tempRoot, 'telemetry.jsonl');
+  const modePath = join(tempRoot, 'mode.txt');
+  const argsPath = join(tempRoot, 'args.json');
+  const token = 'placeholder-credential-headers';
+  const apiPath = 'repos/secret-owner-yy/secret-repo-yy/issues/7';
+  let restore: (() => void) | undefined;
+  const readRecords = (): RequestObservation[] =>
+    existsSync(telemetryPath)
+      ? readFileSync(telemetryPath, 'utf8')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line) as RequestObservation)
+      : [];
+  const setMode = (mode: string): void => {
+    writeFileSync(modePath, `${mode}\n`);
+  };
+  try {
+    setGithubApiTelemetryPolicyForTests({
+      enabled: true,
+      maxRecords: 20,
+      path: telemetryPath,
+    });
+    restore = stubExecutable(
+      'gh',
+      `
+const fs = require('node:fs');
+const mode = fs.readFileSync(${JSON.stringify(modePath)}, 'utf8').trim();
+fs.writeFileSync(${JSON.stringify(argsPath)}, JSON.stringify(process.argv.slice(2)));
+function envelope(status, extra, body) {
+  process.stdout.write('HTTP/2 ' + status + '\\n' + extra + '\\n\\n' + body);
+}
+if (mode === 'ok') {
+  envelope(201, 'x-ratelimit-remaining: 41\\nx-ratelimit-resource: core\\nx-ratelimit-reset: 1700000300', '{"n":9}');
+} else if (mode === 'rate') {
+  envelope(403, 'x-ratelimit-remaining: 0\\nx-ratelimit-resource: core\\nx-ratelimit-reset: 1700000400', '{"message":"API rate limit exceeded"}');
+  process.stderr.write(${JSON.stringify(`token=${token}\nAPI rate limit exceeded (HTTP 403)\n`)});
+  process.exit(1);
+} else if (mode === 'secondary') {
+  envelope(403, 'x-ratelimit-remaining: 5', '{"message":"You have exceeded a secondary rate limit. Please wait."}');
+  process.stderr.write('gh: You have exceeded a secondary rate limit (HTTP 403)\\n');
+  process.exit(1);
+} else {
+  process.stderr.write('unexpected mode ' + mode);
+  process.exit(2);
+}
+`,
+    );
+
+    setMode('ok');
+    const result = ghApiJsonWithHeaders(apiPath);
+    assert.deepEqual(result.data, { n: 9 });
+    assert.deepEqual(
+      (JSON.parse(readFileSync(argsPath, 'utf8')) as string[]).filter(
+        (arg) => arg === '--include',
+      ),
+      ['--include'],
+    );
+    const records = readRecords();
+    assert.equal(records.length, 1);
+    const [success] = records;
+    // 201, not the ubiquitous 200, so a constant cannot pass for extraction.
+    assert.equal(success.status, 201);
+    assert.equal(success.remaining, 41);
+    assert.equal(success.resource, 'core');
+    assert.equal(success.reset, 1700000300);
+    assert.equal(success.classification, 'ok');
+    assert.equal(success.commandInvocationCount, 1);
+    assert.equal(success.retryAttempts, 0);
+
+    setMode('rate');
+    assert.throws(() => ghApiJsonWithHeaders(apiPath));
+    const afterRate = readRecords();
+    assert.equal(afterRate.length, 2);
+    const primary = afterRate[1];
+    assert.equal(primary.classification, 'primary-exhaustion');
+    assert.equal(primary.status, 403);
+    assert.equal(primary.signals.primaryExhaustion, true);
+    assert.equal(primary.signals.secondaryThrottling, false);
+
+    setMode('secondary');
+    assert.throws(() => ghApiJsonWithHeaders(apiPath));
+    const afterSecondary = readRecords();
+    assert.equal(afterSecondary.length, 3);
+    const secondary = afterSecondary[2];
+    assert.equal(secondary.classification, 'secondary-throttling');
+    assert.equal(secondary.status, 403);
+    assert.equal(secondary.signals.secondaryThrottling, true);
+    assert.equal(secondary.signals.primaryExhaustion, false);
+
+    // Redaction: neither the request path nor the credential in the stderr
+    // reaches the retained file.
+    const retained = readFileSync(telemetryPath, 'utf8');
+    assert.equal(retained.includes(apiPath), false);
+    assert.equal(retained.includes('secret-owner-yy'), false);
+    assert.equal(retained.includes(token), false);
+  } finally {
+    restore?.();
+    setGithubApiTelemetryPolicyForTests(null);
+    resetGithubApiTelemetryPolicyCacheForTests();
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });

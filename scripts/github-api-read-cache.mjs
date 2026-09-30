@@ -6,8 +6,9 @@
 //
 // Opt-in host-local read cache for explicitly classified GitHub REST
 // reads. Callers that do not opt in never reach this module, and Discover
-// is not wired here. Credential material is hashed into the cache key and
-// is never written into an entry, a lease, or a log line.
+// reaches it only through discover-hint-cache.mts. Credential material is
+// hashed into the cache key and is never written into an entry, a lease, or
+// a log line.
 import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync,
@@ -38,6 +39,8 @@ const TEMP_NAME = /^[0-9a-f]{64}\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
 const MAX_CACHE_BYTES = 104857600;
 const DEFAULT_LEASE_TTL_MS = 15_000;
 const POLL_MS = 20;
+/** The shape of a lease token: this module mints hex, and only a safe file-name component is trusted. */
+const LEASE_TOKEN = /^[A-Za-z0-9_-]{1,64}$/;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 class CacheStorageError extends Error {
@@ -523,6 +526,17 @@ function entryPath(ctx) {
 function leasePath(ctx) {
   return join(ctx.root, 'leases', `${ctx.entryId}.json`);
 }
+/**
+ * A leader's heartbeat lives in its own file, keyed by the lease token, so
+ * renewing never rewrites (and so can never overwrite) a lease record that a
+ * waiter took over in the meantime.
+ */
+function heartbeatPath(ctx, token) {
+  if (!LEASE_TOKEN.test(token)) {
+    throw new CacheStorageError('cache lease token is not a safe file name');
+  }
+  return join(ctx.root, 'leases', `${ctx.entryId}.${token}.hb`);
+}
 function trustedRecord(ctx) {
   const record = readRecord(ctx, entryPath(ctx));
   if (!record) return null;
@@ -535,7 +549,9 @@ function trustedRecord(ctx) {
 function freshRecord(ctx) {
   const record = trustedRecord(ctx);
   if (!record) return null;
-  if (ctx.now() - record.storedAt > ctx.maxAgeMs) return null;
+  const basis =
+    ctx.ageBasis === 'started' ? generationOf(record) : record.storedAt;
+  if (ctx.now() - basis > ctx.maxAgeMs) return null;
   return record;
 }
 function hitResult(record, entryId) {
@@ -793,12 +809,18 @@ function readLease(ctx) {
     ) {
       return 'stale';
     }
+    // A token names files (see heartbeatPath), so an unsafe one makes the
+    // whole record untrustworthy rather than being interpolated into a path.
+    if (
+      parsed.token !== undefined &&
+      !(typeof parsed.token === 'string' && LEASE_TOKEN.test(parsed.token))
+    ) {
+      return 'stale';
+    }
     return {
       pid: parsed.pid,
       createdAt: parsed.createdAt,
-      ...(typeof parsed.token === 'string' && parsed.token.length > 0
-        ? { token: parsed.token }
-        : {}),
+      ...(typeof parsed.token === 'string' ? { token: parsed.token } : {}),
     };
   } catch {
     return 'stale';
@@ -824,11 +846,25 @@ function discardObservedLease(ctx, observed) {
     leaseMatches(current, observed)
   ) {
     safeUnlink(ctx.storage, leasePath(ctx));
+    if (observed.token) {
+      safeUnlink(ctx.storage, heartbeatPath(ctx, observed.token));
+    }
+  }
+}
+/** When the lease's leader last renewed it, or `0` if it never did. */
+function heartbeatAt(ctx, lease) {
+  if (!lease.token) return 0;
+  try {
+    const seen = Number(ctx.storage.readFile(heartbeatPath(ctx, lease.token)));
+    return Number.isFinite(seen) && seen <= ctx.now() ? seen : 0;
+  } catch {
+    return 0;
   }
 }
 function leaseIsStale(ctx, lease) {
   if (lease.createdAt > ctx.now()) return true;
-  if (ctx.now() - lease.createdAt > ctx.leaseTtlMs) return true;
+  const lastSeen = Math.max(lease.createdAt, heartbeatAt(ctx, lease));
+  if (ctx.now() - lastSeen > ctx.leaseTtlMs) return true;
   return !ctx.isPidAlive(lease.pid);
 }
 function tryAcquire(ctx) {
@@ -856,6 +892,25 @@ function releaseLease(ctx) {
   if (!held) return;
   try {
     discardObservedLease(ctx, held);
+    // Also covers a lease that was taken over while this leader ran.
+    if (held.token) safeUnlink(ctx.storage, heartbeatPath(ctx, held.token));
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+  }
+}
+/**
+ * Record that the lease this context holds is still being served, so a live
+ * leader that computes for longer than the stale threshold is not mistaken
+ * for a dead one. The heartbeat is a file of its own (see
+ * {@link heartbeatPath}); the lease record is never rewritten, so a renewal
+ * cannot clobber a lease a waiter has since taken over. Best effort: a failed
+ * renewal only lets the lease age out as before.
+ */
+function renewLease(ctx) {
+  const held = ctx.heldLease;
+  if (!held?.token) return;
+  try {
+    ctx.storage.writeAtomic(heartbeatPath(ctx, held.token), String(ctx.now()));
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
   }
@@ -1033,6 +1088,71 @@ function executeCached(ctx) {
   return coalesce(ctx);
 }
 /**
+ * Decide whether a read may touch the cache and, when it may, build its
+ * context. Shared by the sync and async entry points so both apply the
+ * same bypass, identity, and directory rules.
+ */
+function prepareRead(input, fetch, sleep) {
+  const anchors = anchorsFor(input);
+  const storage = createStorage(input.storage);
+  if (input.classification !== 'read' || input.policy.enabled !== true) {
+    return { kind: 'bypass' };
+  }
+  // A blank credential or host would hash into a context shared by every
+  // caller that omits it, so an unidentified caller never touches the cache.
+  if (isBlank(input.credentialMaterial) || isBlank(input.host)) {
+    return { kind: 'bypass' };
+  }
+  let entryId;
+  try {
+    entryId = entryIdFor(input);
+  } catch (error) {
+    if (!(error instanceof CacheKeyError)) throw error;
+    return { kind: 'bypass' };
+  }
+  let root;
+  try {
+    root = resolveReadDirectory(input, anchors);
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+    return { kind: 'degraded', entryId };
+  }
+  return {
+    kind: 'ready',
+    ctx: {
+      storage,
+      now: input.now ?? Date.now,
+      sleep,
+      leaseTtlMs: positiveMs(
+        input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS,
+        DEFAULT_LEASE_TTL_MS,
+      ),
+      isPidAlive: input.isPidAlive ?? defaultIsPidAlive,
+      pid: input.pid ?? process.pid,
+      anchors,
+      maxBytes: boundedBytes(input.policy.maxBytes),
+      entryId,
+      root,
+      // The credential itself is always a secret: a response that echoes it
+      // must never be persisted, even when the caller passed no
+      // secretMaterial.
+      secrets: [
+        input.credentialMaterial,
+        ...(input.secretMaterial ?? []),
+      ].filter((secret) => secret.length > 0),
+      host: normalizeHost(input.host),
+      repository: input.repository.trim(),
+      paginated: input.paginated === true,
+      mode: normalizeMode(input.mode),
+      maxAgeMs: positiveMs(input.policy.maxAgeMs, 5 * 60 * 1000),
+      retentionMs: positiveMs(input.policy.retentionMs, 24 * 60 * 60 * 1000),
+      fetch,
+      heldLease: null,
+      ageBasis: 'stored',
+    },
+  };
+}
+/**
  * Read through the host-local GitHub API cache, or purge its entries.
  *
  * Non-read classifications and a disabled policy fetch once and do not
@@ -1041,9 +1161,9 @@ function executeCached(ctx) {
  * after the single-flight lease is released and are not stored.
  */
 export function readThroughGithubApiCache(input) {
-  const anchors = anchorsFor(input);
-  const storage = createStorage(input.storage);
   if (input.operation === 'purge') {
+    const anchors = anchorsFor(input);
+    const storage = createStorage(input.storage);
     try {
       const root = normalizedRoot(purgeTarget(input)) ?? '';
       return purgeDirectory(
@@ -1065,60 +1185,168 @@ export function readThroughGithubApiCache(input) {
       throw error;
     }
   }
-  if (input.classification !== 'read' || input.policy.enabled !== true) {
-    return liveResult(input.fetch, 'bypass');
+  const prepared = prepareRead(input, input.fetch, input.sleep ?? sleepSync);
+  if (prepared.kind === 'bypass') return liveResult(input.fetch, 'bypass');
+  if (prepared.kind === 'degraded') {
+    return liveResult(input.fetch, 'degraded', prepared.entryId);
   }
-  // A blank credential or host would hash into a context shared by every
-  // caller that omits it, so an unidentified caller never touches the cache.
-  if (isBlank(input.credentialMaterial) || isBlank(input.host)) {
-    return liveResult(input.fetch, 'bypass');
-  }
-  let entryId;
   try {
-    entryId = entryIdFor(input);
-  } catch (error) {
-    if (!(error instanceof CacheKeyError)) throw error;
-    return liveResult(input.fetch, 'bypass');
-  }
-  let root;
-  try {
-    root = resolveReadDirectory(input, anchors);
+    return executeCached(prepared.ctx);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
-    return liveResult(input.fetch, 'degraded', entryId);
+    return liveResult(input.fetch, 'degraded', prepared.ctx.entryId);
   }
-  const ctx = {
-    storage,
-    now: input.now ?? Date.now,
-    sleep: input.sleep ?? sleepSync,
-    leaseTtlMs: positiveMs(
-      input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS,
-      DEFAULT_LEASE_TTL_MS,
-    ),
-    isPidAlive: input.isPidAlive ?? defaultIsPidAlive,
-    pid: input.pid ?? process.pid,
-    anchors,
-    maxBytes: boundedBytes(input.policy.maxBytes),
-    entryId,
-    root,
-    // The credential itself is always a secret: a response that echoes it
-    // must never be persisted, even when the caller passed no secretMaterial.
-    secrets: [input.credentialMaterial, ...(input.secretMaterial ?? [])].filter(
-      (secret) => secret.length > 0,
-    ),
-    host: normalizeHost(input.host),
-    repository: input.repository.trim(),
-    paginated: input.paginated === true,
-    mode: normalizeMode(input.mode),
-    maxAgeMs: positiveMs(input.policy.maxAgeMs, 5 * 60 * 1000),
-    retentionMs: positiveMs(input.policy.retentionMs, 24 * 60 * 60 * 1000),
-    fetch: input.fetch,
-    heldLease: null,
+}
+/** Longest an async waiter polls a live leader before computing itself. */
+const DEFAULT_ASYNC_MAX_WAIT_MS = 120_000;
+/**
+ * Age past which a lease that was not renewed is treated as stale even if its
+ * pid looks alive (a crashed leader whose pid was reused). A live leader
+ * renews its lease while it computes, so a long enumeration keeps it.
+ */
+const DEFAULT_ASYNC_LEASE_TTL_MS = 600_000;
+function sleepAsync(ms) {
+  return new Promise((done) => setTimeout(done, ms));
+}
+async function liveResultAsync(fetch, cache, entryId) {
+  const result = await fetch({});
+  return {
+    body: result.body,
+    status: result.status,
+    cache,
+    fetched: true,
+    ...(entryId ? { entryId } : {}),
   };
+}
+async function leaderFetchAsync(ctx, fetch) {
+  const startedAt = ctx.now();
+  if (ctx.mode === 'hint') {
+    // Reached only after the caller's own freshness check missed, so a fresh
+    // record here was published by a peer while this call raced for the lease.
+    const fresh = freshRecord(ctx);
+    if (fresh) return { ...hitResult(fresh, ctx.entryId), coalesced: true };
+  }
+  const result = await fetch({});
+  invalidateOnMissing(ctx, result, startedAt);
   try {
-    return executeCached(ctx);
+    publish(ctx, result, startedAt);
   } catch (error) {
     if (!(error instanceof CacheStorageError)) throw error;
-    return liveResult(input.fetch, 'degraded', entryId);
+  }
+  return fromFetch(result, 'miss', ctx.entryId);
+}
+async function waitForLeaderAsync(ctx, maxWaitMs, sleep) {
+  const started = ctx.now();
+  for (;;) {
+    const fresh = freshRecord(ctx);
+    if (fresh) return fresh;
+    const lease = readLease(ctx);
+    if (lease === null) return freshRecord(ctx);
+    if (lease === 'stale' || leaseIsStale(ctx, lease)) {
+      discardObservedLease(ctx, lease);
+      return null;
+    }
+    if (ctx.now() - started >= maxWaitMs) return null;
+    await sleep(POLL_MS);
+  }
+}
+function defaultLeaseHeartbeat(ctx) {
+  return (renew) => {
+    // A fraction of the effective threshold, so even a short caller-supplied
+    // one is renewed before it lapses.
+    const timer = setInterval(
+      renew,
+      Math.max(1, Math.floor(ctx.leaseTtlMs / 4)),
+    );
+    timer.unref?.();
+    return () => clearInterval(timer);
+  };
+}
+async function leadAsync(ctx, fetch, startHeartbeat) {
+  let stopHeartbeat = () => {};
+  try {
+    // Set up inside the protected block: the lease is already held, so a
+    // heartbeat that fails to start (or stop) must still release it.
+    stopHeartbeat = startHeartbeat(() => renewLease(ctx));
+    return await leaderFetchAsync(ctx, fetch);
+  } finally {
+    try {
+      stopHeartbeat();
+    } finally {
+      releaseLease(ctx);
+    }
+  }
+}
+async function coalesceAsync(ctx, fetch, sleep, maxWaitMs, startHeartbeat) {
+  const fresh = freshRecord(ctx);
+  if (fresh) return hitResult(fresh, ctx.entryId);
+  if (tryAcquire(ctx)) return leadAsync(ctx, fetch, startHeartbeat);
+  const waited = await waitForLeaderAsync(ctx, maxWaitMs, sleep);
+  if (waited) return { ...hitResult(waited, ctx.entryId), coalesced: true };
+  if (tryAcquire(ctx)) return leadAsync(ctx, fetch, startHeartbeat);
+  return liveResultAsync(fetch, 'degraded', ctx.entryId);
+}
+async function strictFreshAsync(ctx, fetch) {
+  const startedAt = ctx.now();
+  const result = await fetch({});
+  invalidateOnMissing(ctx, result, startedAt);
+  try {
+    publish(ctx, result, startedAt);
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+  }
+  return fromFetch(result, 'miss', ctx.entryId);
+}
+/**
+ * Async twin of {@link readThroughGithubApiCache} for `hint` and
+ * `strict-fresh` reads whose producer is asynchronous (a whole helper
+ * enumeration rather than one REST call). It applies the same bypass,
+ * identity, secret, size, and `incomplete` rules. A `hint` read holds the
+ * same cross-process single-flight lease across the whole computation and
+ * measures freshness from when the fetch started; a leader that died is
+ * detected by its pid, a live one is waited on up to `leaseMaxWaitMs` and
+ * never robbed, so a long enumeration is not duplicated. A `strict-fresh`
+ * read, like the sync path's, takes no lease and ignores stored records: it
+ * is defined as "compute now", and coalescing it onto an enumeration that
+ * began earlier would return a record older than the call asked for. Fetch
+ * failures propagate after any lease is released and are never stored.
+ */
+export async function readThroughGithubApiCacheAsync(input) {
+  const { fetch, sleep, leaseMaxWaitMs, startLeaseHeartbeat, ...rest } = input;
+  const prepared = prepareRead(
+    {
+      ...rest,
+      leaseTtlMs: rest.leaseTtlMs ?? DEFAULT_ASYNC_LEASE_TTL_MS,
+    },
+    () => {
+      throw new Error('the async cache path never calls the sync fetch');
+    },
+    () => {
+      throw new Error('the async cache path never calls the sync sleep');
+    },
+  );
+  if (prepared.kind === 'bypass') return liveResultAsync(fetch, 'bypass');
+  if (prepared.kind === 'degraded') {
+    return liveResultAsync(fetch, 'degraded', prepared.entryId);
+  }
+  const { ctx } = prepared;
+  ctx.ageBasis = 'started';
+  try {
+    prepareRoot(ctx);
+    if (input.mode === 'strict-fresh')
+      return await strictFreshAsync(ctx, fetch);
+    return await coalesceAsync(
+      ctx,
+      fetch,
+      sleep ?? sleepAsync,
+      positiveMs(
+        leaseMaxWaitMs ?? DEFAULT_ASYNC_MAX_WAIT_MS,
+        DEFAULT_ASYNC_MAX_WAIT_MS,
+      ),
+      startLeaseHeartbeat ?? defaultLeaseHeartbeat(ctx),
+    );
+  } catch (error) {
+    if (!(error instanceof CacheStorageError)) throw error;
+    return liveResultAsync(fetch, 'degraded', ctx.entryId);
   }
 }

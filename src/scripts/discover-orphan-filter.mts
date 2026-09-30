@@ -24,6 +24,10 @@ import {
 } from './collaborator-permission.mts';
 import { extractDependencyReferences } from './dependency-grammar.mts';
 import {
+  purgeDiscoverHints,
+  readDiscoverHint,
+} from './discover-hint-cache.mts';
+import {
   extractBlockedByIssueNumbers,
   extractDependencyIssueNumbers,
   isParentEpicIssue,
@@ -442,6 +446,12 @@ interface ParsedArgs {
   autopilot: boolean;
   withClaimState: boolean;
   currentClaimId: string;
+  /** `--no-cache`: compute live and neither read nor write a hint. */
+  noCache: boolean;
+  /** `--refresh-cache`: recompute strict-fresh and store the result. */
+  refreshCache: boolean;
+  /** `--purge-cache`: purge the host-local read cache and exit. */
+  purgeCache: boolean;
 }
 
 if (import.meta.main) {
@@ -1342,13 +1352,74 @@ async function runCli(): Promise<HelperCliResult> {
     printHelp();
     process.exit(0);
   }
+  // `--purge-cache` is a standalone maintenance action: it never enumerates.
+  if (args.purgeCache) {
+    const purged = purgeDiscoverHints();
+    process.stdout.write(
+      `${JSON.stringify({ cache: { mode: 'purge', ...purged } }, null, 2)}\n`,
+    );
+    return 0;
+  }
+  if (args.noCache && args.refreshCache) {
+    throw markCliUsageError(
+      new Error('--no-cache cannot be combined with --refresh-cache'),
+    );
+  }
+  const policy = loadPolicy(args.policy);
 
+  // The whole output is the cached unit (#3588): a warm hint skips the open
+  // issue list and every per-candidate read. The hint only ranks; the
+  // selected candidate's live A3-A5 gates and the claim post never read from
+  // it.
+  const { report: output, cache } = await readDiscoverHint<OrphanOutput>({
+    helper: 'discover-orphan-filter',
+    owner: args.owner,
+    repo: args.repo,
+    args: {
+      pr: args.pr,
+      now: args.now,
+      autopilot: args.autopilot,
+      withClaimState: args.withClaimState,
+      currentClaimId: args.currentClaimId,
+    },
+    policy,
+    noCache: args.noCache,
+    refreshCache: args.refreshCache,
+    compute: () => produceOutput(args, policy),
+    hasCandidate: hasEligibleOrphan,
+  });
+
+  process.stdout.write(
+    `${JSON.stringify(cache ? { ...output, cache } : output, null, 2)}\n`,
+  );
+  return 0;
+}
+
+type OrphanOutput = Awaited<ReturnType<typeof produceOutput>>;
+
+/**
+ * Whether an orphan output still lists a candidate worth trying, so a cached
+ * output that answers "no" earns exactly one strict-fresh recompute before
+ * exhaustion is believed. Uses `claimEligible` when the annotation ran.
+ */
+export function hasEligibleOrphan(output: unknown): boolean {
+  const orphans = (output as { orphans?: unknown } | null)?.orphans;
+  if (!Array.isArray(orphans)) return false;
+  if (orphans.some((entry) => entry?.claimEligible !== undefined)) {
+    return orphans.some((entry) => entry?.claimEligible !== false);
+  }
+  return orphans.length > 0;
+}
+
+async function produceOutput(
+  args: ParsedArgs,
+  policy: ReturnType<typeof loadPolicy>,
+) {
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
-  const policy = loadPolicy(args.policy);
 
   const openIssues = fetchOpenIssues(port);
   const openStateByNumber = new Map(
@@ -1448,8 +1519,7 @@ async function runCli(): Promise<HelperCliResult> {
     ...result,
   };
 
-  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-  return 0;
+  return output;
 }
 
 // Excluded from the #1446 cli-args.mts wrapper: --current-claim-id below
@@ -1473,6 +1543,9 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     autopilot: false,
     withClaimState: false,
     currentClaimId: '',
+    noCache: false,
+    refreshCache: false,
+    purgeCache: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -1517,6 +1590,18 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
       parsed.withClaimState = true;
       continue;
     }
+    if (token === '--no-cache') {
+      parsed.noCache = true;
+      continue;
+    }
+    if (token === '--refresh-cache') {
+      parsed.refreshCache = true;
+      continue;
+    }
+    if (token === '--purge-cache') {
+      parsed.purgeCache = true;
+      continue;
+    }
     if (token === '--current-claim-id') {
       // Only consume the next token as the id when it exists and is not
       // itself a flag, mirroring discover-roadmap-graph's own parsing, so
@@ -1541,7 +1626,19 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>]
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>] [--no-cache | --refresh-cache]
+  node scripts/discover-orphan-filter.mjs --purge-cache
+
+Hint cache (opt-in via githubApi.readCache.enabled; off by default): the whole
+output is cached as a short-lived HINT, so an unchanged repeat inside
+githubApi.readCache.maxAge (default PT5M) makes no discovery request. A hint
+only ranks candidates: the selected candidate's live A3-A5 gates and the claim
+post never read from it. --no-cache computes live and stores nothing;
+--refresh-cache recomputes and stores; --purge-cache removes every cached body
+from the host-local read cache and exits. When the cache is active or a cache
+flag is passed, the output gains an additive "cache" object:
+  "cache": {"mode": "hint|refresh|off|bypass", "source": "hint|live", "ageMs": 0, "maxAgeMs": 0, "complete": true, "enumerations": 0, "exhaustionRefresh": false}
+An output with no eligible orphan is recomputed once (exhaustionRefresh true).
 
 Output schema:
 {

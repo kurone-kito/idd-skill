@@ -889,6 +889,21 @@ test('the schema rejects an unknown field and a missing required field', () => {
   );
 });
 
+/**
+ * Environment for a claim or unclaim `--apply` child. Those markers drop the
+ * cached Discover hints after posting (#3588), and this repository's config
+ * enables that cache, so point the child's cache at a throwaway directory
+ * instead of the developer's real per-user location.
+ */
+function sandboxedHintCacheEnv(dir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: dir,
+    XDG_CACHE_HOME: join(dir, 'xdg-cache'),
+    LOCALAPPDATA: join(dir, 'local-app-data'),
+  };
+}
+
 test('--apply CLI POSTs via gh api --input - and prints the apply envelope', () => {
   // Stub `gh` on PATH (the discover-roadmap-graph.test.mts pattern) so the
   // --apply POST path is exercised without network access. The stub records its
@@ -941,7 +956,7 @@ process.exit(1);
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: { ...process.env },
+        env: sandboxedHintCacheEnv(tempRoot),
       },
     );
 
@@ -3555,6 +3570,7 @@ test('--apply for a marker type outside HIDE_AT_POST_TIME_MARKER_TYPES never lis
   // all -- proven by never invoking the `--paginate` branch this stub would
   // otherwise need to answer (any comments-listing call here falls through
   // to the catch-all "unexpected gh invocation" failure).
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-claim-'));
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
@@ -3596,11 +3612,16 @@ if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
         'issue/1200-foo',
         '--apply',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: sandboxedHintCacheEnv(sandbox),
+      },
     );
     assert.equal(JSON.parse(output).commentId, 9800);
   } finally {
     restore();
+    rmSync(sandbox, { recursive: true, force: true });
   }
 });
 
