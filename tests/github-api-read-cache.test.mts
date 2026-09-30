@@ -59,6 +59,20 @@ function policy(
   };
 }
 
+/**
+ * The ACL reader the shared helpers inject by default. On the Windows runner a
+ * configured cache directory under the temp folder carries the inherited
+ * profile ACL, which the real check refuses (#3623); every non-ACL test would
+ * then degrade to a live read, so they get a stub that reports a private ACL.
+ * The real-directory ACL tests override it with `undefined`.
+ */
+const PRIVATE_ACL_STUB: NonNullable<
+  ReadThroughGithubApiCacheInput['windowsAclReader']
+> = () => ({
+  kind: 'entries',
+  entries: [{ sid: 'S-1-5-18', allow: true }],
+});
+
 function readThrough(
   paths: { cacheDir: string; workspace: string },
   fetch: ReadThroughGithubApiCacheInput['fetch'],
@@ -67,6 +81,7 @@ function readThrough(
   return readThroughGithubApiCache({
     classification: 'read',
     mode: 'hint',
+    windowsAclReader: PRIVATE_ACL_STUB,
     policy: policy(paths.cacheDir),
     host: 'github.com',
     repository: 'o/r',
@@ -1879,6 +1894,7 @@ function readThroughAsync(
 ) {
   return readThroughGithubApiCacheAsync({
     classification: 'read',
+    windowsAclReader: PRIVATE_ACL_STUB,
     policy: policy(paths.cacheDir),
     host: 'github.com',
     repository: 'o/r',
@@ -2486,9 +2502,12 @@ test('windows acl: the default per-user location is trusted and performs no ACL 
   const saved = {
     xdg: process.env.XDG_CACHE_HOME,
     local: process.env.LOCALAPPDATA,
+    home: process.env.HOME,
   };
   process.env.XDG_CACHE_HOME = paths.cacheDir;
   process.env.LOCALAPPDATA = paths.cacheDir;
+  // macOS resolves the default under the home directory.
+  process.env.HOME = paths.cacheDir;
   try {
     const noDirectory = {
       enabled: true,
@@ -2516,22 +2535,31 @@ test('windows acl: the default per-user location is trusted and performs no ACL 
     else process.env.XDG_CACHE_HOME = saved.xdg;
     if (saved.local === undefined) delete process.env.LOCALAPPDATA;
     else process.env.LOCALAPPDATA = saved.local;
+    if (saved.home === undefined) delete process.env.HOME;
+    else process.env.HOME = saved.home;
     rmSync(paths.root, { recursive: true, force: true });
   }
 });
 
-test('windows acl: an injected default directory is checked like a configured one', () => {
+test('windows acl: an injected default directory is trusted like the per-user default', () => {
   const paths = tempRoot();
   const reader = aclReader(aclEntries('S-1-1-0'));
   try {
-    const result = readThrough(paths, okBody({ n: 1 }), {
+    const first = readThrough(paths, okBody({ n: 1 }), {
       platform: 'win32',
       windowsAclReader: reader.read,
       policy: policy(''),
       defaultDirectory: paths.cacheDir,
     });
-    assert.equal(result.cache, 'degraded');
-    assert.equal(reader.calls.length, 1);
+    const second = readThrough(paths, okBody({ n: 2 }), {
+      platform: 'win32',
+      windowsAclReader: reader.read,
+      policy: policy(''),
+      defaultDirectory: paths.cacheDir,
+    });
+    assert.equal(first.cache, 'miss');
+    assert.equal(second.cache, 'hit');
+    assert.equal(reader.calls.length, 0);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
@@ -2622,8 +2650,9 @@ test('windows acl real directory: a user-only directory is accepted', {
       '/grant:r',
       `*${windowsUserSid()}:(OI)(CI)F`,
     );
-    const first = readThrough(paths, okBody({ n: 1 }));
-    const second = readThrough(paths, okBody({ n: 2 }));
+    const real = { windowsAclReader: undefined };
+    const first = readThrough(paths, okBody({ n: 1 }), real);
+    const second = readThrough(paths, okBody({ n: 2 }), real);
     assert.equal(first.cache, 'miss');
     assert.equal(second.cache, 'hit');
   } finally {
@@ -2647,10 +2676,11 @@ test('windows acl real directory: a directory readable by Everyone is refused', 
       '/grant:r',
       `*${windowsUserSid()}:(OI)(CI)F`,
     );
-    const accepted = readThrough(paths, okBody({ n: 1 }));
+    const real = { windowsAclReader: undefined };
+    const accepted = readThrough(paths, okBody({ n: 1 }), real);
     assert.equal(accepted.cache, 'miss');
     icacls(paths.cacheDir, '/grant', '*S-1-1-0:(R)');
-    const refused = readThrough(paths, okBody({ n: 2 }));
+    const refused = readThrough(paths, okBody({ n: 2 }), real);
     assert.equal(refused.cache, 'degraded');
     assert.deepEqual(refused.body, { n: 2 });
   } finally {

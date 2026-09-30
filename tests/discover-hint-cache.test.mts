@@ -61,6 +61,12 @@ function fixture(overrides: Partial<DiscoverHintDeps> = {}): Fixture {
       },
       originUrl: () => 'https://github.com/o/r.git',
       ghDefaultIsOrigin: () => true,
+      // A configured directory under the Windows temp folder inherits a permissive
+      // profile ACL; report a private one so these tests stay platform-neutral.
+      windowsAclReader: () => ({
+        kind: 'entries',
+        entries: [{ sid: 'S-1-5-18', allow: true }],
+      }),
       credential: () => 'hint-credential-token',
       now: () => clock.now,
       ...overrides,

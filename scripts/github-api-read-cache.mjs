@@ -440,8 +440,8 @@ function assertAdoptableRoot(ctx) {
   }
 }
 /**
- * Windows has no mode bits, so a configured (or injected) cache directory must
- * be shown by its ACL to grant access only to the current user, SYSTEM, and the
+ * Windows has no mode bits, so a configured cache directory must be shown by
+ * its ACL to grant access only to the current user, SYSTEM, and the
  * built-in Administrators. The per-user default location under
  * `LOCALAPPDATA` inherits a user-only ACL and is trusted without an ACL read.
  * A permissive or unreadable ACL degrades to a live read like any other
@@ -1016,7 +1016,7 @@ function strictFresh(ctx) {
 function resolveReadDirectory(input, anchors) {
   const candidates = [
     { path: input.policy.directory?.trim() ?? '', source: 'configured' },
-    { path: input.defaultDirectory?.trim() ?? '', source: 'injected' },
+    { path: input.defaultDirectory?.trim() ?? '', source: 'default' },
     {
       path: defaultCacheDirectory(process.env, process.platform),
       source: 'default',

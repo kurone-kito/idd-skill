@@ -13,7 +13,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 const SID_SYSTEM = 'S-1-5-18';
 const SID_ADMINISTRATORS = 'S-1-5-32-544';
@@ -42,23 +42,23 @@ const SDDL_ALIASES = {
   SY: SID_SYSTEM,
   WD: 'S-1-1-0',
 };
-function expandAlias(principal) {
+function expandAlias(principal, extra) {
   const upper = principal.trim().toUpperCase();
-  return SDDL_ALIASES[upper] ?? upper;
+  return extra[upper] ?? SDDL_ALIASES[upper] ?? upper;
 }
 /**
  * Decode the file `icacls /save` writes. It is UTF-16LE, with or without a
- * byte-order mark depending on the Windows build; fall back to UTF-8 when the
- * bytes do not look like UTF-16 (no NUL in the second byte of the first pair).
+ * byte-order mark depending on the Windows build. SDDL is ASCII, so a UTF-8
+ * file has no NUL byte while UTF-16 has one in every ASCII code unit; a NUL
+ * anywhere means UTF-16 (which also covers a leading directory name outside
+ * Latin-1, whose high byte is not NUL).
  */
 export function decodeIcaclsSave(bytes) {
   const buffer = Buffer.from(bytes);
   if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
     return buffer.subarray(2).toString('utf16le');
   }
-  if (buffer.length >= 2 && buffer[1] === 0x00 && buffer[0] !== 0x00) {
-    return buffer.toString('utf16le');
-  }
+  if (buffer.includes(0x00)) return buffer.toString('utf16le');
   return buffer.toString('utf8');
 }
 /** Split `(...)(...)` at the top level, honoring nested parentheses. */
@@ -124,9 +124,11 @@ function sddlSections(sddl) {
  * Anything unexpected -- a NULL or empty DACL, an ACE type that is neither
  * allow nor deny, a malformed ACE -- is `unreadable`, never `private`.
  */
-export function parseIcaclsSave(text) {
+export function parseIcaclsSave(text, extraAliases = {}) {
+  // The first line names the directory and is never SDDL, however it looks
+  // (`D:\cache` starts like a DACL); the SDDL is the last line after it.
   const lines = text.split(/\r?\n/).filter((line) => line.length > 0);
-  const sddl = lines.find((line) => /^[OGDS]:/.test(line));
+  const sddl = lines.slice(1).findLast((line) => /^[OGDS]:/.test(line));
   if (sddl === undefined) return { kind: 'unreadable' };
   const dacl = sddlSections(sddl).get('D');
   if (dacl === undefined || dacl.startsWith('NO_ACCESS_CONTROL')) {
@@ -143,9 +145,9 @@ export function parseIcaclsSave(text) {
       return { kind: 'unreadable' };
     }
     if (type === 'A' || type === 'OA' || type === 'XA') {
-      entries.push({ sid: expandAlias(principal), allow: true });
+      entries.push({ sid: expandAlias(principal, extraAliases), allow: true });
     } else if (type === 'D' || type === 'OD' || type === 'XD') {
-      entries.push({ sid: expandAlias(principal), allow: false });
+      entries.push({ sid: expandAlias(principal, extraAliases), allow: false });
     } else {
       return { kind: 'unreadable' };
     }
@@ -186,6 +188,18 @@ export function evaluateWindowsAcl(result) {
     ? 'private'
     : 'permissive';
 }
+/**
+ * `icacls` prints the machine's built-in Administrator (RID 500) and Guest
+ * (RID 501) as `LA` and `LG`. They are only resolvable relative to the current
+ * user's account domain, so derive them from the `whoami` SID; without a
+ * recognizable domain SID they stay unknown principals (permissive).
+ */
+function localAccountAliases(currentSid) {
+  const domain = /^(S-1-5-21-\d+-\d+-\d+)-\d+$/.exec(currentSid)?.[1];
+  return domain === undefined
+    ? {}
+    : { LA: `${domain}-500`, LG: `${domain}-501` };
+}
 const PROCESS_TIMEOUT_MS = 10_000;
 const PROCESS_MAX_BUFFER = 1024 * 1024;
 // One `whoami` per process: the SID cannot change while the process runs,
@@ -195,7 +209,10 @@ const currentSidMemo = new WeakMap();
 function system32(env) {
   // An absolute path: a bare name would be resolved against the current
   // directory before PATH on Windows, so a checkout could plant an `icacls`.
-  return join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32');
+  const root = [env.SystemRoot, env.windir].find(
+    (candidate) => candidate !== undefined && isAbsolute(candidate),
+  );
+  return join(root ?? 'C:\\Windows', 'System32');
 }
 function currentUserSid(exec, env) {
   const known = currentSidMemo.get(exec);
@@ -245,13 +262,23 @@ export function readWindowsAcl(directory, deps = {}) {
       maxBuffer: PROCESS_MAX_BUFFER,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const parsed = parseIcaclsSave(decodeIcaclsSave(readFileSync(saved)));
+    const parsed = parseIcaclsSave(
+      decodeIcaclsSave(readFileSync(saved)),
+      localAccountAliases(sid),
+    );
     return parsed.kind === 'entries'
       ? { ...parsed, currentSid: sid }
       : { kind: 'unreadable' };
   } catch {
     return { kind: 'unreadable' };
   } finally {
-    if (scratch !== null) rmSync(scratch, { recursive: true, force: true });
+    if (scratch !== null) {
+      try {
+        rmSync(scratch, { recursive: true, force: true });
+      } catch {
+        // A scratch directory that cannot be removed must not turn a
+        // readable ACL into an unreadable one.
+      }
+    }
   }
 }

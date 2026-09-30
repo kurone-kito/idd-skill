@@ -294,3 +294,110 @@ test('windows acl reader: a failing tool, unparseable output, or an unknown user
     { kind: 'unreadable' },
   );
 });
+
+test('windows acl parser: UTF-16LE is detected even when the directory name is outside Latin-1', () => {
+  // The first code unit's high byte is not NUL for a Japanese or Cyrillic name.
+  for (const name of ['日本語 cache', 'Кэш', 'キャッシュ']) {
+    const text = `C:\\Users\\x\\${name}\r\nD:PAI(A;OICI;FA;;;SY)\r\n`;
+    const bytes = Buffer.from(text, 'utf16le');
+    assert.equal(decodeIcaclsSave(bytes), text, name);
+    assert.deepEqual(parseIcaclsSave(decodeIcaclsSave(bytes)), {
+      kind: 'entries',
+      entries: [{ sid: 'S-1-5-18', allow: true }],
+    });
+    // A name that starts with the non-Latin character itself.
+    const leading = Buffer.from(
+      `${name}\r\nD:PAI(A;OICI;FA;;;SY)\r\n`,
+      'utf16le',
+    );
+    assert.equal(
+      parseIcaclsSave(decodeIcaclsSave(leading)).kind,
+      'entries',
+      name,
+    );
+  }
+});
+
+test('windows acl parser: the name line is never read as SDDL, and a file without an SDDL line is unreadable', () => {
+  // A drive-root style name that looks like the start of a DACL.
+  assert.deepEqual(parseIcaclsSave('D:\\cache\r\nD:PAI(A;OICI;FA;;;SY)\r\n'), {
+    kind: 'entries',
+    entries: [{ sid: 'S-1-5-18', allow: true }],
+  });
+  // A crafted name must not stand in for the ACL when icacls wrote none.
+  assert.deepEqual(parseIcaclsSave('D:\\c(A;;FA;;;SY)\r\n'), {
+    kind: 'unreadable',
+  });
+  assert.deepEqual(
+    parseIcaclsSave('D:\\c(A;;FA;;;SY)\r\nD:PAI(A;;FR;;;WD)\r\n'),
+    { kind: 'entries', entries: [{ sid: 'S-1-1-0', allow: true }] },
+  );
+});
+
+test('windows acl parser: LA and LG resolve against the current account domain only', () => {
+  const text = 'dir\r\nD:PAI(A;OICI;FA;;;LA)(A;;FR;;;LG)\r\n';
+  const domain = 'S-1-5-21-1000000001-2000000002-3000000003';
+  const withDomain = parseIcaclsSave(text, {
+    LA: `${domain}-500`,
+    LG: `${domain}-501`,
+  });
+  assert.deepEqual(withDomain, {
+    kind: 'entries',
+    entries: [
+      { sid: `${domain}-500`, allow: true },
+      { sid: `${domain}-501`, allow: true },
+    ],
+  });
+  // Guest is another principal, so this is permissive even for RID 500.
+  assert.equal(
+    evaluateWindowsAcl({ ...withDomain, currentSid: `${domain}-500` }),
+    'permissive',
+  );
+  // Without the aliases they are unknown principals, permissive.
+  const bare = parseIcaclsSave(text);
+  assert.equal(bare.kind, 'entries');
+  assert.equal(
+    evaluateWindowsAcl({ ...bare, currentSid: `${domain}-500` }),
+    'permissive',
+  );
+});
+
+test('windows acl reader: the built-in Administrator running the process owns its own directory', () => {
+  const domain = 'S-1-5-21-1000000001-2000000002-3000000003';
+  const admin = `${domain}-500`;
+  const exec = ((file: string, args: string[]) => {
+    if (file.endsWith('whoami.exe')) return `"H\\Administrator","${admin}"\r\n`;
+    writeFileSync(
+      args[2] as string,
+      Buffer.from('dir\r\nD:PAI(A;OICI;FA;;;LA)\r\n', 'utf16le'),
+    );
+    return '';
+  }) as never;
+  const result = readWindowsAcl('C:\\cache', {
+    env: { SystemRoot: 'C:\\Windows' },
+    execFile: exec,
+  });
+  assert.equal(evaluateWindowsAcl(result), 'private');
+});
+
+test('windows acl reader: a relative SystemRoot is ignored so the tools are always absolute', () => {
+  const calls: string[] = [];
+  const exec = ((file: string, args: string[]) => {
+    calls.push(file);
+    if (file.endsWith('whoami.exe')) return `"H\\u","${USER_SID}"\r\n`;
+    writeFileSync(
+      args[2] as string,
+      Buffer.from('dir\r\nD:PAI(A;;FA;;;SY)\r\n', 'utf16le'),
+    );
+    return '';
+  }) as never;
+  readWindowsAcl('C:\\cache', {
+    env: { SystemRoot: 'evil', windir: '' },
+    execFile: exec,
+  });
+  assert.ok(calls.length > 0);
+  for (const file of calls) {
+    assert.ok(/^[A-Za-z]:[\\/]/.test(file) || file.startsWith('/'), file);
+    assert.ok(!file.startsWith('evil'), file);
+  }
+});

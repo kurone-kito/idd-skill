@@ -182,7 +182,7 @@ jobs:
       # cannot be shown user-only (kurone-kito/idd-skill#3623). Only the
       # tests whose titles start with `windows acl` run: the fake-reader
       # cases and the two real-directory cases that prove the real
-      # `whoami`/`icacls` reader here (a `Users`/Everyone grant is refused,
+      # `whoami`/`icacls` reader here (an Everyone grant is refused,
       # an inheritance-stripped user-only directory is accepted). Name
       # filtered like the claim-lock step above -- never the whole file --
       # and the pattern is ASCII-only for the same PowerShell reason.

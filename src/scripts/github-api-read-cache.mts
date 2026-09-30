@@ -180,7 +180,7 @@ interface StoredRecord {
 }
 
 /** Which candidate `resolveReadDirectory` chose. */
-type DirectorySource = 'configured' | 'injected' | 'default';
+type DirectorySource = 'configured' | 'default';
 
 interface CacheContext {
   storage: GithubApiReadCacheStorage;
@@ -681,8 +681,8 @@ function assertAdoptableRoot(ctx: CacheContext): void {
 }
 
 /**
- * Windows has no mode bits, so a configured (or injected) cache directory must
- * be shown by its ACL to grant access only to the current user, SYSTEM, and the
+ * Windows has no mode bits, so a configured cache directory must be shown by
+ * its ACL to grant access only to the current user, SYSTEM, and the
  * built-in Administrators. The per-user default location under
  * `LOCALAPPDATA` inherits a user-only ACL and is trusted without an ACL read.
  * A permissive or unreadable ACL degrades to a live read like any other
@@ -1322,7 +1322,7 @@ function resolveReadDirectory(
 ): { root: string; source: DirectorySource } {
   const candidates: { path: string; source: DirectorySource }[] = [
     { path: input.policy.directory?.trim() ?? '', source: 'configured' },
-    { path: input.defaultDirectory?.trim() ?? '', source: 'injected' },
+    { path: input.defaultDirectory?.trim() ?? '', source: 'default' },
     {
       path: defaultCacheDirectory(process.env, process.platform),
       source: 'default',

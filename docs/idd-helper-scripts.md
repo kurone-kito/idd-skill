@@ -1639,17 +1639,17 @@ refuses a filesystem root, the workspace, an ancestor of the workspace,
 a symlinked cache root, and an existing directory that holds anything
 besides its own layout.
 
-On Windows there are no permission mode bits, so those checks are
-skipped. The default `LOCALAPPDATA` location inherits a user-only ACL
-and is trusted without an ACL read. A configured `directory` must
-instead be shown by its ACL to grant access only to the current user,
-`SYSTEM`, and the built-in Administrators (read with `whoami` and
-`icacls`, by SID); otherwise, or when the ACL cannot be read, the cache
-degrades to a live read and stores nothing. Any other principal
-(Everyone, Users, Authenticated Users, `CREATOR OWNER`, an unknown SID)
-makes the directory permissive, including an inherit-only entry that
-would reach the stored files, so a directory under a shared or profile
-location usually needs its inheritance removed first (for example
+On Windows there are no permission mode bits, so permission-mode checks
+are skipped. The default `LOCALAPPDATA` location is trusted without an
+ACL read. A configured `directory` must instead be shown by its ACL to
+grant access only to the current user, `SYSTEM`, and the built-in
+Administrators (read with `whoami` and `icacls`, by SID); otherwise, or
+when the ACL cannot be read, the cache degrades to a live read and
+stores nothing. Any other principal (Everyone, Users, Authenticated
+Users, `CREATOR OWNER`, an unknown SID) makes the directory permissive,
+including an inherit-only entry that would reach the stored files, so a
+directory under a shared or profile location usually needs its
+inheritance removed first (for example
 `icacls <dir> /inheritance:r /grant:r *<your-SID>:(OI)(CI)F`). The
 verdict is read on every cache read, which costs one `icacls` process
 for a configured directory. This check reads an ACL and never changes
