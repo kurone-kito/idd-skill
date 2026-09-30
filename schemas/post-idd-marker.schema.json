@@ -84,14 +84,14 @@
           "description": "The review-activity snapshot collected in this operation. Watermark fields are derived from this object."
         },
         "watermarkFields": {
-          "type": ["object", "null"],
+          "type": "object",
           "additionalProperties": { "type": "string" },
-          "description": "Watermark field strings derived from snapshot. Null only when derivation did not complete."
+          "description": "Watermark field strings derived from snapshot. Always an object: a capture whose derivation fails throws before any envelope is printed."
         },
         "warnings": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Disposition warnings for this same capture. They do not by themselves publish or suppress the marker."
+          "description": "Disposition warnings for this same capture. They do not by themselves publish or suppress the marker. A same-head-activity refusal appends one entry naming the review-body findings that have no thread."
         }
       }
     }

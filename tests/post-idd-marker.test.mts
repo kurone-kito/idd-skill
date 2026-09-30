@@ -1898,7 +1898,7 @@ test('--from-pr fails closed on an explicit non-pr --target', () => {
  * .headRefOid` call resolves offline to `headSha`, without needing the full
  * review-activity-snapshot stub the watermark tests use above. Any other
  * invocation is treated as unexpected (proving the advisory --from-pr path
- * never spawns the heavier snapshot child). Returns the cleanup callback.
+ * makes no activity-capture call). Returns the cleanup callback.
  */
 function withHeadShaOnlyGhStub(headSha: string): () => void {
   return stubExecutable(
@@ -6199,7 +6199,7 @@ test('the operationLocal envelope schema requires every view field, including re
     decision: 'publish',
     reason: null,
     snapshot: {},
-    watermarkFields: null,
+    watermarkFields: { 'head-sha': SHA },
     warnings: [],
   };
   const envelope = {

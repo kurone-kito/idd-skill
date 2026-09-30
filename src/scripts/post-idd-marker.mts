@@ -338,7 +338,7 @@ export interface OperationLocalPriorBoundary {
 
 export interface OperationLocalWatermarkResult {
   snapshot: unknown;
-  watermarkFields: MarkerFields | null;
+  watermarkFields: MarkerFields;
   warnings: string[];
   decision: OperationLocalDecision;
   reasonCode: OperationLocalReasonCode;
@@ -357,7 +357,7 @@ export interface OperationLocalWatermarkView {
   decision: OperationLocalDecision;
   reason: string | null;
   snapshot: unknown;
-  watermarkFields: MarkerFields | null;
+  watermarkFields: MarkerFields;
   warnings: string[];
 }
 
@@ -879,9 +879,9 @@ interface CliArgs {
   apply: boolean;
   owner: string;
   repo: string;
-  /** Forwarded to the `--from-pr` snapshot child (snapshot input, not a field). */
+  /** Forwarded to the `--from-pr` activity capture (snapshot input, not a field). */
   trustedMarkerLogins: string;
-  /** Forwarded to the `--from-pr` snapshot child (snapshot input, not a field). */
+  /** Forwarded to the `--from-pr` activity capture (snapshot input, not a field). */
   advisoryBotLogins: string;
   help: boolean;
   fields: MarkerFields;
