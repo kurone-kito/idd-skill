@@ -482,18 +482,19 @@ completion.
 
    - **An extra entry** (a `closingIssuesReferences` issue outside the
      deliberate set) is most often the negation-blind false-positive
-     documented above, where an unrelated `#M` reference ends up
-     adjacent to a recognized keyword elsewhere in the body. Edit the
-     PR body to separate the keyword from that `#M` reference.
+     documented above (an unrelated `#M` adjacent to a recognized
+     keyword elsewhere in the body). Edit the PR body to separate the
+     keyword from that `#M` reference.
    - **A missing entry** (a deliberate closing target absent from
      `closingIssuesReferences`) whose keyword matches step 3's regex for
-     that number, on a PR under 4 hours old (`createdAt`), is GitHub's
+     that number, on a PR whose `createdAt` (`gh pr view <pr-number>
+     --json createdAt`) is under 4 hours before now (UTC), is GitHub's
      asynchronous registration (`kurone-kito/idd-skill#3632`), not a
      body defect: do not edit the body, toggle draft, or close and
-     reopen; continue to D4 and poll `gh pr view <pr-number> --json
-     closingIssuesReferences` while F2's `closing-set` gate waits.
-     Otherwise (keyword absent, or the entry still missing at 4 hours)
-     apply step 4's edit-and-recheck path, re-placing the keyword line.
+     reopen; continue to D4 and poll `closingIssuesReferences` the same
+     way while F2's `closing-set` gate waits. Otherwise (keyword absent,
+     or the entry still missing at 4 hours) apply step 4's
+     edit-and-recheck path, re-placing the keyword line.
 
    Repeat this step once after any edit. If it still fails (pending
    registration excepted), post a hold note on the issue citing the PR
