@@ -23,7 +23,7 @@
 // the full incident history.
 
 import {
-  MARKDOWN_HTML_BLOCK_START_PATTERN,
+  maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mts';
 
@@ -260,32 +260,30 @@ const REMARK_HEADING_PATTERN =
 /** Inline form, line-anchored: `🔵 Needs a closer look: text`, optionally
  * behind up to three leading spaces and a run of heading, bullet (`-`,
  * `*`, `+`), or emphasis characters, for example
- * `**Needs a closer look:** text`. Four or more leading spaces (an indented
- * code block) never match, and neither does a label inside a blockquote
+ * `**Needs a closer look:** text`. Four or more leading spaces never match,
+ * and neither does a label inside a blockquote
  * (no real body puts one there, and supporting quote continuation lines
  * would need a container model this reader deliberately does not have).
  * Matches the label and its separator only; the remark text is whatever
  * follows on the line, and a label with no same-line text is not a remark. */
 const REMARK_INLINE_LABEL_PATTERN =
-  /^ {0,3}(?:[#*_+-][ \t#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?[ \t]*/iu;
+  /^ {0,3}(?:[#*_+-][ \t#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?/iu;
 
+const REMARK_PHRASE_PATTERN = /needs a closer look/iu;
 const HAS_TEXT_PATTERN = /[\p{L}\p{N}]/u;
-/** Indented code: four columns of indent, where a tab reaches the next
- * multiple of four (so `  \t` and ` \t` qualify too). */
-const INDENTED_CODE_LINE_PATTERN = /^(?: {4}| {0,3}\t)/u;
 const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
 
-/** A stripped line that opens a block other than a plain paragraph line, so
- * the remark paragraph must not read on into it: an ATX heading or setext
- * underline, a thematic break, a blockquote, a bullet or an ordered item
- * starting at 1 (the only ones CommonMark lets interrupt a paragraph), an
- * HTML block start from `markdown-code.mts`'s CommonMark block-tag list (an
- * inline tag such as `<code>` stays paragraph text), or one of the two bold
+/** A line that opens a block the shared masker does not hide, so the remark
+ * paragraph must not read on into it: an ATX heading or setext underline, a
+ * thematic break, a blockquote, a bullet or an ordered item starting at 1 (the
+ * only ones CommonMark lets interrupt a paragraph), or one of the two bold
  * overview-metadata labels Copilot's v2 overview puts after the remark
  * (`**Review effort:**`, `**Findings:**`). CommonMark would fold the metadata
  * labels into the paragraph as lazy continuation text; every real body
  * separates them with a blank line, and a body that does not must still not
- * report them as the remark. */
+ * report them as the remark. Code blocks, HTML blocks and comments need no
+ * pattern here: {@link maskMarkdownForScan} blanks them, and a blanked line
+ * ends the paragraph. */
 const NEW_BLOCK_LINE_PATTERNS: readonly RegExp[] = [
   ATX_HEADING_LINE_PATTERN,
   // A setext underline ends the paragraph it underlines.
@@ -293,42 +291,21 @@ const NEW_BLOCK_LINE_PATTERNS: readonly RegExp[] = [
   /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/u,
   /^ {0,3}>/u,
   /^ {0,3}(?:[-+*]|1[.)])(?:[ \t]|$)/u,
-  MARKDOWN_HTML_BLOCK_START_PATTERN,
   /^ {0,3}\*\*(?:review effort|findings):\*\*/iu,
 ];
 
-/** CommonMark's raw-content HTML blocks (types 1-5): a comment, processing
- * instruction, declaration, CDATA section, or a `pre`/`script`/`style`/
- * `textarea` element. They start only at a line start (up to three spaces of
- * indent), run through the line holding their closer, and an unterminated one
- * runs to the end of the body, as CommonMark's does. `(?![\s\S])` is the
- * end of input (with the `m` flag `$` would end at every line). A comment
- * that is terminated also hides its content mid-line, as inline HTML. Their
- * content is never rendered as prose, so a label or heading inside one is not
- * a remark (#3688 review: a multi-line HTML comment hiding a label). */
-const RAW_HTML_BLOCK_PATTERN =
-  /^ {0,3}(?:<!--(?:-?>|[\s\S]*?(?:-->|(?![\s\S])))|<\?[\s\S]*?(?:\?>|(?![\s\S]))|<!\[CDATA\[[\s\S]*?(?:\]\]>|(?![\s\S]))|<![A-Za-z][\s\S]*?(?:>|(?![\s\S]))|<(pre|script|style|textarea)(?=[\s>])[\s\S]*?(?:<\/\1\s*>|(?![\s\S])))[^\r\n]*|<!--[\s\S]*?-->/gim;
-
-/** Blank every raw-content HTML block, keeping line structure and columns
- * (no `u` flag: a column is a UTF-16 unit, as `String#slice` counts). */
-function maskRawHtmlBlocks(text: string): string {
-  return text.replace(RAW_HTML_BLOCK_PATTERN, (match) =>
-    match.replace(/[^\r\n]/g, ' '),
-  );
-}
-
 /** `true` for a line that ends the running paragraph on its own: a blank
- * line, or a fence line (blanked to exactly `''` in the stripped text while
- * its original text is not). A code-span interior line is whitespace-only
- * in the stripped text but non-blank in the original, so it does not end
- * the paragraph. */
-function endsRemarkParagraph(original: string, stripped: string): boolean {
-  return original.trim() === '' || stripped === '';
+ * line, or a line the block masker blanked (a fenced or indented code block,
+ * an HTML block or comment) while its original text is not. A code-span
+ * interior line stays visible in the block mask (inline code is kept there),
+ * so it does not end the paragraph. */
+function endsRemarkParagraph(original: string, blocks: string): boolean {
+  return original.trim() === '' || blocks.trim() === '';
 }
 
-/** `true` when a stripped line opens a new block that ends a paragraph. */
-function startsNewBlock(stripped: string): boolean {
-  return NEW_BLOCK_LINE_PATTERNS.some((pattern) => pattern.test(stripped));
+/** `true` when a line opens a new block that ends a paragraph. */
+function startsNewBlock(line: string): boolean {
+  return NEW_BLOCK_LINE_PATTERNS.some((pattern) => pattern.test(line));
 }
 
 /** Reads one paragraph from the ORIGINAL lines, starting at `start` (the
@@ -339,7 +316,8 @@ function startsNewBlock(stripped: string): boolean {
  * dropped). Returns `null` when the paragraph is empty. */
 function readRemarkParagraph(
   original: readonly string[],
-  stripped: readonly string[],
+  blocks: readonly string[],
+  located: readonly string[],
   start: number,
   firstLineOffset: number,
   singleLine = false,
@@ -347,10 +325,9 @@ function readRemarkParagraph(
   const parts: string[] = [];
   for (let index = start; index < original.length; index += 1) {
     const originalLine = original[index] ?? '';
-    const strippedLine = stripped[index] ?? '';
     if (
-      endsRemarkParagraph(originalLine, strippedLine) ||
-      (index > start && startsNewBlock(strippedLine))
+      endsRemarkParagraph(originalLine, blocks[index] ?? '') ||
+      (index > start && startsNewBlock(located[index] ?? ''))
     ) {
       break;
     }
@@ -387,13 +364,20 @@ function readRemarkParagraph(
  * #3263) cannot be met for the inline form, which has no real sample at
  * all (the heading form has four, from four PRs), and the remark is
  * evidence only. Its real-body coverage lives in its own test file
- * instead. Locating runs against the
- * code-stripped body (`stripMarkdownCodeRegions`, same defense as the
- * classifier) so a label quoted inside a code span or fence never
- * matches; the text itself is read from the original lines so a code
- * span INSIDE the remark survives. Masking keeps line count and in-line
- * columns (not absolute offsets, since `\r\n` is normalized), which is
- * all this relies on.
+ * instead.
+ *
+ * Markdown structure comes from the repository's shared CommonMark masker
+ * ({@link maskMarkdownForScan}), not hand-kept patterns, so this reader does
+ * not re-derive what counts as code or HTML (four review rounds on #3688
+ * each found another edge of exactly that). Locating runs against a mask of
+ * fenced, indented and inline code, HTML comments and HTML blocks, so a
+ * label quoted in code or hidden in markup never matches. A paragraph ends
+ * at a line the same mask minus inline code blanked (a code or HTML block)
+ * or at a block-opening line of the full mask, so a multi-line code span
+ * never ends it. The text
+ * itself is read from the original lines, so a code span INSIDE the remark
+ * survives. The mask keeps line count and in-line columns (not absolute
+ * offsets, since `\r\n` is normalized), which is all this relies on.
  *
  * Limits, accepted because the result never gates anything: a review
  * that merely discusses the phrase in uncoded prose as a line-anchored
@@ -405,33 +389,45 @@ function readRemarkParagraph(
 export function extractCopilotReviewBodyRemark(
   body: string | null | undefined,
 ): string | null {
-  if (typeof body !== 'string' || body.length === 0) {
+  // Cheap exit before any masking: the shared masker costs more than linear
+  // on adversarial input, and nearly every review body lacks the phrase.
+  if (typeof body !== 'string' || !REMARK_PHRASE_PATTERN.test(body)) {
     return null;
   }
   const original = body.split(/\r?\n/);
-  const strippedText = stripMarkdownCodeRegions(body);
-  const stripped = strippedText.split(/\r?\n/);
-  // Headings and labels are located where raw HTML content is blanked too;
-  // paragraph boundaries still read `stripped`, which keeps block openers.
-  const located = maskRawHtmlBlocks(strippedText).split(/\r?\n/);
+  const located = maskMarkdownForScan(body, {
+    inlineCode: 'mask',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  }).split(/\r?\n/);
+  // Inline code and inline comments stay visible here: only a blanked code or
+  // HTML BLOCK line ends a paragraph, never the interior of a multi-line span
+  // or comment. (A comment block on its own lines is still an HTML block.)
+  const blocks = maskMarkdownForScan(body, {
+    inlineCode: 'keep',
+    htmlComments: 'keep',
+    htmlBlocks: 'mask',
+  }).split(/\r?\n/);
   for (let index = 0; index < located.length; index += 1) {
     const line = located[index] ?? '';
     let remark: string | null = null;
-    if (REMARK_HEADING_PATTERN.test(line)) {
+    // The plain original line must match too: a code span between the marker
+    // and the phrase is masked to spaces in `line` but is not the heading.
+    if (
+      REMARK_HEADING_PATTERN.test(line) &&
+      REMARK_HEADING_PATTERN.test(original[index] ?? '')
+    ) {
       let first = index + 1;
       while (first < original.length && (original[first] ?? '').trim() === '') {
         first += 1;
       }
-      const firstStripped = stripped[first] ?? '';
-      // A first block indented four spaces or a tab is an indented code block
-      // (#3688 review), not prose; later lines of a paragraph may be indented.
+      // A first block the masker blanked (a code or HTML block) is not prose.
       if (
         first < original.length &&
-        firstStripped !== '' &&
-        !INDENTED_CODE_LINE_PATTERN.test(original[first] ?? '') &&
-        !startsNewBlock(firstStripped)
+        (blocks[first] ?? '').trim() !== '' &&
+        !startsNewBlock(located[first] ?? '')
       ) {
-        remark = readRemarkParagraph(original, stripped, first, 0);
+        remark = readRemarkParagraph(original, blocks, located, first, 0);
       }
     } else {
       const label = REMARK_INLINE_LABEL_PATTERN.exec(line);
@@ -440,11 +436,15 @@ export function extractCopilotReviewBodyRemark(
       // says nothing about which line is the remark (#3688 review).
       if (
         label &&
+        // A masked span inside the label (code between the phrase and the
+        // colon) means the match is not the plain label.
+        (original[index] ?? '').startsWith(label[0]) &&
         HAS_TEXT_PATTERN.test((original[index] ?? '').slice(label[0].length))
       ) {
         remark = readRemarkParagraph(
           original,
-          stripped,
+          blocks,
+          located,
           index,
           label[0].length,
           ATX_HEADING_LINE_PATTERN.test(line),

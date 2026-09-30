@@ -188,9 +188,7 @@ const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
  */
 const MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN =
   /^ {0,3}(?:={1,}|-{1,2})[ \t]*$/u;
-// Exported (#3672) so `copilot-review-body.mts` ends a remark paragraph at the
-// same CommonMark HTML-block starts instead of keeping a second tag list.
-export const MARKDOWN_HTML_BLOCK_START_PATTERN =
+const MARKDOWN_HTML_BLOCK_START_PATTERN =
   /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
   /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>/u;

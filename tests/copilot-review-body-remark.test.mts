@@ -294,6 +294,11 @@ test('a label or heading inside raw HTML content is not a remark (#3672)', () =>
     '<style>\nNeeds a closer look: css\n</style>',
     '<?php\nNeeds a closer look: code ?>',
     '<![CDATA[\nNeeds a closer look: data\n]]>',
+    // Generic HTML blocks run to the next blank line (#3688 review).
+    '<div>\nNeeds a closer look: hidden\n</div>',
+    '<details>\n<summary>x</summary>\nNeeds a closer look: hidden\n</details>',
+    '<custom-tag>\nNeeds a closer look: hidden',
+    '<section>\n### Needs a closer look\n\nhidden\n\nafter',
   ]) {
     assert.equal(extractCopilotReviewBodyRemark(body), null, body);
   }
@@ -316,6 +321,20 @@ test('a label or heading inside raw HTML content is not a remark (#3672)', () =>
       '<pre>\ncode\n</pre>\n\n### Needs a closer look\n\nThe remark.',
     ),
     'The remark.',
+  );
+  // Markdown resumes after the blank line that ends a generic HTML block.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '<details>\n<summary>x</summary>\n\n### Needs a closer look\n\nInside details.\n</details>',
+    ),
+    'Inside details.',
+  );
+});
+
+test('a code span between the phrase and the colon is not the plain label (#3672)', () => {
+  assert.equal(
+    extractCopilotReviewBodyRemark('Needs a closer look `x`: check this'),
+    null,
   );
 });
 
@@ -419,9 +438,20 @@ test('an inline label with no same-line text is not a remark (#3672)', () => {
 });
 
 test('keeps a multi-line inline code span inside the remark (#3672)', () => {
-  const body =
-    '### Needs a closer look\n\nWith `a\n# x\nb` span.\n\nlater paragraph';
-  assert.equal(extractCopilotReviewBodyRemark(body), 'With `a # x b` span.');
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\nWith `a\nmid\nb` span.\n\nlater paragraph',
+    ),
+    'With `a mid b` span.',
+  );
+  // A line that opens a block ends the paragraph before any code span can
+  // continue across it, so the span never reaches past the heading line.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\nWith `a\n# x\nb` span.\n\nlater paragraph',
+    ),
+    'With `a',
+  );
 });
 
 test('reads CRLF bodies without carrying a carriage return (#3672)', () => {
@@ -501,4 +531,44 @@ test('the inline label needs at most three leading spaces (#3672)', () => {
     extractCopilotReviewBodyRemark('    Needs a closer look: indented code.'),
     null,
   );
+});
+
+test('a multi-line inline HTML comment inside the remark does not end it (#3672)', () => {
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\nFoo <!-- hid\nden\n--> bar baz\n\nnext',
+    ),
+    'Foo <!-- hid den --> bar baz',
+  );
+  // A comment on its own line is an HTML block and still ends the paragraph.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      '### Needs a closer look\n\nThe remark.\n<!-- a comment -->\nmore',
+    ),
+    'The remark.',
+  );
+});
+
+test('a code span in the heading line is not the plain heading (#3672)', () => {
+  for (const heading of [
+    '### `x` Needs a closer look',
+    '### Needs a closer look `x`',
+    '### \u{1F535} `x` Needs a closer look',
+  ]) {
+    assert.equal(
+      extractCopilotReviewBodyRemark(`${heading}\n\nRemark one.`),
+      null,
+      heading,
+    );
+  }
+});
+
+test('a body without the phrase returns at once, however adversarial (#3672)', () => {
+  // The shared Markdown masker costs far more than linear on crafted input (a
+  // 65k-character run of unterminated code spans took tens of seconds), so a
+  // body that cannot carry a remark must not reach it.
+  const started = performance.now();
+  assert.equal(extractCopilotReviewBodyRemark('`a\n'.repeat(22000)), null);
+  assert.equal(extractCopilotReviewBodyRemark(`<a${' '.repeat(60000)}`), null);
+  assert.ok(performance.now() - started < 2000);
 });
