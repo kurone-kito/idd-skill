@@ -8,8 +8,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { devNull, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -23,6 +24,10 @@ import {
   withCloneLock,
 } from '../src/scripts/clone-lock.mts';
 
+// Reaches the CJS side of `node:child_process` for the `execFileSync` patch
+// (propagated to the source module's ESM import by
+// `syncBuiltinESMExports`) in the #3664 retry tests at the end of this file.
+const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/clone-lock.mjs');
@@ -496,6 +501,239 @@ test('CLI: concurrent --exec invocations serialize the wrapped command — no tw
         `expected non-overlapping critical sections, got: ${JSON.stringify(sorted)}`,
       );
     }
+  } finally {
+    teardown(primary);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #3664: resolveCloneLockPath retries a spurious `git rev-parse` exit
+// (status 1, whitespace-only stderr) exactly once. Patches
+// `child_process.execFileSync` on the main thread (same technique as
+// tests/claim-lock.test.mts) and delegates every spawn the test does not
+// fail on purpose to the real git.
+// ---------------------------------------------------------------------------
+
+type RevParseStubAction =
+  | { throws: unknown }
+  | { returns: string }
+  // Run a different command with the caller's own spawn options, so the
+  // resulting failure is a real node-shaped `execFileSync` error.
+  | { substitute: { file: string; args: string[] } }
+  | undefined;
+
+function withRevParseStub(
+  decide: (spawnIndex: number) => RevParseStubAction,
+  body: () => void,
+): string[][] {
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  const spawns: string[][] = [];
+  try {
+    cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+      const [file, cmdArgs] = args;
+      if (
+        file === 'git' &&
+        Array.isArray(cmdArgs) &&
+        cmdArgs[2] === 'rev-parse'
+      ) {
+        const index = spawns.length;
+        spawns.push([...cmdArgs]);
+        const action = decide(index);
+        if (action !== undefined) {
+          if ('throws' in action) {
+            throw action.throws;
+          }
+          if ('substitute' in action) {
+            return originalExecFileSync(
+              action.substitute.file,
+              action.substitute.args,
+              args[2],
+            );
+          }
+          return action.returns;
+        }
+      }
+      return originalExecFileSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+    body();
+  } finally {
+    cp.execFileSync = originalExecFileSync;
+    require('node:module').syncBuiltinESMExports();
+  }
+  return spawns;
+}
+
+function stubbedGitExit(
+  message: string,
+  fields: { status?: number | null; stdout?: string; stderr?: unknown },
+): Error {
+  return Object.assign(new Error(message), { signal: null, ...fields });
+}
+
+const SPURIOUS_CLONE_LOCK_EXITS: ReadonlyArray<{
+  name: string;
+  stdout: (realPath: string) => string;
+  stderr: string;
+}> = [
+  { name: 'empty stdout', stdout: () => '', stderr: '' },
+  {
+    name: 'a decoy stdout',
+    stdout: () => `${join(tmpdir(), 'idd-3664-absent-decoy', '.git')}\n`,
+    stderr: '',
+  },
+  { name: 'correct stdout', stdout: (realPath) => `${realPath}\n`, stderr: '' },
+  { name: 'whitespace-only stderr', stdout: () => '', stderr: '\n' },
+];
+
+for (const shape of SPURIOUS_CLONE_LOCK_EXITS) {
+  test(`resolveCloneLockPath: a spurious exit (status 1, ${shape.name}) is retried once and the retry's output is used (#3664)`, () => {
+    const primary = setupRepo();
+    try {
+      const expected = resolveCloneLockPath(primary);
+      const realGitDir = dirname(expected);
+      let resolved: string | undefined;
+      const spawns = withRevParseStub(
+        (index) =>
+          index === 0
+            ? {
+                throws: stubbedGitExit('stubbed spurious exit', {
+                  status: 1,
+                  stdout: shape.stdout(realGitDir),
+                  stderr: shape.stderr,
+                }),
+              }
+            : undefined,
+        () => {
+          resolved = resolveCloneLockPath(primary);
+        },
+      );
+      assert.equal(resolved, expected);
+      assert.equal(spawns.length, 2);
+    } finally {
+      teardown(primary);
+    }
+  });
+}
+
+test('resolveCloneLockPath: two consecutive spurious exits throw the second error unchanged after exactly two spawns (#3664)', () => {
+  const primary = setupRepo();
+  try {
+    const errors = [
+      stubbedGitExit('first spurious exit', {
+        status: 1,
+        stdout: '',
+        stderr: '',
+      }),
+      stubbedGitExit('second spurious exit', {
+        status: 1,
+        stdout: '',
+        stderr: ' \n',
+      }),
+    ];
+    let thrown: unknown;
+    const spawns = withRevParseStub(
+      (index) => ({ throws: errors[index] }),
+      () => {
+        try {
+          resolveCloneLockPath(primary);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.strictEqual(thrown, errors[1]);
+    assert.equal(spawns.length, 2);
+  } finally {
+    teardown(primary);
+  }
+});
+
+const NON_RETRYABLE_CLONE_LOCK_EXITS: ReadonlyArray<{
+  name: string;
+  fields: { status?: number | null; stdout?: string; stderr?: unknown };
+}> = [
+  {
+    name: 'non-whitespace stderr',
+    fields: { status: 1, stdout: '', stderr: 'fatal: boom\n' },
+  },
+  { name: 'status 128 with empty stderr', fields: { status: 128, stderr: '' } },
+  { name: 'a null status', fields: { status: null, stderr: '' } },
+  { name: 'a missing status', fields: { stderr: '' } },
+  { name: 'status 1 with a missing stderr', fields: { status: 1 } },
+  {
+    name: 'status 1 with a non-string stderr',
+    fields: { status: 1, stderr: Buffer.from('') },
+  },
+];
+
+for (const { name, fields } of NON_RETRYABLE_CLONE_LOCK_EXITS) {
+  test(`resolveCloneLockPath: a failure with ${name} is not retried and throws its own error after one spawn (#3664)`, () => {
+    const primary = setupRepo();
+    try {
+      const failure = stubbedGitExit('stubbed non-retryable exit', fields);
+      let thrown: unknown;
+      const spawns = withRevParseStub(
+        () => ({ throws: failure }),
+        () => {
+          try {
+            resolveCloneLockPath(primary);
+          } catch (error) {
+            thrown = error;
+          }
+        },
+      );
+      assert.strictEqual(thrown, failure);
+      assert.equal(spawns.length, 1);
+    } finally {
+      teardown(primary);
+    }
+  });
+}
+
+test('resolveCloneLockPath: a nonexistent repo path still fails after exactly one real git spawn (#3664)', () => {
+  const missing = join(tmpdir(), `idd-3664-missing-clone-${process.pid}`);
+  let thrown: unknown;
+  const spawns = withRevParseStub(
+    () => undefined,
+    () => {
+      try {
+        resolveCloneLockPath(missing);
+      } catch (error) {
+        thrown = error;
+      }
+    },
+  );
+  assert.ok(thrown instanceof Error, 'expected resolveCloneLockPath to throw');
+  assert.equal(spawns.length, 1);
+});
+
+test('resolveCloneLockPath: a real node exit-1 error built from its own spawn options is retried (#3664)', () => {
+  // Every other retry test feeds a hand-built error object; this one makes
+  // the lookup's real `execFileSync` options produce the error, so a future
+  // edit that drops `encoding: 'utf8'` (turning `stderr` into a Buffer and
+  // silently disabling the retry) cannot keep the suite green.
+  const primary = setupRepo();
+  try {
+    const expected = resolveCloneLockPath(primary);
+    let resolved: string | undefined;
+    const spawns = withRevParseStub(
+      (index) =>
+        index === 0
+          ? {
+              substitute: {
+                file: process.execPath,
+                args: ['-e', 'process.exit(1)'],
+              },
+            }
+          : undefined,
+      () => {
+        resolved = resolveCloneLockPath(primary);
+      },
+    );
+    assert.equal(resolved, expected);
+    assert.equal(spawns.length, 2);
   } finally {
     teardown(primary);
   }
