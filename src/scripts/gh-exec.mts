@@ -474,8 +474,9 @@ export interface GhApiJsonOptions {
    */
   allowStatuses?: number[];
   /**
-   * Override the `execFileSync` timeout (milliseconds). Defaults to
-   * {@link DEFAULT_GH_TIMEOUT_MS} for a non-paginated call, or
+   * Override the `gh` timeout (milliseconds): `execFileSync`'s for a
+   * non-paginated call, the capture worker's for a paginated one.
+   * Defaults to {@link DEFAULT_GH_TIMEOUT_MS} for a non-paginated call, or
    * {@link DEFAULT_GH_PAGINATED_TIMEOUT_MS} when `paginate` is `true`
    * (#1675) — a caller-supplied value, including `0`, always wins over
    * either default.
@@ -666,47 +667,7 @@ export function combineOwnerRepoFlags(args: {
   return `${args.owner}/${args.repo}`;
 }
 
-/**
- * Run `gh api <path>` and parse its output as JSON, optionally paginating
- * (NDJSON-compatible) and/or tolerating specific failure statuses.
- *
- * Generalizes the two strictest existing per-helper variants this module
- * replaces: `advisory-wait-state.mts`'s NDJSON-pagination handling and
- * `review-activity-snapshot.mts`'s `allowStatuses` tolerated-failure
- * fallback.
- *
- * Targets the correct GHES host via {@link resolveGhApiHostname} (#1962)
- * instead of always defaulting to `github.com`.
- *
- * **Stderr suppression (#3076).** Field feedback (gist round 17) traced an
- * unexplained raw `gh: Not Found (HTTP 404)` line on `pre-merge-readiness`'s
- * real stderr/CI-log stream, even on a fully successful run, to this
- * function: `execFileSync` with no explicit `stdio` sets Node's own
- * `inheritStderr = !options.stdio` internal flag, which relays the
- * captured stderr buffer to the real process stderr via
- * `process.stderr.write(ret.stderr)` after the child exits, regardless of
- * exit status -- independent of whether the caller goes on to catch and
- * correctly handle the failure (as every existing `allowStatuses`/404
- * caller here already does). Passing `stdio: ['ignore', 'pipe', 'pipe']`
- * disables that relay while leaving stdout/stderr fully captured via the
- * pipe, so `error.stdout`/`error.stderr` and the message text
- * `checkExecSyncError` embeds from that same captured buffer are
- * unaffected -- confirmed empirically against a throwaway Node script.
- * The one behavior change this introduces: a *successful* call that
- * happens to write to stderr (e.g. a `gh` deprecation notice) no longer
- * prints it either, matching the existing `GH_TEXT_LOOP_OPTIONS` opt-in
- * callers elsewhere in this module. A caller whose own `catch` swallows a
- * failure with no logging of its own (several best-effort collectors in
- * `provider-health.mts`, `live-status-digest.mts`, and
- * `provider-outage-park.mts`) loses that failure's only diagnostic
- * surface, which used to be this same accidental stderr leak -- that is
- * this fix's intended effect, not a regression to chase; a future report
- * of silent degradation there should add a log line at the caller, not
- * revert this change.
- *
- * Paginated calls do not use this `execFileSync` path. See
- * {@link readPaginatedGhApi}.
- */
+/** Append one NDJSON stdout line's rows; true when the line looks like JSON. */
 function appendPaginatedNdjsonLine(items: unknown[], bytes: Buffer): boolean {
   const text = bytes.toString('utf8').replace(/\r$/, '').trim();
   if (!text) return false;
@@ -1549,6 +1510,47 @@ function readPaginatedGhApi(
   }
 }
 
+/**
+ * Run `gh api <path>` and parse its output as JSON, optionally paginating
+ * (NDJSON-compatible) and/or tolerating specific failure statuses.
+ *
+ * Generalizes the two strictest existing per-helper variants this module
+ * replaces: `advisory-wait-state.mts`'s NDJSON-pagination handling and
+ * `review-activity-snapshot.mts`'s `allowStatuses` tolerated-failure
+ * fallback.
+ *
+ * Targets the correct GHES host via {@link resolveGhApiHostname} (#1962)
+ * instead of always defaulting to `github.com`.
+ *
+ * **Stderr suppression (#3076).** Field feedback (gist round 17) traced an
+ * unexplained raw `gh: Not Found (HTTP 404)` line on `pre-merge-readiness`'s
+ * real stderr/CI-log stream, even on a fully successful run, to this
+ * function: `execFileSync` with no explicit `stdio` sets Node's own
+ * `inheritStderr = !options.stdio` internal flag, which relays the
+ * captured stderr buffer to the real process stderr via
+ * `process.stderr.write(ret.stderr)` after the child exits, regardless of
+ * exit status -- independent of whether the caller goes on to catch and
+ * correctly handle the failure (as every existing `allowStatuses`/404
+ * caller here already does). Passing `stdio: ['ignore', 'pipe', 'pipe']`
+ * disables that relay while leaving stdout/stderr fully captured via the
+ * pipe, so `error.stdout`/`error.stderr` and the message text
+ * `checkExecSyncError` embeds from that same captured buffer are
+ * unaffected -- confirmed empirically against a throwaway Node script.
+ * The one behavior change this introduces: a *successful* call that
+ * happens to write to stderr (e.g. a `gh` deprecation notice) no longer
+ * prints it either, matching the existing `GH_TEXT_LOOP_OPTIONS` opt-in
+ * callers elsewhere in this module. A caller whose own `catch` swallows a
+ * failure with no logging of its own (several best-effort collectors in
+ * `provider-health.mts`, `live-status-digest.mts`, and
+ * `provider-outage-park.mts`) loses that failure's only diagnostic
+ * surface, which used to be this same accidental stderr leak -- that is
+ * this fix's intended effect, not a regression to chase; a future report
+ * of silent degradation there should add a log line at the caller, not
+ * revert this change.
+ *
+ * Paginated calls do not use this `execFileSync` path. See
+ * {@link readPaginatedGhApi}.
+ */
 export function ghApiJson(
   path: string,
   options: GhApiJsonOptions = {},
