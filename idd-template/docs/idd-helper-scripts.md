@@ -497,10 +497,14 @@ command invocation; its HTTP and page counts stay unknown unless injected
 per-response records supply them. A successful REST call counts one HTTP
 request, and a failed call counts one only when an HTTP status was
 observed; a spawn error, a timeout, a failure before any response, and a
-GraphQL success leave both counts unknown. Each write replaces the
-retention file through a temporary file, and a `path` whose existing file
-holds anything other than these records is not modified and nothing is
-recorded. A configured `path` must be absolute or start with `~/`, which
+GraphQL success leave both counts unknown. A request whose `gh` exits
+cleanly with a body that does not parse is still recorded, with the status
+and headers when the response envelope parses and an unknown status
+otherwise, and the original parse error is thrown unchanged. Each write
+replaces the retention file through a temporary file, and a `path` whose
+existing file holds anything other than these records is not modified and
+nothing is recorded. A configured `path` must be absolute or start with
+`~/`, which
 is the home directory, followed by a file name; any other non-blank value
 keeps telemetry off, so a relative path cannot put the file into the
 working tree. A blank `path`, an empty string or only whitespace, counts
