@@ -36,6 +36,11 @@ import {
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
 import { deriveGhHttpStatus } from '../src/scripts/gh-http-status.mts';
+import {
+  type RequestObservation,
+  resetGithubApiTelemetryPolicyCacheForTests,
+  setGithubApiTelemetryPolicyForTests,
+} from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -3461,5 +3466,224 @@ test('ghApiJson readCache keeps caller requestShape from hiding the request body
   } finally {
     restore();
     rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+// #3616: a `gh` call that exits 0 with a body that fails to parse still
+// consumed a request, and the status and allowlisted headers are exactly what
+// is most useful then. Each success path used to parse before it recorded, so
+// the parse error was thrown first and left no observation.
+const UNPARSABLE_STDOUT_SECRET =
+  'ghp_placeholder_credential_zz1234567890abcdef bodyTextSecretZz queryTextSecretZz';
+const UNPARSABLE_PATHS: {
+  name: string;
+  stdout: string;
+  invoke: () => unknown;
+}[] = [
+  {
+    name: 'ghApiJson (non-paginated)',
+    stdout: `not json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghApiJson('repos/o/r/issues/1'),
+  },
+  {
+    name: 'ghApiJson (paginated)',
+    stdout: `not json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghApiJson('repos/o/r/issues', { paginate: true }),
+  },
+  {
+    name: 'ghApiJsonWithHeaders',
+    stdout: `HTTP/2 200\nx-ratelimit-remaining: 33\nx-ratelimit-resource: core\n\nnot json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghApiJsonWithHeaders('repos/o/r/issues/1'),
+  },
+  {
+    name: 'ghGraphql',
+    stdout: `not json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghGraphql('query { viewer { login } }', {}),
+  },
+];
+
+function withUnparsableStub(
+  stdout: string,
+  run: (telemetryPath: string) => void,
+): void {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-parse-failure-'));
+  const telemetryPath = join(tempRoot, 'telemetry.jsonl');
+  const restore = stubGh(`process.stdout.write(${JSON.stringify(stdout)});`);
+  try {
+    run(telemetryPath);
+  } finally {
+    restore();
+    setGithubApiTelemetryPolicyForTests(null);
+    resetGithubApiTelemetryPolicyCacheForTests();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function readObservations(telemetryPath: string): RequestObservation[] {
+  if (!existsSync(telemetryPath)) return [];
+  return readFileSync(telemetryPath, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as RequestObservation);
+}
+
+for (const wrapper of UNPARSABLE_PATHS) {
+  test(`${wrapper.name} records one observation for an unparsable clean-exit body and rethrows the same error (#3616)`, () => {
+    let disabledMessage = '';
+    withUnparsableStub(wrapper.stdout, (telemetryPath) => {
+      // Telemetry disabled (the default): the parse error, and no file.
+      setGithubApiTelemetryPolicyForTests({
+        enabled: false,
+        maxRecords: 20,
+        path: telemetryPath,
+      });
+      try {
+        wrapper.invoke();
+        assert.fail('an unparsable body must throw');
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        disabledMessage = error.message;
+      }
+      assert.equal(existsSync(telemetryPath), false);
+
+      // Telemetry enabled: the same error, and exactly one record.
+      setGithubApiTelemetryPolicyForTests({
+        enabled: true,
+        maxRecords: 20,
+        path: telemetryPath,
+      });
+      try {
+        wrapper.invoke();
+        assert.fail('an unparsable body must throw');
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, disabledMessage);
+        assert.equal(error.name, 'SyntaxError');
+      }
+      const records = readObservations(telemetryPath);
+      assert.equal(records.length, 1);
+      assert.equal(records[0].classification, 'ok');
+      assert.equal(records[0].commandInvocationCount, 1);
+      // Redaction: nothing from stdout, the request path, or the query.
+      const retained = readFileSync(telemetryPath, 'utf8');
+      for (const secret of [
+        'ghp_placeholder_credential_zz',
+        'bodyTextSecretZz',
+        'queryTextSecretZz',
+        'repos/o/r',
+        'viewer',
+      ]) {
+        assert.equal(retained.includes(secret), false, secret);
+      }
+    });
+  });
+}
+
+// A real `--include` envelope in front of an unparsable body: the status and
+// allowlisted headers are known for the two paths that ask gh for them, and
+// unknown for the paginated and GraphQL paths, which never see a status line.
+const ENVELOPE_HEAD =
+  'HTTP/2 200\nx-ratelimit-remaining: 33\nx-ratelimit-resource: core\nx-ratelimit-reset: 1700000500\n\n';
+// The unparsable body carries blank lines and text shaped like a second
+// header block, with a token-shaped value. None of it may enter a record.
+const HOSTILE_BODY = `intro\n\nHTTP/1.1 429 Too Many Requests\nx-ratelimit-resource: ${UNPARSABLE_STDOUT_SECRET.split(' ')[0]}\nretry-after: 9\nx-ratelimit-remaining: 0\n\nend`;
+
+for (const wrapper of UNPARSABLE_PATHS.filter((candidate) =>
+  ['ghApiJson (non-paginated)', 'ghApiJsonWithHeaders'].includes(
+    candidate.name,
+  ),
+)) {
+  for (const [label, body] of [
+    ['a plain unparsable body', `not json ${UNPARSABLE_STDOUT_SECRET}`],
+    ['an unparsable body with blank lines', 'line one\n\nline two'],
+    ['a hostile body shaped like a second header block', HOSTILE_BODY],
+  ] as const) {
+    test(`${wrapper.name} records the real status and headers for ${label} behind an envelope (#3616)`, () => {
+      withUnparsableStub(`${ENVELOPE_HEAD}${body}`, (telemetryPath) => {
+        setGithubApiTelemetryPolicyForTests({
+          enabled: true,
+          maxRecords: 20,
+          path: telemetryPath,
+        });
+        // Any error, not a SyntaxError: a body with a blank line makes the
+        // existing envelope split read the wrong section, which throws its own
+        // "no HTTP response headers" error before the body is parsed.
+        assert.throws(() => wrapper.invoke(), Error);
+        const records = readObservations(telemetryPath);
+        assert.equal(records.length, 1);
+        const [record] = records;
+        assert.equal(record.status, 200);
+        assert.equal(record.remaining, 33);
+        assert.equal(record.resource, 'core');
+        assert.equal(record.reset, 1700000500);
+        assert.equal(record.classification, 'ok');
+        assert.equal(record.httpRequestCount, 1);
+        assert.equal(record.pageCount, 1);
+        const retained = readFileSync(telemetryPath, 'utf8');
+        for (const leak of [
+          'ghp_placeholder_credential_zz',
+          '429',
+          'retry-after',
+          'Too Many',
+        ]) {
+          assert.equal(retained.includes(leak), false, leak);
+        }
+      });
+    });
+  }
+}
+
+// `gh` starts its output with the status line. An output that begins with
+// blank lines has no head, and a header-shaped body after them must not pass
+// for one (a review of the first revision, which trimmed leading whitespace).
+for (const wrapper of UNPARSABLE_PATHS.filter((candidate) =>
+  ['ghApiJson (non-paginated)', 'ghApiJsonWithHeaders'].includes(
+    candidate.name,
+  ),
+)) {
+  test(`${wrapper.name} does not read a header-shaped body after leading blank lines as the response head (#3616)`, () => {
+    const secretToken = UNPARSABLE_STDOUT_SECRET.split(' ')[0];
+    withUnparsableStub(
+      `\n\nHTTP/1.1 429 Too Many Requests\nx-ratelimit-resource: ${secretToken}\nretry-after: 9\nx-ratelimit-remaining: 0\n\nnot-json`,
+      (telemetryPath) => {
+        setGithubApiTelemetryPolicyForTests({
+          enabled: true,
+          maxRecords: 20,
+          path: telemetryPath,
+        });
+        assert.throws(() => wrapper.invoke(), Error);
+        const records = readObservations(telemetryPath);
+        assert.equal(records.length, 1);
+        assert.equal(records[0].status, 'unknown');
+        assert.equal(records[0].resource, 'unknown');
+        assert.equal(records[0].classification, 'ok');
+        const retained = readFileSync(telemetryPath, 'utf8');
+        for (const leak of [secretToken, '429', 'retry-after']) {
+          assert.equal(retained.includes(leak), false, leak);
+        }
+      },
+    );
+  });
+}
+
+test('the paginated and GraphQL paths record an unknown status and unknown counts for an unparsable body (#3616)', () => {
+  for (const name of ['ghApiJson (paginated)', 'ghGraphql']) {
+    const wrapper = UNPARSABLE_PATHS.find(
+      (candidate) => candidate.name === name,
+    );
+    assert.ok(wrapper, name);
+    withUnparsableStub(wrapper.stdout, (telemetryPath) => {
+      setGithubApiTelemetryPolicyForTests({
+        enabled: true,
+        maxRecords: 20,
+        path: telemetryPath,
+      });
+      assert.throws(() => wrapper.invoke(), SyntaxError);
+      const [record] = readObservations(telemetryPath);
+      assert.equal(record.status, 'unknown', name);
+      assert.equal(record.httpRequestCount, 'unknown', name);
+      assert.equal(record.pageCount, 'unknown', name);
+    });
   }
 });
