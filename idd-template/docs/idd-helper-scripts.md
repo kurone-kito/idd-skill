@@ -1660,10 +1660,11 @@ sizes with `lstat`, and starts a full sweep only when the total exceeds
 `maxBytes`. Once a cache use happens, an expired entry is therefore
 removed within one interval, and it is never served after `retention`. A
 record that cannot be written or read skips the sweep instead of
-repeating it on every use, and two policies that share one directory
-keep the lower of each bound in the record, so they settle instead of
-triggering each other's sweep (the `kurone-kito/idd-skill#3613` review,
-issue `kurone-kito/idd-skill#3627`).
+repeating it on every use. A sweep that only lowered bounds triggered
+records the lower of each bound, so two policies that share one
+directory settle instead of triggering each other's sweep; any other
+sweep records the current bounds (the `kurone-kito/idd-skill#3613`
+review, issue `kurone-kito/idd-skill#3627`).
 
 ### Discover hint cache
 
