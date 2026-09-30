@@ -146,6 +146,32 @@ test('different credential, host, repository, request, or derived inputs do not 
   }
 });
 
+test('a blank credential or host bypasses the cache instead of sharing a context', () => {
+  const paths = tempRoot();
+  let fetches = 0;
+  const fetch = () => {
+    fetches += 1;
+    return { status: 200, body: { ok: true } };
+  };
+  try {
+    for (const overrides of [
+      { credentialMaterial: '' },
+      { credentialMaterial: '   ' },
+      { host: '' },
+      { host: '  ' },
+    ]) {
+      const result = readThrough(paths, fetch, overrides);
+      assert.equal(result.cache, 'bypass');
+      assert.equal(result.entryId, undefined);
+    }
+    assert.equal(fetches, 4);
+    assert.equal(existsSync(join(paths.cacheDir, MARKER)), false);
+    assert.deepEqual(entryNames(paths.cacheDir), []);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('non-read classifications and a disabled policy do not touch the cache', () => {
   const paths = tempRoot();
   const classifications: GithubApiReadClassification[] = [

@@ -198,6 +198,10 @@ function canonicalJson(value: unknown): string {
   return 'null';
 }
 
+function isBlank(value: unknown): boolean {
+  return typeof value !== 'string' || value.trim().length === 0;
+}
+
 function normalizeHost(host: string): string {
   const trimmed = host.trim().toLowerCase();
   return trimmed.length > 0 ? trimmed : 'github.com';
@@ -1182,6 +1186,11 @@ export function readThroughGithubApiCache(
     }
   }
   if (input.classification !== 'read' || input.policy.enabled !== true) {
+    return liveResult(input.fetch, 'bypass');
+  }
+  // A blank credential or host would hash into a context shared by every
+  // caller that omits it, so an unidentified caller never touches the cache.
+  if (isBlank(input.credentialMaterial) || isBlank(input.host)) {
     return liveResult(input.fetch, 'bypass');
   }
   const entryId = entryIdFor(input);

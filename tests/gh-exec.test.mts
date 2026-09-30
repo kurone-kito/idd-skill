@@ -1714,6 +1714,45 @@ test('ghApiJson readCache write classification stays uncached when enabled (#358
   }
 });
 
+test('ghApiJson readCache with blank credential material stays uncached (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(JSON.stringify({ ok: true }));',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      for (const credentialMaterial of ['', '   ']) {
+        const options = {
+          readCache: {
+            classification: 'read' as const,
+            policy: readCachePolicy(paths.cacheDir),
+            workspaceRoot: paths.workspace,
+            repository: 'o/r',
+            credentialMaterial,
+            defaultDirectory: paths.cacheDir,
+          },
+        };
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+      }
+      const recorded = recordedArgs(paths.argsFile);
+      assert.equal(recorded.length, 2);
+      for (const args of recorded) {
+        assert.deepEqual(args, ['api', 'repos/o/r']);
+      }
+      assert.equal(
+        existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
+        false,
+      );
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson readCache stays uncached when the policy is disabled (#3587)', () => {
   const paths = readCacheFixture();
   const restore = stubGh(

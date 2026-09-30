@@ -729,7 +729,9 @@ function ghApiJsonWithReadCache(path, options) {
   if (host === undefined) return ghApiJsonUncached(path, options);
   const credentialMaterial =
     request.credentialMaterial ?? defaultCredentialMaterial(host);
-  if (credentialMaterial === undefined) return ghApiJsonUncached(path, options);
+  if (credentialMaterial === undefined || credentialMaterial.trim() === '') {
+    return ghApiJsonUncached(path, options);
+  }
   const secrets = [
     ...(request.secretMaterial ?? []),
     process.env.GH_TOKEN ?? '',
