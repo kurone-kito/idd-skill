@@ -2649,6 +2649,11 @@ default `instructions-only` profile keep using the written shell /
     the linked issue's active claim, the current PR HEAD SHA, the live
     check state, waivable-selector coverage, and maintainer/admin
     authority
+  - the linked issue's claim honors a forced handoff whatever
+    `forcedHandoff.mode` says, so a successor's `--claim-id` resolves,
+    including an `issue-only` handoff posted before the PR's first commit
+    (`#3675`; the PR commits are read only when the issue carries a
+    handoff marker, and an unreadable list keeps rejecting it)
   - non-interactive apply is refused unless `--yes` is provided after a
     prior dry-run review; interactive TTY runs may confirm with `y/N`
   - the helper fails closed when authority cannot distinguish owner,

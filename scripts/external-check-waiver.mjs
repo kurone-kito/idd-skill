@@ -29,6 +29,7 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadTrustedActorConfig } from './idd-config.mjs';
+import { parseForcedHandoffComment } from './marker-helpers.mjs';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -44,6 +45,7 @@ import {
   readClaimStaleAgeMs,
   renderExternalCheckWaiverComment,
   resolveClosingIssueNumbersForClassifier,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
@@ -1786,6 +1788,32 @@ export function resolveLinkedIssueCandidates({
     trustConfig,
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
+  // #3675: the PR's first-commit time lets an `issue-only` forced handoff
+  // that predates the PR through the PR-scoped resolution below (the Part B
+  // allowance the other merge-side callers already pass). Read lazily and at
+  // most once, only when a linked issue actually carries a handoff marker, so
+  // ordinary waiver runs make no extra call; any failed or empty read is
+  // `null`, which rejects such a handoff exactly as before.
+  let prFirstCommitAt;
+  const readPrFirstCommitAt = () => {
+    if (prFirstCommitAt === undefined) {
+      try {
+        prFirstCommitAt = resolvePrFirstCommitAt(
+          ghJson(
+            [
+              'api',
+              '--paginate',
+              `repos/${owner}/${repo}/pulls/${prNumber}/commits`,
+            ],
+            true,
+          ),
+        );
+      } catch {
+        prFirstCommitAt = null;
+      }
+    }
+    return prFirstCommitAt;
+  };
   for (const issue of issueRefs) {
     const rows = ghJson(
       [
@@ -1822,11 +1850,20 @@ export function resolveLinkedIssueCandidates({
     const forcedHandoffAuthorityPolicy =
       normalizePolicyConfig(rawConfig).forcedHandoff.authorityPolicy;
     const expectedLinkedPrs = prNumber ? [String(prNumber)] : [];
+    const hasForcedHandoffMarker = comments.some(
+      (comment) =>
+        parseForcedHandoffComment(
+          String(comment.body ?? ''),
+          String(comment.created_at ?? ''),
+        ) !== null,
+    );
     const activeClaim = resolveHelperActiveClaim(
       comments,
       [...trustedMarkerLogins],
       {
         expectedLinkedPrs,
+        prFirstCommitAt:
+          prNumber && hasForcedHandoffMarker ? readPrFirstCommitAt() : null,
         isAuthorizedForcedHandoff: (fhActor) => {
           const auth = resolveCollaboratorAuthority({
             owner,

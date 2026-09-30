@@ -377,6 +377,68 @@ test('forced handoff helper keeps PR-scoped active claim when issue-only handoff
   assert.equal(active?.agentId, 'github-copilot-cli-old');
 });
 
+// #3675: the merge-side Part B allowance (#1058) for a PR-scoped resolution.
+function resolveIssueOnlyHandoffForPr(prFirstCommitAt?: string | null) {
+  const claimBody = [
+    '<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->',
+    '',
+    '_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._',
+  ].join('\n');
+  const issueOnlyHandoff = renderForcedHandoffComment({
+    oldAgentId: 'github-copilot-cli-old',
+    oldClaimId: 'claim-20260512T090000Z-337-old',
+    newAgentId: 'github-copilot-cli-mid',
+    newClaimId: 'claim-20260512T110000Z-337-mid',
+    branch: 'issue/337-feat-protocol-add-auditable-forced',
+    forcedBy: 'kurone-kito',
+    reason: 'operator-approved-recovery',
+    timestamp: '2026-05-12T11:00:00Z',
+    contextScope: 'issue-only',
+  });
+  return resolveHelperActiveClaim(
+    [
+      {
+        body: claimBody,
+        created_at: '2026-05-12T09:00:00Z',
+        user: { login: 'github-copilot-cli-old' },
+      },
+      {
+        body: issueOnlyHandoff,
+        created_at: '2026-05-12T11:00:05Z',
+        user: { login: 'kurone-kito' },
+      },
+    ],
+    ['github-copilot-cli-old', 'kurone-kito'],
+    {
+      expectedLinkedPrs: ['359'],
+      ...(prFirstCommitAt === undefined ? {} : { prFirstCommitAt }),
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+      staleAgeMs: DEFAULT_STALE_AGE_MS,
+    },
+  );
+}
+
+test('resolveHelperActiveClaim accepts an issue-only handoff that predates the PR first commit (#3675)', () => {
+  const active = resolveIssueOnlyHandoffForPr('2026-05-12T12:00:00Z');
+
+  assert.equal(active?.claimId, 'claim-20260512T110000Z-337-mid');
+  assert.equal(active?.agentId, 'github-copilot-cli-mid');
+});
+
+test('resolveHelperActiveClaim rejects an issue-only handoff posted after the PR first commit (#3675)', () => {
+  const active = resolveIssueOnlyHandoffForPr('2026-05-12T10:00:00Z');
+
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('resolveHelperActiveClaim keeps rejecting an issue-only handoff for a PR when prFirstCommitAt is omitted or null (#3675)', () => {
+  for (const prFirstCommitAt of [undefined, null]) {
+    const active = resolveIssueOnlyHandoffForPr(prFirstCommitAt);
+
+    assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+  }
+});
+
 test('forced handoff helper refuses output when forced-handoff mode is disabled', () => {
   const originalCwd = process.cwd();
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
