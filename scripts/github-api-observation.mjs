@@ -378,10 +378,12 @@ export function defaultGithubApiTelemetryPath() {
 // audit:ignore-dead-export: reached in production through recordRequestObservation; exported so its cases are unit-tested (issue #3585)
 export function resolveGithubApiTelemetryPath(configured) {
   if (configured === null) return defaultGithubApiTelemetryPath();
-  const expanded = configured.startsWith('~/')
-    ? join(homedir(), configured.slice(2))
-    : configured;
-  return isAbsolute(expanded) ? expanded : null;
+  if (configured.startsWith('~/')) {
+    // A bare `~/` would name the home directory itself, not a file.
+    const rest = configured.slice(2);
+    return rest.length > 0 ? join(homedir(), rest) : null;
+  }
+  return isAbsolute(configured) ? configured : null;
 }
 /** Copy only the allowlisted observation fields, in a stable order. */
 export function allowlistObservation(observation) {
@@ -633,8 +635,17 @@ export function readGithubApiTelemetryPolicy(configText) {
   }
   return policyCache;
 }
+/**
+ * True only when telemetry is enabled and its path resolves, so a rejected
+ * path leaves the wrappers in their unobserved mode (no extra `--include`)
+ * instead of building observations that would be dropped.
+ */
 export function telemetryIsEnabled() {
-  return readGithubApiTelemetryPolicy().enabled === true;
+  const policy = readGithubApiTelemetryPolicy();
+  return (
+    policy.enabled === true &&
+    resolveGithubApiTelemetryPath(policy.path) !== null
+  );
 }
 /**
  * Record when telemetry is enabled. IO and parse failures are swallowed

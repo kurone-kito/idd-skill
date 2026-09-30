@@ -705,6 +705,7 @@ test('a configured telemetry path is expanded or rejected', () => {
       './x.jsonl',
       '../x.jsonl',
       '~',
+      '~/',
       '~other/x.jsonl',
       'state/~/x.jsonl',
     ]) {
@@ -878,6 +879,18 @@ if (mode === 'plain-ok') {
     const withHeaders = ghApiJsonWithHeaders(apiPath);
     assert.deepEqual(withHeaders.data, { n: 2 });
     assert.equal(readArgs().includes('--include'), true);
+    assert.equal(existsSync(telemetryPath), false);
+
+    // A rejected path keeps the wrappers unobserved: no `--include` and no
+    // file, the same as the disabled policy above.
+    setGithubApiTelemetryPolicyForTests({
+      enabled: true,
+      maxRecords: 20,
+      path: 'rejected-relative-telemetry-3585.jsonl',
+    });
+    setMode('plain-ok');
+    assert.deepEqual(ghApiJson(apiPath), { n: 1 });
+    assert.equal(readArgs().includes('--include'), false);
     assert.equal(existsSync(telemetryPath), false);
 
     setGithubApiTelemetryPolicyForTests({
