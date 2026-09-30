@@ -1382,16 +1382,21 @@ default below is unchanged.
     eligibility is unknown and treated as non-blocking). `authoringHeld`
     reports label **presence** only — `--with-readiness` does not compute the
     stale-authoring warning (it would cost a discarded per-leaf timeline fetch
-    and does not change startability). `--with-claim-state` itself is not
-    fully forced-handoff-aware — it intentionally excludes forced-handoff and
-    legacy active-claim takeover rules as a best-effort **soft signal**, but
-    retains a branch released by either new-format or legacy markers for
-    local-worktree collision protection; a discovery-time survey
-    across many candidates must either loop the single-issue
-    `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate or
-    apply `idd-claim.instructions.md`'s full parsing rules manually to catch
-    a more-recent forced-handoff transfer. Both annotations are **soft**
-    discovery hints — the A3/A4/A4.5/A5 gates remain authoritative.
+    and does not change startability). `--with-claim-state` itself is a
+    best-effort **soft signal** that may over- or under-report. With
+    `forcedHandoff.mode: "human-gated"` it follows a forced-handoff transfer
+    posted by a trusted marker author without checking the handoff's
+    authorization (no permission lookup, no linked-PR check), so the leaf
+    carries the successor's ids and clocks; before `#3675` it kept the
+    displaced claim's and advertised a taken-over issue as claimable
+    (observed 2026-09-30 in a private downstream repository). It still
+    excludes legacy active-claim takeover rules, but retains a branch
+    released by either new-format or legacy markers for local-worktree
+    collision protection; the authoritative per-candidate check stays the
+    single-issue `resume-claim-routing.mjs --fresh-claim-gate` resolver,
+    which also applies the handoff authorization and PR rules. Both
+    annotations are **soft** discovery hints — the A3/A4/A4.5/A5 gates
+    remain authoritative.
   - `diagnostics`: same four buckets as single-root mode, deduped across
     every per-root enumeration.
   - `summary`: `{ rootCount: number, leafCount: number,`

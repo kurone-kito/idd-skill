@@ -1398,6 +1398,30 @@ async function runCli(): Promise<HelperCliResult> {
 type OrphanOutput = Awaited<ReturnType<typeof produceOutput>>;
 
 /**
+ * Build the `--with-claim-state` resolution for one run (#3675): the live
+ * comment loader plus the policy inputs the annotation reads, including the
+ * forced-handoff mode that lets it follow a handoff successor.
+ */
+export function buildOrphanClaimState(
+  port: ProviderPort,
+  policy: Pick<
+    ReturnType<typeof loadPolicy>,
+    'claimTiming' | 'trustedMarkerActors' | 'forcedHandoff'
+  >,
+  currentClaimId: string,
+): ClaimStateResolution {
+  return buildClaimStateResolution(
+    port,
+    {
+      claimTiming: policy.claimTiming,
+      trustedMarkerActors: policy.trustedMarkerActors,
+      forcedHandoff: policy.forcedHandoff,
+    },
+    currentClaimId,
+  );
+}
+
+/**
  * Whether an orphan output still lists a candidate worth trying, so a cached
  * output that answers "no" earns exactly one strict-fresh recompute before
  * exhaustion is believed. Uses `claimEligible` when the annotation ran.
@@ -1435,14 +1459,7 @@ async function produceOutput(
   // fetch is made and the output is byte-stable (mirrors
   // discover-roadmap-graph's own CLI wiring).
   const claimState = args.withClaimState
-    ? buildClaimStateResolution(
-        port,
-        {
-          claimTiming: policy.claimTiming,
-          trustedMarkerActors: policy.trustedMarkerActors,
-        },
-        args.currentClaimId,
-      )
+    ? buildOrphanClaimState(port, policy, args.currentClaimId)
     : undefined;
 
   // #2243: always resolved (unlike claimState above) -- the triage-verdict
@@ -1748,16 +1765,18 @@ PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
 each activeClaim (true only when the active claim's claimId equals <id> and
 the current worktree's claim lock plus generated-tokens record confirm the
 same claim and agent identity).
-NOTE: claimEligible is a best-effort SOFT discovery hint (same limitation
-as discover-roadmap-graph's annotation): it does not reproduce authoritative
-forced-handoff authorization or legacy active-claim takeover rules. Trusted
-legacy claim/release evidence is used only for stale/released local-worktree
-occupancy checks; the authoritative A5 claim gate (idd-claim.instructions.md)
-remains the real protection.
+NOTE: claimEligible is a best-effort SOFT discovery hint that may over- or
+under-report (same limitation as discover-roadmap-graph's annotation): with
+forcedHandoff.mode "human-gated" it follows a forced-handoff transfer posted by
+a trusted marker author without checking the handoff's authorization, and it
+does not reproduce legacy active-claim takeover rules. Trusted legacy
+claim/release evidence is used only for stale/released local-worktree occupancy
+checks; the authoritative A5 claim gate (idd-claim.instructions.md) remains
+the real protection.
 `);
 }
 
-function loadPolicy(policyPath: string) {
+export function loadPolicy(policyPath: string) {
   // Read-and-parse failure semantics (explicit path throws; default path
   // silently falls back only on ENOENT) are converged in idd-config.mts's
   // loadPolicyConfig (#1721) — this function keeps only its own shape
@@ -1798,6 +1817,10 @@ function loadPolicy(policyPath: string) {
     // already relies on.
     claimTiming: config.claimTiming,
     trustedMarkerActors: config.trustedMarkerActors,
+    // #3675: the mode normalized through the shared policy helper (so the
+    // legacy `forcedHandoffMode` spellings resolve too), in the nested shape
+    // buildClaimStateResolution reads. Only consumed with --with-claim-state.
+    forcedHandoff: { mode: normalizedPolicy.forcedHandoff.mode },
   };
 }
 

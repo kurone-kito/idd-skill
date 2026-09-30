@@ -1485,12 +1485,14 @@ async function annotateReadiness(
  * unreadable worktree for a stale/released branch. The shared claim parsing is
  * reused read-only and never re-implemented here.
  *
- * Intentional limitation: this annotation remains a best-effort SOFT signal.
- * It traces forced-handoff transfers but does not reproduce authoritative
- * forced-handoff authorization or legacy active-claim takeover rules. Trusted
- * legacy claim/release evidence is used only for stale/released local-worktree
- * collision checks. The authoritative A5 claim gate
- * (`idd-claim.instructions.md`) remains the real protection.
+ * Intentional limitation: this annotation remains a best-effort SOFT signal
+ * that may over- or under-report. When `forcedHandoffEnabled` is set it
+ * follows a forced-handoff transfer posted by a trusted marker author without
+ * checking the handoff's authorization (#3675), and it still does not
+ * reproduce legacy active-claim takeover rules. Trusted legacy claim/release
+ * evidence is used only for stale/released local-worktree collision checks.
+ * The authoritative A5 claim gate (`idd-claim.instructions.md`) remains the
+ * real protection.
  */
 export async function annotateLeafClaimState(issueNumber, claimState) {
   const comments = normalizeClaimComments(
@@ -1503,6 +1505,16 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     // otherwise the same comparison is applied with the configured age.
     isStale: (activeCreatedAt, nextCreatedAt) =>
       isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
+    // #3675: an issue-scoped soft signal (no linked-PR expectation, no
+    // permission lookup, no author/`forcedBy` binding). Only a handoff from a
+    // trusted marker author reaches this point, because the resolver filters
+    // untrusted and edited claim-family markers before reducing.
+    ...(claimState.forcedHandoffEnabled === true
+      ? {
+          isForcedHandoffEnabled: () => true,
+          isAuthorizedForcedHandoff: () => true,
+        }
+      : {}),
   });
   const active = claimTrace.activeClaim;
   const trustedLegacyComments = filterTrustedClaimFamilyEvents(
@@ -1919,6 +1931,10 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
     currentSessionOwnsClaimEvidence: currentSessionEvidence !== null,
     inspectLocalWorktree: (branchName) =>
       inspectLocalWorktreeBranch(branchName),
+    // The same test resume routing uses (#3675), so an adopter with forced
+    // handoff disabled keeps today's annotation.
+    forcedHandoffEnabled:
+      normalizePolicyConfig(policy).forcedHandoff.mode === 'human-gated',
   };
 }
 /**
@@ -2790,8 +2806,10 @@ function printHelp() {
   same claim and agent identity). A stale-claim occupancy bypass additionally
   requires the canonical current worktree path and symbolic branch to match
   the occupied path and active branch.
-  NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
-  reproduce authoritative forced-handoff authorization or legacy active-claim
+  NOTE: claimEligible is a best-effort SOFT discovery hint that may over- or
+  under-report. With forcedHandoff.mode "human-gated" it follows a
+  forced-handoff transfer posted by a trusted marker author without checking
+  the handoff's authorization, and it does not reproduce legacy active-claim
   takeover rules. Trusted legacy claim/release evidence is used only for
   stale/released local-worktree occupancy checks; the authoritative A5 claim
   gate (idd-claim.instructions.md) remains the real protection.

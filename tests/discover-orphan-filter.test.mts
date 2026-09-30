@@ -7,13 +7,16 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildOrphanClaimState,
   classifyIssue,
   extractBlockedByReferences,
   fetchOpenIssues,
   filterOrphanIssues,
   getOrphanFirstPolicy,
+  loadPolicy,
 } from '../src/scripts/discover-orphan-filter.mts';
 import { classifyIssue as classifyGraphIssue } from '../src/scripts/discover-roadmap-graph.mts';
+import { renderForcedHandoffComment } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -2209,6 +2212,97 @@ test('CLI path fails when the default-path config exists but is malformed (not s
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #3675: the forced-handoff mode reaches the claim-state annotation through
+// loadPolicy and buildOrphanClaimState, so a handoff successor is reported.
+// ---------------------------------------------------------------------------
+
+function loadPolicyFromConfig(config: unknown) {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-orphan-filter-fh-policy-'));
+  try {
+    const policyPath = join(tempRoot, 'policy.json');
+    writeFileSync(policyPath, JSON.stringify(config));
+    return loadPolicy(policyPath);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+test('loadPolicy carries the normalized forced-handoff mode (#3675)', () => {
+  assert.equal(
+    loadPolicyFromConfig({ forcedHandoff: { mode: 'human-gated' } })
+      .forcedHandoff.mode,
+    'human-gated',
+  );
+  assert.equal(
+    loadPolicyFromConfig({ forcedHandoffMode: 'human-gated' }).forcedHandoff
+      .mode,
+    'human-gated',
+  );
+  assert.equal(loadPolicyFromConfig({}).forcedHandoff.mode, 'disabled');
+});
+
+test('a human-gated policy makes the annotation follow a handoff successor (#3675)', async () => {
+  const handoffAt = '2026-06-25T10:00:00Z';
+  const comments = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', '2026-06-24T09:00:00Z'),
+        {
+          body: renderForcedHandoffComment({
+            oldAgentId: 'agent-a',
+            oldClaimId: 'claim-701',
+            newAgentId: 'agent-b',
+            newClaimId: 'claim-701-new',
+            branch: 'issue/701-task',
+            forcedBy: 'kurone-kito',
+            reason: 'operator-approved-recovery',
+            timestamp: handoffAt,
+            contextScope: 'issue-only',
+          }),
+          createdAt: handoffAt,
+          author: { login: 'kurone-kito' },
+          lastEditedAt: null,
+        },
+      ],
+    ],
+  ]);
+  const { resolution: base } = buildClaimState(comments);
+
+  for (const [config, expectedClaimId, expectedStale] of [
+    [{ forcedHandoff: { mode: 'human-gated' } }, 'claim-701-new', false],
+    [{}, 'claim-701', true],
+  ] as const) {
+    const policy = loadPolicyFromConfig(config);
+    const resolution = {
+      ...buildOrphanClaimState(createFakeProviderAdapter({}), policy, ''),
+      // Keep the wired mode; replace only the network, clock, and local
+      // worktree inputs.
+      loadComments: base.loadComments,
+      isTrustedAuthor: base.isTrustedAuthor,
+      nowIso: CLAIM_NOW,
+      inspectLocalWorktree: () => ({
+        status: 'absent' as const,
+        paths: [],
+        reason: null,
+      }),
+    };
+
+    const result = await filterOrphanIssues(claimOrphanIssues(), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      claimState: resolution,
+    });
+
+    const orphan701 = new Map(result.orphans.map((o) => [o.number, o])).get(
+      701,
+    );
+    assert.equal(orphan701?.activeClaim?.claimId, expectedClaimId);
+    assert.equal(orphan701?.activeClaim?.stale, expectedStale);
   }
 });
 
