@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -3977,6 +3977,37 @@ const SUCCESSOR_EVENTS = [
   },
 ];
 
+// A git-config-file-safe null device: the Win32 device-namespace form of
+// `devNull` cannot be opened as GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM by Git for
+// Windows, the bare `NUL` name can (kurone-kito/idd-skill#2570).
+const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+
+/**
+ * The fixture's git processes must never read the ambient git environment
+ * (a hook can export GIT_DIR or GIT_INDEX_FILE) or the developer's config, the
+ * same invariant tests/clone-lock.test.mts keeps.
+ */
+function hermeticGitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) delete env[key];
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  return {
+    ...env,
+    GIT_CONFIG_GLOBAL: GIT_NULL_DEVICE,
+    GIT_CONFIG_SYSTEM: GIT_NULL_DEVICE,
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
+}
+
 function gitIn(cwd: string, args: string[], env: NodeJS.ProcessEnv): string {
   return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
     cwd,
@@ -4000,13 +4031,7 @@ function withSuccessorSandbox(
 ): void {
   const primary = mkdtempSync(join(tmpdir(), 'idd-successor-primary-'));
   const worktree = join(primary, '..', `${basename(primary)}-wt`);
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_AUTHOR_NAME: 'idd-test',
-    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
-    GIT_COMMITTER_NAME: 'idd-test',
-    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
-  };
+  const env = hermeticGitEnv();
   try {
     gitIn(primary, ['init', '--quiet', '-b', 'main'], env);
     gitIn(primary, ['commit', '--quiet', '--allow-empty', '-m', 'seed'], env);
