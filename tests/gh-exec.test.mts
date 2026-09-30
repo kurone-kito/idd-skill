@@ -1645,12 +1645,16 @@ function readCachePolicy(directory: string, enabled = true) {
   };
 }
 
-function recordingGh(argsFile: string, bodySource: string): string {
+function recordingGh(
+  argsFile: string,
+  bodySource: string,
+  statusJson = '{"hosts":{"github.com":[{"state":"success"}]}}',
+): string {
   return `
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'auth' && args[1] === 'status') {
-  process.stdout.write('{"hosts":{"github.com":[{"state":"success"}]}}');
+  process.stdout.write(${JSON.stringify(statusJson)});
   process.exit(0);
 }
 if (args[0] === 'auth' && args[1] === 'token') {
@@ -1707,6 +1711,38 @@ test('ghApiJson readCache write classification stays uncached when enabled (#358
         existsSync(join(paths.cacheDir, '.idd-github-api-read-cache')),
         false,
       );
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache resolves github.com from GITHUB_SERVER_URL with several configured hosts (#3587)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}\');',
+      '{"hosts":{"github.com":[{"state":"success"}],"ghe.example.com":[{"state":"success"}]}}',
+    ),
+  );
+  try {
+    withGhHostEnv({ GITHUB_SERVER_URL: 'https://github.com' }, () => {
+      const readCache = {
+        classification: 'read' as const,
+        policy: readCachePolicy(paths.cacheDir),
+        workspaceRoot: paths.workspace,
+        repository: 'o/r',
+        credentialMaterial: 'credential-sentinel',
+        requestShape: { path: 'repos/o/r' },
+      };
+      assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+      assert.deepEqual(ghApiJson('repos/o/r', { readCache }), { ok: true });
+      // The server URL already names the host, so two configured hosts no
+      // longer force a bypass: the second read is a cache hit.
+      assert.equal(recordedArgs(paths.argsFile).length, 1);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
     });
   } finally {
     restore();

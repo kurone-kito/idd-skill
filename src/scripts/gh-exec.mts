@@ -621,13 +621,24 @@ export function resolveGhApiHostname(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   if (env.GH_HOST?.trim()) return undefined;
+  const host = serverUrlHost(env);
+  return host && host !== 'github.com' ? host : undefined;
+}
+
+/**
+ * The host named by `GITHUB_SERVER_URL`, `github.com` included. Unlike
+ * {@link resolveGhApiHostname}, which returns `undefined` for `github.com`
+ * to keep the emitted argv unchanged, this names every host so a caller
+ * that needs the host itself (the read cache) can use it.
+ */
+function serverUrlHost(env: NodeJS.ProcessEnv): string | undefined {
   const serverUrl = env.GITHUB_SERVER_URL?.trim();
   if (!serverUrl) return undefined;
   const host = serverUrl
     .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
     .replace(/\/+$/, '')
     .toLowerCase();
-  return host && host !== 'github.com' ? host : undefined;
+  return host || undefined;
 }
 
 /**
@@ -733,7 +744,7 @@ function activeGhHost(): string | undefined {
 function resolveReadCacheHost(): string | undefined {
   const configured = process.env.GH_HOST?.trim().toLowerCase();
   if (configured) return configured;
-  return resolveGhApiHostname() ?? activeGhHost();
+  return serverUrlHost(process.env) ?? activeGhHost();
 }
 
 function usesGithubToken(host: string): boolean {
