@@ -27,6 +27,11 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { readThroughGithubApiCache } from './github-api-read-cache.mjs';
+import {
+  normalizePolicyConfig,
+  parseIsoDurationToMs,
+} from './policy-helpers.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 /**
  * Tag a thrown `gh`-invocation error with a non-enumerable `ghCommand:
@@ -326,12 +331,15 @@ export async function ghTextAsync(args, options = {}) {
     throw tagGhCommandError(error);
   }
 }
-function parseIncludedGhApiResponse(raw) {
+function parseIncludedGhApiEnvelope(raw) {
   const sections = raw.split(/\r?\n\r?\n/);
   const body = sections.pop()?.trim() ?? '';
   const headerBlock = sections.pop() ?? '';
   const headerLines = headerBlock.split(/\r?\n/);
-  if (!/^HTTP\/\d(?:\.\d)?\s+\d{3}\b/.test(headerLines[0] ?? '')) {
+  const statusMatch = /^HTTP\/\d(?:\.\d)?\s+(\d{3})\b/.exec(
+    headerLines[0] ?? '',
+  );
+  if (!statusMatch) {
     throw new Error('gh api --include returned no HTTP response headers');
   }
   const headers = {};
@@ -343,9 +351,14 @@ function parseIncludedGhApiResponse(raw) {
       .trim();
   }
   return {
+    status: Number.parseInt(statusMatch[1] ?? '', 10),
     data: JSON.parse(body || '{}'),
     headers,
   };
+}
+function parseIncludedGhApiResponse(raw) {
+  const parsed = parseIncludedGhApiEnvelope(raw);
+  return { data: parsed.data, headers: parsed.headers };
 }
 /**
  * Run a single `gh api` request while retaining response headers.
@@ -435,13 +448,23 @@ export function ghApiJsonWithHeaders(path, options = {}) {
  */
 export function resolveGhApiHostname(env = process.env) {
   if (env.GH_HOST?.trim()) return undefined;
+  const host = serverUrlHost(env);
+  return host && host !== 'github.com' ? host : undefined;
+}
+/**
+ * The host named by `GITHUB_SERVER_URL`, `github.com` included. Unlike
+ * {@link resolveGhApiHostname}, which returns `undefined` for `github.com`
+ * to keep the emitted argv unchanged, this names every host so a caller
+ * that needs the host itself (the read cache) can use it.
+ */
+function serverUrlHost(env) {
   const serverUrl = env.GITHUB_SERVER_URL?.trim();
   if (!serverUrl) return undefined;
   const host = serverUrl
     .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
     .replace(/\/+$/, '')
     .toLowerCase();
-  return host && host !== 'github.com' ? host : undefined;
+  return host || undefined;
 }
 /**
  * #2454: the majority of `src/scripts/*.mts` accept a split `--owner
@@ -491,6 +514,267 @@ export function combineOwnerRepoFlags(args) {
   }
   return `${args.owner}/${args.repo}`;
 }
+function safeHeaderValue(value) {
+  if (!value) return undefined;
+  if (value.length > 512 || /[\r\n]/.test(value)) return undefined;
+  return value;
+}
+function responseIsThrottled(status, headers) {
+  if (status === 429) return true;
+  return status === 403 && headers['x-ratelimit-remaining'] === '0';
+}
+function readGhStdout(args) {
+  try {
+    const raw = execFileSync('gh', args, {
+      encoding: 'utf8',
+      timeout: 10_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    return raw.length > 0 ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function activeGhHost() {
+  const raw = readGhStdout(['auth', 'status', '--json', 'hosts']);
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      typeof parsed.hosts !== 'object' ||
+      parsed.hosts === null ||
+      Array.isArray(parsed.hosts)
+    ) {
+      return undefined;
+    }
+    const hosts = Object.keys(parsed.hosts).map((host) => host.toLowerCase());
+    if (hosts.length === 1) return hosts[0];
+    if (hosts.length === 0) return 'github.com';
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+/**
+ * The `--hostname` for a cached request when nothing else names one. The
+ * cache key and credential were derived for `cacheHost`, possibly from the
+ * sole host `gh auth status` reported, so the request is pinned to it
+ * instead of relying on `gh`'s own default agreeing. `github.com` stays
+ * unpinned so the emitted argv is unchanged there, as elsewhere.
+ */
+function explicitCacheHostname(cacheHost) {
+  if (cacheHost === undefined || cacheHost === 'github.com') return undefined;
+  return process.env.GH_HOST?.trim() ? undefined : cacheHost;
+}
+function resolveReadCacheHost() {
+  const configured = process.env.GH_HOST?.trim().toLowerCase();
+  if (configured) return configured;
+  return serverUrlHost(process.env) ?? activeGhHost();
+}
+function usesGithubToken(host) {
+  return (
+    host === 'github.com' ||
+    host === 'github.localhost' ||
+    host.endsWith('.ghe.com')
+  );
+}
+function defaultCredentialMaterial(host) {
+  const token = usesGithubToken(host)
+    ? process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim()
+    : process.env.GH_ENTERPRISE_TOKEN?.trim() ||
+      process.env.GITHUB_ENTERPRISE_TOKEN?.trim();
+  if (token) return token;
+  return readGhStdout(['auth', 'token', '--hostname', host]);
+}
+function readCacheLeaseTtlMs(options, request) {
+  if (request.leaseTtlMs !== undefined && request.leaseTtlMs > 0) {
+    return request.leaseTtlMs;
+  }
+  const fetchTimeout =
+    options.timeout ??
+    (options.paginate
+      ? DEFAULT_GH_PAGINATED_TIMEOUT_MS
+      : DEFAULT_GH_TIMEOUT_MS);
+  const bounded =
+    fetchTimeout > 0 ? fetchTimeout : DEFAULT_GH_PAGINATED_TIMEOUT_MS;
+  return bounded + 30_000;
+}
+function loadReadCachePolicy(injected) {
+  if (injected) {
+    return {
+      enabled: injected.enabled === true,
+      maxAgeMs: injected.maxAgeMs,
+      maxBytes: injected.maxBytes,
+      retentionMs: injected.retentionMs,
+      ...(injected.directory ? { directory: injected.directory } : {}),
+    };
+  }
+  const disabled = {
+    enabled: false,
+    maxAgeMs: 5 * 60 * 1000,
+    maxBytes: 104857600,
+    retentionMs: 24 * 60 * 60 * 1000,
+  };
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(process.cwd(), '.github/idd/config.json'), 'utf8'),
+    );
+    const normalized = normalizePolicyConfig(raw);
+    const readCache = normalized.githubApi.readCache;
+    const maxAgeMs = parseIsoDurationToMs(readCache.maxAge);
+    const retentionMs = parseIsoDurationToMs(readCache.retention);
+    if (maxAgeMs === null || retentionMs === null) return disabled;
+    return {
+      enabled: readCache.enabled === true,
+      maxAgeMs,
+      maxBytes: readCache.maxBytes,
+      retentionMs,
+      ...(readCache.directory ? { directory: readCache.directory } : {}),
+    };
+  } catch {
+    return disabled;
+  }
+}
+function ghApiIncluded(path, options, cacheHost) {
+  const hostname = resolveGhApiHostname() ?? explicitCacheHostname(cacheHost);
+  const args = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    ...(options.extraArgs ?? []),
+    '--include',
+  ];
+  try {
+    const raw = execFileSync('gh', args, {
+      encoding: 'utf8',
+      timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      ...(options.input !== undefined ? { input: options.input } : {}),
+    });
+    return parseIncludedGhApiEnvelope(raw);
+  } catch (error) {
+    const stdout = String(error?.stdout ?? '').trimStart();
+    if (/^HTTP\/\d/.test(stdout)) {
+      try {
+        const parsed = parseIncludedGhApiEnvelope(stdout);
+        const proc = Number(error.status ?? -1);
+        if (
+          parsed.status === 304 ||
+          (options.allowStatuses ?? []).includes(proc)
+        ) {
+          return parsed;
+        }
+      } catch {
+        // Fall through to the uncached failure policy below.
+      }
+    }
+    const failure = error;
+    const status = Number(failure?.status ?? -1);
+    if ((options.allowStatuses ?? []).includes(status)) {
+      const text = String(failure?.stdout ?? '');
+      if (/^\s*[[{]/.test(text)) {
+        return { status, data: JSON.parse(text), headers: {} };
+      }
+    }
+    throw tagGhCommandError(error);
+  }
+}
+function fetchForReadCache(path, options, request, cacheHost) {
+  if (options.paginate) {
+    const executed = executeGhApiJson(path, options, cacheHost);
+    return {
+      status: 200,
+      body: executed.data,
+      incomplete: executed.toleratedFailure,
+    };
+  }
+  const etag = safeHeaderValue(request.etag);
+  const extraArgs = [...(options.extraArgs ?? [])];
+  if (etag) extraArgs.push('-H', `If-None-Match: ${etag}`);
+  const envelope = ghApiIncluded(path, { ...options, extraArgs }, cacheHost);
+  return {
+    status: envelope.status,
+    body: envelope.data,
+    etag: safeHeaderValue(envelope.headers.etag),
+    lastModified: safeHeaderValue(envelope.headers['last-modified']),
+    incomplete: false,
+    throttled: responseIsThrottled(envelope.status, envelope.headers),
+  };
+}
+function hasHostnameOverride(extraArgs) {
+  return (extraArgs ?? []).some(
+    (arg) => arg === '--hostname' || arg.startsWith('--hostname='),
+  );
+}
+function ghApiJsonWithReadCache(path, options) {
+  const request = options.readCache;
+  if (request?.classification !== 'read') {
+    return ghApiJsonUncached(path, options);
+  }
+  const policy = loadReadCachePolicy(request.policy);
+  if (!policy.enabled) return ghApiJsonUncached(path, options);
+  // The entry key and credential are derived for the environment host. A
+  // caller-supplied --hostname would send the request elsewhere, so an
+  // explicit override stays uncached rather than keyed under the wrong host.
+  if (hasHostnameOverride(options.extraArgs)) {
+    return ghApiJsonUncached(path, options);
+  }
+  const host = resolveReadCacheHost();
+  if (host === undefined) return ghApiJsonUncached(path, options);
+  const credentialMaterial =
+    request.credentialMaterial ?? defaultCredentialMaterial(host);
+  if (credentialMaterial === undefined || credentialMaterial.trim() === '') {
+    return ghApiJsonUncached(path, options);
+  }
+  const secrets = [
+    ...(request.secretMaterial ?? []),
+    process.env.GH_TOKEN ?? '',
+    process.env.GITHUB_TOKEN ?? '',
+    process.env.GH_ENTERPRISE_TOKEN ?? '',
+    process.env.GITHUB_ENTERPRISE_TOKEN ?? '',
+    credentialMaterial,
+  ];
+  let thrown;
+  const result = readThroughGithubApiCache({
+    classification: 'read',
+    mode: request.mode,
+    policy,
+    host,
+    repository: request.repository ?? '',
+    credentialMaterial,
+    secretMaterial: secrets,
+    requestShape: {
+      caller: request.requestShape ?? null,
+      path,
+      extraArgs: options.extraArgs ?? [],
+      paginate: options.paginate === true,
+      input: options.input ?? null,
+    },
+    derivedInputs: request.derivedInputs ?? null,
+    paginated: options.paginate === true,
+    fetch: (conditional) => {
+      thrown = undefined;
+      try {
+        return fetchForReadCache(path, options, conditional, host);
+      } catch (error) {
+        // A definitive 404/410 reaches the cache so it drops the stored
+        // 200; the original error is rethrown below, so the caller sees
+        // the same failure it would without a cache.
+        const status = deriveGhHttpStatus(error);
+        if (status !== 404 && status !== 410) throw error;
+        thrown = { error };
+        return { status, body: null, incomplete: false };
+      }
+    },
+    now: request.now,
+    leaseTtlMs: readCacheLeaseTtlMs(options, request),
+    workspaceRoot: request.workspaceRoot ?? process.cwd(),
+    cwd: process.cwd(),
+    defaultDirectory: request.defaultDirectory,
+  });
+  if (thrown !== undefined) throw thrown.error;
+  return result.body;
+}
 /**
  * Run `gh api <path>` and parse its output as JSON, optionally paginating
  * (NDJSON-compatible) and/or tolerating specific failure statuses.
@@ -530,8 +814,14 @@ export function combineOwnerRepoFlags(args) {
  * revert this change.
  */
 export function ghApiJson(path, options = {}) {
+  if (options.readCache !== undefined) {
+    return ghApiJsonWithReadCache(path, options);
+  }
+  return ghApiJsonUncached(path, options);
+}
+function executeGhApiJson(path, options = {}, cacheHost) {
   const { paginate = false, extraArgs = [], allowStatuses = [] } = options;
-  const hostname = resolveGhApiHostname();
+  const hostname = resolveGhApiHostname() ?? explicitCacheHostname(cacheHost);
   const args = [
     'api',
     path,
@@ -545,6 +835,7 @@ export function ghApiJson(path, options = {}) {
     options.timeout ??
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   let raw;
+  let toleratedFailure = false;
   try {
     raw = execFileSync('gh', args, {
       encoding: 'utf8',
@@ -563,14 +854,18 @@ export function ghApiJson(path, options = {}) {
       throw tagGhCommandError(error);
     }
     raw = stdout;
+    toleratedFailure = true;
   }
   if (paginate) {
     // parsePaginatedGhNdjson already trims and returns [] on empty input.
-    return parsePaginatedGhNdjson(raw);
+    return { data: parsePaginatedGhNdjson(raw), toleratedFailure };
   }
   // JSON.parse itself ignores surrounding whitespace, so only trim to
   // decide whether the output was empty.
-  return JSON.parse(raw.trim() || '{}');
+  return { data: JSON.parse(raw.trim() || '{}'), toleratedFailure };
+}
+function ghApiJsonUncached(path, options = {}) {
+  return executeGhApiJson(path, options).data;
 }
 /**
  * Run a `gh api graphql` query with variables, returning the parsed JSON

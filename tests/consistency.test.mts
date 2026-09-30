@@ -1003,6 +1003,14 @@ test('policy normalization provides default-safe values and supports aliases', (
       minCorroboratingPrs: 2,
       samplingWindow: 'PT24H',
     },
+    githubApi: {
+      readCache: {
+        enabled: false,
+        maxAge: 'PT5M',
+        maxBytes: 104857600,
+        retention: 'PT24H',
+      },
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -1199,6 +1207,14 @@ test('policy normalization provides default-safe values and supports aliases', (
       providerHealth: {
         minCorroboratingPrs: 2,
         samplingWindow: 'PT24H',
+      },
+      githubApi: {
+        readCache: {
+          enabled: false,
+          maxAge: 'PT5M',
+          maxBytes: 104857600,
+          retention: 'PT24H',
+        },
       },
     },
   );

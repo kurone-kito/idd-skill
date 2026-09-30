@@ -212,6 +212,7 @@ const DURATION_RE =
 // URLs, and tarball paths while excluding every shell metacharacter in
 // that list.
 const PACKAGE_SPEC_RE = /^[A-Za-z0-9@:/_.+^#%-]+$/;
+const GITHUB_API_READ_CACHE_MAX_BYTES = 104857600;
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -358,6 +359,16 @@ export const POLICY_DEFAULTS = Object.freeze({
   providerHealth: Object.freeze({
     minCorroboratingPrs: 2,
     samplingWindow: 'PT24H',
+  }),
+  // #3587: disabled unless `enabled` is exactly true. `directory` is not an
+  // own key until an operator sets a non-empty string.
+  githubApi: Object.freeze({
+    readCache: Object.freeze({
+      enabled: false,
+      maxAge: 'PT5M',
+      maxBytes: GITHUB_API_READ_CACHE_MAX_BYTES,
+      retention: 'PT24H',
+    }),
   }),
 });
 export function parseProjectCommandRows(text) {
@@ -545,6 +556,33 @@ export function normalizePolicyConfig(config) {
       POLICY_DEFAULTS.providerHealth.samplingWindow,
     ),
   };
+  const rawReadCacheMaxBytes = parsePositiveInteger(
+    c?.githubApi?.readCache?.maxBytes,
+    POLICY_DEFAULTS.githubApi.readCache.maxBytes,
+  );
+  const readCache = {
+    enabled: c?.githubApi?.readCache?.enabled === true,
+    maxAge: parsePositiveDuration(
+      c?.githubApi?.readCache?.maxAge,
+      POLICY_DEFAULTS.githubApi.readCache.maxAge,
+    ),
+    maxBytes:
+      rawReadCacheMaxBytes <= GITHUB_API_READ_CACHE_MAX_BYTES
+        ? rawReadCacheMaxBytes
+        : POLICY_DEFAULTS.githubApi.readCache.maxBytes,
+    retention: parsePositiveDuration(
+      c?.githubApi?.readCache?.retention,
+      POLICY_DEFAULTS.githubApi.readCache.retention,
+    ),
+  };
+  const rawReadCacheDirectory = c?.githubApi?.readCache?.directory;
+  if (
+    typeof rawReadCacheDirectory === 'string' &&
+    rawReadCacheDirectory.trim().length > 0
+  ) {
+    readCache.directory = rawReadCacheDirectory.trim();
+  }
+  const githubApi = { readCache };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured
@@ -780,6 +818,7 @@ export function normalizePolicyConfig(config) {
     providerOutage,
     localValidationEvidence,
     providerHealth,
+    githubApi,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {

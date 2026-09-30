@@ -572,6 +572,44 @@
       },
       "description": "Container for the read-only provider-health classifier's corroboration threshold and sampling window (`minCorroboratingPrs`, `samplingWindow`). Optional; omitting any nested key keeps that key's own distributed default. Never a gate: no field this policy controls is, or is consumed as, a merge-readiness or CI-gate result."
     },
+    "githubApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "readCache": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Opt in to the host-local GitHub REST read cache. Optional; defaults to false. Only a literal true enables it. Enabling this key does not connect Discover."
+            },
+            "maxAge": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Maximum ISO 8601 age of a stored response that hint mode may reuse. Optional; defaults to `PT5M`. Retention is a separate bound."
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum total size, in bytes, of stored response entries. Optional; defaults to 104857600 (100 MiB). A larger value falls back to that default."
+            },
+            "retention": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Maximum ISO 8601 age of a stored response before it is dropped. Optional; defaults to `PT24H`. Independent of `maxAge`."
+            },
+            "directory": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional absolute override for the per-user OS-local cache directory. A relative path, filesystem root, workspace root, or ancestor of the workspace is not used as a cache root."
+            }
+          },
+          "description": "Host-local read cache for explicitly classified REST reads. Optional; omitting it keeps every read live."
+        }
+      },
+      "description": "Opt-in GitHub API read-cache policy. Optional; omitting it keeps live reads. This does not wire Discover."
+    },
     "discover": {
       "type": "object",
       "additionalProperties": false,
