@@ -846,9 +846,18 @@ export function collectPreMergeReadiness(
   const threads = port.listChangeRequestReviewThreadsWithComments(
     args.prNumber,
   );
-  const changedFiles = port
-    .listChangeRequestChangedFiles(args.prNumber)
-    .filter(Boolean);
+  // #3597: a paginated changed-files read can fail closed on a response
+  // ceiling or a transport error. Continue-with-[] would look like a PR
+  // that changed no files, so the failure leaves this collector as
+  // ChangedFilesReadError and main() renders it.
+  let changedFiles: string[];
+  try {
+    changedFiles = port
+      .listChangeRequestChangedFiles(args.prNumber)
+      .filter(Boolean);
+  } catch (error) {
+    throw changedFilesReadError(error);
+  }
   const codeownersText = fetchCodeownersText(port, owner, repo, baseRefName);
   const {
     eligible: eligibleCodeownerUserLogins,
@@ -1688,6 +1697,82 @@ export function collectPreMergeReadiness(
   } as PreMergeReadinessReport;
 }
 
+interface ChangedFilesUnavailable {
+  status: 'unavailable';
+  recovery: {
+    reason: 'response-limit' | 'process-transport';
+    limitBytes: number | null;
+    observedBytes: number | null;
+  };
+}
+
+class ChangedFilesReadError extends Error {
+  readonly changedFiles: ChangedFilesUnavailable;
+
+  constructor(
+    message: string,
+    changedFiles: ChangedFilesUnavailable,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = 'ChangedFilesReadError';
+    this.changedFiles = changedFiles;
+  }
+}
+
+/**
+ * Structural view of `GhPaginatedResponseLimitError`. This helper cannot
+ * import that class: `provider-port-migration-guard` forbids a migrated
+ * helper from importing the gh-exec transport module (#2266).
+ */
+function paginatedResponseLimit(
+  error: unknown,
+): { message: string; limitBytes: number; observedBytes: number } | null {
+  if (
+    !(error instanceof Error) ||
+    error.name !== 'GhPaginatedResponseLimitError'
+  ) {
+    return null;
+  }
+  const limitBytes = (error as { limitBytes?: unknown }).limitBytes;
+  const observedBytes = (error as { observedBytes?: unknown }).observedBytes;
+  if (typeof limitBytes !== 'number' || typeof observedBytes !== 'number') {
+    return null;
+  }
+  return { message: error.message, limitBytes, observedBytes };
+}
+
+function changedFilesReadError(error: unknown): ChangedFilesReadError {
+  const limit = paginatedResponseLimit(error);
+  if (limit) {
+    return new ChangedFilesReadError(
+      limit.message,
+      {
+        status: 'unavailable',
+        recovery: {
+          reason: 'response-limit',
+          limitBytes: limit.limitBytes,
+          observedBytes: limit.observedBytes,
+        },
+      },
+      error,
+    );
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new ChangedFilesReadError(
+    message,
+    {
+      status: 'unavailable',
+      recovery: {
+        reason: 'process-transport',
+        limitBytes: null,
+        observedBytes: null,
+      },
+    },
+    error,
+  );
+}
+
 /** One open follow-up deferred from an origin issue (#3624). */
 export interface DeferFollowUpItem {
   number: number;
@@ -1908,13 +1993,18 @@ export function computeDeferFollowUps({
 // report -- both used to be indistinguishable-by-default (an uncaught
 // exception left an unhandled stack trace on stderr and a non-JSON stdout,
 // easy to conflate with a transient not-ready state if the caller only
-// checks the exit code). `hint` is populated only for the specific error
-// this arose from (the missing --claim-issue/--claimless case); other
-// thrown errors surface with `error` alone.
+// checks the exit code). `hint` is populated only for the missing
+// --claim-issue/--claimless case. #3597 adds `changedFiles` for a
+// changed-files read failure so that failure stays an unavailable read.
+// Every other thrown error surfaces with `error` alone.
 export function renderCliUsageError(error: unknown): {
   error: string;
   hint?: string;
+  changedFiles?: ChangedFilesUnavailable;
 } {
+  if (error instanceof ChangedFilesReadError) {
+    return { error: error.message, changedFiles: error.changedFiles };
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('missing required --claim-issue')) {
     return {

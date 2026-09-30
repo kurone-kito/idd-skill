@@ -16,18 +16,23 @@
 // need the CLI-entry-point guard.
 
 import type { StdioOptions } from 'node:child_process';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import {
   closeSync,
+  existsSync,
   mkdtempSync,
   openSync,
   readFileSync,
+  readSync,
   rmSync,
+  writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { isMainThread, Worker, workerData } from 'node:worker_threads';
 
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import {
@@ -73,6 +78,14 @@ import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
  * error already carries the tag, or is not an object at all (a rejection
  * reason that is not an `Error`, defensively).
  */
+function isTaggedGhCommandError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    Object.hasOwn(error, 'ghCommand')
+  );
+}
+
 export function tagGhCommandError<T>(error: T): T {
   if (
     error &&
@@ -142,6 +155,38 @@ export const DEFAULT_GH_TIMEOUT_MS = 30_000;
  * override it. Recorded here so this default isn't re-litigated later.
  */
 export const DEFAULT_GH_PAGINATED_TIMEOUT_MS = 120_000;
+
+/**
+ * Fail-closed ceiling, in bytes, for one paginated `gh api --paginate`
+ * body (issue #3597). It sits above the 1,073,028-byte response measured
+ * for a 300-file pull request. The paginated reader counts stdout while
+ * `gh` is still running and kills the process when the next chunk would
+ * pass this ceiling, then throws {@link GhPaginatedResponseLimitError}
+ * with the ceiling and the number of bytes observed. It does not wait
+ * until the process exits, it is not a larger silent `maxBuffer`, and it
+ * does not return a partial item list.
+ */
+export const GH_API_PAGINATED_MAX_BYTES = 8 * 1024 * 1024;
+
+/** Structured over-ceiling failure from {@link ghApiJson}'s paginated path. */
+export class GhPaginatedResponseLimitError extends Error {
+  readonly limitBytes: number;
+  readonly observedBytes: number;
+
+  constructor(limitBytes: number, observedBytes: number) {
+    super(
+      `paginated gh api response exceeded ${limitBytes} bytes (observed ${observedBytes})`,
+    );
+    this.name = 'GhPaginatedResponseLimitError';
+    this.limitBytes = limitBytes;
+    this.observedBytes = observedBytes;
+    // Both throw sites construct this class, and a caller may wrap it as
+    // Error.cause. classifyHelperError returns kind "internal" unless some
+    // link carries this tag, so an over-limit read would miss transport
+    // recovery (Copilot review on PR #3605, commit 1a0dec65d).
+    tagGhCommandError(this);
+  }
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -456,8 +501,9 @@ export interface GhApiJsonOptions {
    */
   allowStatuses?: number[];
   /**
-   * Override the `execFileSync` timeout (milliseconds). Defaults to
-   * {@link DEFAULT_GH_TIMEOUT_MS} for a non-paginated call, or
+   * Override the `gh` timeout (milliseconds): `execFileSync`'s for a
+   * non-paginated call, the capture worker's for a paginated one.
+   * Defaults to {@link DEFAULT_GH_TIMEOUT_MS} for a non-paginated call, or
    * {@link DEFAULT_GH_PAGINATED_TIMEOUT_MS} when `paginate` is `true`
    * (#1675) — a caller-supplied value, including `0`, always wins over
    * either default.
@@ -786,6 +832,1013 @@ export function combineOwnerRepoFlags(args: {
     );
   }
   return `${args.owner}/${args.repo}`;
+}
+
+/** Append one NDJSON stdout line's rows; true when the line looks like JSON. */
+function appendPaginatedNdjsonLine(items: unknown[], bytes: Buffer): boolean {
+  const text = bytes.toString('utf8').replace(/\r$/, '').trim();
+  if (!text) return false;
+  // A loop, not `push(...rows)`: a single array line with over ~130k
+  // elements overflows the call stack when spread into arguments.
+  for (const row of parsePaginatedGhNdjson(text)) items.push(row);
+  return text.startsWith('{') || text.startsWith('[');
+}
+
+/**
+ * Parse paginated NDJSON from an already-closed stdout capture, one line
+ * at a time. The raw bytes are not retained as a single string. Crossing
+ * {@link GH_API_PAGINATED_MAX_BYTES} throws before any partial list is
+ * returned.
+ */
+function parsePaginatedNdjsonFile(
+  filePath: string,
+  limitBytes: number,
+): { items: unknown[]; jsonShaped: boolean } {
+  const items: unknown[] = [];
+  let jsonShaped = false;
+  let observedBytes = 0;
+  // The unfinished line, kept as the chunks that make it up and joined once
+  // when its newline arrives. Re-joining it on every read copies a long
+  // line's prefix again for each 64 KiB read, which is quadratic for a row
+  // near the ceiling (Copilot review, PR #3605).
+  let pendingChunks: Buffer[] = [];
+  const chunk = Buffer.alloc(64 * 1024);
+  const fd = openSync(filePath, 'r');
+  try {
+    while (true) {
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) break;
+      observedBytes += read;
+      if (observedBytes > limitBytes) {
+        throw new GhPaginatedResponseLimitError(limitBytes, observedBytes);
+      }
+      const bytes = chunk.subarray(0, read);
+      let start = 0;
+      // Only the newly read bytes are scanned for a newline.
+      for (
+        let index = bytes.indexOf(0x0a);
+        index !== -1;
+        index = bytes.indexOf(0x0a, start)
+      ) {
+        const tail = bytes.subarray(start, index);
+        const line =
+          pendingChunks.length > 0
+            ? Buffer.concat([...pendingChunks, tail])
+            : tail;
+        pendingChunks = [];
+        if (appendPaginatedNdjsonLine(items, line)) {
+          jsonShaped = true;
+        }
+        start = index + 1;
+      }
+      // `chunk` is reused by the next read, so the leftover must be copied.
+      if (start < bytes.length) {
+        pendingChunks.push(Buffer.from(bytes.subarray(start)));
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+  if (pendingChunks.length > 0) {
+    const line = Buffer.concat(pendingChunks);
+    if (appendPaginatedNdjsonLine(items, line)) {
+      jsonShaped = true;
+    }
+  }
+  return { items, jsonShaped };
+}
+
+function ghCommandFailure(status: number, stderr: string, stdout = ''): Error {
+  const error = new Error(`gh command failed: ${stderr.trim()}`);
+  Object.defineProperty(error, 'status', {
+    value: status,
+    enumerable: false,
+  });
+  // `deriveGhHttpStatus` falls back to a JSON body's `status` field when
+  // stderr carries none (#3335); an execFileSync error kept `.stdout` for it.
+  if (stdout.length > 0) {
+    Object.defineProperty(error, 'stdout', {
+      value: stdout,
+      enumerable: false,
+    });
+  }
+  if (stderr.length > 0) {
+    Object.defineProperty(error, 'stderr', {
+      value: stderr,
+      enumerable: false,
+    });
+  }
+  return tagGhCommandError(error);
+}
+
+/** Extra wait after `gh`'s own timeout so a stuck capture worker fails closed. */
+const PAGINATED_CAPTURE_GRACE_MS = 15_000;
+
+/** Stderr retained from a paginated `gh`. Further bytes are discarded, not buffered. */
+const PAGINATED_STDERR_CAP_BYTES = 1024 * 1024;
+
+const PAGINATED_CAPTURE_KIND = 'paginated-gh-capture';
+
+/** Largest delay `setTimeout` honors; a longer one fires after 1 ms. */
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+/**
+ * How long a `gh` the worker signaled may take to exit before it is sent
+ * SIGKILL. The status is published only once `gh` has exited, so a `gh`
+ * that ignores SIGTERM cannot outlive the capture (Copilot review, PR
+ * #3605).
+ */
+const PAGINATED_KILL_ESCALATION_MS = 2_000;
+
+/**
+ * Shared flag: index 0 is completion, index 1 is the `gh` pid, index 2 is
+ * set once the worker has armed its exit hook (see
+ * {@link markPaginatedCaptureStarted}).
+ */
+const CAPTURE_SLOT_DONE = 0;
+const CAPTURE_SLOT_PID = 1;
+const CAPTURE_SLOT_STARTED = 2;
+const CAPTURE_FLAG_BYTES = 12;
+
+interface PaginatedCaptureWorkerData {
+  kind: typeof PAGINATED_CAPTURE_KIND;
+  args: string[];
+  timeout: number;
+  input?: string;
+  outPath: string;
+  errPath: string;
+  statusPath: string;
+  limitBytes: number;
+  flag: SharedArrayBuffer;
+}
+
+interface PaginatedCaptureStatus {
+  limitExceeded: boolean;
+  timedOut: boolean;
+  /**
+   * The worker exited without publishing its own status, so `gh` may still
+   * be running and the parent has to stop it.
+   */
+  workerLost: boolean;
+  observedBytes: number;
+  status: number | null;
+  signal: string | null;
+  spawnErrorMessage: string | null;
+  spawnErrorCode: string | null;
+  streamErrorMessage: string | null;
+  streamErrorCode: string | null;
+}
+
+/**
+ * Exact tokens only. Tests set this so a stream error or a stuck-worker
+ * kill decision can be forced. Any other value, including unset, leaves
+ * the capture unchanged. Not an operator setting.
+ */
+const PAGINATED_CAPTURE_TEST_FAULT = 'IDD_GH_EXEC_TEST_FAULT';
+
+type PaginatedCaptureTestFault =
+  | 'stdout'
+  | 'stderr'
+  | 'stdin'
+  | 'worker-crash'
+  | 'worker-init-fail'
+  | 'proc-unreadable'
+  | 'proc-not-gh'
+  | 'proc-gh-path';
+
+function paginatedCaptureTestFault(): PaginatedCaptureTestFault | null {
+  const value = process.env[PAGINATED_CAPTURE_TEST_FAULT];
+  if (
+    value === 'stdout' ||
+    value === 'stderr' ||
+    value === 'stdin' ||
+    value === 'worker-crash' ||
+    value === 'worker-init-fail' ||
+    value === 'proc-unreadable' ||
+    value === 'proc-not-gh' ||
+    value === 'proc-gh-path'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function paginatedCaptureGraceMs(): number {
+  const fault = paginatedCaptureTestFault();
+  if (
+    fault === 'proc-unreadable' ||
+    fault === 'proc-not-gh' ||
+    fault === 'proc-gh-path'
+  ) {
+    return 2_000;
+  }
+  // No worker will ever start under this fault, so a short window is enough.
+  if (fault === 'worker-init-fail') return 1_000;
+  return PAGINATED_CAPTURE_GRACE_MS;
+}
+
+function writeAllSync(fd: number, buffer: Buffer): void {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const wrote = writeSync(fd, buffer, offset, buffer.length - offset);
+    if (wrote <= 0) {
+      throw new Error('paginated gh capture failed to write stdout');
+    }
+    offset += wrote;
+  }
+}
+
+function errorCode(error: Error): string | null {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
+function readPaginatedCaptureWorkerData(
+  value: unknown,
+): PaginatedCaptureWorkerData | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind !== PAGINATED_CAPTURE_KIND) return null;
+  if (!Array.isArray(record.args)) return null;
+  if (!record.args.every((arg) => typeof arg === 'string')) return null;
+  if (typeof record.timeout !== 'number') return null;
+  if (typeof record.outPath !== 'string') return null;
+  if (typeof record.errPath !== 'string') return null;
+  if (typeof record.statusPath !== 'string') return null;
+  if (typeof record.limitBytes !== 'number') return null;
+  if (!(record.flag instanceof SharedArrayBuffer)) return null;
+  if (record.input !== undefined && typeof record.input !== 'string') {
+    return null;
+  }
+  return {
+    kind: PAGINATED_CAPTURE_KIND,
+    args: record.args,
+    timeout: record.timeout,
+    ...(typeof record.input === 'string' ? { input: record.input } : {}),
+    outPath: record.outPath,
+    errPath: record.errPath,
+    statusPath: record.statusPath,
+    limitBytes: record.limitBytes,
+    flag: record.flag,
+  };
+}
+
+function publishPaginatedCapture(
+  data: PaginatedCaptureWorkerData,
+  report: Omit<PaginatedCaptureStatus, 'workerLost'> & { stderr: string },
+): void {
+  const payload: PaginatedCaptureStatus = {
+    limitExceeded: report.limitExceeded,
+    timedOut: report.timedOut,
+    workerLost: false,
+    observedBytes: report.observedBytes,
+    status: report.status,
+    signal: report.signal,
+    spawnErrorMessage: report.spawnErrorMessage,
+    spawnErrorCode: report.spawnErrorCode,
+    streamErrorMessage: report.streamErrorMessage,
+    streamErrorCode: report.streamErrorCode,
+  };
+  try {
+    writeFileSync(data.errPath, report.stderr);
+    writeFileSync(data.statusPath, JSON.stringify(payload));
+  } catch (error) {
+    try {
+      writeFileSync(
+        data.statusPath,
+        JSON.stringify({
+          limitExceeded: false,
+          timedOut: false,
+          workerLost: false,
+          observedBytes: report.observedBytes,
+          status: null,
+          signal: null,
+          spawnErrorMessage:
+            error instanceof Error ? error.message : String(error),
+          spawnErrorCode: null,
+          streamErrorMessage: null,
+          streamErrorCode: null,
+        } satisfies PaginatedCaptureStatus),
+      );
+    } catch {
+      // The parent exit hook fails closed when the status file is missing.
+    }
+  }
+  const flag = new Int32Array(data.flag);
+  Atomics.store(flag, CAPTURE_SLOT_DONE, 1);
+  Atomics.notify(flag, CAPTURE_SLOT_DONE, 1);
+  process.exit(0);
+}
+
+/**
+ * Wake the parent from the worker thread. The parent's `worker.once('exit')`
+ * handler cannot run while that same thread is inside `Atomics.wait`.
+ */
+function armPaginatedCaptureExit(data: PaginatedCaptureWorkerData): void {
+  const notify = (): void => {
+    const view = new Int32Array(data.flag);
+    if (Atomics.load(view, CAPTURE_SLOT_DONE) !== 0) return;
+    try {
+      if (!existsSync(data.statusPath)) {
+        writeFileSync(
+          data.statusPath,
+          JSON.stringify({
+            limitExceeded: false,
+            timedOut: false,
+            workerLost: true,
+            observedBytes: 0,
+            status: null,
+            signal: null,
+            spawnErrorMessage:
+              'paginated gh capture worker exited before reporting status',
+            spawnErrorCode: null,
+            streamErrorMessage: null,
+            streamErrorCode: null,
+          } satisfies PaginatedCaptureStatus),
+        );
+      }
+    } catch {
+      // The parent still fails closed when the status file is missing.
+    }
+    Atomics.store(view, CAPTURE_SLOT_DONE, 1);
+    Atomics.notify(view, CAPTURE_SLOT_DONE, 1);
+  };
+  process.once('uncaughtException', () => {
+    process.exit(1);
+  });
+  process.once('exit', notify);
+}
+
+/**
+ * Command line of `pid`, or null when `/proc` cannot be read.
+ * A readable Linux cmdline is NUL-separated argv. Only an argv0 whose
+ * basename is exactly `gh` is this capture's child. An unreadable
+ * `/proc` (macOS, or Linux without that filesystem) still signals —
+ * returning here used to leave `gh` running (Copilot review, PR #3605).
+ */
+function paginatedGhCmdline(pid: number): string | null {
+  const fault = paginatedCaptureTestFault();
+  if (fault === 'proc-unreadable') return null;
+  if (fault === 'proc-not-gh') {
+    return '/usr/local/bin/ghost-daemon\0github\0ghq';
+  }
+  // A worker-crash test stubs `gh` with a script whose real argv0 is node.
+  if (fault === 'proc-gh-path' || fault === 'worker-crash') {
+    return '/usr/bin/gh\0api';
+  }
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when argv0's basename is exactly `gh`. `/proc/<pid>/cmdline` is
+ * NUL-separated argv, so a substring match also hits `ghost-daemon`,
+ * `github`, and `ghq` (Copilot review, PR #3605).
+ */
+function linuxCmdlineArgv0IsGh(cmdline: string): boolean {
+  const nul = cmdline.indexOf('\0');
+  const argv0 = nul === -1 ? cmdline : cmdline.slice(0, nul);
+  const slash = argv0.lastIndexOf('/');
+  const base = slash === -1 ? argv0 : argv0.slice(slash + 1);
+  return base === 'gh';
+}
+
+/**
+ * Signal `pid` only when it is this capture's `gh`. On Linux that means
+ * argv0's basename is exactly `gh`; other platforms, and a Linux host
+ * whose `/proc` read fails, still signal. Checked again before each
+ * signal, so on Linux a pid recycled during the escalation wait is not
+ * signaled.
+ */
+function signalPaginatedGhChild(
+  pid: number,
+  signal: 'SIGTERM' | 'SIGKILL',
+): boolean {
+  if (process.platform === 'linux') {
+    const cmdline = paginatedGhCmdline(pid);
+    if (cmdline !== null && !linuxCmdlineArgv0IsGh(cmdline)) return false;
+  }
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch {
+    // The child already exited.
+    return false;
+  }
+}
+
+/**
+ * Best-effort stop for a `gh` left behind when the capture worker never
+ * reports or is lost. Sends SIGTERM, waits up to
+ * {@link PAGINATED_KILL_ESCALATION_MS} for it to exit, then SIGKILL, so a
+ * `gh` that ignores SIGTERM cannot outlive a call that has already
+ * thrown. The worker's own SIGKILL escalation cannot run once the worker
+ * is terminated or gone (Copilot review, PR #3605). A `gh` that exited
+ * but was never reaped still answers `kill(pid, 0)`; on Linux that zombie
+ * is recognized from `/proc`, elsewhere the wait can run its full length.
+ * This is a failure path only.
+ */
+function killPaginatedGhChild(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  if (!signalPaginatedGhChild(pid, 'SIGTERM')) return;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + PAGINATED_KILL_ESCALATION_MS;
+  while (Date.now() < deadline) {
+    if (!paginatedGhIsRunning(pid)) return;
+    Atomics.wait(pause, 0, 0, 25);
+  }
+  signalPaginatedGhChild(pid, 'SIGKILL');
+}
+
+/**
+ * Whether `pid` is still a running process. `kill(pid, 0)` also succeeds
+ * for a zombie, and a `gh` whose capture worker is gone is never reaped,
+ * so on Linux a zombie or dead state counts as stopped.
+ */
+function paginatedGhIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const state = stat.slice(
+        stat.lastIndexOf(')') + 2,
+        stat.lastIndexOf(')') + 3,
+      );
+      if (state === 'Z' || state === 'X') return false;
+    } catch {
+      // No readable /proc entry: keep the kill(pid, 0) answer.
+    }
+  }
+  return true;
+}
+
+function startPaginatedCapture(data: PaginatedCaptureWorkerData): void {
+  const fault = paginatedCaptureTestFault();
+  const procFault =
+    fault === 'proc-unreadable' ||
+    fault === 'proc-not-gh' ||
+    fault === 'proc-gh-path';
+  const outFd = openSync(data.outPath, 'w');
+  let observedBytes = 0;
+  let limitExceeded = false;
+  let timedOut = false;
+  let timeoutTimer: NodeJS.Timeout | undefined;
+  const stopTimeout = (): void => {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+  };
+  let escalationTimer: NodeJS.Timeout | undefined;
+  let closed = false;
+  let finished = false;
+  let exitCode: number | null = null;
+  let exitSignal: string | null = null;
+  let spawnError: Error | null = null;
+  let streamError: Error | null = null;
+  let streamFaulted = false;
+  const stderrChunks: Buffer[] = [];
+  let stderrBytes = 0;
+
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    stopTimeout();
+    if (escalationTimer) clearTimeout(escalationTimer);
+    try {
+      closeSync(outFd);
+    } catch {
+      // The status record still has to wake the parent.
+    }
+    publishPaginatedCapture(data, {
+      limitExceeded,
+      timedOut,
+      observedBytes,
+      status: exitCode,
+      signal: exitSignal,
+      spawnErrorMessage: spawnError ? spawnError.message : null,
+      spawnErrorCode: spawnError ? errorCode(spawnError) : null,
+      streamErrorMessage: streamError ? streamError.message : null,
+      streamErrorCode: streamError ? errorCode(streamError) : null,
+      stderr: Buffer.concat(stderrChunks).toString('utf8'),
+    });
+  };
+
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn('gh', data.args, {
+      windowsHide: true,
+      stdio: [data.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    spawnError = error instanceof Error ? error : new Error(String(error));
+    finish();
+    return;
+  }
+  if (typeof child.pid === 'number' && child.pid > 0) {
+    Atomics.store(new Int32Array(data.flag), CAPTURE_SLOT_PID, child.pid);
+  }
+  if (!child.stdout || !child.stderr) {
+    spawnError = new Error('paginated gh capture did not pipe stdio');
+    finish();
+    return;
+  }
+  if (procFault && typeof child.pid === 'number' && child.pid > 0) {
+    return;
+  }
+  // The timeout is enforced here, not through spawn's `timeout` option:
+  // that option only sends SIGTERM and records nothing, so a `gh` that
+  // handles SIGTERM and exits 0 would close as a clean success carrying
+  // a partial NDJSON body (Copilot review, PR #3605). A proc-fault test
+  // (returned above) leaves `gh` running so the parent's stuck-worker
+  // backstop is what signals it.
+  if (data.timeout > 0) {
+    // `setTimeout` clamps a delay past 2^31-1 ms (and `Infinity`) to 1 ms,
+    // which would time out every capture.
+    timeoutTimer = setTimeout(
+      () => {
+        timedOut = true;
+        killChild();
+      },
+      Math.min(data.timeout, MAX_TIMER_DELAY_MS),
+    );
+  }
+
+  // Every worker-initiated stop goes through here: the timeout, the byte
+  // limit, a write failure, and a pipe error. It stops the timeout timer
+  // first, so a capture that already has its own failure recorded is not
+  // reported as a timeout when `gh` is slow to die. It then escalates to
+  // SIGKILL if `gh` has not exited after a bounded wait. `finish` runs
+  // from the `close` event, so the status is never published, and the
+  // worker never exits, while a signaled `gh` may still be running. This
+  // relies on `gh` leaving no descendant that keeps its pipes open, which
+  // would delay `close`; the parent's timeout backstop still bounds that.
+  const killChild = (): void => {
+    stopTimeout();
+    try {
+      child.kill();
+    } catch {
+      // The child already exited.
+    }
+    if (!closed && !escalationTimer) {
+      escalationTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // The child already exited.
+        }
+      }, PAGINATED_KILL_ESCALATION_MS);
+    }
+  };
+  const noteStreamError = (error: unknown): void => {
+    if (!streamError) {
+      streamError = error instanceof Error ? error : new Error(String(error));
+    }
+    killChild();
+  };
+  // Test fault: kill the worker with an uncaught error once `gh` has
+  // produced output (so it is certainly running), which leaves the worker's
+  // exit hook to report a lost worker.
+  let crashed = false;
+  const armWorkerCrash = (): void => {
+    if (fault !== 'worker-crash' || crashed) return;
+    crashed = true;
+    setTimeout(() => {
+      throw new Error('paginated gh capture worker crash fault');
+    }, 0);
+  };
+  const armStreamFault = (
+    stream: { destroy: (error?: Error) => void } | null,
+    token: 'stdout' | 'stderr' | 'stdin',
+  ): void => {
+    if (fault !== token || streamFaulted || !stream) return;
+    streamFaulted = true;
+    // `destroy` emits `error` on nextTick, which runs before the
+    // `finish` that the `close` event defers by one turn, so the status
+    // file records the pipe failure rather than a later exit 0.
+    stream.destroy(new Error(`paginated gh ${token} pipe failed`));
+  };
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    if (limitExceeded || finished) return;
+    try {
+      const next = observedBytes + chunk.length;
+      if (next > data.limitBytes) {
+        limitExceeded = true;
+        observedBytes = next;
+        killChild();
+        return;
+      }
+      writeAllSync(outFd, chunk);
+      observedBytes = next;
+      armWorkerCrash();
+    } catch (error) {
+      spawnError = error instanceof Error ? error : new Error(String(error));
+      killChild();
+    }
+    armStreamFault(child.stdout, 'stdout');
+  });
+  // A pipe error after a few NDJSON rows must not be parsed as success
+  // when `gh` later exits 0 (Copilot review, PR #3605).
+  child.stdout.on('error', noteStreamError);
+  child.stderr.on('data', (chunk: Buffer) => {
+    if (stderrBytes < PAGINATED_STDERR_CAP_BYTES) {
+      const room = PAGINATED_STDERR_CAP_BYTES - stderrBytes;
+      const slice = chunk.length > room ? chunk.subarray(0, room) : chunk;
+      stderrChunks.push(slice);
+      stderrBytes += slice.length;
+    }
+    armStreamFault(child.stderr, 'stderr');
+  });
+  child.stderr.on('error', noteStreamError);
+  if (data.input !== undefined && child.stdin) {
+    child.stdin.on('error', noteStreamError);
+    armStreamFault(child.stdin, 'stdin');
+    child.stdin.end(data.input);
+  }
+  // Defer to the next turn so an 'error' and a 'close' in the same turn
+  // are both recorded before the status file is published.
+  child.once('error', (error: Error) => {
+    spawnError = error;
+    stopTimeout();
+    if (escalationTimer) clearTimeout(escalationTimer);
+    setTimeout(finish, 0);
+  });
+  child.once('close', (code, signal) => {
+    exitCode = code;
+    exitSignal = signal;
+    closed = true;
+    // `finish` runs a turn later; a timer expiring in between must not
+    // mark a capture that already closed as timed out, or signal a `gh`
+    // that already exited.
+    stopTimeout();
+    if (escalationTimer) clearTimeout(escalationTimer);
+    setTimeout(finish, 0);
+  });
+}
+
+/**
+ * Tell the parent this worker got as far as arming its exit hook, so any
+ * later death is reported through the done flag. A parent that waits with
+ * no timeout uses it to tell a worker that failed while starting up,
+ * before it could set the done flag, from one that is still working.
+ */
+function markPaginatedCaptureStarted(data: PaginatedCaptureWorkerData): void {
+  const view = new Int32Array(data.flag);
+  Atomics.store(view, CAPTURE_SLOT_STARTED, 1);
+  Atomics.notify(view, CAPTURE_SLOT_STARTED, 1);
+}
+
+function runPaginatedCaptureWorker(): void {
+  // Test fault: die during start-up, before the exit hook exists.
+  if (paginatedCaptureTestFault() === 'worker-init-fail') process.exit(1);
+  const data = readPaginatedCaptureWorkerData(workerData);
+  if (data) {
+    armPaginatedCaptureExit(data);
+    markPaginatedCaptureStarted(data);
+  }
+  try {
+    if (!data) {
+      throw new Error('paginated gh capture worker data was unusable');
+    }
+    startPaginatedCapture(data);
+  } catch (error) {
+    if (data) {
+      publishPaginatedCapture(data, {
+        limitExceeded: false,
+        timedOut: false,
+        observedBytes: 0,
+        status: null,
+        signal: null,
+        spawnErrorMessage:
+          error instanceof Error ? error.message : String(error),
+        spawnErrorCode: null,
+        streamErrorMessage: null,
+        streamErrorCode: null,
+        stderr: '',
+      });
+    }
+    process.exit(1);
+  }
+}
+
+function readPaginatedCaptureStatus(filePath: string): PaginatedCaptureStatus {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    throw tagGhCommandError(error);
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw tagGhCommandError(
+      new Error('paginated gh capture status was unreadable'),
+    );
+  }
+  const record = parsed as Record<string, unknown>;
+  if (
+    typeof record.observedBytes !== 'number' ||
+    !Number.isFinite(record.observedBytes)
+  ) {
+    throw tagGhCommandError(
+      new Error('paginated gh capture status was unreadable'),
+    );
+  }
+  return {
+    limitExceeded: record.limitExceeded === true,
+    timedOut: record.timedOut === true,
+    workerLost: record.workerLost === true,
+    observedBytes: record.observedBytes,
+    status: typeof record.status === 'number' ? record.status : null,
+    signal:
+      typeof record.signal === 'string' && record.signal.length > 0
+        ? record.signal
+        : null,
+    spawnErrorMessage:
+      typeof record.spawnErrorMessage === 'string'
+        ? record.spawnErrorMessage
+        : null,
+    spawnErrorCode:
+      typeof record.spawnErrorCode === 'string' ? record.spawnErrorCode : null,
+    streamErrorMessage:
+      typeof record.streamErrorMessage === 'string'
+        ? record.streamErrorMessage
+        : null,
+    streamErrorCode:
+      typeof record.streamErrorCode === 'string'
+        ? record.streamErrorCode
+        : null,
+  };
+}
+
+function paginatedSpawnError(status: PaginatedCaptureStatus): Error {
+  const error = new Error(
+    status.spawnErrorMessage ?? 'paginated gh capture failed',
+  );
+  if (status.spawnErrorCode) {
+    Object.defineProperty(error, 'code', {
+      value: status.spawnErrorCode,
+      enumerable: false,
+    });
+  }
+  return tagGhCommandError(error);
+}
+
+function paginatedTimeoutError(message: string): Error {
+  const error = new Error(message);
+  Object.defineProperty(error, 'code', {
+    value: 'ETIMEDOUT',
+    enumerable: false,
+  });
+  return tagGhCommandError(error);
+}
+
+function paginatedStreamError(status: PaginatedCaptureStatus): Error {
+  const error = new Error(
+    status.streamErrorMessage ?? 'paginated gh capture stream failed',
+  );
+  if (status.streamErrorCode) {
+    Object.defineProperty(error, 'code', {
+      value: status.streamErrorCode,
+      enumerable: false,
+    });
+  }
+  return tagGhCommandError(error);
+}
+
+/** Largest stdout that can still be kept as a failed call's JSON error body. */
+const PAGINATED_ERROR_BODY_MAX_BYTES = 64 * 1024;
+
+/**
+ * The captured stdout, but only when it is gh's own JSON error body: the
+ * whole output is one small JSON object with a string `message` and a
+ * three-digit `status` (e.g. `{"message":"Not Found","status":"404"}`).
+ * `deriveGhHttpStatus` scans an error's `stdout` for that `status` when
+ * stderr carries none (#3335). On this path stdout otherwise holds earlier
+ * pages' data rows, which are user content (comment and issue bodies); the
+ * status and wording scanners must never read those, or text like
+ * "(HTTP 404)" inside a comment would reclassify a transport failure
+ * (CodeRabbit-style critique, PR #3605). Returns '' for anything else.
+ */
+function readPaginatedErrorBody(filePath: string): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(filePath, 'r');
+    const buffer = Buffer.alloc(PAGINATED_ERROR_BODY_MAX_BYTES + 1);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    if (read === 0 || read > PAGINATED_ERROR_BODY_MAX_BYTES) return '';
+    const text = buffer.subarray(0, read).toString('utf8').trim();
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return '';
+    }
+    const body = parsed as { message?: unknown; status?: unknown };
+    return typeof body.message === 'string' &&
+      /^\d{3}$/.test(String(body.status ?? ''))
+      ? text
+      : '';
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Nothing more to release.
+      }
+    }
+  }
+}
+
+/**
+ * Best-effort removal of the capture's temp directory. A worker that is
+ * still terminating can hold a file open (Windows refuses to remove it),
+ * and that cleanup failure must not replace the capture result or its
+ * tagged error (CodeRabbit critique, PR #3605). The directory then stays
+ * in the OS temp area.
+ */
+function removePaginatedCaptureDir(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Leave it for the OS temp cleanup.
+  }
+}
+
+/** What {@link readPaginatedGhApi} hands back to {@link executeGhApiJson}. */
+interface PaginatedGhRead {
+  items: unknown[];
+  /** The rows came from an allow-listed failure, so they may be incomplete. */
+  toleratedFailure: boolean;
+  /** stderr of that tolerated failure; the tolerated stdout is page data. */
+  toleratedStderr?: string;
+}
+
+/**
+ * Run paginated `gh api --paginate` without Node's 1 MiB `maxBuffer`.
+ * A worker counts stdout as it arrives, writes only the in-limit bytes,
+ * and kills `gh` when the next chunk would pass
+ * {@link GH_API_PAGINATED_MAX_BYTES}. The parent stays synchronous
+ * because {@link ghApiJson} is a public sync API. A signaled child is a
+ * failure even when the bytes already written are valid JSON: a null
+ * exit status must not look like success (Copilot review, PR #3605).
+ * A stdout, stderr, or stdin pipe error is likewise a failure even when
+ * `gh` exits 0, so a partial NDJSON prefix is not returned. So is a
+ * timeout: the worker records that it signaled `gh`, because a `gh`
+ * that handles SIGTERM can still exit 0 (Copilot review, PR #3605). A non-zero
+ * exit still honors `allowStatuses` when the captured body is JSON-shaped
+ * and under the ceiling.
+ */
+function readPaginatedGhApi(
+  args: string[],
+  options: { timeout: number; input?: string; allowStatuses: number[] },
+): PaginatedGhRead {
+  const dir = mkdtempSync(join(tmpdir(), 'gh-exec-paginate-'));
+  const outPath = join(dir, 'stdout');
+  const errPath = join(dir, 'stderr');
+  const statusPath = join(dir, 'status.json');
+  const flag = new SharedArrayBuffer(CAPTURE_FLAG_BYTES);
+  const view = new Int32Array(flag);
+  let worker: Worker | undefined;
+  let workerLost = false;
+  try {
+    try {
+      worker = new Worker(new URL(import.meta.url), {
+        // Empty on purpose. The worker only spawns `gh`. Forwarding the
+        // parent's execArgv hands Node's test runner flags
+        // (`--stack-trace-limit`, `--secure-heap`, `--node-snapshot`, and
+        // `--test`) to Worker, which rejects them with
+        // ERR_WORKER_INVALID_EXEC_ARGV (CI lint on PR #3605, Node 24). An
+        // empty list also keeps this module from being loaded as a test
+        // file.
+        execArgv: [],
+        workerData: {
+          kind: PAGINATED_CAPTURE_KIND,
+          args,
+          timeout: options.timeout,
+          ...(options.input !== undefined ? { input: options.input } : {}),
+          outPath,
+          errPath,
+          statusPath,
+          limitBytes: GH_API_PAGINATED_MAX_BYTES,
+          flag,
+        } satisfies PaginatedCaptureWorkerData,
+      });
+    } catch (error) {
+      // A worker that never started is a transport failure, and the
+      // temp directory is still removed by the `finally` below.
+      throw tagGhCommandError(error);
+    }
+    // A worker 'error' event is queued on this thread and cannot be
+    // dispatched while Atomics.wait is blocking it. The listener only
+    // keeps that event from crashing the parent after the wait returns.
+    worker.on('error', () => {});
+    // Bound the start-up first, whatever the timeout. A worker that fails
+    // while starting up never reaches its exit hook, and this blocked
+    // thread cannot see its 'error' event, so without this a call with no
+    // timeout (0, or a timeout too large to be finite) would wait forever
+    // and any other would wait out its whole timeout (Copilot review, PR
+    // #3605). A worker that starts normally passes this in milliseconds.
+    Atomics.wait(view, CAPTURE_SLOT_STARTED, 0, paginatedCaptureGraceMs());
+    if (
+      Atomics.load(view, CAPTURE_SLOT_STARTED) === 0 &&
+      Atomics.load(view, CAPTURE_SLOT_DONE) === 0
+    ) {
+      throw tagGhCommandError(
+        new Error('paginated gh capture worker did not start'),
+      );
+    }
+    if (options.timeout > 0) {
+      Atomics.wait(
+        view,
+        CAPTURE_SLOT_DONE,
+        0,
+        options.timeout + paginatedCaptureGraceMs(),
+      );
+    } else {
+      Atomics.wait(view, CAPTURE_SLOT_DONE, 0);
+    }
+    if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0) {
+      throw paginatedTimeoutError('paginated gh capture timed out');
+    }
+    // Until the status has been read, assume the worker was lost: an
+    // unreadable status (its exit hook could not write one) must not leave
+    // a running `gh` behind either.
+    workerLost = true;
+    const capture = readPaginatedCaptureStatus(statusPath);
+    workerLost = capture.workerLost;
+    const stderr = existsSync(errPath) ? readFileSync(errPath, 'utf8') : '';
+    if (capture.limitExceeded) {
+      throw new GhPaginatedResponseLimitError(
+        GH_API_PAGINATED_MAX_BYTES,
+        capture.observedBytes,
+      );
+    }
+    // Even a clean exit after the timeout's SIGTERM is a failure: the
+    // body may be a partial NDJSON prefix. Checked before the spawn and
+    // pipe errors because, once the worker has signaled `gh` for the
+    // timeout, those are usually consequences of that signal (an EPIPE on
+    // stdin must not hide the timeout). A failure that lands after the
+    // timer fired still reports the timeout, which fails closed. A
+    // worker-initiated kill for any other reason stops the timer first.
+    if (capture.timedOut) {
+      throw paginatedTimeoutError(
+        `paginated gh capture timed out after ${options.timeout}ms`,
+      );
+    }
+    if (capture.spawnErrorMessage) {
+      throw paginatedSpawnError(capture);
+    }
+    if (capture.streamErrorMessage) {
+      throw paginatedStreamError(capture);
+    }
+    if (capture.signal) {
+      throw ghCommandFailure(-1, stderr || `gh killed by ${capture.signal}`);
+    }
+    let parsed: { items: unknown[]; jsonShaped: boolean };
+    try {
+      parsed = parsePaginatedNdjsonFile(outPath, GH_API_PAGINATED_MAX_BYTES);
+    } catch (error) {
+      if (error instanceof GhPaginatedResponseLimitError) throw error;
+      const status = Number(capture.status ?? -1);
+      // A zero exit with a malformed body stays a parse failure. Status 0
+      // is a successful gh exit, so it stays off the gh failure path. A
+      // non-zero exit is a tagged gh failure whether or not the status is
+      // allow-listed: an allow-listed status only tolerates a JSON-shaped
+      // body, and this body did not parse (matching the execFileSync path).
+      if (status !== 0) {
+        throw ghCommandFailure(status, stderr, readPaginatedErrorBody(outPath));
+      }
+      throw error;
+    }
+    // A missing status with no signal is a clean exit. A signal was
+    // already rejected above, so it cannot take this `?? 0` path.
+    const status = Number(capture.status ?? 0);
+    if (status !== 0) {
+      if (options.allowStatuses.includes(status) && parsed.jsonShaped) {
+        // The rows came from an allow-listed failure, so the listing may be
+        // incomplete; the read cache must not treat it as a full page set.
+        return {
+          items: parsed.items,
+          toleratedFailure: true,
+          toleratedStderr: stderr,
+        };
+      }
+      throw ghCommandFailure(status, stderr, readPaginatedErrorBody(outPath));
+    }
+    return { items: parsed.items, toleratedFailure: false };
+  } finally {
+    // The done flag alone does not prove `gh` stopped: a worker that died
+    // before publishing sets it through its exit hook (`workerLost`).
+    if (Atomics.load(view, CAPTURE_SLOT_DONE) === 0 || workerLost) {
+      killPaginatedGhChild(Atomics.load(view, CAPTURE_SLOT_PID));
+    }
+    void worker?.terminate();
+    removePaginatedCaptureDir(dir);
+  }
 }
 
 function safeHeaderValue(value: string | undefined): string | undefined {
@@ -1126,6 +2179,9 @@ function ghApiJsonWithReadCache(
  * this fix's intended effect, not a regression to chase; a future report
  * of silent degradation there should add a log line at the caller, not
  * revert this change.
+ *
+ * Paginated calls do not use this `execFileSync` path. See
+ * {@link readPaginatedGhApi}.
  */
 export function ghApiJson(
   path: string,
@@ -1159,13 +2215,39 @@ function executeGhApiJson(
   const timeout =
     options.timeout ??
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
+  if (paginate) {
+    let read: PaginatedGhRead;
+    try {
+      read = readPaginatedGhApi(args, {
+        timeout,
+        input: options.input,
+        allowStatuses,
+      });
+    } catch (error) {
+      // Only a failure of the gh run is a request outcome, as on the
+      // execFileSync path: a body that fails to parse after a clean exit,
+      // or a temp-dir error, carries no gh tag and is not recorded.
+      if (isTaggedGhCommandError(error)) {
+        recordTransportObservation(() =>
+          observeGhFailure(failureEvidence(error, true), { paginated: true }),
+        );
+      }
+      throw error;
+    }
+    // A tolerated failure is recorded as a failure, from its stderr only:
+    // the tolerated stdout is page data, not an error body.
+    recordTransportObservation(() =>
+      read.toleratedFailure
+        ? observeGhFailure(
+            { stderr: read.toleratedStderr },
+            { paginated: true },
+          )
+        : observeGhSuccess({ data: read.items, paginated: true }),
+    );
+    return { data: read.items, toleratedFailure: read.toleratedFailure };
+  }
   let raw: string;
   let toleratedFailure = false;
-  // Set when an allow-listed non-zero exit is tolerated below, so the
-  // paginated result records the original failure, not a clean success.
-  // Only stderr is kept: the tolerated stdout is page data, not an error
-  // body, so it must not be scanned for rate-limit wording.
-  let toleratedEvidence: { stderr: unknown } | null = null;
   try {
     raw = execFileSync('gh', args, {
       encoding: 'utf8',
@@ -1185,9 +2267,6 @@ function executeGhApiJson(
       throw tagGhCommandError(error);
     }
     toleratedFailure = true;
-    toleratedEvidence = {
-      stderr: (error as { stderr?: unknown } | null)?.stderr,
-    };
     const stdout = String(failure?.stdout ?? '');
     const included = observeHttp ? tryParseIncludedBody(stdout) : null;
     // An envelope parser turns an empty body into `{}`. That is fine for
@@ -1229,17 +2308,6 @@ function executeGhApiJson(
       throw tagGhCommandError(error);
     }
     raw = stdout;
-  }
-  if (paginate) {
-    // parsePaginatedGhNdjson already trims and returns [] on empty input.
-    const data = parsePaginatedGhNdjson(raw);
-    const tolerated = toleratedEvidence;
-    recordTransportObservation(() =>
-      tolerated
-        ? observeGhFailure(tolerated, { paginated: true })
-        : observeGhSuccess({ data, paginated: true }),
-    );
-    return { data, toleratedFailure };
   }
   if (observeHttp) {
     const included = tryParseIncludedBody(raw);
@@ -1470,4 +2538,17 @@ export async function withBoundedRetry<T>(
       );
     }
   }
+}
+
+// Only the capture worker entry should run here. Another worker that
+// imports this module has unrelated workerData; exiting would kill it
+// (Copilot review, PR #3605).
+const captureWorkerKind = workerData as { kind?: unknown } | null;
+if (
+  !isMainThread &&
+  captureWorkerKind !== null &&
+  typeof captureWorkerKind === 'object' &&
+  captureWorkerKind.kind === PAGINATED_CAPTURE_KIND
+) {
+  runPaginatedCaptureWorker();
 }

@@ -595,9 +595,18 @@ export function collectPreMergeReadiness(
   const threads = port.listChangeRequestReviewThreadsWithComments(
     args.prNumber,
   );
-  const changedFiles = port
-    .listChangeRequestChangedFiles(args.prNumber)
-    .filter(Boolean);
+  // #3597: a paginated changed-files read can fail closed on a response
+  // ceiling or a transport error. Continue-with-[] would look like a PR
+  // that changed no files, so the failure leaves this collector as
+  // ChangedFilesReadError and main() renders it.
+  let changedFiles;
+  try {
+    changedFiles = port
+      .listChangeRequestChangedFiles(args.prNumber)
+      .filter(Boolean);
+  } catch (error) {
+    throw changedFilesReadError(error);
+  }
   const codeownersText = fetchCodeownersText(port, owner, repo, baseRefName);
   const {
     eligible: eligibleCodeownerUserLogins,
@@ -1411,6 +1420,63 @@ export function collectPreMergeReadiness(
     trustedMarkerActorsSource,
   };
 }
+class ChangedFilesReadError extends Error {
+  changedFiles;
+  constructor(message, changedFiles, cause) {
+    super(message, { cause });
+    this.name = 'ChangedFilesReadError';
+    this.changedFiles = changedFiles;
+  }
+}
+/**
+ * Structural view of `GhPaginatedResponseLimitError`. This helper cannot
+ * import that class: `provider-port-migration-guard` forbids a migrated
+ * helper from importing the gh-exec transport module (#2266).
+ */
+function paginatedResponseLimit(error) {
+  if (
+    !(error instanceof Error) ||
+    error.name !== 'GhPaginatedResponseLimitError'
+  ) {
+    return null;
+  }
+  const limitBytes = error.limitBytes;
+  const observedBytes = error.observedBytes;
+  if (typeof limitBytes !== 'number' || typeof observedBytes !== 'number') {
+    return null;
+  }
+  return { message: error.message, limitBytes, observedBytes };
+}
+function changedFilesReadError(error) {
+  const limit = paginatedResponseLimit(error);
+  if (limit) {
+    return new ChangedFilesReadError(
+      limit.message,
+      {
+        status: 'unavailable',
+        recovery: {
+          reason: 'response-limit',
+          limitBytes: limit.limitBytes,
+          observedBytes: limit.observedBytes,
+        },
+      },
+      error,
+    );
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new ChangedFilesReadError(
+    message,
+    {
+      status: 'unavailable',
+      recovery: {
+        reason: 'process-transport',
+        limitBytes: null,
+        observedBytes: null,
+      },
+    },
+    error,
+  );
+}
 const DEFAULT_DEFER_MARKER_PREFIX = 'idd-skill';
 /** The marker prefix from the trusted config, defaulting like every other
  * marker reader; never a hard-coded `idd-skill` in an adopter (#3624). */
@@ -1585,10 +1651,14 @@ export function computeDeferFollowUps({
 // report -- both used to be indistinguishable-by-default (an uncaught
 // exception left an unhandled stack trace on stderr and a non-JSON stdout,
 // easy to conflate with a transient not-ready state if the caller only
-// checks the exit code). `hint` is populated only for the specific error
-// this arose from (the missing --claim-issue/--claimless case); other
-// thrown errors surface with `error` alone.
+// checks the exit code). `hint` is populated only for the missing
+// --claim-issue/--claimless case. #3597 adds `changedFiles` for a
+// changed-files read failure so that failure stays an unavailable read.
+// Every other thrown error surfaces with `error` alone.
 export function renderCliUsageError(error) {
+  if (error instanceof ChangedFilesReadError) {
+    return { error: error.message, changedFiles: error.changedFiles };
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('missing required --claim-issue')) {
     return {

@@ -7,17 +7,22 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
 import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   DEFAULT_GH_TIMEOUT_MS,
+  GH_API_PAGINATED_MAX_BYTES,
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  GhPaginatedResponseLimitError,
   ghApiJson,
   ghApiJsonWithHeaders,
   ghGraphql,
@@ -30,6 +35,8 @@ import {
   viewerLoginFailureIsGraphqlEligible,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
+import { deriveGhHttpStatus } from '../src/scripts/gh-http-status.mts';
+import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
@@ -133,6 +140,63 @@ async function withGhHostEnvAsync(
 // callers must invoke it (ideally in a `finally`) even when the assertion throws.
 function stubGh(scriptBody: string): () => void {
   return stubExecutable('gh', scriptBody);
+}
+
+const PAGINATED_CAPTURE_TEST_FAULT = 'IDD_GH_EXEC_TEST_FAULT';
+
+function repoRoot(): string {
+  return fileURLToPath(new URL('..', import.meta.url));
+}
+
+function withCaptureFault(fault: string, run: () => void): void {
+  const previous = process.env[PAGINATED_CAPTURE_TEST_FAULT];
+  process.env[PAGINATED_CAPTURE_TEST_FAULT] = fault;
+  try {
+    run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[PAGINATED_CAPTURE_TEST_FAULT];
+    } else {
+      process.env[PAGINATED_CAPTURE_TEST_FAULT] = previous;
+    }
+  }
+}
+
+function waitForPath(filePath: string, timeoutMs: number): boolean {
+  const started = Date.now();
+  const slot = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() - started < timeoutMs) {
+    if (existsSync(filePath)) return true;
+    Atomics.wait(slot, 0, 0, 50);
+  }
+  return existsSync(filePath);
+}
+
+function stubHungGh(pidPath: string, signalPath: string): () => void {
+  return stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+process.on('SIGTERM', () => {
+  try {
+    fs.writeFileSync(${JSON.stringify(signalPath)}, 'signaled');
+  } catch {
+    // The assertion only cares that the file exists.
+  }
+  process.exit(0);
+});
+setTimeout(() => process.exit(0), 30_000);
+`);
+}
+
+function stopRecordedPid(pidPath: string): void {
+  if (!existsSync(pidPath)) return;
+  const pid = Number(readFileSync(pidPath, 'utf8'));
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // The child already exited.
+  }
 }
 
 test('ghText trims stdout and forwards argv to gh', () => {
@@ -953,6 +1017,631 @@ process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ i
   }
 });
 
+test('ghApiJson (paginated) does not inherit Worker-invalid execArgv (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const runnerPath = join(tempRoot, 'runner.mts');
+  // The runner is a separate process, so this run's own execArgv (here
+  // `--stack-trace-limit`, which Worker rejects) reaches ghApiJson; the
+  // child inherits the PATH that stubGh points at the stub.
+  const restore = stubGh(
+    `process.stdout.write([JSON.stringify([{ id: 1 }, { id: 2 }]), JSON.stringify({ id: 3 })].join('\\n'));`,
+  );
+  const modulePath = join(repoRoot(), 'src/scripts/gh-exec.mts');
+  writeFileSync(
+    runnerPath,
+    `import { ghApiJson } from ${JSON.stringify(modulePath)};
+const rows = ghApiJson('repos/o/r/issues', { paginate: true });
+if (!Array.isArray(rows) || rows.length !== 3 || rows[2]?.id !== 3) {
+  console.error(JSON.stringify(rows));
+  process.exit(2);
+}
+`,
+  );
+  try {
+    execFileSync(process.execPath, ['--stack-trace-limit=10', runnerPath], {
+      cwd: repoRoot(),
+      env: process.env,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('gh-exec worker entry exits only for a paginated capture kind (#3597)', async () => {
+  const moduleUrl = pathToFileURL(join(repoRoot(), 'src/scripts/gh-exec.mts'));
+  const exitCode = (workerData: unknown): Promise<number> => {
+    const worker = new Worker(moduleUrl, { execArgv: [], workerData });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        worker.terminate();
+        reject(
+          new Error(`worker stayed alive for ${JSON.stringify(workerData)}`),
+        );
+      }, 30_000);
+      worker.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      worker.once('exit', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+  };
+
+  assert.equal(await exitCode({ kind: 'not-a-capture' }), 0);
+  assert.equal(await exitCode(null), 0);
+  assert.equal(await exitCode({ kind: 'paginated-gh-capture' }), 1);
+});
+
+test('ghApiJson (paginated) fails closed when gh exits 0 after the timeout SIGTERM (#3597)', () => {
+  // A `gh` that handles SIGTERM and exits cleanly reports `close(0, null)`,
+  // so the timeout has to be recorded independently of the exit status.
+  const restore = stubGh(`
+process.on('SIGTERM', () => process.exit(0));
+process.stdout.write('{"id":1}\\n');
+setTimeout(() => process.exit(0), 30_000);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 300 }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : '';
+        assert.match(message, /paginated gh capture timed out/);
+        assert.equal((error as { code?: unknown }).code, 'ETIMEDOUT');
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  // `kill(pid, 0)` also succeeds for a zombie: a gh whose capture worker
+  // is gone is killed but never reaped.
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const state = stat.slice(
+      stat.lastIndexOf(')') + 2,
+      stat.lastIndexOf(')') + 3,
+    );
+    return state !== 'Z' && state !== 'X';
+  } catch {
+    return true;
+  }
+}
+
+/** A `gh` that ignores SIGTERM, records its pid, writes `output`, then idles. */
+function stubSigtermIgnoringGh(pidPath: string, output: string): () => void {
+  return stubGh(`
+const fs = require('node:fs');
+process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+${output}
+setTimeout(() => process.exit(0), 60_000);
+`);
+}
+
+/**
+ * The recorded gh must be gone. A parent that sends SIGKILL returns as
+ * soon as the signal is queued and the kernel tears the process down a
+ * moment later, so callers on that path poll for a short while; the worker
+ * paths wait for the `close` event and are stopped already.
+ */
+function assertRecordedPidStopped(pidPath: string, waitMs = 0): void {
+  assert.equal(existsSync(pidPath), true);
+  const pid = Number(readFileSync(pidPath, 'utf8'));
+  assert.equal(Number.isInteger(pid) && pid > 0, true);
+  const slot = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + waitMs;
+  while (processIsAlive(pid) && Date.now() < deadline) {
+    Atomics.wait(slot, 0, 0, 25);
+  }
+  assert.equal(processIsAlive(pid), false, `gh ${pid} outlived the capture`);
+}
+
+const SIGKILL_ESCALATION_SKIP = {
+  skip: process.platform === 'win32',
+};
+
+// The parent-path tests need to see a killed, never-reaped gh as stopped.
+// That is only possible through `/proc`, so they run on Linux alone.
+const PARENT_STOP_SKIP = {
+  skip: process.platform !== 'linux',
+};
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores the timeout SIGTERM before returning (#3597)',
+  SIGKILL_ESCALATION_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `process.stdout.write('{"id":1}\\n');`,
+    );
+    try {
+      // The timeout has to outlast the stub's start-up, or SIGTERM would
+      // arrive before it has recorded its pid (a slow runner).
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 1_000 }),
+        (error: unknown) => {
+          assert.equal((error as { code?: unknown }).code, 'ETIMEDOUT');
+          return true;
+        },
+      );
+      assertRecordedPidStopped(pidPath);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM after a pipe error before returning (#3597)',
+  SIGKILL_ESCALATION_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `process.stdout.write('{"id":1}\\n');`,
+    );
+    try {
+      withCaptureFault('stdout', () => {
+        assert.throws(
+          () =>
+            ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : '';
+            assert.match(message, /stdout pipe failed/);
+            return true;
+          },
+        );
+      });
+      assertRecordedPidStopped(pidPath);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM past the ceiling before returning (#3597)',
+  SIGKILL_ESCALATION_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `const chunk = 'x'.repeat(1024 * 1024);
+for (let i = 0; i < 10; i += 1) process.stdout.write(chunk);`,
+    );
+    try {
+      assert.throws(
+        () =>
+          ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+        (error: unknown) => {
+          assert.equal(
+            error instanceof Error ? error.name : '',
+            'GhPaginatedResponseLimitError',
+          );
+          return true;
+        },
+      );
+      assertRecordedPidStopped(pidPath);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM when the parent backstop fires (#3597)',
+  PARENT_STOP_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(pidPath, '');
+    try {
+      // The proc fault leaves gh running, so the parent's stuck-worker
+      // backstop is the only thing that can stop it.
+      withCaptureFault('proc-unreadable', () => {
+        assert.throws(
+          () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : '';
+            assert.match(message, /paginated gh capture timed out/);
+            return true;
+          },
+        );
+      });
+      assertRecordedPidStopped(pidPath, 3_000);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'ghApiJson (paginated) stops a gh that ignores SIGTERM when the capture worker is lost (#3597)',
+  PARENT_STOP_SKIP,
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+    const pidPath = join(tempRoot, 'pid');
+    const restore = stubSigtermIgnoringGh(
+      pidPath,
+      `process.stdout.write('{"id":1}\\n');`,
+    );
+    try {
+      // The worker dies from an uncaught error while gh runs; its exit
+      // hook then sets the done flag without a real result.
+      withCaptureFault('worker-crash', () => {
+        assert.throws(
+          () =>
+            ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : '';
+            assert.match(message, /worker exited before reporting status/);
+            return true;
+          },
+        );
+      });
+      assertRecordedPidStopped(pidPath, 3_000);
+    } finally {
+      stopRecordedPid(pidPath);
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test('ghApiJson (paginated) parses rows whose newlines fall on read boundaries and rows spanning many reads (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'boundaries.ndjson');
+  const readSize = 64 * 1024;
+  const rowOfLength = (id: number, length: number) => {
+    const base = JSON.stringify({ id, pad: '' }).length;
+    return { id, pad: 'x'.repeat(length - base) };
+  };
+  const rows: Array<Record<string, unknown>> = [
+    // Each newline lands just before, on, and just after a 64 KiB edge.
+    rowOfLength(0, readSize - 1),
+    rowOfLength(1, readSize),
+    rowOfLength(2, readSize + 1),
+    rowOfLength(3, 2 * readSize - 1),
+    // One row spanning many reads, with multibyte text over the edges.
+    { id: 4, pad: '日本語𠮷'.repeat(60_000) },
+    { id: 5, pad: 'tail' },
+  ];
+  writeFileSync(
+    fixturePath,
+    `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+  );
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues', { paginate: true }), rows);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) fails instead of hanging when the capture worker never starts (#3597)', () => {
+  // The parent blocks on the worker's flags, so a worker that dies before
+  // arming its exit hook must not leave the call waiting: forever for no
+  // timeout (0, or one too large to be finite), and for the whole timeout
+  // otherwise.
+  withCaptureFault('worker-init-fail', () => {
+    for (const timeout of [0, 30_000, Number.POSITIVE_INFINITY]) {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /capture worker did not start/);
+          assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
+          return true;
+        },
+      );
+    }
+  });
+});
+
+test('ghApiJson (paginated) throws a tagged gh failure for an allow-listed status with a non-JSON body (#3597)', () => {
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeSync(1, 'Not Found\\n');
+fs.writeSync(2, 'gh: Not Found (HTTP 404)\\n');
+process.exit(1);
+`);
+  try {
+    assert.throws(
+      () =>
+        ghApiJson('repos/o/r/issues', { paginate: true, allowStatuses: [1] }),
+      (error: unknown) => {
+        assert.equal(error instanceof SyntaxError, false);
+        assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
+        assert.equal((error as { status?: unknown }).status, 1);
+        assert.match(
+          String((error as { stderr?: unknown }).stderr),
+          /HTTP 404/,
+        );
+        assert.equal(deriveGhHttpStatus(error), 404);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) keeps the stdout JSON body on a failure so its status can be derived (#3597)', () => {
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeSync(1, '{"message":"Forbidden","status":"403"}\\n');
+fs.writeSync(2, 'gh: something odd\\n');
+process.exit(1);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true }),
+      (error: unknown) => {
+        assert.match(
+          String((error as { stdout?: unknown }).stdout),
+          /"status":"403"/,
+        );
+        assert.equal(deriveGhHttpStatus(error), 403);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) never keeps earlier data rows as the failure stdout (#3597)', () => {
+  // A comment body that quotes a gh status must not turn a later transport
+  // failure into a 404 (or a 65 KB error message).
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeSync(1, JSON.stringify({ id: 1, body: 'see (HTTP 404) in the log', status: '404' }) + '\\n');
+fs.writeSync(1, JSON.stringify({ id: 2, body: 'gh: Not Found (HTTP 404)' }) + '\\n');
+fs.writeSync(2, 'error connecting to api.github.com\\n');
+process.exit(1);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues/1/comments', { paginate: true }),
+      (error: unknown) => {
+        assert.equal((error as { stdout?: unknown }).stdout, undefined);
+        assert.equal(deriveGhHttpStatus(error), null);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) parses a single line holding a very large JSON array (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'array-line.json');
+  const count = 150_000;
+  writeFileSync(
+    fixturePath,
+    `[${Array.from({ length: count }, (_, id) => id).join(',')}]\n`,
+  );
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    const items = ghApiJson('repos/o/r/issues', { paginate: true });
+    assert.equal(Array.isArray(items) && items.length, count);
+    assert.equal((items as number[])[count - 1], count - 1);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) parses CRLF rows with multibyte text across read boundaries and no trailing newline (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'rows.ndjson');
+  const rows = Array.from({ length: 6_000 }, (_, id) => ({
+    id,
+    name: `日本語テスト𠮷-${id}`,
+  }));
+  writeFileSync(
+    fixturePath,
+    rows.map((row) => JSON.stringify(row)).join('\r\n'),
+  );
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.deepEqual(ghApiJson('repos/o/r/issues', { paginate: true }), rows);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) treats a timeout past the timer range as the longest delay (#3597)', () => {
+  // `setTimeout` fires after 1 ms for a delay past 2^31-1, which would
+  // time out a capture that has plenty of time left.
+  const restore = stubGh(`process.stdout.write('{"id":1}\\n');`);
+  try {
+    for (const timeout of [Number.POSITIVE_INFINITY, 2 ** 31]) {
+      assert.deepEqual(
+        ghApiJson('repos/o/r/issues', { paginate: true, timeout }),
+        [{ id: 1 }],
+      );
+    }
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) fails closed when the stdout pipe errors (#3597)', () => {
+  const restore = stubGh(`process.stdout.write('{"id":1}\\n');`);
+  try {
+    withCaptureFault('stdout', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 5_000 }),
+        (error: unknown) => {
+          assert.equal(Array.isArray(error), false);
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /stdout pipe failed/);
+          assert.doesNotMatch(message, /gh killed by SIGTERM/);
+          return true;
+        },
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) fails closed when the stderr pipe errors (#3597)', () => {
+  const restore = stubGh(`
+process.stderr.write('warn\\n');
+process.stdout.write('{"id":1}\\n');
+`);
+  try {
+    withCaptureFault('stderr', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 5_000 }),
+        (error: unknown) => {
+          assert.equal(Array.isArray(error), false);
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /stderr pipe failed/);
+          return true;
+        },
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) fails closed when the stdin pipe errors (#3597)', () => {
+  const restore = stubGh(`process.stdout.write('{"id":1}\\n');`);
+  try {
+    withCaptureFault('stdin', () => {
+      assert.throws(
+        () =>
+          ghApiJson('repos/o/r/issues', {
+            paginate: true,
+            input: '{"n":1}\n',
+            timeout: 5_000,
+          }),
+        (error: unknown) => {
+          assert.equal(Array.isArray(error), false);
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /stdin pipe failed/);
+          return true;
+        },
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) still signals gh when /proc cannot be read (#3597)', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const pidPath = join(tempRoot, 'pid');
+  const signalPath = join(tempRoot, 'signal');
+  const restore = stubHungGh(pidPath, signalPath);
+  try {
+    withCaptureFault('proc-unreadable', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /paginated gh capture timed out/);
+          // The parent backstop carries the same code as a worker timeout.
+          assert.equal((error as { code?: unknown }).code, 'ETIMEDOUT');
+          return true;
+        },
+      );
+    });
+    assert.equal(waitForPath(signalPath, 2_000), true);
+  } finally {
+    stopRecordedPid(pidPath);
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) does not signal ghost-daemon when a later argument contains gh (#3597)', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const pidPath = join(tempRoot, 'pid');
+  const signalPath = join(tempRoot, 'signal');
+  const restore = stubHungGh(pidPath, signalPath);
+  try {
+    withCaptureFault('proc-not-gh', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /paginated gh capture timed out/);
+          return true;
+        },
+      );
+    });
+    assert.equal(existsSync(pidPath), true);
+    assert.equal(waitForPath(signalPath, 400), false);
+  } finally {
+    stopRecordedPid(pidPath);
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) still signals a /usr/bin/gh argv0 (#3597)', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const pidPath = join(tempRoot, 'pid');
+  const signalPath = join(tempRoot, 'signal');
+  const restore = stubHungGh(pidPath, signalPath);
+  try {
+    withCaptureFault('proc-gh-path', () => {
+      assert.throws(
+        () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 200 }),
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : '';
+          assert.match(message, /paginated gh capture timed out/);
+          return true;
+        },
+      );
+    });
+    assert.equal(waitForPath(signalPath, 2_000), true);
+  } finally {
+    stopRecordedPid(pidPath);
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson (paginated) forwards --paginate --jq .[] and returns [] on empty output', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
   const argsFile = join(tempRoot, 'args.json');
@@ -1067,6 +1756,300 @@ test('ghApiJson (paginated) succeeds under the default paginated timeout when th
     ]);
   } finally {
     restore();
+  }
+});
+
+// #3597: the measured 300-file pull-request body is 1,073,028 bytes, just
+// over Node's default 1 MiB child-process buffer. The paginated reader
+// must return every filename. A body one byte past
+// GH_API_PAGINATED_MAX_BYTES must throw and must not return a partial list.
+const MEASURED_CHANGED_FILES_BYTES = 1_073_028;
+const MEASURED_CHANGED_FILES_ROWS = 300;
+
+function writeMeasuredChangedFilesFixture(filePath: string): string[] {
+  const names: string[] = [];
+  const chunks: Buffer[] = [];
+  for (let index = 0; index < MEASURED_CHANGED_FILES_ROWS - 1; index += 1) {
+    const name = `file-${String(index).padStart(3, '0')}.txt`;
+    names.push(name);
+    chunks.push(Buffer.from(`{"filename":${JSON.stringify(name)}}\n`));
+  }
+  const prefix = Buffer.concat(chunks);
+  const wrapper = Buffer.byteLength('{"filename":""}\n');
+  const padLength = MEASURED_CHANGED_FILES_BYTES - prefix.length - wrapper;
+  assert.ok(padLength > 0, `fixture prefix is ${prefix.length} bytes`);
+  const lastName = 'x'.repeat(padLength);
+  names.push(lastName);
+  const body = Buffer.concat([
+    prefix,
+    Buffer.from(`{"filename":${JSON.stringify(lastName)}}\n`),
+  ]);
+  assert.equal(body.length, MEASURED_CHANGED_FILES_BYTES);
+  writeFileSync(filePath, body);
+  return names;
+}
+
+function writeOverCeilingPaginatedFixture(filePath: string): number {
+  const line = Buffer.from(`{"filename":"${'n'.repeat(60_000)}"}\n`);
+  assert.ok(line.length < 64 * 1024);
+  const body = Buffer.alloc(GH_API_PAGINATED_MAX_BYTES + 1, 0x20);
+  for (
+    let offset = 0;
+    offset + line.length <= GH_API_PAGINATED_MAX_BYTES;
+    offset += line.length
+  ) {
+    line.copy(body, offset);
+  }
+  writeFileSync(filePath, body);
+  return body.length;
+}
+
+function stubGhStdoutFile(fixturePath: string): () => void {
+  return stubGh(`
+const fs = require('node:fs');
+process.stdout.write(fs.readFileSync(${JSON.stringify(fixturePath)}));
+`);
+}
+
+test('ghApiJson (paginated) parses a 1,073,028-byte 300-file body (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'files.ndjson');
+  const names = writeMeasuredChangedFilesFixture(fixturePath);
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    const rows = ghApiJson('repos/o/r/pulls/1/files', {
+      paginate: true,
+    }) as { filename?: unknown }[];
+    assert.equal(rows.length, MEASURED_CHANGED_FILES_ROWS);
+    assert.equal(rows[0]?.filename, names[0]);
+    assert.equal(rows[rows.length - 1]?.filename, names[names.length - 1]);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) accepts a body of exactly GH_API_PAGINATED_MAX_BYTES (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'files.ndjson');
+  const prefix = '{"filename":"';
+  const suffix = '"}\n';
+  const padLength =
+    GH_API_PAGINATED_MAX_BYTES -
+    Buffer.byteLength(prefix) -
+    Buffer.byteLength(suffix);
+  assert.ok(padLength > 0);
+  const name = 'e'.repeat(padLength);
+  const body = `${prefix}${name}${suffix}`;
+  assert.equal(Buffer.byteLength(body), GH_API_PAGINATED_MAX_BYTES);
+  writeFileSync(fixturePath, body);
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    const rows = ghApiJson('repos/o/r/pulls/1/files', {
+      paginate: true,
+    }) as { filename?: unknown }[];
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.filename, name);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('GhPaginatedResponseLimitError is a tagged gh transport failure (#3597)', () => {
+  const error = new GhPaginatedResponseLimitError(8, 9);
+  assert.equal((error as { ghCommand?: unknown }).ghCommand, true);
+  assert.equal(
+    Object.getOwnPropertyDescriptor(error, 'ghCommand')?.enumerable,
+    false,
+  );
+  assert.equal(classifyHelperError(error).kind, 'transport');
+  assert.equal(
+    classifyHelperError(new Error('changed-files read', { cause: error })).kind,
+    'transport',
+  );
+});
+
+test('ghApiJson (paginated) throws on a body past GH_API_PAGINATED_MAX_BYTES and returns no partial list (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'files.ndjson');
+  const observedBytes = writeOverCeilingPaginatedFixture(fixturePath);
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/pulls/1/files', { paginate: true }),
+      (error: unknown) => {
+        assert.ok(error instanceof GhPaginatedResponseLimitError);
+        assert.equal(error.limitBytes, GH_API_PAGINATED_MAX_BYTES);
+        assert.equal(error.observedBytes, observedBytes);
+        assert.equal(error.observedBytes, GH_API_PAGINATED_MAX_BYTES + 1);
+        assert.equal(Array.isArray(error), false);
+        assert.equal((error as { ghCommand?: unknown }).ghCommand, true);
+        assert.equal(
+          Object.getOwnPropertyDescriptor(error, 'ghCommand')?.enumerable,
+          false,
+        );
+        return true;
+      },
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) stops a runaway writer at the ceiling (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const donePath = join(tempRoot, 'done');
+  const limit = GH_API_PAGINATED_MAX_BYTES;
+  const restore = stubGh(`
+const fs = require('node:fs');
+const chunk = Buffer.alloc(64 * 1024, 0x61);
+const total = ${limit * 4};
+const donePath = ${JSON.stringify(donePath)};
+let written = 0;
+function writeMore() {
+  let ok = true;
+  while (written < total && ok) {
+    const remaining = total - written;
+    const slice =
+      remaining >= chunk.length ? chunk : chunk.subarray(0, remaining);
+    written += slice.length;
+    ok = process.stdout.write(slice);
+  }
+  if (written < total) {
+    process.stdout.once('drain', writeMore);
+    return;
+  }
+  fs.writeFileSync(donePath, 'done');
+}
+process.stdout.on('error', () => process.exit(0));
+writeMore();
+`);
+  try {
+    assert.throws(
+      () =>
+        ghApiJson('repos/o/r/pulls/1/files', {
+          paginate: true,
+          timeout: 10_000,
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof GhPaginatedResponseLimitError);
+        assert.equal(error.limitBytes, limit);
+        assert.ok(error.observedBytes > limit);
+        assert.ok(error.observedBytes < limit + 256 * 1024);
+        assert.equal(Array.isArray(error), false);
+        return true;
+      },
+    );
+    assert.equal(existsSync(donePath), false);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson (paginated) does not treat a signaled gh as a successful partial list (#3597)', {
+  skip: process.platform === 'win32',
+}, () => {
+  const restore = stubGh(`
+process.stdout.write('{"ok":true}\\n', () => {
+  process.kill(process.pid, 'SIGTERM');
+});
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true, timeout: 5_000 }),
+      (error: unknown) => {
+        assert.ok(!(error instanceof GhPaginatedResponseLimitError));
+        assert.equal(Array.isArray(error), false);
+        const message = error instanceof Error ? error.message : '';
+        assert.match(message, /gh killed by SIGTERM/);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) rethrows a non-zero gh status (#3597)', () => {
+  const restore = stubGh(`
+process.stdout.write(JSON.stringify({ id: 1 }));
+process.exit(3);
+`);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues', { paginate: true }),
+      (error: unknown) => {
+        assert.ok(!(error instanceof GhPaginatedResponseLimitError));
+        assert.match(
+          error instanceof Error ? error.message : '',
+          /gh command failed/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) honors an allow-listed failure status when the body is JSON-shaped (#3597)', () => {
+  const restore = stubGh(`
+process.stdout.write(JSON.stringify({ id: 1 }));
+process.exit(1);
+`);
+  try {
+    assert.deepEqual(
+      ghApiJson('repos/o/r/issues', { paginate: true, allowStatuses: [1] }),
+      [{ id: 1 }],
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (paginated) forwards input to gh stdin (#3597)', () => {
+  const restore = stubGh(`
+const chunks = [];
+process.stdin.on('data', (chunk) => chunks.push(chunk));
+process.stdin.on('end', () => {
+  process.stdout.write(Buffer.concat(chunks));
+});
+`);
+  try {
+    assert.deepEqual(
+      ghApiJson('repos/o/r/issues', {
+        paginate: true,
+        input: '{"id":7}\n',
+        timeout: 5_000,
+      }),
+      [{ id: 7 }],
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('ghApiJson (non-paginated) still stops above the 1 MiB child-process buffer (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const fixturePath = join(tempRoot, 'body.json');
+  writeFileSync(fixturePath, Buffer.alloc(MEASURED_CHANGED_FILES_BYTES, 0x78));
+  const restore = stubGhStdoutFile(fixturePath);
+  try {
+    assert.throws(
+      () => ghApiJson('repos/o/r/issues/1'),
+      (error: unknown) => {
+        assert.ok(!(error instanceof GhPaginatedResponseLimitError));
+        const code = String((error as { code?: unknown }).code ?? '');
+        assert.match(code, /MAXBUFFER|ENOBUFS/);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

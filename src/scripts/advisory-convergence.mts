@@ -3510,6 +3510,24 @@ const RETRY_TRANSIENT_GH_FAILURE_ATTEMPTS = 3;
 const RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS = 200;
 
 /**
+ * True for `GhPaginatedResponseLimitError` (#3597), recognized by name for
+ * the same reason `pre-merge-readiness` does: this file is migrated onto
+ * `provider-port.mts` and may not import the gh-exec transport module.
+ * That failure is deterministic -- the same response would exceed the same
+ * ceiling on every attempt -- so retrying only repeats up to
+ * `GH_API_PAGINATED_MAX_BYTES` of capture per attempt. The cause chain is
+ * walked because a port adapter may wrap the failure.
+ */
+function isPaginatedResponseLimitError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
+    if (current.name === 'GhPaginatedResponseLimitError') return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/**
  * #2459: `collectFromGitHub`'s hot-path single-shot `gh` calls threw with
  * no retry on any failure, so a several-second runner network blip
  * crashed the whole required `idd-advisory-convergence` CI job instead of
@@ -3520,7 +3538,9 @@ const RETRY_TRANSIENT_GH_FAILURE_BASE_DELAY_MS = 200;
  * documents under heavy concurrent load) or a 5xx. A definitive 4xx
  * (not-found, forbidden, unauthorized, etc.) is a permanent rejection a
  * retry cannot fix, so it rethrows immediately instead of wasting the
- * attempt budget.
+ * attempt budget. A paginated response-limit failure (#3597) also has no
+ * HTTP status but is just as deterministic, so it rethrows immediately
+ * too (see `isPaginatedResponseLimitError`).
  *
  * Deliberately self-contained (reuses this file's own `sleepSync`, does
  * NOT import `gh-exec.mts`'s async `withBoundedRetry`): this file is
@@ -3546,7 +3566,9 @@ export function retryTransientGhFailure<T>(
       return task();
     } catch (error) {
       const status = deriveGhHttpStatus(error);
-      const retryable = status === null || status >= 500;
+      const retryable =
+        !isPaginatedResponseLimitError(error) &&
+        (status === null || status >= 500);
       if (attempt >= RETRY_TRANSIENT_GH_FAILURE_ATTEMPTS || !retryable) {
         throw error;
       }

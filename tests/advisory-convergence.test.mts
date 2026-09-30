@@ -8433,6 +8433,31 @@ test('retryTransientGhFailure retries a status-less (transport-level) failure, t
   assert.equal(calls, 2);
 });
 
+test('retryTransientGhFailure does not retry a paginated response-limit failure, even wrapped (#3597)', () => {
+  const limitError = Object.assign(
+    new Error('paginated gh api response exceeded 8388608 bytes'),
+    { name: 'GhPaginatedResponseLimitError' },
+  );
+  for (const thrown of [
+    limitError,
+    new Error('changed files read failed', { cause: limitError }),
+  ]) {
+    let calls = 0;
+    assert.throws(
+      () =>
+        retryTransientGhFailure(
+          () => {
+            calls += 1;
+            throw thrown;
+          },
+          { sleep: () => undefined },
+        ),
+      (error: unknown) => error === thrown,
+    );
+    assert.equal(calls, 1);
+  }
+});
+
 test('retryTransientGhFailure retries a 5xx failure, then succeeds (#2459)', () => {
   let calls = 0;
   const result = retryTransientGhFailure(

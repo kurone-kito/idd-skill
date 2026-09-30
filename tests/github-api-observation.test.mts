@@ -932,6 +932,47 @@ test('a configured telemetry path is expanded or rejected', () => {
   }
 });
 
+test('a paginated read records a failure only when the gh run itself failed (#3597)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-telemetry-'));
+  const telemetryPath = join(tempRoot, 'telemetry.jsonl');
+  const readCount = (): number =>
+    existsSync(telemetryPath)
+      ? readFileSync(telemetryPath, 'utf8')
+          .split('\n')
+          .filter((line) => line.trim().length > 0).length
+      : 0;
+  let restore: (() => void) | undefined;
+  try {
+    setGithubApiTelemetryPolicyForTests({
+      enabled: true,
+      maxRecords: 10,
+      path: telemetryPath,
+    });
+    // A clean exit whose body does not parse is not a GitHub request
+    // failure, and gh's own exit status is not to blame for it.
+    restore = stubExecutable('gh', `process.stdout.write('not json\\n');`);
+    assert.throws(() =>
+      ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+    );
+    restore();
+    assert.equal(readCount(), 0);
+    // A gh that exits non-zero is recorded, once.
+    restore = stubExecutable(
+      'gh',
+      `process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1);`,
+    );
+    assert.throws(() =>
+      ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
+    );
+    assert.equal(readCount(), 1);
+  } finally {
+    restore?.();
+    setGithubApiTelemetryPolicyForTests(null);
+    resetGithubApiTelemetryPolicyCacheForTests();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('opt-in telemetry does not change gh results or error classification', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-telemetry-'));
   const telemetryPath = join(tempRoot, 'telemetry.jsonl');
