@@ -454,10 +454,10 @@ never clears by polling: follow its `detail`.
   commit-message match, apply D3.5 step 7's own remediation (amend or
   rebase); for a checklist drift, apply D3.7's own mismatch handling.
   If the fix amended or rebased a commit (changing HEAD), return to
-  this list's first condition instead of only repeating this one — the
-  new HEAD invalidates the conditions already checked above. Otherwise,
-  repeat this condition once. If it still fails, post a hold note and
-  stop — do not proceed to F3.
+  this list's first condition instead of only repeating it — the new
+  HEAD invalidates the checks above. Otherwise, repeat this condition
+  once. If it still fails (pending registration excepted), post a hold
+  note and stop — do not proceed to F3.
 
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the digest after recording the blocking evidence and before
