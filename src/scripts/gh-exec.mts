@@ -15,8 +15,9 @@
 // Consumed by the `src/scripts/*.mts` helpers that shell out to `gh` or
 // need the CLI-entry-point guard.
 
-import type { StdioOptions } from 'node:child_process';
+import type { ExecFileSyncOptions, StdioOptions } from 'node:child_process';
 import { execFile, execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -28,13 +29,22 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { isMainThread, Worker, workerData } from 'node:worker_threads';
 
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import {
+  admitRequest,
+  admitRequestSync,
+  type GithubApiLoadControlRuntimePolicy,
+  type LoadControlGate,
+  type LoadControlIdentity,
+  type LoadControlRequest,
+  type LoadControlRuntime,
+} from './github-api-load-control.mts';
 import {
   observeGhFailure,
   observeGhSuccess,
@@ -50,6 +60,11 @@ import {
   type GithubApiReadClassification,
   readThroughGithubApiCache,
 } from './github-api-read-cache.mts';
+import {
+  isNotDispatchedRefusal,
+  preserveLoadControlRefusal,
+} from './github-api-refusal.mts';
+import { describeGhRequest } from './github-api-request-class.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -116,7 +131,11 @@ export function tagGhCommandError<T>(error: T): T {
  */
 export function wrapGhCompatibilityError(error: unknown): Error {
   const rawStderr = (error as { stderr?: unknown } | null)?.stderr;
-  const stderr = String(rawStderr ?? '').trim();
+  // A refusal has no stderr: keep its own reason in the message instead of
+  // an empty one. Every other failure keeps the historical text.
+  const stderr =
+    String(rawStderr ?? '').trim() ||
+    (isNotDispatchedRefusal(error) ? (error as Error).message : '');
   const wrapped = new Error(`gh command failed: ${stderr}`);
   if (rawStderr != null && String(rawStderr).length > 0) {
     Object.defineProperty(wrapped, 'stderr', {
@@ -125,7 +144,7 @@ export function wrapGhCompatibilityError(error: unknown): Error {
       configurable: true,
     });
   }
-  return tagGhCommandError(wrapped);
+  return tagGhCommandError(preserveLoadControlRefusal(wrapped, error));
 }
 
 /**
@@ -190,6 +209,500 @@ export class GhPaginatedResponseLimitError extends Error {
 
 const execFileAsync = promisify(execFile);
 
+// -- Host-local load control (issue #3586) ---------------------------------
+//
+// One gate per real `gh` process: every owned spawn site below goes through
+// `execGhSync` or `execGhAsync`, so `ghGraphql` and `resolveViewerLogin`
+// (which run through `ghText`) are admitted once, and the identity lookups
+// in `readGhStdout` are never gated (they are how the identity is found).
+// With load control off, or an identity that cannot be verified, the spawn
+// is exactly the historical call.
+
+/** Test-only replacement for the config, identity, and runtime of the gate. */
+export interface GhLoadControlTestOverride {
+  policy?: GithubApiLoadControlRuntimePolicy;
+  /** `null` is an unverified identity. Omit the key to resolve it normally. */
+  identity?: LoadControlIdentity | null;
+  runtime?: LoadControlRuntime;
+}
+
+const LOAD_CONTROL_DISABLED: GithubApiLoadControlRuntimePolicy = Object.freeze({
+  enabled: false,
+  maxConcurrent: 1,
+  maxWaitMs: 0,
+});
+
+let loadControlOverride: GhLoadControlTestOverride | null = null;
+let loadControlPolicyCache: {
+  cwd: string;
+  policy: GithubApiLoadControlRuntimePolicy;
+} | null = null;
+const loadControlIdentityMemo = new Map<string, LoadControlIdentity | null>();
+const ghConfiguredHostsMemo = new Map<string, string[] | null>();
+/** First lookups still running, so a burst of async callers shares one spawn. */
+const loadControlIdentityInflight = new Map<
+  string,
+  Promise<LoadControlIdentity | null>
+>();
+
+/** Test seam. Pass null to resume reading config and resolving identity. */
+// audit:ignore-dead-export: test seam; production reads config and must not toggle load control through process.env (issue #3586)
+export function setGithubApiLoadControlForTests(
+  override: GhLoadControlTestOverride | null,
+): void {
+  loadControlOverride = override;
+  loadControlPolicyCache = null;
+  loadControlIdentityMemo.clear();
+  loadControlIdentityInflight.clear();
+  ghConfiguredHostsMemo.clear();
+}
+
+/**
+ * The effective load-control policy for this working directory, read once
+ * per directory. Anything unreadable or invalid keeps it off.
+ */
+function loadLoadControlPolicy(): GithubApiLoadControlRuntimePolicy {
+  if (loadControlOverride?.policy) return loadControlOverride.policy;
+  let cwd: string;
+  try {
+    cwd = process.cwd();
+  } catch {
+    // A removed working directory keeps load control off, as it keeps any
+    // other config-driven behavior off.
+    return LOAD_CONTROL_DISABLED;
+  }
+  if (loadControlPolicyCache?.cwd === cwd) return loadControlPolicyCache.policy;
+  let policy = LOAD_CONTROL_DISABLED;
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(cwd, '.github/idd/config.json'), 'utf8'),
+    );
+    const configured = normalizePolicyConfig(raw).githubApi.loadControl;
+    const maxWaitMs = parseIsoDurationToMs(configured.maxWait);
+    if (configured.enabled === true && maxWaitMs !== null) {
+      policy = {
+        enabled: true,
+        maxConcurrent: configured.maxConcurrent,
+        maxWaitMs,
+      };
+    }
+  } catch {
+    // An unreadable or invalid config keeps load control off.
+  }
+  loadControlPolicyCache = { cwd, policy };
+  return policy;
+}
+
+/**
+ * `gh`'s configuration directory, in the order `gh` itself resolves it:
+ * `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `APPDATA` on Windows, then
+ * `~/.config`.
+ */
+function ghConfigDirectory(env: NodeJS.ProcessEnv): string {
+  const explicit = env.GH_CONFIG_DIR?.trim();
+  if (explicit) return explicit;
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(xdg, 'gh');
+  const appData = env.APPDATA?.trim();
+  if (process.platform === 'win32' && appData) {
+    return join(appData, 'GitHub CLI');
+  }
+  return join(homedir(), '.config', 'gh');
+}
+
+/**
+ * The hosts the local `gh` configuration lists (`hosts.yml` in `gh`'s config
+ * directory), lower-cased. No file means none. Read once per path. `null`
+ * (unresolved) for a file that cannot be read, and for a non-empty file
+ * that yields no host: an unfamiliar layout must not read as "none
+ * configured", which would fall to github.com.
+ */
+function configuredGhHosts(env: NodeJS.ProcessEnv): string[] | null {
+  const path = join(ghConfigDirectory(env), 'hosts.yml');
+  if (ghConfiguredHostsMemo.has(path)) {
+    return ghConfiguredHostsMemo.get(path) ?? null;
+  }
+  let hosts: string[] | null;
+  try {
+    const text = readFileSync(path, 'utf8').replace(/^\uFEFF/, '');
+    hosts = [
+      ...text.matchAll(/^(?:"([^"\s]+)"|'([^'\s]+)'|([A-Za-z0-9][\w.-]*)):/gm),
+    ].map((match) => (match[1] ?? match[2] ?? match[3]).toLowerCase());
+    if (hosts.length === 0 && text.trim() !== '') hosts = null;
+  } catch (error) {
+    hosts = (error as { code?: unknown } | null)?.code === 'ENOENT' ? [] : null;
+  }
+  ghConfiguredHostsMemo.set(path, hosts);
+  return hosts;
+}
+
+/**
+ * The host a request will reach, or null when it cannot be told without
+ * guessing. An explicit host (`--hostname`, a `HOST/OWNER/REPO` `-R`,
+ * `GH_HOST`, or an Actions `GITHUB_SERVER_URL`) always wins. Otherwise `gh
+ * api` uses its own default: the one host in `gh`'s configuration, else
+ * github.com. A higher-level subcommand takes its host from the repository's
+ * git remote, which is not visible here, so with several configured hosts
+ * it stays unresolved instead of borrowing github.com's scope.
+ */
+function resolveLoadControlHost(
+  hostHint: string | undefined,
+  apiCall: boolean,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  const explicit =
+    hostHint || env.GH_HOST?.trim().toLowerCase() || serverUrlHost(env);
+  if (explicit) return explicit;
+  const hosts = configuredGhHosts(env);
+  if (hosts === null) return null;
+  if (hosts.length === 0) return 'github.com';
+  if (hosts.length === 1) return hosts[0];
+  return apiCall ? 'github.com' : null;
+}
+
+/**
+ * The verified host and credential a request would run with, looked up
+ * once per host and credential environment. It uses `gh auth token` only,
+ * never `gh auth status`, so resolving an identity makes no API request.
+ * `null` means unverified: the request runs uncoordinated.
+ */
+function loadControlIdentityInputs(
+  hostHint: string | undefined,
+  apiCall: boolean,
+): {
+  host: string;
+  key: string;
+} | null {
+  const env = process.env;
+  const host = resolveLoadControlHost(hostHint, apiCall, env);
+  if (host === null) return null;
+  const key = createHash('sha256')
+    .update(
+      [
+        host,
+        env.GH_TOKEN,
+        env.GITHUB_TOKEN,
+        env.GH_ENTERPRISE_TOKEN,
+        env.GITHUB_ENTERPRISE_TOKEN,
+      ]
+        .map((value) => value ?? '')
+        .join('\0'),
+    )
+    .digest('hex');
+  return { host, key };
+}
+
+function verifiedIdentity(
+  host: string,
+  credential: string | undefined,
+): LoadControlIdentity | null {
+  return credential !== undefined && credential.trim() !== ''
+    ? { host, credentialMaterial: credential }
+    : null;
+}
+
+function loadControlIdentity(
+  hostHint: string | undefined,
+  apiCall: boolean,
+): LoadControlIdentity | null {
+  if (loadControlOverride && 'identity' in loadControlOverride) {
+    return loadControlOverride.identity ?? null;
+  }
+  const inputs = loadControlIdentityInputs(hostHint, apiCall);
+  if (inputs === null) return null;
+  const { host, key } = inputs;
+  if (loadControlIdentityMemo.has(key)) {
+    return loadControlIdentityMemo.get(key) ?? null;
+  }
+  const identity = verifiedIdentity(host, defaultCredentialMaterial(host));
+  loadControlIdentityMemo.set(key, identity);
+  return identity;
+}
+
+/**
+ * {@link loadControlIdentity} for an async caller: the first lookup of a
+ * host and credential environment spawns `gh auth token`, which must not
+ * block the event loop, or this process's own in-flight requests could not
+ * complete and release while it waits.
+ */
+async function loadControlIdentityAsync(
+  hostHint: string | undefined,
+  apiCall: boolean,
+): Promise<LoadControlIdentity | null> {
+  if (loadControlOverride && 'identity' in loadControlOverride) {
+    return loadControlOverride.identity ?? null;
+  }
+  const inputs = loadControlIdentityInputs(hostHint, apiCall);
+  if (inputs === null) return null;
+  const { host, key } = inputs;
+  if (loadControlIdentityMemo.has(key)) {
+    return loadControlIdentityMemo.get(key) ?? null;
+  }
+  // Concurrent first callers (a traversal starts several at once) share one
+  // lookup. A slow duplicate that timed out must not overwrite a good
+  // identity either, which sharing one lookup rules out.
+  const running = loadControlIdentityInflight.get(key);
+  if (running) return await running;
+  const lookup = (async () => {
+    const identity = verifiedIdentity(
+      host,
+      await defaultCredentialMaterialAsync(host),
+    );
+    loadControlIdentityMemo.set(key, identity);
+    return identity;
+  })();
+  loadControlIdentityInflight.set(key, lookup);
+  try {
+    return await lookup;
+  } finally {
+    loadControlIdentityInflight.delete(key);
+  }
+}
+
+interface LoadControlCall {
+  /** Null when the request runs uncoordinated. */
+  prepared: {
+    policy: GithubApiLoadControlRuntimePolicy;
+    identity: LoadControlIdentity;
+    request: Omit<LoadControlRequest, 'deadlineMs'>;
+  } | null;
+  admissionDeadlineMs?: number;
+  /** A caller-chosen spawn timeout, which then bounds wait plus run. */
+  explicitTimeoutMs?: number;
+}
+
+/**
+ * Classify one `gh` call and decide whether it is coordinated. Cheap when
+ * load control is off: one cached policy lookup and nothing else.
+ */
+function loadControlCall(
+  args: readonly string[],
+  options: { timeout?: number; admissionDeadlineMs?: number },
+  paginated = args.includes('--paginate'),
+): LoadControlCall {
+  const begun = beginLoadControlCall(args);
+  if (begun === null) return { prepared: null };
+  try {
+    return completeLoadControlCall(
+      begun,
+      loadControlIdentity(begun.description.host, begun.apiCall),
+      options,
+      paginated,
+    );
+  } catch {
+    return { prepared: null };
+  }
+}
+
+/** {@link loadControlCall} for an async caller: the identity lookup does not block. */
+async function loadControlCallAsync(
+  args: readonly string[],
+  options: { timeout?: number; admissionDeadlineMs?: number },
+  paginated = args.includes('--paginate'),
+): Promise<LoadControlCall> {
+  const begun = beginLoadControlCall(args);
+  if (begun === null) return { prepared: null };
+  try {
+    return completeLoadControlCall(
+      begun,
+      await loadControlIdentityAsync(begun.description.host, begun.apiCall),
+      options,
+      paginated,
+    );
+  } catch {
+    return { prepared: null };
+  }
+}
+
+/** The part of a call's preparation that needs no identity, or null when off. */
+function beginLoadControlCall(args: readonly string[]): {
+  policy: GithubApiLoadControlRuntimePolicy;
+  description: ReturnType<typeof describeGhRequest>;
+  apiCall: boolean;
+} | null {
+  const policy = loadLoadControlPolicy();
+  if (!policy.enabled) return null;
+  try {
+    return {
+      policy,
+      description: describeGhRequest(args),
+      apiCall: args[0] === 'api',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function completeLoadControlCall(
+  begun: NonNullable<ReturnType<typeof beginLoadControlCall>>,
+  identity: LoadControlIdentity | null,
+  options: { timeout?: number; admissionDeadlineMs?: number },
+  paginated: boolean,
+): LoadControlCall {
+  if (identity === null) return { prepared: null };
+  return {
+    prepared: {
+      policy: begun.policy,
+      identity,
+      request: {
+        classification: begun.description.classification,
+        ...(begun.description.resource
+          ? { resource: begun.description.resource }
+          : {}),
+        ...(paginated ? { paginated: true } : {}),
+      },
+    },
+    admissionDeadlineMs: options.admissionDeadlineMs,
+    explicitTimeoutMs: options.timeout,
+  };
+}
+
+function admissionRequest(
+  call: LoadControlCall & {
+    prepared: NonNullable<LoadControlCall['prepared']>;
+  },
+): LoadControlRequest {
+  let deadlineMs = call.admissionDeadlineMs ?? call.prepared.policy.maxWaitMs;
+  // An explicit spawn timeout is the caller's whole budget: admission may
+  // use at most half of it, and the spawn gets the rest.
+  if (call.explicitTimeoutMs !== undefined && call.explicitTimeoutMs > 0) {
+    deadlineMs = Math.min(deadlineMs, call.explicitTimeoutMs / 2);
+  }
+  return { ...call.prepared.request, deadlineMs };
+}
+
+/** An admission refusal is a gh-command failure that never spawned `gh`. */
+function surfaceRefusal(error: unknown): null {
+  if (isNotDispatchedRefusal(error)) throw tagGhCommandError(error);
+  // Anything else is a fault in the coordination layer, not evidence: run
+  // the request uncoordinated rather than fail it.
+  return null;
+}
+
+function openLoadControlGateSync(
+  call: LoadControlCall,
+): LoadControlGate | null {
+  if (call.prepared === null) return null;
+  try {
+    return admitRequestSync(
+      call.prepared.identity,
+      call.prepared.policy,
+      admissionRequest({ ...call, prepared: call.prepared }),
+      loadControlOverride?.runtime,
+    );
+  } catch (error) {
+    return surfaceRefusal(error);
+  }
+}
+
+async function openLoadControlGate(
+  call: LoadControlCall,
+): Promise<LoadControlGate | null> {
+  if (call.prepared === null) return null;
+  try {
+    return await admitRequest(
+      call.prepared.identity,
+      call.prepared.policy,
+      admissionRequest({ ...call, prepared: call.prepared }),
+      loadControlOverride?.runtime,
+    );
+  } catch (error) {
+    return surfaceRefusal(error);
+  }
+}
+
+/** The spawn timeout once admission has used part of an explicit budget. */
+function timeoutAfterAdmission(
+  timeout: number,
+  gate: LoadControlGate,
+  call: LoadControlCall,
+): number {
+  const explicit = call.explicitTimeoutMs;
+  if (explicit === undefined || explicit <= 0) return timeout;
+  return Math.max(1, Math.round(explicit - gate.waitedMs));
+}
+
+/**
+ * `execFileSync('gh', ...)` behind the admission gate. A refusal throws
+ * before any process starts; otherwise a failure is fed to the cooldown
+ * before it is rethrown unchanged, and the lease is always released.
+ */
+function execGhSync(
+  args: string[],
+  options: ExecFileSyncOptions,
+  call: LoadControlCall,
+): string | Buffer {
+  const gate = openLoadControlGateSync(call);
+  try {
+    const output = execFileSync(
+      'gh',
+      args,
+      gate === null
+        ? options
+        : {
+            ...options,
+            timeout: timeoutAfterAdmission(
+              options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+              gate,
+              call,
+            ),
+          },
+    );
+    // A GraphQL throttle can arrive as an error inside a successful response.
+    if (gate !== null && call.prepared?.request.resource === 'graphql') {
+      gate.recordResponse(String(output));
+    }
+    return output;
+  } catch (error) {
+    gate?.recordFailure(
+      failureEvidence(error, call.prepared?.request.paginated === true),
+    );
+    throw error;
+  } finally {
+    gate?.release();
+  }
+}
+
+async function execGhAsync(
+  args: string[],
+  options: { encoding: 'utf8'; timeout: number; maxBuffer?: number },
+  call: LoadControlCall,
+): Promise<string> {
+  const gate = await openLoadControlGate(call);
+  try {
+    const run = execFileAsync(
+      'gh',
+      args,
+      gate === null
+        ? options
+        : {
+            ...options,
+            timeout: timeoutAfterAdmission(options.timeout, gate, call),
+          },
+    );
+    run.child.stdin?.end();
+    const { stdout } = await run;
+    if (gate !== null && call.prepared?.request.resource === 'graphql') {
+      gate.recordResponse(stdout);
+    }
+    return stdout;
+  } catch (error) {
+    gate?.recordFailure(
+      failureEvidence(error, call.prepared?.request.paginated === true),
+    );
+    throw error;
+  } finally {
+    gate?.release();
+  }
+}
+
+/** Longest a coordinated call can spend before its spawn even starts. */
+function loadControlWaitBoundMs(): number {
+  const policy = loadLoadControlPolicy();
+  // Identity resolution can run two 10 s `gh auth` lookups on first use.
+  return policy.enabled ? policy.maxWaitMs + 20_000 : 0;
+}
+
 /** Optional `execFileSync` overrides accepted by {@link ghText}. */
 export interface GhTextOptions {
   /**
@@ -228,6 +741,14 @@ export interface GhTextOptions {
    * rather than risking an `ENOBUFS` failure (#2935 review, Codex).
    */
   maxBuffer?: number;
+  /**
+   * Longest this request may wait to be admitted when host-local load
+   * control is on (`githubApi.loadControl`). Defaults to the policy
+   * `maxWait`, and an explicit `timeout` caps it at half of that budget.
+   * A write or unclassified request never waits. Ignored when load control
+   * is off.
+   */
+  admissionDeadlineMs?: number;
 }
 
 /**
@@ -309,16 +830,23 @@ function withResolvedApiHostname(args: string[]): string[] {
  * or {@link ghApiJson}'s `allowStatuses` option instead.
  */
 export function ghText(args: string[], options: GhTextOptions = {}): string {
+  const resolvedArgs = withResolvedApiHostname(args);
   try {
-    return execFileSync('gh', withResolvedApiHostname(args), {
-      encoding: 'utf8',
-      timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-      ...(options.stdio ? { stdio: options.stdio } : {}),
-      ...(options.input !== undefined ? { input: options.input } : {}),
-      ...(options.maxBuffer !== undefined
-        ? { maxBuffer: options.maxBuffer }
-        : {}),
-    }).trim();
+    return String(
+      execGhSync(
+        resolvedArgs,
+        {
+          encoding: 'utf8',
+          timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+          ...(options.stdio ? { stdio: options.stdio } : {}),
+          ...(options.input !== undefined ? { input: options.input } : {}),
+          ...(options.maxBuffer !== undefined
+            ? { maxBuffer: options.maxBuffer }
+            : {}),
+        },
+        loadControlCall(resolvedArgs, options),
+      ),
+    ).trim();
   } catch (error) {
     throw tagGhCommandError(error);
   }
@@ -356,17 +884,22 @@ export function ghText(args: string[], options: GhTextOptions = {}): string {
  */
 export function ghTextUnbounded(
   args: string[],
-  options: Pick<GhTextOptions, 'timeout'> = {},
+  options: Pick<GhTextOptions, 'timeout' | 'admissionDeadlineMs'> = {},
 ): string {
   const dir = mkdtempSync(join(tmpdir(), 'gh-exec-unbounded-'));
   const outPath = join(dir, 'stdout');
   try {
     const fd = openSync(outPath, 'w');
     try {
-      execFileSync('gh', withResolvedApiHostname(args), {
-        stdio: ['ignore', fd, 'pipe'],
-        timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-      });
+      const resolvedArgs = withResolvedApiHostname(args);
+      execGhSync(
+        resolvedArgs,
+        {
+          stdio: ['ignore', fd, 'pipe'],
+          timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+        },
+        loadControlCall(resolvedArgs, options),
+      );
     } catch (error) {
       throw tagGhCommandError(error);
     } finally {
@@ -428,6 +961,8 @@ export interface GhTextAsyncOptions {
    * truncation.
    */
   maxBuffer?: number;
+  /** See {@link GhTextOptions.admissionDeadlineMs}. */
+  admissionDeadlineMs?: number;
 }
 
 /**
@@ -460,16 +995,19 @@ export async function ghTextAsync(
   args: string[],
   options: GhTextAsyncOptions = {},
 ): Promise<string> {
-  const run = execFileAsync('gh', withResolvedApiHostname(args), {
-    encoding: 'utf8',
-    timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-    ...(options.maxBuffer !== undefined
-      ? { maxBuffer: options.maxBuffer }
-      : {}),
-  });
-  run.child.stdin?.end();
+  const resolvedArgs = withResolvedApiHostname(args);
   try {
-    const { stdout } = await run;
+    const stdout = await execGhAsync(
+      resolvedArgs,
+      {
+        encoding: 'utf8',
+        timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+        ...(options.maxBuffer !== undefined
+          ? { maxBuffer: options.maxBuffer }
+          : {}),
+      },
+      await loadControlCallAsync(resolvedArgs, options),
+    );
     return stdout.trim();
   } catch (error) {
     throw tagGhCommandError(error);
@@ -520,6 +1058,8 @@ export interface GhApiJsonOptions {
    * body (`--input`, `-f`, `-F`) alone does not.
    */
   readCache?: GhApiJsonReadCacheOptions;
+  /** See {@link GhTextOptions.admissionDeadlineMs}. */
+  admissionDeadlineMs?: number;
 }
 
 /**
@@ -569,6 +1109,18 @@ function recordTransportObservation(build: () => RequestObservation): void {
   } catch {
     // Observation retention must not change the wrapper's own outcome.
   }
+}
+
+/**
+ * Record a failed call. A load-control refusal started no `gh` process, so
+ * it is not a failed invocation and is never counted as one.
+ */
+function recordTransportFailure(
+  error: unknown,
+  build: () => RequestObservation,
+): void {
+  if (isNotDispatchedRefusal(error)) return;
+  recordTransportObservation(build);
 }
 
 function statusFromIncluded(raw: string): number | null {
@@ -774,14 +1326,24 @@ export function ghApiJsonWithHeaders(
   ];
   let raw: string;
   try {
-    raw = execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-      ...(options.input !== undefined ? { input: options.input } : {}),
-    });
+    raw = String(
+      execGhSync(
+        args,
+        {
+          encoding: 'utf8',
+          timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+          stdio: [
+            options.input !== undefined ? 'pipe' : 'ignore',
+            'pipe',
+            'pipe',
+          ],
+          ...(options.input !== undefined ? { input: options.input } : {}),
+        },
+        loadControlCall(args, options),
+      ),
+    );
   } catch (error) {
-    recordTransportObservation(() => observeGhFailure(error));
+    recordTransportFailure(error, () => observeGhFailure(error));
     throw tagGhCommandError(error);
   }
   let parsed: IncludedGhApiEnvelope;
@@ -1966,6 +2528,22 @@ function readGhStdout(args: string[]): string | undefined {
   }
 }
 
+/** {@link readGhStdout} without blocking the event loop. */
+async function readGhStdoutAsync(args: string[]): Promise<string | undefined> {
+  try {
+    const run = execFileAsync('gh', args, {
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+    run.child.stdin?.end();
+    const { stdout } = await run;
+    const raw = stdout.trim();
+    return raw.length > 0 ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Process-lifetime memo of the one host `gh auth status` reported (#3621).
  * Without it every cached read ran a `gh` process before the cache lookup,
@@ -2064,6 +2642,17 @@ export function defaultCredentialMaterial(host: string): string | undefined {
   return readGhStdout(['auth', 'token', '--hostname', host]);
 }
 
+async function defaultCredentialMaterialAsync(
+  host: string,
+): Promise<string | undefined> {
+  const token = usesGithubToken(host)
+    ? process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim()
+    : process.env.GH_ENTERPRISE_TOKEN?.trim() ||
+      process.env.GITHUB_ENTERPRISE_TOKEN?.trim();
+  if (token) return token;
+  return await readGhStdoutAsync(['auth', 'token', '--hostname', host]);
+}
+
 function readCacheLeaseTtlMs(
   options: GhApiJsonOptions,
   request: GhApiJsonReadCacheOptions,
@@ -2078,7 +2667,8 @@ function readCacheLeaseTtlMs(
       : DEFAULT_GH_TIMEOUT_MS);
   const bounded =
     fetchTimeout > 0 ? fetchTimeout : DEFAULT_GH_PAGINATED_TIMEOUT_MS;
-  return bounded + 30_000;
+  // The leader may also wait for load-control admission before it spawns.
+  return bounded + 30_000 + loadControlWaitBoundMs();
 }
 
 export function loadReadCachePolicy(
@@ -2134,12 +2724,22 @@ function ghApiIncluded(
     '--include',
   ];
   try {
-    const raw = execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
-      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-      ...(options.input !== undefined ? { input: options.input } : {}),
-    });
+    const raw = String(
+      execGhSync(
+        args,
+        {
+          encoding: 'utf8',
+          timeout: options.timeout ?? DEFAULT_GH_TIMEOUT_MS,
+          stdio: [
+            options.input !== undefined ? 'pipe' : 'ignore',
+            'pipe',
+            'pipe',
+          ],
+          ...(options.input !== undefined ? { input: options.input } : {}),
+        },
+        loadControlCall(args, options),
+      ),
+    );
     return parseIncludedGhApiEnvelope(raw);
   } catch (error) {
     const stdout = String(
@@ -2382,13 +2982,18 @@ function executeGhApiJson(
 ): { data: unknown; toleratedFailure: boolean } {
   const { paginate = false, extraArgs = [], allowStatuses = [] } = options;
   const hostname = resolveGhApiHostname() ?? explicitCacheHostname(cacheHost);
-  const observeHttp = !paginate && telemetryIsEnabled();
   const args = [
     'api',
     path,
     ...(hostname ? ['--hostname', hostname] : []),
     ...extraArgs,
   ];
+  const call = loadControlCall(args, options, paginate);
+  // Headers (retry-after, reset) are only visible through `--include`, so a
+  // coordinated call asks for them, as opt-in telemetry does. An
+  // uncoordinated call keeps the historical argv.
+  const observeHttp =
+    !paginate && (telemetryIsEnabled() || call.prepared !== null);
   if (paginate) {
     args.push('--paginate', '--jq', '.[]');
   } else if (observeHttp) {
@@ -2398,54 +3003,79 @@ function executeGhApiJson(
     options.timeout ??
     (paginate ? DEFAULT_GH_PAGINATED_TIMEOUT_MS : DEFAULT_GH_TIMEOUT_MS);
   if (paginate) {
-    let read: PaginatedGhRead;
+    // The capture worker is the one spawn site for a paginated read, so the
+    // gate wraps it here, before the try that records request outcomes: a
+    // refusal started no gh run and is not one.
+    const gate = openLoadControlGateSync(call);
     try {
-      read = readPaginatedGhApi(args, {
-        timeout,
-        input: options.input,
-        allowStatuses,
-      });
-    } catch (error) {
-      // A failure of the gh run is recorded as a failure. A body that fails
-      // to parse after a clean exit still consumed a request, so it is
-      // recorded as an observation with no status (#3616), never as a
-      // failed gh run. A temp-dir or size-limit error carries neither tag
-      // and is not recorded.
-      if (isTaggedGhCommandError(error)) {
-        recordTransportObservation(() =>
-          observeGhFailure(failureEvidence(error, true), { paginated: true }),
-        );
-      } else if (isResponseParseFailure(error)) {
-        recordResponseParseFailure(null, { paginated: true });
+      let read: PaginatedGhRead;
+      try {
+        read = readPaginatedGhApi(args, {
+          timeout:
+            gate === null
+              ? timeout
+              : timeoutAfterAdmission(timeout, gate, call),
+          input: options.input,
+          allowStatuses,
+        });
+      } catch (error) {
+        // A failure of the gh run is recorded as a failure. A body that
+        // fails to parse after a clean exit still consumed a request, so it
+        // is recorded as an observation with no status (#3616), never as a
+        // failed gh run. A temp-dir or size-limit error carries neither tag
+        // and is not recorded.
+        if (isTaggedGhCommandError(error)) {
+          gate?.recordFailure(failureEvidence(error, true));
+          recordTransportObservation(() =>
+            observeGhFailure(failureEvidence(error, true), { paginated: true }),
+          );
+        } else if (isResponseParseFailure(error)) {
+          recordResponseParseFailure(null, { paginated: true });
+        }
+        throw error;
       }
-      throw error;
+      // A tolerated failure is recorded as a failure, from its stderr only:
+      // the tolerated stdout is page data, not an error body.
+      if (read.toleratedFailure) {
+        gate?.recordFailure({ stderr: read.toleratedStderr });
+      }
+      recordTransportObservation(() =>
+        read.toleratedFailure
+          ? observeGhFailure(
+              { stderr: read.toleratedStderr },
+              { paginated: true },
+            )
+          : observeGhSuccess({ data: read.items, paginated: true }),
+      );
+      return { data: read.items, toleratedFailure: read.toleratedFailure };
+    } finally {
+      gate?.release();
     }
-    // A tolerated failure is recorded as a failure, from its stderr only:
-    // the tolerated stdout is page data, not an error body.
-    recordTransportObservation(() =>
-      read.toleratedFailure
-        ? observeGhFailure(
-            { stderr: read.toleratedStderr },
-            { paginated: true },
-          )
-        : observeGhSuccess({ data: read.items, paginated: true }),
-    );
-    return { data: read.items, toleratedFailure: read.toleratedFailure };
   }
   let raw: string;
   let toleratedFailure = false;
   try {
-    raw = execFileSync('gh', args, {
-      encoding: 'utf8',
-      timeout,
-      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-      ...(options.input !== undefined ? { input: options.input } : {}),
-    });
+    raw = String(
+      execGhSync(
+        args,
+        {
+          encoding: 'utf8',
+          timeout,
+          stdio: [
+            options.input !== undefined ? 'pipe' : 'ignore',
+            'pipe',
+            'pipe',
+          ],
+          ...(options.input !== undefined ? { input: options.input } : {}),
+        },
+        call,
+      ),
+    );
   } catch (error) {
     const failure = error as { status?: unknown; stdout?: unknown } | null;
     const status = Number(failure?.status ?? -1);
     if (!allowStatuses.includes(status)) {
-      recordTransportObservation(() =>
+      recordTransportFailure(error, () =>
         observeGhFailure(failureEvidence(error, paginate), {
           paginated: paginate,
         }),
@@ -2567,7 +3197,7 @@ export function ghGraphql(
   try {
     raw = ghText(args);
   } catch (error) {
-    recordTransportObservation(() =>
+    recordTransportFailure(error, () =>
       observeGhFailure(error, { graphql: true }),
     );
     throw error;
@@ -2728,7 +3358,15 @@ export async function withBoundedRetry<T>(
     try {
       return await task();
     } catch (error) {
-      if (attempt >= totalAttempts || !isRetryable(error)) {
+      // A load-control refusal is already the outcome of bounded waiting and
+      // means nothing was sent: retrying it only waits again. This check
+      // precedes the caller's predicate, which cannot see a refusal that a
+      // wrapper rebuilt.
+      if (
+        isNotDispatchedRefusal(error) ||
+        attempt >= totalAttempts ||
+        !isRetryable(error)
+      ) {
         throw error;
       }
       await sleep(

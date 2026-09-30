@@ -26,6 +26,10 @@ import {
   deriveGhHttpStatus,
   ghErrorText,
 } from './gh-http-status.mjs';
+import {
+  isNotDispatchedRefusal,
+  preserveLoadControlRefusal,
+} from './github-api-refusal.mjs';
 import { PROVIDER_CAPABILITY_GROUPS } from './provider-contract.mjs';
 /**
  * GitHub's search API returns at most 1000 results for a single query, so a
@@ -87,7 +91,8 @@ function toProviderError(error) {
   const wrapped = new Error(message);
   wrapped.category = statusToCategory(status);
   wrapped.cause = error;
-  return wrapped;
+  // #3586: a refused read is still a refusal to whoever reads the wrapper.
+  return preserveLoadControlRefusal(wrapped, error);
 }
 /**
  * #2267: throw when a GraphQL response carries top-level `errors`, so a bad
@@ -394,6 +399,9 @@ function readWorkItemCommentPage(
   try {
     raw = readAdapterGhText(deps, apiArgs, timeoutMs);
   } catch (error) {
+    // A load-control refusal started no request: rebuilding it as a
+    // retryable transport failure would hide that from the retry loop.
+    if (isNotDispatchedRefusal(error)) throw error;
     if (isUnresolvedWorkItemSide(error, side)) {
       throw unresolvedWorkItemSideError(side, number);
     }
@@ -1626,6 +1634,17 @@ function postWorkItemCommentWithRetry(deps, repoPath, number, body) {
       ) {
         throw error;
       }
+      // #3586: host-local load control refused this POST before any request
+      // was sent, so it is not an ambiguous write. On the first attempt
+      // nothing at all was sent: no duplicate re-read, no retry. After an
+      // earlier failure that may have landed, stop posting and confirm that
+      // earlier attempt once through the final duplicate check below;
+      // `lastError` stays the earlier failure, so the error finally thrown
+      // never claims that nothing was sent.
+      if (isNotDispatchedRefusal(error)) {
+        if (attempt === 1) throw error;
+        break;
+      }
       const status = deriveGhHttpStatus(error);
       if (
         status !== null &&
@@ -1863,6 +1882,9 @@ function fetchReviewThreadsGeneric(
  * whenever real stream text exists (Copilot review, #3335).
  */
 function wrapTraversalGhFailure(error, args) {
+  // A load-control refusal carries no stderr to copy and must stay
+  // recognizable to the retry loop, so it is rethrown as is.
+  if (isNotDispatchedRefusal(error)) throw error;
   if (classifyInaccessibleIssueLookup(error) === 'not-found') {
     return '';
   }
@@ -2599,6 +2621,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             }
             return parsed;
           } catch (error) {
+            if (isNotDispatchedRefusal(error)) throw error;
             const stderr = String(error?.stderr ?? '').trim();
             const detail = stderr || error.message;
             throw new Error(`gh api graphql failed: ${detail}`);

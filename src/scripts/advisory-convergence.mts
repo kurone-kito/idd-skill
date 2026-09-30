@@ -128,6 +128,7 @@ import {
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -3566,7 +3567,11 @@ export function retryTransientGhFailure<T>(
       return task();
     } catch (error) {
       const status = deriveGhHttpStatus(error);
+      // A load-control refusal (#3586) has no status but is no transient
+      // fault: it is the outcome of bounded waiting, and a retry only waits
+      // again.
       const retryable =
+        !isNotDispatchedRefusal(error) &&
         !isPaginatedResponseLimitError(error) &&
         (status === null || status >= 500);
       if (attempt >= RETRY_TRANSIENT_GH_FAILURE_ATTEMPTS || !retryable) {
