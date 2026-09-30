@@ -666,7 +666,12 @@ function publish(ctx, result, startedAt) {
  * {@link enforceSizeBound}.
  */
 function evict(ctx) {
+  sweepEntries(ctx);
+  // Only a sweep that ran to the end counts: a storage failure leaves the
+  // flag unset, so the due-check after the read may still try once more.
   ctx.fullSweepRan = true;
+}
+function sweepEntries(ctx) {
   const entriesDir = join(ctx.root, 'entries');
   const stat = tryLstat(ctx.storage, entriesDir);
   if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return;
@@ -786,7 +791,7 @@ function readSweepRecord(ctx) {
     return null;
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
-  const { sweptAt, maxBytes, retentionMs } = parsed;
+  const { sweptAt, maxBytes, retentionMs, claim } = parsed;
   if (
     typeof sweptAt !== 'number' ||
     !Number.isFinite(sweptAt) ||
@@ -797,11 +802,24 @@ function readSweepRecord(ctx) {
   ) {
     return null;
   }
-  return { sweptAt, maxBytes, retentionMs };
+  return {
+    sweptAt,
+    maxBytes,
+    retentionMs,
+    ...(typeof claim === 'string' ? { claim } : {}),
+  };
 }
+/** Writes the record and returns the random claim it carries. */
 function writeSweepRecord(ctx, maxBytes, retentionMs) {
-  const record = { sweptAt: ctx.now(), maxBytes, retentionMs };
+  const claim = randomBytes(8).toString('hex');
+  const record = {
+    sweptAt: ctx.now(),
+    maxBytes,
+    retentionMs,
+    claim,
+  };
   ctx.storage.writeAtomic(sweepRecordPath(ctx), JSON.stringify(record));
+  return claim;
 }
 /**
  * Run the full sweep when one is due, after a cache use has produced its
@@ -832,13 +850,18 @@ function sweepIfDue(ctx) {
         Math.min(SWEEP_INTERVAL_MS, ctx.retentionMs);
     if (record !== null && !lowered && !elapsed) return;
     const loweredOnly = record !== null && lowered && !elapsed;
-    writeSweepRecord(
+    const claim = writeSweepRecord(
       ctx,
       loweredOnly ? Math.min(record.maxBytes, ctx.maxBytes) : ctx.maxBytes,
       loweredOnly
         ? Math.min(record.retentionMs, ctx.retentionMs)
         : ctx.retentionMs,
     );
+    // The write is not exclusive: a process that read the same due state can
+    // overwrite it. Read the record back and let only the process whose claim
+    // survived sweep, which narrows a burst of simultaneous users to (almost
+    // always) one sweep. A loser skips; the survivor's sweep covers it.
+    if (readSweepRecord(ctx)?.claim !== claim) return;
     // A write in this use may already have run the full sweep (its total went
     // past `maxBytes`); the record above still claims the due state.
     if (!ctx.fullSweepRan) evict(ctx);

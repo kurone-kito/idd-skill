@@ -2090,6 +2090,94 @@ test('a write that already ran the full sweep is not swept again by the due-chec
   }
 });
 
+test('a size-triggered sweep that fails does not stop the due-check from sweeping (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  try {
+    const ids = seedEntries(paths, clock, 3);
+    const size = lstatSync(entryPathOf(paths.cacheDir, ids[0])).size;
+    let listings = 0;
+    clock.now += 10;
+    // The write's size pass lists the entries (1st), its full sweep lists them
+    // again and fails (2nd); the due-check then sweeps successfully (3rd).
+    const result = readThrough(paths, okBody({ pad: 'x'.repeat(400) }), {
+      requestShape: { path: '/new-key' },
+      policy: policy(paths.cacheDir, { maxBytes: Math.floor(size * 2.5) }),
+      now: () => clock.now,
+      storage: {
+        readdir(path: string): string[] {
+          if (path.endsWith(`${sep}entries`)) {
+            listings += 1;
+            if (listings === 2) {
+              throw Object.assign(new Error('EIO'), { code: 'EIO' });
+            }
+          }
+          return readdirSync(path);
+        },
+      },
+    });
+    assert.equal(result.cache, 'miss');
+    assert.equal(listings, 3);
+    assert.equal(entryNames(paths.cacheDir).length, 2);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('only the process whose sweep claim survives runs the full sweep (#3627)', () => {
+  const paths = tempRoot();
+  const clock = { now: 1_000_000 };
+  const counter = countingStorage();
+  const expired = join(paths.cacheDir, 'entries', `${'a'.repeat(64)}.json`);
+  try {
+    seedEntries(paths, clock, 1);
+    const recordPath = join(paths.cacheDir, SWEEP_FILE);
+    unlinkSync(recordPath);
+    writeFileSync(expired, storedRecordText(clock.now - 90_000_000), {
+      mode: 0o600,
+    });
+    const use = (storage: ReadThroughGithubApiCacheInput['storage']) => {
+      clock.now += 10;
+      return readThrough(paths, okBody({ never: 'fetched' }), {
+        requestShape: { path: '/seed/0' },
+        now: () => clock.now,
+        storage,
+      });
+    };
+
+    // A competing process overwrote the record between this one's write and
+    // its read-back: this one must not sweep.
+    counter.reset();
+    const lostClaim: ReadThroughGithubApiCacheInput['storage'] = {
+      ...counter.storage,
+      readFile(path: string): string {
+        if (path.endsWith(SWEEP_FILE)) {
+          return JSON.stringify({
+            sweptAt: clock.now,
+            maxBytes: 104857600,
+            retentionMs: 86_400_000,
+            claim: 'someone-else',
+          });
+        }
+        return readFileSync(path, 'utf8');
+      },
+    };
+    assert.equal(use(lostClaim).cache, 'hit');
+    assert.equal(existsSync(expired), true);
+    assert.equal(
+      counter.calls.readdir.some((path) => path.endsWith(`${sep}entries`)),
+      false,
+    );
+
+    // With the record intact, the survivor of the claim sweeps.
+    unlinkSync(recordPath);
+    assert.equal(use(undefined).cache, 'hit');
+    assert.equal(existsSync(expired), false);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('within bounds and inside the sweep interval, a hit or publish reads no unrelated entry (#3627)', () => {
   const paths = tempRoot();
   const clock = { now: 1_000_000 };
