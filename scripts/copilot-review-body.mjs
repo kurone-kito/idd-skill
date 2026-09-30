@@ -203,3 +203,136 @@ export function classifyCopilotReviewBody(body) {
   }
   return { shape: 'unrecognized', suppressedCount: 0 };
 }
+// -----------------------------------------------------------------------
+// Review-body remark extraction (#3672)
+// -----------------------------------------------------------------------
+/** `### 🔵 Needs a closer look` (any ATX level; the `🔵` marker, with or
+ * without an emoji variation selector, is optional, since the real corpus
+ * bodies carry it and older test fixtures do not). The phrase must end the
+ * line, so `### Needs a closer look: text` is left to
+ * {@link REMARK_INLINE_LABEL_PATTERN}. */
+const REMARK_HEADING_PATTERN =
+  /^ {0,3}#{1,6}[ \t]+(?:🔵\uFE0F?[ \t]*)?needs a closer look[ \t#]*$/iu;
+/** Inline form, line-anchored: `🔵 Needs a closer look: text`, optionally
+ * behind up to three leading spaces and a run of heading, bullet (`-`,
+ * `*`, `+`), quote, or emphasis characters, for example
+ * `**Needs a closer look:** text`. Four or more leading spaces (an indented
+ * code block) never match. Matches the label and its separator only; the
+ * remark text is whatever follows on the line. */
+const REMARK_INLINE_LABEL_PATTERN =
+  /^ {0,3}(?:[>#*_+-][ \t>#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:\*\*|__)?[ \t]*/iu;
+const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
+const DETAILS_TAG_LINE_PATTERN = /^ {0,3}<\/?details(?:[ \t>]|$)/iu;
+/** `true` for a line that ends the running paragraph on its own: a blank
+ * line, or a fence line (blanked to exactly `''` in the stripped text while
+ * its original text is not). A code-span interior line is whitespace-only
+ * in the stripped text but non-blank in the original, so it does not end
+ * the paragraph. */
+function endsRemarkParagraph(original, stripped) {
+  return original.trim() === '' || stripped === '';
+}
+/** `true` when a stripped line opens a new block that ends a paragraph. */
+function startsNewBlock(stripped) {
+  return (
+    ATX_HEADING_LINE_PATTERN.test(stripped) ||
+    DETAILS_TAG_LINE_PATTERN.test(stripped)
+  );
+}
+/** Reads one paragraph from the ORIGINAL lines, starting at `start` (the
+ * first line's text begins at column `firstLineOffset`). Lines are trimmed
+ * and joined with one space, so a wrapped remark reads as Markdown renders
+ * it. Returns `null` when the paragraph is empty. */
+function readRemarkParagraph(original, stripped, start, firstLineOffset) {
+  const parts = [];
+  for (let index = start; index < original.length; index += 1) {
+    const originalLine = original[index] ?? '';
+    const strippedLine = stripped[index] ?? '';
+    if (
+      endsRemarkParagraph(originalLine, strippedLine) ||
+      (index > start && startsNewBlock(strippedLine))
+    ) {
+      break;
+    }
+    const text = originalLine
+      .slice(index === start ? firstLineOffset : 0)
+      .trim();
+    if (text !== '') {
+      parts.push(text);
+    }
+  }
+  return parts.length === 0 ? null : parts.join(' ');
+}
+/**
+ * Extract the remark a Copilot review body carries under its
+ * `### 🔵 Needs a closer look` heading (legacy and `ccr-overview-v2`
+ * bodies alike) or after an inline `Needs a closer look:` label
+ * (kurone-kito/idd-skill#3672), or `null` when neither is present.
+ *
+ * Why this exists: {@link classifyCopilotReviewBody} takes
+ * `suppressedCount` only from the "Previously missed" / "Suppressed
+ * comments" blocks, so a body whose only signal is this remark (next to
+ * `**Findings:** None` and no inline thread) classifies as
+ * `suppressedCount: 0` and the latest-review clause stays satisfied.
+ * That classification is deliberate and unchanged -- the corpus bodies
+ * that carry both a remark and a counted block would otherwise be
+ * counted twice -- so this function only makes the remark readable.
+ *
+ * Pure, and deliberately NOT a `BOT_WORDING_CLASSIFIERS` entry: that
+ * registry's corpus evidence bar (3 real samples from 2 distinct PRs,
+ * #3263) cannot be met for the inline form, which has no real sample at
+ * all (the heading form has four, from four PRs), and the remark is
+ * evidence only. Its real-body coverage lives in its own test file
+ * instead. Locating runs against the
+ * code-stripped body (`stripMarkdownCodeRegions`, same defense as the
+ * classifier) so a label quoted inside a code span or fence never
+ * matches; the text itself is read from the original lines so a code
+ * span INSIDE the remark survives. Masking keeps line count and in-line
+ * columns (not absolute offsets, since `\r\n` is normalized), which is
+ * all this relies on.
+ *
+ * Limits, accepted because the result never gates anything: a review
+ * that merely discusses the phrase in uncoded prose as a line-anchored
+ * `Needs a closer look:` label yields a spurious remark (unlike the
+ * classifier's #3390 false-block risk, which a spurious remark cannot
+ * reach), and the inline form is pinned only by the issue's own example
+ * -- every real review observed so far uses the heading form.
+ */
+export function extractCopilotReviewBodyRemark(body) {
+  if (typeof body !== 'string' || body.length === 0) {
+    return null;
+  }
+  const original = body.split(/\r?\n/);
+  const stripped = stripMarkdownCodeRegions(body).split(/\r?\n/);
+  for (let index = 0; index < stripped.length; index += 1) {
+    const line = stripped[index] ?? '';
+    let remark = null;
+    if (REMARK_HEADING_PATTERN.test(line)) {
+      let first = index + 1;
+      while (first < original.length && (original[first] ?? '').trim() === '') {
+        first += 1;
+      }
+      const firstStripped = stripped[first] ?? '';
+      if (
+        first < original.length &&
+        firstStripped !== '' &&
+        !startsNewBlock(firstStripped)
+      ) {
+        remark = readRemarkParagraph(original, stripped, first, 0);
+      }
+    } else {
+      const label = REMARK_INLINE_LABEL_PATTERN.exec(line);
+      if (label) {
+        remark = readRemarkParagraph(
+          original,
+          stripped,
+          index,
+          label[0].length,
+        );
+      }
+    }
+    if (remark !== null) {
+      return remark;
+    }
+  }
+  return null;
+}
