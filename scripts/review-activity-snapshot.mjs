@@ -5,6 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
+import { extractCopilotReviewBodyRemark } from './copilot-review-body.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -16,6 +17,7 @@ import {
   buildActivitySnapshotSummary,
   countUncoveredCodeRabbitEmbeddedFindings,
   extractCodeRabbitEmbeddedFindings,
+  isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
@@ -160,6 +162,7 @@ export function collectReviewActivitySnapshot(input) {
         dispositionEvidence.soleCauseAckOnlyPostDisposition,
     },
     embeddedFindings,
+    reviewBodyRemarks: buildCopilotReviewBodyRemarks(reviews),
   };
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
@@ -302,6 +305,46 @@ export function buildCodeRabbitEmbeddedFindings(reviews, threads) {
           body,
           threadedCount,
         ),
+      },
+    ];
+  });
+}
+/**
+ * One row per Copilot `COMMENTED` review whose body yields a remark
+ * (#3672): a one-sentence "Needs a closer look" remark can sit beside
+ * `**Findings:** None` with no inline thread, and no counter reads it
+ * (`classifyCopilotReviewBody` keeps its suppressed count to the counted
+ * blocks). Evidence only -- the result never feeds
+ * `buildActivitySnapshotSummary` or any counter, so `effective`, the counts,
+ * `embeddedFindings` and the exit status are the same with or without it.
+ * `APPROVED` and `CHANGES_REQUESTED` reviews and other authors are omitted.
+ *
+ * Uses the default-primary-bot `isCopilotReviewerLogin`, not the configured
+ * `primaryBotLogin` (unlike `pre-merge-readiness`): only Copilot emits this
+ * body shape, so threading a configured non-Copilot primary bot would narrow
+ * away the one author whose bodies the extractor parses. One row per
+ * review, so earlier reviews' rows are historical -- a consumer compares
+ * `commitId` with `headSha`.
+ */
+export function buildCopilotReviewBodyRemarks(reviews) {
+  return reviews.flatMap((review) => {
+    if (review.state !== 'COMMENTED') {
+      return [];
+    }
+    const author = String(review.user?.login ?? '').trim();
+    if (!isCopilotReviewerLogin(author)) {
+      return [];
+    }
+    const remark = extractCopilotReviewBodyRemark(review.body);
+    if (remark === null) {
+      return [];
+    }
+    return [
+      {
+        reviewId: String(review.node_id ?? ''),
+        author,
+        commitId: String(review.commit_id ?? ''),
+        remark,
       },
     ];
   });
