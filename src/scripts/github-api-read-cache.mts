@@ -22,7 +22,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, parse, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  resolve,
+  sep,
+} from 'node:path';
 
 const SCHEMA_VERSION = 1;
 const MARKER_NAME = '.idd-github-api-read-cache';
@@ -255,13 +263,43 @@ function comparePath(path: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function canonicalPath(path: string): string {
-  const resolved = resolve(path);
-  try {
-    return realpathSync(resolved);
-  } catch {
-    return resolved;
+/**
+ * Resolve the physical location of `path`, canonicalizing the nearest
+ * existing ancestor and appending the missing suffix so a not-yet-created
+ * cache directory is judged where `mkdir` will really create it. Returns
+ * `null` (unsafe) when a component cannot be resolved, including a
+ * dangling symlink that `mkdir -p` would follow to an unchecked place.
+ */
+function canonicalPath(path: string): string | null {
+  let existing = resolve(path);
+  const suffix: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(existing), ...suffix);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+      try {
+        lstatSync(existing);
+        return null;
+      } catch (lstatError) {
+        if (errorCode(lstatError) !== 'ENOENT') return null;
+      }
+      const parent = dirname(existing);
+      if (parent === existing) return null;
+      suffix.unshift(basename(existing));
+      existing = parent;
+    }
   }
+}
+
+/**
+ * Normalize a configured directory once, lexically, and use only the
+ * result for every check and operation. A raw `..` after a symlink would
+ * otherwise be judged lexically but resolved physically by the OS.
+ */
+function normalizedRoot(candidate: string): string | null {
+  return isAbsolute(candidate) ? resolve(candidate) : null;
 }
 
 function isFilesystemRoot(path: string): boolean {
@@ -280,13 +318,16 @@ function isUnsafeDirectory(
   anchors: readonly string[],
 ): boolean {
   if (!isAbsolute(candidate)) return true;
-  const paths = [comparePath(candidate)];
   const real = canonicalPath(candidate);
+  if (real === null) return true;
+  const paths = [comparePath(candidate)];
   if (real !== resolve(candidate)) paths.push(comparePath(real));
   for (const path of paths) {
     if (isFilesystemRoot(path)) return true;
     for (const anchor of anchors) {
-      const resolvedAnchor = comparePath(canonicalPath(anchor));
+      const resolvedAnchor = comparePath(
+        canonicalPath(anchor) ?? resolve(anchor),
+      );
       if (path === resolvedAnchor || isAncestor(path, resolvedAnchor)) {
         return true;
       }
@@ -974,9 +1015,9 @@ function resolveReadDirectory(
     defaultCacheDirectory(process.env, process.platform),
   ];
   for (const candidate of candidates) {
-    if (candidate.length === 0) continue;
-    if (!isAbsolute(candidate)) continue;
-    if (!isUnsafeDirectory(candidate, anchors)) return candidate;
+    const root = normalizedRoot(candidate);
+    if (root === null) continue;
+    if (!isUnsafeDirectory(root, anchors)) return root;
   }
   throw new CacheStorageError('no safe cache directory');
 }
@@ -1077,7 +1118,7 @@ export function readThroughGithubApiCache(
   const anchors = anchorsFor(input);
   const storage = createStorage(input.storage);
   if (input.operation === 'purge') {
-    const root = input.policy.directory?.trim() ?? '';
+    const root = normalizedRoot(input.policy.directory?.trim() ?? '') ?? '';
     try {
       return purgeDirectory(storage, root, anchors);
     } catch (error) {

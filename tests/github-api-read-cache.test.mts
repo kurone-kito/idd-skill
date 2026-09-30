@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -8,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -705,6 +707,62 @@ test('an unsafe directory override falls back instead of writing the workspace',
     assert.equal(
       readFileSync(join(paths.workspace, 'important.txt'), 'utf8'),
       'keep',
+    );
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a dot-dot after a symlink is judged where the OS resolves it', {
+  skip: process.platform === 'win32',
+}, () => {
+  const paths = tempRoot();
+  const wsParent = join(paths.root, 'ws-parent');
+  const repo = join(wsParent, 'repo');
+  mkdirSync(repo, { recursive: true });
+  chmodSync(wsParent, 0o755);
+  const other = join(paths.root, 'other');
+  mkdirSync(other);
+  symlinkSync(repo, join(other, 'link'));
+  const fallback = join(paths.root, 'fallback');
+  mkdirSync(fallback);
+  try {
+    // Lexically this is `other`; physically `link/..` is the workspace's
+    // ancestor `ws-parent`, which must never be chmod'ed or adopted.
+    const result = readThrough(
+      { cacheDir: fallback, workspace: repo },
+      okBody({ ok: true }),
+      {
+        policy: policy(`${join(other, 'link')}${sep}..`),
+        defaultDirectory: fallback,
+      },
+    );
+    assert.notEqual(result.cache, 'refused');
+    assert.equal(statSync(wsParent).mode & 0o777, 0o755);
+    assert.deepEqual(readdirSync(wsParent), ['repo']);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a cache path under a dangling symlink is unsafe, not followed', {
+  skip: process.platform === 'win32',
+}, () => {
+  const paths = tempRoot();
+  const nowhere = join(paths.root, 'nowhere');
+  symlinkSync(nowhere, join(paths.root, 'dangling'));
+  const fallback = join(paths.root, 'fallback');
+  mkdirSync(fallback);
+  try {
+    const result = readThrough(paths, okBody({ ok: true }), {
+      policy: policy(join(paths.root, 'dangling', 'cache')),
+      defaultDirectory: fallback,
+    });
+    assert.equal(result.cache, 'miss');
+    assert.equal(existsSync(nowhere), false);
+    assert.equal(
+      existsSync(join(fallback, 'entries', `${result.entryId}.json`)),
+      true,
     );
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
