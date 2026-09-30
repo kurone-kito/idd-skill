@@ -179,6 +179,67 @@ test('self-waiver job keeps checks: read and statuses: read in both advisory-con
   }
 });
 
+// kurone-kito/idd-skill#3683: a private adopter repository's self-waiver
+// job failed on every run that touched an allowlisted path, most likely
+// because the `gh pr view --json statusCheckRollup` request inside
+// `external-check-waiver` also selects each check suite's workflow run, an
+// Actions resource (the cause is not proven). The pinning tests above name one or two scopes of one
+// job each and could not catch a third, so this one discovers every job
+// whose steps invoke `external-check-waiver` (by substring: the template's
+// post step is profile-selected, so it is not always
+// `node scripts/external-check-waiver.mjs`) and requires all three read
+// scopes on each. Full-line YAML comments are dropped first: several of them
+// name the helper and would otherwise select the verdict job.
+function jobBlocks(text: string): Map<string, string> {
+  const header = text.match(/^jobs:\s*$/m);
+  assert.ok(
+    header?.index !== undefined,
+    'workflow must declare a jobs: section',
+  );
+  const uncommented = text
+    .slice(header.index + header[0].length)
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  const nextTopLevel = uncommented.search(/^\S/m);
+  const jobsBody =
+    nextTopLevel === -1 ? uncommented : uncommented.slice(0, nextTopLevel);
+  const headers = [...jobsBody.matchAll(/^ {2}([\w-]+):\s*$/gm)];
+  const blocks = new Map<string, string>();
+  headers.forEach((match, index) => {
+    const start = match.index + match[0].length;
+    const end = headers[index + 1]?.index ?? jobsBody.length;
+    blocks.set(match[1], jobsBody.slice(start, end));
+  });
+  return blocks;
+}
+
+test('every job that invokes external-check-waiver keeps actions: read, checks: read and statuses: read in both advisory-convergence workflow copies (kurone-kito/idd-skill#3683)', () => {
+  for (const path of REQUIRED_PATHS) {
+    const invokers = [...jobBlocks(readWorkflow(path))].filter(([, body]) =>
+      body.includes('external-check-waiver'),
+    );
+    assert.ok(
+      invokers.some(([id]) => id === 'idd-advisory-convergence-self-waiver'),
+      `${path}: the scan must find idd-advisory-convergence-self-waiver as an external-check-waiver invoker, or this test would pass vacuously`,
+    );
+    for (const [id, body] of invokers) {
+      const permissions = body.match(/^ {4}permissions:\n((?: {6}.*\n)+)/m);
+      assert.ok(
+        permissions,
+        `${path}: ${id} invokes external-check-waiver and must declare a permissions: block`,
+      );
+      for (const scope of ['actions', 'checks', 'statuses']) {
+        assert.match(
+          permissions[1],
+          new RegExp(`^ {6}${scope}: read$`, 'm'),
+          `${path}: ${id} invokes external-check-waiver and must keep ${scope}: read (kurone-kito/idd-skill#3683 -- its statusCheckRollup and check-suites reads can fail with "Resource not accessible by integration" in a private repository without it)`,
+        );
+      }
+    }
+  }
+});
+
 // kurone-kito/idd-skill#3253: the idd-advisory-convergence job's new
 // `getChangeRequestHeadObservedAt` port method reads `Commit.checkSuites`
 // via GraphQL, which needs the Checks API scope explicitly in a private
