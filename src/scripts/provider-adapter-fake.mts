@@ -148,6 +148,15 @@ export interface FakeProviderFixture {
   traversalComments?: Record<number, unknown[]>;
   /** Backs {@link ProviderPort.searchOpenWorkItems}. */
   searchResults?: unknown[];
+  /** When set, {@link ProviderPort.searchOpenWorkItems} throws an error with
+   * this message instead of returning {@link searchResults} (#3624: a search
+   * that fails must never read as zero hits). */
+  searchOpenWorkItemsError?: string;
+  /** #3624: a minimal read recorder. Only `searchOpenWorkItems` and
+   * `getChangeRequestReadinessSnapshot` append here, in call order, so a test
+   * can assert how many enumeration and snapshot reads a collection made
+   * (the fake has no general read recorder). */
+  readCalls?: { method: string; args: unknown[] }[];
 
   // --- #2267 additions below. -------------------------------------------
 
@@ -372,6 +381,13 @@ export function createFakeProviderAdapter(
   fixture.postedComments ??= [];
   fixture.closedWorkItems ??= [];
   fixture.nextCommentId ??= 1;
+  // #3624: the one recorder behind `readCalls`. `readCalls` stays absent until
+  // a search or a readiness-snapshot read, so a fixture that never makes one
+  // is unchanged.
+  const recordRead = (method: string, args: unknown[]): void => {
+    fixture.readCalls ??= [];
+    fixture.readCalls.push({ method, args });
+  };
   // Per-instance pagination-call counters: each `createFakeProviderAdapter`
   // call gets independent state, so parallel/repeated tests never leak
   // page-cursor progress into one another the way module-level state would.
@@ -630,7 +646,17 @@ export function createFakeProviderAdapter(
       });
     },
 
-    searchOpenWorkItems(): unknown[] {
+    searchOpenWorkItems(query: {
+      label?: string;
+      matchBody?: string;
+      fields: string[];
+      limit: number;
+      strict?: boolean;
+    }): unknown[] {
+      recordRead('searchOpenWorkItems', [query]);
+      if (fixture.searchOpenWorkItemsError !== undefined) {
+        throw new Error(fixture.searchOpenWorkItemsError);
+      }
       return fixture.searchResults ?? [];
     },
 
@@ -732,6 +758,7 @@ export function createFakeProviderAdapter(
     getChangeRequestReadinessSnapshot(
       number: number,
     ): ProviderChangeRequestReadinessSnapshot {
+      recordRead('getChangeRequestReadinessSnapshot', [number]);
       const value = fixture.changeRequestReadinessSnapshots?.[number];
       if (!value) {
         throw new Error(

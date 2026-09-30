@@ -54,15 +54,17 @@ import {
 } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
+  GH_SEARCH_RESULT_CAP,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
 import type { ProviderPort } from './provider-port.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-// GitHub's search API returns at most 1000 results for a single query. The
-// open-roadmap-roots loader pins each search at this cap and warns when a
-// single search returns the full cap (a possible silent truncation).
-const GH_SEARCH_RESULT_CAP = 1000;
+// GitHub's search API returns at most 1000 results for a single query
+// (`GH_SEARCH_RESULT_CAP`, shared with the pre-merge deferred-follow-up
+// check). The open-roadmap-roots loader pins each search at this cap and
+// warns when a single search returns the full cap (a possible silent
+// truncation).
 // #1136: default in-flight bound for the concurrent prefetch crawl. Each
 // in-flight slot is one live `gh` subprocess (one network round-trip), so the
 // bound caps parallel I/O without risking GitHub secondary rate limits. The

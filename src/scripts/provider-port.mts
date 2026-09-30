@@ -242,6 +242,11 @@ export interface ProviderChangeRequestReadinessSnapshot {
   mergeable: string;
   mergeStateStatus: string;
   closingIssuesReferences: unknown;
+  /** The pull request body (#3624), so the deferred-follow-up check can read
+   * it from this one call instead of a second request. Optional so every
+   * existing snapshot fixture stays valid; an absent body reads as no
+   * mention, which can only add a blocker that a PR comment clears. */
+  body?: string;
 }
 
 /** Backs {@link ProviderPort.getChangeRequestBranchAndChecks}. `statusCheckRollup` is a raw passthrough. */
@@ -907,6 +912,14 @@ export interface ProviderPort {
     matchBody?: string;
     fields: string[];
     limit: number;
+    /**
+     * #3624: a caller that must never read a failed search as "zero hits" sets
+     * this. The adapter then throws on empty output, the literal `null`, or
+     * any non-array JSON (for example a rate-limit object printed with exit
+     * 0) instead of mapping each to an empty list. Absent keeps the lenient
+     * mapping `discover-roadmap-graph.mts`'s root loader relies on.
+     */
+    strict?: boolean;
   }): unknown[];
 
   // --- #2267 additions below. -------------------------------------------
@@ -1008,8 +1021,8 @@ export interface ProviderPort {
   /**
    * change-requests. `pr view --json
    * headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,
-   * mergeable,mergeStateStatus,closingIssuesReferences` -- the distinct
-   * nine-field shape `pre-merge-readiness.mts` uses (deliberately folds
+   * mergeable,mergeStateStatus,closingIssuesReferences,body` -- the distinct
+   * ten-field shape `pre-merge-readiness.mts` uses (deliberately folds
    * check status into this one call rather than a second `pr checks`
    * round trip, #1483).
    */

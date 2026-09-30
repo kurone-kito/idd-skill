@@ -9,7 +9,15 @@ import {
   resolveRemoteSoloCodeownerAdminFallbackMode,
   runMergeExecute,
 } from '../src/scripts/idd-merge-execute.mts';
+import {
+  collectPreMergeReadiness,
+  computeDeferFollowUps,
+} from '../src/scripts/pre-merge-readiness.mts';
 import { computePreMergeReadinessBlockers } from '../src/scripts/protocol-helpers.mts';
+import {
+  createFakeProviderAdapter,
+  type FakeProviderFixture,
+} from '../src/scripts/provider-adapter-fake.mts';
 import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
@@ -1969,5 +1977,188 @@ test('resolveRemoteSoloCodeownerAdminFallbackMode rejects an empty (but successf
         () => '',
       ),
     /policy is empty for PR #42 at deadbeef/,
+  );
+});
+
+// --- #3624: the deferred-follow-up gates reach F3 and `--apply` -------------
+
+const DEFER_MARKER =
+  '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->';
+
+/** Evidence computed through the fake provider, exactly as the collector
+ * computes it, so the gate is proven from a real search result rather than a
+ * hand-built record. */
+function deferEvidenceFromFakeProvider(mentionTexts: string[]) {
+  const port = createFakeProviderAdapter({
+    searchResults: [
+      {
+        number: 12,
+        state: 'open',
+        labels: [{ name: 'status:authoring' }],
+        body: `<!-- idd-skill-authoring-publication: target=t; anchor=t; set=s; session=x; token=k -->\n${DEFER_MARKER}\n\nRefs #7\n\n## Background\n\nA deferred review finding.`,
+      },
+    ],
+  });
+  return computeDeferFollowUps({
+    port,
+    owner: 'o',
+    repo: 'r',
+    markerPrefix: 'idd-skill',
+    authoringLabelName: 'status:authoring',
+    originIssueNumbers: [7],
+    mentionTexts,
+  });
+}
+
+test('evaluateMergeGates: an unreconciled deferred follow-up is its own blocker on an otherwise ready report, and a reconciled one is not', () => {
+  const blocked = evaluateMergeGates({
+    ...readyReport(),
+    deferFollowUps: deferEvidenceFromFakeProvider(['Closes #7']),
+  });
+  assert.deepEqual(
+    blocked.map((blocker) => blocker.gate),
+    ['deferred-followup-unreconciled'],
+  );
+  assert.match(blocked[0].detail, /#12/);
+  assert.deepEqual(
+    evaluateMergeGates({
+      ...readyReport(),
+      deferFollowUps: deferEvidenceFromFakeProvider([
+        'Closes #7',
+        'deferred to follow-up issue #12',
+      ]),
+    }),
+    [],
+  );
+});
+
+test('evaluateMergeGates: unverified follow-up evidence is its own blocker and never reads as no follow-ups', () => {
+  const failing = createFakeProviderAdapter({
+    searchOpenWorkItemsError: 'rate limit exceeded',
+  });
+  const evidence = computeDeferFollowUps({
+    port: failing,
+    owner: 'o',
+    repo: 'r',
+    markerPrefix: 'idd-skill',
+    authoringLabelName: 'status:authoring',
+    originIssueNumbers: [7],
+    mentionTexts: [],
+  });
+  const blockers = evaluateMergeGates({
+    ...readyReport(),
+    deferFollowUps: evidence,
+  });
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.gate),
+    ['deferred-followup-unverified'],
+  );
+  assert.match(blockers[0].detail, /rate limit exceeded/);
+});
+
+test('--apply refuses to merge while a deferred follow-up is unreconciled and merges once the PR names it', () => {
+  const blockedReport = {
+    ...readyReport(),
+    deferFollowUps: deferEvidenceFromFakeProvider(['Closes #7']),
+  };
+  const blocked = depsFor(blockedReport);
+  const refused = runMergeExecute([...BASE_ARGS, '--apply'], blocked.deps);
+  assert.equal(refused.verdict.ready, false);
+  assert.equal(refused.verdict.merged, false);
+  assert.deepEqual(blocked.calls.merged, []);
+  assert.ok(
+    refused.verdict.blockers.some(
+      (blocker: { gate: string }) =>
+        blocker.gate === 'deferred-followup-unreconciled',
+    ),
+  );
+  assert.equal(refused.exitCode, 1);
+
+  const clearedReport = {
+    ...readyReport(),
+    deferFollowUps: deferEvidenceFromFakeProvider([
+      'Closes #7',
+      'deferred to follow-up issue #12',
+    ]),
+  };
+  const cleared = depsFor(clearedReport);
+  const merged = runMergeExecute([...BASE_ARGS, '--apply'], cleared.deps);
+  assert.equal(merged.verdict.ready, true);
+  assert.equal(merged.verdict.merged, true);
+  assert.deepEqual(cleared.calls.merged, [`994:${HEAD}`]);
+});
+
+/** A `deps.collect` that runs the REAL `collectPreMergeReadiness` against a
+ * fake provider, so `--apply` sees the report exactly as the CLI would build
+ * it: the follow-up search, the mention sources, and the gate all go through
+ * the collector instead of a hand-injected evidence record. */
+function collectorBackedDeps(prBody: string) {
+  const fixture: FakeProviderFixture = {
+    changeRequestReadinessSnapshots: {
+      994: {
+        headSha: HEAD,
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/994',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 309 }],
+        body: prBody,
+      },
+    },
+    comments: { 994: [] },
+    reviews: { 994: [] },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 994: [] },
+    reviewsWithHeadCommitDate: {
+      994: { reviews: [], headCommittedAt: '2026-08-01T00:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    searchResults: [
+      {
+        number: 12,
+        state: 'open',
+        labels: [{ name: 'status:authoring' }],
+        body: `${DEFER_MARKER}\n\nRefs #309\n\n## Background\n\nA deferred review finding.`,
+      },
+    ],
+  };
+  const port = createFakeProviderAdapter(fixture);
+  return depsFor(readyReport(), {
+    collect: (passthrough) =>
+      collectPreMergeReadiness(
+        [...passthrough, '--owner', 'o', '--repo', 'r'],
+        () => port,
+        () => ({}) as never,
+      ) as Record<string, unknown>,
+  });
+}
+
+test('--apply through the real collector refuses to merge while the PR never names a deferred follow-up, and drops that blocker once it does', () => {
+  const blocked = collectorBackedDeps('Closes #309');
+  const refused = runMergeExecute([...BASE_ARGS, '--apply'], blocked.deps);
+  assert.equal(refused.verdict.merged, false);
+  assert.deepEqual(blocked.calls.merged, []);
+  const refusedGates = refused.verdict.blockers.map(
+    (blocker: { gate: string }) => blocker.gate,
+  );
+  assert.ok(
+    refusedGates.includes('deferred-followup-unreconciled'),
+    refusedGates.join(),
+  );
+
+  const named = collectorBackedDeps(
+    'Closes #309\n\nDeferred a finding to follow-up issue #12.',
+  );
+  const namedRun = runMergeExecute([...BASE_ARGS, '--apply'], named.deps);
+  const namedGates = namedRun.verdict.blockers.map(
+    (blocker: { gate: string }) => blocker.gate,
+  );
+  assert.ok(
+    !namedGates.some((gate: string) => gate.startsWith('deferred-followup-')),
+    namedGates.join(),
   );
 });

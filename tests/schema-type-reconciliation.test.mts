@@ -638,6 +638,7 @@ export const preMergeReadinessKeys = [
   'localValidationEvidence',
   'developmentBranchTarget',
   'closingSet',
+  'deferFollowUps',
   'ready',
   'blockers',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];

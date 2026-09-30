@@ -40,6 +40,13 @@ export function createFakeProviderAdapter(fixture) {
   fixture.postedComments ??= [];
   fixture.closedWorkItems ??= [];
   fixture.nextCommentId ??= 1;
+  // #3624: the one recorder behind `readCalls`. `readCalls` stays absent until
+  // a search or a readiness-snapshot read, so a fixture that never makes one
+  // is unchanged.
+  const recordRead = (method, args) => {
+    fixture.readCalls ??= [];
+    fixture.readCalls.push({ method, args });
+  };
   // Per-instance pagination-call counters: each `createFakeProviderAdapter`
   // call gets independent state, so parallel/repeated tests never leak
   // page-cursor progress into one another the way module-level state would.
@@ -241,7 +248,11 @@ export function createFakeProviderAdapter(fixture) {
         return row;
       });
     },
-    searchOpenWorkItems() {
+    searchOpenWorkItems(query) {
+      recordRead('searchOpenWorkItems', [query]);
+      if (fixture.searchOpenWorkItemsError !== undefined) {
+        throw new Error(fixture.searchOpenWorkItemsError);
+      }
       return fixture.searchResults ?? [];
     },
     // --- #2267 additions below. -------------------------------------------
@@ -308,6 +319,7 @@ export function createFakeProviderAdapter(fixture) {
       return value;
     },
     getChangeRequestReadinessSnapshot(number) {
+      recordRead('getChangeRequestReadinessSnapshot', [number]);
       const value = fixture.changeRequestReadinessSnapshots?.[number];
       if (!value) {
         throw new Error(
