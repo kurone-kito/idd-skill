@@ -494,8 +494,11 @@ Writers take a sibling `<path>.lock` file for the moment of a write, and no
 writer removes another's lock. A writer killed mid-write can leave that
 file, and a temporary `.tmp` file, behind. While an orphaned lock exists,
 recording stays off and every wrapped call waits a fraction of a second
-before skipping its record, so delete the lock by hand once the process id
-written in it is gone; deleting a live writer's lock can drop records.
+before skipping its record. The lock holds `<process id>:<token>`, or is
+empty when its writer died before writing it; delete it by hand once that
+process is gone, since deleting a live writer's lock can drop records. A
+record is also skipped, silently, when another writer holds the lock for
+the whole short wait.
 More than one of GraphQL errors, primary exhaustion, secondary
 throttling, and access denial stays `unknown` rather than guessing a
 subtype. A read or write failure in this retention path does not change
