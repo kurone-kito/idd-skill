@@ -1277,6 +1277,43 @@ test('policy schema accepts githubApi telemetry and rejects a bad record bound',
   );
 });
 
+test('policy schema accepts githubApi loadControl and rejects bad bounds', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const accepted = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  accepted.githubApi = {
+    loadControl: { enabled: true, maxConcurrent: 8, maxWait: 'PT30S' },
+  };
+  assert.deepEqual(validate(accepted, schema), []);
+
+  for (const [key, value] of [
+    ['maxConcurrent', 0],
+    ['maxConcurrent', 1.5],
+    ['maxWait', 'P0D'],
+    ['maxWait', 'soon'],
+  ] as const) {
+    const rejected = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    rejected.githubApi = { loadControl: { [key]: value } };
+    const errors = validate(rejected, schema);
+    assert.ok(
+      errors.some((error) => error.includes(`$.githubApi.loadControl.${key}`)),
+      `${key}=${String(value)}: ${errors.join('\n')}`,
+    );
+  }
+  const unknown = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  unknown.githubApi = { loadControl: { directory: '/tmp/x' } };
+  assert.ok(
+    validate(unknown, schema).some((error) =>
+      error.includes('additional property "directory"'),
+    ),
+  );
+});
+
 test('policy schema accepts a discover.legacyRoots array of issue numbers', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

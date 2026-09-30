@@ -87,6 +87,8 @@ unchanged.
 
 `githubApi.telemetry` is optional and defaults off (issue
 `kurone-kito/idd-skill#3585`).
+`githubApi.loadControl` is optional and defaults off (issue
+`kurone-kito/idd-skill#3586`).
 See [Customizing IDD](customization.md#policy-constants).
 
 ## Ownership Defaults
@@ -478,6 +480,18 @@ Turning it on does not connect Discover. The contract is described in
 | Stored size (`githubApi.readCache.maxBytes`) | `104857600`       | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Caps stored responses at 100 MiB. A larger configured value falls back to this default.                                                               |
 | Retention (`githubApi.readCache.retention`)  | `PT24H`           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Drops older stored responses. Independent of `maxAge`.                                                                                                |
 | Directory (`githubApi.readCache.directory`)  | Omitted           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Optional absolute override of the per-user OS cache directory. A relative path, filesystem root, workspace, or ancestor of the workspace is not used. |
+
+## GitHub API Load Control Defaults
+
+`githubApi.loadControl` stays off unless `enabled` is the literal `true`.
+Turning it on does not connect Discover. The contract is described in
+[`docs/idd-helper-scripts.md`](idd-helper-scripts.md).
+
+| Policy default                                      | Distributed value | Owning surface                                        | Onboarding expectation                                                                                                                     |
+| --------------------------------------------------- | ----------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Load control (`githubApi.loadControl.enabled`)      | `false`           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Leave unset. Only a literal `true` enables host-local admission and a shared throttle cooldown for the owned `gh` wrappers.                |
+| Concurrency (`githubApi.loadControl.maxConcurrent`) | `1`               | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Serial by default. A value outside 1 to 8, or a non-integer, falls back to 1. The largest value across participating repositories applies. |
+| Read wait (`githubApi.loadControl.maxWait`)         | `PT30S`           | [`docs/idd-helper-scripts.md`](idd-helper-scripts.md) | Bounds how long a read waits for a slot or a cooldown. A value over ten minutes falls back. Writes never wait.                             |
 
 ## Provider Outage Declaration Defaults
 

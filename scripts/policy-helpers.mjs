@@ -213,6 +213,10 @@ const DURATION_RE =
 // that list.
 const PACKAGE_SPEC_RE = /^[A-Za-z0-9@:/_.+^#%-]+$/;
 const GITHUB_API_READ_CACHE_MAX_BYTES = 104857600;
+/** Largest `githubApi.loadControl.maxConcurrent`; a larger value falls back to serial. */
+export const GITHUB_API_LOAD_CONTROL_MAX_CONCURRENT = 8;
+/** Longest `githubApi.loadControl.maxWait`, ten minutes; a longer value falls back to the default. */
+export const GITHUB_API_LOAD_CONTROL_MAX_WAIT_MS = 600_000;
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -375,6 +379,13 @@ export const POLICY_DEFAULTS = Object.freeze({
       maxAge: 'PT5M',
       maxBytes: GITHUB_API_READ_CACHE_MAX_BYTES,
       retention: 'PT24H',
+    }),
+    // #3586: off unless `enabled` is exactly true. Serial admission is the
+    // conservative default; the bounded override is validated below.
+    loadControl: Object.freeze({
+      enabled: false,
+      maxConcurrent: 1,
+      maxWait: 'PT30S',
     }),
   }),
 });
@@ -601,7 +612,27 @@ export function normalizePolicyConfig(config) {
   ) {
     readCache.directory = rawReadCacheDirectory.trim();
   }
-  const githubApi = { telemetry, readCache };
+  const rawLoadControlMaxConcurrent = c?.githubApi?.loadControl?.maxConcurrent;
+  const rawLoadControlMaxWait = parsePositiveDuration(
+    c?.githubApi?.loadControl?.maxWait,
+    POLICY_DEFAULTS.githubApi.loadControl.maxWait,
+  );
+  const loadControl = {
+    enabled: c?.githubApi?.loadControl?.enabled === true,
+    maxConcurrent:
+      typeof rawLoadControlMaxConcurrent === 'number' &&
+      Number.isInteger(rawLoadControlMaxConcurrent) &&
+      rawLoadControlMaxConcurrent >= 1 &&
+      rawLoadControlMaxConcurrent <= GITHUB_API_LOAD_CONTROL_MAX_CONCURRENT
+        ? rawLoadControlMaxConcurrent
+        : POLICY_DEFAULTS.githubApi.loadControl.maxConcurrent,
+    maxWait:
+      (parseIsoDurationToMs(rawLoadControlMaxWait) ??
+        Number.POSITIVE_INFINITY) <= GITHUB_API_LOAD_CONTROL_MAX_WAIT_MS
+        ? rawLoadControlMaxWait
+        : POLICY_DEFAULTS.githubApi.loadControl.maxWait,
+  };
+  const githubApi = { telemetry, readCache, loadControl };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured

@@ -306,6 +306,11 @@ interface PolicyConfigFile {
       retention?: string;
       directory?: string;
     };
+    loadControl?: {
+      enabled?: boolean;
+      maxConcurrent?: number;
+      maxWait?: string;
+    };
   };
 }
 
@@ -1302,6 +1307,11 @@ const policyConfigFixture = {
       maxAge: 'PT5M',
       maxBytes: 104857600,
       retention: 'PT24H',
+    },
+    loadControl: {
+      enabled: false,
+      maxConcurrent: 1,
+      maxWait: 'PT30S',
     },
   },
 } satisfies PolicyConfigFile;

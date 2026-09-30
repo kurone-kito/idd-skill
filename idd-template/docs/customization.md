@@ -374,6 +374,19 @@ that holds anything other than these records is left untouched. A
 primary quota signal is never relabeled as secondary throttling. This
 key is not a response cache and not a request-admission policy.
 
+`githubApi.loadControl` is an opt-in, host-local admission and shared
+throttle-cooldown layer for the requests helpers make through the owned
+`gh` wrappers (issue `kurone-kito/idd-skill#3586`). The default is off,
+and while it is off no argument, result, error, or state file changes.
+`maxConcurrent` (1 to 8, default 1, so serial) bounds requests admitted
+at once across the processes of one operating-system user, and
+`maxWait` (default `PT30S`) bounds how long a read waits. A write or an
+unclassified request is admitted immediately or refused with a
+not-dispatched error; it is never queued or retried by this layer. It
+does not cover a standalone or ad hoc `gh` command, and it is not a
+cross-host or global limit. Turning it on does not connect Discover; the
+helper-script load-control section describes the contract.
+
 For advisory review timing, repositories may now customize
 `advisoryWait.requestCap`, `advisoryWait.pendingWindow`,
 `advisoryWait.settledWindow`, and `advisoryWait.pollInterval` in
