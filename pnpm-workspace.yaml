@@ -8,7 +8,6 @@ ignoreWorkspaceRootCheck: true
 linkWorkspacePackages: true
 minimumReleaseAgeExcludePrune: true
 minimumReleaseAgeStrict: true
-pmOnFail: warn
 shellEmulator: true
 update:
   changeset: true
