@@ -521,22 +521,25 @@ canonical spec this helper's own behavior must match, the authoritative
 fallback for an `instructions-only` profile, and the reference for any step
 the helper's dry-run output doesn't make self-explanatory.
 
-**An unrelated worktree record.** This is the only part of §LWR that applies
-to an `owner_evidence_required` verdict, and it also covers a
-`local_worktree_occupied` result whose reason ends
-`-local-worktree-unreadable` when `paths` names a record that is not the
-claimed branch's own. Steps 1-5 below recover the claimed branch's own
-record. The triggers differ by verdict:
+**An unrelated worktree record.** Resume Step 1 routes only a forced-handoff
+successor to §FH, so any other session stops on `owner_evidence_required`
+and reports the failed proof; an operator may then apply this paragraph. It
+is the only part of §LWR that applies to an `owner_evidence_required`
+verdict, and it also covers a `local_worktree_occupied` result whose
+top-level `reason` ends `-local-worktree-unreadable` when `paths` names a
+record that is not the claimed branch's own. Steps 1-5 below recover the
+claimed branch's own record. The triggers differ by verdict:
 
 - `owner_evidence_required`: `evidence.owner_evidence.occupancy_probe` is
   `unreadable` (the `warnings[]` line reads `owner evidence required: first
   failed proof is occupancy_probe (unreadable)`) although the proofs before
   it hold, that is `worktree_identity`, `claim_lock_matches`,
   `generated_tokens_match` and `agent_and_branch_match` are all `true`.
-- `local_worktree_occupied`: the reason ends `-local-worktree-unreadable`
-  (the `warnings[]` line reads `cannot verify local worktree occupancy for
-  <stale|released> branch <branch>: ...`) and `evidence.local_worktree.paths`
-  names a record other than the claimed branch's own.
+- `local_worktree_occupied`: the top-level `reason` ends
+  `-local-worktree-unreadable` (the `warnings[]` line reads `cannot verify
+  local worktree occupancy for <stale|released> branch <branch>: ...`) and
+  `evidence.local_worktree.paths` names a record other than the claimed
+  branch's own.
 
 The probe reads every record in `git worktree list --porcelain`, not only
 the claimed branch's, and a record it cannot classify makes it fail closed
@@ -558,34 +561,30 @@ against an unrelated branch, and none has an observed incident of its own
 
 - A detached record whose directory was removed with `rm -rf` reads
   `unreadable`, and `git worktree list --porcelain` flags it `prunable`.
-  git prints that same line for a deleted directory, an unmounted volume
-  and a directory moved by hand, so clear the record only when the
-  operator confirms the directory was deleted; repair a moved worktree
-  with `git worktree repair <new-path>` instead of removing it. First
-  point a backup ref at the listing's `HEAD <sha>` (`git update-ref
+  git prints that same line for a deleted directory, an unmounted volume,
+  a directory moved by hand and a directory whose `.git` file is gone. Act
+  only when the operator confirms the directory was deleted and `test ! -e
+  <path>` holds; repair a moved worktree with `git worktree repair
+  <new-path>`, never remove it. Otherwise stop and report. Then point a
+  backup ref at the listing's `HEAD <sha>` (`git update-ref
   refs/idd-lwr/unrelated-<sha> <sha>`) and confirm that `git rev-parse
   --verify refs/idd-lwr/unrelated-<sha>` prints the same `<sha>`; key the
   ref by the commit, because an admin id can be reused and a second
   `update-ref` on the same name silently replaces the first backup. A
   detached tip may be kept only by that record, and removal leaves the
   commit unreferenced, so `git gc` may delete it later. Leave the ref in
-  place and report it. Then run `git worktree remove --force <path>`,
-  behind the clone-scoped lock when workers share the clone, as B1 does. A
-  plain `git worktree prune` also clears it, but it is clone-wide, and its
-  dry run (`git worktree prune -n -v`) prints admin ids, not paths. Read
-  each id's `gitdir` file, `<git-common-dir>/worktrees/<id>/gitdir`, which
-  holds the worktree path plus `/.git`. Back up every detached record the
-  prune would clear, and use it only when each listed record is one you
-  mean to clear; otherwise use the targeted `remove`.
+  place and report it. Last, run `git worktree remove --force <path>`,
+  behind the clone-scoped lock when workers share the clone, as B1 does.
+  Do not use a plain `git worktree prune` here: it is clone-wide.
 - The same record, locked, also reads `unreadable` but is not flagged
   `prunable`, and a plain prune leaves it. Read its `locked <reason>` line.
-  The reason is free text written by whoever locked it: unlock
-  (`git worktree unlock <path>`) only when the operator confirms, or the
-  reason states the owner is gone. A reason such as "on removable media"
-  means stop and report. Once unlocked it is an ordinary gone record, the
-  previous bullet, including its operator confirmation. `git worktree
-  remove --force` alone fails on a locked record and needs `--force`
-  twice, but that bypasses the unlock rule; the rule above still decides.
+  Unlock it (`git worktree unlock <path>`) only when the operator
+  confirms. The reason is free text written by whoever locked it, so it is
+  evidence for that confirmation, not a substitute for it, and a reason
+  such as "on removable media" means stop and report. Once unlocked it is
+  an ordinary gone record, the previous bullet. `git worktree remove
+  --force` alone fails on a locked record and needs `--force` twice, but
+  that bypasses the unlock rule; the rule above still decides.
 - A foreign detached worktree in the middle of a rebase, a `git am` or a
   bisect reads `unreadable` when that work was started from a detached
   HEAD. A rebase's `head-name` is the literal `detached HEAD`, a `git am`
@@ -609,21 +608,23 @@ against an unrelated branch, and none has an observed incident of its own
    even when `git worktree list --porcelain` shows it `detached` in the
    middle of a rebase or bisect (step 3 handles that). Under a reason
    ending `-local-worktree-unreadable`, go on only through the prunable
-   skip-ahead below, and only for a record that shows `branch
-   refs/heads/<branch>`; any other unreadable path is the unrelated-record
-   paragraph's case and stops here. If `<path>` no longer exists on disk
-   (a prunable record), skip to `git worktree remove --force
-   <path-from-list>` — mirroring B1's own same-shape recovery rule for a
-   prunable entry (`idd-work.instructions.md`). Steps 3-4 have nothing to
-   preserve or remove here. Keep that command rather than a plain `git
-   worktree prune`: prune is clone-wide (replayed on git 2.53.0, one
-   prune cleared an unrelated record together with the claimed branch's
-   own), though it does remove an unlocked prunable record at once. The
-   3-month expiry belongs to `gc.worktreePruneExpire`, which only `git gc`
-   applies. A locked record is never flagged `prunable`, so this
+   skip-ahead below, which needs a record that shows `branch
+   refs/heads/<branch>`, is flagged `prunable`, is unlocked, and whose
+   `<path>` is absent on disk; every other `-local-worktree-unreadable`
+   result is the unrelated-record paragraph's case and stops here. If
+   `<path>` no longer exists on disk (a prunable record), skip to `git
+   worktree remove --force <path-from-list>`, behind the clone-scoped lock
+   when workers share the clone — mirroring B1's own same-shape recovery
+   rule for a prunable entry (`idd-work.instructions.md`). Steps 3-4 have
+   nothing to preserve or remove here. Keep that command rather than a
+   plain `git worktree prune`: prune is clone-wide (replayed on git 2.53.0,
+   one prune cleared an unrelated record together with the claimed
+   branch's own), though it does remove an unlocked prunable record at
+   once. The 3-month expiry belongs to `gc.worktreePruneExpire`, which only
+   `git gc` applies. A locked record is never flagged `prunable`, so this
    skip-ahead does not reach it; unlocking it is the operator's call, and
-   once unlocked it is prunable and the skip-ahead applies. Otherwise run
-   the profile-selected
+   once unlocked it is prunable and the skip-ahead applies. Otherwise (a
+   `-local-worktree-occupied` reason) run the profile-selected
    `claim-lock` helper's check form (source-repo/vendored-node: `node
    scripts/claim-lock.mjs --check --worktree <path>`) to read which
    claim-id holds the lock. Proceed only when that claim-id matches the
