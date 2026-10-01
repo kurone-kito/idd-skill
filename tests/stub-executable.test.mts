@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
+  type RmOptions,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -11,7 +12,11 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 
-import { stubExecutable } from './test-utils.mts';
+import {
+  removeStubDirectory,
+  STUB_REMOVAL_POLL_COUNT,
+  stubExecutable,
+} from './test-utils.mts';
 
 // #2571: `stubExecutable` is the shared cross-platform replacement for the
 // PATH-stubbed-`gh`-CLI fixture pattern every affected test file used to
@@ -169,6 +174,187 @@ test('the returned cleanup callback removes the temp directory it created (regre
   assert.ok(existsSync(createdPath));
   restore();
   assert.equal(existsSync(createdPath), false);
+});
+
+// #3680: `removeStubDirectory` is exercised through injected collaborators, so
+// every assertion below is about call counts, recorded arguments and
+// warnings, never elapsed time.
+function removalRecorder(
+  failures: (callNumber: number) => NodeJS.ErrnoException | undefined,
+) {
+  const calls: { path: string; options: RmOptions }[] = [];
+  const sleeps: number[] = [];
+  const warnings: string[] = [];
+  return {
+    calls,
+    sleeps,
+    warnings,
+    options: {
+      remove: (path: string, options: RmOptions) => {
+        calls.push({ path, options });
+        const failure = failures(calls.length);
+        if (failure) {
+          throw failure;
+        }
+      },
+      sleep: (milliseconds: number) => void sleeps.push(milliseconds),
+      warn: (message: string) => void warnings.push(message),
+      pollIntervalMs: 7,
+    },
+  };
+}
+
+function errnoError(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error('injected removal failure'), { code });
+}
+
+function assertEveryCallIsRecursiveAndForced(
+  calls: readonly { options: RmOptions }[],
+) {
+  for (const { options } of calls) {
+    assert.equal(options.recursive, true);
+    assert.equal(options.force, true);
+  }
+}
+
+test('removeStubDirectory: an EPERM that clears inside the bound returns with no warning (win32)', () => {
+  const recorder = removalRecorder((n) =>
+    n <= 3 ? errnoError('EPERM') : undefined,
+  );
+  removeStubDirectory('C:\\tmp\\idd-stub-x', {
+    ...recorder.options,
+    platform: 'win32',
+  });
+  assert.equal(recorder.calls.length, 4);
+  assert.deepEqual(recorder.calls[0].options, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
+  for (const { options } of recorder.calls.slice(1)) {
+    assert.equal(options.maxRetries, 0);
+    assert.equal(options.retryDelay, 0);
+  }
+  assertEveryCallIsRecursiveAndForced(recorder.calls);
+  assert.deepEqual(recorder.sleeps, [7, 7, 7]);
+  assert.deepEqual(recorder.warnings, []);
+});
+
+test('removeStubDirectory: success on the last polling call is still silent (off-by-one guard)', () => {
+  const lastCall = 1 + STUB_REMOVAL_POLL_COUNT;
+  const recorder = removalRecorder((n) =>
+    n < lastCall ? errnoError('EPERM') : undefined,
+  );
+  removeStubDirectory('C:\\tmp\\idd-stub-x', {
+    ...recorder.options,
+    platform: 'win32',
+  });
+  assert.equal(recorder.calls.length, lastCall);
+  assert.equal(recorder.sleeps.length, STUB_REMOVAL_POLL_COUNT);
+  assert.deepEqual(recorder.warnings, []);
+});
+
+for (const code of ['EPERM', 'EBUSY']) {
+  test(`removeStubDirectory: ${code} on every call (win32) returns after the initial call plus every polling call, with one warning naming the directory`, () => {
+    const recorder = removalRecorder(() => errnoError(code));
+    const directory = 'C:\\tmp\\idd-stub-locked';
+    removeStubDirectory(directory, {
+      ...recorder.options,
+      platform: 'win32',
+    });
+    assert.equal(recorder.calls.length, 1 + STUB_REMOVAL_POLL_COUNT);
+    assert.equal(recorder.sleeps.length, STUB_REMOVAL_POLL_COUNT);
+    assertEveryCallIsRecursiveAndForced(recorder.calls);
+    assert.equal(recorder.warnings.length, 1);
+    assert.ok(recorder.warnings[0].includes(directory));
+    assert.ok(recorder.warnings[0].includes(code));
+  });
+}
+
+for (const platform of ['linux', 'darwin'] as const) {
+  test(`removeStubDirectory: EPERM on ${platform} is thrown after one attempt`, () => {
+    const injected = errnoError('EPERM');
+    const recorder = removalRecorder(() => injected);
+    assert.throws(
+      () =>
+        removeStubDirectory('/tmp/idd-stub-x', {
+          ...recorder.options,
+          platform,
+        }),
+      (thrown) => thrown === injected,
+    );
+    assert.equal(recorder.calls.length, 1);
+    assert.deepEqual(recorder.sleeps, []);
+    assert.deepEqual(recorder.warnings, []);
+  });
+}
+
+test('removeStubDirectory: an error other than EPERM or EBUSY (win32) is thrown after one attempt', () => {
+  const injected = errnoError('ENOSPC');
+  const recorder = removalRecorder(() => injected);
+  assert.throws(
+    () =>
+      removeStubDirectory('C:\\tmp\\idd-stub-x', {
+        ...recorder.options,
+        platform: 'win32',
+      }),
+    (thrown) => thrown === injected,
+  );
+  assert.equal(recorder.calls.length, 1);
+  assert.deepEqual(recorder.sleeps, []);
+  assert.deepEqual(recorder.warnings, []);
+});
+
+test('removeStubDirectory: a non-transient error during polling (win32) is thrown at once, not swallowed into the warning', () => {
+  const injected = errnoError('ENOTEMPTY');
+  const recorder = removalRecorder((n) =>
+    n === 1 ? errnoError('EPERM') : n === 3 ? injected : errnoError('EPERM'),
+  );
+  assert.throws(
+    () =>
+      removeStubDirectory('C:\\tmp\\idd-stub-x', {
+        ...recorder.options,
+        platform: 'win32',
+      }),
+    (thrown) => thrown === injected,
+  );
+  assert.equal(recorder.calls.length, 3);
+  assert.equal(recorder.sleeps.length, 2);
+  assert.deepEqual(recorder.warnings, []);
+});
+
+test('removeStubDirectory: removes a real directory with the default collaborators', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'idd-stub-remove-real-'));
+  writeFileSync(join(directory, 'file.txt'), 'x');
+  removeStubDirectory(directory);
+  assert.equal(existsSync(directory), false);
+});
+
+test('removeStubDirectory: the default sleep and warning sink work when every removal fails (win32)', () => {
+  const recorder = removalRecorder(() => errnoError('EPERM'));
+  const directory = 'C:\\tmp\\idd-stub-default-sinks';
+  const written: string[] = [];
+  const realWrite = process.stderr.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    written.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    // A zero interval keeps the default blocking sleep out of the wall-clock
+    // budget (`Atomics.wait` with a zero timeout returns at once).
+    removeStubDirectory(directory, {
+      remove: recorder.options.remove,
+      platform: 'win32',
+      pollIntervalMs: 0,
+    });
+  } finally {
+    process.stderr.write = realWrite;
+  }
+  assert.equal(recorder.calls.length, 1 + STUB_REMOVAL_POLL_COUNT);
+  assert.equal(written.length, 1);
+  assert.ok(written[0].includes(directory));
+  assert.ok(written[0].endsWith('\n'));
 });
 
 test('an originally-unset PATH is stubbed without a trailing delimiter and restored by deletion, not the literal string "undefined" (regression, Copilot review on PR #2575)', () => {
