@@ -17,7 +17,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { after, test } from 'node:test';
+import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCommandCatalog,
@@ -71,6 +71,7 @@ import {
 import { loadOnboardingHearingCatalog } from '../src/scripts/onboarding-hearing.mts';
 import type { PromptFn } from '../src/scripts/readline-prompt.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { pinLoadControlOff } from './test-utils.mts';
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
 const PLACEHOLDERS_DOC = join(
@@ -137,6 +138,18 @@ after(() => {
   for (const dir of createdFixtureDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// This source repository's own config enables load control (#3702). The
+// in-process hearing tests reach the real `gh` for the evidence they gather,
+// which would write host-local load-control state; run them as before, with it
+// off. Load control has its own tests in gh-exec-load-control.test.mts.
+let restoreLoadControl: (() => void) | undefined;
+before(() => {
+  restoreLoadControl = pinLoadControlOff();
+});
+after(() => {
+  restoreLoadControl?.();
 });
 
 const ALL_OVERRIDES = {
@@ -2168,7 +2181,10 @@ test('a real idd-skill source tree imports the full core file set byte-identical
 
 const BIN_PATH = join(REPO_ROOT, 'bin', 'idd-onboard.mjs');
 
-function runCliBin(args: string[]): {
+function runCliBin(
+  args: string[],
+  options: { cwd?: string } = {},
+): {
   status: number;
   verdict: Record<string, unknown>;
 } {
@@ -2182,6 +2198,9 @@ function runCliBin(args: string[]): {
       process.execPath,
       [BIN_PATH, ...args, '--allow-root', tmpdir()],
       {
+        // A test passes `cwd` when the spawned CLI must not read this
+        // repository's own config, which enables load control (#3702).
+        cwd: options.cwd,
         encoding: 'utf8',
       },
     );
@@ -8038,12 +8057,12 @@ function buildValidHearAnswers(): Record<string, string> {
 test('bin/idd-onboard.mjs --hear --propose lists every catalog item id, derives PROJECT_MARKER_PREFIX and the install-deps candidate, and reports helper-runtime evidence', () => {
   const root = makeFixtureDir();
   writeHearFixture(root);
-  const { status, verdict } = runCliBin([
-    '--hear',
-    '--propose',
-    '--target',
-    root,
-  ]);
+  // `--propose` gathers evidence through the real `gh`; run from the fixture so
+  // it does not read this repository's own load-control config (#3702).
+  const { status, verdict } = runCliBin(
+    ['--hear', '--propose', '--target', root],
+    { cwd: root },
+  );
   assert.equal(status, 0);
   assert.equal(verdict.mode, 'propose');
   const catalog = loadOnboardingHearingCatalog();

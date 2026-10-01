@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -38,7 +38,18 @@ import {
 } from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
-import { stubExecutable } from './test-utils.mts';
+import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
+
+// This source repository's own config enables load control (#3702), and the
+// tests in this file assert the wrappers' exact `gh` calls with it off; the
+// load-control path has its own tests in gh-exec-load-control.test.mts.
+let restoreLoadControl: (() => void) | undefined;
+before(() => {
+  restoreLoadControl = pinLoadControlOff();
+});
+after(() => {
+  restoreLoadControl?.();
+});
 
 const SECONDARY_STDERR =
   'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again (HTTP 403)';

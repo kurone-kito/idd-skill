@@ -1022,7 +1022,11 @@ test('CLI: pass -- an unchanged body reports pass end to end, comments fetched b
           '--trusted-marker-logins',
           'kurone-kito',
         ],
-        { encoding: 'utf8' },
+        // Run from the scratch directory, not the repository root: the helper
+        // reads this repository's own load-control config through its working
+        // directory, which would add an identity lookup and `--include` to the
+        // stubbed `gh` calls these tests count (#3702).
+        { cwd: callLogDir, encoding: 'utf8' },
       ),
     );
     assert.equal(output.verdict, 'pass');
@@ -1665,7 +1669,11 @@ test('CLI: a REST comments stub cannot satisfy the GraphQL mapping', () => {
           'kurone-kito',
           '--verbose',
         ],
-        { encoding: 'utf8' },
+        // Run from the scratch directory, not the repository root: the helper
+        // reads this repository's own load-control config through its working
+        // directory, which would add an identity lookup and `--include` to the
+        // stubbed `gh` calls these tests count (#3702).
+        { cwd: callLogDir, encoding: 'utf8' },
       ),
     );
     assert.equal(output.verdict, 'not-found');

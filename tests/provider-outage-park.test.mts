@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import { renderClaimedByMarker } from '../src/scripts/marker-helpers.mts';
 import {
   parseProviderOutageParkComment,
@@ -20,6 +20,21 @@ import {
   resolveParkEligibility,
 } from '../src/scripts/provider-outage-park.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+
+import { pinLoadControlOff } from './test-utils.mts';
+
+// This source repository's own config enables load control (#3702). These
+// tests build the parked-change report in-process and reach the real `gh` for
+// reads they do not inject, which would write host-local load-control state;
+// run them as before, with it off. Load control has its own tests in
+// gh-exec-load-control.test.mts.
+let restoreLoadControl: (() => void) | undefined;
+before(() => {
+  restoreLoadControl = pinLoadControlOff();
+});
+after(() => {
+  restoreLoadControl?.();
+});
 
 // ---------------------------------------------------------------------------
 // toSecondPrecisionIso -- Copilot review finding (PR #2421): the default

@@ -661,7 +661,17 @@ test('audit-pr-cleanup.mjs without --pr fails before any gh invocation', () => {
     () => {
       execFileSync(
         process.execPath,
-        [join(REPO_ROOT, 'scripts/audit-pr-cleanup.mjs')],
+        [
+          join(REPO_ROOT, 'scripts/audit-pr-cleanup.mjs'),
+          // Without an explicit repository the helper asks `gh` to detect one
+          // before it checks --pr, so name it: that keeps this test true to
+          // its title and, with this repository's own config enabling load
+          // control (#3702), out of the real host-local state directory.
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+        ],
         {
           encoding: 'utf8',
           timeout: 60_000,

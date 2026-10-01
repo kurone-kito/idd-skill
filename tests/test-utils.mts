@@ -16,6 +16,7 @@ import { devNull, tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { setGithubApiLoadControlForTests } from '../src/scripts/gh-exec.mts';
 import type { ReviewThreadNode } from '../src/scripts/resolve-review-thread.mts';
 
 /**
@@ -146,6 +147,11 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
   // cache (#3588), that would store a hint keyed only by the stub's canned
   // answers and let a later test read it back.
   const scrubbedTokens = name === 'gh' ? scrubGitHubTokenEnv() : null;
+  // Likewise keep the load-control state of a stubbed `gh` run out of the real
+  // per-user directory (#3702). The directory lives under `tempRoot`, so the
+  // stub's own removal below deletes it.
+  const redirectedState =
+    name === 'gh' ? redirectLoadControlStateEnv(join(tempRoot, 'state')) : null;
   const restorePath = () => {
     if (originalPath === undefined) {
       delete process.env.PATH;
@@ -153,6 +159,7 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
       process.env.PATH = originalPath;
     }
     scrubbedTokens?.();
+    redirectedState?.();
   };
   if (process.platform !== 'win32') {
     return () => {
@@ -293,6 +300,55 @@ const GITHUB_TOKEN_ENV_NAMES = [
   'GH_ENTERPRISE_TOKEN',
   'GITHUB_ENTERPRISE_TOKEN',
 ] as const;
+
+/**
+ * Pin the load-control runtime policy to "off" for the calling test or file
+ * (#3702). This repository's own config enables load control, which adds
+ * `--include` to a non-paginated `ghApiJson` call and one `gh auth` identity
+ * lookup per process, so a test that asserts the exact `gh` argv, call counts
+ * or record counts of a wrapper would otherwise depend on that config. The
+ * load-control path itself is covered in `gh-exec-load-control.test.mts`.
+ * The result resumes reading the working directory's config.
+ */
+export function pinLoadControlOff(): () => void {
+  setGithubApiLoadControlForTests({
+    policy: { enabled: false, maxConcurrent: 1, maxWaitMs: 0 },
+  });
+  return () => setGithubApiLoadControlForTests(null);
+}
+
+/**
+ * The variables the host-local load-control state directory is resolved from
+ * (`XDG_STATE_HOME`, or `LOCALAPPDATA` on Windows; issue #3586).
+ */
+const LOAD_CONTROL_STATE_ENV_NAMES = [
+  'XDG_STATE_HOME',
+  'LOCALAPPDATA',
+] as const;
+
+/**
+ * Point the load-control state root at `stateRoot` for as long as a `gh` stub
+ * is active (#3702). With this repository's config enabling load control, a
+ * helper run against a stubbed `gh` would otherwise write lease and cooldown
+ * files into the real per-user directory that every concurrent session shares.
+ * The value is set unconditionally, so a root the caller already exported (for
+ * example one the acceptance run sets to an empty directory) is overridden
+ * rather than polluted. The result restores each variable only while it still
+ * holds `stateRoot`: a test that assigns its own value after stubbing keeps it.
+ */
+function redirectLoadControlStateEnv(stateRoot: string): () => void {
+  const saved = LOAD_CONTROL_STATE_ENV_NAMES.map(
+    (key) => [key, process.env[key]] as const,
+  );
+  for (const key of LOAD_CONTROL_STATE_ENV_NAMES) process.env[key] = stateRoot;
+  return () => {
+    for (const [key, value] of saved) {
+      if (process.env[key] !== stateRoot) continue;
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+}
 
 /** Remove GitHub token variables from `process.env`; the result restores them. */
 function scrubGitHubTokenEnv(): () => void {

@@ -63,6 +63,10 @@
   "githubApi": {
     "readCache": {
       "enabled": true
+    },
+    "loadControl": {
+      "enabled": true,
+      "maxConcurrent": 4
     }
   },
   "ciGate": {

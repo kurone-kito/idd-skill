@@ -250,7 +250,12 @@ function refusalOf(action: () => unknown) {
 test('with load control off, argv, results, and files are unchanged', async () => {
   const f = fixture();
   const previous = process.env.XDG_STATE_HOME;
+  const originalCwd = process.cwd();
   process.env.XDG_STATE_HOME = f.state;
+  // "No config entry" means off, which is only true for a working directory
+  // whose config does not enable load control; this repository's own does
+  // (#3702), so run from the fixture directory instead.
+  process.chdir(f.root);
   try {
     assert.equal(ghText(['api', 'user']), '{"ok":true}');
     assert.deepEqual(ghApiJson('repos/o/r'), { ok: true });
@@ -275,6 +280,7 @@ test('with load control off, argv, results, and files are unchanged', async () =
     );
     assert.equal(existsSync(f.state), false, 'no state directory is created');
   } finally {
+    process.chdir(originalCwd);
     if (previous === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = previous;
   }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   type RmOptions,
   readFileSync,
@@ -408,4 +409,101 @@ test('a stub-setup failure never mutates PATH/NODE_OPTIONS (regression, Copilot 
   );
   assert.equal(process.env.PATH, originalPath);
   assert.equal(process.env.NODE_OPTIONS, originalNodeOptions);
+});
+
+// --- #3702: a gh stub keeps load-control state out of the real directory ----
+
+const STATE_ENV_NAMES = ['XDG_STATE_HOME', 'LOCALAPPDATA'] as const;
+
+/** Run `body` with both state variables set to `value` (or removed), restored after. */
+function withStateEnv(value: string | undefined, body: () => void): void {
+  const saved = STATE_ENV_NAMES.map((key) => [key, process.env[key]] as const);
+  for (const key of STATE_ENV_NAMES) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    body();
+  } finally {
+    for (const [key, original] of saved) {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+  }
+}
+
+test('a gh stub redirects both load-control state variables into its own temp directory and restores them (#3702)', () => {
+  const preset = mkdtempSync(join(tmpdir(), 'idd-stub-state-preset-'));
+  try {
+    withStateEnv(preset, () => {
+      const restore = stubExecutable('gh', "process.stdout.write('x');\n");
+      const redirected = STATE_ENV_NAMES.map((key) => process.env[key]);
+      assert.equal(redirected[0], redirected[1]);
+      assert.notEqual(redirected[0], preset, 'a preset value is overridden');
+      assert.ok(redirected[0]?.startsWith(tmpdir()));
+      assert.ok(redirected[0]?.includes('idd-stub-gh-'));
+      const stateRoot = redirected[0] as string;
+      // Stand in for what a helper under test would write there, so the
+      // removal check below can actually fail.
+      mkdirSync(join(stateRoot, 'leases'), { recursive: true });
+      writeFileSync(join(stateRoot, 'leases', 'slot.json'), '{}');
+      restore();
+      for (const key of STATE_ENV_NAMES) {
+        assert.equal(process.env[key], preset, `${key} is restored`);
+      }
+      assert.equal(existsSync(stateRoot), false, 'the state root is removed');
+    });
+    withStateEnv(undefined, () => {
+      const restore = stubExecutable('gh', "process.stdout.write('x');\n");
+      for (const key of STATE_ENV_NAMES) {
+        assert.ok(process.env[key], `${key} is set while the stub is active`);
+      }
+      restore();
+      for (const key of STATE_ENV_NAMES) {
+        assert.equal(process.env[key], undefined, `${key} is removed again`);
+      }
+    });
+  } finally {
+    rmSync(preset, { recursive: true, force: true });
+  }
+});
+
+test('a value a test assigns after stubbing gh survives the stub cleanup (#3702)', () => {
+  const original = mkdtempSync(join(tmpdir(), 'idd-stub-state-original-'));
+  const own = mkdtempSync(join(tmpdir(), 'idd-stub-state-own-'));
+  try {
+    withStateEnv(original, () => {
+      const restore = stubExecutable('gh', "process.stdout.write('x');\n");
+      for (const key of STATE_ENV_NAMES) process.env[key] = own;
+      restore();
+      for (const key of STATE_ENV_NAMES) {
+        assert.equal(
+          process.env[key],
+          own,
+          `${key} keeps the test's own value`,
+        );
+      }
+    });
+  } finally {
+    rmSync(original, { recursive: true, force: true });
+    rmSync(own, { recursive: true, force: true });
+  }
+});
+
+test('a stub that is not gh leaves the load-control state variables alone (#3702)', () => {
+  const preset = mkdtempSync(join(tmpdir(), 'idd-stub-state-other-'));
+  try {
+    withStateEnv(preset, () => {
+      const restore = stubExecutable('git', "process.stdout.write('x');\n");
+      for (const key of STATE_ENV_NAMES) {
+        assert.equal(process.env[key], preset, `${key} is untouched`);
+      }
+      restore();
+      for (const key of STATE_ENV_NAMES) {
+        assert.equal(process.env[key], preset, `${key} is untouched`);
+      }
+    });
+  } finally {
+    rmSync(preset, { recursive: true, force: true });
+  }
 });

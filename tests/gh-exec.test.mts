@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
@@ -43,7 +43,18 @@ import {
   setGithubApiTelemetryPolicyForTests,
 } from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
-import { stubExecutable } from './test-utils.mts';
+import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
+
+// This source repository's own config enables load control (#3702), and the
+// tests in this file assert the wrappers' exact `gh` calls with it off; the
+// load-control path has its own tests in gh-exec-load-control.test.mts.
+let restoreLoadControl: (() => void) | undefined;
+before(() => {
+  restoreLoadControl = pinLoadControlOff();
+});
+after(() => {
+  restoreLoadControl?.();
+});
 
 // #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
 // gh-http-status.test.mts and the other migrated-domain test files.
