@@ -66,6 +66,21 @@
 // carries none of `claim-lock.mts`'s GitHub-reverification requirement,
 // because this lock has no cross-machine claim-ownership meaning to
 // protect.
+//
+// One Windows-only refinement stays inside that design (#3679): a create
+// there can answer `EPERM` (or, as a precaution, `EACCES`) instead of
+// `EEXIST`. Observed 2026-09-30 in the Windows `lint.yml` same-claim-id
+// race test (runs 36666761069 and 36709000096); the cause was not
+// established (a delete still pending on the name is one unconfirmed
+// candidate), and no `EPERM` from a real session has been seen.
+// `tryExclusiveCreate` reports it as "did not acquire this round", and the
+// loop in `acquireCloneLockAtPath` retries a bounded number of times
+// (`CLONE_LOCK_WINDOWS_DENIED_RETRIES`) before rethrowing that error, so a
+// real permission problem still fails within seconds. The operating
+// system's create remains the only decision authority: treating an `EPERM`
+// as contention adds no takeover, no removal, and no second coordination
+// path. POSIX behavior is unchanged: any error other than `EEXIST` is
+// thrown at once.
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -84,6 +99,16 @@ const CLONE_LOCK_TOKEN_ENV = 'IDD_CLONE_LOCK_TOKEN';
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** Delay between retry attempts while waiting for a held lock. */
 const POLL_INTERVAL_MS = 200;
+/**
+ * Windows only (#3679): how many times `acquireCloneLockAtPath` retries
+ * after a create fails with `EPERM`/`EACCES` before it rethrows the error
+ * of the last failing create, so a run that never succeeds makes this
+ * many plus one create attempts. About 3 seconds at
+ * {@link POLL_INTERVAL_MS}: intended to outlast a brief transient
+ * condition (its cause is unconfirmed) while a real permission problem
+ * still fails far sooner than the 120 s default deadline.
+ */
+export const CLONE_LOCK_WINDOWS_DENIED_RETRIES = 15;
 const CLONE_LOCK_FLAG_SPEC = {
   '--exec': { type: 'boolean' },
   '--check': { type: 'boolean' },
@@ -266,14 +291,30 @@ function isPidAlive(pid) {
  * this lock -- there is no removal or recreation path a defect could
  * hide in (see this module's header comment for the three prior designs
  * that tried to add one, and why each was abandoned).
+ *
+ * `EEXIST` means another holder won the round. On Windows only (read from
+ * `process.platform` each time this runs, #3679), an `EPERM` or `EACCES`
+ * from the create is reported as `denied`, "did not acquire this round",
+ * so the caller's loop can retry a bounded number of times instead of
+ * letting the error escape. That adds no takeover, no removal, and no
+ * second coordination path: the operating system's create is still the
+ * only authority. Every other error, and every error on POSIX, is thrown
+ * at once.
  */
 function tryExclusiveCreate(path, agentId, token) {
   try {
     writeFileSync(path, renderLockBody(agentId, token), { flag: 'wx' });
-    return true;
+    return { kind: 'created' };
   } catch (error) {
-    if (error.code === 'EEXIST') {
-      return false;
+    const code = error.code;
+    if (code === 'EEXIST') {
+      return { kind: 'exists' };
+    }
+    if (
+      process.platform === 'win32' &&
+      (code === 'EPERM' || code === 'EACCES')
+    ) {
+      return { kind: 'denied', error: error };
     }
     throw error;
   }
@@ -328,10 +369,15 @@ function describeTimeout(path) {
 }
 /**
  * Block (retrying with backoff) until the clone-scoped lock at `repoPath`
- * is acquired, or throw {@link CloneLockTimeoutError} after `timeoutMs`.
+ * is acquired, or throw {@link CloneLockTimeoutError} after `timeoutMs`
+ * (on Windows, the error of a still-failing `EPERM`/`EACCES` create is
+ * thrown instead; see below).
  * A held lock is never taken over automatically, regardless of how long
  * it has been held or whether its recorded holder process is still
- * running -- see this module's header comment.
+ * running -- see this module's header comment. On Windows, a create that
+ * fails with `EPERM` or `EACCES` is retried a bounded number of times
+ * ({@link CLONE_LOCK_WINDOWS_DENIED_RETRIES}) and then that error is
+ * thrown; that adds no takeover, removal, or second coordination path.
  */
 export function acquireCloneLock(
   repoPath,
@@ -345,7 +391,10 @@ export function acquireCloneLock(
  * Acquire a clone lock when the caller already resolved its path. This is
  * useful for a worktree operation that may remove the worktree while waiting:
  * resolving the path before blocking keeps the mutex usable after that
- * worktree disappears.
+ * worktree disappears. On Windows, an `EPERM`/`EACCES` from the create is
+ * retried a bounded number of times, and the error of the last failing
+ * create is thrown instead of {@link CloneLockTimeoutError} when the
+ * retries or the deadline run out while the most recent create was denied.
  */
 export function acquireCloneLockAtPath(
   path,
@@ -354,12 +403,33 @@ export function acquireCloneLockAtPath(
 ) {
   const token = randomToken();
   const deadline = Date.now() + timeoutMs;
+  // #3679: the current run of consecutive Windows-denied creates and the
+  // error of the most recent one. `tryExclusiveCreate` holds no state
+  // across attempts, so the bound lives here; a created or `EEXIST`
+  // result ends the run.
+  let deniedRun = 0;
+  let lastDenied = null;
   for (;;) {
-    if (tryExclusiveCreate(path, agentId, token)) {
+    const outcome = tryExclusiveCreate(path, agentId, token);
+    if (outcome.kind === 'created') {
       return { path, token };
     }
+    if (outcome.kind === 'denied') {
+      deniedRun += 1;
+      lastDenied = outcome.error;
+      if (deniedRun > CLONE_LOCK_WINDOWS_DENIED_RETRIES) {
+        throw outcome.error;
+      }
+    } else {
+      deniedRun = 0;
+      lastDenied = null;
+    }
     if (Date.now() >= deadline) {
-      throw new CloneLockTimeoutError(path, timeoutMs);
+      // When the most recent create was denied, no holder is known to
+      // exist: throw that error rather than a timeout whose message
+      // (through `readLock`) would report a lock file that cannot be
+      // parsed and tell the operator to delete it by hand.
+      throw lastDenied ?? new CloneLockTimeoutError(path, timeoutMs);
     }
     sleepSync(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
   }

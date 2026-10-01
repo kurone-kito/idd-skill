@@ -17,6 +17,8 @@ import { promisify } from 'node:util';
 
 import {
   acquireCloneLock,
+  acquireCloneLockAtPath,
+  CLONE_LOCK_WINDOWS_DENIED_RETRIES,
   CloneLockTimeoutError,
   checkCloneLock,
   releaseCloneLock,
@@ -736,5 +738,262 @@ test('resolveCloneLockPath: a real node exit-1 error built from its own spawn op
     assert.equal(spawns.length, 2);
   } finally {
     teardown(primary);
+  }
+});
+
+// --- #3679: a Windows EPERM/EACCES from the exclusive create ----------------
+
+/**
+ * Run `body` with `process.platform` forced to `platform` and the
+ * exclusive create of an `idd-clone.lock` file made to fail on demand, the
+ * same `syncBuiltinESMExports` technique the #3664 retry tests use. Only a
+ * `writeFileSync(<...>idd-clone.lock, ..., { flag: 'wx' })` call is
+ * intercepted; every other write passes through unchanged. `codeFor` gets
+ * the zero-based index of the intercepted attempt and returns the error
+ * code to inject, or `null` to let that attempt run for real. Returns how
+ * many creates were attempted.
+ */
+function withLockCreateInjection(
+  platform: NodeJS.Platform,
+  codeFor: (attempt: number) => string | null,
+  body: () => void,
+): number {
+  const fsModule = require('node:fs') as typeof import('node:fs');
+  const originalWrite = fsModule.writeFileSync;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let attempts = 0;
+  fsModule.writeFileSync = ((...args: Parameters<typeof originalWrite>) => {
+    const [file, , options] = args;
+    const isLockCreate =
+      typeof file === 'string' &&
+      file.endsWith('idd-clone.lock') &&
+      typeof options === 'object' &&
+      options !== null &&
+      (options as { flag?: string }).flag === 'wx';
+    if (isLockCreate) {
+      const attempt = attempts;
+      attempts += 1;
+      const code = codeFor(attempt);
+      if (code !== null) {
+        throw Object.assign(
+          new Error(`${code}: injected on attempt ${attempt}, open '${file}'`),
+          { code },
+        );
+      }
+    }
+    return originalWrite(...args);
+  }) as typeof originalWrite;
+  Object.defineProperty(process, 'platform', {
+    value: platform,
+    configurable: true,
+  });
+  require('node:module').syncBuiltinESMExports();
+  try {
+    body();
+  } finally {
+    fsModule.writeFileSync = originalWrite;
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+    require('node:module').syncBuiltinESMExports();
+  }
+  return attempts;
+}
+
+function withLockDir(run: (lockPath: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-clone-lock-3679-'));
+  try {
+    run(join(dir, 'idd-clone.lock'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+for (const code of ['EPERM', 'EACCES']) {
+  test(`acquire (win32): ${code} on the first attempts is retried and the lock is then acquired with the caller's own body (#3679)`, () => {
+    withLockDir((lockPath) => {
+      let handle: { path: string; token: string } | undefined;
+      const attempts = withLockCreateInjection(
+        'win32',
+        (attempt) => (attempt < 3 ? code : null),
+        () => {
+          handle = acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+        },
+      );
+      assert.equal(attempts, 4);
+      assert.ok(handle);
+      assert.equal(handle.path, lockPath);
+      const body = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+        agentId: string;
+        token: string;
+        pid: number;
+      };
+      assert.equal(body.agentId, 'agent-win');
+      assert.equal(body.token, handle.token);
+      assert.equal(body.pid, process.pid);
+      releaseCloneLock(handle);
+    });
+  });
+}
+
+test('acquire (win32): an EPERM that never clears throws the last failing create error after exactly the bound plus one attempts, not a timeout (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    const attempts = withLockCreateInjection(
+      'win32',
+      () => 'EPERM',
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.equal(attempts, CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
+    assert.ok(thrown instanceof Error);
+    assert.ok(!(thrown instanceof CloneLockTimeoutError));
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+    assert.match(
+      thrown.message,
+      new RegExp(`injected on attempt ${CLONE_LOCK_WINDOWS_DENIED_RETRIES},`),
+    );
+  });
+});
+
+test('acquire (win32): a deadline shorter than the bound still throws the EPERM error, after the loop kept retrying (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    const attempts = withLockCreateInjection(
+      'win32',
+      () => 'EPERM',
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 500);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.ok(attempts >= 2, `expected at least two attempts, got ${attempts}`);
+    assert.ok(attempts <= CLONE_LOCK_WINDOWS_DENIED_RETRIES);
+    assert.ok(thrown instanceof Error);
+    assert.ok(!(thrown instanceof CloneLockTimeoutError));
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+  });
+});
+
+test('acquire (win32): an EEXIST ends a run of EPERM results and restarts the count (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    // Two denied creates, one lost round, then denied forever. Without a
+    // restart the bound would trip on the denied create that follows the
+    // lost round after BOUND - 2 more; with it, only after BOUND + 1.
+    const attempts = withLockCreateInjection(
+      'win32',
+      (attempt) => (attempt === 2 ? 'EEXIST' : 'EPERM'),
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.equal(attempts, 2 + 1 + CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+  });
+});
+
+test('acquire (win32): a create that succeeds on the last allowed retry is acquired (#3679)', () => {
+  withLockDir((lockPath) => {
+    let handle: { path: string; token: string } | undefined;
+    const attempts = withLockCreateInjection(
+      'win32',
+      (attempt) =>
+        attempt < CLONE_LOCK_WINDOWS_DENIED_RETRIES ? 'EPERM' : null,
+      () => {
+        handle = acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+      },
+    );
+    assert.equal(attempts, CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
+    assert.ok(handle);
+    releaseCloneLock(handle);
+  });
+});
+
+test('acquire (win32): any other error code is still thrown at once (#3679)', () => {
+  for (const code of ['ENOENT', 'EBUSY']) {
+    withLockDir((lockPath) => {
+      let thrown: unknown;
+      const attempts = withLockCreateInjection(
+        'win32',
+        () => code,
+        () => {
+          try {
+            acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+          } catch (error) {
+            thrown = error;
+          }
+        },
+      );
+      assert.equal(attempts, 1, code);
+      assert.equal((thrown as NodeJS.ErrnoException).code, code);
+    });
+  }
+});
+
+test('acquire (win32): a denied create followed only by lost rounds still ends in CloneLockTimeoutError, not the stale denied error (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    withLockCreateInjection(
+      'win32',
+      (attempt) => (attempt === 0 ? 'EPERM' : 'EEXIST'),
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 300);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.ok(thrown instanceof CloneLockTimeoutError);
+  });
+});
+
+test('acquire (linux): an injected EPERM is thrown on the first attempt, with no retry (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    const attempts = withLockCreateInjection(
+      'linux',
+      () => 'EPERM',
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-posix', 60_000);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.equal(attempts, 1);
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+  });
+});
+
+test('acquire (win32 and linux): an injected EEXIST still loses the round and retries as before (#3679)', () => {
+  for (const platform of ['win32', 'linux'] as const) {
+    withLockDir((lockPath) => {
+      let handle: { path: string; token: string } | undefined;
+      const attempts = withLockCreateInjection(
+        platform,
+        (attempt) => (attempt < 2 ? 'EEXIST' : null),
+        () => {
+          handle = acquireCloneLockAtPath(lockPath, 'agent-a', 60_000);
+        },
+      );
+      assert.equal(attempts, 3, platform);
+      assert.ok(handle, platform);
+      releaseCloneLock(handle);
+    });
   }
 });
