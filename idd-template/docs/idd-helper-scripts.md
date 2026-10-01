@@ -6683,6 +6683,29 @@ reporting `branch_outcome: retained_unmerged` (issue #2331).
   --force` is warranted only for that fatal, and only after leftovers
   are preserved. Revalidate with `--worktree` immediately before the
   retry (`idd-merge.instructions.md`).
+- **`merge.autoStash=true` hides a dirty primary worktree** (step 4): F4
+  holds a dirty primary worktree as `primary-worktree-dirty` and never
+  stashes, but with `git config merge.autoStash` true the fast-forward
+  stashes for itself. Replayed on git 2.53.0 on 2026-10-01: with an
+  incoming change to a file the primary worktree has modified, `git
+  merge --ff-only` printed `Created autostash`, fast-forwarded, printed
+  `Applying autostash resulted in conflicts`, and left the file in the
+  `UU` state with one stash entry, where the default configuration
+  refuses with `Your local changes ... would be overwritten` (the hold's
+  trigger); for an incoming change to a different file it printed
+  `Created autostash` and `Applied autostash` and restored the file.
+  When `git config merge.autoStash` is true, run the step 4 fast-forward
+  as `git -c merge.autoStash=false merge --ff-only
+  origin/{development-branch}`: an overlapping dirty path then still
+  refuses and holds as `primary-worktree-dirty`, and a non-overlapping
+  dirty file fast-forwards either way. If git already printed `Created
+  autostash`, look for `Applied autostash`. Without it (the `UU` state)
+  the merge still exits 0, so step 4's `&&` chain does not stop on it:
+  treat it as the `primary-worktree-dirty` hold, stop before step 5,
+  leave the conflicted paths and the stash entry (match it by the hash
+  git printed) for the operator, and never pop or drop a stash entry in
+  F4. One report (issue `#3678`) also found a nine-day-old `autostash`
+  entry in a shared clone's stash list that nobody had noticed.
 - **Verified unmerged fallback** (step 4, issue `#3536`): an unmerged
   index can make `stash push` fail even though the working-tree paths
   were copied and verified outside the worktree. If the first removal

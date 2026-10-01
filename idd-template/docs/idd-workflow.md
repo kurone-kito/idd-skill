@@ -931,6 +931,63 @@ config, and forge state. This guidance is **advisory** — a recommended
 practice with its rationale, not a hard requirement — and
 **runner-agnostic**, since this repository ships no runner.
 
+### E/F edge cases from field reports
+
+Three situations from 2026-09-30 field reports have no complete written
+answer in the phase files. None changes a gate; each cites its reported
+incident.
+
+- **A commit on the PR branch that this session did not write.** A
+  maintainer applied Copilot Autofix in the GitHub web UI (committer
+  `web-flow`, trailer "Co-authored-by: Copilot Autofix powered by AI")
+  on a pull request that had one `github-advanced-security[bot]` thread.
+  Reported 2026-09-30 (kurone-kito/idd-skill#3678): the thread ended
+  resolved and outdated with no reply, the successor's local branch was
+  one commit behind origin, and the `Bash tests (bats)` check was red on
+  that commit because the autofix changed a shape a test mock relied on;
+  nothing but CI validated the diff. Fetch and fast-forward the local
+  branch (a branch behind origin is the benign case), let E1 take the
+  moved head (`diffReviewSnapshot` already routes a moved head to E1 as
+  `head-changed`), and run the repository's objective validation on that
+  diff, because only CI has validated it. A resolved bot thread needs no
+  marker-first reply: `classifyReviewThreadForGate` returns `resolved`
+  for any resolved thread whoever wrote it, so it does not count toward
+  the unresolved-threads gate, and the disposition-evidence gate skips
+  it once the E1 watermark on the moved head is newer than its last
+  external comment, so that E1 pass, not a reply, is what clears it. The
+  fix itself stays unvalidated until CI or E12's lint and test step says
+  otherwise. Whether the commit subject follows a convention is adopter
+  policy.
+
+- **A pull request that must not close its claimed issue.** Reported
+  2026-09-30 (kurone-kito/idd-skill#3678): an acceptance criterion that
+  only a later session can check after the merge (a throwaway pull
+  request that must show a CI check passing) led an orchestrator to tell
+  the worker to write `Refs`, not a closing keyword. The F2 collector
+  then had no fitting mode: with `--claim-issue N` the closing set is
+  `[N]` and `--closing-issues` must include the claimed issue number,
+  while `--claimless` skips claim revalidation, so claim ownership was
+  covered only by a gate script the session wrote. Split the issue
+  instead, through the `issue-authoring` skill: an implementation issue
+  that closes with its pull request and the closing keyword D3 requires,
+  and a verification issue that carries the post-merge check. Do not use
+  a `Refs`-only body for the claimed issue, and do not use `--claimless`
+  to get around the closing set.
+
+- **A closing link that stays empty.** D3.5 already says to wait, and
+  not to edit the body, toggle draft, or close and reopen, while the
+  pull request is under 4 hours old (by `createdAt`) and its keyword
+  matches step 3's regex (kurone-kito/idd-skill#3660). Two adopters'
+  reports add what it does not say: across seven pull requests the field
+  stayed empty for 1 h 04 min to at least 2 h 24 min and healed without
+  action, and the delay is neither a fixed age nor a shared clock time,
+  so a session cannot plan the wait. To tell quickly whether the fault
+  is platform-wide, sample one unrelated recent pull request that has a
+  closing keyword and read its `closingIssuesReferences`: if that is
+  also empty, keep waiting. The operator may also add the
+  issue-to-pull-request link by hand in the web UI's Development
+  sidebar.
+
 ### Orchestrator fan-out variant
 
 A long-lived orchestrating session may run Discover and Claim itself and
@@ -1798,6 +1855,35 @@ issues, proceed to E11" round.
 `critiqueLoop.telemetryHook` remains scoped to the C1 critique pass
 only; E10 never consults it, regardless of configuration. Extending
 the telemetry hook to E10 remains a separate, not-yet-scoped change.
+
+### E2 after a clean C1 on the same HEAD
+
+E2's first pass (`idd-review-snapshot.instructions.md`) is kept even
+when C1 ran clean on the tree that became the pull request's head: C1
+having reviewed that head is not a reason to skip it. What E2 must not
+do is repeat C1. C1's rounds already ran the configured mechanism (for
+example the delegate plus the per-agent pass under `combined`), while
+E2's incremental scope keys off a same-claim `review-baseline` that
+neither C nor D posts, so a first E2 pass scopes to the full branch diff
+(and does so again after a takeover). Briefed like C1, it asks for the
+same review a second time.
+
+Name C1's lens and its finding count in the E2 brief and ask for a
+different lens, for example an **adversarial** one: try to break the
+change, and run the new tests against mutants of it (small deliberate
+defects in the code under test) so each mutant must fail a named test. A
+takeover successor that cannot recover C1's lens or count says so in the
+brief and picks a lens the C1 checklist did not use. Reported 2026-09-30
+by an adopter (kurone-kito/idd-skill#3678): on a small guard-plus-tests
+change, C1 with a checklist lens reported three Low items, while E2 with
+an adversarial lens ran the new specs against five mutants of the guard,
+reported one Low item, and showed every mutant failing a named test.
+That is evidence C1 could not produce, and it let the session reject the
+Low item without another push. The
+[mutation / write-side helper lens](#mutation--write-side-helper-lens)
+and the [gate-mirroring helper lens](#gate-mirroring-helper-lens) below
+apply at E2 exactly as at C1, on top of the lens chosen here; the first
+concerns helpers that mutate GitHub or git state, not mutation testing.
 
 ### Mutation / write-side helper lens
 
