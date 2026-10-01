@@ -1515,6 +1515,63 @@ agent; only the mechanism differs.
 | Cursor CLI      | Launch an independent Cursor `Task` tool subagent with `subagent_type="generalPurpose"` (or the nearest equivalent general-purpose subagent) using the calling phase's critique checklist; parent waits for and collects the result. Fallback: structured self-critique when delegation is unavailable, unsuitable, or fails. Do not substitute Cursor product review skills for IDD E-phase critique. |
 | Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                                                                                                                                                                                                                                                                                       |
 
+The brief given to a delegated per-agent critique subagent states the
+five rules below, each followed here by its citation per
+[Cite the observed incident](idd-design-rationale.md#cite-the-observed-incident).
+These rules apply to the brief for a delegated per-agent critique
+subagent only; structured self-critique and `critiqueLoop.delegate`
+commands are unchanged. The brief is a prospective constraint, not an
+enforced sandbox, like the trust-based contract the
+[Completed-draft adversarial review](#completed-draft-adversarial-review)
+subsection describes for the issue-authoring reviewer.
+
+1. **Read-only.** Apart from creating and writing in its own scratch
+   directory (see the scratch-directory rule), the pass writes nothing
+   to the worktree or the git directory and leaves no file elsewhere,
+   changes no branch, posts no marker or comment, and runs no `gh`
+   command other than a read-only query. For example it may read files
+   and run `git log`, `show`, `diff` and `grep`; any other command,
+   apart from creating and filling its own scratch directory, runs only
+   when the brief names it, and that includes a test run (invoked
+   directly, for example `node --test <file>` for a Node project, not
+   through a package-manager script, with its temporary and cache
+   output directed into the scratch directory) and a helper script.
+   Observed 2026-10-01, during the E2 critique of
+   `kurone-kito/idd-skill#3648`; no issue records the incident itself.
+   The issue-authoring analogue is `kurone-kito/idd-skill#3448`.
+2. **No package manager or hook installer, no `node_modules` writes.**
+   No package-manager command that can install, link or run a script
+   (for example `pnpm`, `npm`, `npx`), no other command that installs
+   hooks or links packages (for example `husky`), and no copying,
+   linking or writing of the worktree's `node_modules`. Observed
+   2026-10-01, during the E2 critique of `kurone-kito/idd-skill#3648`
+   (no issue records the incident itself), and 2026-09-30 in an
+   issue-authoring draft review (no issue filed).
+3. **Scratch files only in its own directory.** Scratch files go only
+   in a directory the subagent creates (for example with `mktemp -d`)
+   outside the repository and the session scratchpad. When the parent
+   has already created a scratch directory outside the repository and
+   the session scratchpad and named it in the brief (the Claude Code
+   recipe below has the parent create a scratch directory and name it
+   in the launch prompt), the subagent uses only that directory and
+   creates none. This rule is preventive; no observed incident yet (the
+   `kurone-kito/idd-skill#3648` vector was the symlink, not the
+   location).
+4. **No reading of session-private state.** The subagent does not read
+   the claim lock file `idd-claim.lock`, the `idd-generated-*` files in
+   the git directory, the session scratchpad (except a file the brief
+   names), the parent session's transcript, or the operator's notes and
+   per-user agent memory files. Observed 2026-09-24, during work on
+   `kurone-kito/idd-skill#3253` (no issue records the incident itself),
+   for the session scratchpad; observed 2026-10-01 (no issue filed), for
+   the operator's notes and per-user agent memory files; for the claim
+   lock file, the `idd-generated-*` files and the parent session's
+   transcript: preventive; no observed incident yet.
+5. **No background process left running.** The subagent ends every
+   background process the subagent itself started before it returns.
+   Observed 2026-10-01, during the plan critique for
+   `kurone-kito/idd-skill#3705` (no issue records the incident itself).
+
 The parent bounds its wait for each delegated per-agent critique pass by
 the resolved `critiqueLoop.subagentWaitCeiling`. Enforce that ceiling
 through the harness's own per-invocation timeout control, never through a
