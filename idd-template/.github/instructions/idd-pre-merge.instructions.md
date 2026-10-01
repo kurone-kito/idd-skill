@@ -435,7 +435,7 @@ never clears by polling: follow its `detail`.
   `set -o pipefail`, run
   `git ls-tree -r -z --full-tree --name-only "$PR_HEAD_SHA" |
   (cd "$(git rev-parse --show-toplevel)" &&
-  GIT_LITERAL_PATHSPECS=1 xargs -0 -r git ls-files -z -o --exclude-standard --)`
+  GIT_LITERAL_PATHSPECS=1 xargs -0 git ls-files -z -o --exclude-standard --)`
   and again with `-o -i`; any output or failure holds. Use
   `git switch {branch-name}` (not
   detached), recheck; reset on pass)

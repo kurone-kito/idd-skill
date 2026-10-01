@@ -327,14 +327,17 @@ test('a clean tree and a path tracked in both commits print nothing and exit 0 (
   }
 });
 
-test('an empty head tree and a leading-dash tracked path are handled literally (#3671)', {
+test('an empty head tree on a clean tree and a leading-dash tracked path are handled literally (#3671)', {
   skip: SKIP,
 }, () => {
-  // With nothing to look up, `xargs -r` must not run `git ls-files` with no
-  // paths, which would list every unrelated untracked file.
+  // The pipeline has no `xargs -r` (BSD/macOS xargs may reject it, and BSD
+  // already skips the command on empty input). With nothing to look up, GNU
+  // xargs runs `git ls-files` once with no paths, which lists untracked files:
+  // a clean tree prints nothing either way, and any difference on an empty tree
+  // is a hold, never a false pass.
   const empty = makeShadowRepo({
     trackedAtHead: ['d/gone.txt'],
-    untracked: ['d/unrelated.txt'],
+    untracked: [],
   });
   try {
     const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -374,8 +377,9 @@ test('a bad SHA fails closed under pipefail, and would pass silently without it 
       assert.notEqual(closed.status, 0, cwd);
       assert.deepEqual(closed.paths, [], cwd);
 
-      // Without pipefail, xargs -r gets empty input and the pipeline exits
-      // 0 with empty output, which "any output holds" would read as a pass.
+      // Without pipefail the failed `git ls-tree` is invisible: the pipeline
+      // exits 0 and a clean tree prints nothing, which "any output holds"
+      // would read as a pass.
       const open = run(PIPELINE, cwd, 'deadbeef', { pipefail: false });
       assert.equal(open.status, 0, cwd);
       assert.deepEqual(open.paths, [], cwd);
@@ -389,6 +393,14 @@ test('F2 carries the shadow-path pipeline and F3 refers to it, in the templates 
   for (const file of F2_FILES) {
     const text = normalizeWhitespace(readText(file));
     extractPipeline(file);
+    // Portable across GNU and BSD/macOS xargs: no GNU-only -r flag.
+    assert.equal(
+      /xargs(?=\s)[^`]*?\s-[A-Za-z0-9]*r\b|xargs[^`]*--no-run-if-empty/.test(
+        text,
+      ),
+      false,
+      file,
+    );
     assert.match(
       text,
       /Under `set -o pipefail`, run `git ls-tree -r -z /,
