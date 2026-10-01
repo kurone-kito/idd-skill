@@ -527,8 +527,9 @@ the helper's dry-run output doesn't make self-explanatory.
 
 **An unrelated worktree record.** Resume Step 1 routes only a forced-handoff
 successor to §FH, so any other session stops on `owner_evidence_required`
-and reports the failed proof; an operator may then apply this paragraph. It
-is the only part of §LWR that applies to an `owner_evidence_required`
+and reports the failed proof; an operator may then apply this paragraph, and
+for either trigger below an operator confirms every action. It is the only
+part of §LWR that applies to an `owner_evidence_required`
 verdict, and it also covers a `local_worktree_occupied` result whose
 top-level `reason` ends `-local-worktree-unreadable` when `paths` names a
 record that is not the claimed branch's own. Steps 1-5 below recover the
@@ -569,7 +570,7 @@ against an unrelated branch, and none has an observed incident of its own
   a directory moved by hand and a directory whose `.git` file is gone. Act
   only when the operator confirms the directory was deleted and `test ! -e
   <path>` holds; repair a moved worktree with `git worktree repair
-  <new-path>`, never remove it. Otherwise stop and report. Then point a
+  <new-path>`, never remove it. Otherwise stop and report. If both hold, point a
   backup ref at the listing's `HEAD <sha>` (`git update-ref
   refs/idd-lwr/unrelated-<sha> <sha>`) and confirm that `git rev-parse
   --verify refs/idd-lwr/unrelated-<sha>` prints the same `<sha>`; key the
@@ -578,17 +579,22 @@ against an unrelated branch, and none has an observed incident of its own
   detached tip may be kept only by that record, and removal leaves the
   commit unreferenced, so `git gc` may delete it later. Leave the ref in
   place and report it. Last, run `git worktree remove --force <path>`,
-  behind the clone-scoped lock when workers share the clone, as B1 does.
-  Do not use a plain `git worktree prune` here: it is clone-wide.
+  behind the clone-scoped lock when workers share the clone, as B1 does;
+  once the lock is held, re-run the routing call and `test ! -e <path>`,
+  and remove only if the same conditions still hold. Do not use a plain
+  `git worktree prune` here: it is clone-wide, so it also clears other gone
+  detached records before they have a backup ref, and it removes the admin
+  directory of a record whose `.git` file is gone.
 - The same record, locked, also reads `unreadable` but is not flagged
   `prunable`, and a plain prune leaves it. Read its `locked <reason>` line.
   Unlock it (`git worktree unlock <path>`) only when the operator
-  confirms. The reason is free text written by whoever locked it, so it is
-  evidence for that confirmation, not a substitute for it, and a reason
-  such as "on removable media" means stop and report. Once unlocked it is
-  an ordinary gone record, the previous bullet. `git worktree remove
-  --force` alone fails on a locked record and needs `--force` twice, but
-  that bypasses the unlock rule; the rule above still decides.
+  confirms the directory was deleted and `test ! -e <path>` holds. The
+  reason is free text written by whoever locked it, so it is evidence for
+  that confirmation, not a substitute for it, and a reason such as "on
+  removable media" means stop and report. Once unlocked it is an ordinary
+  gone record, the previous bullet. `git worktree remove --force` alone
+  fails on a locked record and needs `--force` twice, but that bypasses the
+  unlock rule; the rule above still decides.
 - A foreign detached worktree in the middle of a rebase, a `git am` or a
   bisect reads `unreadable` when that work was started from a detached
   HEAD. A rebase's `head-name` is the literal `detached HEAD`, a `git am`
@@ -606,8 +612,8 @@ against an unrelated branch, and none has an observed incident of its own
    helper (`docs/idd-helper-scripts.md`; source-repo/vendored-node: `node
    scripts/resume-claim-routing.mjs --issue <n>`); a
    `local_worktree_occupied` result reports
-   `evidence.local_worktree.paths` and a `reason` starting
-   `stale-claim-...` or `released-claim-...`. Under a reason ending
+   `evidence.local_worktree.paths` and a top-level `reason`
+   starting `stale-claim-...` or `released-claim-...`. Under a reason ending
    `-local-worktree-occupied`, `<path>` is the claimed branch's own record,
    even when `git worktree list --porcelain` shows it `detached` in the
    middle of a rebase or bisect (step 3 handles that). Under a reason
@@ -618,9 +624,11 @@ against an unrelated branch, and none has an observed incident of its own
    result is the unrelated-record paragraph's case and stops here. If
    `<path>` no longer exists on disk (a prunable record), skip to `git
    worktree remove --force <path-from-list>`, behind the clone-scoped lock
-   when workers share the clone — mirroring B1's own same-shape recovery
-   rule for a prunable entry (`idd-work.instructions.md`). Steps 3-4 have
-   nothing to preserve or remove here. Keep that command rather than a
+   when workers share the clone (re-run the routing call and re-check that
+   `<path>` is still absent once the lock is held) — mirroring B1's own
+   same-shape recovery rule for a prunable entry
+   (`idd-work.instructions.md`). Steps 3-4 have nothing to preserve or
+   remove here. Keep that command rather than a
    plain `git worktree prune`: prune is clone-wide (replayed on git 2.53.0,
    one prune cleared an unrelated record together with the claimed
    branch's own), though it does remove an unlocked prunable record at
