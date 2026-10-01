@@ -563,12 +563,43 @@ test('a code span in the heading line is not the plain heading (#3672)', () => {
   }
 });
 
-test('a body without the phrase returns at once, however adversarial (#3672)', () => {
+test('adversarial bodies return promptly, with or without the phrase (#3672)', () => {
   // The shared Markdown masker costs far more than linear on crafted input (a
-  // 65k-character run of unterminated code spans took tens of seconds), so a
-  // body that cannot carry a remark must not reach it.
+  // 65k-character run of unterminated code spans took tens of seconds, and a
+  // `<a` line followed by spaces is cubic), so it only sees a bounded head
+  // with bounded lines (#3688 review).
   const started = performance.now();
-  assert.equal(extractCopilotReviewBodyRemark('`a\n'.repeat(22000)), null);
-  assert.equal(extractCopilotReviewBodyRemark(`<a${' '.repeat(60000)}`), null);
-  assert.ok(performance.now() - started < 2000);
+  for (const body of [
+    '`a\n'.repeat(22000),
+    `<a${' '.repeat(60000)}`,
+    `Needs a closer look\n${'`a\n'.repeat(22000)}`,
+    // A blank line first: `<a` right after a paragraph line opens no block.
+    `Needs a closer look\n\n<a${' '.repeat(60000)}`,
+    // The worst shape found for the bounded head: one unterminated code span
+    // per paragraph.
+    `Needs a closer look\n\n${'`\n\n'.repeat(20000)}`,
+    // A long run of blanks inside a label on an ATX heading line.
+    `### Needs a closer look: a${' '.repeat(65000)}b\n`,
+    `### Needs a closer look\n\n<a${' '.repeat(4000)}\n`.repeat(5),
+    `> \`a\` x\nNeeds a closer look\n`.repeat(3000),
+  ]) {
+    extractCopilotReviewBodyRemark(body);
+  }
+  assert.ok(performance.now() - started < 3000);
+});
+
+test('a remark at the head of a very large body is still found, and read in full (#3672)', () => {
+  const long = 'word '.repeat(300).trim();
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      `<!-- ccr-overview-v2 -->\n\n### Needs a closer look\n\n${long}\n\n${'filler line\n'.repeat(20000)}`,
+    ),
+    long,
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      `Needs a closer look: ${long}\n\n${'x'.repeat(100000)}`,
+    ),
+    long,
+  );
 });

@@ -270,6 +270,24 @@ const REMARK_INLINE_LABEL_PATTERN =
   /^ {0,3}(?:[#*_+-][ \t#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?/iu;
 
 const REMARK_PHRASE_PATTERN = /needs a closer look/iu;
+/** The head of a body the Markdown masker may read, and the longest line it
+ * may see: a remark sits at the top of a review body (every observed one
+ * within its first hundred characters). Known limit, accepted for an
+ * evidence-only field: a line over MASK_LINE_CHARS whose HTML comment or
+ * raw-text element closes past that column reads as unterminated, so it hides
+ * the rest of the head, and a remark paragraph that crosses the head's end is
+ * read only up to the line holding the boundary. */
+const MASK_HEAD_CHARS = 2048;
+const MASK_LINE_CHARS = 512;
+
+/** The bounded copy of `body` handed to the shared masker. */
+function boundedMaskInput(body: string): string {
+  return body
+    .slice(0, MASK_HEAD_CHARS)
+    .split(/\r?\n/)
+    .map((line) => line.slice(0, MASK_LINE_CHARS))
+    .join('\n');
+}
 const HAS_TEXT_PATTERN = /[\p{L}\p{N}]/u;
 const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
 
@@ -335,7 +353,9 @@ function readRemarkParagraph(
       .slice(index === start ? firstLineOffset : 0)
       .trim();
     if (text !== '') {
-      parts.push(singleLine ? text.replace(/[ \t]+#+[ \t]*$/u, '') : text);
+      // A closing `#` run needs a space before it; this is linear, unlike a
+      // `[ \t]+#+[ \t]*$` pattern over a long run of blanks.
+      parts.push(singleLine ? text.replace(/[ \t]#+$/u, '').trimEnd() : text);
     }
     if (singleLine) {
       break;
@@ -377,7 +397,8 @@ function readRemarkParagraph(
  * never ends it. The text
  * itself is read from the original lines, so a code span INSIDE the remark
  * survives. The mask keeps line count and in-line columns (not absolute
- * offsets, since `\r\n` is normalized), which is all this relies on.
+ * offsets, since `\r\n` is normalized), which is all this relies on. It sees
+ * only a bounded head of the body (see {@link boundedMaskInput}).
  *
  * Limits, accepted because the result never gates anything: a review
  * that merely discusses the phrase in uncoded prose as a line-anchored
@@ -389,13 +410,21 @@ function readRemarkParagraph(
 export function extractCopilotReviewBodyRemark(
   body: string | null | undefined,
 ): string | null {
-  // Cheap exit before any masking: the shared masker costs more than linear
-  // on adversarial input, and nearly every review body lacks the phrase.
-  if (typeof body !== 'string' || !REMARK_PHRASE_PATTERN.test(body)) {
+  if (typeof body !== 'string') {
+    return null;
+  }
+  // The shared masker costs more than linear on crafted input (#3688 review:
+  // tens of seconds on a 65k-character run of unterminated code spans, and
+  // cubic in the length of a `<a` line followed by spaces), so it only ever
+  // sees a bounded head of the body with bounded lines, and not at all when
+  // that head lacks the phrase. A remark sits at the top of a review body;
+  // the remark TEXT is still read from the full original lines.
+  const maskInput = boundedMaskInput(body);
+  if (!REMARK_PHRASE_PATTERN.test(maskInput)) {
     return null;
   }
   const original = body.split(/\r?\n/);
-  const located = maskMarkdownForScan(body, {
+  const located = maskMarkdownForScan(maskInput, {
     inlineCode: 'mask',
     htmlComments: 'mask',
     htmlBlocks: 'mask',
@@ -403,7 +432,7 @@ export function extractCopilotReviewBodyRemark(
   // Inline code and inline comments stay visible here: only a blanked code or
   // HTML BLOCK line ends a paragraph, never the interior of a multi-line span
   // or comment. (A comment block on its own lines is still an HTML block.)
-  const blocks = maskMarkdownForScan(body, {
+  const blocks = maskMarkdownForScan(maskInput, {
     inlineCode: 'keep',
     htmlComments: 'keep',
     htmlBlocks: 'mask',
