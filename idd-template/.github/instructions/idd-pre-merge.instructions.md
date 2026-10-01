@@ -431,10 +431,13 @@ never clears by polling: follow its `detail`.
   After fetch, the claim gate must confirm
   `git branch --show-current` is `{branch-name}`; else hold.
   Require empty `git status --porcelain` and
-  `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`; else hold. For
-  paths in `git ls-tree --full-tree -r --name-only "$PR_HEAD_SHA"`, run
-  `git ls-files -o --exclude-standard -- ":(top)$path"` and the same with
-  `-i`; either output holds. Use `git switch {branch-name}` (not
+  `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`; else hold. Under
+  `set -o pipefail`, run
+  `git ls-tree -r -z --full-tree --name-only "$PR_HEAD_SHA" |
+  (cd "$(git rev-parse --show-toplevel)" &&
+  GIT_LITERAL_PATHSPECS=1 xargs -0 -r git ls-files -z -o --exclude-standard --)`
+  and again with `-o -i`; any output or failure holds. Use
+  `git switch {branch-name}` (not
   detached), recheck; reset on pass)
   — D3.5/D3.7 read local state, not the remote PR. Then re-run
   `idd-pr-submit.instructions.md`'s D3.5 steps

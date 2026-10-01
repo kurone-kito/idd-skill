@@ -184,10 +184,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      `git branch --show-current` is `{branch-name}`; else hold).
      Require empty `git status --porcelain` and
      `git merge-base --is-ancestor HEAD "${PR_HEAD_SHA_F3}"`;
-     else hold. For paths in
-     `git ls-tree --full-tree -r --name-only "${PR_HEAD_SHA_F3}"`, run
-     `git ls-files -o --exclude-standard -- ":(top)$path"` and the same with
-     `-i`; either output holds. Use `git switch {branch-name}` (not
+     else hold. Run F2's
+     shadow-path check against `${PR_HEAD_SHA_F3}`; any output or failure
+     holds. Use `git switch {branch-name}` (not
      detached), recheck; reset on pass) — D3.5/D3.7 read local state, not
      the remote PR. Skip
      D3.5 steps 6-7 under the
