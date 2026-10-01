@@ -40,8 +40,8 @@ import {
   blankFencedCodeBlocks,
   findFencedCodeRanges,
   findHtmlBlockRanges,
+  findInlineCodeSpans,
   findMarkdownCodeRanges,
-  INLINE_CODE_SPAN_PATTERN,
   maskMarkdownCodeRegionsPreservingPositions,
 } from './markdown-code.mts';
 
@@ -68,17 +68,15 @@ export function findCorruptingCodeSpanWraps(
   const normalized = text.replace(/\r\n?/g, '\n');
   // Fenced-block content is blanked to '' per line, so a code span can
   // never start or continue inside one; blanking always leaves a blank
-  // line, which the pattern below already treats as a span terminator, so
+  // line, which the span scan below already treats as a span terminator, so
   // no false span can bridge a fenced block. Line counts stay aligned
   // with `normalized` because blanking preserves the number of lines.
   const scanned = blankFencedCodeBlocks(normalized);
   const violations: CodeSpanWrapViolation[] = [];
 
-  for (const match of scanned.matchAll(INLINE_CODE_SPAN_PATTERN)) {
-    const ticks = match[1];
-    const inner = match[2];
-    const spanStart = match.index ?? 0;
-    const innerStart = spanStart + ticks.length;
+  for (const span of findInlineCodeSpans(scanned)) {
+    const { inner } = span;
+    const innerStart = span.index + span.ticks.length;
     let cursor = 0;
     for (;;) {
       const breakIndex = inner.indexOf('\n', cursor);
@@ -131,10 +129,10 @@ export function findCorruptingCodeSpanWraps(
 // slash/dot mid-token splits are a code/path concern this prose check does
 // not attempt to generalize to.
 //
-// EMPHASIS_SPAN_PATTERN mirrors INLINE_CODE_SPAN_PATTERN's own technique --
-// a backreference-counted delimiter run (`\1`) whose inner content may
-// cross any number of line breaks, same as INLINE_CODE_SPAN_PATTERN, as
-// long as none of them is a blank line -- with two extra guards
+// EMPHASIS_SPAN_PATTERN mirrors the former inline-code-span pattern's
+// technique -- a backreference-counted delimiter run (`\1`) whose inner
+// content may cross any number of line breaks, same as an inline code
+// span, as long as none of them is a blank line -- with two extra guards
 // approximating CommonMark's emphasis flanking rules well enough to avoid
 // misreading a `*`/`-`/`+` bullet-list marker as an emphasis opener: the
 // opening run must not be immediately followed by whitespace (a bullet

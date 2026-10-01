@@ -316,3 +316,88 @@ test('findCorruptingProseWraps: a real fixture file with emphasis markup has no 
   );
   assert.deepEqual(findCorruptingProseWraps(text), []);
 });
+
+// #3705: the inline code span pattern cost about the cube of a backtick run's
+// length when the run had no closer: 11 s for 4,000 backticks, where the
+// scanner now needs a few milliseconds. Each test times its first, smaller
+// size and asserts it before the 100,000 call, so a regression fails after
+// seconds instead of hanging the suite. The ceiling stays far above the
+// measured cost to ride out a loaded shared host; on a failure here, rerun
+// this file alone before suspecting a regression.
+const INLINE_CODE_SPAN_LINEAR_CEILING_MS = 2000;
+const INLINE_CODE_SPAN_LARGE_RUN = 100_000;
+
+function assertWrapScanLinear(
+  label: string,
+  firstSize: number,
+  buildText: (size: number) => string,
+  expectNoViolations: boolean,
+): void {
+  for (const size of [firstSize, INLINE_CODE_SPAN_LARGE_RUN]) {
+    const text = buildText(size);
+    const start = performance.now();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const elapsedMs = performance.now() - start;
+    assert.ok(
+      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+      `${label} took ${Math.round(elapsedMs)} ms for n = ${size} (ceiling ${INLINE_CODE_SPAN_LINEAR_CEILING_MS} ms)`,
+    );
+    if (expectNoViolations) assert.deepEqual(violations, []);
+  }
+}
+
+test('findCorruptingCodeSpanWraps stays linear on an unclosed backtick run before a letter and a newline (#3705)', () => {
+  assertWrapScanLinear(
+    'findCorruptingCodeSpanWraps',
+    4000,
+    (size) => `text ${'`'.repeat(size)}a\n`,
+    true,
+  );
+});
+
+test('findCorruptingCodeSpanWraps stays linear on an unclosed backtick run before a blank line, twice (#3705)', () => {
+  assertWrapScanLinear(
+    'findCorruptingCodeSpanWraps',
+    1200,
+    (size) => `text ${'`'.repeat(size)}\n\ntext ${'`'.repeat(size)}\n`,
+    true,
+  );
+});
+
+test('findCorruptingCodeSpanWraps stays linear on a long backtick run followed by many one-backtick closers (#3705)', () => {
+  // Spans are found here, so only the time is asserted.
+  assertWrapScanLinear(
+    'findCorruptingCodeSpanWraps',
+    1000,
+    (size) => `text ${'`'.repeat(size)}${'a`'.repeat(size)}`,
+    false,
+  );
+});
+
+// Both guards pass before and after the change (the old pattern takes 7 and
+// 9 ms): they catch a replacement that does work per match in proportion to
+// the text length, or that scans to the end of the text instead of stopping
+// at a blank line.
+test('findCorruptingCodeSpanWraps stays linear on many short spans (#3705)', () => {
+  const text = '`a`\n'.repeat(25_000);
+  const start = performance.now();
+  const violations = findCorruptingCodeSpanWraps(text);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for 25,000 short spans`,
+  );
+  assert.deepEqual(violations, []);
+});
+
+test('findCorruptingCodeSpanWraps stays linear on many unclosed runs each followed by a blank line (#3705)', () => {
+  const text = '``a\n\n'.repeat(25_000);
+  const start = performance.now();
+  const violations = findCorruptingCodeSpanWraps(text);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for 25,000 unclosed runs`,
+  );
+  assert.deepEqual(violations, []);
+});

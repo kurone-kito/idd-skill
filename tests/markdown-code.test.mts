@@ -6,6 +6,7 @@ import {
   findFencedCodeRanges,
   findHtmlBlockRanges,
   findHtmlCommentRanges,
+  findInlineCodeSpans,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
   MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN,
@@ -379,7 +380,7 @@ test('findFencedCodeRanges recognizes a closed fence under wide list-marker padd
   // adjustment and never recognized as a fence at all. Confirmed
   // pre-existing on `main` before #1894/#1897 touched this file: with the
   // fence invisible, blankFencedCodeBlocks left the input completely
-  // unchanged, and stripMarkdownCodeRegions's inline-code-span regex then
+  // unchanged, and stripMarkdownCodeRegions's inline-code-span matching then
   // read the two unrelated 3-backtick runs as one open/close delimiter
   // pair, masking the content between them -- the dangerous direction,
   // since that path backs several consumers beyond checkTrustSafety
@@ -2106,4 +2107,355 @@ test('the custom HTML block opener patterns accept exactly the strings the pre-#
       `${pair.name}: no non-matching string enumerated`,
     );
   }
+});
+
+// #3705: findInlineCodeSpans replaced one regular expression whose cost grew
+// with the cube of a backtick run's length. It must reproduce that
+// expression's matches exactly, so the expression is kept here, verbatim, as
+// the reference every comparison below runs against.
+const REFERENCE_INLINE_CODE_SPAN_PATTERN =
+  /(`+)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)\1/g;
+
+type InlineCodeSpanShape = {
+  index: number;
+  ticks: string;
+  inner: string;
+  end: number;
+};
+
+function referenceInlineCodeSpans(text: string): InlineCodeSpanShape[] {
+  return [...text.matchAll(REFERENCE_INLINE_CODE_SPAN_PATTERN)].map((match) => {
+    const index = match.index ?? 0;
+    return {
+      index,
+      ticks: match[1],
+      inner: match[2],
+      end: index + match[0].length,
+    };
+  });
+}
+
+function sameInlineCodeSpans(
+  left: readonly InlineCodeSpanShape[],
+  right: readonly InlineCodeSpanShape[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((span, position) => {
+      const other = right[position];
+      return (
+        other !== undefined &&
+        span.index === other.index &&
+        span.ticks === other.ticks &&
+        span.inner === other.inner &&
+        span.end === other.end
+      );
+    })
+  );
+}
+
+/**
+ * Every string of up to `maxLength` symbols over `symbols` (a symbol may be
+ * longer than one UTF-16 unit), the empty string included, compared span for
+ * span with the reference.
+ */
+function sweepInlineCodeSpans(
+  symbols: readonly string[],
+  maxLength: number,
+): { strings: number; withMatch: number; mismatches: string[] } {
+  let strings = 0;
+  let withMatch = 0;
+  const mismatches: string[] = [];
+  const visit = (text: string, length: number): void => {
+    strings += 1;
+    const expected = referenceInlineCodeSpans(text);
+    if (expected.length > 0) withMatch += 1;
+    if (!sameInlineCodeSpans(expected, findInlineCodeSpans(text))) {
+      mismatches.push(text);
+    }
+    if (length === maxLength) return;
+    for (const symbol of symbols) visit(text + symbol, length + 1);
+  };
+  visit('', 0);
+  return { strings, withMatch, mismatches };
+}
+
+const INLINE_CODE_SPAN_SWEEPS = [
+  {
+    name: 'up to 8 over backtick, a, newline, space and tab',
+    symbols: ['`', 'a', '\n', ' ', '\t'],
+    maxLength: 8,
+    strings: 488_281,
+    atLeastWithMatch: 171_589,
+  },
+  {
+    name: 'up to 7 over those and carriage return',
+    symbols: ['`', 'a', '\n', ' ', '\t', '\r'],
+    maxLength: 7,
+    strings: 335_923,
+    atLeastWithMatch: 52_122,
+  },
+  {
+    // A wider alphabet: an implementation that treats any whitespace as a
+    // blank line passes the two sweeps above and still differs here.
+    name: 'up to 5 over backtick, a, newline, carriage return, space, tab, form feed, U+00A0, U+2028 and U+1F600',
+    symbols: [
+      '`',
+      'a',
+      '\n',
+      '\r',
+      ' ',
+      '\t',
+      '\f',
+      '\u00a0',
+      '\u2028',
+      '\u{1F600}',
+    ],
+    maxLength: 5,
+    strings: 111_111,
+    atLeastWithMatch: 4_357,
+  },
+  {
+    // Long runs of backticks, which the sweeps with more symbols cannot reach.
+    name: 'up to 12 over backtick, a and newline',
+    symbols: ['`', 'a', '\n'],
+    maxLength: 12,
+    strings: 797_161,
+    atLeastWithMatch: 600_227,
+  },
+] as const;
+
+for (const sweep of INLINE_CODE_SPAN_SWEEPS) {
+  test(`findInlineCodeSpans matches the pre-#3705 pattern on every string ${sweep.name} (#3705)`, () => {
+    const { strings, withMatch, mismatches } = sweepInlineCodeSpans(
+      sweep.symbols,
+      sweep.maxLength,
+    );
+    // The enumeration really covered every string.
+    assert.equal(strings, sweep.strings);
+    assert.deepEqual(
+      mismatches.slice(0, 5),
+      [],
+      `${mismatches.length} string(s) differ from the reference`,
+    );
+    // Enough strings hold a span for the agreement above to prove something.
+    assert.ok(
+      withMatch >= sweep.atLeastWithMatch,
+      `only ${withMatch} string(s) hold a span (expected at least ${sweep.atLeastWithMatch})`,
+    );
+  });
+}
+
+const INLINE_CODE_SPAN_EXAMPLES: ReadonlyArray<
+  readonly [string, readonly InlineCodeSpanShape[]]
+> = [
+  ['``a```', [{ index: 0, ticks: '``', inner: 'a', end: 5 }]],
+  ['```a``', [{ index: 0, ticks: '``', inner: '`a', end: 6 }]],
+  ['````a``', [{ index: 1, ticks: '``', inner: '`a', end: 7 }]],
+  ['``a`', [{ index: 1, ticks: '`', inner: 'a', end: 4 }]],
+  ['`a\nb`', [{ index: 0, ticks: '`', inner: 'a\nb', end: 5 }]],
+  // A blank line ends the paragraph, so a span cannot cross it.
+  ['`a\n\nb`', []],
+  ['`a\r\nb`', [{ index: 0, ticks: '`', inner: 'a\r\nb', end: 6 }]],
+  // A carriage return without a line feed cannot be inside a span.
+  ['`a\rb`', []],
+  // A form feed is not a blank-line character.
+  ['`\n\f\n`', [{ index: 0, ticks: '`', inner: '\n\f\n', end: 5 }]],
+  // The inner text needs at least one character.
+  ['``', []],
+  // The rest of a longer closing run opens the next span.
+  [
+    '`a``b`',
+    [
+      { index: 0, ticks: '`', inner: 'a', end: 3 },
+      { index: 3, ticks: '`', inner: 'b', end: 6 },
+    ],
+  ],
+];
+
+for (const [text, expected] of INLINE_CODE_SPAN_EXAMPLES) {
+  test(`findInlineCodeSpans(${JSON.stringify(text)}) keeps the pre-#3705 result (#3705)`, () => {
+    assert.deepEqual(findInlineCodeSpans(text), expected);
+    // The table itself is checked against the old pattern, not just the new code.
+    assert.deepEqual(referenceInlineCodeSpans(text), expected);
+  });
+}
+
+test('stripMarkdownCodeRegions blanks the inside of a span but keeps its backticks and its line breaks (#3705)', () => {
+  // blankFencedCodeBlocks turns the CRLF of `\r\r\n` into LF, which leaves
+  // a CRLF inside the span. The letters and the tab become spaces, and the
+  // CRLF stays as it is.
+  assert.equal(stripMarkdownCodeRegions('x `a\r\r\nb\tc` y'), 'x ` \r\n   ` y');
+});
+
+test('stripMarkdownCodeRegions equals the pre-#3705 replace on every string up to 6 over backtick, a, newline, carriage return, space and tab (#3705)', () => {
+  const symbols = ['`', 'a', '\n', '\r', ' ', '\t'];
+  let total = 0;
+  const mismatches: string[] = [];
+  const visit = (text: string, length: number): void => {
+    total += 1;
+    const expected = blankFencedCodeBlocks(text).replace(
+      REFERENCE_INLINE_CODE_SPAN_PATTERN,
+      (_match, ticks: string, inner: string) =>
+        `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
+    );
+    if (stripMarkdownCodeRegions(text) !== expected) mismatches.push(text);
+    if (length === 6) return;
+    for (const symbol of symbols) visit(text + symbol, length + 1);
+  };
+  visit('', 0);
+  // 6^0 + 6^1 + ... + 6^6: the enumeration really covered every string.
+  assert.equal(total, 55_987);
+  assert.deepEqual(
+    mismatches.slice(0, 5),
+    [],
+    `${mismatches.length} string(s) differ from the old replace`,
+  );
+});
+
+test('findInlineCodeSpans matches the pre-#3705 pattern on seeded random strings of long runs (#3705)', () => {
+  // A small seeded generator (mulberry32): the same strings on every run.
+  let state = 0x3705;
+  const random = (): number => {
+    state = (state + 0x6d2b79f5) | 0;
+    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
+  };
+  const pick = (count: number): number => Math.floor(random() * count);
+  const separators = [
+    'a',
+    ' ',
+    '\t',
+    '\n',
+    '\r',
+    '\r\n',
+    '\n\n',
+    '\n \n',
+    '\n\t\r\n',
+    '\r\r\n',
+    '\u2028',
+    '\f',
+    '\u00a0',
+    '\u{1F600}',
+    '',
+  ];
+  const mismatches: string[] = [];
+  let withMatch = 0;
+  const cases = 20_000;
+  for (let made = 0; made < cases; made += 1) {
+    let text = '';
+    while (text.length < 200 && random() < 0.97) {
+      text += '`'.repeat(1 + pick(20));
+      text += separators[pick(separators.length)] ?? '';
+    }
+    const expected = referenceInlineCodeSpans(text);
+    if (expected.length > 0) withMatch += 1;
+    if (!sameInlineCodeSpans(expected, findInlineCodeSpans(text))) {
+      mismatches.push(text);
+    }
+  }
+  assert.deepEqual(
+    mismatches.slice(0, 3),
+    [],
+    `${mismatches.length} string(s) differ from the reference`,
+  );
+  assert.ok(withMatch > cases / 10, `only ${withMatch} string(s) hold a span`);
+});
+
+// #3705: the inline code span pattern cost about the cube of a backtick run's
+// length when the run had no closer: 11 s for 4,000 backticks, where the
+// scanner now needs a few milliseconds. Each test times its first, smaller
+// size and asserts it before the 100,000 call, so a regression fails after
+// seconds instead of hanging the suite. The ceiling stays far above the
+// measured cost to ride out a loaded shared host; on a failure here, rerun
+// this file alone before suspecting a regression.
+const INLINE_CODE_SPAN_LINEAR_CEILING_MS = 2000;
+const INLINE_CODE_SPAN_LARGE_RUN = 100_000;
+
+function assertStripLinear(
+  label: string,
+  firstSize: number,
+  buildText: (size: number) => string,
+  expectResult?: (text: string, stripped: string) => void,
+): void {
+  for (const size of [firstSize, INLINE_CODE_SPAN_LARGE_RUN]) {
+    const text = buildText(size);
+    const start = performance.now();
+    const stripped = stripMarkdownCodeRegions(text);
+    const elapsedMs = performance.now() - start;
+    assert.ok(
+      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+      `${label} took ${Math.round(elapsedMs)} ms for n = ${size} (ceiling ${INLINE_CODE_SPAN_LINEAR_CEILING_MS} ms)`,
+    );
+    expectResult?.(text, stripped);
+  }
+}
+
+const expectUnchanged = (text: string, stripped: string): void => {
+  assert.equal(stripped, text);
+};
+
+test('stripMarkdownCodeRegions stays linear on an unclosed backtick run before a letter and a newline (#3705)', () => {
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    4000,
+    (size) => `text ${'`'.repeat(size)}a\n`,
+    expectUnchanged,
+  );
+});
+
+test('stripMarkdownCodeRegions stays linear on an unclosed backtick run before a blank line, twice (#3705)', () => {
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    1200,
+    (size) => `text ${'`'.repeat(size)}\n\ntext ${'`'.repeat(size)}\n`,
+    expectUnchanged,
+  );
+});
+
+test('stripMarkdownCodeRegions stays linear on a long backtick run followed by many one-backtick closers (#3705)', () => {
+  // Spans are found here, so only the time is asserted.
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    1000,
+    (size) => `text ${'`'.repeat(size)}${'a`'.repeat(size)}`,
+  );
+});
+
+test('stripMarkdownCodeRegions stays linear on an unclosed backtick run before a lone carriage return (#3705)', () => {
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    4000,
+    (size) => `text ${'`'.repeat(size)}a\rb`,
+    expectUnchanged,
+  );
+});
+
+// Both guards pass before and after the change (the old pattern takes 16 and
+// 7 ms): they catch a replacement that does work per match in proportion to
+// the text length, or that scans to the end of the text instead of stopping
+// at a blank line.
+test('stripMarkdownCodeRegions stays linear on many short spans (#3705)', () => {
+  const text = '`a`\n'.repeat(25_000);
+  const start = performance.now();
+  const stripped = stripMarkdownCodeRegions(text);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `stripMarkdownCodeRegions took ${Math.round(elapsedMs)} ms for 25,000 short spans`,
+  );
+  assert.equal(stripped, '` `\n'.repeat(25_000));
+});
+
+test('stripMarkdownCodeRegions stays linear on many unclosed runs each followed by a blank line (#3705)', () => {
+  const text = '``a\n\n'.repeat(25_000);
+  const start = performance.now();
+  const stripped = stripMarkdownCodeRegions(text);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `stripMarkdownCodeRegions took ${Math.round(elapsedMs)} ms for 25,000 unclosed runs`,
+  );
+  assert.equal(stripped, text);
 });
