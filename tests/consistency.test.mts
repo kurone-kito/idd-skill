@@ -1831,6 +1831,25 @@ test('#3001: this repository dogfoods critiqueLoop.telemetryHook.command as a re
   assert.equal(resolved.hook?.command, 'idd-critique-telemetry');
 });
 
+test('#3702: this repository enables githubApi.loadControl at its measured maxConcurrent, while the distributed template config carries no githubApi entry', () => {
+  // Read the raw JSON on purpose: `normalizePolicyConfig` coerces an invalid or
+  // missing value to its default, so a normalized assertion would still pass
+  // on a mistyped or removed entry. The `maxConcurrent` literal is the value
+  // the measurement in issue #3702 chose; changing it means re-measuring.
+  const repoConfig = readJson('.github/idd/config.json') as {
+    githubApi?: { loadControl?: unknown };
+  };
+  assert.deepEqual(repoConfig.githubApi?.loadControl, {
+    enabled: true,
+    maxConcurrent: 4,
+  });
+
+  const templateConfig = readJson('idd-template/.github/idd/config.json') as {
+    githubApi?: unknown;
+  };
+  assert.equal('githubApi' in templateConfig, false);
+});
+
 test('collectDuplicateSyncPairTargets flags repeated targets and ignores unique ones', () => {
   assert.deepEqual(
     collectDuplicateSyncPairTargets([

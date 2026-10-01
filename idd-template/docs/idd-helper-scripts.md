@@ -1964,7 +1964,6 @@ layer for the `gh` requests the helpers make (issue
 false, `maxConcurrent` at `1`, and `maxWait` at `PT30S`. While it is off
 the wrappers behave exactly as before: no new argument, no state
 directory, no extra process, and no change to a result or an error.
-This repository does not enable it yet.
 
 The state lives in one per-user directory: `XDG_STATE_HOME` or
 `~/.local/state` on Linux and macOS, `LOCALAPPDATA` on Windows (a relative

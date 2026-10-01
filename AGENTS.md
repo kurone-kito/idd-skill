@@ -241,6 +241,35 @@ layered on top of the distributed IDD defaults:
   that round threshold. See
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
+- **GitHub API load control**: This source repository also records
+  `githubApi.loadControl: { enabled: true, maxConcurrent: 4 }` in
+  `.github/idd/config.json` as a local IDD dogfooding policy (applies
+  only to `kurone-kito/idd-skill`); `idd-template/` keeps the distributed
+  default off, so adopters are unchanged. Roadmap `#3583` dogfoods each
+  delivered capability here first, and this repository runs many
+  concurrent sessions as one OS user, the case the host-local admission
+  layer is for (motivating episode: the 2026-09-27 GraphQL rate-limit
+  report in issue `#3560`; most of the failing commands it lists were
+  typed by an agent, which load control does not cover). The value was
+  measured, not guessed (issue `#3702`, 2026-10-01): four parallel
+  `discover-roadmap-graph --all-roadmaps --with-claim-state
+  --with-readiness --with-progress --no-cache` scans (each at its own
+  `--concurrency` of 8) against a fresh state directory per row took, at
+  `maxConcurrent` 8, 4, 2 and 1, a slowest scan of 9.9, 14.5, 23.1 and
+  43.7 seconds, all sixteen scans exited 0 and none reported a `deadline`
+  interruption. The smallest value within twice the 8 row (19.8
+  seconds) is 4, so that is the cap; the full table is in the PR that
+  enabled it. Exposure: a write or unclassified request that meets a
+  full slot is refused at once with nothing sent, and a read that waits
+  out `maxWait` (`PT30S` by default) with every slot held is refused
+  too, which a scan reports as a `deadline` interruption; a standard
+  Discover scan, which passes no `--with-progress`, surfaces that
+  refusal as an error instead of a recovery result. To turn it off,
+  remove the `loadControl` entry or set `enabled` to `false`; a refused
+  request (`notDispatched`) in a real session is the signal to do so
+  (preventive; no observed incident yet).
+  See [docs/idd-helper-scripts.md](docs/idd-helper-scripts.md#github-api-load-control)
+  for the mechanism.
 
 ## Branch strategy
 
