@@ -177,8 +177,24 @@ const MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN =
   /^ {0,3}(?:={1,}|-{1,2})[ \t]*$/u;
 const MARKDOWN_HTML_BLOCK_START_PATTERN =
   /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
-const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
-  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>/u;
+/**
+ * Prefix-only test for a line that opens a custom (CommonMark type 7) HTML
+ * tag: up to three spaces, `<` or `</`, a tag name, an optional attribute
+ * run, an optional `/`, and the closing `>`.
+ *
+ * The attribute run is `[ \t][^<>]*`, not `[ \t]+[^<>]*?[ \t]*`: once one
+ * leading blank is consumed, `[^<>]*` already absorbs every further blank
+ * and any `/` before the `>`, so the older spelling accepted exactly the
+ * same lines while letting three adjacent quantifiers match the same
+ * blanks. That backtracked cubically on an unclosed tag followed by a long
+ * run of blanks (`<a` plus 4,000 spaces took about 7 s through
+ * {@link findHtmlBlockRanges}, and through {@link findMarkdownCodeRanges}
+ * once a backtick sat on or next to that line; observed 2026-10-01, issue
+ * #3704, first hit in PR #3688). The brute-force enumeration test in
+ * `tests/markdown-code.test.mts` pins the equivalence.
+ */
+export const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
+  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t][^<>]*)?\/?>/u;
 /**
  * Stricter, line-consuming variant of
  * {@link MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN}, used only by
@@ -195,10 +211,14 @@ const MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN =
  * over-masking real Acceptance-criteria/Candidate-files content on a
  * following, non-blank-line-separated line. `gh api /markdown` confirms
  * the paragraph-then-heading rendering. Scoped to this one call site
- * rather than tightening the shared pattern itself.
+ * rather than tightening the shared pattern itself. Its tag text is the
+ * shared pattern's, linear for the same reason (issue #3704): `>` cannot
+ * occur inside the attribute run, so a complete tag followed by text costs
+ * one backtracking pass over the blanks inside the tag instead of retrying
+ * every split of them between the three old quantifiers.
  */
-const MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN =
-  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>[ \t]*$/u;
+export const MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN =
+  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t][^<>]*)?\/?>[ \t]*$/u;
 // CommonMark §4.1: a thematic break is 3+ matching -, _, or * characters,
 // each optionally followed by spaces/tabs -- interior spacing is allowed
 // (e.g. `_ _ _`), unlike the tightly-packed run already covered above.
