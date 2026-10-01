@@ -1569,21 +1569,39 @@ function policyWithoutDirectory(): ReadThroughGithubApiCacheInput['policy'] {
 }
 
 /**
- * Run `run` with both per-platform cache-home variables unset, so the
- * default directory has to ask for the home directory on every platform.
+ * Unset both per-platform cache-home variables, so the default directory has
+ * to ask for the home directory on every platform. Returns the restore step.
  */
-function withoutCacheHomeEnv<T>(run: () => T): T {
+function unsetCacheHomeEnv(): () => void {
   const previousXdg = process.env.XDG_CACHE_HOME;
   const previousLocal = process.env.LOCALAPPDATA;
   delete process.env.XDG_CACHE_HOME;
   delete process.env.LOCALAPPDATA;
-  try {
-    return run();
-  } finally {
+  return () => {
     if (previousXdg === undefined) delete process.env.XDG_CACHE_HOME;
     else process.env.XDG_CACHE_HOME = previousXdg;
     if (previousLocal === undefined) delete process.env.LOCALAPPDATA;
     else process.env.LOCALAPPDATA = previousLocal;
+  };
+}
+
+/** Run `run` with the cache-home variables unset. */
+function withoutCacheHomeEnv<T>(run: () => T): T {
+  const restore = unsetCacheHomeEnv();
+  try {
+    return run();
+  } finally {
+    restore();
+  }
+}
+
+/** The async twin: the variables stay unset until `run` settles. */
+async function withoutCacheHomeEnvAsync<T>(run: () => Promise<T>): Promise<T> {
+  const restore = unsetCacheHomeEnv();
+  try {
+    return await run();
+  } finally {
+    restore();
   }
 }
 
@@ -1959,6 +1977,42 @@ test('an empty lease that becomes a live record mid-wait is left in place', () =
     assert.equal(clock.sleeps.length, 10);
     assert.equal(result.cache, 'degraded');
     assert.equal(readFileSync(lease, 'utf8'), live);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a discard whose re-read finds a live record leaves the lease in place', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    writeFileSync(lease, '');
+    const clock = steppedClock(25);
+    const live = JSON.stringify({
+      pid: 4242,
+      createdAt: clock.start,
+      mode: 'hint',
+    });
+    // The wait reads the lease once per poll. The re-read that guards the
+    // discard happens at the clock value of the read that found the settle
+    // window elapsed, so the second read at one clock value is the guard's
+    // and is the one that sees a live record.
+    let lastReadAt: number | null = null;
+    const result = readThrough(paths, okBody({ n: 6 }), {
+      now: clock.now,
+      sleep: clock.sleep,
+      isPidAlive: () => true,
+      storage: {
+        readFile(path: string) {
+          if (path !== lease) return readFileSync(path, 'utf8');
+          const reread = lastReadAt === clock.now();
+          lastReadAt = clock.now();
+          return reread ? live : '';
+        },
+      },
+    });
+    assert.equal(result.cache, 'degraded');
+    assert.equal(existsSync(lease), true);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
@@ -3012,6 +3066,53 @@ test('an async waiter keeps an empty lease through the settle window before it t
     assert.deepEqual(present, [true, true, true, true]);
     assert.equal(result.cache, 'miss');
     assert.deepEqual(result.body, { n: 8 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+for (const [name, lookup] of [
+  [
+    'throws',
+    () => {
+      throw new Error('no home');
+    },
+  ],
+  ['returns a non-string', () => undefined as unknown as string],
+] as const) {
+  test(`an async read whose home lookup ${name} degrades to a live fetch`, async () => {
+    const paths = tempRoot();
+    try {
+      const result = await withoutCacheHomeEnvAsync(() =>
+        readThroughAsync(
+          paths,
+          async () => ({ status: 200, body: { live: true } }),
+          { policy: policyWithoutDirectory(), homeDirectory: lookup },
+        ),
+      );
+      assert.equal(result.cache, 'degraded');
+      assert.equal(result.fetched, true);
+      assert.deepEqual(result.body, { live: true });
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('an async read with a configured directory never asks for the home directory', async () => {
+  const paths = tempRoot();
+  let lookups = 0;
+  try {
+    const result = await withoutCacheHomeEnvAsync(() =>
+      readThroughAsync(paths, async () => ({ status: 200, body: { n: 1 } }), {
+        homeDirectory: () => {
+          lookups += 1;
+          throw new Error('the home lookup must not run');
+        },
+      }),
+    );
+    assert.equal(result.cache, 'miss');
+    assert.equal(lookups, 0);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
