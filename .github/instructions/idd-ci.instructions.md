@@ -369,11 +369,11 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   **but only once** [Required-check discovery](#required-check-discovery)
   has resolved `noRequiredChecksConfigured: false`. When Required-check
   discovery has instead resolved `noRequiredChecksConfigured: true`,
-  `--watch --required` returns immediately, non-blocking, printing a "no
-  required checks reported" message even while real CI is still running —
+  `--watch --required` returns immediately, printing a "no required
+  checks reported" message even while real CI is still running —
   block with
   the bare `gh pr checks <pr-number> --watch` (no `--required`)
-  instead. That bare form still returns once every visible check
+  instead. That bare form returns once every visible check
   reaches a terminal GitHub state, which is not the same as "safe to
   proceed" — a lone `CANCELLED` check with no same-producer successor
   is one such terminal-but-`pending` case (#2714). None of the three
@@ -412,8 +412,8 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   review state either — see
   `idd-advisory-wait.instructions.md`, whose Scope section also covers
   why a non-primary bot's review must not gate a custom wait either. A
-  bare `sleep` may be refused (observed 2026-09-30 in Claude Code:
-  `sleep 30` refused, `sleep 5` ran); in such a runtime, block a CI wait
+  bare `sleep` may be refused (observed 2026-09-30 in Claude Code, issue
+  `#3673`: `sleep 30` refused, `sleep 5` ran); in such a runtime, block a CI wait
   with the `--watch` forms above. A `run_in_background` Bash task or other
   detached/backgrounded mechanism (a background until-loop included) must
   not be used for this wait unless the topology-safety condition above is
