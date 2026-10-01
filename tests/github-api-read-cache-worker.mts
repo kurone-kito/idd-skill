@@ -13,6 +13,7 @@ const directory = required('IDD_CACHE_DIR');
 const workspace = required('IDD_CACHE_WORKSPACE');
 const booted = required('IDD_CACHE_BOOTED');
 const started = required('IDD_CACHE_STARTED');
+const sleptPath = required('IDD_CACHE_SLEPT');
 const releasePath = required('IDD_CACHE_RELEASE');
 const countFile = required('IDD_CACHE_COUNT');
 
@@ -34,6 +35,11 @@ const result = readThroughGithubApiCache({
   requestShape: { path: '/repos/o/r' },
   workspaceRoot: workspace,
   cwd: workspace,
+  // Only a waiting process sleeps, so this marker shows it reached the wait.
+  sleep: (ms) => {
+    if (!existsSync(sleptPath)) writeFileSync(sleptPath, '1');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  },
   // A configured directory under the Windows temp folder inherits a
   // permissive profile ACL, which the real check refuses (#3623); this
   // worker exercises lease coalescing, not the ACL rule.

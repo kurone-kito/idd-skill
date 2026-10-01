@@ -1553,6 +1553,158 @@ test('the default directory follows the OS cache home', () => {
   }
 });
 
+/** A `sleep` that fails the read on its first call: the read must not wait. */
+function refuseToWait(): never {
+  throw new Error('the read waited on a lease it should not have waited on');
+}
+
+/** A policy with no `directory`, so a read resolves the default location. */
+function policyWithoutDirectory(): ReadThroughGithubApiCacheInput['policy'] {
+  return {
+    enabled: true,
+    maxAgeMs: 300_000,
+    maxBytes: 104857600,
+    retentionMs: 86_400_000,
+  };
+}
+
+/**
+ * Unset both per-platform cache-home variables, so the default directory has
+ * to ask for the home directory on every platform. Returns the restore step.
+ */
+function unsetCacheHomeEnv(): () => void {
+  const previousXdg = process.env.XDG_CACHE_HOME;
+  const previousLocal = process.env.LOCALAPPDATA;
+  delete process.env.XDG_CACHE_HOME;
+  delete process.env.LOCALAPPDATA;
+  return () => {
+    if (previousXdg === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = previousXdg;
+    if (previousLocal === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocal;
+  };
+}
+
+/** Run `run` with the cache-home variables unset. */
+function withoutCacheHomeEnv<T>(run: () => T): T {
+  const restore = unsetCacheHomeEnv();
+  try {
+    return run();
+  } finally {
+    restore();
+  }
+}
+
+/** The async twin: the variables stay unset until `run` settles. */
+async function withoutCacheHomeEnvAsync<T>(run: () => Promise<T>): Promise<T> {
+  const restore = unsetCacheHomeEnv();
+  try {
+    return await run();
+  } finally {
+    restore();
+  }
+}
+
+for (const [name, lookup] of [
+  [
+    'throws',
+    () => {
+      throw new Error('no home');
+    },
+  ],
+  ['returns a non-string', () => undefined as unknown as string],
+] as const) {
+  test(`a home lookup that ${name} degrades a default-directory read to a live fetch`, () => {
+    const paths = tempRoot();
+    try {
+      const result = withoutCacheHomeEnv(() =>
+        readThrough(paths, okBody({ live: true }), {
+          policy: policyWithoutDirectory(),
+          homeDirectory: lookup,
+        }),
+      );
+      assert.equal(result.cache, 'degraded');
+      assert.equal(result.fetched, true);
+      assert.deepEqual(result.body, { live: true });
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('a configured or injected directory never asks for the home directory', () => {
+  const paths = tempRoot();
+  let lookups = 0;
+  const homeDirectory = () => {
+    lookups += 1;
+    throw new Error('the home lookup must not run');
+  };
+  try {
+    const configured = readThrough(paths, okBody({ n: 1 }), {
+      homeDirectory,
+    });
+    assert.equal(configured.cache, 'miss');
+    const injected = readThrough(paths, okBody({ n: 2 }), {
+      policy: policyWithoutDirectory(),
+      defaultDirectory: paths.cacheDir,
+      homeDirectory,
+    });
+    assert.equal(injected.cache, 'hit');
+    assert.equal(lookups, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a purge whose home lookup throws is refused', () => {
+  const paths = tempRoot();
+  try {
+    const purged = withoutCacheHomeEnv(() =>
+      readThrough(paths, okBody({ unused: true }), {
+        operation: 'purge',
+        policy: policyWithoutDirectory(),
+        homeDirectory: () => {
+          throw new Error('no home');
+        },
+      }),
+    );
+    assert.equal(purged.cache, 'refused');
+    assert.equal(purged.removed, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an injected home directory places the default cache under it', () => {
+  const paths = tempRoot();
+  const home = join(paths.root, 'home');
+  mkdirSync(home);
+  const leaf = ['idd-skill', 'github-api-read-cache'];
+  let expected: string;
+  if (process.platform === 'win32') {
+    expected = join(home, 'AppData', 'Local', ...leaf);
+  } else if (process.platform === 'darwin') {
+    expected = join(home, 'Library', 'Caches', ...leaf);
+  } else {
+    expected = join(home, '.cache', ...leaf);
+  }
+  try {
+    const result = withoutCacheHomeEnv(() =>
+      readThrough(paths, okBody({ home: true }), {
+        policy: policyWithoutDirectory(),
+        homeDirectory: () => home,
+      }),
+    );
+    assert.equal(result.cache, 'miss');
+    assert.equal(
+      existsSync(join(expected, 'entries', `${result.entryId}.json`)),
+      true,
+    );
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('a dead or future lease is recovered without waiting out the ttl', async () => {
   const paths = tempRoot();
   const child = spawn(process.execPath, ['-e', 'process.exit(0)']);
@@ -1569,9 +1721,9 @@ test('a dead or future lease is recovered without waiting out the ttl', async ()
       lease,
       JSON.stringify({ pid: deadPid, createdAt: Date.now(), mode: 'hint' }),
     );
-    const started = Date.now();
-    const recovered = readThrough(paths, okBody({ n: 2 }));
-    assert.ok(Date.now() - started < 500);
+    const recovered = readThrough(paths, okBody({ n: 2 }), {
+      sleep: refuseToWait,
+    });
     assert.equal(recovered.fetched, true);
     assert.deepEqual(recovered.body, { n: 2 });
 
@@ -1584,9 +1736,9 @@ test('a dead or future lease is recovered without waiting out the ttl', async ()
         mode: 'hint',
       }),
     );
-    const futureStarted = Date.now();
-    const future = readThrough(paths, okBody({ n: 3 }));
-    assert.ok(Date.now() - futureStarted < 500);
+    const future = readThrough(paths, okBody({ n: 3 }), {
+      sleep: refuseToWait,
+    });
     assert.deepEqual(future.body, { n: 3 });
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
@@ -1606,12 +1758,11 @@ test('strict-fresh does not wait on a live hint lease', async () => {
       join(paths.cacheDir, 'leases', `${first.entryId}.json`),
       JSON.stringify({ pid: sleeper.pid, createdAt: Date.now(), mode: 'hint' }),
     );
-    const started = Date.now();
     const result = readThrough(paths, okBody({ live: true }), {
       mode: 'strict-fresh',
       leaseTtlMs: 5_000,
+      sleep: refuseToWait,
     });
-    assert.ok(Date.now() - started < 400);
     assert.deepEqual(result.body, { live: true });
   } finally {
     sleeper.kill();
@@ -1645,6 +1796,279 @@ test('hint waits out a live foreign lease before fetching', async () => {
   }
 });
 
+/**
+ * Create the cache layout, drop the stored entry, and return the lease path
+ * the next read for the same request contends for.
+ */
+function primeLease(paths: { cacheDir: string; workspace: string }): string {
+  const first = readThrough(paths, okBody({ primed: true }));
+  unlinkSync(join(paths.cacheDir, 'entries', `${first.entryId}.json`));
+  return join(paths.cacheDir, 'leases', `${first.entryId}.json`);
+}
+
+/** A fake clock that moves only when `sleep` is called. */
+function steppedClock(step: number) {
+  const start = Date.now();
+  let current = start;
+  const sleeps: number[] = [];
+  return {
+    start,
+    sleeps,
+    now: () => current,
+    sleep: (ms: number) => {
+      sleeps.push(ms);
+      current += step;
+    },
+  };
+}
+
+function countDateNow<T>(run: () => T): { value: T; calls: number } {
+  const real = Date.now;
+  let calls = 0;
+  Date.now = () => {
+    calls += 1;
+    return real();
+  };
+  try {
+    const value = run();
+    return { value, calls };
+  } finally {
+    Date.now = real;
+  }
+}
+
+for (const [name, content] of [
+  ['an empty', ''],
+  ['a truncated', '{"pid":12'],
+] as const) {
+  test(`${name} lease file is kept until it has stayed unparseable for the settle window`, () => {
+    const paths = tempRoot();
+    try {
+      const lease = primeLease(paths);
+      writeFileSync(lease, content);
+      const clock = steppedClock(25);
+      const present: boolean[] = [];
+      const result = readThrough(paths, okBody({ n: 1 }), {
+        now: clock.now,
+        sleep: (ms) => {
+          present.push(existsSync(lease));
+          clock.sleep(ms);
+        },
+      });
+      // 100 ms of injected time at 25 ms per sleep: four waits, then reclaim.
+      assert.deepEqual(present, [true, true, true, true]);
+      assert.equal(result.cache, 'miss');
+      assert.equal(result.fetched, true);
+      assert.deepEqual(result.body, { n: 1 });
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('a leftover empty lease is reclaimed under a ttl shorter than the settle window', () => {
+  const paths = tempRoot();
+  try {
+    writeFileSync(primeLease(paths), '');
+    const clock = steppedClock(25);
+    const result = readThrough(paths, okBody({ n: 2 }), {
+      now: clock.now,
+      sleep: clock.sleep,
+      leaseTtlMs: 50,
+    });
+    assert.equal(clock.sleeps.length, 1);
+    assert.equal(result.cache, 'miss');
+    assert.equal(result.fetched, true);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an empty lease is not reclaimed on first sight even under a 1 ms ttl', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    writeFileSync(lease, '');
+    const clock = steppedClock(1);
+    const present: boolean[] = [];
+    const result = readThrough(paths, okBody({ n: 7 }), {
+      now: clock.now,
+      sleep: (ms) => {
+        present.push(existsSync(lease));
+        clock.sleep(ms);
+      },
+      leaseTtlMs: 1,
+    });
+    assert.deepEqual(present, [true]);
+    assert.equal(result.cache, 'miss');
+    assert.equal(result.fetched, true);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+for (const [name, content] of [
+  ['a record with a non-numeric pid', '{"pid":"x","createdAt":1}'],
+  ['a JSON null', 'null'],
+  ['a JSON array', '[]'],
+  ['an empty object', '{}'],
+] as const) {
+  test(`${name} as a lease is reclaimed without waiting`, () => {
+    const paths = tempRoot();
+    try {
+      writeFileSync(primeLease(paths), content);
+      const clock = steppedClock(25);
+      const result = readThrough(paths, okBody({ n: 3 }), {
+        now: clock.now,
+        sleep: clock.sleep,
+      });
+      assert.deepEqual(clock.sleeps, []);
+      assert.equal(result.cache, 'miss');
+      assert.equal(result.fetched, true);
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('a symlink lease is neither followed nor waited on', {
+  skip: process.platform === 'win32',
+}, () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    const target = join(paths.root, 'nowhere');
+    symlinkSync(target, lease);
+    const clock = steppedClock(25);
+    const result = readThrough(paths, okBody({ n: 4 }), {
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+    assert.deepEqual(clock.sleeps, []);
+    assert.equal(result.cache, 'degraded');
+    assert.equal(result.fetched, true);
+    assert.equal(lstatSync(lease).isSymbolicLink(), true);
+    assert.equal(existsSync(target), false);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an empty lease that becomes a live record mid-wait is left in place', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    writeFileSync(lease, '');
+    const clock = steppedClock(100);
+    const live = JSON.stringify({
+      pid: 4242,
+      createdAt: clock.start,
+      mode: 'hint',
+    });
+    const result = readThrough(paths, okBody({ n: 5 }), {
+      now: clock.now,
+      sleep: (ms) => {
+        if (clock.sleeps.length === 0) writeFileSync(lease, live);
+        clock.sleep(ms);
+      },
+      leaseTtlMs: 1_000,
+      isPidAlive: () => true,
+    });
+    assert.equal(clock.sleeps.length, 10);
+    assert.equal(result.cache, 'degraded');
+    assert.equal(readFileSync(lease, 'utf8'), live);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a discard whose re-read finds a live record leaves the lease in place', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    writeFileSync(lease, '');
+    const clock = steppedClock(25);
+    const live = JSON.stringify({
+      pid: 4242,
+      createdAt: clock.start,
+      mode: 'hint',
+    });
+    // The wait reads the lease once per poll. The re-read that guards the
+    // discard happens at the clock value of the read that found the settle
+    // window elapsed, so the second read at one clock value is the guard's
+    // and is the one that sees a live record.
+    let lastReadAt: number | null = null;
+    const result = readThrough(paths, okBody({ n: 6 }), {
+      now: clock.now,
+      sleep: clock.sleep,
+      isPidAlive: () => true,
+      storage: {
+        readFile(path: string) {
+          if (path !== lease) return readFileSync(path, 'utf8');
+          const reread = lastReadAt === clock.now();
+          lastReadAt = clock.now();
+          return reread ? live : '';
+        },
+      },
+    });
+    assert.equal(result.cache, 'degraded');
+    assert.equal(existsSync(lease), true);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a lease wait is bounded even when the injected clock never advances', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    const frozen = Date.now();
+    const sleeps: number[] = [];
+    writeFileSync(
+      lease,
+      JSON.stringify({ pid: 4242, createdAt: frozen, mode: 'hint' }),
+    );
+    const result = readThrough(paths, okBody({ n: 6 }), {
+      now: () => frozen,
+      sleep: (ms) => {
+        sleeps.push(ms);
+      },
+      leaseTtlMs: 100,
+      isPidAlive: () => true,
+    });
+    assert.ok(sleeps.length >= 1 && sleeps.length <= 10);
+    assert.equal(result.cache, 'degraded');
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('a lease wait follows the injected clock and never reads Date.now', () => {
+  const paths = tempRoot();
+  try {
+    const lease = primeLease(paths);
+    const clock = steppedClock(100);
+    writeFileSync(
+      lease,
+      JSON.stringify({ pid: 4242, createdAt: clock.start, mode: 'hint' }),
+    );
+    const { value: result, calls } = countDateNow(() =>
+      readThrough(paths, okBody({ live: true }), {
+        now: clock.now,
+        sleep: clock.sleep,
+        leaseTtlMs: 1_000,
+        isPidAlive: () => true,
+      }),
+    );
+    assert.equal(clock.sleeps.length, 10);
+    assert.equal(calls, 0);
+    assert.equal(result.cache, 'degraded');
+    assert.deepEqual(result.body, { live: true });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('two processes coalesce a cold hint read onto one fetch', async () => {
   const paths = tempRoot();
   const leaderCount = join(paths.root, 'leader-count');
@@ -1653,12 +2077,15 @@ test('two processes coalesce a cold hint read onto one fetch', async () => {
   const leaderBoot = join(paths.root, 'leader-boot');
   const followerBoot = join(paths.root, 'follower-boot');
   const leaderStarted = join(paths.root, 'leader-started');
+  const leaderSlept = join(paths.root, 'leader-slept');
+  const followerSlept = join(paths.root, 'follower-slept');
   const flags = process.execArgv.filter(
     (arg) => arg !== '--test' && !arg.startsWith('--test-'),
   );
   function start(role: 'leader' | 'follower') {
     const boot = role === 'leader' ? leaderBoot : followerBoot;
     const count = role === 'leader' ? leaderCount : followerCount;
+    const slept = role === 'leader' ? leaderSlept : followerSlept;
     let stdout = '';
     let stderr = '';
     const child = spawn(process.execPath, [...flags, WORKER], {
@@ -1669,6 +2096,7 @@ test('two processes coalesce a cold hint read onto one fetch', async () => {
         IDD_CACHE_WORKSPACE: paths.workspace,
         IDD_CACHE_BOOTED: boot,
         IDD_CACHE_STARTED: leaderStarted,
+        IDD_CACHE_SLEPT: slept,
         IDD_CACHE_RELEASE: release,
         IDD_CACHE_COUNT: count,
       },
@@ -1705,9 +2133,11 @@ test('two processes coalesce a cold hint read onto one fetch', async () => {
     const follower = start('follower');
     try {
       await waitFor(followerBoot);
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      // The follower's first poll of the leader's lease proves it is waiting.
+      await waitFor(followerSlept);
       assert.equal(follower.child.exitCode, null);
       assert.equal(existsSync(followerCount), false);
+      assert.equal(existsSync(leaderSlept), false);
       writeFileSync(release, '1');
       assert.equal(await leader.exited, 0, leader.output().stderr);
       assert.equal(await follower.exited, 0, follower.output().stderr);
@@ -2605,6 +3035,84 @@ test('two concurrent in-process async reads coalesce onto one fetch', async () =
     assert.equal(led.coalesced, undefined);
     assert.deepEqual(waited.body, { report: 'shared' });
     assert.equal(leaseNames(paths.cacheDir).length, 0);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('an async waiter keeps an empty lease through the settle window before it takes over', async () => {
+  const paths = tempRoot();
+  try {
+    const first = await readThroughAsync(paths, async () => ({
+      status: 200,
+      body: { primed: true },
+    }));
+    unlinkSync(join(paths.cacheDir, 'entries', `${first.entryId}.json`));
+    const lease = join(paths.cacheDir, 'leases', `${first.entryId}.json`);
+    writeFileSync(lease, '');
+    const clock = steppedClock(25);
+    const present: boolean[] = [];
+    const result = await readThroughAsync(
+      paths,
+      async () => ({ status: 200, body: { n: 8 } }),
+      {
+        now: clock.now,
+        sleep: async (ms) => {
+          present.push(existsSync(lease));
+          clock.sleep(ms);
+        },
+      },
+    );
+    assert.deepEqual(present, [true, true, true, true]);
+    assert.equal(result.cache, 'miss');
+    assert.deepEqual(result.body, { n: 8 });
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+for (const [name, lookup] of [
+  [
+    'throws',
+    () => {
+      throw new Error('no home');
+    },
+  ],
+  ['returns a non-string', () => undefined as unknown as string],
+] as const) {
+  test(`an async read whose home lookup ${name} degrades to a live fetch`, async () => {
+    const paths = tempRoot();
+    try {
+      const result = await withoutCacheHomeEnvAsync(() =>
+        readThroughAsync(
+          paths,
+          async () => ({ status: 200, body: { live: true } }),
+          { policy: policyWithoutDirectory(), homeDirectory: lookup },
+        ),
+      );
+      assert.equal(result.cache, 'degraded');
+      assert.equal(result.fetched, true);
+      assert.deepEqual(result.body, { live: true });
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('an async read with a configured directory never asks for the home directory', async () => {
+  const paths = tempRoot();
+  let lookups = 0;
+  try {
+    const result = await withoutCacheHomeEnvAsync(() =>
+      readThroughAsync(paths, async () => ({ status: 200, body: { n: 1 } }), {
+        homeDirectory: () => {
+          lookups += 1;
+          throw new Error('the home lookup must not run');
+        },
+      }),
+    );
+    assert.equal(result.cache, 'miss');
+    assert.equal(lookups, 0);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
   }
