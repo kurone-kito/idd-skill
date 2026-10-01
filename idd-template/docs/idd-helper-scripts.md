@@ -1806,7 +1806,9 @@ single-flight lease outlives that call's `gh` timeout, and a process
 removes only the lease it acquired. A conditional read that runs its own
 fetch still sends one request, even when GitHub answers 304. A lease
 waiter polls local files for up to the lease TTL (the `gh` timeout plus
-30 seconds) before it falls back to a live read.
+30 seconds, plus the load-control wait bound when
+[load control](#github-api-load-control) is enabled) before it falls
+back to a live read.
 
 Eviction runs on every cache use without reading every entry. A full
 sweep parses each stored entry, drops the corrupt, wrong-version,
