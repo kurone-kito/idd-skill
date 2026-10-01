@@ -7,6 +7,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  type RmOptions,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -171,23 +172,119 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     } else {
       process.env.NODE_OPTIONS = originalNodeOptions;
     }
-    // maxRetries/retryDelay (kurone-kito/idd-skill#2892): a caller that
-    // just killed a process launched from this stub (e.g.
+    // A caller that just killed a process launched from this stub (e.g.
     // idd-critique-telemetry-hook's win32 tree-kill, now a fire-and-forget
     // `taskkill`/`powershell.exe` spawn rather than a synchronous signal)
     // can reach this `restore()` slightly before Windows has actually
     // finished tearing down the `<name>.exe` image this directory holds --
     // NTFS refuses to delete a still-open executable (EBUSY/EPERM), which
-    // `force: true` alone does not swallow (only ENOENT). Retrying absorbs
-    // that narrow, transient window instead of failing the whole test on a
-    // cleanup race unrelated to what the test itself is asserting.
-    rmSync(tempRoot, {
+    // `force: true` alone does not swallow (only ENOENT).
+    // `removeStubDirectory` absorbs that window instead of failing the whole
+    // test on a cleanup race unrelated to what the test itself is asserting
+    // (kurone-kito/idd-skill#2892, #3680).
+    removeStubDirectory(tempRoot);
+  };
+}
+
+/** Polling calls `removeStubDirectory` makes after its first removal failed. */
+export const STUB_REMOVAL_POLL_COUNT = 20;
+
+/** Pause, in milliseconds, before each `removeStubDirectory` polling call. */
+export const STUB_REMOVAL_POLL_INTERVAL_MS = 250;
+
+/** Injectable collaborators of {@link removeStubDirectory}. */
+export interface RemoveStubDirectoryOptions {
+  /** Removal function; defaults to `rmSync`. */
+  readonly remove?: (path: string, options: RmOptions) => void;
+  /** Platform name; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform;
+  /** Receives the single warning for a directory that could not be removed. */
+  readonly warn?: (message: string) => void;
+  /** Blocking pause; defaults to an `Atomics.wait` on a private buffer. */
+  readonly sleep?: (milliseconds: number) => void;
+  /** Pause before each polling call; defaults to the exported constant. */
+  readonly pollIntervalMs?: number;
+}
+
+/** Whether `error` is a failure a still-running Windows image can cause. */
+function isTransientRemovalError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code;
+  return code === 'EPERM' || code === 'EBUSY';
+}
+
+/**
+ * Remove a `stubExecutable` temp directory, tolerating a Windows image that
+ * is still being torn down (kurone-kito/idd-skill#3680).
+ *
+ * The first attempt keeps the native retry (`maxRetries: 5` with
+ * `retryDelay: 100`, six attempts spread over about 1.5 seconds). Only on
+ * win32, and only when that fails with `EPERM` or `EBUSY`, up to
+ * {@link STUB_REMOVAL_POLL_COUNT} polling calls follow, each after one
+ * blocking `sleep`, each with `maxRetries: 0` and `retryDelay: 0` so the
+ * sleep is the only pause. A directory that is still there after the last
+ * call produces one warning naming it, and the function returns: the test's
+ * own assertions have already decided its verdict, and a leftover directory
+ * on an ephemeral runner is harmless. Every other error, and every failure
+ * on another platform, is thrown unchanged. That includes `ENOTEMPTY` from a
+ * delete-pending file (all observed failures were `EPERM`).
+ *
+ * `EBUSY` is precautionary: Node 24's native `rmSync` reports a persistent
+ * `EBUSY` as an unknown error, so it only matters on Node 22. The wait blocks
+ * because `restore` is synchronous, which also starves the event loop, so
+ * only progress made by the operating system can free the directory.
+ */
+export function removeStubDirectory(
+  directory: string,
+  options: RemoveStubDirectoryOptions = {},
+): void {
+  const remove = options.remove ?? rmSync;
+  const platform = options.platform ?? process.platform;
+  const warn =
+    options.warn ?? ((message) => void process.stderr.write(`${message}\n`));
+  const sleep = options.sleep ?? blockingSleep;
+  const pollIntervalMs =
+    options.pollIntervalMs ?? STUB_REMOVAL_POLL_INTERVAL_MS;
+  let lastError: unknown;
+  try {
+    remove(directory, {
       recursive: true,
       force: true,
       maxRetries: 5,
       retryDelay: 100,
     });
-  };
+    return;
+  } catch (error) {
+    if (platform !== 'win32' || !isTransientRemovalError(error)) {
+      throw error;
+    }
+    lastError = error;
+  }
+  for (let poll = 0; poll < STUB_REMOVAL_POLL_COUNT; poll += 1) {
+    sleep(pollIntervalMs);
+    try {
+      remove(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 0,
+        retryDelay: 0,
+      });
+      return;
+    } catch (error) {
+      if (!isTransientRemovalError(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  const { code, message } = lastError as NodeJS.ErrnoException;
+  warn(
+    `stubExecutable: left ${directory} behind after ${STUB_REMOVAL_POLL_COUNT} polling removals (${code}: ${message})`,
+  );
+}
+
+/** Block the thread for `milliseconds` without spinning. */
+function blockingSleep(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
 const GITHUB_TOKEN_ENV_NAMES = [

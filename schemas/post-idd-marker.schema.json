@@ -74,7 +74,7 @@
         "decision": {
           "type": "string",
           "enum": ["publish", "defer", "refuse"],
-          "description": "Whether this capture may publish a watermark, defer it because required CI is incomplete, or refuse it."
+          "description": "Whether this capture may publish a watermark, defer it because CI is incomplete (required checks not passing, or with none configured the present runs not all passing), or refuse it."
         },
         "reason": {
           "type": ["string", "null"],

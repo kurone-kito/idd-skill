@@ -179,6 +179,18 @@ export interface ProviderChangeRequestState {
   mergeStateStatus: string;
 }
 
+/** A change request's terminal-state evidence (`state`, `mergedAt`,
+ * `headRefOid`) -- what `idd-merge-execute.mts` reads back after a failed
+ * merge command to tell "merged server-side" from "did not happen". */
+export interface ProviderChangeRequestOutcome {
+  /** The provider's state word, upper-cased (`OPEN`, `CLOSED`, `MERGED`). */
+  state: string;
+  /** ISO timestamp of the merge, or `null` when it has not been merged. */
+  mergedAt: string | null;
+  /** Head commit SHA, or `''` when the provider returned none. */
+  headRefOid: string;
+}
+
 export interface ProviderRequiredCheck {
   name: string;
   state: string;
@@ -1120,6 +1132,17 @@ export interface ProviderPort {
     number: number,
   ): ProviderChangeRequestState | null;
 
+  /** change-requests, cross-repo. `pr view -R {owner}/{repo} --json
+   * state,mergedAt,headRefOid`, `null` on a 404 -- the post-failure
+   * read-back `idd-merge-execute.mts` makes after a failed merge command
+   * (#3681). Every other failure throws, like
+   * {@link ProviderPort.getChangeRequestAtRepo}. */
+  getChangeRequestOutcomeAtRepo(
+    owner: string,
+    repo: string,
+    number: number,
+  ): ProviderChangeRequestOutcome | null;
+
   /** change-requests, cross-repo, write. `pr merge -R {owner}/{repo}
    * --merge --match-head-commit {headSha}`. */
   mergeChangeRequestAtRepo(
@@ -1242,9 +1265,10 @@ export interface ProviderPort {
    * scope `nodeIds` to advisory-bot thread comments whose `lastEditedAt`
    * postdates their thread's latest IDD disposition -- see
    * `protocol-helpers.mts`'s `selectAdvisoryThreadCommentIdsEditedAfterDisposition`.
-   * Every other review-thread consumer (`review-activity-snapshot.mts`,
-   * the merged-PR sweep, `audit-pr-cleanup.mts`) never calls this method,
-   * so an edited thread comment keeps `updatedAt` dating there.
+   * `review-activity-snapshot.mts` (#3655) makes the same bounded call
+   * through `review-thread-edit-histories.mts`. Every other review-thread
+   * consumer (the merged-PR sweep, `audit-pr-cleanup.mts`) never calls this
+   * method, so an edited thread comment keeps `updatedAt` dating there.
    *
    * Returns one entry per requested id, `commentId` echoing it back.
    * `totalCount` is the comment's FULL edit-history size, which can exceed
@@ -1253,8 +1277,14 @@ export interface ProviderPort {
    * in protocol-helpers.mts) MUST fail closed (treat the history as
    * unverifiable, keeping `updatedAt` dating) whenever `totalCount` does
    * not equal `edits.length`. `edits` is in the connection's own order
-   * (newest edit first); a caller must sort by `editedAt` itself rather
-   * than trust that order. A missing/mismatched node in the response, or
+   * (newest edit first). A caller must sort by `editedAt` itself rather
+   * than trust that order across different timestamps, and must break a
+   * same-second tie (GitHub reports `editedAt` with one-second resolution)
+   * by array position: among equal `editedAt` values the revision listed
+   * earlier is the later one, so this newest-first order is what puts tied
+   * revisions in their true chronological order (#3663;
+   * `resolveThreadCommentRevisionDatingOutcome` applies this rule). A
+   * missing/mismatched node in the response, or
    * any other transport failure, throws -- mirrors
    * `fetchLastEditedAtByNodeId`'s fail-fast contract (every requested id
    * was selected from an already-successful thread-comments read, so a

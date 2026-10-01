@@ -3862,6 +3862,23 @@ export const EDITED_AFTER_DISPOSITION_HINT =
   'this same comment id into a non-review notice -- if so, that disposition ' +
   'now predates the edit and no longer counts; post a fresh disposition ' +
   'reply in the non-review-notice shape';
+// #3670 diagnostic-only hint text for `missingThreads[].hint`, single-sourced
+// like the hints above: a thread is cleared only by an unedited, marker-first
+// IDD disposition newer than its latest non-disposition comment, so the fix is
+// a new reply, and a plain-prose correction re-opens the thread instead of
+// replacing the earlier disposition. Worded to hold for a thread that never got
+// a reply and for an edited disposition too, and to send a repeating
+// no-new-content advisory-bot reply to a hold (the #3324 rule) rather than
+// another reply. Never consumed by any routing
+// decision -- see the `hint` field's own doc comment on
+// `DispositionEvidenceSummary`.
+export const STALE_THREAD_DISPOSITION_HINT =
+  'post a NEW marker-first "**Accepted**" or "**Rejected**" reply after the ' +
+  'newest non-disposition comment on this thread; a plain-prose reply (a ' +
+  'correction counts as feedback) or an edited disposition is not a ' +
+  'disposition and does not clear it. If that newest comment is a ' +
+  'no-new-content advisory-bot reply that reappears after every reply, post ' +
+  'a hold comment instead of another reply';
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
@@ -4477,6 +4494,28 @@ function parseCompletedAt(value) {
   const timestamp = String(value ?? '');
   return isCompletedCiTimestamp(timestamp) ? Date.parse(timestamp) : null;
 }
+/** Check-run states that mean a run is still queued or running. */
+export const CI_PENDING_STATES = new Set(['QUEUED', 'IN_PROGRESS', 'WAITING']);
+/**
+ * Commit-status (StatusContext) states that also mean a run is still running.
+ * `ci-wait-state.mts` buckets them as pending alongside
+ * {@link CI_PENDING_STATES}, but `classifyCiChecks` leaves them unrecognized,
+ * so the present-run fallback reads them as `some-failing` (when no check-run
+ * pending state sits beside them). They are not named as blocking runs
+ * (#3670): a still-running status is not a failure.
+ */
+export const CI_STATUS_CONTEXT_PENDING_STATES = new Set([
+  'PENDING',
+  'EXPECTED',
+  'REQUESTED',
+]);
+/** Check-run states `classifyCiChecks` counts as passing. */
+const CI_PASSING_STATES = new Set([
+  'SUCCESS',
+  'SKIPPED',
+  'NEUTRAL',
+  'NOT_APPLICABLE',
+]);
 /**
  * Failure-family *conclusion* states that must win a same-instant
  * tie-break and classify as a genuine `classifyCiChecks` failure (#1688).
@@ -4764,21 +4803,11 @@ export function classifyCiChecks(checks) {
   if (failed.length > 0) {
     return { status: 'failed', failed, discardedNonPassingInstances };
   }
-  const pending = deduped.filter((check) => {
-    return (
-      check.state === 'QUEUED' ||
-      check.state === 'IN_PROGRESS' ||
-      check.state === 'WAITING'
-    );
-  });
+  const pending = deduped.filter((check) => CI_PENDING_STATES.has(check.state));
   if (pending.length > 0) {
     return { status: 'pending', pending, discardedNonPassingInstances };
   }
-  const passing = deduped.filter((check) => {
-    return ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
-      check.state,
-    );
-  });
+  const passing = deduped.filter((check) => CI_PASSING_STATES.has(check.state));
   return {
     status: passing.length === deduped.length ? 'success' : 'unknown',
     passing,
@@ -7004,6 +7033,10 @@ export function summarizeDispositionEvidenceForGate(
           : 'unresolved-without-fresh-disposition',
         ackOnlyPostDisposition: classification.ackOnlyPostDisposition,
         inPlaceEditOnly: classification.inPlaceEditOnly,
+        // #3670: never on an ack-only entry -- see the field's doc comment.
+        ...(classification.ackOnlyPostDisposition
+          ? {}
+          : { hint: STALE_THREAD_DISPOSITION_HINT }),
       };
     })
     .filter(Boolean);
@@ -7647,11 +7680,7 @@ export function summarizeRequiredChecks(
     })),
   };
 }
-// Conclusion over *all* present check runs (waiver-covered runs count as
-// skipped), used for the F2 fallback when no required checks are configured:
-// an unprotected branch must not satisfy CI vacuously, so the gate inspects the
-// real run conclusions instead.
-export function resolvePresentRunConclusion(
+function classifyPresentRuns(
   normalizedChecks,
   // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
   // check NAMES this collection pass could not fully resolve real
@@ -7665,21 +7694,67 @@ export function resolvePresentRunConclusion(
   // `workflowPath` producer key -- reopening the exact bypass #2919 exists
   // to close, on an unprotected branch, even though the PRIMARY
   // required-check gate (`summarizeRequiredChecks`'s own `status`) is
-  // already fixed. Default empty set is backward compatible: every caller
-  // that omits it (none of them do after this fix, but a future direct
-  // caller might) sees unchanged pre-#2919 behavior.
-  identityUnresolvedCheckNames = new Set(),
+  // already fixed.
+  identityUnresolvedCheckNames,
 ) {
   if (normalizedChecks.length === 0) {
-    return 'none';
+    return { conclusion: 'none', blockingNames: [] };
   }
-  if (
-    identityUnresolvedCheckNames.size > 0 &&
-    normalizedChecks.some((check) =>
-      identityUnresolvedCheckNames.has(check.name),
-    )
-  ) {
-    // `'some-failing'`, not `'pending'`: the `#2714` comment above maps a
+  const identityBlockedNames =
+    identityUnresolvedCheckNames.size > 0
+      ? normalizedChecks
+          .filter((check) => identityUnresolvedCheckNames.has(check.name))
+          .map((check) => check.name)
+      : [];
+  const effective = normalizedChecks.map((check) =>
+    check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
+  );
+  const classification = classifyCiChecks(effective);
+  const conclusion = presentRunConclusion(
+    classification,
+    identityBlockedNames.length > 0,
+  );
+  if (conclusion !== 'some-failing') {
+    return { conclusion, blockingNames: [] };
+  }
+  // An identity-unresolved name, a genuine failure, and an unrecognized state
+  // are separate causes of `some-failing`; report each. `classifyCiChecks`
+  // stops at its failed or pending bucket and exposes nothing past it, so an
+  // unrecognized state beside either is derived directly from the same
+  // per-producer de-duplication (it keeps blocking once the failure clears).
+  const blocking = new Set(identityBlockedNames);
+  if (classification.status === 'failed') {
+    for (const check of classification.failed ?? []) {
+      blocking.add(String(check.name ?? ''));
+    }
+  }
+  const latestPerProducer = selectLatestCheckPerName(
+    effective.map((check) => ({
+      ...check,
+      state: String(check.state ?? '').toUpperCase(),
+    })),
+  );
+  for (const check of latestPerProducer) {
+    if (
+      !CI_FAILURE_CONCLUSION_STATES.has(check.state) &&
+      !CI_PENDING_STATES.has(check.state) &&
+      !CI_STATUS_CONTEXT_PENDING_STATES.has(check.state) &&
+      !CI_PASSING_STATES.has(check.state) &&
+      check.state !== 'CANCELLED'
+    ) {
+      blocking.add(String(check.name ?? ''));
+    }
+  }
+  blocking.delete('');
+  return { conclusion, blockingNames: [...blocking].sort() };
+}
+/**
+ * The present-run conclusion for one classification (the part of
+ * {@link classifyPresentRuns} F2 consults).
+ */
+function presentRunConclusion(classification, identityBlocked) {
+  if (identityBlocked) {
+    // `'some-failing'`, not `'pending'`: the `#2714` comment below maps a
     // lone CANCELLED-with-no-successor instance to `'pending'` because
     // that shape is a plausible rerun-in-progress candidate that can
     // reasonably resolve on its own without operator action. An
@@ -7691,10 +7766,6 @@ export function resolvePresentRunConclusion(
     // narrower CANCELLED carve-out.
     return 'some-failing';
   }
-  const effective = normalizedChecks.map((check) =>
-    check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
-  );
-  const classification = classifyCiChecks(effective);
   if (classification.status === 'success') {
     return 'all-passing';
   }
@@ -7712,14 +7783,46 @@ export function resolvePresentRunConclusion(
   // to avoid. Scoped to CANCELLED-only `unknown` entries: an `unknown`
   // bucket containing any other, genuinely unrecognized state stays
   // 'some-failing', the conservative default.
-  const unknownChecks = classification.unknown ?? [];
   if (
     classification.status === 'unknown' &&
-    unknownChecks.every((check) => check.state === 'CANCELLED')
+    (classification.unknown ?? []).every((check) => check.state === 'CANCELLED')
   ) {
     return 'pending';
   }
   return 'some-failing';
+}
+// Conclusion over *all* present check runs (waiver-covered runs count as
+// skipped), used for the F2 fallback when no required checks are configured:
+// an unprotected branch must not satisfy CI vacuously, so the gate inspects the
+// real run conclusions instead.
+export function resolvePresentRunConclusion(
+  normalizedChecks,
+  // See `classifyPresentRuns` for the `identityUnresolvedCheckNames` rationale
+  // (kurone-kito/idd-skill#2919): an unresolved producer identity fails this
+  // fallback closed. The default empty set keeps every caller that omits it on
+  // the unchanged pre-#2919 behavior.
+  identityUnresolvedCheckNames = new Set(),
+) {
+  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
+    .conclusion;
+}
+/**
+ * The sorted names of the present runs that make
+ * {@link resolvePresentRunConclusion} `some-failing`, and `[]` for every other
+ * conclusion (#3670). A run the advisory-convergence downgrade blocks is
+ * included even when its own state is green, so callers name these runs as
+ * blocking rather than failing. A run with no name cannot be named, so it is
+ * left out, and so is a still-running status context
+ * ({@link CI_STATUS_CONTEXT_PENDING_STATES}), which the fallback can read as
+ * `some-failing` but is not a failure. Otherwise the result is non-empty
+ * exactly when the conclusion is `some-failing`.
+ */
+export function listBlockingPresentRunNames(
+  normalizedChecks,
+  identityUnresolvedCheckNames = new Set(),
+) {
+  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
+    .blockingNames;
 }
 export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {
   const rules = parseCodeownersRules(codeownersText);
@@ -11714,6 +11817,13 @@ function isOnlyAllowlistedMarkerCommentDiff(prevBody, currBody) {
  * - {@link isVisibleTextAppendOnly} between the two revisions;
  * - {@link isOnlyAllowlistedMarkerCommentDiff} between the two revisions.
  *
+ * Tie rule (#3663): revisions are ordered by `editedAt` ascending, and
+ * revisions sharing one `editedAt` (GitHub reports one-second
+ * resolution) are ordered by their position in the supplied array --
+ * among equal values the revision listed EARLIER is treated as the LATER
+ * one, which is their true order for the newest-first array the
+ * connection returns.
+ *
  * Returns `'all-cosmetic'` when every transition qualifies (dating stays
  * `createdAt`), `'dated'` with the LAST transition that failed
  * (dating is that revision's own `editedAt`), or `'unverifiable'` when
@@ -11754,13 +11864,35 @@ function resolveThreadCommentRevisionDatingOutcome(comment, authorLogin) {
   // Connection order is newest-edit-first by convention
   // (`ProviderPort.getReviewThreadCommentUserContentEdits`'s own doc
   // comment), but a caller (a hand-built test fixture, in particular)
-  // must never be trusted to preserve that order -- sort explicitly by
-  // `editedAt` ascending (oldest/creation revision first). Every
-  // `editedAt` is already confirmed parseable above.
-  const chronological = [...edits].sort(
-    (left, right) =>
-      Date.parse(String(left.editedAt)) - Date.parse(String(right.editedAt)),
-  );
+  // must never be trusted to preserve that order across DIFFERENT
+  // timestamps -- sort explicitly by `editedAt` ascending (oldest/creation
+  // revision first). Every `editedAt` is already confirmed parseable
+  // above.
+  //
+  // #3663: GitHub reports `editedAt` with one-second resolution, so two
+  // revisions can share one. A stable ascending sort alone would keep such
+  // tied revisions in their newest-first input order, i.e. classify them
+  // in the REVERSE of the order they happened in. Observed 2026-09-30 on
+  // kurone-kito/idd-skill PR #3660, review comment 4146452802: its
+  // `Confirmed` and `Addressed` revisions shared one second, so the
+  // marker-only rewrite after them was compared with the wrong
+  // predecessor and dated six seconds after a fresh IDD reply. Among equal
+  // `editedAt` values, therefore, the revision listed EARLIER in the
+  // supplied array is treated as the LATER one (the tie-break is the
+  // input index, descending), which puts tied revisions in their true
+  // chronological order whenever the input is newest-first. The index
+  // tie-break is explicit rather than relying on sort stability.
+  const chronological = edits
+    .map((edit, index) => ({
+      edit,
+      index,
+      editedAtMs: Date.parse(String(edit.editedAt)),
+    }))
+    .sort(
+      (left, right) =>
+        left.editedAtMs - right.editedAtMs || right.index - left.index,
+    )
+    .map(({ edit }) => edit);
   // Copilot review, PR #3430: `comment.body` and `comment.userContentEdits`
   // come from two SEPARATE fetches (the thread-comments read and the
   // bounded edit-history read) that are never guaranteed to observe the

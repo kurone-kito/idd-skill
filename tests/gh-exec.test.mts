@@ -29,6 +29,7 @@ import {
   ghText,
   ghTextAsync,
   ghTextUnbounded,
+  resetGhAuthHostMemo,
   resolveGhApiHostname,
   resolveViewerLogin,
   safeGhText,
@@ -36,6 +37,11 @@ import {
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
 import { deriveGhHttpStatus } from '../src/scripts/gh-http-status.mts';
+import {
+  type RequestObservation,
+  resetGithubApiTelemetryPolicyCacheForTests,
+  setGithubApiTelemetryPolicyForTests,
+} from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -2607,6 +2613,10 @@ function readCacheFixture(): {
   workspace: string;
   argsFile: string;
 } {
+  // The host memo lives for the whole process, so every case starts empty:
+  // otherwise a host memoized by an earlier case would answer for a later
+  // case that stubs `gh auth status` differently (#3621).
+  resetGhAuthHostMemo();
   const root = mkdtempSync(join(tmpdir(), 'idd-gh-read-cache-'));
   const workspace = join(root, 'workspace');
   mkdirSync(workspace);
@@ -2618,6 +2628,16 @@ function readCacheFixture(): {
   };
 }
 
+/**
+ * A configured cache directory under the Windows temp folder inherits a
+ * permissive profile ACL, which the real check refuses (#3623) and every
+ * cache test here would then degrade on; report a private ACL instead.
+ */
+const PRIVATE_ACL_STUB = () => ({
+  kind: 'entries' as const,
+  entries: [{ sid: 'S-1-5-18', allow: true }],
+});
+
 function readCachePolicy(directory: string, enabled = true) {
   return {
     enabled,
@@ -2628,25 +2648,61 @@ function readCachePolicy(directory: string, enabled = true) {
   };
 }
 
+/**
+ * Scripted `gh auth` accounting for {@link recordingGh} (#3621). Every
+ * `auth status` and `auth token` call appends one line to `logFile`, which
+ * also serves as the call counter across the separate `gh` processes.
+ */
+interface RecordingGhAuth {
+  logFile: string;
+  /** Nth `auth status` call gets the Nth response; the last one repeats. */
+  statusResponses?: readonly { stdout: string; exit?: number }[];
+  /** Answer `auth token` with `keyring-token-<call number>`. */
+  numberedTokens?: boolean;
+}
+
 function recordingGh(
   argsFile: string,
   bodySource: string,
   statusJson = '{"hosts":{"github.com":[{"state":"success"}]}}',
+  auth?: RecordingGhAuth,
 ): string {
   return `
 const fs = require('node:fs');
 const args = process.argv.slice(2);
+const auth = ${JSON.stringify(auth ?? null)};
+function authCall(kind) {
+  if (!auth) return 1;
+  fs.appendFileSync(auth.logFile, kind + '\\n');
+  return fs.readFileSync(auth.logFile, 'utf8').split('\\n').filter((line) => line === kind).length;
+}
 if (args[0] === 'auth' && args[1] === 'status') {
-  process.stdout.write(${JSON.stringify(statusJson)});
-  process.exit(0);
+  const call = authCall('status');
+  const scripted = auth && auth.statusResponses;
+  const response = scripted
+    ? scripted[Math.min(call, scripted.length) - 1]
+    : { stdout: ${JSON.stringify(statusJson)}, exit: 0 };
+  process.stdout.write(response.stdout);
+  process.exit(response.exit || 0);
 }
 if (args[0] === 'auth' && args[1] === 'token') {
-  process.stdout.write('keyring-token\\n');
+  const call = authCall('token');
+  process.stdout.write(auth && auth.numberedTokens ? 'keyring-token-' + call + '\\n' : 'keyring-token\\n');
   process.exit(0);
 }
 fs.appendFileSync(${JSON.stringify(argsFile)}, JSON.stringify(args) + '\\n');
 ${bodySource}
 `;
+}
+
+function authCalls(logFile: string): { status: number; token: number } {
+  const lines = existsSync(logFile)
+    ? readFileSync(logFile, 'utf8').split('\n')
+    : [];
+  return {
+    status: lines.filter((line) => line === 'status').length,
+    token: lines.filter((line) => line === 'token').length,
+  };
 }
 
 function recordedArgs(argsFile: string): string[][] {
@@ -2676,6 +2732,7 @@ test('ghApiJson readCache write classification stays uncached when enabled (#358
         readCache: {
           classification: 'write' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -2715,6 +2772,7 @@ test('ghApiJson readCache resolves github.com from GITHUB_SERVER_URL with severa
       const readCache = {
         classification: 'read' as const,
         policy: readCachePolicy(paths.cacheDir),
+        windowsAclReader: PRIVATE_ACL_STUB,
         workspaceRoot: paths.workspace,
         repository: 'o/r',
         credentialMaterial: 'credential-sentinel',
@@ -2752,6 +2810,7 @@ test('ghApiJson readCache stays uncached when extraArgs overrides the hostname (
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             credentialMaterial: 'credential-sentinel',
@@ -2811,6 +2870,7 @@ test('ghApiJson readCache pins a request to the host it keyed the entry for (#35
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             credentialMaterial: 'credential-sentinel',
@@ -2847,6 +2907,7 @@ test('ghApiJson readCache with blank credential material stays uncached (#3587)'
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             credentialMaterial,
@@ -2871,6 +2932,58 @@ test('ghApiJson readCache with blank credential material stays uncached (#3587)'
   }
 });
 
+test('ghApiJson readCache forwards the ACL seam, so a permissive Windows ACL degrades to live reads (#3623)', () => {
+  const paths = readCacheFixture();
+  const restore = stubGh(
+    recordingGh(
+      paths.argsFile,
+      'process.stdout.write(\'HTTP/2.0 200 OK\\netag: "abc"\\n\\n{"ok":true}\');',
+    ),
+  );
+  try {
+    withGhHostEnv({}, () => {
+      const readCache = (
+        windowsAclReader: () => { kind: 'entries'; entries: unknown[] },
+      ) => ({
+        classification: 'read' as const,
+        policy: readCachePolicy(paths.cacheDir),
+        workspaceRoot: paths.workspace,
+        repository: 'o/r',
+        credentialMaterial: 'credential-sentinel',
+        requestShape: { path: 'repos/o/r' },
+        platform: 'win32' as const,
+        windowsAclReader: windowsAclReader as never,
+      });
+      const everyone = () => ({
+        kind: 'entries' as const,
+        entries: [{ sid: 'S-1-1-0', allow: true }],
+      });
+      assert.deepEqual(
+        ghApiJson('repos/o/r', { readCache: readCache(everyone) }),
+        { ok: true },
+      );
+      assert.deepEqual(
+        ghApiJson('repos/o/r', { readCache: readCache(everyone) }),
+        { ok: true },
+      );
+      assert.equal(recordedArgs(paths.argsFile).length, 2);
+      assert.deepEqual(cacheEntryNames(paths.cacheDir), []);
+      // The same call with a private ACL is cached.
+      const priv = () => ({
+        kind: 'entries' as const,
+        entries: [{ sid: 'S-1-5-18', allow: true }],
+      });
+      ghApiJson('repos/o/r', { readCache: readCache(priv) });
+      ghApiJson('repos/o/r', { readCache: readCache(priv) });
+      assert.equal(recordedArgs(paths.argsFile).length, 3);
+      assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
 test('ghApiJson readCache stays uncached when the policy is disabled (#3587)', () => {
   const paths = readCacheFixture();
   const restore = stubGh(
@@ -2885,6 +2998,7 @@ test('ghApiJson readCache stays uncached when the policy is disabled (#3587)', (
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir, false),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -2969,6 +3083,7 @@ test('ghApiJson readCache reuses one included response for a later hint read (#3
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3028,6 +3143,7 @@ test('ghApiJson readCache drops the stored 200 when a strict-fresh read throws a
         const readCache = {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3067,6 +3183,7 @@ test('ghApiJson readCache keeps the stored 200 when a strict-fresh read throws a
       const readCache = {
         classification: 'read' as const,
         policy: readCachePolicy(paths.cacheDir),
+        windowsAclReader: PRIVATE_ACL_STUB,
         workspaceRoot: paths.workspace,
         repository: 'o/r',
         credentialMaterial: 'credential-sentinel',
@@ -3103,6 +3220,7 @@ test('ghApiJson readCache stores a paginated aggregate without --include (#3587)
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3142,6 +3260,7 @@ test('ghApiJson readCache keeps different request bodies in different entries (#
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3176,6 +3295,7 @@ test('ghApiJson readCache hashes the keyring token when no env token is set (#35
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           defaultDirectory: paths.cacheDir,
@@ -3218,6 +3338,7 @@ process.stdout.write(JSON.stringify({ ok: true }));
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3258,6 +3379,7 @@ process.exit(1);
         readCache: {
           classification: 'read' as const,
           policy: readCachePolicy(paths.cacheDir),
+          windowsAclReader: PRIVATE_ACL_STUB,
           workspaceRoot: paths.workspace,
           repository: 'o/r',
           credentialMaterial: 'credential-sentinel',
@@ -3327,6 +3449,7 @@ test('ghApiJson readCache partitions a GHES host by the enterprise token (#3587)
               readCache: {
                 classification: 'read',
                 policy: readCachePolicy(paths.cacheDir),
+                windowsAclReader: PRIVATE_ACL_STUB,
                 workspaceRoot: paths.workspace,
                 repository: 'o/r',
                 defaultDirectory: paths.cacheDir,
@@ -3376,6 +3499,7 @@ test('ghApiJson readCache keeps a github.com token stable across enterprise toke
               readCache: {
                 classification: 'read',
                 policy: readCachePolicy(paths.cacheDir),
+                windowsAclReader: PRIVATE_ACL_STUB,
                 workspaceRoot: paths.workspace,
                 repository: 'o/r',
                 defaultDirectory: paths.cacheDir,
@@ -3415,6 +3539,7 @@ process.stdout.write(JSON.stringify({ ok: true }));
           readCache: {
             classification: 'read' as const,
             policy: readCachePolicy(paths.cacheDir),
+            windowsAclReader: PRIVATE_ACL_STUB,
             workspaceRoot: paths.workspace,
             repository: 'o/r',
             defaultDirectory: paths.cacheDir,
@@ -3448,6 +3573,7 @@ test('ghApiJson readCache keeps caller requestShape from hiding the request body
       const readCache = {
         classification: 'read' as const,
         policy: readCachePolicy(paths.cacheDir),
+        windowsAclReader: PRIVATE_ACL_STUB,
         workspaceRoot: paths.workspace,
         repository: 'o/r',
         credentialMaterial: 'credential-sentinel',
@@ -3461,5 +3587,533 @@ test('ghApiJson readCache keeps caller requestShape from hiding the request body
   } finally {
     restore();
     rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+// #3621: a fake `gh` that answers a cached read with an `--include` envelope
+// and an uncached one with the bare body.
+const READ_CACHE_AUTH_BODY =
+  "const body = '{\"ok\":true}'; process.stdout.write(args.includes('--include') ? 'HTTP/2.0 200 OK\\n\\n' + body : body);";
+
+const GITHUB_TOKEN_VARIABLES = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+] as const;
+
+function withoutGithubTokens(run: () => void): void {
+  const previous = GITHUB_TOKEN_VARIABLES.map(
+    (name) => [name, process.env[name]] as const,
+  );
+  for (const name of GITHUB_TOKEN_VARIABLES) delete process.env[name];
+  try {
+    run();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+function authCountingRead(paths: ReturnType<typeof readCacheFixture>) {
+  return {
+    classification: 'read' as const,
+    policy: readCachePolicy(paths.cacheDir),
+    windowsAclReader: PRIVATE_ACL_STUB,
+    workspaceRoot: paths.workspace,
+    repository: 'o/r',
+    defaultDirectory: paths.cacheDir,
+  };
+}
+
+test('ghApiJson readCache resolves the gh auth status host once and the credential per read (#3621)', () => {
+  const paths = readCacheFixture();
+  const logFile = join(paths.root, 'auth.log');
+  const restore = stubGh(
+    recordingGh(paths.argsFile, READ_CACHE_AUTH_BODY, undefined, { logFile }),
+  );
+  try {
+    withoutGithubTokens(() =>
+      withGhHostEnv({}, () => {
+        const options = { readCache: authCountingRead(paths) };
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.equal(recordedArgs(paths.argsFile).length, 1);
+        assert.deepEqual(authCalls(logFile), { status: 1, token: 2 });
+      }),
+    );
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache re-resolves the host when GH_HOST or GITHUB_SERVER_URL changes what selects it (#3621)', () => {
+  const paths = readCacheFixture();
+  const logFile = join(paths.root, 'auth.log');
+  const restore = stubGh(
+    recordingGh(paths.argsFile, READ_CACHE_AUTH_BODY, undefined, { logFile }),
+  );
+  try {
+    withoutGithubTokens(() => {
+      const options = { readCache: authCountingRead(paths) };
+      const read = (env: { GH_HOST?: string; GITHUB_SERVER_URL?: string }) =>
+        withGhHostEnv(env, () => {
+          assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        });
+      const statusCalls = () => authCalls(logFile).status;
+
+      read({});
+      assert.equal(statusCalls(), 1);
+      // A variable that names the host never reaches `gh auth status`, and
+      // returning to the original values finds the memo again.
+      read({ GH_HOST: 'ghes.example.com' });
+      read({});
+      read({ GITHUB_SERVER_URL: 'https://ghes.example.com' });
+      read({});
+      assert.equal(statusCalls(), 1);
+      // Blank values still fall through to `gh auth status`, under their own
+      // key, so each change re-resolves and an unchanged key does not.
+      read({ GH_HOST: '  ' });
+      assert.equal(statusCalls(), 2);
+      read({ GH_HOST: '  ' });
+      assert.equal(statusCalls(), 2);
+      read({ GITHUB_SERVER_URL: 'https://' });
+      assert.equal(statusCalls(), 3);
+      read({});
+      assert.equal(statusCalls(), 4);
+      // github.com and ghes.example.com are the only hosts that were fetched.
+      assert.equal(recordedArgs(paths.argsFile).length, 2);
+    });
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache stores a read under a new partition when the credential changes between calls (#3621)', () => {
+  const paths = readCacheFixture();
+  const logFile = join(paths.root, 'auth.log');
+  const restore = stubGh(
+    recordingGh(paths.argsFile, READ_CACHE_AUTH_BODY, undefined, {
+      logFile,
+      numberedTokens: true,
+    }),
+  );
+  try {
+    withoutGithubTokens(() =>
+      withGhHostEnv({}, () => {
+        const options = { readCache: authCountingRead(paths) };
+        ghApiJson('repos/o/r', options);
+        ghApiJson('repos/o/r', options);
+        // `keyring-token-1` then `keyring-token-2`: the second account never
+        // reads the first account's entry.
+        assert.equal(recordedArgs(paths.argsFile).length, 2);
+        assert.equal(cacheEntryNames(paths.cacheDir).length, 2);
+        assert.deepEqual(authCalls(logFile), { status: 1, token: 2 });
+      }),
+    );
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache retries a gh auth status lookup that failed, was empty or was ambiguous (#3621)', () => {
+  const paths = readCacheFixture();
+  const logFile = join(paths.root, 'auth.log');
+  const restore = stubGh(
+    recordingGh(paths.argsFile, READ_CACHE_AUTH_BODY, undefined, {
+      logFile,
+      statusResponses: [
+        { stdout: '', exit: 1 },
+        { stdout: '' },
+        { stdout: '{"hosts":{}}' },
+        { stdout: '{"hosts":{"github.com":[],"ghe.example.com":[]}}' },
+        { stdout: '{"hosts":{"github.com":[{"state":"success"}]}}' },
+      ],
+    }),
+  );
+  try {
+    withoutGithubTokens(() =>
+      withGhHostEnv({}, () => {
+        const options = { readCache: authCountingRead(paths) };
+        const read = () => ghApiJson('repos/o/r', options);
+        const statusCalls = () => authCalls(logFile).status;
+
+        // A failed call and empty output leave no host, so the read is live
+        // and stores nothing.
+        assert.deepEqual(read(), { ok: true });
+        assert.equal(statusCalls(), 1);
+        assert.deepEqual(read(), { ok: true });
+        assert.equal(statusCalls(), 2);
+        assert.equal(cacheEntryNames(paths.cacheDir).length, 0);
+        // An empty `hosts` object keeps today's github.com fallback (a cached
+        // read) and is asked again on the next call.
+        assert.deepEqual(read(), { ok: true });
+        assert.equal(statusCalls(), 3);
+        assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+        // Several hosts leave no host either, so this read is live again.
+        assert.deepEqual(read(), { ok: true });
+        assert.equal(statusCalls(), 4);
+        // Exactly one host is remembered: no further `gh auth status`.
+        assert.deepEqual(read(), { ok: true });
+        assert.equal(statusCalls(), 5);
+        assert.deepEqual(read(), { ok: true });
+        assert.deepEqual(read(), { ok: true });
+        assert.equal(statusCalls(), 5);
+        // Two live reads, the github.com fallback fetch, and the several-host
+        // read; the last three reads are cache hits.
+        assert.equal(recordedArgs(paths.argsFile).length, 4);
+      }),
+    );
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache asks again after gh auth status returns unusable JSON or an empty or whitespace-only host name (#3621, #3657)', () => {
+  const paths = readCacheFixture();
+  const logFile = join(paths.root, 'auth.log');
+  const restore = stubGh(
+    recordingGh(paths.argsFile, READ_CACHE_AUTH_BODY, undefined, {
+      logFile,
+      statusResponses: [
+        { stdout: 'not json' },
+        { stdout: '{"hosts":[]}' },
+        { stdout: '{"hosts":{"":[]}}' },
+        { stdout: '{"hosts":{" ":[]}}' },
+        { stdout: '{"hosts":{"github.com":[{"state":"success"}]}}' },
+      ],
+    }),
+  );
+  try {
+    withoutGithubTokens(() =>
+      withGhHostEnv({}, () => {
+        const options = { readCache: authCountingRead(paths) };
+        const statusCalls = () => authCalls(logFile).status;
+        // Unparseable output, a `hosts` value that is not an object, an empty
+        // host name and a whitespace-only host name are each asked again and
+        // leave the read live and uncached; only the fifth answer, one named
+        // host, is remembered and cached.
+        for (const expected of [1, 2, 3, 4, 5]) {
+          assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+          assert.equal(statusCalls(), expected);
+          assert.equal(
+            cacheEntryNames(paths.cacheDir).length,
+            expected === 5 ? 1 : 0,
+            `entries after read ${expected}`,
+          );
+        }
+        assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+        assert.equal(statusCalls(), 5);
+        assert.equal(cacheEntryNames(paths.cacheDir).length, 1);
+        // Four live reads and one miss reached `gh`; the sixth read was a hit.
+        assert.equal(recordedArgs(paths.argsFile).length, 5);
+      }),
+    );
+  } finally {
+    restore();
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+test('ghApiJson readCache bypasses the cache for an explicit non-GET method and runs no gh auth (#3621)', () => {
+  for (const extraArgs of [
+    ['--method', 'POST'],
+    ['-X', 'POST'],
+    ['--method=POST'],
+    ['-XPOST'],
+    ['-X=POST'],
+    ['--method', 'post'],
+    ['-X', 'Delete'],
+    ['--method'],
+    ['--method', 'GET', '--method', 'POST'],
+    ['-iXPOST'],
+    ['-iX=POST'],
+  ]) {
+    const paths = readCacheFixture();
+    const logFile = join(paths.root, 'auth.log');
+    const restore = stubGh(
+      recordingGh(paths.argsFile, READ_CACHE_AUTH_BODY, undefined, { logFile }),
+    );
+    try {
+      withoutGithubTokens(() =>
+        withGhHostEnv({}, () => {
+          const options = { extraArgs, readCache: authCountingRead(paths) };
+          assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+          assert.deepEqual(ghApiJson('repos/o/r', options), { ok: true });
+          const label = JSON.stringify(extraArgs);
+          const recorded = recordedArgs(paths.argsFile);
+          assert.equal(recorded.length, 2, label);
+          for (const args of recorded) {
+            assert.equal(args.includes('--include'), false, label);
+            assert.deepEqual(args, ['api', 'repos/o/r', ...extraArgs], label);
+          }
+          assert.equal(cacheEntryNames(paths.cacheDir).length, 0, label);
+          assert.deepEqual(authCalls(logFile), { status: 0, token: 0 }, label);
+        }),
+      );
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+// cspell:ignore XGET
+test('ghApiJson readCache keeps a GET method and an implicit request body cacheable (#3621)', () => {
+  for (const { extraArgs, input } of [
+    { extraArgs: ['--method', 'GET'], input: undefined },
+    { extraArgs: ['--method=get'], input: undefined },
+    { extraArgs: ['-X', 'GET'], input: undefined },
+    { extraArgs: ['-XGET'], input: undefined },
+    { extraArgs: ['-f', 'a=b'], input: undefined },
+    { extraArgs: ['-F', 'n=1'], input: undefined },
+    { extraArgs: ['--input', '-'], input: '{"q":"alpha"}' },
+  ]) {
+    const paths = readCacheFixture();
+    const restore = stubGh(recordingGh(paths.argsFile, READ_CACHE_AUTH_BODY));
+    try {
+      withoutGithubTokens(() =>
+        withGhHostEnv({}, () => {
+          const options = {
+            extraArgs,
+            ...(input === undefined ? {} : { input }),
+            readCache: authCountingRead(paths),
+          };
+          ghApiJson('repos/o/r', options);
+          ghApiJson('repos/o/r', options);
+          const label = JSON.stringify(extraArgs);
+          assert.equal(recordedArgs(paths.argsFile).length, 1, label);
+          assert.equal(cacheEntryNames(paths.cacheDir).length, 1, label);
+        }),
+      );
+    } finally {
+      restore();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  }
+});
+
+// #3616: a `gh` call that exits 0 with a body that fails to parse still
+// consumed a request, and the status and allowlisted headers are exactly what
+// is most useful then. Each success path used to parse before it recorded, so
+// the parse error was thrown first and left no observation.
+const UNPARSABLE_STDOUT_SECRET =
+  'ghp_placeholder_credential_zz1234567890abcdef bodyTextSecretZz queryTextSecretZz';
+const UNPARSABLE_PATHS: {
+  name: string;
+  stdout: string;
+  invoke: () => unknown;
+}[] = [
+  {
+    name: 'ghApiJson (non-paginated)',
+    stdout: `not json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghApiJson('repos/o/r/issues/1'),
+  },
+  {
+    name: 'ghApiJson (paginated)',
+    stdout: `not json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghApiJson('repos/o/r/issues', { paginate: true }),
+  },
+  {
+    name: 'ghApiJsonWithHeaders',
+    stdout: `HTTP/2 200\nx-ratelimit-remaining: 33\nx-ratelimit-resource: core\n\nnot json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghApiJsonWithHeaders('repos/o/r/issues/1'),
+  },
+  {
+    name: 'ghGraphql',
+    stdout: `not json ${UNPARSABLE_STDOUT_SECRET}`,
+    invoke: () => ghGraphql('query { viewer { login } }', {}),
+  },
+];
+
+function withUnparsableStub(
+  stdout: string,
+  run: (telemetryPath: string) => void,
+): void {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-parse-failure-'));
+  const telemetryPath = join(tempRoot, 'telemetry.jsonl');
+  const restore = stubGh(`process.stdout.write(${JSON.stringify(stdout)});`);
+  try {
+    run(telemetryPath);
+  } finally {
+    restore();
+    setGithubApiTelemetryPolicyForTests(null);
+    resetGithubApiTelemetryPolicyCacheForTests();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function readObservations(telemetryPath: string): RequestObservation[] {
+  if (!existsSync(telemetryPath)) return [];
+  return readFileSync(telemetryPath, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as RequestObservation);
+}
+
+for (const wrapper of UNPARSABLE_PATHS) {
+  test(`${wrapper.name} records one observation for an unparsable clean-exit body and rethrows the same error (#3616)`, () => {
+    let disabledMessage = '';
+    withUnparsableStub(wrapper.stdout, (telemetryPath) => {
+      // Telemetry disabled (the default): the parse error, and no file.
+      setGithubApiTelemetryPolicyForTests({
+        enabled: false,
+        maxRecords: 20,
+        path: telemetryPath,
+      });
+      try {
+        wrapper.invoke();
+        assert.fail('an unparsable body must throw');
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        disabledMessage = error.message;
+      }
+      assert.equal(existsSync(telemetryPath), false);
+
+      // Telemetry enabled: the same error, and exactly one record.
+      setGithubApiTelemetryPolicyForTests({
+        enabled: true,
+        maxRecords: 20,
+        path: telemetryPath,
+      });
+      try {
+        wrapper.invoke();
+        assert.fail('an unparsable body must throw');
+      } catch (error) {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, disabledMessage);
+        assert.equal(error.name, 'SyntaxError');
+      }
+      const records = readObservations(telemetryPath);
+      assert.equal(records.length, 1);
+      assert.equal(records[0].classification, 'ok');
+      assert.equal(records[0].commandInvocationCount, 1);
+      // Redaction: nothing from stdout, the request path, or the query.
+      const retained = readFileSync(telemetryPath, 'utf8');
+      for (const secret of [
+        'ghp_placeholder_credential_zz',
+        'bodyTextSecretZz',
+        'queryTextSecretZz',
+        'repos/o/r',
+        'viewer',
+      ]) {
+        assert.equal(retained.includes(secret), false, secret);
+      }
+    });
+  });
+}
+
+// A real `--include` envelope in front of an unparsable body: the status and
+// allowlisted headers are known for the two paths that ask gh for them, and
+// unknown for the paginated and GraphQL paths, which never see a status line.
+const ENVELOPE_HEAD =
+  'HTTP/2 200\nx-ratelimit-remaining: 33\nx-ratelimit-resource: core\nx-ratelimit-reset: 1700000500\n\n';
+// The unparsable body carries blank lines and text shaped like a second
+// header block, with a token-shaped value. None of it may enter a record.
+const HOSTILE_BODY = `intro\n\nHTTP/1.1 429 Too Many Requests\nx-ratelimit-resource: ${UNPARSABLE_STDOUT_SECRET.split(' ')[0]}\nretry-after: 9\nx-ratelimit-remaining: 0\n\nend`;
+
+for (const wrapper of UNPARSABLE_PATHS.filter((candidate) =>
+  ['ghApiJson (non-paginated)', 'ghApiJsonWithHeaders'].includes(
+    candidate.name,
+  ),
+)) {
+  for (const [label, body] of [
+    ['a plain unparsable body', `not json ${UNPARSABLE_STDOUT_SECRET}`],
+    ['an unparsable body with blank lines', 'line one\n\nline two'],
+    ['a hostile body shaped like a second header block', HOSTILE_BODY],
+  ] as const) {
+    test(`${wrapper.name} records the real status and headers for ${label} behind an envelope (#3616)`, () => {
+      withUnparsableStub(`${ENVELOPE_HEAD}${body}`, (telemetryPath) => {
+        setGithubApiTelemetryPolicyForTests({
+          enabled: true,
+          maxRecords: 20,
+          path: telemetryPath,
+        });
+        // Any error, not a SyntaxError: a body with a blank line makes the
+        // existing envelope split read the wrong section, which throws its own
+        // "no HTTP response headers" error before the body is parsed.
+        assert.throws(() => wrapper.invoke(), Error);
+        const records = readObservations(telemetryPath);
+        assert.equal(records.length, 1);
+        const [record] = records;
+        assert.equal(record.status, 200);
+        assert.equal(record.remaining, 33);
+        assert.equal(record.resource, 'core');
+        assert.equal(record.reset, 1700000500);
+        assert.equal(record.classification, 'ok');
+        assert.equal(record.httpRequestCount, 1);
+        assert.equal(record.pageCount, 1);
+        const retained = readFileSync(telemetryPath, 'utf8');
+        for (const leak of [
+          'ghp_placeholder_credential_zz',
+          '429',
+          'retry-after',
+          'Too Many',
+        ]) {
+          assert.equal(retained.includes(leak), false, leak);
+        }
+      });
+    });
+  }
+}
+
+// `gh` starts its output with the status line. An output that begins with
+// blank lines has no head, and a header-shaped body after them must not pass
+// for one (a review of the first revision, which trimmed leading whitespace).
+for (const wrapper of UNPARSABLE_PATHS.filter((candidate) =>
+  ['ghApiJson (non-paginated)', 'ghApiJsonWithHeaders'].includes(
+    candidate.name,
+  ),
+)) {
+  test(`${wrapper.name} does not read a header-shaped body after leading blank lines as the response head (#3616)`, () => {
+    const secretToken = UNPARSABLE_STDOUT_SECRET.split(' ')[0];
+    withUnparsableStub(
+      `\n\nHTTP/1.1 429 Too Many Requests\nx-ratelimit-resource: ${secretToken}\nretry-after: 9\nx-ratelimit-remaining: 0\n\nnot-json`,
+      (telemetryPath) => {
+        setGithubApiTelemetryPolicyForTests({
+          enabled: true,
+          maxRecords: 20,
+          path: telemetryPath,
+        });
+        assert.throws(() => wrapper.invoke(), Error);
+        const records = readObservations(telemetryPath);
+        assert.equal(records.length, 1);
+        assert.equal(records[0].status, 'unknown');
+        assert.equal(records[0].resource, 'unknown');
+        assert.equal(records[0].classification, 'ok');
+        const retained = readFileSync(telemetryPath, 'utf8');
+        for (const leak of [secretToken, '429', 'retry-after']) {
+          assert.equal(retained.includes(leak), false, leak);
+        }
+      },
+    );
+  });
+}
+
+test('the paginated and GraphQL paths record an unknown status and unknown counts for an unparsable body (#3616)', () => {
+  for (const name of ['ghApiJson (paginated)', 'ghGraphql']) {
+    const wrapper = UNPARSABLE_PATHS.find(
+      (candidate) => candidate.name === name,
+    );
+    assert.ok(wrapper, name);
+    withUnparsableStub(wrapper.stdout, (telemetryPath) => {
+      setGithubApiTelemetryPolicyForTests({
+        enabled: true,
+        maxRecords: 20,
+        path: telemetryPath,
+      });
+      assert.throws(() => wrapper.invoke(), SyntaxError);
+      const [record] = readObservations(telemetryPath);
+      assert.equal(record.status, 'unknown', name);
+      assert.equal(record.httpRequestCount, 'unknown', name);
+      assert.equal(record.pageCount, 'unknown', name);
+    });
   }
 });

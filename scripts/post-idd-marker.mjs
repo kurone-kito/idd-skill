@@ -540,6 +540,25 @@ function sameHeadActivityAdvanced(snapshot, prior) {
   }
   return compareIsoTimestamps(max, prior.maxActivityUpdatedAt) > 0;
 }
+/** The most blocking present runs a deferral message names before "and N more". */
+const MAX_NAMED_BLOCKING_RUNS = 5;
+/**
+ * Check names come from the PR's own workflows, so collapse any whitespace (a
+ * newline would break the single-line stderr and JSON `reason`) and drop empty
+ * names before they reach a message (#3670).
+ */
+function cleanBlockingRunNames(names) {
+  const cleaned = names
+    .map((name) => name.replace(/\s+/gu, ' ').trim())
+    .filter((name) => name.length > 0);
+  return [...new Set(cleaned)];
+}
+/** Name at most {@link MAX_NAMED_BLOCKING_RUNS} runs, then "and N more". */
+function formatBlockingRunNames(names) {
+  const shown = names.slice(0, MAX_NAMED_BLOCKING_RUNS);
+  const more = names.length - shown.length;
+  return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
+}
 /**
  * Derive watermark fields from one fresh activity capture, then compare a
  * separate required-CI/HEAD agreement read. Does not accept a saved snapshot.
@@ -648,6 +667,34 @@ export function runOperationLocalSnapshotWatermark(input) {
     };
   }
   if (!agreement.requiredChecksPassing) {
+    if (agreement.noRequiredChecksConfigured) {
+      // #3670: with no required check configured, the present runs decide CI,
+      // so "required checks are not passing" names a cause that does not
+      // exist. Say what actually holds the watermark back, and that E1 Step 2
+      // treats it as a deferral (Step 2 deferred, E3 continues, an empty list
+      // routes through E15/E14 and back to E1), not a deadlock.
+      const blocking = cleanBlockingRunNames(agreement.blockingPresentRunNames);
+      const deferral =
+        `In E1 Step 2 this is a deferral, not a deadlock: continue to E3 ` +
+        `(an empty list routes through E15/E14 and back to E1), then re-run ` +
+        `--from-pr at E1 Step 2 once the present runs no longer block.`;
+      const scope =
+        `refusing to post watermark: PR ${input.prNumber} has no required ` +
+        `check configured, so its present runs decide CI`;
+      return {
+        snapshot,
+        watermarkFields,
+        warnings,
+        decision: 'defer',
+        reasonCode:
+          blocking.length > 0 ? 'present-run-failing' : 'required-checks',
+        reason:
+          blocking.length > 0
+            ? `${scope}, and ${formatBlockingRunNames(blocking)} ` +
+              `${blocking.length === 1 ? 'is' : 'are'} blocking. ${deferral}`
+            : `${scope}, and they are not all passing yet. ${deferral}`,
+      };
+    }
     return {
       snapshot,
       watermarkFields,
@@ -1183,15 +1230,17 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
   --operation-local    --from-pr --type watermark only: also return the review
                        activity capture in the JSON envelope's operationLocal
                        field, and make a defer non-fatal: while required checks
-                       are not passing, exit 0 and post nothing. Every other
-                       refusal still exits 1 (HEAD or CI-completion mismatch,
-                       unreadable check state, or the --prior-* guard below,
-                       which is checked before the defer). Read
-                       operationLocal.decision to tell the runs apart, since
-                       --apply does not: publish posts the marker (exit 0);
-                       defer exits 0 with "mode": "dry-run" and posts nothing;
-                       refuse exits 1, posts nothing, and prints the same
-                       envelope on stdout next to the reason on stderr.
+                       are not passing (or, with none configured, the present
+                       runs are not all passing), exit 0 and post nothing.
+                       Every other refusal still exits 1 (HEAD or
+                       CI-completion mismatch, unreadable check state, or the
+                       --prior-* guard below, which is checked before the
+                       defer). Read operationLocal.decision to tell the runs
+                       apart, since --apply does not: publish posts the marker
+                       (exit 0); defer exits 0 with "mode": "dry-run" and
+                       posts nothing; refuse exits 1, posts nothing, and
+                       prints the same envelope on stdout next to the reason
+                       on stderr.
   --prior-head-sha <sha>
   --prior-total-item-count <n>
   --prior-max-activity-at <iso|none>

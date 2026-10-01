@@ -626,9 +626,30 @@
             }
           },
           "description": "Host-local read cache for explicitly classified REST reads. Optional; omitting it keeps every read live."
+        },
+        "loadControl": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Opt in to host-local admission and a shared throttle cooldown for the requests that go through the owned gh transport wrappers. Optional; defaults to false, which leaves argv, results, errors, and state files unchanged. Only a literal true enables it. It does not cover a standalone or ad hoc gh command and makes no cross-host or global claim."
+            },
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Requests admitted at once across processes of the same OS user. Optional; defaults to 1 (serial). A value above 8 falls back to 1. The effective concurrency across participating repositories is the largest configured value."
+            },
+            "maxWait": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Longest a read waits to be admitted, as an ISO 8601 duration. Optional; defaults to `PT30S`. A value longer than ten minutes falls back to the default. Writes and unclassified requests never wait: they are admitted immediately or refused."
+            }
+          },
+          "description": "Host-local request admission and shared throttle cooldown. Optional; omitting it leaves every request uncoordinated."
         }
       },
-      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations and `readCache` opts in to the host-local REST read cache. Optional; omitting the container keeps telemetry disabled and every read live. `telemetry` does not wire Discover; an enabled `readCache` lets Discover helpers serve a hint."
+      "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations, `readCache` opts in to the host-local REST read cache, and `loadControl` opts in to host-local admission and a shared throttle cooldown. Optional; omitting the container keeps telemetry disabled, every read live, and every request uncoordinated. `telemetry` does not wire Discover; an enabled `readCache` lets Discover helpers serve a hint."
     },
     "discover": {
       "type": "object",

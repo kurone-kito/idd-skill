@@ -31,6 +31,7 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { loadTrustedActorConfig } from './idd-config.mts';
+import { parseForcedHandoffComment } from './marker-helpers.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -41,6 +42,7 @@ import type {
   ExternalCheckWaiverAuthorityLookup,
   ExternalCheckWaiverEvidence,
   PrClosingIssueClaimState,
+  PrCommitPayload,
   PrLoopMembership,
   PrLoopMembershipResult,
 } from './protocol-helpers.mts';
@@ -54,6 +56,7 @@ import {
   readClaimStaleAgeMs,
   renderExternalCheckWaiverComment,
   resolveClosingIssueNumbersForClassifier,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
@@ -1196,6 +1199,14 @@ export async function runExternalCheckWaiver(
   const pr =
     options.pr ??
     fetchPullRequest({ owner, repo: name, prNumber: args.prNumber });
+  // #3675: one first-commit reader shared by the pre-write resolution and the
+  // post-write reconcile below, so a handoff-bearing apply reads the PR's
+  // commits once.
+  const readPrFirstCommitAt = createPrFirstCommitAtReader(
+    owner,
+    name,
+    args.prNumber,
+  );
   const issueCandidates =
     options.issueCandidates ??
     options.resolveIssueCandidates?.() ??
@@ -1219,6 +1230,7 @@ export async function runExternalCheckWaiver(
       // resolveLinkedIssueCandidates's own enforceBranchMatch doc comment.
       enforceBranchMatch: !args.autoBootstrap,
       prNumber: args.prNumber,
+      readPrFirstCommitAt,
     });
 
   const resolvedHeadCommittedAt =
@@ -1840,6 +1852,7 @@ export async function runExternalCheckWaiver(
             // actually posted, confusing the concurrent-duplicate check.
             enforceBranchMatch: !args.autoBootstrap,
             prNumber: args.prNumber,
+            readPrFirstCommitAt,
           }),
         {
           issueNumber: args.issueNumber,
@@ -2418,6 +2431,42 @@ export function trustedLoginsForLinkedIssueClaims({
   });
 }
 
+/**
+ * A lazy, memoized reader of a PR's first-commit time (#3675), the anchor that
+ * lets an `issue-only` forced handoff predate a PR-scoped claim resolution
+ * (the Part B allowance the other merge-side callers already pass). The first
+ * call reads `pulls/{n}/commits` once and every later call reuses the result,
+ * so a caller that resolves linked-issue claims twice (the pre-write
+ * resolution and the post-write reconcile) shares one read. Any failed or
+ * empty read is `null`, which rejects such a handoff exactly as before.
+ */
+export function createPrFirstCommitAtReader(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): () => string | null {
+  let prFirstCommitAt: string | null | undefined;
+  return () => {
+    if (prFirstCommitAt === undefined) {
+      try {
+        prFirstCommitAt = resolvePrFirstCommitAt(
+          ghJson(
+            [
+              'api',
+              '--paginate',
+              `repos/${owner}/${repo}/pulls/${prNumber}/commits`,
+            ],
+            true,
+          ) as PrCommitPayload[],
+        );
+      } catch {
+        prFirstCommitAt = null;
+      }
+    }
+    return prFirstCommitAt;
+  };
+}
+
 export function resolveLinkedIssueCandidates({
   owner,
   repo,
@@ -2430,6 +2479,7 @@ export function resolveLinkedIssueCandidates({
   headRefName,
   enforceBranchMatch,
   prNumber,
+  readPrFirstCommitAt: suppliedPrFirstCommitAtReader,
 }: {
   owner: string;
   repo: string;
@@ -2463,6 +2513,14 @@ export function resolveLinkedIssueCandidates({
    */
   enforceBranchMatch: boolean;
   prNumber: number;
+  /**
+   * #3675: a shared first-commit reader from
+   * {@link createPrFirstCommitAtReader}. A caller that resolves candidates
+   * more than once for the same PR passes one reader so the commits are read
+   * once across those resolutions; omitted, this call reads at most once for
+   * itself.
+   */
+  readPrFirstCommitAt?: () => string | null;
 }): IssueCandidatePayload[] {
   const issueRefs = (linkedIssues ?? []).filter((issue) => {
     return !issueNumber || Number(issue.number) === issueNumber;
@@ -2492,6 +2550,11 @@ export function resolveLinkedIssueCandidates({
     trustConfig,
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
+  // #3675: read lazily, only when a linked issue actually carries a handoff
+  // marker, so ordinary waiver runs make no extra call.
+  const readPrFirstCommitAt =
+    suppliedPrFirstCommitAtReader ??
+    createPrFirstCommitAtReader(owner, repo, prNumber);
   for (const issue of issueRefs) {
     const rows = ghJson(
       [
@@ -2528,11 +2591,20 @@ export function resolveLinkedIssueCandidates({
     const forcedHandoffAuthorityPolicy =
       normalizePolicyConfig(rawConfig).forcedHandoff.authorityPolicy;
     const expectedLinkedPrs = prNumber ? [String(prNumber)] : [];
+    const hasForcedHandoffMarker = comments.some(
+      (comment) =>
+        parseForcedHandoffComment(
+          String(comment.body ?? ''),
+          String(comment.created_at ?? ''),
+        ) !== null,
+    );
     const activeClaim = resolveHelperActiveClaim(
       comments,
       [...trustedMarkerLogins],
       {
         expectedLinkedPrs,
+        prFirstCommitAt:
+          prNumber && hasForcedHandoffMarker ? readPrFirstCommitAt() : null,
         isAuthorizedForcedHandoff: (fhActor) => {
           const auth = resolveCollaboratorAuthority({
             owner,

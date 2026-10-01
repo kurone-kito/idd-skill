@@ -88,9 +88,22 @@ interface GithubApiTelemetryPolicy {
   path: string | null;
 }
 
+/**
+ * `githubApi.loadControl` (#3586): opt-in host-local request admission and
+ * shared throttle cooldown. `maxConcurrent` is bounded to
+ * 1..{@link GITHUB_API_LOAD_CONTROL_MAX_CONCURRENT} (serial by default) and
+ * `maxWait` to at most {@link GITHUB_API_LOAD_CONTROL_MAX_WAIT_MS}.
+ */
+interface GithubApiLoadControlPolicy {
+  enabled: boolean;
+  maxConcurrent: number;
+  maxWait: string;
+}
+
 interface GithubApiPolicy {
   telemetry: GithubApiTelemetryPolicy;
   readCache: GithubApiReadCachePolicy;
+  loadControl: GithubApiLoadControlPolicy;
 }
 
 /** How one policy document presents `critiqueLoop.delegate`. */
@@ -540,6 +553,11 @@ interface RawConfig {
       retention?: unknown;
       directory?: unknown;
     };
+    loadControl?: {
+      enabled?: unknown;
+      maxConcurrent?: unknown;
+      maxWait?: unknown;
+    };
   };
   developmentBranch?: unknown;
   provider?: unknown;
@@ -622,6 +640,10 @@ const DURATION_RE =
 // that list.
 const PACKAGE_SPEC_RE = /^[A-Za-z0-9@:/_.+^#%-]+$/;
 const GITHUB_API_READ_CACHE_MAX_BYTES = 104857600;
+/** Largest `githubApi.loadControl.maxConcurrent`; a larger value falls back to serial. */
+export const GITHUB_API_LOAD_CONTROL_MAX_CONCURRENT = 8;
+/** Longest `githubApi.loadControl.maxWait`, ten minutes; a longer value falls back to the default. */
+export const GITHUB_API_LOAD_CONTROL_MAX_WAIT_MS = 600_000;
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -785,6 +807,13 @@ export const POLICY_DEFAULTS = Object.freeze({
       maxAge: 'PT5M',
       maxBytes: GITHUB_API_READ_CACHE_MAX_BYTES,
       retention: 'PT24H',
+    }),
+    // #3586: off unless `enabled` is exactly true. Serial admission is the
+    // conservative default; the bounded override is validated below.
+    loadControl: Object.freeze({
+      enabled: false,
+      maxConcurrent: 1,
+      maxWait: 'PT30S',
     }),
   }) as Readonly<GithubApiPolicy>,
 });
@@ -1031,7 +1060,27 @@ export function normalizePolicyConfig(config: unknown) {
   ) {
     readCache.directory = rawReadCacheDirectory.trim();
   }
-  const githubApi: GithubApiPolicy = { telemetry, readCache };
+  const rawLoadControlMaxConcurrent = c?.githubApi?.loadControl?.maxConcurrent;
+  const rawLoadControlMaxWait = parsePositiveDuration(
+    c?.githubApi?.loadControl?.maxWait,
+    POLICY_DEFAULTS.githubApi.loadControl.maxWait,
+  );
+  const loadControl: GithubApiLoadControlPolicy = {
+    enabled: c?.githubApi?.loadControl?.enabled === true,
+    maxConcurrent:
+      typeof rawLoadControlMaxConcurrent === 'number' &&
+      Number.isInteger(rawLoadControlMaxConcurrent) &&
+      rawLoadControlMaxConcurrent >= 1 &&
+      rawLoadControlMaxConcurrent <= GITHUB_API_LOAD_CONTROL_MAX_CONCURRENT
+        ? rawLoadControlMaxConcurrent
+        : POLICY_DEFAULTS.githubApi.loadControl.maxConcurrent,
+    maxWait:
+      (parseIsoDurationToMs(rawLoadControlMaxWait) ??
+        Number.POSITIVE_INFINITY) <= GITHUB_API_LOAD_CONTROL_MAX_WAIT_MS
+        ? rawLoadControlMaxWait
+        : POLICY_DEFAULTS.githubApi.loadControl.maxWait,
+  };
+  const githubApi: GithubApiPolicy = { telemetry, readCache, loadControl };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured

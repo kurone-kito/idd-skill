@@ -2039,3 +2039,66 @@ test('githubApi.readCache opts in only for literal true and ignores invalid valu
     false,
   );
 });
+
+test('githubApi.loadControl defaults to disabled, serial, and PT30S (#3586)', () => {
+  assert.equal(POLICY_DEFAULTS.githubApi.loadControl.enabled, false);
+  assert.equal(POLICY_DEFAULTS.githubApi.loadControl.maxConcurrent, 1);
+  assert.equal(POLICY_DEFAULTS.githubApi.loadControl.maxWait, 'PT30S');
+  assert.deepEqual(normalizePolicyConfig({}).githubApi.loadControl, {
+    enabled: false,
+    maxConcurrent: 1,
+    maxWait: 'PT30S',
+  });
+  assert.deepEqual(normalizePolicyConfig(null).githubApi.loadControl, {
+    enabled: false,
+    maxConcurrent: 1,
+    maxWait: 'PT30S',
+  });
+});
+
+test('githubApi.loadControl opts in only for literal true and validates its bounds (#3586)', () => {
+  assert.equal(
+    normalizePolicyConfig({
+      githubApi: { loadControl: { enabled: 'true' } },
+    }).githubApi.loadControl.enabled,
+    false,
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({
+      githubApi: {
+        loadControl: { enabled: true, maxConcurrent: 3, maxWait: 'PT2M' },
+      },
+    }).githubApi.loadControl,
+    { enabled: true, maxConcurrent: 3, maxWait: 'PT2M' },
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      githubApi: { loadControl: { maxConcurrent: 8 } },
+    }).githubApi.loadControl.maxConcurrent,
+    8,
+  );
+  for (const invalid of [0, -1, 1.5, 9, 1000, '2', null, Number.NaN]) {
+    assert.equal(
+      normalizePolicyConfig({
+        githubApi: { loadControl: { maxConcurrent: invalid } },
+      }).githubApi.loadControl.maxConcurrent,
+      1,
+      `expected maxConcurrent ${JSON.stringify(invalid)} to fall back to serial`,
+    );
+  }
+  for (const invalid of ['P0D', 'nope', 'PT11M', 'P1D', 30, null]) {
+    assert.equal(
+      normalizePolicyConfig({
+        githubApi: { loadControl: { maxWait: invalid } },
+      }).githubApi.loadControl.maxWait,
+      'PT30S',
+      `expected maxWait ${JSON.stringify(invalid)} to fall back`,
+    );
+  }
+  assert.equal(
+    normalizePolicyConfig({
+      githubApi: { loadControl: { maxWait: 'PT10M' } },
+    }).githubApi.loadControl.maxWait,
+    'PT10M',
+  );
+});

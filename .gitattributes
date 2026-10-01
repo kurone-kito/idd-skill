@@ -43,6 +43,7 @@ scripts/copilot-review-wave-audit.mjs linguist-generated=true
 scripts/dependency-grammar.mjs linguist-generated=true
 scripts/discover-hint-cache.mjs linguist-generated=true
 scripts/discover-orphan-filter.mjs linguist-generated=true
+scripts/discover-progress.mjs linguist-generated=true
 scripts/discover-readiness-check.mjs linguist-generated=true
 scripts/discover-roadmap-graph.mjs linguist-generated=true
 scripts/discover-shared-file-overlap.mjs linguist-generated=true
@@ -55,8 +56,11 @@ scripts/force-handoff.mjs linguist-generated=true
 scripts/forced-handoff-marker.mjs linguist-generated=true
 scripts/gh-exec.mjs linguist-generated=true
 scripts/gh-http-status.mjs linguist-generated=true
+scripts/github-api-load-control.mjs linguist-generated=true
 scripts/github-api-observation.mjs linguist-generated=true
 scripts/github-api-read-cache.mjs linguist-generated=true
+scripts/github-api-refusal.mjs linguist-generated=true
+scripts/github-api-request-class.mjs linguist-generated=true
 scripts/helper-cli-runner.mjs linguist-generated=true
 scripts/helper-flag-drift.mjs linguist-generated=true
 scripts/helper-runtime-manifest.mjs linguist-generated=true
@@ -105,6 +109,7 @@ scripts/review-activity-snapshot.mjs linguist-generated=true
 scripts/review-clause.mjs linguist-generated=true
 scripts/review-comment-origin.mjs linguist-generated=true
 scripts/review-disposition-verify.mjs linguist-generated=true
+scripts/review-thread-edit-histories.mjs linguist-generated=true
 scripts/select-desynced-index.mjs linguist-generated=true
 scripts/snapshot-issue-body-corpus.mjs linguist-generated=true
 scripts/stalled-session-quiet-check.mjs linguist-generated=true
@@ -126,6 +131,7 @@ scripts/validate-schemas.mjs linguist-generated=true
 scripts/verify-import-mirror.mjs linguist-generated=true
 scripts/verify-install-deps.mjs linguist-generated=true
 scripts/verify-workshop-integrity.mjs linguist-generated=true
+scripts/windows-acl.mjs linguist-generated=true
 idd-template/scripts/minimize-superseded-markers.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true
@@ -148,3 +154,6 @@ pnpm-lock.yaml linguist-vendored
 .gitmessage export-ignore
 .husky/** export-ignore
 .imgbotconfig export-ignore
+
+# UTF-16LE fixtures captured from real `icacls /save` output (SIDs sanitized).
+tests/fixtures/windows-acl/*.sddl binary

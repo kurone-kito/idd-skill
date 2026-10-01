@@ -61,6 +61,12 @@ function fixture(overrides: Partial<DiscoverHintDeps> = {}): Fixture {
       },
       originUrl: () => 'https://github.com/o/r.git',
       ghDefaultIsOrigin: () => true,
+      // A configured directory under the Windows temp folder inherits a permissive
+      // profile ACL; report a private one so these tests stay platform-neutral.
+      windowsAclReader: () => ({
+        kind: 'entries',
+        entries: [{ sid: 'S-1-5-18', allow: true }],
+      }),
       credential: () => 'hint-credential-token',
       now: () => clock.now,
       ...overrides,
@@ -299,6 +305,7 @@ test('invalidation forgets discover hints only, not other cache entries', async 
       workspaceRoot: fx.workspace,
       cwd: fx.workspace,
       now: () => fx.clock.now,
+      windowsAclReader: fx.deps.windowsAclReader,
       fetch: () => ({ status: 200, body: { n: 1 } }),
     });
     assert.equal(unrelated.cache, 'miss');
@@ -317,6 +324,7 @@ test('invalidation forgets discover hints only, not other cache entries', async 
       workspaceRoot: fx.workspace,
       cwd: fx.workspace,
       now: () => fx.clock.now,
+      windowsAclReader: fx.deps.windowsAclReader,
       fetch: () => {
         throw new Error('the unrelated entry must still be cached');
       },

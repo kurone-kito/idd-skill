@@ -488,8 +488,9 @@ async function waitForReceivedPayload(
 /** Best-effort wait for the capture stub hook whose pid file is `pidPath` to
  * have exited, so that the `restore()` that follows can remove the directory
  * holding its executable (NTFS refuses to delete a running image, and
- * `restore()` only retries for about half a second). Each of its two phases
- * (the pid file appearing, then the process exiting) is bounded by
+ * `restore()` makes six attempts over about 1.5 seconds before
+ * `removeStubDirectory` polls for about five more seconds). Each of its two
+ * phases (the pid file appearing, then the process exiting) is bounded by
  * `timeoutMs`; a timeout in either is silent and `restore()` then runs anyway.
  * A stub that never started, or is already gone, has nothing to wait for. */
 async function waitForStubHookExit(

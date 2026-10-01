@@ -1780,6 +1780,375 @@ test('acquire: filtering out empty lines would have hidden a genuinely ambiguous
   }
 });
 
+// ---------------------------------------------------------------------------
+// #3664: a spurious `git rev-parse` exit (status 1, empty stderr) is retried
+// once. These tests patch `child_process.execFileSync` on the main thread
+// (the same technique as the #3526 tests above) and must stay off the
+// Windows job's name filter (see .github/workflows/lint.yml), so none of
+// their titles may contain that step's three name fragments.
+// ---------------------------------------------------------------------------
+
+type RevParseStubAction =
+  | { throws: unknown }
+  | { returns: string }
+  // Run a different command with the caller's own spawn options, so the
+  // resulting failure is a real node-shaped `execFileSync` error.
+  | { substitute: { file: string; args: string[] } }
+  | undefined;
+
+/**
+ * Run `body` with `child_process.execFileSync` patched so every
+ * `git -C <cwd> rev-parse ...` spawn is first offered to `decide` (its
+ * zero-based spawn index and the full argv); `undefined` delegates to the
+ * real git. Returns the `git rev-parse` argv of every such spawn, in order.
+ */
+function withRevParseStub(
+  decide: (spawnIndex: number, args: readonly string[]) => RevParseStubAction,
+  body: () => void,
+): string[][] {
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  const spawns: string[][] = [];
+  try {
+    cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+      const [file, cmdArgs] = args;
+      if (
+        file === 'git' &&
+        Array.isArray(cmdArgs) &&
+        cmdArgs[2] === 'rev-parse'
+      ) {
+        const index = spawns.length;
+        spawns.push([...cmdArgs]);
+        const action = decide(index, cmdArgs);
+        if (action !== undefined) {
+          if ('throws' in action) {
+            throw action.throws;
+          }
+          if ('substitute' in action) {
+            return originalExecFileSync(
+              action.substitute.file,
+              action.substitute.args,
+              args[2],
+            );
+          }
+          return action.returns;
+        }
+      }
+      return originalExecFileSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+    body();
+  } finally {
+    cp.execFileSync = originalExecFileSync;
+    require('node:module').syncBuiltinESMExports();
+  }
+  return spawns;
+}
+
+/** An error shaped like `execFileSync`'s own failure for a non-zero exit. */
+function stubbedGitExit(
+  message: string,
+  fields: { status?: number | null; stdout?: string; stderr?: unknown },
+): Error {
+  return Object.assign(new Error(message), {
+    signal: null,
+    ...fields,
+  });
+}
+
+function realGitRevParse(cwd: string, flag: string): string {
+  return execFileSync('git', ['-C', cwd, 'rev-parse', flag], {
+    encoding: 'utf8',
+    env: fixtureEnv(),
+    stdio: 'pipe',
+  }).trim();
+}
+
+const SPURIOUS_EXIT_SHAPES = ['empty-stdout', 'decoy-stdout'] as const;
+// The happy path's three `git rev-parse` spawns, in order, with the flags
+// each one passes (argv after `-C <cwd> rev-parse`).
+const ACQUIRE_SPAWNS = [
+  {
+    name: 'the first combined lookup',
+    flags: ['--absolute-git-dir', '--git-common-dir'],
+  },
+  {
+    name: 'the clone lock path lookup',
+    flags: ['--path-format=absolute', '--git-common-dir'],
+  },
+  {
+    name: 'the post-mutex combined lookup',
+    flags: ['--absolute-git-dir', '--git-common-dir'],
+  },
+] as const;
+
+for (const shape of SPURIOUS_EXIT_SHAPES) {
+  for (const [failingSpawn, spawnInfo] of ACQUIRE_SPAWNS.entries()) {
+    test(`acquire: a spurious git exit (status 1, empty stderr, ${shape}) on ${spawnInfo.name} is retried and still acquires the real lock (#3664)`, () => {
+      const fixture = setupLinkedWorktree();
+      const decoyWorktree = `${fixture.worktree}-decoy`;
+      try {
+        git(fixture.primary, [
+          'worktree',
+          'add',
+          decoyWorktree,
+          '-b',
+          'issue/2-decoy',
+          'main',
+        ]);
+        // Everything below that spawns git runs before the stub is
+        // installed: resolveClaimLockPath spawns through the same patched
+        // execFileSync.
+        const expectedPath = resolveClaimLockPath(fixture.worktree);
+        const decoyAdminDir = realGitRevParse(
+          decoyWorktree,
+          '--absolute-git-dir',
+        );
+        const realCommonDir = realGitRevParse(
+          fixture.worktree,
+          '--git-common-dir',
+        );
+        assert.notEqual(join(decoyAdminDir, 'idd-claim.lock'), expectedPath);
+
+        // A well-formed two-line response naming a different (existing)
+        // worktree admin directory for the two combined lookups, and a
+        // path whose directory does not exist for resolveCloneLockPath: an
+        // implementation that trusts the failed spawn's stdout fails.
+        const decoyStdout =
+          shape === 'decoy-stdout'
+            ? failingSpawn === 1
+              ? join(tmpdir(), 'idd-3664-absent-decoy', '.git')
+              : `${decoyAdminDir}\n${realCommonDir}\n`
+            : '';
+
+        let outcome: ReturnType<typeof acquireClaimLock> | undefined;
+        const spawns = withRevParseStub(
+          (index) =>
+            index === failingSpawn
+              ? {
+                  throws: stubbedGitExit(
+                    'Command failed: git rev-parse (stubbed spurious exit)',
+                    { status: 1, stdout: decoyStdout, stderr: '' },
+                  ),
+                }
+              : undefined,
+          () => {
+            outcome = acquireClaimLock(
+              fixture.worktree,
+              'agent-a',
+              'claim-a',
+              false,
+            );
+          },
+        );
+
+        assert.equal(outcome?.mode, 'acquired');
+        assert.equal(outcome?.path, expectedPath);
+        assert.equal(
+          spawns.length,
+          4,
+          `expected the happy path's 3 git rev-parse spawns plus exactly one retry, got ${JSON.stringify(spawns)}`,
+        );
+        // The failed spawn really is the lookup this test's title names, and
+        // the retry repeats exactly that lookup.
+        assert.deepEqual(spawns[failingSpawn]?.slice(3), spawnInfo.flags);
+        assert.deepEqual(spawns[failingSpawn + 1], spawns[failingSpawn]);
+        assert.equal(checkClaimLock(fixture.worktree).present, true);
+        assert.equal(existsSync(join(decoyAdminDir, 'idd-claim.lock')), false);
+      } finally {
+        try {
+          git(fixture.primary, [
+            'worktree',
+            'remove',
+            '--force',
+            decoyWorktree,
+          ]);
+        } catch {
+          // best-effort; the recursive rm below is the real cleanup
+        }
+        rmSync(decoyWorktree, { recursive: true, force: true });
+        teardown(fixture);
+      }
+    });
+  }
+}
+
+test('acquire: a spurious git exit on the first fallback single-flag query of an ambiguous combined response is retried too (#3664)', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const expectedPath = resolveClaimLockPath(fixture.worktree);
+    let failedOnce = false;
+    let outcome: ReturnType<typeof acquireClaimLock> | undefined;
+    const spawns = withRevParseStub(
+      (_index, args) => {
+        if (args.length === 5 && args[3] === '--absolute-git-dir') {
+          // The combined query, made ambiguous exactly like the #3526
+          // test above (a three-line reply).
+          return { returns: 'part-one\npart-two\n.git\n' };
+        }
+        if (args.length === 4 && args[3] === '--absolute-git-dir') {
+          if (!failedOnce) {
+            failedOnce = true;
+            return {
+              throws: stubbedGitExit(
+                'Command failed: git rev-parse (stubbed fallback exit)',
+                { status: 1, stdout: '', stderr: '' },
+              ),
+            };
+          }
+        }
+        return undefined;
+      },
+      () => {
+        outcome = acquireClaimLock(
+          fixture.worktree,
+          'agent-a',
+          'claim-a',
+          false,
+        );
+      },
+    );
+    assert.equal(outcome?.mode, 'acquired');
+    assert.equal(outcome?.path, expectedPath);
+    assert.equal(failedOnce, true, 'expected the fallback query to fail once');
+    // Both combined lookups (before and after the clone mutex) are
+    // ambiguous, so the single-flag `--absolute-git-dir` fallback runs
+    // three times: the failed first attempt, its retry, and the post-mutex
+    // fallback.
+    const fallbackAdminSpawns = spawns.filter(
+      (args) => args.length === 4 && args[3] === '--absolute-git-dir',
+    );
+    assert.equal(
+      fallbackAdminSpawns.length,
+      3,
+      `expected the failed fallback query to be retried once, got ${JSON.stringify(spawns)}`,
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('rev-parse lookup: two consecutive spurious exits throw the second error unchanged after exactly two spawns (#3664)', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const first = stubbedGitExit('first spurious exit', {
+      status: 1,
+      stdout: '',
+      stderr: '',
+    });
+    const second = stubbedGitExit('second spurious exit', {
+      status: 1,
+      stdout: '',
+      stderr: '   \n',
+    });
+    const errors = [first, second];
+    let thrown: unknown;
+    const spawns = withRevParseStub(
+      (index) => ({ throws: errors[index] }),
+      () => {
+        try {
+          resolveClaimLockPath(fixture.worktree);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.strictEqual(thrown, second);
+    assert.equal(spawns.length, 2);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+const NON_RETRYABLE_EXITS: ReadonlyArray<{
+  name: string;
+  fields: { status?: number | null; stdout?: string; stderr?: unknown };
+}> = [
+  {
+    name: 'non-whitespace stderr',
+    fields: { status: 1, stdout: '', stderr: 'fatal: boom\n' },
+  },
+  { name: 'status 128 with empty stderr', fields: { status: 128, stderr: '' } },
+  { name: 'a null status', fields: { status: null, stderr: '' } },
+  { name: 'a missing status', fields: { stderr: '' } },
+  { name: 'status 1 with a missing stderr', fields: { status: 1 } },
+  {
+    name: 'status 1 with a non-string stderr',
+    fields: { status: 1, stderr: Buffer.from('') },
+  },
+];
+
+for (const { name, fields } of NON_RETRYABLE_EXITS) {
+  test(`rev-parse lookup: a failure with ${name} is not retried and throws its own error after one spawn (#3664)`, () => {
+    const fixture = setupLinkedWorktree();
+    try {
+      const failure = stubbedGitExit('stubbed non-retryable exit', fields);
+      let thrown: unknown;
+      const spawns = withRevParseStub(
+        () => ({ throws: failure }),
+        () => {
+          try {
+            resolveClaimLockPath(fixture.worktree);
+          } catch (error) {
+            thrown = error;
+          }
+        },
+      );
+      assert.strictEqual(thrown, failure);
+      assert.equal(spawns.length, 1);
+    } finally {
+      teardown(fixture);
+    }
+  });
+}
+
+test('rev-parse lookup: a nonexistent worktree path still fails after exactly one real git spawn (#3664)', () => {
+  const missing = join(tmpdir(), `idd-3664-missing-${process.pid}`);
+  let thrown: unknown;
+  const spawns = withRevParseStub(
+    () => undefined,
+    () => {
+      try {
+        resolveClaimLockPath(missing);
+      } catch (error) {
+        thrown = error;
+      }
+    },
+  );
+  assert.ok(thrown instanceof Error, 'expected resolveClaimLockPath to throw');
+  assert.equal(spawns.length, 1);
+});
+
+test("rev-parse lookup: a real node exit-1 error built from the lookup's own spawn options is retried (#3664)", () => {
+  // Every other retry test feeds a hand-built error object; this one makes
+  // the lookup's real `execFileSync` options produce the error, so a future
+  // edit that drops `encoding: 'utf8'` (turning `stderr` into a Buffer and
+  // silently disabling the retry) cannot keep the suite green.
+  const fixture = setupLinkedWorktree();
+  try {
+    const expected = resolveClaimLockPath(fixture.worktree);
+    let resolved: string | undefined;
+    const spawns = withRevParseStub(
+      (index) =>
+        index === 0
+          ? {
+              substitute: {
+                file: process.execPath,
+                args: ['-e', 'process.exit(1)'],
+              },
+            }
+          : undefined,
+      () => {
+        resolved = resolveClaimLockPath(fixture.worktree);
+      },
+    );
+    assert.equal(resolved, expected);
+    assert.equal(spawns.length, 2);
+  } finally {
+    teardown(fixture);
+  }
+});
+
 // Generated-tokens record tests (#2719).
 
 test('generated-tokens: record/read round trip reports the recorded fields', () => {

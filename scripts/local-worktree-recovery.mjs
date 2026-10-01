@@ -7383,9 +7383,10 @@ function confirmBlockProduction(args, repositoryRoot = null) {
     } catch (error) {
       const execError = error;
       // A non-zero exit can still have printed a valid JSON verdict
-      // (resume-claim-routing.mjs itself only ever exits non-zero on a
-      // genuine usage/internal error, but tolerate a parseable payload
-      // regardless of exit status rather than discarding it).
+      // (resume-claim-routing.mjs without --assert, which this call never
+      // passes, only ever exits non-zero on a genuine usage/internal
+      // error, but tolerate a parseable payload regardless of exit status
+      // rather than discarding it).
       if (execError.stdout) {
         try {
           return {

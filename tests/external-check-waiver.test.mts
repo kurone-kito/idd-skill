@@ -15,6 +15,7 @@ import {
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
   collectValidWaiverComments,
+  createPrFirstCommitAtReader,
   deriveGhApiStatusFromError,
   findReusableWaiverComment,
   parseArgs,
@@ -28,6 +29,7 @@ import { resolveHelperActiveClaim } from '../src/scripts/forced-handoff-marker.m
 import {
   digestExternalCheckWaiverMarkerBody,
   operationalMarkerPrefix,
+  renderForcedHandoffComment,
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
@@ -2056,6 +2058,224 @@ process.exit(1);
   } finally {
     restore();
   }
+});
+
+// --- #3675: an issue-only handoff that predates the PR is accepted ---------
+// --- through resolveLinkedIssueCandidates' real gh reads -------------------
+
+const HANDOFF_BRANCH = 'issue/3675-fix-claim-state-resolve-forced-handoff';
+const HANDOFF_POSTED_AT = '2026-09-30T03:40:26Z';
+
+function runHandoffLinkedIssueScenario({
+  commits,
+  permission = 'admin',
+  withHandoff = true,
+  prNumber = 99,
+  resolutions = 1,
+  shareReader = false,
+}: {
+  /** PR commit dates (first-commit candidates), or `fail` to make the read fail. */
+  commits: string[] | 'fail';
+  permission?: string;
+  withHandoff?: boolean;
+  prNumber?: number;
+  /** How many times to resolve the linked-issue candidates for the PR. */
+  resolutions?: number;
+  /** Pass one shared first-commit reader to every resolution. */
+  shareReader?: boolean;
+}) {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-waiver-handoff-'));
+  const logPath = join(dir, 'gh.log');
+  writeFileSync(logPath, '');
+  const claimRow = {
+    id: 1,
+    node_id: 'IC_claim',
+    body: `<!-- claimed-by: agent-old claim-old supersedes: none 2026-09-29T16:42:00Z branch: ${HANDOFF_BRANCH} -->`,
+    created_at: '2026-09-29T16:42:00Z',
+    user: { login: 'kurone-kito' },
+  };
+  const handoffRow = {
+    id: 2,
+    node_id: 'IC_handoff',
+    body: renderForcedHandoffComment({
+      oldAgentId: 'agent-old',
+      oldClaimId: 'claim-old',
+      newAgentId: 'agent-new',
+      newClaimId: 'claim-new',
+      branch: HANDOFF_BRANCH,
+      forcedBy: 'kurone-kito',
+      reason: 'operator-approved-recovery',
+      timestamp: HANDOFF_POSTED_AT,
+      contextScope: 'issue-only',
+    }),
+    created_at: HANDOFF_POSTED_AT,
+    user: { login: 'kurone-kito' },
+  };
+  const commentsNdjson = [claimRow, ...(withHandoff ? [handoffRow] : [])]
+    .map((row) => JSON.stringify(row))
+    .join('\n');
+  const commitsNdjson =
+    commits === 'fail'
+      ? ''
+      : commits
+          .map((date) =>
+            JSON.stringify({ sha: 'a', commit: { committer: { date } } }),
+          )
+          .join('\n');
+  const stubGhScript = `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const joined = args.join(' ');
+fs.appendFileSync(process.env.IDD_GH_LOG, joined + '\\n');
+function out(text) { process.stdout.write(text); process.exit(0); }
+if (joined.includes('/pulls/')) {
+  if (process.env.IDD_GH_COMMITS_FAIL === '1') {
+    process.stderr.write('simulated commits read failure\\n');
+    process.exit(1);
+  }
+  out(process.env.IDD_GH_COMMITS);
+}
+if (joined.includes('contents/.github/idd/config.json')) out(process.env.IDD_GH_CONFIG_B64);
+if (args.includes('graphql')) {
+  const ids = args.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice(6));
+  out(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
+}
+if (joined.includes('/issues/') && joined.includes('/comments')) out(process.env.IDD_GH_COMMENTS);
+if (joined.includes('/collaborators/')) {
+  out(JSON.stringify({ permission: process.env.IDD_GH_PERMISSION, role_name: process.env.IDD_GH_PERMISSION }));
+}
+process.stderr.write('unexpected gh invocation: ' + joined + '\\n');
+process.exit(1);
+`;
+  const env = {
+    IDD_GH_LOG: logPath,
+    IDD_GH_COMMENTS: `${commentsNdjson}\n`,
+    IDD_GH_COMMITS: commitsNdjson ? `${commitsNdjson}\n` : '',
+    IDD_GH_COMMITS_FAIL: commits === 'fail' ? '1' : '0',
+    IDD_GH_PERMISSION: permission,
+    IDD_GH_CONFIG_B64: Buffer.from('{}', 'utf8').toString('base64'),
+  };
+  const previous = Object.fromEntries(
+    Object.keys(env).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, env);
+  const restore = stubExecutable('gh', stubGhScript);
+  try {
+    const readPrFirstCommitAt = shareReader
+      ? createPrFirstCommitAtReader('acme', 'widgets', prNumber)
+      : undefined;
+    let candidate:
+      | ReturnType<typeof resolveLinkedIssueCandidates>[number]
+      | undefined;
+    for (let round = 0; round < resolutions; round += 1) {
+      [candidate] = resolveLinkedIssueCandidates({
+        owner: 'acme',
+        repo: 'widgets',
+        rawConfig: {},
+        viewerLogin: 'kurone-kito',
+        baseRefName: 'main',
+        linkedIssues: [{ number: 11, url: 'https://example.test/11' }],
+        issueNumber: 0,
+        expectedClaimId: '',
+        headRefName: HANDOFF_BRANCH,
+        enforceBranchMatch: true,
+        prNumber,
+        ...(readPrFirstCommitAt ? { readPrFirstCommitAt } : {}),
+      });
+    }
+    const lines = readFileSync(logPath, 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0);
+    return {
+      claimId: candidate?.activeClaim?.claimId ?? null,
+      commitReads: lines.filter((line) => line.includes('/pulls/')).length,
+    };
+  } finally {
+    restore();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('resolveLinkedIssueCandidates accepts an issue-only handoff that predates the PR first commit (#3675)', () => {
+  const result = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T04:10:00Z', '2026-09-30T05:00:00Z'],
+  });
+
+  assert.equal(result.claimId, 'claim-new');
+  assert.equal(result.commitReads, 1);
+});
+
+test('resolveLinkedIssueCandidates rejects an issue-only handoff posted after the PR first commit (#3675)', () => {
+  const result = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T05:00:00Z', '2026-09-30T03:00:00Z'],
+  });
+
+  assert.equal(result.claimId, 'claim-old');
+});
+
+test('resolveLinkedIssueCandidates rejects the handoff when the commit list is unreadable or empty (#3675)', () => {
+  assert.equal(
+    runHandoffLinkedIssueScenario({ commits: 'fail' }).claimId,
+    'claim-old',
+  );
+  assert.equal(
+    runHandoffLinkedIssueScenario({ commits: [] }).claimId,
+    'claim-old',
+  );
+});
+
+test('resolveLinkedIssueCandidates still rejects a predating handoff whose forced-by lacks authority (#3675)', () => {
+  const result = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T04:10:00Z'],
+    permission: 'read',
+  });
+
+  assert.equal(result.claimId, 'claim-old');
+});
+
+test('resolveLinkedIssueCandidates reads no PR commits unless a handoff marker is present (#3675)', () => {
+  const result = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T04:10:00Z'],
+    withHandoff: false,
+  });
+
+  assert.equal(result.claimId, 'claim-old');
+  assert.equal(result.commitReads, 0);
+});
+
+test('resolveLinkedIssueCandidates resolutions sharing a reader read the PR commits once (#3675)', () => {
+  const shared = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T04:10:00Z'],
+    resolutions: 2,
+    shareReader: true,
+  });
+  assert.equal(shared.claimId, 'claim-new');
+  assert.equal(shared.commitReads, 1);
+
+  // Without a shared reader each resolution still reads for itself.
+  const separate = runHandoffLinkedIssueScenario({
+    commits: ['2026-09-30T04:10:00Z'],
+    resolutions: 2,
+  });
+  assert.equal(separate.claimId, 'claim-new');
+  assert.equal(separate.commitReads, 2);
+});
+
+test('resolveLinkedIssueCandidates accepts an issue-scoped handoff without a PR and reads no commits (#3675)', () => {
+  const result = runHandoffLinkedIssueScenario({
+    commits: 'fail',
+    prNumber: 0,
+  });
+
+  assert.equal(result.claimId, 'claim-new');
+  assert.equal(result.commitReads, 0);
 });
 
 test('the deadline reader rejects a schema-invalid advisoryWait section (#2328 review)', () => {

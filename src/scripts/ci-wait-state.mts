@@ -36,10 +36,13 @@ import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   CI_FAILURE_CONCLUSION_STATES,
+  CI_PENDING_STATES,
+  CI_STATUS_CONTEXT_PENDING_STATES,
   classifyCiChecks,
   compareIsoTimestamps,
   isCompletedCiTimestamp,
   isPreMergeCiAllPassing,
+  listBlockingPresentRunNames,
   resolvePresentRunConclusion,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
@@ -253,13 +256,12 @@ const SUCCESS_STATES = new Set([
   'SKIPPED',
   'NOT_APPLICABLE',
 ]);
+// Built from the shared sets in protocol-helpers.mts so the present-run
+// fallback's names (#3670) and this bucketing cannot disagree about which
+// states are still running.
 const PENDING_STATES = new Set([
-  'QUEUED',
-  'IN_PROGRESS',
-  'WAITING',
-  'PENDING',
-  'EXPECTED',
-  'REQUESTED',
+  ...CI_PENDING_STATES,
+  ...CI_STATUS_CONTEXT_PENDING_STATES,
 ]);
 // Derived from the shared `CI_FAILURE_CONCLUSION_STATES` (protocol-helpers.mts)
 // plus `CANCELLED`, rather than an independently hand-maintained literal
@@ -892,6 +894,34 @@ function buildRequiredChecksRollup(
 }
 
 /**
+ * The present-run inputs both {@link ciWaitSummaryIsPreMergeCiPassing} and the
+ * watermark agreement read (#3670): every present check in the shape
+ * `resolvePresentRunConclusion` takes, plus the names the advisory-convergence
+ * downgrade fails closed. One derivation, so the pass predicate and the names
+ * reported beside it cannot drift (the #3465 bug class).
+ */
+function presentRunInputs(summary: CiWaitStateSummary) {
+  const advisoryDowngrade =
+    summary.advisoryConvergenceIdentityUnresolved ||
+    summary.advisoryConvergenceNonTargetEventOnly;
+  return {
+    advisoryDowngrade,
+    downgradeNames: advisoryDowngrade
+      ? new Set([DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR])
+      : new Set<string>(),
+    checks: summary.checks.map((check) => ({
+      name: check.checkName,
+      state: check.state,
+      completedAt: check.completedAt,
+      coveredByWaiver: false,
+      type: check.type,
+      workflowName: check.workflowName,
+      workflowPath: check.workflowPath ?? '',
+    })),
+  };
+}
+
+/**
  * #3465: map this helper's required-check rollup onto
  * {@link isPreMergeCiAllPassing}, the predicate pre-merge readiness
  * already uses. A rollup `status` of `success` is the only value that
@@ -922,12 +952,8 @@ export function ciWaitSummaryIsPreMergeCiPassing(
   // Require both: the rollup's own success (missing names, source-pinned,
   // and unreadable stay on that status) and a producer-aware success.
   const requiredNames = new Set(rollup.names);
-  const advisoryDowngrade =
-    summary.advisoryConvergenceIdentityUnresolved ||
-    summary.advisoryConvergenceNonTargetEventOnly;
-  const advisoryDowngradeNames = advisoryDowngrade
-    ? new Set([DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR])
-    : new Set<string>();
+  const presentRuns = presentRunInputs(summary);
+  const advisoryDowngrade = presentRuns.advisoryDowngrade;
   const producerStatus = classifyCiChecks(
     summary.checks
       .filter((check) => requiredNames.has(check.checkName))
@@ -941,16 +967,8 @@ export function ciWaitSummaryIsPreMergeCiPassing(
       })),
   ).status;
   const presentRunConclusion = resolvePresentRunConclusion(
-    summary.checks.map((check) => ({
-      name: check.checkName,
-      state: check.state,
-      completedAt: check.completedAt,
-      coveredByWaiver: false,
-      type: check.type,
-      workflowName: check.workflowName,
-      workflowPath: check.workflowPath ?? '',
-    })),
-    advisoryDowngradeNames,
+    presentRuns.checks,
+    presentRuns.downgradeNames,
   );
   const requiredChecksPassing =
     rollup.names.length > 0 &&
@@ -981,6 +999,23 @@ export function ciWaitSummaryIsPreMergeCiPassing(
 export interface RequiredCiHeadAgreement {
   headRefOid: string;
   requiredChecksPassing: boolean;
+  /**
+   * True when no required check is configured (the rollup status is
+   * `no-required-checks`): `requiredChecksPassing` is then decided by the
+   * present runs, so a deferral must not claim a required check is failing
+   * (#3670).
+   */
+  noRequiredChecksConfigured: boolean;
+  /**
+   * With no required check configured, the sorted names of the present runs
+   * that block CI -- a failing run, or a run the advisory-convergence
+   * downgrade fails closed even when its own state is green. Empty when a
+   * required check is configured or no present run blocks (a pending,
+   * cancelled-only, or empty run set). A run with no name cannot be named, so
+   * it is left out, and so is a still-running commit status (`PENDING`,
+   * `EXPECTED`, `REQUESTED`), which is not a failure.
+   */
+  blockingPresentRunNames: string[];
   latestPassingCompletedAt: string;
 }
 
@@ -988,9 +1023,19 @@ export interface RequiredCiHeadAgreement {
 export function requiredCiHeadAgreementFromSummary(
   summary: CiWaitStateSummary,
 ): RequiredCiHeadAgreement {
+  const noRequiredChecksConfigured =
+    summary.requiredChecks.status === 'no-required-checks';
+  const presentRuns = presentRunInputs(summary);
   return {
     headRefOid: summary.headRefOid.trim(),
     requiredChecksPassing: ciWaitSummaryIsPreMergeCiPassing(summary),
+    noRequiredChecksConfigured,
+    blockingPresentRunNames: noRequiredChecksConfigured
+      ? listBlockingPresentRunNames(
+          presentRuns.checks,
+          presentRuns.downgradeNames,
+        )
+      : [],
     latestPassingCompletedAt: latestPassingCompletedAt(summary),
   };
 }

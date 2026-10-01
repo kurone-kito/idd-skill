@@ -40,6 +40,7 @@ import {
 } from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
+import { NOW_FLAG_USAGE_MESSAGE, normalizeNowFlag } from './marker-helpers.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
@@ -1004,6 +1005,10 @@ async function runCli() {
       new Error('--no-cache cannot be combined with --refresh-cache'),
     );
   }
+  // #3675: a malformed --now is a usage error before any policy or network
+  // read, exactly like the other helpers that route it through
+  // normalizeNowFlag.
+  resolveClaimStateNow(args);
   const policy = loadPolicy(args.policy);
   // The whole output is the cached unit (#3588): a warm hint skips the open
   // issue list and every per-candidate read. The hint only ranks; the
@@ -1030,6 +1035,40 @@ async function runCli() {
     `${JSON.stringify(cache ? { ...output, cache } : output, null, 2)}\n`,
   );
   return 0;
+}
+/**
+ * Build the `--with-claim-state` resolution for one run (#3675): the live
+ * comment loader plus the policy inputs the annotation reads, including the
+ * forced-handoff mode that lets it follow a handoff successor.
+ */
+export function buildOrphanClaimState(port, policy, currentClaimId, nowIso) {
+  return buildClaimStateResolution(
+    port,
+    {
+      claimTiming: policy.claimTiming,
+      trustedMarkerActors: policy.trustedMarkerActors,
+      forcedHandoff: policy.forcedHandoff,
+    },
+    currentClaimId,
+    nowIso,
+  );
+}
+/**
+ * The clock `--now` sets for the claim-state annotation (#3675). Only
+ * meaningful with `--with-claim-state`: without it, or with an empty value
+ * (treated as not provided), this returns `undefined` and leaves the raw
+ * `--now` to the other readers of it. A value {@link normalizeNowFlag}
+ * rejects is a usage error.
+ */
+export function resolveClaimStateNow(args) {
+  if (!args.withClaimState || !args.now) {
+    return undefined;
+  }
+  const normalized = normalizeNowFlag(args.now);
+  if (normalized === null) {
+    throw markCliUsageError(new Error(NOW_FLAG_USAGE_MESSAGE));
+  }
+  return normalized;
 }
 /**
  * Whether an orphan output still lists a candidate worth trying, so a cached
@@ -1061,13 +1100,11 @@ async function produceOutput(args, policy) {
   // fetch is made and the output is byte-stable (mirrors
   // discover-roadmap-graph's own CLI wiring).
   const claimState = args.withClaimState
-    ? buildClaimStateResolution(
+    ? buildOrphanClaimState(
         port,
-        {
-          claimTiming: policy.claimTiming,
-          trustedMarkerActors: policy.trustedMarkerActors,
-        },
+        policy,
         args.currentClaimId,
+        resolveClaimStateNow(args),
       )
     : undefined;
   // #2243: always resolved (unlike claimState above) -- the triage-verdict
@@ -1198,7 +1235,15 @@ function parseArgs(rawArgv) {
       continue;
     }
     if (token === '--now') {
-      parsed.now = value ?? '';
+      // #3675: a missing value, or one that is really the next flag, is a
+      // usage error -- otherwise `--now --with-claim-state` would swallow that
+      // flag and silently run the annotation on the wall clock (or, without
+      // it, never annotate). An explicitly empty value still means not
+      // provided.
+      if (value === undefined || value.startsWith('--')) {
+        throw markCliUsageError(new Error('missing value for argument: --now'));
+      }
+      parsed.now = value;
       index += 1;
       continue;
     }
@@ -1363,19 +1408,25 @@ heartbeatOverdue is true when the latest valid claimed-by/heartbeat
 created_at is at or past claimTiming.heartbeatInterval with no later trusted
 heartbeat; false otherwise, including whenever present is false. It is
 PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
+--now <ISO8601> (with --with-claim-state) sets the clock the annotation
+measures claim age against, for a reproducible run; it must be an ISO 8601
+date-time with a Z or numeric UTC offset, and a missing or malformed value is a
+usage error.
 --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
 each activeClaim (true only when the active claim's claimId equals <id> and
 the current worktree's claim lock plus generated-tokens record confirm the
 same claim and agent identity).
-NOTE: claimEligible is a best-effort SOFT discovery hint (same limitation
-as discover-roadmap-graph's annotation): it does not reproduce authoritative
-forced-handoff authorization or legacy active-claim takeover rules. Trusted
-legacy claim/release evidence is used only for stale/released local-worktree
-occupancy checks; the authoritative A5 claim gate (idd-claim.instructions.md)
-remains the real protection.
+NOTE: claimEligible is a best-effort SOFT discovery hint that may over- or
+under-report (same limitation as discover-roadmap-graph's annotation): with
+forcedHandoff.mode "human-gated" it follows a forced-handoff transfer posted by
+a trusted marker author without checking the handoff's authorization, and it
+does not reproduce legacy active-claim takeover rules. Trusted legacy
+claim/release evidence is used only for stale/released local-worktree occupancy
+checks; the authoritative A5 claim gate (idd-claim.instructions.md) remains
+the real protection.
 `);
 }
-function loadPolicy(policyPath) {
+export function loadPolicy(policyPath) {
   // Read-and-parse failure semantics (explicit path throws; default path
   // silently falls back only on ENOENT) are converged in idd-config.mts's
   // loadPolicyConfig (#1721) — this function keeps only its own shape
@@ -1412,6 +1463,10 @@ function loadPolicy(policyPath) {
     // already relies on.
     claimTiming: config.claimTiming,
     trustedMarkerActors: config.trustedMarkerActors,
+    // #3675: the mode normalized through the shared policy helper (so the
+    // legacy `forcedHandoffMode` spellings resolve too), in the nested shape
+    // buildClaimStateResolution reads. Only consumed with --with-claim-state.
+    forcedHandoff: { mode: normalizedPolicy.forcedHandoff.mode },
   };
 }
 function resolveAutopilotSuitabilityFloor(config) {

@@ -16,6 +16,11 @@ discipline and has no tag.
 
 ### Added
 
+- On Windows the host-local read cache now verifies that a configured
+  `githubApi.readCache.directory` grants access only to the current user,
+  `SYSTEM`, and Administrators (read by SID with `whoami` and `icacls`), and
+  degrades to a live read otherwise or when the ACL cannot be read; the
+  default `LOCALAPPDATA` location stays trusted (#3623).
 - `discover-roadmap-graph` and `discover-orphan-filter` can serve their whole
   output from a short-lived hint when `githubApi.readCache.enabled` is true,
   so an unchanged repeat within `maxAge` starts no discovery request (#3588).
@@ -36,6 +41,50 @@ discipline and has no tag.
   finding can be deferred by an urgency score. High defers only at
   `very-low`. `low` and `low-and-medium` are unchanged, except that in
   those two modes an unassessed E4 tier never defers (#3589).
+- `discover-roadmap-graph --all-roadmaps` gains an opt-in `--with-progress`
+  (#3598). It prints bounded JSON progress lines on stderr (phase plus
+  completed and known counts) while an annotated scan runs. When a rate
+  limit, a timeout, or an admission deadline interrupts the scan, stdout
+  carries an `incomplete` result instead of a crash and the exit code is
+  `75`. The result names the phase, the counts, the retry time when the
+  admission contract or the failure headers give one, and the same
+  arguments to rerun. It has no leaves or summary, so it is never read as
+  candidates or as exhaustion, and the hint cache never stores it. A
+  complete report is unchanged, and so is a run without the flag.
+- `idd-merge-execute --apply` prints one stderr line per phase (collecting
+  readiness, re-validating claim and head, merging, and admin fallback when
+  it is entered), so a slow run under load can be told apart from a hung
+  one; stdout stays one JSON document and dry-run is unchanged. After a
+  failed merge attempt it reads the pull request back once, adds an optional
+  `postFailureState` (`state`, `mergedAt`, `headRefOid`) to the verdict, and
+  appends a read-before-retrying sentence to `mergeResult`. `merged`,
+  `adminFallbackUsed` and the exit code are unchanged (#3681).
+
+### Changed
+
+- A failed `gh api` call while `discover-roadmap-graph` reads a descendant
+  issue now reports its exit status, its signal and whether the process was
+  killed: the error message ends with `[exit status: ...; signal: ...;
+  killed: ...]` on a line of its own, and the error carries `status`,
+  `signal` and `killed`. The call already made three attempts before the
+  error surfaced, and retry, backoff and the not-found handling are
+  unchanged; only the diagnosis was missing (#3682).
+
+### Fixed
+
+- A failed fetch in the roadmap traversal's concurrent crawl now stops the
+  other workers from starting new items, so an interrupted scan no longer
+  keeps sending requests into a throttled API (#3598).
+- The `idd-advisory-convergence-self-waiver` job now holds `actions: read`,
+  in the dogfooded workflow and in its `idd-template/` copy. A private
+  adopter repository reported that its `gh pr view --json statusCheckRollup`
+  read failed with `Resource not accessible by integration` on every pull
+  request that touched an allowlisted path, so the bootstrap waiver could
+  not be posted.
+  The likely cause is that this request also selects each check suite's
+  workflow run, an Actions resource; it is not proven, because no A/B probe
+  was run. Adopters who copied the workflow should add the scope to their
+  own copy (#3683).
 
 ## [0.13.0] - 2026-09-27
 

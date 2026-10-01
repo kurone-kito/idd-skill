@@ -1277,6 +1277,43 @@ test('policy schema accepts githubApi telemetry and rejects a bad record bound',
   );
 });
 
+test('policy schema accepts githubApi loadControl and rejects bad bounds', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const accepted = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  accepted.githubApi = {
+    loadControl: { enabled: true, maxConcurrent: 8, maxWait: 'PT30S' },
+  };
+  assert.deepEqual(validate(accepted, schema), []);
+
+  for (const [key, value] of [
+    ['maxConcurrent', 0],
+    ['maxConcurrent', 1.5],
+    ['maxWait', 'P0D'],
+    ['maxWait', 'soon'],
+  ] as const) {
+    const rejected = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    rejected.githubApi = { loadControl: { [key]: value } };
+    const errors = validate(rejected, schema);
+    assert.ok(
+      errors.some((error) => error.includes(`$.githubApi.loadControl.${key}`)),
+      `${key}=${String(value)}: ${errors.join('\n')}`,
+    );
+  }
+  const unknown = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  unknown.githubApi = { loadControl: { directory: '/tmp/x' } };
+  assert.ok(
+    validate(unknown, schema).some((error) =>
+      error.includes('additional property "directory"'),
+    ),
+  );
+});
+
 // #3626: the schema, `normalizePolicyConfig` and the helper docs give one
 // answer for a blank telemetry path: it counts as unset and uses the default
 // file, so the schema must not reject the empty string that the normalizer
@@ -3164,6 +3201,62 @@ test('discover-roadmap-union invalid fixture fails validation', () => {
     false,
   );
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('discover-roadmap-incomplete schema uses only allowed keywords', () => {
+  const schema = loadJson('schemas/discover-roadmap-incomplete.schema.json');
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test('discover-roadmap-incomplete schema publishes metadata fields', () => {
+  const schema = loadJson(
+    'schemas/discover-roadmap-incomplete.schema.json',
+  ) as JsonRecord;
+  assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+  assert.equal(
+    schema.$id,
+    'https://kurone-kito.github.io/idd-skill/schemas/discover-roadmap-incomplete.schema.json',
+  );
+  assert.equal(schema.title, 'Discover Roadmap Incomplete');
+});
+
+test('discover-roadmap-incomplete valid fixture passes validation', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/discover-roadmap-incomplete.schema.json',
+    'fixtures/schemas/discover-roadmap-incomplete.valid.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
+test('discover-roadmap-incomplete invalid fixture fails validation', () => {
+  const { ok } = validateFixture(
+    'schemas/discover-roadmap-incomplete.schema.json',
+    'fixtures/schemas/discover-roadmap-incomplete.invalid.json',
+    false,
+  );
+  assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('discover-roadmap-incomplete schema rejects a union report and an exhausted claim', () => {
+  const incomplete = loadJson(
+    'schemas/discover-roadmap-incomplete.schema.json',
+  );
+  // A complete union report must never validate as an incomplete result.
+  const union = loadJson('fixtures/schemas/discover-roadmap-union.valid.json');
+  assert.notDeepEqual(validate(union, incomplete), []);
+  // And the incomplete result must never validate as a union report, so a
+  // union-validating consumer fails closed on it.
+  const result = loadJson(
+    'fixtures/schemas/discover-roadmap-incomplete.valid.json',
+  );
+  assert.notDeepEqual(
+    validate(result, loadJson('schemas/discover-roadmap-union.schema.json')),
+    [],
+  );
+  const claimsExhausted = JSON.parse(JSON.stringify(result));
+  claimsExhausted.incomplete.exhausted = true;
+  assert.notDeepEqual(validate(claimsExhausted, incomplete), []);
 });
 
 test('discover-roadmap-union schema rejects a non-object activeClaim', () => {

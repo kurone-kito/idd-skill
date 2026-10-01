@@ -41,6 +41,7 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
+import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   buildHelperErrorEnvelope,
@@ -665,6 +666,11 @@ and emit (default) or post (--apply) the canonical E6 disposition: a marker-firs
 \`**Accepted** — {bot} summary walkthrough …\` per current summary (re-dispositioned
 per HEAD). Idempotent and fail-closed.
 
+A CodeRabbit summary the gate already classifies as resolved ("No actionable
+comments were generated") is skipped with reason
+\`summary-resolved-no-actionable-comments\` and receives no reply. The written
+E6 rule stays authoritative for every other summary.
+
   --pr <number>                  PR number (required)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
@@ -860,7 +866,24 @@ export function applyDispositionPlan(plan, deps) {
   let postFailure = null;
   for (let index = 0; index < plan.planned.length; index += 1) {
     const item = plan.planned[index];
-    if (!deps.revalidateClaim()) {
+    let claimHeld;
+    try {
+      claimHeld = deps.revalidateClaim();
+    } catch (revalidationError) {
+      if (!isNotDispatchedRefusal(revalidationError)) throw revalidationError;
+      // #3586: the claim re-read was refused, so the claim is unverified.
+      // Post nothing more, and keep the report of what this run already
+      // posted instead of letting the refusal escape past it.
+      for (const remaining of plan.planned.slice(index)) {
+        failed.push({
+          noticeId: remaining.noticeId,
+          error: `claim revalidation not dispatched: ${revalidationError.message}`,
+        });
+      }
+      postFailure ??= revalidationError;
+      break;
+    }
+    if (!claimHeld) {
       // Claim lost mid-loop: stop writing and surface the current AND all
       // remaining notices as failed rather than posting them under a claim we
       // no longer hold, so the apply report names every notice left
@@ -885,6 +908,21 @@ export function applyDispositionPlan(plan, deps) {
     let lastThrown = null;
     let becameStale = false;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
+      // #3586: host-local load control refused a request of this loop before
+      // it was sent. On the first attempt nothing at all was sent, so the
+      // refusal is the classified failure. On a later attempt an earlier
+      // POST was dispatched and may have landed: that failure stays the
+      // classified one, and the refusal is only appended to the report, so
+      // it never claims that nothing was sent.
+      const noteRefusal = (refusal, what) => {
+        const text = `${what} not dispatched: ${refusal instanceof Error ? refusal.message : String(refusal)}`;
+        if (attempt === 0) {
+          lastThrown = refusal;
+          lastError = text;
+        } else {
+          lastError = `${lastError}; ${text}`;
+        }
+      };
       // #2695 (Codex review, P1 follow-up): re-checked immediately before
       // EACH actual POST attempt, not once before the retry loop -- a failed
       // first attempt plus recovery lookup both take real network time, long
@@ -903,7 +941,13 @@ export function applyDispositionPlan(plan, deps) {
             item,
             plan.headSha,
           );
-        } catch {
+        } catch (revalidationError) {
+          if (isNotDispatchedRefusal(revalidationError)) {
+            // Unconfirmed, not stale: nothing is posted, and it is reported
+            // as a failure rather than dropped as a skip.
+            noteRefusal(revalidationError, 'codex revalidation');
+            break;
+          }
           stillComplete = false;
         }
         if (!stillComplete) {
@@ -921,7 +965,11 @@ export function applyDispositionPlan(plan, deps) {
               item,
               plan.headSha,
             );
-          } catch {
+          } catch (revalidationError) {
+            if (isNotDispatchedRefusal(revalidationError)) {
+              noteRefusal(revalidationError, 'codex revalidation');
+              break;
+            }
             stillCurrent = false;
           }
         }
@@ -938,15 +986,32 @@ export function applyDispositionPlan(plan, deps) {
         // generic 'unknown error' -- coerce it the same way the rest of this
         // repo does (see idd-onboard.mts, discover-shared-file-overlap.mts,
         // rerun-advisory-convergence.mts).
+        // #3586: host-local load control refused the create before any
+        // request was sent. Nothing can have landed, so there is nothing to
+        // recover, and a second attempt would only be refused again.
+        if (isNotDispatchedRefusal(error)) {
+          noteRefusal(error, attempt === 0 ? 'create' : 'retry');
+          break;
+        }
         lastThrown = error;
         lastError = error instanceof Error ? error.message : String(error);
         // The create may have landed server-side despite the nonzero exit;
         // re-read (by NEW comment id) before any retry so we never
         // double-post.
-        posted = deps.recoverPostedDisposition(
-          item.body,
-          knownViewerCommentIds,
-        );
+        try {
+          posted = deps.recoverPostedDisposition(
+            item.body,
+            knownViewerCommentIds,
+          );
+        } catch (recoveryError) {
+          if (!isNotDispatchedRefusal(recoveryError)) throw recoveryError;
+          // #3586: the recovery read itself was refused, so whether the
+          // create landed is unknown. Report the create's own failure (never
+          // a claim that nothing was sent) and stop: a second POST could
+          // double-post.
+          lastError = `${lastError}; recovery read not dispatched: ${recoveryError.message}`;
+          break;
+        }
       }
     }
     if (becameStale) {
@@ -986,7 +1051,7 @@ function writeStderrSync(text) {
     written += writeSync(2, buffer, written, buffer.length - written);
   }
 }
-function exitClassified(code, kind, message, httpStatus = null) {
+function exitClassified(code, kind, message, httpStatus = null, refusal = {}) {
   if (code !== 0 && isHelperErrorEnvelopeEnabled()) {
     // Synchronous: process.exit drops a pending async stderr write, which
     // would truncate this envelope line.
@@ -996,6 +1061,8 @@ function exitClassified(code, kind, message, httpStatus = null) {
           kind,
           message,
           httpStatus,
+          ...(refusal.notDispatched ? { notDispatched: true } : {}),
+          ...(refusal.retryAt ? { retryAt: refusal.retryAt } : {}),
         }),
       )}\n`,
     );
@@ -1256,5 +1323,11 @@ function main() {
           ? 'one or more dispositions failed'
           : '',
     ghFailure ? ghFailure.httpStatus : null,
+    ghFailure
+      ? {
+          notDispatched: ghFailure.notDispatched,
+          retryAt: ghFailure.retryAt,
+        }
+      : {},
   );
 }

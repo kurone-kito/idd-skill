@@ -18,6 +18,7 @@ import {
   createFakeProviderAdapter,
   type FakeProviderFixture,
 } from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderChangeRequestOutcome } from '../src/scripts/provider-port.mts';
 import { spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
@@ -897,6 +898,452 @@ test('a mergePr rejection without a stderr field falls back to the error message
   assert.equal(exitCode, 1);
 });
 
+// #3681: `--apply` phase lines through the optional `progress` sink.
+const PHASE_COLLECT = 'idd-merge-execute: collecting readiness';
+const PHASE_REVALIDATE = 'idd-merge-execute: re-validating claim and head';
+const PHASE_MERGE = `idd-merge-execute: merging ${HEAD}`;
+const PHASE_ADMIN = 'idd-merge-execute: admin fallback';
+
+function captureProgress(): { lines: string[]; sink: (line: string) => void } {
+  const lines: string[] = [];
+  return { lines, sink: (line) => lines.push(line) };
+}
+
+test('--apply reports each phase through the progress sink, in order (#3681)', () => {
+  const { deps } = depsFor(readyReport());
+  const { lines, sink } = captureProgress();
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+    sink,
+  );
+
+  assert.deepEqual(lines, [PHASE_COLLECT, PHASE_REVALIDATE, PHASE_MERGE]);
+  assert.equal(verdict.merged, true);
+  assert.equal(exitCode, 0);
+});
+
+test('dry-run emits no phase line, and an apply that is not ready stops after the first (#3681)', () => {
+  const dry = captureProgress();
+  runMergeExecute(BASE_ARGS, depsFor(readyReport()).deps, dry.sink);
+  assert.deepEqual(dry.lines, []);
+
+  const blocked = readyReport();
+  blocked.advisoryWait = { f3Outcome: 'WAIT' };
+  const notReady = captureProgress();
+  runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    depsFor(blocked).deps,
+    notReady.sink,
+  );
+  assert.deepEqual(notReady.lines, [PHASE_COLLECT]);
+});
+
+test('a usage error under --apply emits no phase line (#3681)', () => {
+  const { deps } = depsFor(readyReport());
+  const missingClaim = captureProgress();
+  assert.throws(
+    () =>
+      runMergeExecute(
+        ['--pr', '994', '--claim-issue', '309', '--apply'],
+        deps,
+        missingClaim.sink,
+      ),
+    /missing required --claim-id/,
+  );
+  const nowWithApply = captureProgress();
+  assert.throws(
+    () =>
+      runMergeExecute(
+        [...BASE_ARGS, '--now', '2026-10-01T00:00:00Z', '--apply'],
+        deps,
+        nowWithApply.sink,
+      ),
+    /mutually exclusive/,
+  );
+  const badNow = captureProgress();
+  const { nowFlagError } = runMergeExecute(
+    [...BASE_ARGS, '--now', 'Sep 27 2026', '--apply'],
+    deps,
+    badNow.sink,
+  );
+  assert.ok(nowFlagError);
+  assert.deepEqual(
+    [missingClaim.lines, nowWithApply.lines, badNow.lines],
+    [[], [], []],
+  );
+});
+
+test('a progress sink that throws never blocks the merge (#3681)', () => {
+  const { deps, calls } = depsFor(readyReport());
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+    () => {
+      throw new Error('stderr closed');
+    },
+  );
+
+  assert.equal(verdict.merged, true);
+  assert.deepEqual(calls.merged, [`994:${HEAD}`]);
+  assert.equal(exitCode, 0);
+});
+
+test('the admin path adds one admin-fallback line after the merge line, and none under hold-and-report (#3681)', () => {
+  const admin = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+  });
+  const adminRun = captureProgress();
+  const adminResult = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    admin.deps,
+    adminRun.sink,
+  );
+  assert.equal(adminResult.verdict.adminFallbackUsed, true);
+  assert.deepEqual(adminRun.lines, [
+    PHASE_COLLECT,
+    PHASE_REVALIDATE,
+    PHASE_MERGE,
+    PHASE_ADMIN,
+  ]);
+
+  const hold = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: () => 'hold-and-report',
+  });
+  const holdRun = captureProgress();
+  runMergeExecute([...BASE_ARGS, '--apply'], hold.deps, holdRun.sink);
+  assert.deepEqual(holdRun.lines, [
+    PHASE_COLLECT,
+    PHASE_REVALIDATE,
+    PHASE_MERGE,
+  ]);
+});
+
+// #3681: a failed merge command is followed by one read-back of the pull
+// request, so a `gh` call cut off by its timeout that completed server-side
+// is not reported as a bare `merged: false`.
+function failingMerge(
+  mergeError: Error = Object.assign(new Error('Command failed'), {
+    stderr: 'merge transport closed\n',
+  }),
+): Partial<MergeExecuteDeps> {
+  return {
+    mergePr: () => {
+      throw mergeError;
+    },
+  };
+}
+
+function outcomeDeps(
+  outcome: ProviderChangeRequestOutcome | null,
+  overrides: Partial<MergeExecuteDeps> = {},
+  report: Record<string, unknown> = readyReport(),
+): { deps: MergeExecuteDeps; reads: (string | null)[] } {
+  const reads: (string | null)[] = [];
+  const { deps } = depsFor(report, {
+    ...failingMerge(),
+    fetchPrOutcome: (_prNumber, repoRef) => {
+      reads.push(repoRef);
+      return outcome;
+    },
+    ...overrides,
+  });
+  return { deps, reads };
+}
+
+test('a failed merge whose pull request reads back MERGED says it completed server-side (#3681)', () => {
+  const mergedAt = '2026-10-01T03:04:05Z';
+  const { deps, reads } = outcomeDeps({
+    state: 'MERGED',
+    mergedAt,
+    headRefOid: HEAD,
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.deepEqual(verdict.postFailureState, {
+    state: 'MERGED',
+    mergedAt,
+    headRefOid: HEAD,
+  });
+  // The original error stays first; the sentence is appended.
+  assert.match(
+    verdict.mergeResult,
+    /^merge command failed: merge transport closed/,
+  );
+  assert.match(verdict.mergeResult, /MERGED \(mergedAt 2026-10-01T03:04:05Z\)/);
+  assert.match(verdict.mergeResult, /completed server-side; do not retry/);
+  assert.match(verdict.mergeResult, /continue with F4 after confirming/);
+  // The sentence sits on its own line after gh's error text, never glued to it.
+  assert.equal(
+    verdict.mergeResult,
+    'merge command failed: merge transport closed\n\nCommand failed\npost-failure read: the pull request is MERGED (mergedAt 2026-10-01T03:04:05Z), so the merge completed server-side; do not retry, and continue with F4 after confirming.',
+  );
+  // Diagnostic only: verdict fields and exit code are unchanged.
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.equal(exitCode, 1);
+  assert.deepEqual(reads, [null], 'exactly one read, scoped like the merge');
+});
+
+test('a failed merge whose pull request is still OPEN at the validated head says a retry is safe (#3681)', () => {
+  const { deps } = outcomeDeps({
+    state: 'OPEN',
+    mergedAt: null,
+    headRefOid: HEAD,
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.deepEqual(verdict.postFailureState, {
+    state: 'OPEN',
+    mergedAt: null,
+    headRefOid: HEAD,
+  });
+  assert.match(
+    verdict.mergeResult,
+    /merge command failed: merge transport closed/,
+  );
+  assert.match(verdict.mergeResult, /did not happen; a retry is safe/);
+  assert.match(verdict.mergeResult, /--match-head-commit binds the head/);
+  assert.match(verdict.mergeResult, /once the cause above is resolved/);
+  assert.equal(verdict.merged, false);
+  assert.equal(exitCode, 1);
+});
+
+test('an OPEN pull request with a moved head, a CLOSED one, or an empty state all say read before retrying (#3681)', () => {
+  for (const outcome of [
+    { state: 'OPEN', mergedAt: null, headRefOid: DRIFTED },
+    { state: 'CLOSED', mergedAt: null, headRefOid: HEAD },
+    { state: '', mergedAt: null, headRefOid: '' },
+  ]) {
+    const { deps } = outcomeDeps(outcome);
+    const { verdict, exitCode } = runMergeExecute(
+      [...BASE_ARGS, '--apply'],
+      deps,
+    );
+    assert.deepEqual(verdict.postFailureState, outcome);
+    assert.match(
+      verdict.mergeResult,
+      /merge command failed: merge transport closed/,
+    );
+    assert.match(
+      verdict.mergeResult,
+      /read its state, mergedAt and headRefOid before retrying/,
+    );
+    assert.doesNotMatch(verdict.mergeResult, /retry is safe|do not retry/);
+    assert.equal(verdict.merged, false);
+    assert.equal(exitCode, 1);
+  }
+});
+
+test('a missing pull request or a failing read leaves postFailureState absent and keeps the original error as the cause (#3681)', () => {
+  const missing = outcomeDeps(null);
+  const missingRun = runMergeExecute([...BASE_ARGS, '--apply'], missing.deps);
+  assert.equal('postFailureState' in missingRun.verdict, false);
+  assert.match(
+    missingRun.verdict.mergeResult,
+    /merge command failed: merge transport closed/,
+  );
+  assert.match(
+    missingRun.verdict.mergeResult,
+    /post-failure read unavailable; read the pull request state, mergedAt and headRefOid before retrying/,
+  );
+
+  const readFailure = new Error('read timed out');
+  const mergeError = Object.assign(new Error('Command failed'), {
+    stderr: 'merge transport closed\n',
+  });
+  const throwing = outcomeDeps(null, {
+    ...failingMerge(mergeError),
+    fetchPrOutcome: () => {
+      throw readFailure;
+    },
+  });
+  const throwingRun = runMergeExecute([...BASE_ARGS, '--apply'], throwing.deps);
+  assert.equal('postFailureState' in throwingRun.verdict, false);
+  assert.match(
+    throwingRun.verdict.mergeResult,
+    /merge command failed: merge transport closed/,
+  );
+  assert.match(
+    throwingRun.verdict.mergeResult,
+    /post-failure read unavailable/,
+  );
+  assert.equal(throwingRun.exitCode, 1);
+  // The failed read never masks the merge error.
+  assert.strictEqual(throwingRun.cause, mergeError);
+  assert.notStrictEqual(throwingRun.cause, readFailure);
+  assert.equal(throwingRun.verdict.merged, false);
+});
+
+test('a dep set without fetchPrOutcome behaves exactly as before a failed merge (#3681)', () => {
+  const { deps } = depsFor(readyReport(), failingMerge());
+  assert.equal(deps.fetchPrOutcome, undefined);
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(
+    verdict.mergeResult,
+    'merge command failed: merge transport closed\n\nCommand failed',
+  );
+  assert.equal('postFailureState' in verdict, false);
+  assert.equal(exitCode, 1);
+});
+
+test('no read-back happens for a successful merge, a dry-run, a not-ready apply, or a refused re-validation (#3681)', () => {
+  const read = { count: 0 };
+  const counting: Partial<MergeExecuteDeps> = {
+    fetchPrOutcome: () => {
+      read.count += 1;
+      return { state: 'OPEN', mergedAt: null, headRefOid: HEAD };
+    },
+  };
+  const success = depsFor(readyReport(), counting).deps;
+  assert.equal(
+    runMergeExecute([...BASE_ARGS, '--apply'], success).verdict.merged,
+    true,
+  );
+  runMergeExecute(BASE_ARGS, depsFor(readyReport(), counting).deps);
+  const blocked = readyReport();
+  blocked.advisoryWait = { f3Outcome: 'WAIT' };
+  runMergeExecute([...BASE_ARGS, '--apply'], depsFor(blocked, counting).deps);
+  // Head drift is caught by re-validation before any merge command runs.
+  runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    depsFor(readyReport(), { ...counting, fetchHeadSha: () => DRIFTED }).deps,
+  );
+  assert.equal(read.count, 0);
+});
+
+test('the admin path reads back after a failed admin merge, and not after a successful one (#3681)', () => {
+  const adminFailure = new Error('admin merge failed');
+  const events: string[] = [];
+  // The deadlock report makes the plain failure eligible for the retry.
+  const { deps: failedDeps } = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      events.push('plain-merge');
+      throw baseBranchPolicyMergeError();
+    },
+    mergePrAdmin: () => {
+      events.push('admin-merge');
+      throw adminFailure;
+    },
+    fetchPrOutcome: () => {
+      events.push('read-back');
+      return { state: 'OPEN', mergedAt: null, headRefOid: HEAD };
+    },
+  });
+  const failedRun = runMergeExecute([...BASE_ARGS, '--apply'], failedDeps);
+  assert.equal(failedRun.verdict.adminFallbackUsed, true);
+  assert.equal(failedRun.verdict.merged, false);
+  assert.match(
+    failedRun.verdict.mergeResult,
+    /^admin-fallback merge also failed: /,
+  );
+  assert.match(
+    failedRun.verdict.mergeResult,
+    /did not happen; a retry is safe/,
+  );
+  assert.deepEqual(failedRun.verdict.postFailureState, {
+    state: 'OPEN',
+    mergedAt: null,
+    headRefOid: HEAD,
+  });
+  assert.equal(failedRun.exitCode, 1);
+  assert.deepEqual(
+    events,
+    ['plain-merge', 'admin-merge', 'read-back'],
+    'one read, after the admin attempt',
+  );
+
+  const reads: number[] = [];
+  const succeeded = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    fetchPrOutcome: () => {
+      reads.push(1);
+      return { state: 'MERGED', mergedAt: null, headRefOid: HEAD };
+    },
+  });
+  const succeededRun = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    succeeded.deps,
+  );
+  assert.equal(succeededRun.verdict.merged, true);
+  assert.equal('postFailureState' in succeededRun.verdict, false);
+  assert.deepEqual(reads, []);
+});
+
+test('an aborted admin fallback after a failed plain merge also carries the read-back (#3681)', () => {
+  const { deps } = outcomeDeps(
+    { state: 'OPEN', mergedAt: null, headRefOid: HEAD },
+    {
+      mergePr: () => {
+        throw baseBranchPolicyMergeError();
+      },
+      resolveSoloCodeownerAdminFallbackMode: () => 'hold-and-report',
+    },
+    soloCodeownerDeadlockReport(),
+  );
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+  assert.match(verdict.mergeResult, /^merge command failed: /);
+  assert.match(verdict.mergeResult, /did not happen; a retry is safe/);
+  assert.equal(verdict.postFailureState?.state, 'OPEN');
+  assert.equal(exitCode, 1);
+});
+
+test('a MERGED read-back without a mergedAt still says do not retry (#3681)', () => {
+  const { deps } = outcomeDeps({
+    state: 'MERGED',
+    mergedAt: null,
+    headRefOid: HEAD,
+  });
+  const { verdict } = runMergeExecute([...BASE_ARGS, '--apply'], deps);
+
+  assert.match(verdict.mergeResult, /the pull request is MERGED, so the merge/);
+  assert.doesNotMatch(verdict.mergeResult, /mergedAt \(|\(mergedAt/);
+  assert.match(verdict.mergeResult, /completed server-side; do not retry/);
+  assert.equal(verdict.merged, false);
+});
+
+test('the read-back is scoped to the --owner/--repo the merge ran against (#3681)', () => {
+  const { deps, reads } = outcomeDeps({
+    state: 'OPEN',
+    mergedAt: null,
+    headRefOid: HEAD,
+  });
+  runMergeExecute(
+    [...BASE_ARGS, '--owner', 'acme', '--repo', 'widget', '--apply'],
+    deps,
+  );
+  assert.deepEqual(reads, ['acme/widget']);
+});
+
+test('a refused re-validation reports the collect and re-validate lines but no merge line (#3681)', () => {
+  const { deps } = depsFor(readyReport(), { fetchHeadSha: () => DRIFTED });
+  const { lines, sink } = captureProgress();
+  const { verdict } = runMergeExecute([...BASE_ARGS, '--apply'], deps, sink);
+
+  assert.match(verdict.mergeResult, /head drift/);
+  assert.deepEqual(lines, [PHASE_COLLECT, PHASE_REVALIDATE]);
+});
+
 test('missing --pr is rejected', () => {
   assert.throws(
     () =>
@@ -1187,6 +1634,50 @@ test('a malformed --now returns a one-line usage error instead of throwing, with
   assert.equal(result.exitCode, 1);
   assert.equal(result.verdict.ready, false);
   assert.match(result.nowFlagError ?? '', /--now/);
+});
+
+// #3669: the usage synopsis must name every collector flag a caller needs.
+// `--nonce` matters most -- omitting it silently skips the merge-time
+// activation-nonce comparison. (`tests/help-text-flags.test.mts` lists this
+// helper in `EXCLUDED_HELPERS`, so the synopsis is pinned here.)
+test('bin/idd-merge-execute.mjs --help: the synopsis names --nonce, --claimless and --closing-issues (#3669)', () => {
+  const result = spawnHelperBinWithEnvelope('idd-merge-execute.mjs', [
+    '--help',
+  ]);
+  assert.equal(result.status, 0, JSON.stringify(result));
+  const synopsis = result.stdout
+    .split('\n')
+    .filter((line) => line.trimStart().startsWith('node scripts/'));
+  assert.equal(synopsis.length, 2, result.stdout);
+  const [claimBound, claimless] = synopsis;
+  assert.match(claimBound, /\[--nonce <token>\]/);
+  assert.match(claimBound, /\[--closing-issues <n>\[,<n>\.\.\.\]\]/);
+  assert.match(claimless, /--claimless/);
+  assert.doesNotMatch(claimless, /--claim-id/);
+  assert.match(
+    result.stdout,
+    /omitting it, or leaving it empty,\s+silently skips/,
+  );
+});
+
+test('--nonce reaches the collector arguments verbatim (#3669)', () => {
+  const { deps } = depsFor(readyReport());
+  let receivedPassthrough: string[] = [];
+  const capturingDeps: MergeExecuteDeps = {
+    ...deps,
+    collect: (passthrough) => {
+      receivedPassthrough = passthrough;
+      return deps.collect(passthrough);
+    },
+  };
+  const { verdict } = runMergeExecute(
+    [...BASE_ARGS, '--nonce', 'abc123'],
+    capturingDeps,
+  );
+  assert.equal(verdict.ready, true);
+  const at = receivedPassthrough.indexOf('--nonce');
+  assert.ok(at >= 0, JSON.stringify(receivedPassthrough));
+  assert.equal(receivedPassthrough[at + 1], 'abc123');
 });
 
 // #3551 Codex review: with IDD_HELPER_ERROR_ENVELOPE=1, a malformed --now

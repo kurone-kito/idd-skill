@@ -168,7 +168,9 @@ outside the selected roadmap graph.
   such a loop has no closure order left to get wrong. A cycle whose
   segment includes the audited roadmap, or holds any node that is open,
   inaccessible, unresolved, or absent from the traversal's node set,
-  still blocks.
+  still blocks. A task-list entry and a native sub-issue link for the
+  same child under the same parent are one membership, not a duplicate
+  reference, and the helper does not report that pair.
 - If all referenced child and descendant work is closed or otherwise
   complete, compare the roadmap success criteria against the closed
   child issues, linked merged PRs, task-list state, follow-up comments,

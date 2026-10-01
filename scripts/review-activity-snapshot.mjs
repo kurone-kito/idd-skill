@@ -5,6 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
+import { extractCopilotReviewBodyRemark } from './copilot-review-body.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -16,6 +17,7 @@ import {
   buildActivitySnapshotSummary,
   countUncoveredCodeRabbitEmbeddedFindings,
   extractCodeRabbitEmbeddedFindings,
+  isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
@@ -25,6 +27,7 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mjs';
 
 /** REST logins `REVIEW_BOT_LOGINS` lists for CodeRabbit. Codex connector
  * logins in that same set are not CodeRabbit reviews. */
@@ -99,7 +102,19 @@ export function collectReviewActivitySnapshot(input) {
     input.prNumber,
   );
   const normalizedComments = comments.map(normalizeComment);
-  const normalizedThreads = threads.map(normalizeThread);
+  // #3655: the same bounded second pass the merge gate runs (#3269), so a
+  // cosmetic in-place edit of an advisory-bot thread comment is dated by
+  // content activity here too and both collectors report the same
+  // `dispositionEvidence`. The disposition-author logins are the trusted set
+  // this collector hands the summarizers below.
+  const normalizedThreads = enrichThreadsWithBotEditHistories(
+    input.port,
+    threads.map(normalizeThread),
+    {
+      dispositionAuthorLogins: activityTrustedMarkerLogins,
+      advisoryBotLogins,
+    },
+  );
   const summary = buildActivitySnapshotSummary(
     {
       comments: normalizedComments,
@@ -147,6 +162,7 @@ export function collectReviewActivitySnapshot(input) {
         dispositionEvidence.soleCauseAckOnlyPostDisposition,
     },
     embeddedFindings,
+    reviewBodyRemarks: buildCopilotReviewBodyRemarks(reviews),
   };
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
@@ -293,6 +309,46 @@ export function buildCodeRabbitEmbeddedFindings(reviews, threads) {
     ];
   });
 }
+/**
+ * One row per Copilot `COMMENTED` review whose body yields a remark
+ * (#3672): a one-sentence "Needs a closer look" remark can sit beside
+ * `**Findings:** None` with no inline thread, and no counter reads it
+ * (`classifyCopilotReviewBody` keeps its suppressed count to the counted
+ * blocks). Evidence only -- the result never feeds
+ * `buildActivitySnapshotSummary` or any counter, so `effective`, the counts,
+ * `embeddedFindings` and the exit status are the same with or without it.
+ * `APPROVED` and `CHANGES_REQUESTED` reviews and other authors are omitted.
+ *
+ * Uses the default-primary-bot `isCopilotReviewerLogin`, not the configured
+ * `primaryBotLogin` (unlike `pre-merge-readiness`): only Copilot emits this
+ * body shape, so threading a configured non-Copilot primary bot would narrow
+ * away the one author whose bodies the extractor parses. One row per
+ * review, so earlier reviews' rows are historical -- a consumer compares
+ * `commitId` with `headSha`.
+ */
+export function buildCopilotReviewBodyRemarks(reviews) {
+  return reviews.flatMap((review) => {
+    if (review.state !== 'COMMENTED') {
+      return [];
+    }
+    const author = String(review.user?.login ?? '').trim();
+    if (!isCopilotReviewerLogin(author)) {
+      return [];
+    }
+    const remark = extractCopilotReviewBodyRemark(review.body);
+    if (remark === null) {
+      return [];
+    }
+    return [
+      {
+        reviewId: String(review.node_id ?? ''),
+        author,
+        commitId: String(review.commit_id ?? ''),
+        remark,
+      },
+    ];
+  });
+}
 function normalizeReview(review) {
   return {
     author: { login: review.user?.login ?? '' },
@@ -312,6 +368,8 @@ export function normalizeThread(thread) {
     comments: {
       pageInfo: { hasNextPage: false },
       nodes: thread.comments.map((comment) => ({
+        // #3655: the bounded edit-history pass names candidates by id.
+        id: comment.id,
         author: { login: comment.authorLogin },
         body: comment.body,
         createdAt: comment.createdAt,

@@ -156,13 +156,11 @@ that set instead of re-deriving it.
 
    **Label-gated or other opt-in gate surfacing as a job step, not a
    check.** `gh pr checks` (and `ci-wait-state`) lists jobs/checks, not
-   the steps inside them. An opt-in heavy CI gate wired to run as a
-   step inside an already-present job — rather than its own discrete
-   check — never appears as a new entry there; only the parent job
-   does, and only once, regardless of whether the gated step ran. Do
-   not conclude such a gate is not-running or already-done solely
-   because `gh pr checks` shows no new check for it; confirm it
-   actually executed by inspecting the job's own steps instead:
+   the steps inside them. An opt-in heavy gate wired as a step inside an
+   already-present job, not its own check, shows only as that parent job,
+   once, whether or not the step ran. Do not conclude such a gate is
+   not-running or already-done solely because `gh pr checks` shows no new
+   check for it; confirm it executed by inspecting the job's own steps:
 
    ```sh
    gh run view {run-id} --json jobs
@@ -371,11 +369,11 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   **but only once** [Required-check discovery](#required-check-discovery)
   has resolved `noRequiredChecksConfigured: false`. When Required-check
   discovery has instead resolved `noRequiredChecksConfigured: true`,
-  `--watch --required` returns immediately, non-blocking, printing a
-  "no required checks
-  reported" message even while real CI is still running — block with
+  `--watch --required` returns immediately, printing a "no required
+  checks reported" message even while real CI is still running —
+  block with
   the bare `gh pr checks <pr-number> --watch` (no `--required`)
-  instead. That bare form still returns once every visible check
+  instead. That bare form returns once every visible check
   reaches a terminal GitHub state, which is not the same as "safe to
   proceed" — a lone `CANCELLED` check with no same-producer successor
   is one such terminal-but-`pending` case (#2714). None of the three
@@ -414,10 +412,12 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   review state either — see
   `idd-advisory-wait.instructions.md`, whose Scope section also covers
   why a non-primary bot's review must not gate a custom wait either. A
-  bare `sleep` may be sandboxed or blocked in some runtimes (preventive; no observed
-  incident yet); a `run_in_background` Bash task or other
-  detached/backgrounded mechanism must not be used for this wait
-  unless the topology-safety condition above is confirmed. Never
+  bare `sleep` may be refused (observed 2026-09-30 in Claude Code, issue
+  `#3673`: `sleep 30` refused, `sleep 5` ran); in such a runtime, block a CI wait
+  with the `--watch` forms above. A `run_in_background` Bash task or other
+  detached/backgrounded mechanism (a background until-loop included) must
+  not be used for this wait unless the topology-safety condition above is
+  confirmed. Never
   insert "is it done yet?" turns or end this turn assuming an
   unconfirmed background/async notification resumes it — that stalls
   silently under supervisor/worker topologies.

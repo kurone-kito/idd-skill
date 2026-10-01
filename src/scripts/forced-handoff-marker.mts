@@ -540,6 +540,12 @@ export function resolveHelperActiveClaim(
   trustedMarkerLogins: TrustedMarkerLoginsInput,
   options: {
     expectedLinkedPrs?: string[];
+    /** The linked PR's first-commit time (#3675), which lets an `issue-only`
+     * handoff that predates the PR through a PR-scoped resolution (the
+     * merge-side Part B allowance, #1058). Omitted or `null` keeps the
+     * original behavior, so the marker planner -- whose PR-scoped replay
+     * deliberately rejects such a marker -- never passes it. */
+    prFirstCommitAt?: string | null;
     isAuthorizedForcedHandoff?: (forcedBy: string) => boolean;
     /** Configured `claimTiming.staleAge` window (#3270), e.g. via
      * {@link readClaimStaleAgeMs}. REQUIRED (Copilot review, PR #3370):
@@ -572,6 +578,7 @@ export function resolveHelperActiveClaim(
       trustedMarkerLogins: [...trustedLogins],
       forcedHandoffEnabled: true,
       expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+      prFirstCommitAt: options.prFirstCommitAt ?? null,
       isAuthorizedForcedHandoff:
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
