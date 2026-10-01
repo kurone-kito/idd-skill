@@ -2362,3 +2362,100 @@ test('findInlineCodeSpans matches the pre-#3705 pattern on seeded random strings
   );
   assert.ok(withMatch > cases / 10, `only ${withMatch} string(s) hold a span`);
 });
+
+// #3705: the inline code span pattern cost about the cube of a backtick run's
+// length when the run had no closer: 11 s for 4,000 backticks, where the
+// scanner now needs a few milliseconds. Each test times its first, smaller
+// size and asserts it before the 100,000 call, so a regression fails after
+// seconds instead of hanging the suite. The ceiling stays far above the
+// measured cost to ride out a loaded shared host; on a failure here, rerun
+// this file alone before suspecting a regression.
+const INLINE_CODE_SPAN_LINEAR_CEILING_MS = 2000;
+const INLINE_CODE_SPAN_LARGE_RUN = 100_000;
+
+function assertStripLinear(
+  label: string,
+  firstSize: number,
+  buildText: (size: number) => string,
+  expectResult?: (text: string, stripped: string) => void,
+): void {
+  for (const size of [firstSize, INLINE_CODE_SPAN_LARGE_RUN]) {
+    const text = buildText(size);
+    const start = performance.now();
+    const stripped = stripMarkdownCodeRegions(text);
+    const elapsedMs = performance.now() - start;
+    assert.ok(
+      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+      `${label} took ${Math.round(elapsedMs)} ms for n = ${size} (ceiling ${INLINE_CODE_SPAN_LINEAR_CEILING_MS} ms)`,
+    );
+    expectResult?.(text, stripped);
+  }
+}
+
+const expectUnchanged = (text: string, stripped: string): void => {
+  assert.equal(stripped, text);
+};
+
+test('stripMarkdownCodeRegions stays linear on an unclosed backtick run before a letter and a newline (#3705)', () => {
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    4000,
+    (size) => `text ${'`'.repeat(size)}a\n`,
+    expectUnchanged,
+  );
+});
+
+test('stripMarkdownCodeRegions stays linear on an unclosed backtick run before a blank line, twice (#3705)', () => {
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    1200,
+    (size) => `text ${'`'.repeat(size)}\n\ntext ${'`'.repeat(size)}\n`,
+    expectUnchanged,
+  );
+});
+
+test('stripMarkdownCodeRegions stays linear on a long backtick run followed by many one-backtick closers (#3705)', () => {
+  // Spans are found here, so only the time is asserted.
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    1000,
+    (size) => `text ${'`'.repeat(size)}${'a`'.repeat(size)}`,
+  );
+});
+
+test('stripMarkdownCodeRegions stays linear on an unclosed backtick run before a lone carriage return (#3705)', () => {
+  assertStripLinear(
+    'stripMarkdownCodeRegions',
+    4000,
+    (size) => `text ${'`'.repeat(size)}a\rb`,
+    expectUnchanged,
+  );
+});
+
+// Both guards pass before and after the change (the old pattern takes 16 and
+// 7 ms): they catch a replacement that does work per match in proportion to
+// the text length, or that scans to the end of the text instead of stopping
+// at a blank line.
+test('stripMarkdownCodeRegions stays linear on many short spans (#3705)', () => {
+  const text = '`a`\n'.repeat(25_000);
+  const start = performance.now();
+  const stripped = stripMarkdownCodeRegions(text);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `stripMarkdownCodeRegions took ${Math.round(elapsedMs)} ms for 25,000 short spans`,
+  );
+  assert.equal(stripped, '` `\n'.repeat(25_000));
+});
+
+test('stripMarkdownCodeRegions stays linear on many unclosed runs each followed by a blank line (#3705)', () => {
+  const text = '``a\n\n'.repeat(25_000);
+  const start = performance.now();
+  const stripped = stripMarkdownCodeRegions(text);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `stripMarkdownCodeRegions took ${Math.round(elapsedMs)} ms for 25,000 unclosed runs`,
+  );
+  assert.equal(stripped, text);
+});
