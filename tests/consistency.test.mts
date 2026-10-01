@@ -32,6 +32,7 @@ import {
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
 import { resolveEffectiveCritiqueLoopTelemetryHook } from '../src/scripts/policy-helpers.mts';
+import { validate } from '../src/scripts/validate-schemas.mts';
 import { readJson, readText } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1839,6 +1840,13 @@ test('#3702: this repository enables githubApi.loadControl at its measured maxCo
   const repoConfig = readJson('.github/idd/config.json') as {
     githubApi?: { loadControl?: unknown };
   };
+  // The schema rejects a `maxConcurrent` below 1 or a non-integer one and an
+  // unknown key, so a config that parses but would fail `idd-doctor` cannot
+  // slip by; the literal comparison below pins the exact value.
+  assert.deepEqual(
+    validate(repoConfig, readJson('schemas/policy.schema.json')),
+    [],
+  );
   assert.deepEqual(repoConfig.githubApi?.loadControl, {
     enabled: true,
     maxConcurrent: 4,
