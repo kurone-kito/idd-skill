@@ -174,7 +174,9 @@ applies), through the profile-selected claim-lock command:
    `--acquire` with the same flags, no `--takeover`. Any other holder:
    stop. A displaced predecessor that is somehow still running is
    displaced by definition.
-4. Re-run the routing call and expect `already_owned`.
+4. Re-run the routing call and expect `already_owned`. If it still returns
+   `owner_evidence_required` with `occupancy_probe` `unreadable`, §LWR's
+   paragraph on an unrelated worktree record applies.
 
 The trust basis is the human-gated forced-handoff marker, the nonce winner,
 and the `--check` run immediately before the takeover. `resume-claim-routing`
@@ -188,15 +190,17 @@ displaced session is by definition unreachable, so its own planning
 comment can never substitute for this independent check.
 
 **Inherited plan comment** — The displaced session may also have posted a B2
-plan. Where it left no commits there is nothing for §CSA to audit; where it
-left commits, §CSA covers them but not the plan. `idd-work.instructions.md`'s
-B3 self-check accepts only the refined, post-critique plan, and a successor
-cannot observe whether the predecessor's critique pass ran. On the no-PR
-route that enters B3 (a dirty worktree) the successor therefore treats the
-inherited comment as an unverified draft: it re-verifies the plan against
-the issue and the code, runs its own critique pass, posts a refined plan
-before entering B3, and adds that comment to `Authoritative by` alongside
-the evidence §FH and Step 2 require. It never relies on the predecessor's
+plan. Where it left no commits, §CSA's committed range is empty, but the
+dirty-state note in the recipe above still covers any uncommitted work;
+where it left commits, §CSA covers them but not the plan.
+`idd-work.instructions.md`'s B3 self-check accepts only the refined,
+post-critique plan, and a successor cannot verify that the predecessor's
+critique pass ran. On the no-PR route that enters B3 (a dirty worktree) the
+successor therefore treats the inherited comment as an unverified draft: it
+re-verifies the plan against the issue and the code, runs its own critique
+pass, posts a refined plan before entering B3, and adds the refined plan
+comment, never the inherited draft, to `Authoritative by` alongside the
+evidence §FH and Step 2 require. It never relies on the predecessor's
 critique having run. The same holds after an ordinary stale takeover. The
 no-PR rows that route to B2 draft their own plan anyway. The routes that
 skip both B2 and B3 (a clean worktree with unpushed commits and §W8 with
