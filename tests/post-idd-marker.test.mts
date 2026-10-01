@@ -1461,7 +1461,11 @@ function runWatermarkFromPr(apply: boolean): string {
   );
 }
 
-function assertWatermarkRefused(stub: string, apply: boolean): void {
+function assertWatermarkRefused(
+  stub: string,
+  apply: boolean,
+  expected: RegExp = /required checks are not passing/,
+): void {
   const restore = stubExecutable('gh', stub);
   try {
     runWatermarkFromPr(apply);
@@ -1472,7 +1476,7 @@ function assertWatermarkRefused(stub: string, apply: boolean): void {
       stdout?: string;
     };
     assert.equal(failure.status, 1);
-    assert.match(failure.stderr ?? '', /required checks are not passing/);
+    assert.match(failure.stderr ?? '', expected);
     assert.equal(failure.stdout ?? '', '');
     return;
   } finally {
@@ -1583,6 +1587,33 @@ test('#3465: a non-required failure does not refuse a passing required check', (
   } finally {
     restore();
   }
+});
+
+test('#3670: --from-pr watermark with no required check names the blocking present run and the deferral path', () => {
+  // No required check is configured (the default empty rules), so the failing
+  // present run decides CI. The text must not claim a required check fails.
+  const stub = watermarkFromPrGhStub(SHA, {
+    rollupNodes: [
+      rollupCheck('lint', 'SUCCESS'),
+      rollupCheck('docs', 'FAILURE'),
+    ],
+  });
+  assertWatermarkRefused(
+    stub,
+    false,
+    /PR 1200 has no required check configured, so its present runs decide CI, and docs is blocking\. In E1 Step 2 this is a deferral, not a deadlock: continue to E3 .*re-run --from-pr at E1 Step 2/,
+  );
+});
+
+test('#3670: --from-pr watermark keeps the required-checks text when a required check fails', () => {
+  assertWatermarkRefused(
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [rollupCheck('lint', 'FAILURE')],
+      rulesBody: REQUIRED_LINT_RULE,
+    }),
+    false,
+    /PR 1200's required checks are not passing\. Re-run --from-pr once they pass\./,
+  );
 });
 
 test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
@@ -5414,6 +5445,8 @@ function passingAgreement(head = OPERATION_LOCAL_SHA) {
   return {
     headRefOid: head,
     requiredChecksPassing: true,
+    noRequiredChecksConfigured: false,
+    blockingPresentRunNames: [] as string[],
     latestPassingCompletedAt: '2026-06-25T11:00:00Z',
   };
 }
@@ -5539,6 +5572,120 @@ test('operation-local defers the watermark when required CI is not passing', () 
     assert.equal(result.reasonCode, 'required-checks');
     assert.equal(result.snapshot !== null, true);
   }
+});
+
+test('#3670: operation-local with no required check names the blocking runs and the deferral path', () => {
+  const defer = (blockingPresentRunNames: string[]) =>
+    runOperationLocalSnapshotWatermark({
+      prNumber: 3592,
+      collectRichActivity: () => operationLocalSnapshot(),
+      readRequiredCiAgreement: () => ({
+        ...passingAgreement(),
+        requiredChecksPassing: false,
+        noRequiredChecksConfigured: true,
+        blockingPresentRunNames,
+      }),
+    });
+
+  const one = defer(['idd-advisory-convergence']);
+  assert.equal(one.decision, 'defer');
+  assert.equal(one.reasonCode, 'present-run-failing');
+  assert.match(one.reason ?? '', /^refusing to post watermark: /);
+  assert.match(one.reason ?? '', /has no required check configured/);
+  assert.match(one.reason ?? '', /idd-advisory-convergence is blocking\./);
+  assert.match(one.reason ?? '', /deferral, not a deadlock/);
+  assert.match(one.reason ?? '', /empty list routes through E15\/E14/);
+  assert.doesNotMatch(one.reason ?? '', /required checks are not passing/);
+
+  const two = defer(['docs', 'lint']);
+  assert.equal(two.reasonCode, 'present-run-failing');
+  assert.match(two.reason ?? '', /docs, lint are blocking\./);
+
+  // A pending, cancelled-only, or empty run set blocks nothing by name, but
+  // with no required check it is still not a required-check failure.
+  const none = defer([]);
+  assert.equal(none.decision, 'defer');
+  assert.equal(none.reasonCode, 'required-checks');
+  assert.match(none.reason ?? '', /has no required check configured/);
+  assert.match(none.reason ?? '', /not all passing yet/);
+  assert.match(none.reason ?? '', /deferral, not a deadlock/);
+  assert.doesNotMatch(none.reason ?? '', /required checks are not passing/);
+});
+
+test('#3670: operation-local collapses whitespace in check names and caps how many it names', () => {
+  const reasonFor = (blockingPresentRunNames: string[]) =>
+    runOperationLocalSnapshotWatermark({
+      prNumber: 3592,
+      collectRichActivity: () => operationLocalSnapshot(),
+      readRequiredCiAgreement: () => ({
+        ...passingAgreement(),
+        requiredChecksPassing: false,
+        noRequiredChecksConfigured: true,
+        blockingPresentRunNames,
+      }),
+    }).reason ?? '';
+
+  // A name with a newline or runs of spaces stays on one line.
+  const clean = reasonFor(['docs\nlint   job']);
+  assert.equal(clean.includes('\n'), false);
+  assert.match(clean, /docs lint job is blocking\./);
+
+  // Five names fit exactly, six spill one, and the verb stays plural.
+  assert.match(
+    reasonFor(['a', 'b', 'c', 'd', 'e']),
+    /, and a, b, c, d, e are blocking\./,
+  );
+  assert.match(
+    reasonFor(['a', 'b', 'c', 'd', 'e', 'f']),
+    /a, b, c, d, e and 1 more are blocking\./,
+  );
+  // Only the first five are named, then "and N more".
+  assert.match(
+    reasonFor(['a', 'b', 'c', 'd', 'e', 'f', 'g']),
+    /a, b, c, d, e and 2 more are blocking\./,
+  );
+
+  // Two raw names that collapse to the same string are listed once.
+  assert.match(
+    reasonFor(['docs  job', 'docs job']),
+    /, and docs job is blocking\./,
+  );
+
+  // Names that are empty after cleaning are not named: the generic text
+  // applies and the reason code stays required-checks.
+  const blank = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => ({
+      ...passingAgreement(),
+      requiredChecksPassing: false,
+      noRequiredChecksConfigured: true,
+      blockingPresentRunNames: ['  ', '\n'],
+    }),
+  });
+  assert.equal(blank.reasonCode, 'required-checks');
+  assert.match(blank.reason ?? '', /not all passing yet/);
+});
+
+test('#3670: operation-local keeps the required-checks text when a required check is configured', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => ({
+      ...passingAgreement(),
+      requiredChecksPassing: false,
+      noRequiredChecksConfigured: false,
+      // Names are only meaningful with no required check configured.
+      blockingPresentRunNames: ['docs'],
+    }),
+  });
+  assert.equal(result.decision, 'defer');
+  assert.equal(result.reasonCode, 'required-checks');
+  assert.equal(
+    result.reason,
+    `refusing to post watermark: PR 3592's required checks are not passing. ` +
+      `Re-run --from-pr once they pass.`,
+  );
 });
 
 test('operation-local refuses newly actionable same-HEAD activity past a stored boundary', () => {
@@ -5828,6 +5975,52 @@ test('--operation-local CLI defers with the capture and never posts while requir
       readFileSync(argvLog, 'utf8').length > 0,
       'the stub must have observed the capture reads',
     );
+    assert.deepEqual(ghPostCalls(argvLog), [], 'a deferred watermark posts');
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('--operation-local CLI defers with no required check, names the blocking run, and never posts (#3670)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-post-idd-marker-no-required-'),
+  );
+  const argvLog = join(tempRoot, 'gh-argv.log');
+  const restore = stubExecutable(
+    'gh',
+    withGhArgvLog(
+      // No required check configured (the default empty rules), so the failing
+      // present run decides CI.
+      watermarkFromPrGhStub(SHA, {
+        rollupNodes: [
+          rollupCheck('lint', 'SUCCESS'),
+          rollupCheck('docs', 'FAILURE'),
+        ],
+      }),
+      argvLog,
+    ),
+  );
+  try {
+    for (const apply of [false, true]) {
+      const result = runWatermarkCli([
+        '--operation-local',
+        ...(apply ? ['--apply'] : []),
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assert.deepEqual(validate(envelope, schema), []);
+      assert.equal(envelope.operationLocal.decision, 'defer');
+      assert.match(
+        envelope.operationLocal.reason,
+        /has no required check configured, so its present runs decide CI, and docs is blocking\. In E1 Step 2 this is a deferral, not a deadlock/,
+      );
+      assert.doesNotMatch(
+        envelope.operationLocal.reason,
+        /required checks are not passing/,
+      );
+      assert.equal(envelope.operationLocal.snapshot.headSha, SHA);
+    }
     assert.deepEqual(ghPostCalls(argvLog), [], 'a deferred watermark posts');
   } finally {
     restore();

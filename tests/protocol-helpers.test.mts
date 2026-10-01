@@ -15,11 +15,14 @@ import {
   hasTrustedReviewAckAfter,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
+  listBlockingPresentRunNames,
   MALFORMED_DISPOSITION_PREFIX_HINT,
   orderClaimEvents,
   resolveActiveClaim,
   resolveActiveClaimForWriteGate,
   resolveLatestReviewWatermark,
+  resolvePresentRunConclusion,
+  STALE_THREAD_DISPOSITION_HINT,
   summarizeAdvisoryWaitMarkers,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
@@ -4927,4 +4930,219 @@ test('resolveActiveClaimForWriteGate ignores an edited trusted forced-handoff ma
   });
   assert.equal(active?.claimId, 'claim-old');
   assert.equal(active?.agentId, 'agent-old');
+});
+
+// --- #3670: the names behind a `some-failing` present-run conclusion ---------
+
+function presentRun(name: string, state: string, coveredByWaiver = false) {
+  return {
+    name,
+    state,
+    completedAt: '2026-06-25T11:00:00Z',
+    coveredByWaiver,
+    type: 'check-run',
+    workflowName: 'ci',
+    workflowPath: `.github/workflows/${name}.yml`,
+  };
+}
+
+test('listBlockingPresentRunNames is non-empty exactly when the present-run conclusion is some-failing, except for a still-running status context', () => {
+  const scenarios: {
+    label: string;
+    checks: ReturnType<typeof presentRun>[];
+    identityUnresolved?: string[];
+    conclusion: string;
+    names: string[];
+    /** A still-running status context reads some-failing but is not named. */
+    namesOmitStillRunning?: boolean;
+  }[] = [
+    { label: 'no runs', checks: [], conclusion: 'none', names: [] },
+    {
+      label: 'all passing',
+      checks: [presentRun('a', 'SUCCESS'), presentRun('b', 'SKIPPED')],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'pending',
+      checks: [presentRun('a', 'IN_PROGRESS'), presentRun('b', 'SUCCESS')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'cancelled only',
+      checks: [presentRun('a', 'CANCELLED'), presentRun('b', 'SUCCESS')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'failed',
+      checks: [presentRun('b', 'FAILURE'), presentRun('a', 'SUCCESS')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'failed beside a cancelled run',
+      checks: [presentRun('a', 'CANCELLED'), presentRun('b', 'TIMED_OUT')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'unrecognized state beside a cancelled run',
+      checks: [presentRun('a', 'CANCELLED'), presentRun('b', 'MYSTERY')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'an unrecognized state beside a failure is named too',
+      checks: [presentRun('a', 'FAILURE'), presentRun('b', 'MYSTERY')],
+      conclusion: 'some-failing',
+      names: ['a', 'b'],
+    },
+    {
+      label: 'failure, unrecognized, cancelled and passing runs together',
+      checks: [
+        presentRun('a', 'CANCELLED'),
+        presentRun('b', 'MYSTERY'),
+        presentRun('c', 'TIMED_OUT'),
+        presentRun('d', 'SUCCESS'),
+      ],
+      conclusion: 'some-failing',
+      names: ['b', 'c'],
+    },
+    {
+      label: 'a superseded failure does not block, but a live failure does',
+      checks: [
+        {
+          ...presentRun('a', 'FAILURE'),
+          completedAt: '2026-06-25T10:00:00Z',
+        },
+        {
+          ...presentRun('a', 'SUCCESS'),
+          completedAt: '2026-06-25T11:00:00Z',
+        },
+        presentRun('b', 'MYSTERY'),
+        presentRun('c', 'TIMED_OUT'),
+      ],
+      conclusion: 'some-failing',
+      names: ['b', 'c'],
+    },
+    {
+      label: 'failure, pending and unrecognized runs together',
+      checks: [
+        presentRun('a', 'FAILURE'),
+        presentRun('b', 'QUEUED'),
+        presentRun('c', 'MYSTERY'),
+      ],
+      conclusion: 'some-failing',
+      names: ['a', 'c'],
+    },
+    {
+      label: 'identity-unresolved name beside pending and unrecognized runs',
+      checks: [
+        presentRun('a', 'SUCCESS'),
+        presentRun('b', 'IN_PROGRESS'),
+        presentRun('c', 'MYSTERY'),
+      ],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a', 'c'],
+    },
+    {
+      label:
+        'a still-running commit status reads some-failing but is not named',
+      checks: [
+        presentRun('a', 'PENDING'),
+        presentRun('b', 'EXPECTED'),
+        presentRun('c', 'REQUESTED'),
+        presentRun('d', 'SUCCESS'),
+      ],
+      conclusion: 'some-failing',
+      names: [],
+      namesOmitStillRunning: true,
+    },
+    {
+      label:
+        'a still-running commit status beside a failure names only the failure',
+      checks: [presentRun('a', 'PENDING'), presentRun('b', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'pending beside an unrecognized state names nothing',
+      checks: [presentRun('a', 'QUEUED'), presentRun('b', 'MYSTERY')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label:
+        'the same name failing in one workflow and unrecognized in another',
+      checks: [
+        presentRun('a', 'FAILURE'),
+        {
+          ...presentRun('a', 'MYSTERY'),
+          workflowPath: '.github/workflows/other.yml',
+        },
+      ],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a waiver-covered failure',
+      checks: [presentRun('a', 'FAILURE', true), presentRun('b', 'SUCCESS')],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'identity-unresolved name on a green run',
+      checks: [presentRun('a', 'SUCCESS'), presentRun('b', 'SUCCESS')],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'identity-unresolved name plus an independent failure',
+      checks: [presentRun('a', 'SUCCESS'), presentRun('b', 'FAILURE')],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a', 'b'],
+    },
+    {
+      label: 'identity-unresolved name that is not present',
+      checks: [presentRun('b', 'SUCCESS')],
+      identityUnresolved: ['a'],
+      conclusion: 'all-passing',
+      names: [],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const unresolved = new Set(scenario.identityUnresolved ?? []);
+    const conclusion = resolvePresentRunConclusion(scenario.checks, unresolved);
+    const names = listBlockingPresentRunNames(scenario.checks, unresolved);
+    assert.equal(conclusion, scenario.conclusion, scenario.label);
+    assert.deepEqual(names, scenario.names, scenario.label);
+    if (!scenario.namesOmitStillRunning) {
+      assert.equal(
+        names.length > 0,
+        conclusion === 'some-failing',
+        `${scenario.label}: names are non-empty exactly when some-failing`,
+      );
+    }
+  }
+});
+
+test('STALE_THREAD_DISPOSITION_HINT names the reply that clears a thread and stays wording-safe (#3670)', () => {
+  // The wording the gate rules support: a NEW marker-first reply, after the
+  // newest non-disposition comment; a plain-prose reply or an edited
+  // disposition does not count.
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /NEW marker-first/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /\*\*Accepted\*\*/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /\*\*Rejected\*\*/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /newest non-disposition comment/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /plain-prose reply/);
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /edited disposition/);
+  // A repeating no-new-content advisory-bot reply needs a hold, not a reply.
+  assert.match(STALE_THREAD_DISPOSITION_HINT, /post a hold comment/);
+  // A single line, so it reads cleanly in the JSON output.
+  assert.equal(STALE_THREAD_DISPOSITION_HINT.includes('\n'), false);
 });

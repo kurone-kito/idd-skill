@@ -8,6 +8,7 @@ import {
   isProtectionReadUnreadable,
   latestPassingCompletedAt,
   parseArgs,
+  requiredCiHeadAgreementFromSummary,
   selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
 import { classifyCiChecks } from '../src/scripts/protocol-helpers.mts';
@@ -1561,4 +1562,125 @@ test('#3465: latestPassingCompletedAt ignores sentinel and malformed passing tim
     latestPassingCompletedAt(fractional),
     '2026-06-25T11:00:00.123Z',
   );
+});
+
+// --- #3670: the agreement names why CI is not passing ------------------------
+
+test('#3670: the agreement carries noRequiredChecksConfigured and the blocking present runs', () => {
+  const agreementFor = (
+    statusCheckRollup: ReturnType<typeof checkRun>[],
+    options: Parameters<typeof buildCiWaitStateSummary>[1] = {},
+    overrides: Record<string, unknown> = {},
+  ) =>
+    requiredCiHeadAgreementFromSummary({
+      ...buildCiWaitStateSummary(
+        { headRefOid: HEAD_SHA, statusCheckRollup },
+        options,
+      ),
+      ...overrides,
+    });
+
+  // No required check plus a failing non-required run: the run is named.
+  const failing = agreementFor([
+    checkRun({ name: 'lint', conclusion: 'SUCCESS' }),
+    checkRun({ name: 'docs', conclusion: 'FAILURE' }),
+  ]);
+  assert.equal(failing.requiredChecksPassing, false);
+  assert.equal(failing.noRequiredChecksConfigured, true);
+  assert.deepEqual(failing.blockingPresentRunNames, ['docs']);
+
+  // Several blocking runs are sorted, and two failing runs that share a name
+  // (different workflows) are listed once.
+  const several = agreementFor([
+    checkRun({ name: 'zeta', conclusion: 'FAILURE', workflowName: 'push' }),
+    checkRun({ name: 'zeta', conclusion: 'FAILURE', workflowName: 'merge' }),
+    checkRun({ name: 'alpha', conclusion: 'TIMED_OUT' }),
+    checkRun({ name: 'mid', conclusion: 'SUCCESS' }),
+  ]);
+  assert.deepEqual(several.blockingPresentRunNames, ['alpha', 'zeta']);
+
+  // A still-running or cancelled-only run set blocks nothing by name.
+  const pending = agreementFor([
+    checkRun({ name: 'ci', status: 'IN_PROGRESS', conclusion: '' }),
+  ]);
+  assert.equal(pending.requiredChecksPassing, false);
+  assert.equal(pending.noRequiredChecksConfigured, true);
+  assert.deepEqual(pending.blockingPresentRunNames, []);
+  const cancelledOnly = agreementFor([
+    checkRun({ name: 'ci', conclusion: 'CANCELLED' }),
+  ]);
+  assert.equal(cancelledOnly.noRequiredChecksConfigured, true);
+  assert.deepEqual(cancelledOnly.blockingPresentRunNames, []);
+
+  // Every present run passing is not blocked, and names nothing.
+  const passing = agreementFor([
+    checkRun({ name: 'ci', conclusion: 'SUCCESS' }),
+  ]);
+  assert.equal(passing.requiredChecksPassing, true);
+  assert.equal(passing.noRequiredChecksConfigured, true);
+  assert.deepEqual(passing.blockingPresentRunNames, []);
+
+  // With a required check configured the names stay empty, even beside a
+  // failing non-required run, so the required-checks text is what applies.
+  const required = agreementFor(
+    [
+      checkRun({ name: 'lint', conclusion: 'FAILURE' }),
+      checkRun({ name: 'docs', conclusion: 'FAILURE' }),
+    ],
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(required.requiredChecksPassing, false);
+  assert.equal(required.noRequiredChecksConfigured, false);
+  assert.deepEqual(required.blockingPresentRunNames, []);
+});
+
+test('#3670: a green advisory-convergence run the downgrade blocks is named as blocking', () => {
+  const green = [
+    checkRun({ name: 'idd-advisory-convergence', conclusion: 'SUCCESS' }),
+    checkRun({ name: 'lint', conclusion: 'SUCCESS' }),
+  ];
+  const summary = buildCiWaitStateSummary(
+    { headRefOid: HEAD_SHA, statusCheckRollup: green },
+    {},
+  );
+
+  const clean = requiredCiHeadAgreementFromSummary(summary);
+  assert.equal(clean.requiredChecksPassing, true);
+  assert.deepEqual(clean.blockingPresentRunNames, []);
+
+  for (const flag of [
+    'advisoryConvergenceNonTargetEventOnly',
+    'advisoryConvergenceIdentityUnresolved',
+  ] as const) {
+    const downgraded = requiredCiHeadAgreementFromSummary({
+      ...summary,
+      [flag]: true,
+    });
+    assert.equal(downgraded.requiredChecksPassing, false, flag);
+    assert.equal(downgraded.noRequiredChecksConfigured, true, flag);
+    assert.deepEqual(
+      downgraded.blockingPresentRunNames,
+      ['idd-advisory-convergence'],
+      flag,
+    );
+  }
+
+  // A failing run beside the downgraded one is a second, separate cause.
+  const both = requiredCiHeadAgreementFromSummary({
+    ...buildCiWaitStateSummary(
+      {
+        headRefOid: HEAD_SHA,
+        statusCheckRollup: [
+          ...green,
+          checkRun({ name: 'docs', conclusion: 'FAILURE' }),
+        ],
+      },
+      {},
+    ),
+    advisoryConvergenceNonTargetEventOnly: true,
+  });
+  assert.deepEqual(both.blockingPresentRunNames, [
+    'docs',
+    'idd-advisory-convergence',
+  ]);
 });

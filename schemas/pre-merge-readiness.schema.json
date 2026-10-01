@@ -1245,6 +1245,10 @@
               "inPlaceEditOnly": {
                 "type": "boolean",
                 "description": "Advisory-only, narrower than ackOnlyPostDisposition: true only when every qualifying reply is an in-place edit of content that already existed at or before the thread's disposition."
+              },
+              "hint": {
+                "type": "string",
+                "description": "Diagnostic-only next step, present only for missing-fresh-disposition and unresolved-without-fresh-disposition entries that are not ackOnlyPostDisposition: post a new marker-first **Accepted** or **Rejected** reply after the newest non-disposition comment on the thread. A plain-prose correction counts as feedback, and an edited disposition never counts. If the newest comment is a no-new-content advisory-bot reply that reappears after every reply, the hint says to post a hold comment instead. Never changes route or reason (#3670)."
               }
             }
           }

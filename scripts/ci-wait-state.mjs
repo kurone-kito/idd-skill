@@ -34,10 +34,13 @@ import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   CI_FAILURE_CONCLUSION_STATES,
+  CI_PENDING_STATES,
+  CI_STATUS_CONTEXT_PENDING_STATES,
   classifyCiChecks,
   compareIsoTimestamps,
   isCompletedCiTimestamp,
   isPreMergeCiAllPassing,
+  listBlockingPresentRunNames,
   resolvePresentRunConclusion,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
@@ -58,13 +61,12 @@ const SUCCESS_STATES = new Set([
   'SKIPPED',
   'NOT_APPLICABLE',
 ]);
+// Built from the shared sets in protocol-helpers.mts so the present-run
+// fallback's names (#3670) and this bucketing cannot disagree about which
+// states are still running.
 const PENDING_STATES = new Set([
-  'QUEUED',
-  'IN_PROGRESS',
-  'WAITING',
-  'PENDING',
-  'EXPECTED',
-  'REQUESTED',
+  ...CI_PENDING_STATES,
+  ...CI_STATUS_CONTEXT_PENDING_STATES,
 ]);
 // Derived from the shared `CI_FAILURE_CONCLUSION_STATES` (protocol-helpers.mts)
 // plus `CANCELLED`, rather than an independently hand-maintained literal
@@ -622,6 +624,33 @@ function buildRequiredChecksRollup(
   };
 }
 /**
+ * The present-run inputs both {@link ciWaitSummaryIsPreMergeCiPassing} and the
+ * watermark agreement read (#3670): every present check in the shape
+ * `resolvePresentRunConclusion` takes, plus the names the advisory-convergence
+ * downgrade fails closed. One derivation, so the pass predicate and the names
+ * reported beside it cannot drift (the #3465 bug class).
+ */
+function presentRunInputs(summary) {
+  const advisoryDowngrade =
+    summary.advisoryConvergenceIdentityUnresolved ||
+    summary.advisoryConvergenceNonTargetEventOnly;
+  return {
+    advisoryDowngrade,
+    downgradeNames: advisoryDowngrade
+      ? new Set([DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR])
+      : new Set(),
+    checks: summary.checks.map((check) => ({
+      name: check.checkName,
+      state: check.state,
+      completedAt: check.completedAt,
+      coveredByWaiver: false,
+      type: check.type,
+      workflowName: check.workflowName,
+      workflowPath: check.workflowPath ?? '',
+    })),
+  };
+}
+/**
  * #3465: map this helper's required-check rollup onto
  * {@link isPreMergeCiAllPassing}, the predicate pre-merge readiness
  * already uses. A rollup `status` of `success` is the only value that
@@ -650,12 +679,8 @@ export function ciWaitSummaryIsPreMergeCiPassing(summary) {
   // Require both: the rollup's own success (missing names, source-pinned,
   // and unreadable stay on that status) and a producer-aware success.
   const requiredNames = new Set(rollup.names);
-  const advisoryDowngrade =
-    summary.advisoryConvergenceIdentityUnresolved ||
-    summary.advisoryConvergenceNonTargetEventOnly;
-  const advisoryDowngradeNames = advisoryDowngrade
-    ? new Set([DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR])
-    : new Set();
+  const presentRuns = presentRunInputs(summary);
+  const advisoryDowngrade = presentRuns.advisoryDowngrade;
   const producerStatus = classifyCiChecks(
     summary.checks
       .filter((check) => requiredNames.has(check.checkName))
@@ -669,16 +694,8 @@ export function ciWaitSummaryIsPreMergeCiPassing(summary) {
       })),
   ).status;
   const presentRunConclusion = resolvePresentRunConclusion(
-    summary.checks.map((check) => ({
-      name: check.checkName,
-      state: check.state,
-      completedAt: check.completedAt,
-      coveredByWaiver: false,
-      type: check.type,
-      workflowName: check.workflowName,
-      workflowPath: check.workflowPath ?? '',
-    })),
-    advisoryDowngradeNames,
+    presentRuns.checks,
+    presentRuns.downgradeNames,
   );
   const requiredChecksPassing =
     rollup.names.length > 0 &&
@@ -702,9 +719,19 @@ export function ciWaitSummaryIsPreMergeCiPassing(summary) {
 }
 /** Project a CI-wait summary onto {@link RequiredCiHeadAgreement}. */
 export function requiredCiHeadAgreementFromSummary(summary) {
+  const noRequiredChecksConfigured =
+    summary.requiredChecks.status === 'no-required-checks';
+  const presentRuns = presentRunInputs(summary);
   return {
     headRefOid: summary.headRefOid.trim(),
     requiredChecksPassing: ciWaitSummaryIsPreMergeCiPassing(summary),
+    noRequiredChecksConfigured,
+    blockingPresentRunNames: noRequiredChecksConfigured
+      ? listBlockingPresentRunNames(
+          presentRuns.checks,
+          presentRuns.downgradeNames,
+        )
+      : [],
     latestPassingCompletedAt: latestPassingCompletedAt(summary),
   };
 }
