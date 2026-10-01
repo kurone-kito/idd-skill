@@ -19,7 +19,11 @@
 // output informs manual review of .github/workflows/*.yml, not an
 // automated gate.
 import { parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  resolveGhOwnerRepo,
+} from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 /** Ceils a job's elapsed milliseconds to whole billed minutes, per GitHub's
  * actual billing unit -- a job that ran for any positive duration still
@@ -199,20 +203,7 @@ function ghPaginatedJson(args) {
 /** Resolves `{owner, repo}` the same way other CLI helpers in this
  * repository do: explicit flags first, else `gh repo view` auto-detection. */
 function resolveOwnerRepo(owner, repo) {
-  return {
-    owner:
-      owner ||
-      ghText(
-        ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ),
-    repo:
-      repo ||
-      ghText(
-        ['repo', 'view', '--json', 'name', '--jq', '.name'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ),
-  };
+  return resolveGhOwnerRepo({ owner, repo }, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
 }
 /**
  * Fetch and aggregate Actions usage for one pull request. Every workflow

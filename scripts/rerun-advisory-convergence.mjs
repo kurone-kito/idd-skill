@@ -136,7 +136,11 @@ import {
   resolveCiRerunDecision,
 } from './ci-wait-policy.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  resolveGhOwnerRepo,
+} from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -2466,23 +2470,15 @@ function collectFromGitHub(args) {
   // now-unused `isCrossRepo` boolean it used to justify, both went stale
   // in stages as each remaining local-context special-case was removed).
   // GH_TEXT_LOOP_TIMEOUT_OPTIONS on every `gh` call in this function,
-  // including these first three (owner/repo/PR-head resolution) -- same
+  // including these first two (owner/repo and PR-head resolution) -- same
   // hang hazard as fetchCheckRunsForRef and the per-run lookup loop below:
   // a stalled or unexpectedly-interactive `gh` here would hang this
   // read-only helper before it resolves even the basic identity of what
   // it is diagnosing (#1434 review, Copilot).
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
+  const { owner, repo } = resolveGhOwnerRepo(
+    { owner: args.owner, repo: args.repo },
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
   const repoRef = `${owner}/${repo}`;
   const prHeadSha = ghText(
     [
@@ -2864,26 +2860,15 @@ export function applyRefreshLatestPlan(plan, deps) {
   return { executed, skippedStaleHead, failed };
 }
 /** Resolves `{owner, repo}` the same way {@link collectFromGitHub} does
- * (explicit `--owner`/`--repo` first, else `gh repo view` auto-detection)
- * -- duplicated as these two lines rather than extracted into a shared
- * helper `collectFromGitHub` also calls, since that function's own
- * structure has already been shaped by several rounds of review (#1434)
- * and splitting it now for this narrow reuse is not worth the regression
- * risk. */
+ * (explicit `--owner`/`--repo` first, else one `gh repo view` call through
+ * {@link resolveGhOwnerRepo}) -- the same shared call, not an extraction out
+ * of `collectFromGitHub`, whose own structure has already been shaped by
+ * several rounds of review (#1434). */
 function resolveOwnerRepo(args) {
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  return { owner, repo };
+  return resolveGhOwnerRepo(
+    { owner: args.owner, repo: args.repo },
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
 }
 /** Production {@link RerunApplyDeps}: a real `gh run rerun` plus {@link
  * waitForNewAttempt} polling, and a fresh {@link collectFromGitHub} +
@@ -2903,7 +2888,7 @@ function resolveOwnerRepo(args) {
  * throw. `owner`/`repo` are resolved once, up front, and reused for
  * every rerun in the loop -- `recomputePlan` still re-resolves them
  * itself on each call (via its own fresh `collectFromGitHub`), which
- * is redundant but harmless (two cheap `gh repo view` calls) and keeps
+ * is redundant but harmless (one cheap `gh repo view` call) and keeps
  * `recomputePlan` a self-contained unit. */
 function buildProductionApplyDeps(args) {
   const { owner, repo } = resolveOwnerRepo(args);

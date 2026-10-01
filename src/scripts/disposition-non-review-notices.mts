@@ -42,7 +42,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mts';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  resolveGhOwnerRepo,
+} from './gh-exec.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type {
   HelperCliResult,
@@ -1341,11 +1345,10 @@ function main(): HelperCliResult {
     );
   }
   const pr = args.pr as number;
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const { owner, repo } = resolveGhOwnerRepo({
+    owner: args.owner,
+    repo: args.repo,
+  });
 
   // Default the trusted disposition authors to this gh login. Existing
   // dispositions only count toward idempotency when their author is trusted, so

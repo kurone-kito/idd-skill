@@ -17,7 +17,7 @@
 // (`post-idd-marker.mjs --type unclaim`) the caller takes afterward.
 
 import { parseCliArgs } from './cli-args.mts';
-import { ghApiJson, ghText } from './gh-exec.mts';
+import { ghApiJson, ghText, resolveGhOwnerRepo } from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -905,12 +905,10 @@ function main(): HelperCliResult {
     );
   }
 
-  const owner =
-    (values.owner as string) ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    (values.repo as string) ||
-    ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const { owner, repo } = resolveGhOwnerRepo({
+    owner: values.owner as string,
+    repo: values.repo as string,
+  });
 
   if (values['parked-issues'] as boolean) {
     const summary = buildParkedIssuesSummary(owner, repo);

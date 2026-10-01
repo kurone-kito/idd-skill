@@ -366,21 +366,13 @@ test('idd-suggest-untrusted-labelers.mjs CLI: table format renders the same aggr
 test('idd-suggest-untrusted-labelers.mjs CLI: --owner/--repo omitted auto-detects via gh repo view, with no other gh call made', () => {
   // Same no-mutation proof as the explicit-flags tests above, but for the
   // default (auto-detect) invocation shape: the stub table registers only
-  // the two `gh repo view` reads plus the one events page -- any other
+  // the one combined `gh repo view` read plus the one events page -- any other
   // call, mutating or not, fails the stub loudly.
   const responses = new Map<string, string>([
     [
-      JSON.stringify([
-        'repo',
-        'view',
-        '--json',
-        'owner',
-        '--jq',
-        '.owner.login',
-      ]),
-      OWNER,
+      JSON.stringify(['repo', 'view', '--json', 'owner,name']),
+      JSON.stringify({ owner: { login: OWNER }, name: REPO }),
     ],
-    [JSON.stringify(['repo', 'view', '--json', 'name', '--jq', '.name']), REPO],
     [
       JSON.stringify(eventsPageArgv(1)),
       JSON.stringify([

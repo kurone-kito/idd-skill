@@ -1784,8 +1784,11 @@ test('CLI path fails when an explicit --policy file is invalid', () => {
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");

@@ -8,7 +8,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 
 import { parseCliArgs } from './cli-args.mts';
-import { ghText } from './gh-exec.mts';
+import { ghText, resolveGhOwnerRepo } from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -221,11 +221,10 @@ async function main(): Promise<HelperCliResult> {
     );
   }
 
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const { owner, repo } = resolveGhOwnerRepo({
+    owner: args.owner,
+    repo: args.repo,
+  });
 
   const result = await classifyBranchConflictState(args.prNumber, {
     owner,

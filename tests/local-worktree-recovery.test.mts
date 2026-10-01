@@ -8387,7 +8387,11 @@ if (args[0] === 'api' && args[1] === 'user') {
   process.exit(0);
 }
 if (args[0] === 'repo' && args[1] === 'view') {
-  process.stdout.write(args.includes('owner') ? 'o\\n' : 'r\\n');
+  if (args.join(' ') !== 'repo view --json owner,name') {
+    process.stderr.write('unexpected repo view argv: ' + args.join(' ') + '\\n');
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: 'o' }, name: 'r' }) + '\\n');
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.some((a) => /nodes\\(ids/.test(a))) {

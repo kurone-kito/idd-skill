@@ -41,7 +41,7 @@ import {
   resolveAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghApiJson, ghText } from './gh-exec.mjs';
+import { ghApiJson, ghText, resolveGhOwnerRepo } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -614,11 +614,10 @@ function main() {
     printHelp();
     return 0;
   }
-  const owner =
-    values.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    values.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const { owner, repo } = resolveGhOwnerRepo({
+    owner: values.owner,
+    repo: values.repo,
+  });
   const report = buildProviderHealthReport(owner, repo);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   return 0;

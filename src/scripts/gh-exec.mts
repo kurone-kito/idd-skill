@@ -1492,6 +1492,58 @@ export function combineOwnerRepoFlags(args: {
   return `${args.owner}/${args.repo}`;
 }
 
+/** Matches an ANSI SGR colour sequence, which `gh` emits into `--json` output
+ * when `CLICOLOR_FORCE` or `GH_FORCE_TTY` is set. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matches the ESC byte
+const ANSI_SGR_PATTERN = /\u001B\[[0-9;]*m/g;
+
+/**
+ * Resolve the current repository's `{ owner, repo }` with one `gh repo view`
+ * call instead of one per field (#3715), the shared replacement for every
+ * helper's former `owner || ghText(...)` / `repo || ghText(...)` pair.
+ *
+ * A caller's explicit `--owner`/`--repo` value wins over the resolved one and
+ * is returned as given (a falsy value counts as not given, as the old pair
+ * did); with both present no process is spawned. Otherwise it runs exactly
+ * `gh repo view --json owner,name` through {@link ghText} with the caller's
+ * own `options` (each site keeps its stdio and timeout), and fills only the
+ * missing field or fields from `owner.login` and `name`, trimmed. A field the
+ * response lacks resolves to `''`, which a caller such as the pending-review
+ * watch treats as unknown evidence.
+ *
+ * A non-zero `gh` exit throws the error {@link ghText} already tagged. A
+ * response that is not a JSON object (empty, unparseable, `null`, an array or
+ * a primitive) throws a tagged error with a constant message, so
+ * `classifyHelperError` reports `transport`; it never echoes the response,
+ * because a message that carried a body could be read as an HTTP status.
+ */
+export function resolveGhOwnerRepo(
+  explicit: { owner?: string | null; repo?: string | null } = {},
+  options: GhTextOptions = {},
+): { owner: string; repo: string } {
+  if (explicit.owner && explicit.repo) {
+    return { owner: explicit.owner, repo: explicit.repo };
+  }
+  const raw = ghText(['repo', 'view', '--json', 'owner,name'], options);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.replace(ANSI_SGR_PATTERN, ''));
+  } catch {
+    parsed = null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw tagGhCommandError(
+      new Error('gh repo view --json owner,name did not return a JSON object'),
+    );
+  }
+  const { owner, name } = parsed as { owner?: unknown; name?: unknown };
+  const login = (owner as { login?: unknown } | null | undefined)?.login;
+  return {
+    owner: explicit.owner || (typeof login === 'string' ? login.trim() : ''),
+    repo: explicit.repo || (typeof name === 'string' ? name.trim() : ''),
+  };
+}
+
 /** Append one NDJSON stdout line's rows; true when the line looks like JSON. */
 function appendPaginatedNdjsonLine(items: unknown[], bytes: Buffer): boolean {
   const text = bytes.toString('utf8').replace(/\r$/, '').trim();

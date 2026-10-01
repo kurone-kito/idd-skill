@@ -2334,7 +2334,7 @@ function readPendingReviewWatch(watch, argv, previousFingerprint) {
  * A throw or a blank HEAD is unknown, never an empty successful watch.
  *
  * When argv carries no `--owner` or `--repo`, the repository is resolved from
- * the current checkout (two `gh repo view` reads) once and reused by every
+ * the current checkout (one `gh repo view` read) once and reused by every
  * later call of the same instance, so a poll pays for it once instead of on
  * every tick (#3617). Only a resolved pair whose owner and repo are both
  * non-empty is kept: a throw or a blank value is unknown evidence, is never

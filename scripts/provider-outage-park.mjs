@@ -16,7 +16,7 @@
 // the claim itself is a separate, already-existing step
 // (`post-idd-marker.mjs --type unclaim`) the caller takes afterward.
 import { parseCliArgs } from './cli-args.mjs';
-import { ghApiJson, ghText } from './gh-exec.mjs';
+import { ghApiJson, ghText, resolveGhOwnerRepo } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -676,11 +676,10 @@ function main() {
       new Error('--park and --parked-issues are mutually exclusive'),
     );
   }
-  const owner =
-    values.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    values.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const { owner, repo } = resolveGhOwnerRepo({
+    owner: values.owner,
+    repo: values.repo,
+  });
   if (values['parked-issues']) {
     const summary = buildParkedIssuesSummary(owner, repo);
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);

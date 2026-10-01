@@ -11,6 +11,7 @@ import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
+  resolveGhOwnerRepo,
   wrapGhCompatibilityError,
 } from './gh-exec.mjs';
 import {
@@ -167,18 +168,10 @@ function runCli() {
     process.env.GH_TOKEN = args.ghToken;
     process.env.GITHUB_TOKEN = args.ghToken;
   }
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
+  const { owner, repo } = resolveGhOwnerRepo(
+    { owner: args.owner, repo: args.repo },
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
   const repository = `${owner}/${repo}`;
   const now = args.now || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const quietWindowMs =

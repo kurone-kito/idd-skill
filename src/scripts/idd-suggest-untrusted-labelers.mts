@@ -20,7 +20,11 @@
 // adopter-owned edit after reviewing this report.
 
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghApiJson, ghText } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghApiJson,
+  resolveGhOwnerRepo,
+} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -339,28 +343,14 @@ export function sweepUntrustedLabelerCandidates(
 }
 
 /** Resolves `{owner, repo}` the same way other CLI helpers in this
- * repository do: explicit flags first, else `gh repo view` auto-detection
- * (matching `stalled-session-quiet-check.mts`'s inline style rather than
- * importing the heavier `provider-adapter-github.mts` module just for
- * this one lookup). */
+ * repository do: explicit flags first, else one `gh repo view` call through
+ * `gh-exec.mts`'s `resolveGhOwnerRepo` (rather than importing the heavier
+ * `provider-adapter-github.mts` module just for this one lookup). */
 function resolveOwnerRepo(
   owner: string,
   repo: string,
 ): { owner: string; repo: string } {
-  return {
-    owner:
-      owner ||
-      ghText(
-        ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ),
-    repo:
-      repo ||
-      ghText(
-        ['repo', 'view', '--json', 'name', '--jq', '.name'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ),
-  };
+  return resolveGhOwnerRepo({ owner, repo }, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
 }
 
 // ---------------------------------------------------------------------------

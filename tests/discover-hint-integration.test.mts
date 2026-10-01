@@ -406,8 +406,11 @@ const { appendFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n");
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 if (args[0] === "api" && args[1] === "repos/kurone-kito/idd-skill/issues/700") {
@@ -648,8 +651,11 @@ const { appendFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(logPath)}, args.join(" ") + "\\n");
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 if (args[0] === "api" && /issues\\?/.test(args[1] || "")) {
