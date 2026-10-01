@@ -88,9 +88,12 @@ persists on every retry: the handoff marker made this session's
 `new-claim-id` the active claim, but `W`'s `idd-claim.lock` still names the
 displaced claim-id and `W` holds no generated-claim record for the new one.
 The stop at `kurone-kito/idd-skill#3597` (2026-09-30) is the observed
-instance. Every other `owner_evidence_required` case keeps "stop", and §LWR
-does not apply: it recovers a stale or released claim's occupied worktree,
-not a live forced-handoff claim. Apply this only when all of these hold:
+instance. Every other `owner_evidence_required` case keeps "stop", except
+an `unreadable` occupancy probe caused by an unrelated record, which §LWR's
+paragraph on an unrelated worktree record covers. §LWR's steps 1-5 apply to
+none of them: they recover a stale or released claim's occupied worktree,
+not a live forced-handoff claim. Apply the recipe below only when all of
+these hold:
 
 - A routing call that passed this session's `--claim-id` and `--worktree W`
   returned `owner_evidence_required`, and
@@ -171,7 +174,9 @@ applies), through the profile-selected claim-lock command:
    `--acquire` with the same flags, no `--takeover`. Any other holder:
    stop. A displaced predecessor that is somehow still running is
    displaced by definition.
-4. Re-run the routing call and expect `already_owned`.
+4. Re-run the routing call and expect `already_owned`. If it still returns
+   `owner_evidence_required` with `occupancy_probe` `unreadable`, §LWR's
+   paragraph on an unrelated worktree record applies.
 
 The trust basis is the human-gated forced-handoff marker, the nonce winner,
 and the `--check` run immediately before the takeover. `resume-claim-routing`
@@ -183,6 +188,28 @@ inherited commits on `{branch}`, run the content-scope audit described
 in §CSA before those commits are pushed or bundled into a PR. The
 displaced session is by definition unreachable, so its own planning
 comment can never substitute for this independent check.
+
+**Inherited plan comment** — The displaced session may also have posted a B2
+plan. Where it left no commits, §CSA's committed range is empty, but the
+dirty-state note in the recipe above still covers any uncommitted work;
+where it left commits, §CSA covers them but not the plan.
+`idd-work.instructions.md`'s B3 self-check accepts only the refined,
+post-critique plan, and a successor cannot verify that the predecessor's
+critique pass ran. On the no-PR route that enters B3 (a dirty worktree) the
+successor therefore treats the inherited comment as an unverified draft: it
+re-verifies the plan against the issue and the code, runs its own critique
+pass, posts a refined plan before entering B3, and adds the refined plan
+comment, never the inherited draft, to `Authoritative by` alongside the
+evidence §FH and Step 2 require. It never relies on the predecessor's
+critique having run. The same holds after an ordinary stale takeover. The
+no-PR rows that route to B2 draft their own plan anyway. The routes that
+skip both B2 and B3 (a clean worktree with unpushed commits and §W8 with
+unpushed commits go to D1, and §W7 resumes from C1) have no B3 self-check
+to satisfy, so the successor does not rely on the inherited plan there.
+Reported 2026-09-30 in `kurone-kito/dotfiles`
+(the round for issue `dotfiles#530`): the successor did this as a judgment
+call. Its two failure modes are building on an unreviewed draft and redoing
+reviewed work (preventive; no observed incident yet).
 
 ## §MC — F4 Cleanup Routing for a Merged or Closed Issue
 
@@ -498,19 +525,118 @@ canonical spec this helper's own behavior must match, the authoritative
 fallback for an `instructions-only` profile, and the reference for any step
 the helper's dry-run output doesn't make self-explanatory.
 
+**An unrelated worktree record.** Resume Step 1 routes only a forced-handoff
+successor to §FH, so any other session stops on `owner_evidence_required`
+and reports the failed proof; an operator may then apply this paragraph, and
+for either trigger below an operator confirms every action. It is the only
+part of §LWR that applies to an `owner_evidence_required`
+verdict, and it also covers a `local_worktree_occupied` result whose
+top-level `reason` ends `-local-worktree-unreadable` when `paths` names a
+record that is not the claimed branch's own. Steps 1-5 below recover the
+claimed branch's own record. The triggers differ by verdict:
+
+- `owner_evidence_required`: `evidence.owner_evidence.occupancy_probe` is
+  `unreadable` (the `warnings[]` line reads `owner evidence required: first
+  failed proof is occupancy_probe (unreadable)`) although the proofs before
+  it hold, that is `worktree_identity`, `claim_lock_matches`,
+  `generated_tokens_match` and `agent_and_branch_match` are all `true`.
+- `local_worktree_occupied`: the top-level `reason` ends
+  `-local-worktree-unreadable` (the `warnings[]` line reads `cannot verify
+  local worktree occupancy for <stale|released> branch <branch>: ...`) and
+  `evidence.local_worktree.paths` names a record other than the claimed
+  branch's own.
+
+The probe reads every record in `git worktree list --porcelain`, not only
+the claimed branch's, and a record it cannot classify makes it fail closed
+for any branch. `evidence.local_worktree.paths` names the record to look
+at; when it is empty the listing failed or could not be parsed, so read
+`evidence.local_worktree.reason` instead. A record the probe could not
+resolve to the claimed branch (the shapes below) is never preserved or
+removed by steps 1-5. After clearing a record, re-run the routing call
+that stopped. For empty `paths`, or a shape not listed below, no bullet
+applies: stop and report. Reported 2026-09-30 by the `kurone-kito/dotfiles`
+adopter (the round for issues `dotfiles#533` and `dotfiles#534`): about 45
+minutes until a peer's scratch worktree record disappeared, on a pin that
+predates the fix for issue `kurone-kito/idd-skill#3205` (PR
+`kurone-kito/idd-skill#3206`), so that record may have been the plain
+detached case that fix covers rather than one of the shapes below. Every
+shape below, except an unmounted volume, was replayed on git 2.53.0
+against an unrelated branch, and none has an observed incident of its own
+(preventive; no observed incident yet):
+
+- A detached record whose directory was removed with `rm -rf` reads
+  `unreadable`, and `git worktree list --porcelain` flags it `prunable`.
+  git prints that same line for a deleted directory, an unmounted volume,
+  a directory moved by hand and a directory whose `.git` file is gone. Act
+  only when the operator confirms the directory was deleted and `test ! -e
+  <path>` holds; repair a moved worktree with `git worktree repair
+  <new-path>`, never remove it. Otherwise stop and report. If both hold, point a
+  backup ref at the listing's `HEAD <sha>` (`git update-ref
+  refs/idd-lwr/unrelated-<sha> <sha>`) and confirm that `git rev-parse
+  --verify refs/idd-lwr/unrelated-<sha>` prints the same `<sha>`; key the
+  ref by the commit, because an admin id can be reused and a second
+  `update-ref` on the same name silently replaces the first backup. A
+  detached tip may be kept only by that record, and removal leaves the
+  commit unreferenced, so `git gc` may delete it later. Leave the ref in
+  place and report it. Last, run `git worktree remove --force <path>`,
+  behind the clone-scoped lock when workers share the clone, as B1 does;
+  once the lock is held, re-run the routing call and `test ! -e <path>`,
+  and remove only if the same conditions still hold. Do not use a plain
+  `git worktree prune` here: it is clone-wide, so it also clears other gone
+  detached records before they have a backup ref, and it removes the admin
+  directory of a record whose `.git` file is gone.
+- The same record, locked, also reads `unreadable` but is not flagged
+  `prunable`, and a plain prune leaves it. Read its `locked <reason>` line.
+  Unlock it (`git worktree unlock <path>`) only when the operator
+  confirms the directory was deleted and `test ! -e <path>` holds. The
+  reason is free text written by whoever locked it, so it is evidence for
+  that confirmation, not a substitute for it, and a reason such as "on
+  removable media" means stop and report. Once unlocked it is an ordinary
+  gone record, the previous bullet. `git worktree remove --force` alone
+  fails on a locked record and needs `--force` twice, but that bypasses the
+  unlock rule; the rule above still decides.
+- A foreign detached worktree in the middle of a rebase, a `git am` or a
+  bisect reads `unreadable` when that work was started from a detached
+  HEAD. A rebase's `head-name` is the literal `detached HEAD`, a `git am`
+  has no `head-name` at all, and a bisect's `BISECT_START` is a bare
+  commit id, so none of them names a branch. Only its owner clears it, by
+  finishing or aborting that work (`git rebase --abort`, `git am --abort`,
+  `git bisect reset`), never this session; otherwise stop and report the
+  path to the operator.
+- A clean detached record, a locked clean detached record, a record on a
+  named branch whose directory is gone, a rebase in progress on a named
+  branch, and a cherry-pick or merge conflict all read `absent`. They are
+  not the cause.
+
 1. **Confirm the block.** Run the profile-selected `resume-claim-routing`
    helper (`docs/idd-helper-scripts.md`; source-repo/vendored-node: `node
    scripts/resume-claim-routing.mjs --issue <n>`); a
    `local_worktree_occupied` result reports
-   `evidence.local_worktree.paths` and a `reason` starting
-   `stale-claim-...` or `released-claim-...`. If `<path>` no longer
-   exists on disk (a prunable record), skip to `git worktree remove
-   --force <path-from-list>` — mirroring B1's own same-shape recovery
-   rule for a prunable entry (`idd-work.instructions.md`); plain `git
-   worktree prune` silently no-ops on a record younger than Git's
-   default 3-month prune expiry, leaving the occupancy helper failing
-   closed on it. Nothing to preserve or
-   remove. Otherwise run the profile-selected
+   `evidence.local_worktree.paths` and a top-level `reason`
+   starting `stale-claim-...` or `released-claim-...`. Under a reason ending
+   `-local-worktree-occupied`, `<path>` is the claimed branch's own record,
+   even when `git worktree list --porcelain` shows it `detached` in the
+   middle of a rebase or bisect (step 3 handles that). Under a reason
+   ending `-local-worktree-unreadable`, go on only through the prunable
+   skip-ahead below, which needs a record that shows `branch
+   refs/heads/<branch>`, is flagged `prunable`, is unlocked, and whose
+   `<path>` is absent on disk; every other `-local-worktree-unreadable`
+   result is the unrelated-record paragraph's case and stops here. If
+   `<path>` no longer exists on disk (a prunable record), skip to `git
+   worktree remove --force <path-from-list>`, behind the clone-scoped lock
+   when workers share the clone (re-run the routing call and re-check that
+   `<path>` is still absent once the lock is held) — mirroring B1's own
+   same-shape recovery rule for a prunable entry
+   (`idd-work.instructions.md`). Steps 3-4 have nothing to preserve or
+   remove here. Keep that command rather than a
+   plain `git worktree prune`: prune is clone-wide (replayed on git 2.53.0,
+   one prune cleared an unrelated record together with the claimed
+   branch's own), though it does remove an unlocked prunable record at
+   once. The 3-month expiry belongs to `gc.worktreePruneExpire`, which only
+   `git gc` applies. A locked record is never flagged `prunable`, so this
+   skip-ahead does not reach it; unlocking it is the operator's call, and
+   once unlocked it is prunable and the skip-ahead applies. Otherwise (a
+   `-local-worktree-occupied` reason) run the profile-selected
    `claim-lock` helper's check form (source-repo/vendored-node: `node
    scripts/claim-lock.mjs --check --worktree <path>`) to read which
    claim-id holds the lock. Proceed only when that claim-id matches the
