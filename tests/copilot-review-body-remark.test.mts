@@ -629,3 +629,56 @@ test('a remark at the head of a very large body is still found, and read in full
     long,
   );
 });
+
+test('scanning stops after the first line the bounds cut (#3672)', () => {
+  // #3688 review: a line over the cap loses an HTML comment opener past the
+  // cut, so the lines below it must not be read without that context.
+  const cutLine = `${'a'.repeat(520)} <!--`;
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      `${cutLine}\nNeeds a closer look: hidden\n-->`,
+    ),
+    null,
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      `${'a'.repeat(520)}\n### Needs a closer look\n\nBelow a long line.`,
+    ),
+    null,
+  );
+  // The mirror case: an opener above the cut whose closer sits past it. The
+  // cut line's own paragraph is unreadable, so a label in it is not a remark.
+  for (const body of [
+    `\`open\nNeeds a closer look: x\n${'a'.repeat(520)} \``,
+    `foo <!--\nNeeds a closer look: x\n${'a'.repeat(520)} -->`,
+    `Needs a closer look: x\n${'a'.repeat(520)} <!--\nhidden\n-->`,
+  ]) {
+    assert.equal(extractCopilotReviewBodyRemark(body), null, body.slice(0, 40));
+  }
+  // The cap itself: 512 characters stay readable context, 513 cut the line.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      `${'a'.repeat(512)}\nNeeds a closer look: x`,
+    ),
+    'x',
+  );
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      `${'a'.repeat(513)}\nNeeds a closer look: x`,
+    ),
+    null,
+  );
+  // A label or heading above the long line, and a long remark line itself,
+  // are still read in full.
+  assert.equal(
+    extractCopilotReviewBodyRemark(
+      `Needs a closer look: above\n\n${cutLine}\nafter`,
+    ),
+    'above',
+  );
+  const long = 'word '.repeat(300).trim();
+  assert.equal(
+    extractCopilotReviewBodyRemark(`### Needs a closer look\n\n${long}`),
+    long,
+  );
+});

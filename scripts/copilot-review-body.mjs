@@ -232,20 +232,38 @@ const REMARK_INLINE_LABEL_PATTERN =
 const REMARK_PHRASE_PATTERN = /needs a closer look/iu;
 /** The head of a body the Markdown masker may read, and the longest line it
  * may see: a remark sits at the top of a review body (every observed one
- * within its first hundred characters). Known limit, accepted for an
- * evidence-only field: a line over MASK_LINE_CHARS whose HTML comment or
- * raw-text element closes past that column reads as unterminated, so it hides
- * the rest of the head, and a remark paragraph that crosses the head's end is
- * read only up to the line holding the boundary. */
+ * within its first hundred characters). Known limits, accepted for an
+ * evidence-only field: a remark that starts past the head is not found, and
+ * scanning stops after the first line the bounds cut (see
+ * {@link boundedMaskInput}), so nothing below a very long line, or a remark
+ * paragraph crossing the head's end, is read. */
 const MASK_HEAD_CHARS = 2048;
 const MASK_LINE_CHARS = 512;
-/** The bounded copy of `body` handed to the shared masker. */
+/** The bounded copy of `body` handed to the shared masker, and the last line
+ * index scanning may reach. The first line the bounds truncated (a line over
+ * MASK_LINE_CHARS, or the line holding the head's end) has unknown Markdown
+ * context past the cut: an HTML comment or code span can open or close there.
+ * So it is an opaque boundary: no later line is scanned, and neither is a line
+ * of the cut line's own paragraph unless the cut line starts it (an inline
+ * construct needs its opener and closer in one paragraph), which keeps a long
+ * remark line readable under its heading (#3688 review). */
 function boundedMaskInput(body) {
-  return body
-    .slice(0, MASK_HEAD_CHARS)
-    .split(/\r?\n/)
-    .map((line) => line.slice(0, MASK_LINE_CHARS))
-    .join('\n');
+  const lines = body.slice(0, MASK_HEAD_CHARS).split(/\r?\n/);
+  const cut = lines.findIndex((line) => line.length > MASK_LINE_CHARS);
+  let lastLine = cut === -1 ? lines.length - 1 : cut;
+  if (cut !== -1 || body.length > MASK_HEAD_CHARS) {
+    let start = lastLine;
+    while (start > 0 && (lines[start - 1] ?? '').trim() !== '') {
+      start -= 1;
+    }
+    if (start < lastLine) {
+      lastLine = start - 1;
+    }
+  }
+  return {
+    text: lines.map((line) => line.slice(0, MASK_LINE_CHARS)).join('\n'),
+    lastLine,
+  };
 }
 const HAS_TEXT_PATTERN = /[\p{L}\p{N}]/u;
 const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
@@ -291,12 +309,13 @@ function readRemarkParagraph(
   original,
   blocks,
   located,
+  lastLine,
   start,
   firstLineOffset,
   singleLine = false,
 ) {
   const parts = [];
-  for (let index = start; index < original.length; index += 1) {
+  for (let index = start; index <= lastLine; index += 1) {
     const originalLine = original[index] ?? '';
     if (
       endsRemarkParagraph(originalLine, blocks[index] ?? '') ||
@@ -371,7 +390,7 @@ export function extractCopilotReviewBodyRemark(body) {
   // sees a bounded head of the body with bounded lines, and not at all when
   // that head lacks the phrase. A remark sits at the top of a review body;
   // the remark TEXT is still read from the full original lines.
-  const maskInput = boundedMaskInput(body);
+  const { text: maskInput, lastLine } = boundedMaskInput(body);
   if (!REMARK_PHRASE_PATTERN.test(maskInput)) {
     return null;
   }
@@ -389,7 +408,7 @@ export function extractCopilotReviewBodyRemark(body) {
     htmlComments: 'keep',
     htmlBlocks: 'mask',
   }).split(/\r?\n/);
-  for (let index = 0; index < located.length; index += 1) {
+  for (let index = 0; index <= lastLine; index += 1) {
     const line = located[index] ?? '';
     let remark = null;
     // The plain original line must match too: a code span between the marker
@@ -399,16 +418,23 @@ export function extractCopilotReviewBodyRemark(body) {
       REMARK_HEADING_PATTERN.test(original[index] ?? '')
     ) {
       let first = index + 1;
-      while (first < original.length && (original[first] ?? '').trim() === '') {
+      while (first <= lastLine && (original[first] ?? '').trim() === '') {
         first += 1;
       }
       // A first block the masker blanked (a code or HTML block) is not prose.
       if (
-        first < original.length &&
+        first <= lastLine &&
         (blocks[first] ?? '').trim() !== '' &&
         !startsNewBlock(located[first] ?? '')
       ) {
-        remark = readRemarkParagraph(original, blocks, located, first, 0);
+        remark = readRemarkParagraph(
+          original,
+          blocks,
+          located,
+          lastLine,
+          first,
+          0,
+        );
       }
     } else {
       const label = REMARK_INLINE_LABEL_PATTERN.exec(line);
@@ -426,6 +452,7 @@ export function extractCopilotReviewBodyRemark(body) {
           original,
           blocks,
           located,
+          lastLine,
           index,
           label[0].length,
           ATX_HEADING_LINE_PATTERN.test(line),
