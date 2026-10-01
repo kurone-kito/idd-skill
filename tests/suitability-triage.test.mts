@@ -41,7 +41,6 @@ function stubGhWithCounter(scriptBody: string): {
 } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-suitability-triage-test-'));
   const counterFile = join(tempRoot, 'count');
-  const restoreLoadControl = pinLoadControlOff();
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
@@ -58,11 +57,17 @@ process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
 `,
   );
+  // Pin only once the stub exists: a throwing `stubExecutable` has no cleanup
+  // to release it (#3702).
+  const restoreLoadControl = pinLoadControlOff();
   return {
     restore: () => {
-      restore();
-      restoreLoadControl();
-      rmSync(tempRoot, { recursive: true, force: true });
+      try {
+        restore();
+      } finally {
+        restoreLoadControl();
+        rmSync(tempRoot, { recursive: true, force: true });
+      }
     },
     readCount: () => Number(readFileSync(counterFile, 'utf8').trim()),
   };
