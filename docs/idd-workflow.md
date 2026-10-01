@@ -1558,6 +1558,74 @@ A harness whose delegation primitive offers no way to bound the wait
 cannot honor the ceiling. Record that residual risk explicitly and use
 structured self-critique as the unattended-safe path for that harness.
 
+For Claude Code, whose `Agent` tool has no timeout parameter, the
+following recipe is conditional on `Agent` launching asynchronously, as it
+does today: it returns at once, and only a later notification reports that
+the pass ended, which may never come if the subagent stalls. Where a
+harness call blocks until the subagent ends, nothing can interrupt it and
+the "cannot honor the ceiling" paragraph above applies instead. A Claude
+Code session:
+
+1. Checks, before launching, that it can arm a wake-up with one of the
+   mechanisms the
+   [wake-up discipline](../.github/instructions/idd-ci.instructions.md#wake-up-discipline)
+   section names (that section also notes that a bare `sleep` may be
+   refused) and that `TaskStop` is available (a tool listed only as
+   deferred counts once it has been loaded, which must happen before the
+   launch). When it cannot confirm both, it does not launch, records the
+   residual risk as the "cannot honor the ceiling" paragraph above
+   requires, and uses structured self-critique.
+2. Creates, before the launch, a unique scratch directory outside the
+   worktree, names it in the launch prompt, and tells the subagent to put
+   any scratch file only under it and to start any background job with a
+   working directory under it.
+3. Launches the pass with `Agent`, notes the launch time, and arms the
+   wake-up for the ceiling, deliberately the ceiling and not the expected
+   completion because the ceiling is the only moment a decision is
+   needed, cancelling or ignoring that wake once that pass has returned.
+4. When the ceiling is reached and no findings list has arrived, stops the
+   subagent with `TaskStop` and the agent id the launch returned. That is
+   the delegation failure defined above, so the structured self-critique
+   fallback runs, the critique result records that the delegated pass did
+   not return, and a result that arrives later is discarded even if it is
+   usable (a repository whose passes legitimately run longer sets a larger
+   `critiqueLoop.subagentWaitCeiling`). A findings list that has already
+   arrived when the session acts is used. If the launch returned no agent
+   id or `TaskStop` fails, the session records the residual risk and takes
+   the same fallback, because it cannot confirm the stop.
+5. Once the pass has returned, been stopped, or the stop could not be
+   confirmed, lists the processes left running and ends by process id only
+   those whose working directory or command line is under the scratch
+   directory, never the session's own shell or the listing command itself.
+   It reports any other leftover as residual risk, without ending it, and
+   it never ends processes by a name pattern. It removes the scratch
+   directory by its exact literal path (never a possibly unset shell
+   variable) only after that cleanup and only when no process under it
+   remains; otherwise it leaves the directory and records the residual
+   risk.
+
+In a session that passed the check in item 1, stopping with `TaskStop` and
+this cleanup are how the Claude Code pattern meets the equivalence
+condition above. Whether a background job survives `TaskStop` was not
+replayed. The observations behind this recipe follow; none was recorded in
+an issue or pull request before this recipe:
+
+- On 2026-10-01, during the plan critique for kurone-kito/idd-skill#3705
+  (later pull request kurone-kito/idd-skill#3712), a delegated pass
+  returned after about 33 minutes against the 20-minute ceiling and the
+  session waited it out, neither stopping the subagent nor recording a
+  delegation failure. After that subagent's result was delivered, an
+  enumeration it had started in the background was still using about 108%
+  of a CPU on the shared host until the parent ended it by process id.
+  Neither is recorded in that issue or pull request.
+- In a replay on 2026-10-02 (no issue), `TaskStop` with the agent id the
+  launch returned stopped a running subagent, and the foreground process
+  it had been running was gone eight seconds later.
+- On 2026-09-30, in an operator session during the work on pull request
+  kurone-kito/idd-skill#3605, a name-pattern kill ended the session's own
+  shell, which is why step 5 never ends processes by a name pattern. No
+  issue or pull request records that incident itself.
+
 For Codex delegation, the parent collects the reviewer result before
 continuing; if delegation fails, use the structured fallback.
 
