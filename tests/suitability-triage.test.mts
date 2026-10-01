@@ -27,19 +27,21 @@ import {
   splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
 import type { StructuralEvidence } from '../src/scripts/triage-structural-evidence.mts';
-import { stubExecutable } from './test-utils.mts';
+import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
 
 // Stub `gh` on PATH with an invocation counter (the discover-roadmap-graph.
 // test.mts / gh-exec.test.mts pattern) so fetchMergedPrFileOverlapEvidence's
 // early exit (#1815) can be exercised against real argv without network
 // access, and so the test can assert exactly how many `gh` invocations
-// happened.
+// happened. Those counts assume load control is off: this repository's own
+// config enables it, which adds one identity lookup per process (#3702).
 function stubGhWithCounter(scriptBody: string): {
   restore: () => void;
   readCount: () => number;
 } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-suitability-triage-test-'));
   const counterFile = join(tempRoot, 'count');
+  const restoreLoadControl = pinLoadControlOff();
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
@@ -59,6 +61,7 @@ process.exit(1);
   return {
     restore: () => {
       restore();
+      restoreLoadControl();
       rmSync(tempRoot, { recursive: true, force: true });
     },
     readCount: () => Number(readFileSync(counterFile, 'utf8').trim()),

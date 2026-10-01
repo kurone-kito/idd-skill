@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import {
   readAdvisoryConvergenceDeadlineMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
@@ -38,7 +38,20 @@ import {
   parseExternalCheckWaiverComment,
   renderExternalCheckWaiverComment,
 } from '../src/scripts/protocol-helpers.mts';
-import { stubExecutable } from './test-utils.mts';
+import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
+
+// This source repository's own config enables load control (#3702). Many
+// tests here drive `runExternalCheckWaiver` against injected data but still
+// reach the real `gh` for reads they do not inject, which would write
+// host-local load-control state; run them as before, with it off. Load control
+// has its own tests in gh-exec-load-control.test.mts.
+let restoreLoadControl: (() => void) | undefined;
+before(() => {
+  restoreLoadControl = pinLoadControlOff();
+});
+after(() => {
+  restoreLoadControl?.();
+});
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
