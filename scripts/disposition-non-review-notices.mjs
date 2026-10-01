@@ -40,7 +40,11 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { DEFAULT_GH_PAGINATED_TIMEOUT_MS, ghText } from './gh-exec.mjs';
+import {
+  DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghText,
+  resolveGhOwnerRepo,
+} from './gh-exec.mjs';
 import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -1105,11 +1109,10 @@ function main() {
     );
   }
   const pr = args.pr;
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const { owner, repo } = resolveGhOwnerRepo({
+    owner: args.owner,
+    repo: args.repo,
+  });
   // Default the trusted disposition authors to this gh login. Existing
   // dispositions only count toward idempotency when their author is trusted, so
   // without this default a re-run would not recognize its own prior posts and

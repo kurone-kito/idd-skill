@@ -29,20 +29,25 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const existingFooPath = resolve(process.cwd(), 'src/scripts/foo.mts');
 
 /**
- * Stub `gh` on PATH so `runCli()` can resolve owner/repo via `repo view`
- * before it ever reaches `loadPolicy` -- these tests only exercise the
- * policy-load failure path (#1721), which throws before any further `gh`
- * call (the open-issues sweep), so nothing beyond `repo view` needs a
- * response. Returns a cleanup callback that restores PATH; callers must
- * invoke it (ideally in a `finally`) even when the assertion throws.
+ * Stub `gh` on PATH for the policy-load failure tests (#1721). `runCli()`
+ * loads the policy before it resolves owner/repo, so these tests throw
+ * before any `gh` call and the `repo view` answer below is not reached
+ * today. It answers only the combined `repo view --json owner,name` request
+ * and fails every other call loudly, so a change that did reach it with a
+ * different shape could not pass silently. Returns a cleanup callback that
+ * restores PATH; callers must invoke it (ideally in a `finally`) even when
+ * the assertion throws.
  */
 function stubGhRepoView(): () => void {
   return stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");

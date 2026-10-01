@@ -21,6 +21,7 @@ import {
   ghTextUnbounded,
   readGithubRepoDefaultBranch,
   resolveGhApiHostname,
+  resolveGhOwnerRepo,
   withBoundedRetry,
 } from './gh-exec.mts';
 import {
@@ -4877,20 +4878,12 @@ function formatTraversalGraphqlErrors(errors: unknown[]): string {
     .join('; ');
 }
 
-/** Resolve the current repository's owner/name via `gh repo view` (the
- * boilerplate every one of the 11 migrated files already performs). */
+/** Resolve the current repository's owner/name with one `gh repo view` call
+ * (#3715), the shared resolver every migrated helper reaches through the
+ * adapter instead of spelling the lookup itself. */
 export function resolveCurrentGithubRepository(): {
   owner: string;
   repo: string;
 } {
-  return {
-    owner: ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_OPTIONS,
-    ).trim(),
-    repo: ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_OPTIONS,
-    ).trim(),
-  };
+  return resolveGhOwnerRepo({}, GH_TEXT_LOOP_OPTIONS);
 }

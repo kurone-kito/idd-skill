@@ -25,6 +25,7 @@ import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
+  resolveGhOwnerRepo,
 } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -140,18 +141,10 @@ function runCli() {
     process.env.GH_TOKEN = ghToken;
     process.env.GITHUB_TOKEN = ghToken;
   }
-  const owner =
-    values.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    values.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
+  const { owner, repo } = resolveGhOwnerRepo(
+    { owner: values.owner, repo: values.repo },
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
   const repository = `${owner}/${repo}`;
   const quietWindowMs =
     parseDurationOrMsToken(values['quiet-window-ms']) ??

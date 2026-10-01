@@ -747,10 +747,10 @@ if (process.argv[2] === 'repo' && process.argv[3] === 'view') {
 // itself failing) -- nothing proved the composed
 // repos/{owner}/{repo}/actions/runs/{run-id} path is correct when
 // owner/repo come from auto-detection rather than flags. This test omits
-// --owner/--repo entirely, has the stub answer both `gh repo view` calls
-// (--json owner and --json name) plus the run lookup, and captures the
-// final `gh api` call's argv to prove the auto-detected values were
-// composed into the URL correctly.
+// --owner/--repo entirely, has the stub answer the one combined `gh repo
+// view --json owner,name` call (any other `repo view` fails the stub) plus
+// the run lookup, and captures the final `gh api` call's argv to prove the
+// auto-detected values were composed into the URL correctly.
 test('CLI --run-id auto-detects --owner/--repo via gh repo view and composes the correct API path', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-ci-wait-policy-autodetect-'),
@@ -758,10 +758,8 @@ test('CLI --run-id auto-detects --owner/--repo via gh repo view and composes the
   const argsFile = join(tempRoot, 'args.json');
   const restore = stubGh(`
 const fs = require('node:fs');
-if (process.argv[2] === 'repo' && process.argv[3] === 'view' && process.argv[5] === 'owner') {
-  process.stdout.write('kurone-kito');
-} else if (process.argv[2] === 'repo' && process.argv[3] === 'view' && process.argv[5] === 'name') {
-  process.stdout.write('idd-skill');
+if (process.argv.slice(2).join(' ') === 'repo view --json owner,name') {
+  process.stdout.write(JSON.stringify({ owner: { login: 'kurone-kito' }, name: 'idd-skill' }));
 } else if (process.argv[2] === 'api') {
   fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
   process.stdout.write(JSON.stringify({ run_attempt: 1 }));

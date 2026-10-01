@@ -21,7 +21,11 @@
 // automated gate.
 
 import { parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  resolveGhOwnerRepo,
+} from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 // ---------------------------------------------------------------------------
@@ -298,20 +302,7 @@ function resolveOwnerRepo(
   owner: string,
   repo: string,
 ): { owner: string; repo: string } {
-  return {
-    owner:
-      owner ||
-      ghText(
-        ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ),
-    repo:
-      repo ||
-      ghText(
-        ['repo', 'view', '--json', 'name', '--jq', '.name'],
-        GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-      ),
-  };
+  return resolveGhOwnerRepo({ owner, repo }, GH_TEXT_LOOP_TIMEOUT_OPTIONS);
 }
 
 /**

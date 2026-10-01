@@ -25,6 +25,7 @@ import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
   resolveGhApiHostname,
+  resolveGhOwnerRepo,
   wrapGhCompatibilityError,
 } from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
@@ -4419,18 +4420,10 @@ function runCli(): HelperCliResult {
     process.env.GITHUB_TOKEN = args.ghToken;
   }
 
-  const owner =
-    args.owner ||
-    ghText(
-      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
-  const repo =
-    args.repo ||
-    ghText(
-      ['repo', 'view', '--json', 'name', '--jq', '.name'],
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    );
+  const { owner, repo } = resolveGhOwnerRepo(
+    { owner: args.owner, repo: args.repo },
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
   const repoRef = `${owner}/${repo}`;
 
   const issue = fetchIssue(repoRef, args.issue);

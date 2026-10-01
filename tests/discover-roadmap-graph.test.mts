@@ -1914,8 +1914,11 @@ test('CLI path can enumerate GitHub sub-issues without top-level await initializ
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 if (args[0] === "api" && args[1] === "repos/kurone-kito/idd-skill/issues/700") {
@@ -2011,8 +2014,11 @@ test('CLI path treats gh 404 descendants as unresolved references', () => {
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 if (args[0] === "api" && args[1] === "repos/kurone-kito/idd-skill/issues/720") {
@@ -2087,8 +2093,11 @@ test('CLI path fails when an explicit policy file is invalid', () => {
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
@@ -2726,8 +2735,11 @@ test('CLI rejects combining --issue with --all-roadmaps', () => {
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
@@ -2766,8 +2778,11 @@ test('CLI requires --issue when --all-roadmaps is absent', () => {
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === "repo" && args[1] === "view") {
-  const jq = args[args.indexOf("--jq") + 1];
-  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  if (args.join(" ") !== "repo view --json owner,name") {
+    process.stderr.write("unexpected repo view argv: " + args.join(" ") + "\\n");
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
   process.exit(0);
 }
 process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");

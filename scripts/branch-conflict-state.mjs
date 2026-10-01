@@ -6,7 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghText } from './gh-exec.mjs';
+import { ghText, resolveGhOwnerRepo } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -157,11 +157,10 @@ async function main() {
       new Error('missing required --pr <number> argument'),
     );
   }
-  const owner =
-    args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-  const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const { owner, repo } = resolveGhOwnerRepo({
+    owner: args.owner,
+    repo: args.repo,
+  });
   const result = await classifyBranchConflictState(args.prNumber, {
     owner,
     repo,
