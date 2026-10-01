@@ -132,8 +132,9 @@ trusted legacy claim using this same 24 h threshold and the
 **(d) Open PR** — A5(d) has no supported helper. Re-check live GitHub
 PR state with the written rules below. No open PR may close or
 reference this issue (check both linked issues and closing keywords in
-PR bodies), unless that PR's head branch matches the `branch` field in
-an inheritable claim comment. An inheritable claim comment is either:
+PR bodies; a bare prose mention or a `Refs` line is not a reference),
+unless that PR's head branch matches the `branch` field in an
+inheritable claim comment. An inheritable claim comment is either:
 
 - the already verified active claim for this current session, or
 - the currently active stale claim you are taking over, or

@@ -7,7 +7,10 @@ import type { AdvisoryConvergenceVerdict } from '../src/scripts/advisory-converg
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
 import { REAL_ISSUE_REFERENCE_PATTERN } from '../src/scripts/audit-authored-issue.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
-import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
+import type {
+  DiscoverIncompleteReport,
+  RoadmapGraphUnionReport,
+} from '../src/scripts/discover-roadmap-graph.mts';
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
 import type { IddRoadmapAuditExecuteVerdict } from '../src/scripts/idd-roadmap-audit-execute.mts';
@@ -328,6 +331,11 @@ interface PolicyConfigFile {
       retention?: string;
       directory?: string;
     };
+    loadControl?: {
+      enabled?: boolean;
+      maxConcurrent?: number;
+      maxWait?: string;
+    };
   };
 }
 
@@ -450,6 +458,13 @@ export const discoverRoadmapUnionKeys = [
   'cache',
 ] as const satisfies readonly (keyof RoadmapGraphUnionReport)[];
 
+export const discoverRoadmapIncompleteKeys = [
+  'mode',
+  'status',
+  'incomplete',
+  'cache',
+] as const satisfies readonly (keyof DiscoverIncompleteReport)[];
+
 export const iddMergeExecuteKeys = [
   'protocolVersion',
   'decisionAuthority',
@@ -463,6 +478,7 @@ export const iddMergeExecuteKeys = [
   'mergeResult',
   'adminFallbackUsed',
   'localHeadDrift',
+  'postFailureState',
 ] as const satisfies readonly (keyof IddMergeExecuteVerdict)[];
 
 export const iddRoadmapAuditExecuteKeys = [
@@ -724,6 +740,10 @@ const exhaustivenessWitnesses: {
     RoadmapGraphUnionReport,
     (typeof discoverRoadmapUnionKeys)[number]
   >;
+  discoverRoadmapIncomplete: CoversAllKeysOf<
+    DiscoverIncompleteReport,
+    (typeof discoverRoadmapIncompleteKeys)[number]
+  >;
   forcedHandoffMarker: CoversAllKeysOf<
     ParsedForcedHandoffMarker,
     (typeof forcedHandoffMarkerKeys)[number]
@@ -782,6 +802,7 @@ const exhaustivenessWitnesses: {
   providerHealth: true,
   claimMarker: true,
   discoverRoadmapUnion: true,
+  discoverRoadmapIncomplete: true,
   forcedHandoffMarker: true,
   iddMergeExecute: true,
   iddRoadmapAuditExecute: true,
@@ -1083,6 +1104,35 @@ const discoverRoadmapUnionFixture = {
   },
 } satisfies RoadmapGraphUnionReport;
 
+const discoverRoadmapIncompleteFixture = {
+  mode: 'all-roadmaps',
+  status: 'incomplete',
+  incomplete: {
+    reason: 'rate-limit',
+    phase: 'claim-state',
+    lastCompletedPhase: 'traversal',
+    counts: { unit: 'leaves', completed: 12, known: 19, leavesKnown: 19 },
+    retryAt: '2026-10-01T03:15:00.000Z',
+    retryAtSource: 'server',
+    exhausted: false,
+    recovery: {
+      safeToRerun: true,
+      sameArguments: true,
+      notBefore: '2026-10-01T03:15:00.000Z',
+      arguments: ['--all-roadmaps', '--with-claim-state', '--with-progress'],
+    },
+  },
+  cache: {
+    mode: 'off',
+    source: 'live',
+    ageMs: 0,
+    maxAgeMs: 0,
+    complete: false,
+    enumerations: 1,
+    exhaustionRefresh: false,
+  },
+} satisfies DiscoverIncompleteReport;
+
 const forcedHandoffMarkerFixture = {
   oldAgentId: 'github-copilot-cli-old',
   oldClaimId: 'claim-20260512T090000Z-337-old',
@@ -1358,6 +1408,11 @@ const policyConfigFixture = {
       maxAge: 'PT5M',
       maxBytes: 104857600,
       retention: 'PT24H',
+    },
+    loadControl: {
+      enabled: false,
+      maxConcurrent: 1,
+      maxWait: 'PT30S',
     },
   },
 } satisfies PolicyConfigFile;
@@ -1803,6 +1858,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/discover-roadmap-graph.mts',
     keys: discoverRoadmapUnionKeys,
     fixture: discoverRoadmapUnionFixture,
+  },
+  {
+    schemaFile: 'discover-roadmap-incomplete.schema.json',
+    exportedType: 'DiscoverIncompleteReport',
+    owningModule: 'src/scripts/discover-roadmap-graph.mts',
+    keys: discoverRoadmapIncompleteKeys,
+    fixture: discoverRoadmapIncompleteFixture,
   },
   {
     schemaFile: 'forced-handoff-marker.schema.json',

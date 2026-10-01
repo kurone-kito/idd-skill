@@ -193,6 +193,7 @@ import {
   inheritedCloneLockAtPath,
   releaseCloneLock,
   resolveCloneLockPath,
+  retryOnSpuriousGitExit,
 } from './clone-lock.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -308,11 +309,19 @@ function gitRevParseRaw(cwd, args) {
   // populated, so `runHelperCli`'s `classifyHelperError` (which renders
   // `error.message` for this "internal" kind) still surfaces the same
   // diagnostic text.
-  return execFileSync('git', ['-C', cwd, 'rev-parse', ...args], {
-    encoding: 'utf8',
-    env: sanitizedGitEnvironment(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  //
+  // #3664: a spurious `status: 1` exit with empty stderr (seen on native
+  // Windows CI under the race probe's spawn burst) is retried once by
+  // `retryOnSpuriousGitExit`, which also covers the combined lookup's
+  // fallback single-flag queries and every other caller of this function.
+  // Any other failure, including a `fatal:` diagnostic, still throws at once.
+  return retryOnSpuriousGitExit(() =>
+    execFileSync('git', ['-C', cwd, 'rev-parse', ...args], {
+      encoding: 'utf8',
+      env: sanitizedGitEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  );
 }
 function gitRevParse(cwd, args) {
   return gitRevParseRaw(cwd, args).trim();
@@ -377,9 +386,11 @@ function canonicalizeExistingDir(path) {
  * git) rather than a fault in the fixture or in git's own logic (#3526). A
  * real caller never provokes this: `--acquire` is one call per worktree
  * per mutation, never dozens racing at once. Folding the query down to
- * one spawn per acquire removes the contention at its source instead of
- * merely tolerating it, and is a genuine efficiency win independent of
- * that test.
+ * one spawn per acquire removes most of the contention at its source
+ * and is a genuine efficiency win independent of that test. The lookups
+ * that remain (this one, its fallback queries, and `resolveCloneLockPath`)
+ * additionally tolerate a rare spurious exit through
+ * `retryOnSpuriousGitExit` (#3664).
  *
  * `git`'s own repository discovery resolves `-C`'s target through the
  * same OS-level symlink-resolving directory-change semantics regardless

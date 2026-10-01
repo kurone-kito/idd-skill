@@ -17,4 +17,8 @@ jobs:
   pnpm-boundary-node22-floor:
     uses: ./.github/workflows/pnpm-boundary.yml
     with:
+      # #3665: a workflow_call caller receives pnpm-boundary.yml's declared
+      # input default (ubuntu-slim), whose 15-minute job cap cancelled the
+      # suite, so pass the uncapped runner explicitly.
+      runner: ubuntu-latest
       node-version: '22.23.2'

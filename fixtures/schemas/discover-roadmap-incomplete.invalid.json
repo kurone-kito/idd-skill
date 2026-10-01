@@ -1,0 +1,22 @@
+{
+  "mode": "all-roadmaps",
+  "status": "incomplete",
+  "incomplete": {
+    "reason": "unknown-cause",
+    "phase": "claim-state",
+    "lastCompletedPhase": "traversal",
+    "counts": {
+      "unit": "leaves",
+      "completed": -1,
+      "known": 19
+    },
+    "retryAt": "not-a-time",
+    "retryAtSource": "server",
+    "exhausted": true,
+    "recovery": {
+      "safeToRerun": false,
+      "sameArguments": true
+    }
+  },
+  "leaves": []
+}

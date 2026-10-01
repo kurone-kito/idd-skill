@@ -29,6 +29,10 @@ import {
   ghErrorText,
 } from './gh-http-status.mts';
 import {
+  isNotDispatchedRefusal,
+  preserveLoadControlRefusal,
+} from './github-api-refusal.mts';
+import {
   PROVIDER_CAPABILITY_GROUPS,
   type ProviderCapabilityDeclaration,
   type ProviderError,
@@ -40,6 +44,7 @@ import type {
   ProviderChangeRequestBranchAndChecks,
   ProviderChangeRequestConvergenceView,
   ProviderChangeRequestHeadShaAndAuthor,
+  ProviderChangeRequestOutcome,
   ProviderChangeRequestReadinessSnapshot,
   ProviderChangeRequestState,
   ProviderChangeRequestSummary,
@@ -152,7 +157,71 @@ function toProviderError(error: unknown): Error & ProviderError {
   const wrapped = new Error(message) as Error & ProviderError;
   wrapped.category = statusToCategory(status);
   wrapped.cause = error;
-  return wrapped;
+  // #3586: a refused read is still a refusal to whoever reads the wrapper.
+  return preserveLoadControlRefusal(wrapped, error);
+}
+
+/**
+ * Copy the failure evidence a caller may need to classify a rebuilt error
+ * (#3598): the failed process's own `stderr`/`stdout` text, its `code`, and
+ * its `killed` flag. A wrapper here rebuilds the error as a plain `Error`
+ * from a message, which would drop the timeout and rate-limit evidence the
+ * discovery recovery path reads. Each value is defined as an own,
+ * non-enumerable property (never as `cause`, which would change how Node
+ * prints an uncaught error), only when the original carries a value of the
+ * expected type and the wrapper does not already hold one.
+ */
+function preserveTransportEvidence<T extends Error>(
+  wrapper: T,
+  original: unknown,
+): T {
+  const source = original as Record<string, unknown> | null;
+  const evidence: Record<string, unknown> = {};
+  for (const key of ['stderr', 'stdout', 'code'] as const) {
+    if (typeof source?.[key] === 'string') {
+      evidence[key] = source[key];
+    }
+  }
+  if (typeof source?.killed === 'boolean') {
+    evidence.killed = source.killed;
+  }
+  for (const [key, value] of Object.entries(evidence)) {
+    if (!Object.hasOwn(wrapper, key)) {
+      Object.defineProperty(wrapper, key, {
+        value,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  return wrapper;
+}
+
+/**
+ * Evidence for a GraphQL `errors[]` body that arrived with a successful exit
+ * (#3598): the messages as stderr-style text, and the error types only as a
+ * minimal GraphQL body, so the discovery classifier can recognize a
+ * `RATE_LIMITED` type whose message carries no rate-limit wording, without
+ * ever holding the response's `data`.
+ */
+function graphqlErrorEvidence(errors: unknown[]): {
+  stderr: string;
+  stdout: string;
+} {
+  const entries = errors as ({ type?: unknown; message?: unknown } | null)[];
+  return {
+    stderr: entries
+      .map((entry) => String(entry?.message ?? ''))
+      .filter(Boolean)
+      .join('; ')
+      .slice(0, 200),
+    stdout: JSON.stringify({
+      errors: entries.map((entry) =>
+        typeof entry?.type === 'string' ? { type: entry.type } : {},
+      ),
+    }),
+  };
 }
 
 /**
@@ -522,13 +591,19 @@ function readWorkItemCommentPage(
   try {
     raw = readAdapterGhText(deps, apiArgs, timeoutMs);
   } catch (error) {
+    // A load-control refusal started no request: rebuilding it as a
+    // retryable transport failure would hide that from the retry loop.
+    if (isNotDispatchedRefusal(error)) throw error;
     if (isUnresolvedWorkItemSide(error, side)) {
       throw unresolvedWorkItemSideError(side, number);
     }
     const detail = error instanceof Error ? error.message : String(error);
-    throw new WorkItemCommentReadError(
-      `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
-      true,
+    throw preserveTransportEvidence(
+      new WorkItemCommentReadError(
+        `listWorkItemComments: GraphQL transport failed for ${label}: ${detail}`,
+        true,
+      ),
+      error,
     );
   }
   let parsed: {
@@ -561,8 +636,14 @@ function readWorkItemCommentPage(
     ) {
       throw unresolvedWorkItemSideError(side, number);
     }
-    throw new WorkItemCommentReadError(
-      `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
+    // A GraphQL throttle can arrive as a successful response whose `errors`
+    // say so. Keep those messages as stderr-style evidence so the discovery
+    // recovery path can still tell a rate limit from a defect (#3598).
+    throw preserveTransportEvidence(
+      new WorkItemCommentReadError(
+        `listWorkItemComments: GraphQL errors for ${label}: ${detail}`,
+      ),
+      graphqlErrorEvidence(parsed.errors),
     );
   }
   const repository = parsed.data?.repository;
@@ -1987,6 +2068,17 @@ function postWorkItemCommentWithRetry(
       ) {
         throw error;
       }
+      // #3586: host-local load control refused this POST before any request
+      // was sent, so it is not an ambiguous write. On the first attempt
+      // nothing at all was sent: no duplicate re-read, no retry. After an
+      // earlier failure that may have landed, stop posting and confirm that
+      // earlier attempt once through the final duplicate check below;
+      // `lastError` stays the earlier failure, so the error finally thrown
+      // never claims that nothing was sent.
+      if (isNotDispatchedRefusal(error)) {
+        if (attempt === 1) throw error;
+        break;
+      }
       const status = deriveGhHttpStatus(error);
       if (
         status !== null &&
@@ -2273,6 +2365,57 @@ function fetchReviewThreadsGeneric(
 // stderr/stdout text via the shared classifier instead, matching
 // discover-readiness-check.mts's isInaccessibleIssueLookupError.
 
+/** Safe to interpolate into a message: a signal name or an error code such as
+ * `SIGKILL` or `ENOENT`, never free text (#3682). */
+const TRANSPORT_EVIDENCE_TEXT = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * The exit evidence of a failed `gh` child process (#3682): the first safe
+ * integer among `status` and a numeric `code`, else a safe string `code`
+ * (for example `ENOENT`) as text only, plus the signal name and whether the
+ * process was killed. Node's async `execFile` reports a timeout as
+ * `{ code: null, signal: 'SIGTERM', killed: true }`, so `code` alone cannot
+ * tell a kill from a failed lookup. `killed` is true only when Node itself
+ * sent the signal (a timeout), so a process killed from outside shows its
+ * signal with `killed: false`. A field that is absent or not of the expected
+ * type renders as `unknown` (the status), `none` (the signal) or `false`
+ * (the killed flag), never as a value.
+ */
+function readTransportExit(error: unknown): {
+  status: number | null;
+  statusText: string;
+  signal: string | null;
+  killed: boolean;
+} {
+  const source = error as {
+    status?: unknown;
+    code?: unknown;
+    signal?: unknown;
+    killed?: unknown;
+  } | null;
+  const numeric = [source?.status, source?.code].find(
+    (value): value is number =>
+      typeof value === 'number' && Number.isSafeInteger(value),
+  );
+  const codeText =
+    typeof source?.code === 'string' &&
+    TRANSPORT_EVIDENCE_TEXT.test(source.code)
+      ? source.code
+      : null;
+  const signal =
+    typeof source?.signal === 'string' &&
+    TRANSPORT_EVIDENCE_TEXT.test(source.signal)
+      ? source.signal
+      : null;
+  return {
+    status: numeric ?? null,
+    statusText:
+      numeric === undefined ? (codeText ?? 'unknown') : String(numeric),
+    signal,
+    killed: source?.killed === true,
+  };
+}
+
 /**
  * Wraps a failed `gh` error into a normalized `{ stderr, stdout }` shape
  * the shared classifier re-derives its status and wording classification
@@ -2301,6 +2444,9 @@ function fetchReviewThreadsGeneric(
  * whenever real stream text exists (Copilot review, #3335).
  */
 function wrapTraversalGhFailure(error: unknown, args: string[]): string {
+  // A load-control refusal carries no stderr to copy and must stay
+  // recognizable to the retry loop, so it is rethrown as is.
+  if (isNotDispatchedRefusal(error)) throw error;
   if (classifyInaccessibleIssueLookup(error) === 'not-found') {
     return '';
   }
@@ -2310,13 +2456,36 @@ function wrapTraversalGhFailure(error: unknown, args: string[]): string {
   const summary =
     ghErrorText(error).trim() ||
     `gh ${args.join(' ')} failed with no diagnostic output`;
-  const wrapped = new Error(summary) as Error & {
-    stderr?: string;
-    stdout?: string;
-  };
-  wrapped.stderr = stderr;
-  wrapped.stdout = stdout;
-  throw wrapped;
+  // #3682: an empty-stderr failure used to surface with nothing to tell a
+  // throttle, a 5xx, a killed process or a reset apart. The exit evidence
+  // goes on its OWN line: `deriveGhHttpStatus` anchors some patterns
+  // (`^gh: HTTP NNN$`, `^HTTP NNN ...(url)$`) to a whole line of `.message`
+  // when both streams are empty, and a same-line suffix would change how such
+  // a failure classifies and so whether it is retried.
+  const exit = readTransportExit(error);
+  const wrapped = new Error(
+    `${summary}\n[exit status: ${exit.statusText}; signal: ${exit.signal ?? 'none'}; killed: ${exit.killed}]`,
+  );
+  // Kept verbatim and separate from the message for the classifier, but
+  // hidden like every other rebuilt error (#3598): an uncaught error no
+  // longer prints the captured streams a second time, and the message
+  // already carries the stderr text. `status`, `signal` and `killed` (#3682)
+  // carry the same evidence the message suffix shows.
+  for (const [key, value] of [
+    ['stderr', stderr],
+    ['stdout', stdout],
+    ['status', exit.status],
+    ['signal', exit.signal],
+    ['killed', exit.killed],
+  ] as const) {
+    Object.defineProperty(wrapped, key, {
+      value,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  throw preserveTransportEvidence(wrapped, error);
 }
 
 // #1449: explicit above the promisified execFile's 1 MiB default, applied
@@ -3205,15 +3374,25 @@ export function createGithubProviderAdapter(
               errors?: unknown;
             };
             if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
-              throw new Error(formatTraversalGraphqlErrors(parsed.errors));
+              // A GraphQL throttle can arrive as a successful response whose
+              // `errors` say so; keep the text as stderr-style evidence (the
+              // catch below carries it onto the rebuilt error, #3598).
+              throw preserveTransportEvidence(
+                new Error(formatTraversalGraphqlErrors(parsed.errors)),
+                graphqlErrorEvidence(parsed.errors),
+              );
             }
             return parsed;
           } catch (error) {
+            if (isNotDispatchedRefusal(error)) throw error;
             const stderr = String(
               (error as { stderr?: unknown } | null)?.stderr ?? '',
             ).trim();
             const detail = stderr || (error as Error).message;
-            throw new Error(`gh api graphql failed: ${detail}`);
+            throw preserveTransportEvidence(
+              new Error(`gh api graphql failed: ${detail}`),
+              error,
+            );
           }
         })) as {
           data?: {
@@ -4303,6 +4482,48 @@ export function createGithubProviderAdapter(
         return {
           mergeable: String(parsed.mergeable ?? ''),
           mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
+        };
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+
+    getChangeRequestOutcomeAtRepo(
+      atRepoOwner: string,
+      atRepoRepo: string,
+      number: number,
+    ): ProviderChangeRequestOutcome | null {
+      try {
+        const raw = deps.ghText(
+          [
+            'pr',
+            'view',
+            String(number),
+            '-R',
+            `${atRepoOwner}/${atRepoRepo}`,
+            '--json',
+            'state,mergedAt,headRefOid',
+          ],
+          GH_TEXT_LOOP_OPTIONS,
+        );
+        const parsed = JSON.parse(raw) as {
+          state?: unknown;
+          mergedAt?: unknown;
+          headRefOid?: unknown;
+        };
+        const mergedAt = String(parsed.mergedAt ?? '');
+        return {
+          state: String(parsed.state ?? '').toUpperCase(),
+          // A never-merged pull request reads back as null (or, defensively,
+          // as Go's zero time), never as a merge timestamp.
+          mergedAt:
+            mergedAt === '' || mergedAt.startsWith('0001-01-01')
+              ? null
+              : mergedAt,
+          headRefOid: String(parsed.headRefOid ?? ''),
         };
       } catch (error) {
         if (deriveGhHttpStatus(error) === 404) {

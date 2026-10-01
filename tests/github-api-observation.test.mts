@@ -950,15 +950,17 @@ test('a configured telemetry path is expanded or rejected', () => {
   }
 });
 
-test('a paginated read records a failure only when the gh run itself failed (#3597)', () => {
+test('a paginated read records a failed gh run as a failure and an unparsable clean exit as an observation (#3597, #3616)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-telemetry-'));
   const telemetryPath = join(tempRoot, 'telemetry.jsonl');
-  const readCount = (): number =>
+  const readLines = (): RequestObservation[] =>
     existsSync(telemetryPath)
       ? readFileSync(telemetryPath, 'utf8')
           .split('\n')
-          .filter((line) => line.trim().length > 0).length
-      : 0;
+          .filter((line) => line.trim().length > 0)
+          .map((line) => JSON.parse(line) as RequestObservation)
+      : [];
+  const readCount = (): number => readLines().length;
   let restore: (() => void) | undefined;
   try {
     setGithubApiTelemetryPolicyForTests({
@@ -966,15 +968,20 @@ test('a paginated read records a failure only when the gh run itself failed (#35
       maxRecords: 10,
       path: telemetryPath,
     });
-    // A clean exit whose body does not parse is not a GitHub request
-    // failure, and gh's own exit status is not to blame for it.
+    // A clean exit whose body does not parse is not a gh failure, and gh's
+    // own exit status is not to blame for it, so it is not recorded as one.
+    // It still consumed a request, so it is recorded as an observation with
+    // no status (#3616), once.
     restore = stubExecutable('gh', `process.stdout.write('not json\\n');`);
     assert.throws(() =>
       ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
     );
     restore();
-    assert.equal(readCount(), 0);
-    // A gh that exits non-zero is recorded, once.
+    assert.equal(readCount(), 1);
+    const [parseRecord] = readLines();
+    assert.equal(parseRecord.classification, 'ok');
+    assert.equal(parseRecord.status, 'unknown');
+    // A gh that exits non-zero is recorded as a failure, once more.
     restore = stubExecutable(
       'gh',
       `process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1);`,
@@ -982,7 +989,8 @@ test('a paginated read records a failure only when the gh run itself failed (#35
     assert.throws(() =>
       ghApiJson('repos/o/r/issues', { paginate: true, timeout: 30_000 }),
     );
-    assert.equal(readCount(), 1);
+    assert.equal(readCount(), 2);
+    assert.equal(readLines()[1].status, 404);
   } finally {
     restore?.();
     setGithubApiTelemetryPolicyForTests(null);
@@ -1111,6 +1119,26 @@ if (mode === 'plain-ok') {
       extensions: { cost: { actualQueryCost: 9 } },
     }),
   )});
+} else if (mode === 'graphql-remaining') {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: { ok: true, rateLimit: { cost: 5, remaining: 4321 } },
+    }),
+  )});
+} else if (mode === 'graphql-throttled') {
+  process.stdout.write(${JSON.stringify(
+    JSON.stringify({
+      data: null,
+      errors: [
+        {
+          type: 'RATE_LIMITED',
+          message: 'API rate limit already exceeded for user ID 1.',
+        },
+      ],
+    }),
+  )});
+  process.stderr.write('gh: API rate limit already exceeded for user ID 1.\\n');
+  process.exit(1);
 } else if (mode === 'allow-paginated') {
   process.stdout.write('{"partial":1}\\n');
   process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n');
@@ -1316,6 +1344,9 @@ if (mode === 'plain-ok') {
     assert.ok(last);
     assert.equal(last.classification, 'graphql-errors');
     assert.equal(last.graphqlCost, 7);
+    // #3619: with no header, the selected `rateLimit { remaining }` of the
+    // response envelope is what the record keeps.
+    assert.equal(last.remaining, 4);
     assert.equal(last.status, 'unknown');
     assert.equal(last.httpRequestCount, 'unknown');
     assert.equal(last.pageCount, 'unknown');
@@ -1360,6 +1391,30 @@ if (mode === 'plain-ok') {
     assert.ok(last);
     assert.equal(last.classification, 'ok');
     assert.equal(last.graphqlCost, 'unknown');
+    // A query that did not select `rateLimit { remaining }` leaves it unknown.
+    assert.equal(last.remaining, 'unknown');
+
+    // #3619: through the real wrapper, a response envelope that selects
+    // `rateLimit { remaining }` records it, and a real gh failure carrying
+    // only the `RATE_LIMITED` throttle error records `graphql-throttled`.
+    setMode('graphql-remaining');
+    ghGraphql(graphqlQuery, {});
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'ok');
+    assert.equal(last.remaining, 4321);
+    assert.equal(last.graphqlCost, 5);
+
+    setMode('graphql-throttled');
+    assert.throws(() => ghGraphql(graphqlQuery, {}));
+    last = readRecords().at(-1);
+    assert.ok(last);
+    assert.equal(last.classification, 'graphql-throttled');
+    assert.equal(last.signals.graphqlErrors, true);
+    assert.equal(last.signals.primaryExhaustion, false);
+    assert.equal(last.signals.secondaryThrottling, false);
+    assert.equal(last.status, 'unknown');
+    assert.equal(last.httpRequestCount, 'unknown');
 
     setMode('allow-paginated');
     assert.deepEqual(
@@ -1416,6 +1471,249 @@ if (mode === 'plain-ok') {
     restore?.();
     setGithubApiTelemetryPolicyForTests(null);
     resetGithubApiTelemetryPolicyCacheForTests();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// GraphQL throttle observations and the `remaining` field (#3619).
+
+const GRAPHQL_THROTTLE_MESSAGE =
+  'API rate limit already exceeded for user ID 1.';
+
+function graphqlSuccessObservation(body: unknown): RequestObservation {
+  return observeGhSuccess({ graphql: true, httpObserved: false, data: body });
+}
+
+function graphqlFailureObservation(body: unknown): RequestObservation {
+  return observeGhFailure(
+    { stderr: 'gh: request failed\n', stdout: JSON.stringify(body) },
+    { graphql: true },
+  );
+}
+
+test('a GraphQL response whose errors are all throttle-shaped records graphql-throttled (#3619)', () => {
+  const fixtures: unknown[][] = [
+    [{ type: 'RATE_LIMITED', message: GRAPHQL_THROTTLE_MESSAGE }],
+    [{ type: 'RATE_LIMITED', message: 'other' }],
+    [{ message: GRAPHQL_THROTTLE_MESSAGE }],
+  ];
+  for (const errors of fixtures) {
+    for (const observed of [
+      graphqlSuccessObservation({ errors }),
+      graphqlFailureObservation({ errors }),
+    ]) {
+      assert.equal(observed.classification, 'graphql-throttled');
+      assert.equal(observed.signals.graphqlErrors, true);
+      assert.equal(observed.signals.primaryExhaustion, false);
+      assert.equal(observed.signals.secondaryThrottling, false);
+      assert.equal(observed.signals.accessDenied, false);
+      assert.equal(observed.status, 'unknown');
+      assert.equal(observed.httpRequestCount, 'unknown');
+      assert.equal(observed.pageCount, 'unknown');
+    }
+  }
+});
+
+test('GraphQL errors that are not all throttle-shaped stay graphql-errors (#3619)', () => {
+  const fixtures: unknown[][] = [
+    [
+      { type: 'RATE_LIMITED', message: GRAPHQL_THROTTLE_MESSAGE },
+      { type: 'NOT_FOUND', message: 'Could not resolve to a User' },
+    ],
+    [{ type: 'NOT_FOUND', message: 'Could not resolve to a User' }],
+    [{ type: 'RATE_LIMITED', message: GRAPHQL_THROTTLE_MESSAGE }, null],
+    [{ type: 'RATE_LIMITED', message: GRAPHQL_THROTTLE_MESSAGE }, 'text'],
+    [{ type: 'rate_limited', message: 'other' }],
+  ];
+  for (const errors of fixtures) {
+    assert.equal(
+      graphqlSuccessObservation({ errors }).classification,
+      'graphql-errors',
+    );
+    assert.equal(
+      graphqlFailureObservation({ errors }).classification,
+      'graphql-errors',
+    );
+  }
+});
+
+test('a throttle-shaped error with primary or secondary wording keeps its classification (#3619)', () => {
+  // A GraphQL success has no status, so the wording matchers never scan it;
+  // the throttle check itself must still leave these as graphql-errors.
+  const primary = [
+    { type: 'RATE_LIMITED', message: 'API rate limit exceeded for user ID 1.' },
+  ];
+  const secondary = [
+    { message: 'You have already exceeded a secondary rate limit.' },
+  ];
+  for (const errors of [primary, secondary]) {
+    const success = graphqlSuccessObservation({ errors });
+    assert.equal(success.classification, 'graphql-errors');
+    assert.equal(success.signals.primaryExhaustion, false);
+    assert.equal(success.signals.secondaryThrottling, false);
+  }
+  // On a failure the wording sets its own signal, so the multiple-signal
+  // rule still turns the record into unknown.
+  const primaryFailure = graphqlFailureObservation({ errors: primary });
+  assert.equal(primaryFailure.classification, 'unknown');
+  assert.equal(primaryFailure.signals.primaryExhaustion, true);
+  const secondaryFailure = graphqlFailureObservation({ errors: secondary });
+  assert.equal(secondaryFailure.classification, 'unknown');
+  assert.equal(secondaryFailure.signals.secondaryThrottling, true);
+});
+
+test('a throttle-shaped error beside another signal stays unknown (#3619)', () => {
+  const errors = [{ type: 'RATE_LIMITED', message: GRAPHQL_THROTTLE_MESSAGE }];
+  const headerZero = observeGhSuccess({
+    status: 200,
+    graphql: true,
+    headers: { 'x-ratelimit-remaining': '0' },
+    data: { errors },
+  });
+  assert.equal(headerZero.classification, 'unknown');
+  assert.equal(headerZero.signals.primaryExhaustion, true);
+
+  const selectedZero = graphqlSuccessObservation({
+    errors,
+    data: { rateLimit: { cost: 1, remaining: 0 } },
+  });
+  assert.equal(selectedZero.classification, 'unknown');
+  assert.equal(selectedZero.signals.primaryExhaustion, true);
+
+  const unauthorized = observeGhSuccess({
+    status: 401,
+    graphql: true,
+    data: { errors },
+  });
+  assert.equal(unauthorized.classification, 'unknown');
+  assert.equal(unauthorized.signals.accessDenied, true);
+});
+
+test('a selected GraphQL rateLimit remaining is stored, and a header value wins (#3619)', () => {
+  const selected = graphqlSuccessObservation({
+    data: { rateLimit: { cost: 2, remaining: 4321 } },
+  });
+  assert.equal(selected.remaining, 4321);
+  assert.equal(selected.graphqlCost, 2);
+  assert.equal(selected.classification, 'ok');
+
+  const headerWins = observeGhSuccess({
+    status: 200,
+    graphql: true,
+    headers: { 'x-ratelimit-remaining': '500' },
+    data: { data: { rateLimit: { cost: 1, remaining: 7 } } },
+  });
+  assert.equal(headerWins.remaining, 500);
+
+  // A header and a selected value can disagree; the header still wins and
+  // the selected zero still counts as primary exhaustion.
+  const disagree = observeGhSuccess({
+    status: 200,
+    graphql: true,
+    headers: { 'x-ratelimit-remaining': '500' },
+    data: { data: { rateLimit: { cost: 1, remaining: 0 } } },
+  });
+  assert.equal(disagree.remaining, 500);
+  assert.equal(disagree.signals.primaryExhaustion, true);
+
+  const notSelected = graphqlSuccessObservation({
+    data: { rateLimit: { cost: 3 } },
+  });
+  assert.equal(notSelected.remaining, 'unknown');
+  assert.equal(notSelected.graphqlCost, 3);
+
+  const noRateLimit = graphqlSuccessObservation({ data: { viewer: {} } });
+  assert.equal(noRateLimit.remaining, 'unknown');
+
+  const fromFailure = graphqlFailureObservation({
+    errors: [{ message: 'nope' }],
+    data: { rateLimit: { cost: 1, remaining: 9 } },
+  });
+  assert.equal(fromFailure.remaining, 9);
+
+  // A REST payload is never read as a GraphQL `rateLimit` selection.
+  const rest = observeGhSuccess({
+    status: 200,
+    data: { data: { rateLimit: { cost: 1, remaining: 5 } } },
+  });
+  assert.equal(rest.remaining, 'unknown');
+});
+
+test('injected GraphQL exchanges refine to graphql-throttled only when every errored response is throttle-shaped (#3619)', () => {
+  const throttled = {
+    status: 200,
+    graphqlBody: {
+      errors: [{ type: 'RATE_LIMITED', message: GRAPHQL_THROTTLE_MESSAGE }],
+    },
+  };
+  const other = {
+    status: 200,
+    graphqlBody: {
+      errors: [{ type: 'NOT_FOUND', message: 'Could not resolve' }],
+    },
+  };
+  const clean = { status: 200, graphqlBody: { data: { viewer: {} } } };
+  const classify = (
+    responses: Parameters<
+      typeof summarizeInjectedExchanges
+    >[0][number]['responses'],
+  ): string => summarizeInjectedExchanges([{ responses }]).classification;
+
+  assert.equal(classify([throttled, throttled]), 'graphql-throttled');
+  assert.equal(classify([throttled, clean]), 'graphql-throttled');
+  assert.equal(classify([throttled, other]), 'graphql-errors');
+  assert.equal(classify([other, clean]), 'graphql-errors');
+  // A response carrying a second signal keeps the merged record unknown.
+  assert.equal(
+    classify([
+      throttled,
+      { status: 403, bodyText: 'API rate limit exceeded for user' },
+    ]),
+    'unknown',
+  );
+});
+
+test('retained records keep their classification across the graphql-throttled addition (#3619)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-observe-throttled-'));
+  try {
+    const plain = observeGhSuccess({ status: 200, data: { ok: true } });
+    const readClassifications = (path: string): unknown[] =>
+      readFileSync(path, 'utf8')
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+        .map(
+          (line) =>
+            (JSON.parse(line) as Record<string, unknown>).classification,
+        );
+
+    // A file written by the previous version: every record key is present
+    // and the classification is one it knew.
+    const previous = graphqlSuccessObservation({
+      errors: [{ message: 'nope' }],
+    });
+    assert.equal(previous.classification, 'graphql-errors');
+    const previousPath = join(tempRoot, 'previous.jsonl');
+    writeFileSync(previousPath, `${JSON.stringify(previous)}\n`);
+    appendRequestObservation(plain, { path: previousPath, maxRecords: 5 });
+    assert.deepEqual(readClassifications(previousPath), [
+      'graphql-errors',
+      'ok',
+    ]);
+
+    // A record carrying the new value is this version's own record: it is
+    // kept as graphql-throttled, not read back as unknown.
+    const throttled = graphqlSuccessObservation({
+      errors: [{ type: 'RATE_LIMITED', message: GRAPHQL_THROTTLE_MESSAGE }],
+    });
+    assert.equal(throttled.classification, 'graphql-throttled');
+    const throttledPath = join(tempRoot, 'throttled.jsonl');
+    appendRequestObservation(throttled, { path: throttledPath, maxRecords: 5 });
+    appendRequestObservation(plain, { path: throttledPath, maxRecords: 5 });
+    assert.deepEqual(readClassifications(throttledPath), [
+      'graphql-throttled',
+      'ok',
+    ]);
+  } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });

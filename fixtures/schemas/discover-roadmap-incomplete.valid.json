@@ -1,0 +1,29 @@
+{
+  "mode": "all-roadmaps",
+  "status": "incomplete",
+  "incomplete": {
+    "reason": "rate-limit",
+    "phase": "claim-state",
+    "lastCompletedPhase": "traversal",
+    "counts": {
+      "unit": "leaves",
+      "completed": 12,
+      "known": 19,
+      "leavesKnown": 19
+    },
+    "retryAt": "2026-10-01T03:15:00.000Z",
+    "retryAtSource": "server",
+    "exhausted": false,
+    "recovery": {
+      "safeToRerun": true,
+      "sameArguments": true,
+      "notBefore": "2026-10-01T03:15:00.000Z",
+      "arguments": [
+        "--all-roadmaps",
+        "--with-claim-state",
+        "--with-readiness",
+        "--with-progress"
+      ]
+    }
+  }
+}

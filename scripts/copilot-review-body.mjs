@@ -21,7 +21,10 @@
 // comments (N)</summary>` form only). See this module's own callers'
 // doc comments (`resolveLatestCopilotReviewClause`, review-clause.mts) for
 // the full incident history.
-import { stripMarkdownCodeRegions } from './markdown-code.mjs';
+import {
+  maskMarkdownForScan,
+  stripMarkdownCodeRegions,
+} from './markdown-code.mjs';
 
 // -----------------------------------------------------------------------
 // `isCopilotErrorReviewBody` (moved here from protocol-helpers.mts, #3258)
@@ -202,4 +205,263 @@ export function classifyCopilotReviewBody(body) {
     return { shape: 'overview-legacy', suppressedCount };
   }
   return { shape: 'unrecognized', suppressedCount: 0 };
+}
+// -----------------------------------------------------------------------
+// Review-body remark extraction (#3672)
+// -----------------------------------------------------------------------
+/** `### 🔵 Needs a closer look` (any ATX level; the `🔵` marker, with or
+ * without an emoji variation selector, is optional, since the real corpus
+ * bodies carry it and older test fixtures do not). The phrase must end the
+ * line, apart from an ATX closing `#` run, which needs a space before it
+ * (`look###` is heading text, not a closing run), so
+ * `### Needs a closer look: text` is left to
+ * {@link REMARK_INLINE_LABEL_PATTERN}. */
+const REMARK_HEADING_PATTERN =
+  /^ {0,3}#{1,6}[ \t]+(?:🔵\uFE0F?[ \t]*)?needs a closer look(?:[ \t]+#+)?[ \t]*$/iu;
+/** Inline form, line-anchored: `🔵 Needs a closer look: text`, optionally
+ * behind up to three leading spaces and a run of heading, bullet (`-`,
+ * `*`, `+`), or emphasis characters, for example
+ * `**Needs a closer look:** text`. Four or more leading spaces never match,
+ * and neither does a label inside a blockquote
+ * (no real body puts one there, and supporting quote continuation lines
+ * would need a container model this reader deliberately does not have).
+ * Matches the label and its separator only; the remark text is whatever
+ * follows on the line, and a label with no same-line text is not a remark. */
+const REMARK_INLINE_LABEL_PATTERN =
+  /^ {0,3}(?:[#*_+-][ \t#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?/iu;
+const REMARK_PHRASE_PATTERN = /needs a closer look/iu;
+/** The head of a body the Markdown masker may read, and the longest line it
+ * may see: a remark sits at the top of a review body (every observed one
+ * within its first hundred characters). Known limits, accepted for an
+ * evidence-only field: a remark that starts past the head is not found, and
+ * scanning stops after the first line the bounds cut (see
+ * {@link boundedMaskInput}), so nothing below a very long line, or a remark
+ * paragraph crossing the head's end, is read. */
+const MASK_HEAD_CHARS = 2048;
+const MASK_LINE_CHARS = 512;
+/** The bounded copy of `body` handed to the shared masker, and the last line
+ * index scanning may reach. The first line the bounds truncated (a line over
+ * MASK_LINE_CHARS, or the line holding the head's end) has unknown Markdown
+ * context past the cut: an HTML comment or code span can open or close there.
+ * So it is an opaque boundary: no later line is scanned, and neither is a line
+ * of the cut line's own paragraph unless the cut line starts it (an inline
+ * construct needs its opener and closer in one paragraph), which keeps a long
+ * remark line readable under its heading (#3688 review). */
+function boundedMaskInput(body) {
+  const lines = body.slice(0, MASK_HEAD_CHARS).split(/\r?\n/);
+  const cut = lines.findIndex((line) => line.length > MASK_LINE_CHARS);
+  let lastLine = cut === -1 ? lines.length - 1 : cut;
+  if (cut !== -1 || body.length > MASK_HEAD_CHARS) {
+    let start = lastLine;
+    while (start > 0 && (lines[start - 1] ?? '').trim() !== '') {
+      start -= 1;
+    }
+    if (start < lastLine) {
+      lastLine = start - 1;
+    }
+  }
+  return {
+    text: lines.map((line) => line.slice(0, MASK_LINE_CHARS)).join('\n'),
+    lastLine,
+  };
+}
+const HAS_TEXT_PATTERN = /[\p{L}\p{N}]/u;
+const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
+/** A line that opens a block the shared masker does not hide, so the remark
+ * paragraph must not read on into it: an ATX heading or setext underline, a
+ * thematic break, a blockquote, a bullet or an ordered item starting at 1 (the
+ * only ones CommonMark lets interrupt a paragraph), or one of the two bold
+ * overview-metadata labels Copilot's v2 overview puts after the remark
+ * (`**Review effort:**`, `**Findings:**`). CommonMark would fold the metadata
+ * labels into the paragraph as lazy continuation text; every real body
+ * separates them with a blank line, and a body that does not must still not
+ * report them as the remark. Code blocks, HTML blocks and comments need no
+ * pattern here: {@link maskMarkdownForScan} blanks them, and a blanked line
+ * ends the paragraph. */
+const NEW_BLOCK_LINE_PATTERNS = [
+  ATX_HEADING_LINE_PATTERN,
+  // A setext underline ends the paragraph it underlines.
+  /^ {0,3}(?:=+|-{1,2})[ \t]*$/u,
+  /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/u,
+  /^ {0,3}>/u,
+  /^ {0,3}(?:[-+*]|1[.)])(?:[ \t]|$)/u,
+  /^ {0,3}\*\*(?:review effort|findings):\*\*/iu,
+];
+/** `true` for a line that ends the running paragraph on its own: a blank
+ * line, or a line the block masker blanked (a fenced or indented code block,
+ * an HTML block or comment) while its original text is not. A code-span
+ * interior line stays visible in the block mask (inline code is kept there),
+ * so it does not end the paragraph. */
+function endsRemarkParagraph(original, blocks) {
+  return original.trim() === '' || blocks.trim() === '';
+}
+/** `true` when a line opens a new block that ends a paragraph. */
+function startsNewBlock(line) {
+  return NEW_BLOCK_LINE_PATTERNS.some((pattern) => pattern.test(line));
+}
+/** Reads one paragraph from the ORIGINAL lines, starting at `start` (the
+ * first line's text begins at column `firstLineOffset`). Lines are trimmed
+ * and joined with one space, so a wrapped remark reads as Markdown renders
+ * it. `singleLine` reads only the first line, for a label that sits on an
+ * ATX heading line (a heading is one line; its optional closing `#` run is
+ * dropped). Returns `null` when the paragraph is empty. */
+function readRemarkParagraph(
+  original,
+  blocks,
+  located,
+  lastLine,
+  start,
+  firstLineOffset,
+  singleLine = false,
+) {
+  const parts = [];
+  for (let index = start; index <= lastLine; index += 1) {
+    const originalLine = original[index] ?? '';
+    if (
+      endsRemarkParagraph(originalLine, blocks[index] ?? '') ||
+      (index > start && startsNewBlock(located[index] ?? ''))
+    ) {
+      break;
+    }
+    const text = originalLine
+      .slice(index === start ? firstLineOffset : 0)
+      .trim();
+    if (text !== '') {
+      // A closing `#` run needs a space before it; this is linear, unlike a
+      // `[ \t]+#+[ \t]*$` pattern over a long run of blanks.
+      parts.push(singleLine ? text.replace(/[ \t]#+$/u, '').trimEnd() : text);
+    }
+    if (singleLine) {
+      break;
+    }
+  }
+  return parts.length === 0 ? null : parts.join(' ');
+}
+/**
+ * Extract the remark a Copilot review body carries under its
+ * `### 🔵 Needs a closer look` heading (legacy and `ccr-overview-v2`
+ * bodies alike) or after an inline `Needs a closer look:` label
+ * (kurone-kito/idd-skill#3672), or `null` when neither is present.
+ *
+ * Why this exists: {@link classifyCopilotReviewBody} takes
+ * `suppressedCount` only from the "Previously missed" / "Suppressed
+ * comments" blocks, so a body whose only signal is this remark (next to
+ * `**Findings:** None` and no inline thread) classifies as
+ * `suppressedCount: 0` and the latest-review clause stays satisfied.
+ * That classification is deliberate and unchanged -- the corpus bodies
+ * that carry both a remark and a counted block would otherwise be
+ * counted twice -- so this function only makes the remark readable.
+ *
+ * Pure, and deliberately NOT a `BOT_WORDING_CLASSIFIERS` entry: that
+ * registry's corpus evidence bar (3 real samples from 2 distinct PRs,
+ * #3263) cannot be met for the inline form, which has no real sample at
+ * all (the heading form has four, from four PRs), and the remark is
+ * evidence only. Its real-body coverage lives in its own test file
+ * instead.
+ *
+ * Markdown structure comes from the repository's shared CommonMark masker
+ * ({@link maskMarkdownForScan}), not hand-kept patterns, so this reader does
+ * not re-derive what counts as code or HTML (four review rounds on #3688
+ * each found another edge of exactly that). Locating runs against a mask of
+ * fenced, indented and inline code, HTML comments and HTML blocks, so a
+ * label quoted in code or hidden in markup never matches. A paragraph ends
+ * at a line the same mask minus inline code blanked (a code or HTML block)
+ * or at a block-opening line of the full mask, so a multi-line code span
+ * never ends it. The text
+ * itself is read from the original lines, so a code span INSIDE the remark
+ * survives. The mask keeps line count and in-line columns (not absolute
+ * offsets, since `\r\n` is normalized), which is all this relies on. It sees
+ * only a bounded head of the body (see {@link boundedMaskInput}).
+ *
+ * Limits, accepted because the result never gates anything: a review
+ * that merely discusses the phrase in uncoded prose as a line-anchored
+ * `Needs a closer look:` label yields a spurious remark (unlike the
+ * classifier's #3390 false-block risk, which a spurious remark cannot
+ * reach), and the inline form is pinned only by the issue's own example
+ * -- every real review observed so far uses the heading form.
+ */
+export function extractCopilotReviewBodyRemark(body) {
+  if (typeof body !== 'string') {
+    return null;
+  }
+  // The shared masker costs more than linear on crafted input (#3688 review:
+  // tens of seconds on a 65k-character run of unterminated code spans, and
+  // cubic in the length of a `<a` line followed by spaces), so it only ever
+  // sees a bounded head of the body with bounded lines, and not at all when
+  // that head lacks the phrase. A remark sits at the top of a review body;
+  // the remark TEXT is still read from the full original lines.
+  const { text: maskInput, lastLine } = boundedMaskInput(body);
+  if (!REMARK_PHRASE_PATTERN.test(maskInput)) {
+    return null;
+  }
+  const original = body.split(/\r?\n/);
+  const located = maskMarkdownForScan(maskInput, {
+    inlineCode: 'mask',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  }).split(/\r?\n/);
+  // Inline code and inline comments stay visible here: only a blanked code or
+  // HTML BLOCK line ends a paragraph, never the interior of a multi-line span
+  // or comment. (A comment block on its own lines is still an HTML block.)
+  const blocks = maskMarkdownForScan(maskInput, {
+    inlineCode: 'keep',
+    htmlComments: 'keep',
+    htmlBlocks: 'mask',
+  }).split(/\r?\n/);
+  for (let index = 0; index <= lastLine; index += 1) {
+    const line = located[index] ?? '';
+    let remark = null;
+    // The plain original line must match too: a code span between the marker
+    // and the phrase is masked to spaces in `line` but is not the heading.
+    if (
+      REMARK_HEADING_PATTERN.test(line) &&
+      REMARK_HEADING_PATTERN.test(original[index] ?? '')
+    ) {
+      let first = index + 1;
+      while (first <= lastLine && (original[first] ?? '').trim() === '') {
+        first += 1;
+      }
+      // A first block the masker blanked (a code or HTML block) is not prose.
+      if (
+        first <= lastLine &&
+        (blocks[first] ?? '').trim() !== '' &&
+        !startsNewBlock(located[first] ?? '')
+      ) {
+        remark = readRemarkParagraph(
+          original,
+          blocks,
+          located,
+          lastLine,
+          first,
+          0,
+        );
+      }
+    } else {
+      const label = REMARK_INLINE_LABEL_PATTERN.exec(line);
+      // The label needs same-line text (a letter or digit, so a stray
+      // emphasis mark does not count): a bare label followed by another line
+      // says nothing about which line is the remark (#3688 review).
+      if (
+        label &&
+        // A masked span inside the label (code between the phrase and the
+        // colon) means the match is not the plain label.
+        (original[index] ?? '').startsWith(label[0]) &&
+        HAS_TEXT_PATTERN.test((original[index] ?? '').slice(label[0].length))
+      ) {
+        remark = readRemarkParagraph(
+          original,
+          blocks,
+          located,
+          lastLine,
+          index,
+          label[0].length,
+          ATX_HEADING_LINE_PATTERN.test(line),
+        );
+      }
+    }
+    if (remark !== null) {
+      return remark;
+    }
+  }
+  return null;
 }

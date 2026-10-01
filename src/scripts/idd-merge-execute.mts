@@ -34,6 +34,7 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
+import type { ProviderChangeRequestOutcome } from './provider-port.mts';
 
 /**
  * GitHub's exact `gh pr merge` failure text for the solo-CODEOWNER
@@ -100,7 +101,23 @@ export interface IddMergeExecuteVerdict {
    * finds no divergence. Never gates `ready` or blocks the merge.
    */
   localHeadDrift: { localHeadSha: string; remoteHeadSha: string } | null;
+  /**
+   * #3681: the pull request read back once after a failed merge attempt
+   * (the plain merge, the `--admin` retry, or an aborted admin fallback), so
+   * a `gh` call cut off by its timeout that completed server-side is not
+   * misread as `merged: false` for an unmerged pull request. Absent (never
+   * `null`) on every other path: no failed merge attempt, a failed or empty
+   * read-back (`mergeResult` then tells the operator to read the pull
+   * request before retrying), and a run whose `fetchPrOutcome` dep is absent
+   * (nothing is read or appended). Diagnostic only: `merged`,
+   * `adminFallbackUsed` and the exit code never depend on it.
+   */
+  postFailureState?: ProviderChangeRequestOutcome;
 }
+
+/** #3681: receives one progress line (no trailing newline) per `--apply`
+ * phase, so a slow run is distinguishable from a hung one. */
+type ProgressSink = (line: string) => void;
 
 /** Parsed CLI arguments mirroring pre-merge-readiness, plus `--apply`. */
 interface IddMergeExecuteArgs {
@@ -292,6 +309,19 @@ export interface MergeExecuteDeps {
    * being merged, for the advisory `localHeadDrift` check.
    */
   fetchHeadRefName: (prNumber: number, repoRef: string | null) => string;
+  /**
+   * #3681: best-effort read-back of the pull request's `state`, `mergedAt`
+   * and `headRefOid`, scoped to `repoRef` like the other reads. Called at
+   * most once per run, only after a merge command failed, to populate the
+   * verdict's `postFailureState`. Optional: absent means skip the read (the
+   * verdict and `mergeResult` are then exactly as before), so a dep set
+   * written before this member existed still compiles and behaves the same.
+   * `null` means the pull request was not found; a throw is swallowed.
+   */
+  fetchPrOutcome?: (
+    prNumber: number,
+    repoRef: string | null,
+  ) => ProviderChangeRequestOutcome | null;
 }
 
 /** `resolveOwnerRepoFromRef`'s split of a `<owner>/<repo>` `repoRef`, or the
@@ -502,7 +532,88 @@ const defaultDeps: MergeExecuteDeps = {
       repo,
     ).getChangeRequestHeadRefNameAtRepo(owner, repo, prNumber);
   },
+  fetchPrOutcome: (prNumber, repoRef) => {
+    const { owner, repo } = resolveOwnerRepoFromRef(repoRef);
+    return createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getChangeRequestOutcomeAtRepo(owner, repo, prNumber);
+  },
 };
+
+/** Forward one `idd-merge-execute: <phase>` line to the optional sink. A
+ * throwing sink is swallowed: progress output must never block or alter a
+ * merge run. */
+function emitProgress(progress: ProgressSink | undefined, phase: string): void {
+  try {
+    progress?.(`idd-merge-execute: ${phase}`);
+  } catch {
+    // Diagnostic only (#3681).
+  }
+}
+
+/**
+ * #3681: the `mergeResult` sentence for a post-failure read-back.
+ * `MERGED` is authoritative on its own (`mergedAt` is shown when present,
+ * never required); only an `OPEN` pull request still at the validated head
+ * proves the merge did not happen, which is what makes a retry safe (the
+ * merge binds `--match-head-commit`). Everything else -- another state, a
+ * moved head, a missing pull request, a failed read -- sends the operator
+ * to read the pull request first.
+ */
+function describePostFailureState(
+  outcome: ProviderChangeRequestOutcome | null,
+  validatedHeadSha: string,
+): string {
+  if (outcome?.state === 'MERGED') {
+    const mergedAt = outcome.mergedAt ? ` (mergedAt ${outcome.mergedAt})` : '';
+    return `post-failure read: the pull request is MERGED${mergedAt}, so the merge completed server-side; do not retry, and continue with F4 after confirming.`;
+  }
+  if (outcome?.state === 'OPEN' && outcome.headRefOid === validatedHeadSha) {
+    return 'post-failure read: the pull request is still OPEN at the validated head, so the merge did not happen; a retry is safe because --match-head-commit binds the head, once the cause above is resolved.';
+  }
+  if (outcome) {
+    return `post-failure read: the pull request is ${
+      outcome.state || 'in an unknown state'
+    } at head ${
+      outcome.headRefOid || 'unknown'
+    } (validated head ${validatedHeadSha}); read its state, mergedAt and headRefOid before retrying.`;
+  }
+  return 'post-failure read unavailable; read the pull request state, mergedAt and headRefOid before retrying.';
+}
+
+/**
+ * #3681: one best-effort read-back after a failed merge attempt. Appends a
+ * sentence to `mergeResult` (never replacing the original error text) and,
+ * on a usable read, sets `postFailureState`. Never throws and never touches
+ * `merged`, `adminFallbackUsed` or the exit code. A dep set without
+ * `fetchPrOutcome` skips the read entirely.
+ */
+function annotatePostFailureState(
+  verdict: IddMergeExecuteVerdict,
+  deps: MergeExecuteDeps,
+  prNumber: number,
+  repoRef: string | null,
+): void {
+  if (!deps.fetchPrOutcome) {
+    return;
+  }
+  let outcome: ProviderChangeRequestOutcome | null = null;
+  try {
+    outcome = deps.fetchPrOutcome(prNumber, repoRef);
+  } catch {
+    outcome = null;
+  }
+  if (outcome) {
+    verdict.postFailureState = outcome;
+  }
+  // A newline, not a space: `mergeResult` ends with gh's own error text, and
+  // the sentence must not read as a continuation of it.
+  verdict.mergeResult = `${verdict.mergeResult}\n${describePostFailureState(
+    outcome,
+    verdict.prHeadSha,
+  )}`;
+}
 
 /**
  * Build the F3 verdict and, under `--apply`, execute the merge. The
@@ -514,6 +625,7 @@ const defaultDeps: MergeExecuteDeps = {
 export function runMergeExecute(
   argv: string[],
   deps: MergeExecuteDeps = defaultDeps,
+  progress?: ProgressSink,
 ): {
   verdict: IddMergeExecuteVerdict;
   exitCode: number;
@@ -587,6 +699,13 @@ export function runMergeExecute(
     );
   }
 
+  // #3681: phase lines are an `--apply`-only signal; dry-run collects too but
+  // stays silent. Emitted here (after every usage-error return above), never
+  // inside `revalidateImmediatelyBeforeMerge`, so the admin path cannot
+  // double-emit.
+  if (args.apply) {
+    emitProgress(progress, 'collecting readiness');
+  }
   const report = deps.collect(args.passthrough);
   const prHeadSha = String(report.prHeadSha ?? '');
   const blockers = evaluateMergeGates(report);
@@ -654,6 +773,7 @@ export function runMergeExecute(
 
   // Ready under --apply: re-fetch the head and re-validate the claim
   // immediately before merging, then fail closed on any drift.
+  emitProgress(progress, 're-validating claim and head');
   const revalidation = revalidateImmediatelyBeforeMerge(
     deps,
     args.prNumber,
@@ -674,12 +794,24 @@ export function runMergeExecute(
   const revalidated = revalidation.report;
 
   // Always a merge commit — never squash/rebase. Bind to the validated head.
+  //
+  // #3681: `plainMergeFailed` + the `finally` below make ONE best-effort
+  // read-back of the pull request after any failed merge command. The
+  // `finally` mutates the shared `verdict` object that every catch-block
+  // return below carries by reference, so each exit (the plain-failure
+  // returns, every `admin-fallback aborted:` return and a failed admin
+  // merge) is annotated without a per-return copy -- and the read happens
+  // after the admin call when one was made. An admin-fallback merge that
+  // succeeded has `merged: true` and is never annotated.
+  emitProgress(progress, `merging ${prHeadSha}`);
+  let plainMergeFailed = false;
   try {
     const mergeOutput = deps.mergePr(args.prNumber, prHeadSha, args.repoRef);
     verdict.merged = true;
     verdict.mergeResult = mergeOutput || 'merge command completed';
     return { verdict, exitCode: 0 };
   } catch (mergeError) {
+    plainMergeFailed = true;
     // #1521: the plain merge command failed. Every path below stays
     // fail-closed by default (hold-and-report, unchanged from pre-#1521
     // behavior); the ONLY escalation is the narrow solo-CODEOWNER `--admin`
@@ -737,6 +869,9 @@ export function runMergeExecute(
       }`;
       return { verdict, exitCode: 1, cause: mergeError };
     }
+    // #3681: the admin path is entered; its re-validation below is a second
+    // full readiness collection, the silent stretch an operator waits on.
+    emitProgress(progress, 'admin fallback');
 
     // #1521 (Codex review on PR #1537): re-validate a SECOND time,
     // immediately before the --admin call, rather than trusting the
@@ -817,6 +952,10 @@ export function runMergeExecute(
         ghErrorText(adminMergeError) || 'unknown error'
       }`;
       return { verdict, exitCode: 1, cause: adminMergeError };
+    }
+  } finally {
+    if (plainMergeFailed && !verdict.merged) {
+      annotatePostFailureState(verdict, deps, args.prNumber, args.repoRef);
     }
   }
 }
@@ -1136,7 +1275,8 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> --claim-id <claim-id> [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
+  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> --claim-id <claim-id> [--agent-id <agent-id>] [--nonce <token>] [--closing-issues <n>[,<n>...]] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
+  node scripts/idd-merge-execute.mjs --pr <number> --claimless [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
 
   Every flag except --apply is forwarded verbatim to the read-only
   pre-merge-readiness collector, so the full collector flag surface is
@@ -1144,9 +1284,15 @@ function printHelp(): void {
   --expected-claim-id / --expected-agent-id aliases. --owner and --repo
   must be passed together or not at all.
 
+  --nonce <token> is this session's own recorded activation nonce (#1522).
+  Pass it whenever one was recorded: omitting it, or leaving it empty,
+  silently skips the merge-time activation-nonce comparison. --claimless
+  and --closing-issues keep their pre-merge-readiness meaning (see that
+  helper's --help).
+
   #3252 required claim binding: --claim-id (or the deprecated
   --expected-claim-id alias) is required unless --claimless is also
-  given (only valid for a PR with no closingIssuesReferences) -- checked
+  given (see pre-merge-readiness --help for when it is valid) -- checked
   here, before this helper ever collects readiness evidence or merges,
   since the collector's own claim gate only checks whether a SUPPLIED
   claim-id matches the active claim, never whether one was supplied.
@@ -1188,6 +1334,25 @@ function printHelp(): void {
   a warning is printed on stderr -- a non-fatal signal an unpushed commit
   may be about to be left behind. Never blocks the merge; a silent no-op
   from any other directory, branch, or local read failure.
+
+  Progress lines (#3681): under --apply only, one line per phase goes to
+  stderr -- "idd-merge-execute: collecting readiness",
+  "idd-merge-execute: re-validating claim and head",
+  "idd-merge-execute: merging <sha>", and "idd-merge-execute: admin
+  fallback" when that path is entered -- so a slow run under load is
+  distinguishable from a hung one. Stdout stays a single JSON document;
+  dry-run prints no phase line.
+
+  Post-failure state (#3681): after a failed merge attempt (the plain merge,
+  the --admin retry, or an aborted admin fallback), the helper reads the
+  pull request back once and adds postFailureState { state, mergedAt,
+  headRefOid } plus a sentence to mergeResult. MERGED means the merge
+  completed server-side: do not retry. OPEN at the validated head means it
+  did not happen and a retry is safe (--match-head-commit binds the head).
+  Anything else, or a failed read, means read the pull request before
+  retrying. merged, adminFallbackUsed and the exit code are unchanged. After
+  ANY interruption of --apply (an outer timeout, a killed shell), read state,
+  mergedAt and headRefOid before retrying.
 `);
 }
 
@@ -1201,8 +1366,14 @@ if (import.meta.main) {
 }
 
 function main(): HelperCliResult {
+  // #3681: phase lines go to stderr (one line each); stdout stays the single
+  // final JSON document. `undefined` keeps the default deps.
   const { verdict, exitCode, cause, nowFlagError } = runMergeExecute(
     process.argv.slice(2),
+    undefined,
+    (line) => {
+      process.stderr.write(`${line}\n`);
+    },
   );
   if (nowFlagError) {
     // #3541: a clean one-line usage error, never an uncaught throw.

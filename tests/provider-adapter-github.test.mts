@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { classifyDiscoverInterruption } from '../src/scripts/discover-progress.mts';
 import { GhPaginatedResponseLimitError } from '../src/scripts/gh-exec.mts';
 import {
   createGithubProviderAdapter,
@@ -1143,6 +1144,296 @@ test('getWorkItemForTraversalAsync rethrows after exhausting bounded attempts on
     /HTTP 500/,
   );
   assert.equal(calls, 3);
+});
+
+// #3682: a failed traversal call used to surface with its stderr and stdout
+// empty and nothing else, so a throttle, a 5xx, a killed process and a network
+// reset were indistinguishable. The wrapped error now states its exit
+// status, signal and killed flag in the message (on its own line, so a
+// line-anchored status pattern still classifies the rest) and on the
+// non-enumerable `status`, `signal` and `killed` properties.
+const EMPTY_OUTPUT_FAILURE = 'Command failed: gh api repos/o/r/issues/1 --jq .';
+
+test('getWorkItemForTraversalAsync reports exit status, signal and killed state once every bounded attempt fails without output (#3682)', async () => {
+  const cases: {
+    label: string;
+    evidence: Record<string, unknown>;
+    suffix: string;
+    status: number | null;
+    signal: string | null;
+    killed: boolean;
+  }[] = [
+    {
+      label: 'a plain non-zero exit',
+      evidence: { stderr: '', stdout: '', code: 1 },
+      suffix: 'exit status: 1; signal: none; killed: false',
+      status: 1,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a process killed by a signal',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: null,
+        signal: 'SIGKILL',
+        killed: true,
+      },
+      suffix: 'exit status: unknown; signal: SIGKILL; killed: true',
+      status: null,
+      signal: 'SIGKILL',
+      killed: true,
+    },
+    {
+      label:
+        'a process killed from outside, which Node does not flag as killed',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: null,
+        signal: 'SIGKILL',
+        killed: false,
+      },
+      suffix: 'exit status: unknown; signal: SIGKILL; killed: false',
+      status: null,
+      signal: 'SIGKILL',
+      killed: false,
+    },
+    {
+      label: 'a timeout',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: null,
+        signal: 'SIGTERM',
+        killed: true,
+      },
+      suffix: 'exit status: unknown; signal: SIGTERM; killed: true',
+      status: null,
+      signal: 'SIGTERM',
+      killed: true,
+    },
+    {
+      label: 'a string error code',
+      evidence: { stderr: '', stdout: '', code: 'ENOENT' },
+      suffix: 'exit status: ENOENT; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a status field instead of a code',
+      evidence: { stderr: '', stdout: '', status: 2 },
+      suffix: 'exit status: 2; signal: none; killed: false',
+      status: 2,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a status that wins over a code',
+      evidence: { stderr: '', stdout: '', status: 2, code: 3 },
+      suffix: 'exit status: 2; signal: none; killed: false',
+      status: 2,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a status that is not a safe integer',
+      evidence: { stderr: '', stdout: '', status: Number.NaN, code: 1.5 },
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a killed flag that is not the boolean true',
+      evidence: { stderr: '', stdout: '', code: 1, killed: 1 },
+      suffix: 'exit status: 1; signal: none; killed: false',
+      status: 1,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a string code longer than the safe limit',
+      evidence: { stderr: '', stdout: '', code: 'A'.repeat(65) },
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'no evidence at all',
+      evidence: {},
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'an unsafe code or signal that must never reach the message',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: 'bad code\n!',
+        signal: 'SIG TERM',
+      },
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+  ];
+  // Each exhausted retry sleeps for real (about 0.6-1.0 s), so the cases run
+  // together on separate adapters.
+  await Promise.all(
+    cases.map(async (entry) => {
+      let calls = 0;
+      const port = createGithubProviderAdapter(
+        'o',
+        'r',
+        fakeDeps({
+          ghTextAsync: async () => {
+            calls += 1;
+            throw Object.assign(
+              new Error(EMPTY_OUTPUT_FAILURE),
+              entry.evidence,
+            );
+          },
+        }),
+      );
+      const error = await port.getWorkItemForTraversalAsync(1).then(
+        () => null,
+        (rejected: unknown) => rejected,
+      );
+      assert.ok(error instanceof Error, entry.label);
+      assert.equal(calls, 3, `${entry.label}: bounded retry is unchanged`);
+      assert.ok(
+        error.message.startsWith(EMPTY_OUTPUT_FAILURE),
+        `${entry.label}: the original text stays first`,
+      );
+      assert.ok(
+        error.message.endsWith(`\n[${entry.suffix}]`),
+        `${entry.label}: suffix on its own line, got ${JSON.stringify(error.message)}`,
+      );
+      const carried = error as unknown as {
+        status: unknown;
+        signal: unknown;
+        killed: unknown;
+      };
+      assert.equal(carried.status, entry.status, entry.label);
+      assert.equal(carried.signal, entry.signal, entry.label);
+      assert.equal(carried.killed, entry.killed, entry.label);
+      for (const key of ['status', 'signal', 'killed']) {
+        assert.equal(
+          Object.keys(error).includes(key),
+          false,
+          `${entry.label}: ${key} stays non-enumerable`,
+        );
+      }
+    }),
+  );
+});
+
+test('getWorkItemForTraversalAsync survives a thrown value that is not an error object (#3682)', async () => {
+  // A rejection carrying null, undefined or a bare string has no evidence to
+  // read; the wrapper must still build its summary and suffix instead of
+  // throwing a TypeError out of the retry loop.
+  await Promise.all(
+    [null, undefined, 'boom'].map(async (thrown) => {
+      const port = createGithubProviderAdapter(
+        'o',
+        'r',
+        fakeDeps({
+          ghTextAsync: async () => {
+            throw thrown;
+          },
+        }),
+      );
+      const error = await port.getWorkItemForTraversalAsync(1).then(
+        () => null,
+        (rejected: unknown) => rejected,
+      );
+      assert.ok(error instanceof Error, String(thrown));
+      assert.equal(
+        error.message,
+        'gh api repos/o/r/issues/1 --jq . failed with no diagnostic output\n[exit status: unknown; signal: none; killed: false]',
+        String(thrown),
+      );
+    }),
+  );
+});
+
+test('getWorkItemForTraversalAsync still resolves a message-only 404 as not found after the suffix is added (#3682)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw Object.assign(new Error('gh: HTTP 404'), { code: 1 });
+      },
+    }),
+  );
+  assert.deepEqual(await port.getWorkItemForTraversalAsync(1), {
+    outcome: 'not-found',
+  });
+  assert.equal(calls, 1);
+});
+
+test('getWorkItemForTraversalAsync still retries an empty-output failure and returns the item once a later attempt succeeds (#3682)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(new Error(EMPTY_OUTPUT_FAILURE), {
+            stderr: '',
+            stdout: '',
+            code: 1,
+          });
+        }
+        return JSON.stringify({ number: 1, title: 'issue 1' });
+      },
+    }),
+  );
+  assert.deepEqual(await port.getWorkItemForTraversalAsync(1), {
+    outcome: 'found',
+    item: { number: 1, title: 'issue 1' },
+  });
+  assert.equal(calls, 2);
+});
+
+test('getWorkItemForTraversalAsync keeps classifying a message-only HTTP status line after the suffix is added (#3682)', async () => {
+  // Both shapes put the status on a whole line of `.message` with empty
+  // streams, which `deriveGhHttpStatus` anchors to a line: a same-line suffix
+  // would have made them classify as no status, so they would be retried.
+  for (const message of [
+    'gh: HTTP 410',
+    'HTTP 410: Gone (https://api.github.com/repos/o/r/issues/1)',
+  ]) {
+    let calls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghTextAsync: async () => {
+          calls += 1;
+          throw Object.assign(new Error(message), { code: 1 });
+        },
+      }),
+    );
+    assert.deepEqual(
+      await port.getWorkItemForTraversalAsync(1),
+      { outcome: 'inaccessible' },
+      message,
+    );
+    assert.equal(calls, 1, `${message}: resolved without a retry`);
+  }
 });
 
 test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, without retry', async () => {
@@ -2765,6 +3056,97 @@ test('mergeChangeRequestAtRepo targets an explicit owner/repo distinct from the 
     '--match-head-commit',
     'deadbeef',
   ]);
+});
+
+test('getChangeRequestOutcomeAtRepo reads state, mergedAt and headRefOid from an explicit owner/repo (#3681)', () => {
+  let capturedArgs: string[] | undefined;
+  const port = createGithubProviderAdapter(
+    'ambient-owner',
+    'ambient-repo',
+    fakeDeps({
+      ghText: (args) => {
+        capturedArgs = args;
+        return JSON.stringify({
+          state: 'MERGED',
+          mergedAt: '2026-10-01T03:04:05Z',
+          headRefOid: 'deadbeef',
+        });
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getChangeRequestOutcomeAtRepo('other-owner', 'other-repo', 42),
+    {
+      state: 'MERGED',
+      mergedAt: '2026-10-01T03:04:05Z',
+      headRefOid: 'deadbeef',
+    },
+  );
+  assert.deepEqual(capturedArgs, [
+    'pr',
+    'view',
+    '42',
+    '-R',
+    'other-owner/other-repo',
+    '--json',
+    'state,mergedAt,headRefOid',
+  ]);
+});
+
+test('getChangeRequestOutcomeAtRepo maps a never-merged pull request to a null mergedAt and upper-cases the state (#3681)', () => {
+  for (const mergedAt of [null, '', '0001-01-01T00:00:00Z']) {
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () =>
+          JSON.stringify({ state: 'open', mergedAt, headRefOid: 'abc' }),
+      }),
+    );
+    assert.deepEqual(port.getChangeRequestOutcomeAtRepo('o', 'r', 7), {
+      state: 'OPEN',
+      mergedAt: null,
+      headRefOid: 'abc',
+    });
+  }
+  const sparse = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: () => '{}' }),
+  );
+  assert.deepEqual(sparse.getChangeRequestOutcomeAtRepo('o', 'r', 7), {
+    state: '',
+    mergedAt: null,
+    headRefOid: '',
+  });
+});
+
+test('getChangeRequestOutcomeAtRepo returns null on a 404 and rethrows any other failure (#3681)', () => {
+  const notFound = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('HTTP 404') as Error & { stderr?: string };
+        error.stderr = 'gh: Not Found (HTTP 404)';
+        throw error;
+      },
+    }),
+  );
+  assert.equal(notFound.getChangeRequestOutcomeAtRepo('o', 'r', 7), null);
+
+  const boom = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('boom') as Error & { stderr?: string };
+        error.stderr = 'gh: Internal Server Error (HTTP 500)';
+        throw error;
+      },
+    }),
+  );
+  assert.throws(() => boom.getChangeRequestOutcomeAtRepo('o', 'r', 7), /boom/);
 });
 
 test('listChangeRequestChecks omits --required, unlike listRequiredChecks', () => {
@@ -5244,4 +5626,287 @@ test('listOpenChangeRequests returns all 101 rows via the paginated REST endpoin
   assert.equal(result[0].url, 'https://github.com/o/r/pull/1');
   assert.equal(result[100].url, 'https://github.com/o/r/pull/101');
   assert.ok(result.every((pr, index) => pr.url === rows[index].html_url));
+});
+
+// ---------------------------------------------------------------------------
+// #3598: the discovery loaders rebuild a failed `gh` call as a plain `Error`.
+// The interruption classifier reads a timeout or a rate limit from the
+// failure's own streams and codes, so each rebuild must keep that evidence
+// (as non-enumerable own properties, never as `cause`) or a real timeout or
+// throttle in exactly these loaders would look like an unclassifiable error.
+// ---------------------------------------------------------------------------
+
+const EVIDENCE_NOW_MS = Date.parse('2026-10-01T00:00:00.000Z');
+
+function timedOutGhError(): Error {
+  const error = new Error('Command failed: gh api SECRET-COMMAND-LINE');
+  Object.defineProperty(error, 'code', {
+    value: 'ETIMEDOUT',
+    enumerable: false,
+  });
+  Object.defineProperty(error, 'killed', { value: true, enumerable: false });
+  return error;
+}
+
+function assertEvidenceKept(error: unknown, expectedCode: string | null) {
+  const carried = error as { code?: unknown; killed?: unknown };
+  if (expectedCode !== null) {
+    assert.equal(carried.code, expectedCode);
+    assert.equal(carried.killed, true);
+  }
+  // Non-enumerable: an uncaught error never prints the captured streams.
+  for (const key of [
+    'code',
+    'killed',
+    'signal',
+    'status',
+    'stderr',
+    'stdout',
+  ]) {
+    assert.equal(Object.keys(error as object).includes(key), false, key);
+  }
+  assert.equal((error as { cause?: unknown }).cause, undefined);
+}
+
+test('listWorkItemCommentsWithRetryAsync keeps timeout evidence on a rebuilt transport failure (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw timedOutGhError();
+      },
+    }),
+  );
+  const error = await port
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(error instanceof Error);
+  assertEvidenceKept(error, 'ETIMEDOUT');
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'timeout',
+  );
+});
+
+test('getWorkItemForTraversalAsync keeps timeout evidence on a rebuilt failure (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw timedOutGhError();
+      },
+    }),
+  );
+  const error = await port.getWorkItemForTraversalAsync(900).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(error instanceof Error);
+  assertEvidenceKept(error, 'ETIMEDOUT');
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'timeout',
+  );
+});
+
+test('listWorkItemSubIssueNodesAsync keeps rate-limit and timeout evidence on a rebuilt failure (#3598)', async () => {
+  const rateLimited = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw Object.assign(new Error('Command failed: gh api graphql'), {
+          stderr: 'gh: API rate limit exceeded for user ID 1. (HTTP 403)',
+          stdout: '',
+        });
+      },
+    }),
+  );
+  const throttled = await rateLimited.listWorkItemSubIssueNodesAsync(700).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(throttled instanceof Error);
+  assertEvidenceKept(throttled, null);
+  assert.equal(
+    classifyDiscoverInterruption(throttled, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+
+  const timedOut = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw timedOutGhError();
+      },
+    }),
+  );
+  const slow = await timedOut.listWorkItemSubIssueNodesAsync(700).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(slow instanceof Error);
+  assertEvidenceKept(slow, 'ETIMEDOUT');
+  assert.equal(
+    classifyDiscoverInterruption(slow, EVIDENCE_NOW_MS)?.reason,
+    'timeout',
+  );
+});
+
+test('listWorkItemCommentsWithRetryAsync keeps a GraphQL rate-limit error that arrives with a successful exit (#3598)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        return JSON.stringify({
+          errors: [
+            {
+              type: 'RATE_LIMITED',
+              message: 'API rate limit exceeded for user ID 1.',
+            },
+          ],
+        });
+      },
+    }),
+  );
+  const error = await port
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(error instanceof Error);
+  assert.equal(calls, 1, 'a non-retryable GraphQL error is not retried');
+  assertEvidenceKept(error, null);
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+});
+
+test('listWorkItemSubIssueNodesAsync keeps a GraphQL rate-limit error that arrives with a successful exit (#3598)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        return JSON.stringify({
+          errors: [
+            {
+              type: 'RATE_LIMITED',
+              message: 'API rate limit exceeded for user ID 1.',
+            },
+          ],
+        });
+      },
+    }),
+  );
+  const error = await port.listWorkItemSubIssueNodesAsync(700).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(error instanceof Error);
+  assert.equal(calls, 3, 'the bounded retry still runs before giving up');
+  assertEvidenceKept(error, null);
+  assert.equal(
+    classifyDiscoverInterruption(error, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+});
+
+test('a RATE_LIMITED GraphQL error type is kept even when its message has no rate-limit wording (#3598)', async () => {
+  const body = JSON.stringify({
+    errors: [{ type: 'RATE_LIMITED', message: 'Something went wrong.' }],
+  });
+  const comments = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: () => body }),
+  );
+  const commentError = await comments
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(commentError instanceof Error);
+  assertEvidenceKept(commentError, null);
+  assert.equal(
+    classifyDiscoverInterruption(commentError, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+  const subIssues = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghTextAsync: async () => body }),
+  );
+  const subIssueError = await subIssues
+    .listWorkItemSubIssueNodesAsync(700)
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(subIssueError instanceof Error);
+  assertEvidenceKept(subIssueError, null);
+  assert.equal(
+    classifyDiscoverInterruption(subIssueError, EVIDENCE_NOW_MS)?.reason,
+    'rate-limit',
+  );
+});
+
+test('GraphQL error evidence never carries response data or bodies (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: { repository: { issue: { body: 'ISSUE-BODY-SECRET' } } },
+          errors: [
+            { type: 'RATE_LIMITED', message: 'API rate limit exceeded' },
+          ],
+        }),
+    }),
+  );
+  const error = await port
+    .listWorkItemCommentsWithRetryAsync(900, { includeEditState: true })
+    .then(
+      () => null,
+      (rejected: unknown) => rejected,
+    );
+  assert.ok(error instanceof Error);
+  const carried = error as { stdout?: string; stderr?: string };
+  assert.equal(String(carried.stdout).includes('ISSUE-BODY-SECRET'), false);
+  assert.equal(String(carried.stderr).includes('ISSUE-BODY-SECRET'), false);
+});
+
+test('a traversal failure that is neither a timeout nor a throttle stays unclassified (#3598)', async () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        throw Object.assign(new Error('gh failed'), {
+          stderr: 'gh: Bad credentials (HTTP 401)',
+        });
+      },
+    }),
+  );
+  const error = await port.getWorkItemForTraversalAsync(900).then(
+    () => null,
+    (rejected: unknown) => rejected,
+  );
+  assert.ok(error instanceof Error);
+  assert.equal(classifyDiscoverInterruption(error, EVIDENCE_NOW_MS), null);
 });

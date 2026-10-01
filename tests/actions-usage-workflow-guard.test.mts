@@ -1,10 +1,16 @@
-// Guards two of #2322's acceptance criteria against future workflow edits:
+// Guards two of #2322's acceptance criteria and one of #3665's against
+// future workflow edits:
 // (1) none of the four required status-check workflows ever gains a path
 // filter on its pull_request trigger or renames its job id (a path-filtered
 // required check never reports for a change outside its filter, which
 // blocks every such pull request rather than saving anything); (2) every
 // pull_request-triggering workflow keeps some form of concurrency
-// cancellation, so a superseded push does not also pay for a stale run.
+// cancellation, so a superseded push does not also pay for a stale run;
+// (3) both of this repository's own pnpm-boundary lanes keep running on
+// ubuntu-latest, while the reusable workflow's declared runner input
+// default stays ubuntu-slim for downstream callers (GitHub caps a job on
+// the single-CPU ubuntu-slim runner at 15 minutes, which cancelled the
+// required check although timeout-minutes was 20).
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -89,6 +95,26 @@ function extractJobBody(text: string, jobId: string): string {
   return nextSiblingMatch?.index === undefined
     ? afterStart
     : afterStart.slice(0, nextSiblingMatch.index);
+}
+
+/** Extracts the indented body of the `key:` line that sits at exactly
+ * `indent` spaces in `text`: every following line that is blank or indented
+ * deeper than the key, up to the first line that is neither. Asserts the key
+ * exists, so a renamed or removed block fails loudly instead of matching
+ * nothing. */
+function extractKeyBlock(text: string, indent: number, key: string): string {
+  const lines = text.split('\n');
+  const start = lines.indexOf(`${' '.repeat(indent)}${key}:`);
+  assert.notEqual(start, -1, `${key}: block not found at indent ${indent}`);
+  const deeper = ' '.repeat(indent + 1);
+  const body: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line !== '' && !line.startsWith(deeper)) {
+      break;
+    }
+    body.push(line);
+  }
+  return body.join('\n');
 }
 
 /** Same on:-block slice convention as
@@ -233,4 +259,59 @@ test('every pull_request-triggering workflow has working concurrency cancellatio
       `${file}: calls ${calledFile} as a reusable workflow, but ${calledFile} declares no effective cancel-in-progress for it to inherit`,
     );
   }
+});
+
+// #3665: GitHub limits a job on a single-CPU runner such as ubuntu-slim to 15
+// minutes, so the required pnpm-boundary job (a suite that can take longer)
+// was cancelled at 15m0s although its timeout-minutes was 20. Both of this
+// repository's own pull_request lanes must therefore run on ubuntu-latest,
+// and they reach it by different paths: the default lane through the literal
+// fallback in `runs-on` (the `inputs` context is empty under pull_request),
+// the Node 22 floor lane through an explicit `runner` input (a workflow_call
+// caller otherwise receives the declared default). The declared default stays
+// ubuntu-slim on purpose, so downstream callers keep the documented default.
+const SLIM_CAP_NOTE =
+  'ubuntu-slim caps a job at 15 minutes, which cancelled the required pnpm-boundary check (#3665)';
+
+test('pnpm-boundary.yml falls back to ubuntu-latest for the default lane of this repository', () => {
+  const jobBody = extractJobBody(
+    readWorkflow('pnpm-boundary.yml'),
+    'pnpm-boundary',
+  );
+  assert.match(
+    jobBody,
+    /^ {4}runs-on: \$\{\{ inputs\.runner \|\| 'ubuntu-latest' \}\}$/m,
+    `pnpm-boundary.yml: the pnpm-boundary job's runs-on fallback must be ubuntu-latest -- the inputs context is empty under pull_request, so the fallback is the runner the default lane gets, and ${SLIM_CAP_NOTE}`,
+  );
+});
+
+test('the Node 22 floor lane passes runner: ubuntu-latest to pnpm-boundary.yml', () => {
+  const jobBody = extractJobBody(
+    readWorkflow('pnpm-boundary-node22-floor.yml'),
+    'pnpm-boundary-node22-floor',
+  );
+  // Anchored to a whole line at the with: entries' indentation, so a comment
+  // that merely mentions the runner cannot satisfy it.
+  assert.match(
+    extractKeyBlock(jobBody, 4, 'with'),
+    /^ {6}runner: ["']?ubuntu-latest["']?$/m,
+    `pnpm-boundary-node22-floor.yml: the job's with: block must pass runner: ubuntu-latest -- a workflow_call caller otherwise receives the declared ubuntu-slim default, and ${SLIM_CAP_NOTE}`,
+  );
+});
+
+test('pnpm-boundary.yml keeps ubuntu-slim as the declared runner input default', () => {
+  const inputsRunner = extractKeyBlock(
+    extractKeyBlock(
+      extractKeyBlock(readWorkflow('pnpm-boundary.yml'), 2, 'workflow_call'),
+      4,
+      'inputs',
+    ),
+    6,
+    'runner',
+  );
+  assert.match(
+    inputsRunner,
+    /^ {8}default: ubuntu-slim$/m,
+    'pnpm-boundary.yml: inputs.runner.default must stay ubuntu-slim -- the documented default for downstream workflow_call callers in docs/customization.md (#3665)',
+  );
 });

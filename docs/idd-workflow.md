@@ -950,6 +950,63 @@ config, and forge state. This guidance is **advisory** — a recommended
 practice with its rationale, not a hard requirement — and
 **runner-agnostic**, since this repository ships no runner.
 
+### E/F edge cases from field reports
+
+Three situations from 2026-09-30 field reports have no complete written
+answer in the phase files. None changes a gate; each cites its reported
+incident.
+
+- **A commit on the PR branch that this session did not write.** A
+  maintainer applied Copilot Autofix in the GitHub web UI (committer
+  `web-flow`, trailer "Co-authored-by: Copilot Autofix powered by AI")
+  on a pull request that had one `github-advanced-security[bot]` thread.
+  Reported 2026-09-30 (kurone-kito/idd-skill#3678): the thread ended
+  resolved and outdated with no reply, the successor's local branch was
+  one commit behind origin, and the `Bash tests (bats)` check was red on
+  that commit because the autofix changed a shape a test mock relied on;
+  nothing but CI validated the diff. Fetch and fast-forward the local
+  branch (a branch behind origin is the benign case), let E1 take the
+  moved head (`diffReviewSnapshot` already routes a moved head to E1 as
+  `head-changed`), and run the repository's objective validation on that
+  diff, because only CI has validated it. A resolved bot thread needs no
+  marker-first reply: `classifyReviewThreadForGate` returns `resolved`
+  for any resolved thread whoever wrote it, so it does not count toward
+  the unresolved-threads gate, and the disposition-evidence gate skips
+  it once the E1 watermark on the moved head is newer than its last
+  external comment, so that E1 pass, not a reply, is what clears it. The
+  fix itself stays unvalidated until CI or E12's lint and test step says
+  otherwise. Whether the commit subject follows a convention is adopter
+  policy.
+
+- **A pull request that must not close its claimed issue.** Reported
+  2026-09-30 (kurone-kito/idd-skill#3678): an acceptance criterion that
+  only a later session can check after the merge (a throwaway pull
+  request that must show a CI check passing) led an orchestrator to tell
+  the worker to write `Refs`, not a closing keyword. The F2 collector
+  then had no fitting mode: with `--claim-issue N` the closing set is
+  `[N]` and `--closing-issues` must include the claimed issue number,
+  while `--claimless` skips claim revalidation, so claim ownership was
+  covered only by a gate script the session wrote. Split the issue
+  instead, through the `issue-authoring` skill: an implementation issue
+  that closes with its pull request and the closing keyword D3 requires,
+  and a verification issue that carries the post-merge check. Do not use
+  a `Refs`-only body for the claimed issue, and do not use `--claimless`
+  to get around the closing set.
+
+- **A closing link that stays empty.** D3.5 already says to wait, and
+  not to edit the body, toggle draft, or close and reopen, while the
+  pull request is under 4 hours old (by `createdAt`) and its keyword
+  matches step 3's regex (kurone-kito/idd-skill#3660). Two adopters'
+  reports add what it does not say: across seven pull requests the field
+  stayed empty for 1 h 04 min to at least 2 h 24 min and healed without
+  action, and the delay is neither a fixed age nor a shared clock time,
+  so a session cannot plan the wait. To tell quickly whether the fault
+  is platform-wide, sample one unrelated recent pull request that has a
+  closing keyword and read its `closingIssuesReferences`: if that is
+  also empty, keep waiting. The operator may also add the
+  issue-to-pull-request link by hand in the web UI's Development
+  sidebar.
+
 ### Orchestrator fan-out variant
 
 A long-lived orchestrating session may run Discover and Claim itself and
@@ -988,12 +1045,28 @@ Running this variant safely requires:
   does not reliably close its residual role-misread risk — a
   documented known limitation (kurone-kito/idd-skill#2221,
   kurone-kito/idd-skill#2624, kurone-kito/idd-skill#2802).
-- **A small concurrency cap**, sized against CI-minute cost and
-  shared-file contention rather than raised without bound. The optional
-  `discover-shared-file-overlap` helper (see
+- **A small concurrency cap**, sized against CI-minute cost,
+  shared-file contention, and host capacity rather than raised without
+  bound. The optional `discover-shared-file-overlap` helper (see
   [IDD helper script evaluation](idd-helper-scripts.md#discover-shared-file-overlap-contract))
   reports high-contention shared-file overlap evidence to inform both
-  the cap and the delegation order.
+  the cap and the delegation order. Neither CI-minute cost nor
+  shared-file contention reflects host capacity: a worker's own build
+  and test children compete for the same cores and memory as every other
+  session on the host, so run a cheap preflight before each dispatch.
+  Compare the 1-minute load average (`uptime`) with the core count
+  (`nproc`, or `sysctl -n hw.ncpu` on macOS), and read the available
+  memory (`MemAvailable` in `/proc/meminfo`, or the platform
+  equivalent). As starting values an operator may tune — this guide's
+  own starting choice, not measured limits — start no new worker while
+  the 1-minute load exceeds the core count or the available memory is
+  under 2 GiB; dispatch fewer workers or wait instead. In one
+  orchestrated private downstream adopter's run (reported 2026-09-30,
+  kurone-kito/idd-skill#3677), a delegated worker's tool calls stopped
+  returning and the runtime ended it (`Agent stalled: no progress for
+  600s`) while the 1-minute load average read 90.87 on 24 cores and no
+  memory was available, and full-suite runs failed on timeouts in
+  unrelated specs that all passed alone.
 - **Full per-issue gating before every delegation.** The orchestrator
   runs the complete A4.5/A5 suitability and claim gates (and the A4
   viability gate that precedes them) for each issue before handing it to
@@ -1067,7 +1140,26 @@ Running this variant safely requires:
   kurone-kito/idd-skill#2389) -- before delegating a fresh subagent
   with a resume-specific briefing rather than resuming the dead
   worker's own
-  context.
+  context. The exception is a worker the runtime can still message or
+  resume (for example by its agent id), such as one it reported stalled
+  or ended while its claim and worktree were still intact: resuming that
+  same worker with freshly verified facts is an accepted, cheaper path
+  than a fresh subagent, provided the orchestrator first verified the
+  claim, the worktree, and the child processes the worker still has
+  running (for example in the process table). Those children are waited
+  for, by PID, and never duplicated by a second copy — a fresh worker
+  would start a second heavy run on the same host. On an in-place
+  resume, still run the same lock check: a present lock whose
+  `holderAlive` is true is expected and is waited for, never removed; a
+  present lock whose holder is gone is stale and takes the
+  manual-recovery procedure above. A worker that can no longer be
+  messaged keeps the fresh-subagent path above. In a downstream
+  adopter's run (reported 2026-09-30, kurone-kito/idd-skill#3677), the
+  orchestrator verified claim routing, `git log`, the pull request list,
+  and the process table, sent one message to the same worker with those
+  facts and one instruction (wait for the child by PID, do not start a
+  second full run), and the worker continued from its own context and
+  reached F2 in about 80 minutes without repeating work.
 - **A delegation brief resuming mid-review at E4 or E9 must run the
   cold-start reconstruction.** A fresh worker dispatched straight into
   E4 or E9 without a `ReviewItems_snapshot` from its own E1-E3 pass
@@ -1086,7 +1178,24 @@ Running this variant safely requires:
   outcome, confirm live GitHub state directly — for example
   `gh pr view <n> --json state,mergedAt` and
   `gh issue view <n> --json state,closedAt` — rather than trusting the
-  worker's own narrative.
+  worker's own narrative. A runtime's completed notice that says the
+  worker still has background work of its own running, or that its
+  result may be interim, is not final: check the worktree and the claim,
+  and wait for the worker to resume while there is live evidence of the
+  background work it reported (a running child process, a background
+  task the runtime still lists as running, or new worktree changes),
+  restarting the wait on each new piece of evidence; after one runtime
+  stall interval (the runtime's own no-progress limit) with none and no
+  resume, apply the dangling-state check below. A completed notice with
+  no such statement is a real stop: verify its outcome as above. In a
+  downstream adopter's run (reported 2026-09-30,
+  kurone-kito/idd-skill#3677), one worker ended its turn four times with
+  "still waiting on the review delegate; I will continue when it lands"
+  while a background task of its own was running, the harness reported
+  each stop as completed with an interim note, and each time the worker
+  resumed on its own; a fifth notice carried no such note and was a real
+  stop, so an orchestrator that read "completed" as final would have
+  verified "merged?", found no, and re-delegated.
 - **Check for dangling or broken state after an ambiguous worker
   dispatch.** When a worker's turn ends without a clean final report
   (stalled, killed, timed out) — especially if its last visible action
@@ -1140,6 +1249,30 @@ widening it to a broader mode this session never selected.
   enumeration failure, unchanged from today's A2 rule; a helper that
   actually errors or exits non-zero is already an A2 enumeration
   failure on the first occurrence.
+- **An exhausted pool** (Discover returned no startable candidate and no
+  worker is running). This applies only when no worker is running, and
+  only to an orchestrator that stays alive by design, for example one
+  re-invoked by a loop runner: A4's exhaustion exit still reports the
+  discarded issues and stops, and this bullet changes that for no
+  session — the report-and-stop still happens first, and this bullet
+  governs only how an orchestrator that its runner keeps alive waits
+  afterward. It complements the first bullet above, never overrides it:
+  that bullet rules out re-running after every completion, and the **Do
+  re-run** bullet's no-startable-candidate trigger is spent by the
+  Discover run that returned this empty pool, so it does not recur on a
+  timer. Wait for an external change instead of re-running Discover on a
+  timer: poll with one GraphQL query shape, paginated by cursor until
+  every page is read, for the open issues' numbers, labels, and state
+  (not per-issue REST reads) about every 2 minutes, and re-run Discover
+  only on one of three events: an issue closed, a new issue without an
+  authoring or blocking label appeared, or such a label was removed —
+  those events, not elapsed time, are what make the graph stale here.
+  The interval is deliberately shorter than the roughly 4-minute race
+  seen in a downstream adopter's run (reported 2026-09-30,
+  kurone-kito/idd-skill#3677): a second orchestrator claimed the next
+  serial issue about 4 minutes after its blocker closed, so the wait
+  also decides who wins. A helper for the query is optional and not part
+  of this guidance.
 - **Optional hint cache**: this section decides _when_ to re-run.
   With `githubApi.readCache.enabled`, a re-run inside `maxAge` is served
   from a hint instead (see the helper-script
@@ -1742,6 +1875,35 @@ issues, proceed to E11" round.
 `critiqueLoop.telemetryHook` remains scoped to the C1 critique pass
 only; E10 never consults it, regardless of configuration. Extending
 the telemetry hook to E10 remains a separate, not-yet-scoped change.
+
+### E2 after a clean C1 on the same HEAD
+
+E2's first pass (`idd-review-snapshot.instructions.md`) is kept even
+when C1 ran clean on the tree that became the pull request's head: C1
+having reviewed that head is not a reason to skip it. What E2 must not
+do is repeat C1. C1's rounds already ran the configured mechanism (for
+example the delegate plus the per-agent pass under `combined`), while
+E2's incremental scope keys off a same-claim `review-baseline` that
+neither C nor D posts, so a first E2 pass scopes to the full branch diff
+(and does so again after a takeover). Briefed like C1, it asks for the
+same review a second time.
+
+Name C1's lens and its finding count in the E2 brief and ask for a
+different lens, for example an **adversarial** one: try to break the
+change, and run the new tests against mutants of it (small deliberate
+defects in the code under test) so each mutant must fail a named test. A
+takeover successor that cannot recover C1's lens or count says so in the
+brief and picks a lens the C1 checklist did not use. Reported 2026-09-30
+by an adopter (kurone-kito/idd-skill#3678): on a small guard-plus-tests
+change, C1 with a checklist lens reported three Low items, while E2 with
+an adversarial lens ran the new specs against five mutants of the guard,
+reported one Low item, and showed every mutant failing a named test.
+That is evidence C1 could not produce, and it let the session reject the
+Low item without another push. The
+[mutation / write-side helper lens](#mutation--write-side-helper-lens)
+and the [gate-mirroring helper lens](#gate-mirroring-helper-lens) below
+apply at E2 exactly as at C1, on top of the lens chosen here; the first
+concerns helpers that mutate GitHub or git state, not mutation testing.
 
 ### Mutation / write-side helper lens
 

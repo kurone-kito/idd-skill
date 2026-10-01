@@ -36,8 +36,8 @@ session already claimed and implemented. If the repository is
 - The branch already exists on the remote **and** has an open PR **and**
   the branch-conflict-state helper's `syncRecommendation` is not `none`
   (after the `recheck` retry budget in D1 step 1, if applicable) — this
-  lite file only covers the pre-first-push rebase; the post-publication
-  merge-based resync (or a closer live-state read) is out of its scope.
+  file covers only the pre-first-push rebase; the post-publication
+  merge-based resync or a closer live-state read is out of scope.
   (A pushed branch with **no** open PR yet is not this case: skip
   straight to D2 (claim re-read, **pre-push-validate**, then a normal
   push — never force), then D3. An open PR with
@@ -48,8 +48,7 @@ session already claimed and implemented. If the repository is
 - After D1, `git branch --show-current` is empty (detached HEAD) and one
   re-attach-and-re-rebase attempt still fails.
 - D3.5's closing-keyword self-check, or the `closingIssuesReferences`
-  match against the deliberate closing set, still fails after one
-  corrective edit.
+  match (a pending registration excepted), still fails after one edit.
 - The required-check set for D4 cannot be determined: `ci-wait-state`'s
   `requiredChecks.status` reports `unreadable` (protection or ruleset
   reads are unreadable), `source-pinned`, or `no-required-checks` with
@@ -120,9 +119,8 @@ This section's rebase only applies **before the branch's first push**.
      rather than treating every non-`CLEAN` state the same:
      - `syncRecommendation: "none"`: D1-D3 already happened in an
        earlier session. Run D3.5's closing-keyword check first — it is
-       idempotent even if an earlier session already verified it, and
-       a session that crashed between D3 and D3.5 would otherwise
-       never get the keyword verified — then continue to D4 (wait for
+       idempotent, and a session that crashed between D3 and D3.5 would
+       otherwise never verify the keyword — then continue to D4 (wait for
        CI).
      - `syncRecommendation: "recheck"` (mergeability still computing):
        re-run the helper after a short wait, up to 3 attempts; only a
@@ -131,9 +129,7 @@ This section's rebase only applies **before the branch's first push**.
      - Any other value (`"merge-base"`, `"policy-required-update"`,
        `"force-push-exception"`, `"hold-unknown"`, or the helper is
        unavailable, fails, or disagrees with live GitHub state): stop
-       per the condition above — this needs either the merge-based
-       resync or a closer live-state read this file's mechanical scope
-       does not cover.
+       per the condition above (out of this file's scope).
 2. Run `git fetch origin main`.
 3. If `git merge-base HEAD origin/main` equals `origin/main`, the branch
    already contains every commit on `main` — skip the rebase and go to
@@ -142,8 +138,8 @@ This section's rebase only applies **before the branch's first push**.
    hostile (GPG pinentry, or a hardware-touch path) and the repository
    provides **no** fallback wrapper for arbitrary git subcommands, stop
    and ask before running the rebase at all — replaying even one commit
-   needs to re-sign it, and a hostile signing path with no wrapper has
-   no safe non-interactive way to do that, conflict or not.
+   re-signs it, and a hostile path with no wrapper has no safe
+   non-interactive way to do that.
 5. Rebase onto `origin/main`. When primary signing is
    non-interactive-hostile and a subcommand wrapper exists, run the
    rebase through it from the start: `git -c gpg.format=ssh -c
@@ -153,9 +149,8 @@ This section's rebase only applies **before the branch's first push**.
 6. If the rebase hits a content conflict, resolve it and continue the
    rebase. On the signed-commit repo case in step 5, continue with the
    **wrapper's own** `--continue` form, not plain `git rebase
-   --continue` — the plain form re-signs through the configured primary
-   signing and stalls non-interactively right after the conflict is
-   already resolved.
+   --continue` — the plain form re-signs through primary signing and
+   stalls.
 7. Failed write — rebase in progress, index holds the replay, branch
    tip still the pre-rebase commit, and the commit object was never
    written with no staged content conflict: run `git rebase --abort` to
@@ -198,7 +193,7 @@ loop instead of returning to this D1 rebase path.
    already required a rebase. If any of those does not hold, stop
    per the condition above — do not push with `--force-with-lease`
    and do not continue in this lite flow; the merge-based resync path
-   is out of this file's scope.
+   is out of scope.
 4. New CI job: land it `workflow_dispatch`-only first (if its workflow
    file isn't on `main` yet, land a bootstrap PR for just the trigger
    wiring first — `gh workflow run` can't dispatch a branch-only
@@ -279,10 +274,16 @@ loop instead of returning to this D1 rebase path.
    deliberate closing set (normally just `<N>`).
    - An extra entry usually means an unrelated `#M` sits next to a
      keyword elsewhere in the body — separate them.
-   - A missing entry means that issue's keyword did not register — apply
-     the same edit-and-recheck path as step 4 for that number.
-   - Repeat once after either fix. If it still fails, stop and post a
-     hold note citing the PR URL.
+   - A missing entry whose keyword matches step 3's regex for that
+     number, on a PR whose `createdAt` (`gh pr view {pr-number} --json
+     createdAt`) is under 4 hours before now (UTC), is GitHub's async
+     registration (`kurone-kito/idd-skill#3632`): do not edit the body,
+     toggle draft, or close and reopen; go on to D4 and poll
+     `closingIssuesReferences` the same way. Otherwise (keyword absent,
+     or still missing at 4 hours) apply step 4's path, re-placing the
+     keyword line.
+   - Repeat once after any edit. If it still fails (pending registration
+     excepted), stop and post a hold note citing the PR URL.
 6. A commit message closing keyword counts too: never place one next
    to an issue outside the closing set. F2's `closing-set` blocker
    re-checks the set and messages against final HEAD (skipped on a
@@ -297,22 +298,21 @@ timeouts. Use both, not either alone.
 
 **Waiting mode**: wait synchronously by default. Only background this
 wait when it is confirmed to route completion back to this same
-session/turn; otherwise a backgrounded wait can strand the session past
-its handoff point with no one left to act on the result.
+session/turn; otherwise it can strand the session past its handoff point
+with no one left to act on the result.
 
 **HEAD-drift detection**: on the first poll, record `ci-wait-state`'s
 `headRefOid`. On every later poll in this same wait, compare the fresh
 `headRefOid` against that recorded value. If it differs, someone pushed
 to this branch while waiting — stop per the condition above rather than
 proceeding to E1 on results for a HEAD this session never validated. Do
-not resume this wait on its own initiative: a fresh D4 entry over the
-new HEAD is a decision for whoever resolves the stop, not an automatic
-continuation.
+not resume this wait on its own: a fresh D4 entry over the new HEAD is
+for whoever resolves the stop.
 
 **Duplicate check instances**: the state helper's `checks[]` array can
 hold more than one entry for the same `checkName` — a rerun leaves the
-earlier instance in place alongside the fresh one, and this raw array
-is not pre-deduped for callers. It is keyed by `(checkName,
+earlier instance in place alongside the fresh one, and the raw array is
+not pre-deduped. It is keyed by `(checkName,
 workflowName)` so two independent checks sharing a display name across
 workflows stay distinct. Before evaluating `checks[]` below (steps 3,
 5, and 6 all read it): for a **`required`** entry (steps 5 and 6's own

@@ -98,6 +98,22 @@ test('mergeChangeRequest and mergeChangeRequestAtRepo record distinct owner/repo
   ]);
 });
 
+test('getChangeRequestOutcomeAtRepo reads the keyed outcome fixture and reads null for an absent key (#3681)', () => {
+  const outcome = {
+    state: 'MERGED',
+    mergedAt: '2026-10-01T03:04:05Z',
+    headRefOid: 'deadbeef',
+  };
+  const port = createFakeProviderAdapter({
+    changeRequestOutcomesAtRepo: { 'other/repo2/3': outcome },
+  });
+  assert.deepEqual(
+    port.getChangeRequestOutcomeAtRepo('other', 'repo2', 3),
+    outcome,
+  );
+  assert.equal(port.getChangeRequestOutcomeAtRepo('other', 'repo2', 4), null);
+});
+
 test('resolveChangeRequestReviewThread throws for a thread id in unresolvableReviewThreadIds, otherwise records it', () => {
   const fixture: Parameters<typeof createFakeProviderAdapter>[0] = {
     unresolvableReviewThreadIds: new Set(['T_stuck']),

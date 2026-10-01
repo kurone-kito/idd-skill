@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/discover-roadmap-incomplete.schema.json",
+  "title": "Discover Roadmap Incomplete",
+  "description": "Recovery result printed by discover-roadmap-graph --all-roadmaps --with-progress when a rate limit, timeout, or admission deadline interrupts the scan. It is deliberately not a discover-roadmap-union report: it has no roots, leaves, or summary, so a partial row is never a claimable candidate and the missing list is never zero remaining work.",
+  "type": "object",
+  "required": [
+    "mode",
+    "status",
+    "incomplete"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "description": "Fixed literal naming the scan that was interrupted.",
+      "enum": [
+        "all-roadmaps"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "description": "Fixed literal marking this result as incomplete. A complete union report has no status field.",
+      "enum": [
+        "incomplete"
+      ]
+    },
+    "incomplete": {
+      "type": "object",
+      "description": "Where the scan stopped and how to rerun it safely.",
+      "required": [
+        "reason",
+        "phase",
+        "lastCompletedPhase",
+        "counts",
+        "retryAt",
+        "retryAtSource",
+        "exhausted",
+        "recovery"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Why the scan stopped: a rate limit (real throttle or a load-control cooldown refusal), a request timeout, or an admission deadline that expired while another local process held every slot.",
+          "enum": [
+            "rate-limit",
+            "timeout",
+            "deadline"
+          ]
+        },
+        "phase": {
+          "type": "string",
+          "description": "The phase in flight when the scan stopped.",
+          "enum": [
+            "root-discovery",
+            "traversal",
+            "claim-state",
+            "readiness"
+          ]
+        },
+        "lastCompletedPhase": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The last phase that finished before the scan stopped; null when even root discovery had not finished.",
+          "enum": [
+            "root-discovery",
+            "traversal",
+            "claim-state",
+            "readiness",
+            null
+          ]
+        },
+        "counts": {
+          "type": "object",
+          "description": "Completed and known counts for the phase in flight.",
+          "required": [
+            "unit",
+            "completed",
+            "known",
+            "leavesKnown"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "unit": {
+              "type": "string",
+              "description": "What completed and known count: roots or execution-leaf candidates.",
+              "enum": [
+                "roots",
+                "leaves"
+              ]
+            },
+            "completed": {
+              "type": "integer",
+              "description": "Items of this phase finished before the scan stopped.",
+              "minimum": 0
+            },
+            "known": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Items this phase had to do; null while the phase did not yet know its own size (never 0 for unknown).",
+              "minimum": 0
+            },
+            "leavesKnown": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Execution-leaf candidates discovered so far; null before traversal started. These are not claimable rows.",
+              "minimum": 0
+            }
+          }
+        },
+        "retryAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO time before which a rerun would be refused or throttled again, when the API admission contract or the failure reported one; null otherwise.",
+          "format": "date-time"
+        },
+        "retryAtSource": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "server for an observed retry-after or reset, backoff for a local cooldown; null when retryAt is null.",
+          "enum": [
+            "server",
+            "backoff",
+            null
+          ]
+        },
+        "exhausted": {
+          "type": "boolean",
+          "description": "Always false: an interrupted scan is unknown, never an exhausted inventory.",
+          "enum": [
+            false
+          ]
+        },
+        "recovery": {
+          "type": "object",
+          "description": "The safe restart plan: rerun the same full scan, not a resume from partial rows.",
+          "required": [
+            "safeToRerun",
+            "sameArguments",
+            "notBefore"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "safeToRerun": {
+              "type": "boolean",
+              "description": "Always true: the scan is read-only, so a full rerun is safe.",
+              "enum": [
+                true
+              ]
+            },
+            "sameArguments": {
+              "type": "boolean",
+              "description": "Always true: rerun with the same scope and flags.",
+              "enum": [
+                true
+              ]
+            },
+            "notBefore": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Do not rerun before this ISO time; null when none is known.",
+              "format": "date-time"
+            },
+            "arguments": {
+              "type": "array",
+              "description": "The invocation's scope and flags as an argv array, rebuilt from the parsed flags.",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "description": "Additive hint-cache provenance (kurone-kito/idd-skill#3588). Present only when the cache feature is active or a cache flag was passed; complete is always false here because an interrupted scan is never stored.",
+      "required": [
+        "mode",
+        "source",
+        "ageMs",
+        "maxAgeMs",
+        "complete",
+        "enumerations",
+        "exhaustionRefresh"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "How the run related to the cache: hint (normal read-through), refresh (--refresh-cache), off (--no-cache), or bypass (feature off or caller unidentified while a cache flag was passed).",
+          "enum": [
+            "hint",
+            "refresh",
+            "off",
+            "bypass"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "Whether this result was computed live in this run.",
+          "enum": [
+            "hint",
+            "live"
+          ]
+        },
+        "ageMs": {
+          "type": "integer",
+          "description": "Age of the served hint in milliseconds; 0 for a live computation.",
+          "minimum": 0
+        },
+        "maxAgeMs": {
+          "type": "integer",
+          "description": "Configured hint freshness window in milliseconds; 0 when no window applies.",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "False for an interrupted scan; such a result is never stored and never proves exhaustion."
+        },
+        "enumerations": {
+          "type": "integer",
+          "description": "Full discovery enumerations this run performed.",
+          "minimum": 0
+        },
+        "exhaustionRefresh": {
+          "type": "boolean",
+          "description": "True when a cached report with no startable candidate triggered the single complete refresh before this result."
+        }
+      }
+    }
+  }
+}

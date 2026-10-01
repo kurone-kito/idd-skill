@@ -25,6 +25,13 @@ import {
   readDiscoverHint,
 } from './discover-hint-cache.mjs';
 import {
+  buildDiscoverIncompleteResult,
+  classifyDiscoverInterruption,
+  createDiscoverProgress,
+  DISCOVER_INCOMPLETE_EXIT_CODE,
+  isDiscoverIncompleteResult,
+} from './discover-progress.mjs';
+import {
   buildRoadmapMarkerResolver,
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
@@ -202,6 +209,13 @@ async function main() {
       new Error('--no-cache cannot be combined with --refresh-cache'),
     );
   }
+  // Progress and the recovery result describe the multi-phase union scan;
+  // the single-root traversal has no phases to report (#3598).
+  if (args.withProgress && !args.allRoadmaps) {
+    throw markCliUsageError(
+      new Error('--with-progress requires --all-roadmaps'),
+    );
+  }
   const policy = loadPolicy(args.policy);
   // The whole report is the cached unit (#3588): a warm hint skips every
   // discovery read, including the repository lookup inside `produceReport`.
@@ -211,6 +225,10 @@ async function main() {
     helper: 'discover-roadmap-graph',
     owner: args.owner,
     repo: args.repo,
+    // `--with-progress` is deliberately absent, like `--concurrency`: it only
+    // adds stderr lines and never changes a complete report, so a complete
+    // hint is shared with runs that did not pass it. An interruption's
+    // recovery result is never stored (see `produceReport`).
     args: {
       issue: args.issue,
       allRoadmaps: args.allRoadmaps,
@@ -227,6 +245,22 @@ async function main() {
   process.stdout.write(
     `${JSON.stringify(cache ? { ...report, cache } : report, null, 2)}\n`,
   );
+  if (isDiscoverIncompleteResult(report)) {
+    // The JSON above is the recovery plan, but a caller that only checks the
+    // exit status must still fail closed: the scan is not a complete report.
+    // The message is fixed text; nothing from the interrupting error is
+    // copied into it (#3598).
+    return {
+      exitCode: DISCOVER_INCOMPLETE_EXIT_CODE,
+      kind: 'transport',
+      message:
+        'discover-roadmap-graph: scan incomplete; rerun the same arguments after incomplete.recovery.notBefore',
+      httpStatus: null,
+      ...(report.incomplete.retryAt
+        ? { retryAt: report.incomplete.retryAt }
+        : {}),
+    };
+  }
   return 0;
 }
 /**
@@ -258,6 +292,45 @@ export function hasStartableCandidate(report) {
   return entries.length > 0;
 }
 async function produceReport(args, policy) {
+  if (!args.allRoadmaps) {
+    const { owner, repo, port, claimState, readiness } = resolveScanContext(
+      args,
+      policy,
+    );
+    return enumerateRoadmapGraph(args.issue, {
+      markerPrefix: policy.markerPrefix,
+      owner,
+      repo,
+      loadIssue: buildIssueLoader(port),
+      loadSubIssues: buildSubIssueLoader(port),
+      claimState,
+      readiness,
+      concurrency: args.concurrency,
+    });
+  }
+  if (!args.withProgress) {
+    return enumerateAllRoadmapsGraph(buildUnionOptions(args, policy));
+  }
+  // The tracker is created here, inside `compute`, because the hint layer
+  // may run `compute` twice; each run gets its own phase state. A warm hint
+  // hit or a coalesced follower runs no scan and so prints no progress. The
+  // options are built lazily inside the recovery wrapper so that the
+  // repository lookup they start with is covered too: an interruption there
+  // is reported as an incomplete root discovery instead of a crash.
+  return enumerateAllRoadmapsGraphWithRecovery(
+    () => buildUnionOptions(args, policy),
+    {
+      progress: createDiscoverProgress({
+        write: (line) => {
+          process.stderr.write(line);
+        },
+      }),
+      rerunArguments: buildRerunArguments(args),
+    },
+  );
+}
+/** The repository, provider port, and opt-in annotation inputs of one run. */
+function resolveScanContext(args, policy) {
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
@@ -278,37 +351,71 @@ async function produceReport(args, policy) {
   const readiness = args.withReadiness
     ? buildReadinessResolution(owner, repo, policy)
     : undefined;
-  const report = args.allRoadmaps
-    ? await enumerateAllRoadmapsGraph({
-        markerPrefix: policy.markerPrefix,
-        floor: policy.autopilotSuitability?.floor,
-        milestoneScope: policy.discover?.milestoneScope,
-        owner,
-        repo,
-        loadIssue: buildIssueLoader(port),
-        loadSubIssues: buildSubIssueLoader(port),
-        loadOpenRoadmapRoots: buildOpenRoadmapRootsLoader(
-          owner,
-          repo,
-          policy.markerPrefix,
-          buildSearchIssuesRunner(),
-          policy.discover?.legacyRoots,
-        ),
-        claimState,
-        readiness,
-        concurrency: args.concurrency,
-      })
-    : await enumerateRoadmapGraph(args.issue, {
-        markerPrefix: policy.markerPrefix,
-        owner,
-        repo,
-        loadIssue: buildIssueLoader(port),
-        loadSubIssues: buildSubIssueLoader(port),
-        claimState,
-        readiness,
-        concurrency: args.concurrency,
-      });
-  return report;
+  return { owner, repo, port, claimState, readiness };
+}
+function buildUnionOptions(args, policy) {
+  const { owner, repo, port, claimState, readiness } = resolveScanContext(
+    args,
+    policy,
+  );
+  return {
+    markerPrefix: policy.markerPrefix,
+    floor: policy.autopilotSuitability?.floor,
+    milestoneScope: policy.discover?.milestoneScope,
+    owner,
+    repo,
+    loadIssue: buildIssueLoader(port),
+    loadSubIssues: buildSubIssueLoader(port),
+    loadOpenRoadmapRoots: buildOpenRoadmapRootsLoader(
+      owner,
+      repo,
+      policy.markerPrefix,
+      buildSearchIssuesRunner(),
+      policy.discover?.legacyRoots,
+    ),
+    claimState,
+    readiness,
+    concurrency: args.concurrency,
+  };
+}
+/**
+ * The scope and flags of this invocation as an argv array, rebuilt from the
+ * parsed, validated values (never from raw `process.argv`) so a recovery
+ * result can name exactly the run to repeat after a cooldown. It keeps
+ * `--with-progress` and any cache flag, because "the same arguments" is the
+ * contract (#3598).
+ */
+function buildRerunArguments(args) {
+  const argv = ['--all-roadmaps'];
+  if (args.owner) {
+    argv.push('--owner', args.owner);
+  }
+  if (args.repo) {
+    argv.push('--repo', args.repo);
+  }
+  if (args.policy) {
+    argv.push('--policy', args.policy);
+  }
+  if (args.withClaimState) {
+    argv.push('--with-claim-state');
+  }
+  if (args.withReadiness) {
+    argv.push('--with-readiness');
+  }
+  if (args.currentClaimId) {
+    argv.push('--current-claim-id', args.currentClaimId);
+  }
+  if (args.concurrency > 0) {
+    argv.push('--concurrency', String(args.concurrency));
+  }
+  argv.push('--with-progress');
+  if (args.noCache) {
+    argv.push('--no-cache');
+  }
+  if (args.refreshCache) {
+    argv.push('--refresh-cache');
+  }
+  return argv;
 }
 if (import.meta.main) {
   // #3343: call main() directly when the envelope is disabled -- see
@@ -345,16 +452,27 @@ export function normalizeConcurrency(value) {
  * returning results in input order. A fixed pool of workers pulls from a shared
  * cursor, so a slow item never blocks faster siblings (continuous, not
  * lock-step batches). An empty input runs no workers; the first rejection
- * propagates (mirroring the previous serial traversal's fail-closed abort).
+ * propagates (mirroring the previous serial traversal's fail-closed abort) and
+ * stops the other workers from starting further items.
  */
 async function mapPool(items, limit, task) {
   const results = new Array(items.length);
   let cursor = 0;
+  // After the first rejection the whole call is already failed, so sibling
+  // workers stop pulling new items (a request already in flight still
+  // finishes). Otherwise an interrupted scan would keep sending requests into
+  // a throttled API until the queue drained (#3598).
+  let failed = false;
   const worker = async () => {
-    while (cursor < items.length) {
+    while (!failed && cursor < items.length) {
       const index = cursor;
       cursor += 1;
-      results[index] = await task(items[index]);
+      try {
+        results[index] = await task(items[index]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   };
   const workerCount = Math.min(Math.max(1, limit), items.length);
@@ -393,6 +511,26 @@ export function coalesceIssueLoader(load) {
     shared.set(issueNumber, tracked);
     return tracked;
   };
+}
+/**
+ * True when two edges are the two halves of one membership: the same child
+ * listed in a parent's task list and linked as a native sub-issue of that
+ * same parent (#3668). Both share `source` and `target`, and their
+ * relationships are exactly `task-list` and `sub-issue`, in either order.
+ * A1.5's own follow-up linking writes both, so the pair is one membership,
+ * not a duplicate reference. Any other pair of different relationships on
+ * one source and target (a task-list entry plus `Blocked by`, `Refs`, or a
+ * closing keyword, say) stays an ambiguity the caller must still report.
+ */
+export function isTaskListSubIssuePair(first, second) {
+  if (first.source !== second.source || first.target !== second.target) {
+    return false;
+  }
+  return (
+    (first.relationship === 'task-list' &&
+      second.relationship === 'sub-issue') ||
+    (first.relationship === 'sub-issue' && second.relationship === 'task-list')
+  );
 }
 export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -617,7 +755,10 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     // another provenance path. A later same-triple mention in this body
     // (prose + standalone `Blocked by #N`, or two identical task-list
     // lines) collapses to the first edge (#2799). A remaining
-    // same-source different-relationship pair is still a duplicate.
+    // same-source different-relationship pair is still a duplicate, except
+    // a task-list entry plus a native sub-issue link for the same child
+    // (#3668): that is one membership, so both edges stay but no
+    // diagnostic is recorded.
     const seenSourceTriples = new Set();
     const firstReferenceBySourceTarget = new Map();
     for (const reference of references) {
@@ -640,7 +781,9 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
         const firstReference =
           firstReferenceBySourceTarget.get(sourceTargetKey);
         if (firstReference) {
-          recordDuplicateReference(edge, firstReference);
+          if (!isTaskListSubIssuePair(firstReference, edge)) {
+            recordDuplicateReference(edge, firstReference);
+          }
         } else {
           firstReferenceBySourceTarget.set(sourceTargetKey, edge);
         }
@@ -920,9 +1063,14 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       'enumerateAllRoadmapsGraph requires loadOpenRoadmapRoots()',
     );
   }
+  const progress = options.progress ?? createDiscoverProgress();
+  progress.begin('root-discovery', 'roots', null);
   const rootNumbers = normalizeOpenRoadmapRootNumbers(
     await loadOpenRoadmapRoots(),
   );
+  progress.setKnown(rootNumbers.length);
+  progress.complete();
+  progress.begin('traversal', 'roots', rootNumbers.length);
   // One pair of loader maps for this union call (#3584). Every root and the
   // readiness pass below share them. Traversal bookkeeping stays inside
   // each `enumerateRoadmapGraph` call. Omitted loaders stay omitted so a
@@ -984,6 +1132,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       // A skipped root is a partial inventory: never cache it, never let it
       // stand as proof of exhaustion (#3588).
       noteDiscoveryIncomplete(`root-skipped:#${rootNumber}`);
+      progress.advance();
       continue;
     }
     roots.push({
@@ -1042,7 +1191,11 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       (entry) =>
         `${entry.source}:${entry.target}:${entry.relationship}:${entry.reason}`,
     );
+    progress.setLeavesKnown(leafRecords.size);
+    progress.advance();
   }
+  progress.setLeavesKnown(leafRecords.size);
+  progress.complete();
   const leaves = [...leafRecords.values()]
     .map((leaf) => ({
       ...leaf,
@@ -1057,6 +1210,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
   // it. Gated on `options.claimState`, so the default path adds no extra
   // GitHub API call and the union output shape stays byte-stable.
   if (options.claimState) {
+    progress.begin('claim-state', 'leaves', leaves.length);
     for (const leaf of leaves) {
       const annotated = await annotateLeafClaimState(
         leaf.number,
@@ -1064,7 +1218,9 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       );
       leaf.activeClaim = annotated.activeClaim;
       leaf.claimEligible = annotated.claimEligible;
+      progress.advance();
     }
+    progress.complete();
   }
   // Opt-in (#1123): annotate the open union leaves with their A3 readiness in a
   // single batch call. Runs after the claim loop so `startable` can fold in
@@ -1077,6 +1233,12 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
   // cast. Readiness uses that same wrapper, so it does not reload a node
   // the traversal already loaded (#3584).
   if (options.readiness && typeof sharedLoadIssue === 'function') {
+    progress.begin(
+      'readiness',
+      'leaves',
+      leaves.filter((leaf) => String(leaf.state).toUpperCase() === 'OPEN')
+        .length,
+    );
     await annotateReadiness(
       leaves,
       options.readiness,
@@ -1084,6 +1246,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       markerPrefix,
       currentRepoRef,
     );
+    progress.complete();
   }
   const scoredLeafCount = leaves.filter((leaf) =>
     isAutopilotSuitabilityScore(leaf.autopilotSuitability),
@@ -1133,6 +1296,49 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       unresolvedReferenceCount: unresolvedReferences.size,
     },
   };
+}
+/**
+ * `--with-progress` entry point (#3598): run {@link enumerateAllRoadmapsGraph}
+ * with a phase tracker and turn an interruption into a recovery result.
+ *
+ * Only the failures {@link classifyDiscoverInterruption} recognizes (a rate
+ * limit, a timeout, or an admission deadline) become a result; every other
+ * error rethrows unchanged, so an authentication failure, a defect, or a
+ * missing root still fails the run exactly as it always did. The result has
+ * no `leaves` at all, is never stored by the hint cache (it records an
+ * incompleteness reason first), and never claims exhaustion.
+ *
+ * The tracker is closed on every path so a request still in flight when the
+ * result is built can never print after it.
+ */
+export async function enumerateAllRoadmapsGraphWithRecovery(options, recovery) {
+  const { progress } = recovery;
+  try {
+    // A function builds the options lazily, inside this try, so any lookup
+    // that precedes the scan (the repository name) is covered too.
+    const resolved = typeof options === 'function' ? await options() : options;
+    return await enumerateAllRoadmapsGraph({ ...resolved, progress });
+  } catch (error) {
+    const interruption = classifyDiscoverInterruption(
+      error,
+      (recovery.now ?? Date.now)(),
+    );
+    if (interruption === null) {
+      throw error;
+    }
+    const snapshot = progress.snapshot();
+    progress.interrupted(interruption.reason);
+    noteDiscoveryIncomplete(
+      `interrupted:${snapshot.phase ?? 'root-discovery'}`,
+    );
+    return buildDiscoverIncompleteResult(
+      snapshot,
+      interruption,
+      recovery.rerunArguments,
+    );
+  } finally {
+    progress.close();
+  }
 }
 /**
  * Global-by-score comparator for the cross-roadmap union.
@@ -1304,12 +1510,14 @@ async function annotateReadiness(
  * unreadable worktree for a stale/released branch. The shared claim parsing is
  * reused read-only and never re-implemented here.
  *
- * Intentional limitation: this annotation remains a best-effort SOFT signal.
- * It traces forced-handoff transfers but does not reproduce authoritative
- * forced-handoff authorization or legacy active-claim takeover rules. Trusted
- * legacy claim/release evidence is used only for stale/released local-worktree
- * collision checks. The authoritative A5 claim gate
- * (`idd-claim.instructions.md`) remains the real protection.
+ * Intentional limitation: this annotation remains a best-effort SOFT signal
+ * that may over- or under-report. When `forcedHandoffEnabled` is set it
+ * follows a forced-handoff transfer posted by a trusted marker author without
+ * checking the handoff's authorization (#3675), and it still does not
+ * reproduce legacy active-claim takeover rules. Trusted legacy claim/release
+ * evidence is used only for stale/released local-worktree collision checks.
+ * The authoritative A5 claim gate (`idd-claim.instructions.md`) remains the
+ * real protection.
  */
 export async function annotateLeafClaimState(issueNumber, claimState) {
   const comments = normalizeClaimComments(
@@ -1322,6 +1530,16 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     // otherwise the same comparison is applied with the configured age.
     isStale: (activeCreatedAt, nextCreatedAt) =>
       isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
+    // #3675: an issue-scoped soft signal (no linked-PR expectation, no
+    // permission lookup, no author/`forcedBy` binding). Only a handoff from a
+    // trusted marker author reaches this point, because the resolver filters
+    // untrusted and edited claim-family markers before reducing.
+    ...(claimState.forcedHandoffEnabled === true
+      ? {
+          isForcedHandoffEnabled: () => true,
+          isAuthorizedForcedHandoff: () => true,
+        }
+      : {}),
   });
   const active = claimTrace.activeClaim;
   const trustedLegacyComments = filterTrustedClaimFamilyEvents(
@@ -1607,6 +1825,64 @@ function resolveCurrentSessionWorktreeIdentity(cwdOverride) {
   }
 }
 /**
+ * Run the worktree identity, claim lock and generated-tokens proofs in
+ * order, stopping at the first failure. Each stage has its own `try/catch`
+ * and fails closed, so a throw stays attributable to its stage.
+ */
+function resolveStagedSessionClaimEvidence(claimId, worktreePath) {
+  let cwd;
+  try {
+    cwd = worktreePath ?? process.cwd();
+  } catch {
+    // Fail closed: a deleted cwd makes `process.cwd()` throw.
+    return {
+      identity: null,
+      lockMatches: null,
+      tokensMatch: null,
+      evidence: null,
+    };
+  }
+  const identity = resolveCurrentSessionWorktreeIdentity(cwd);
+  if (identity === null) {
+    return { identity, lockMatches: null, tokensMatch: null, evidence: null };
+  }
+  let lockHolderAgentId = '';
+  try {
+    const lock = checkClaimLock(cwd);
+    const holder = lock.holder;
+    if (
+      lock.present &&
+      !lock.malformed &&
+      holder !== undefined &&
+      holder.claimId === claimId &&
+      holder.agentId
+    ) {
+      lockHolderAgentId = holder.agentId;
+    }
+  } catch {
+    lockHolderAgentId = '';
+  }
+  if (!lockHolderAgentId) {
+    return { identity, lockMatches: false, tokensMatch: null, evidence: null };
+  }
+  let tokensMatch = false;
+  try {
+    const tokens = readGeneratedClaimTokens(cwd, claimId);
+    tokensMatch =
+      tokens.status === 'present' &&
+      tokens.record.claimId === claimId &&
+      tokens.record.agentId === lockHolderAgentId;
+  } catch {
+    tokensMatch = false;
+  }
+  return {
+    identity,
+    lockMatches: true,
+    tokensMatch,
+    evidence: tokensMatch ? { ...identity, agentId: lockHolderAgentId } : null,
+  };
+}
+/**
  * `worktreePath` (kurone-kito/idd-skill#3272): when given, every read below
  * (the claim lock, the generated-tokens record, and Git's own worktree-root /
  * branch identification) targets that path instead of `process.cwd()`. This
@@ -1617,32 +1893,23 @@ function resolveCurrentSessionWorktreeIdentity(cwdOverride) {
  * prior `process.cwd()`-only behavior exactly.
  */
 export function resolveCurrentSessionClaimEvidence(claimId, worktreePath) {
-  try {
-    const cwd = worktreePath ?? process.cwd();
-    const worktree = resolveCurrentSessionWorktreeIdentity(cwd);
-    if (worktree === null) {
-      return null;
-    }
-    const lock = checkClaimLock(cwd);
-    const holder = lock.holder;
-    if (
-      !lock.present ||
-      lock.malformed ||
-      holder === undefined ||
-      holder.claimId !== claimId ||
-      !holder.agentId
-    ) {
-      return null;
-    }
-    const tokens = readGeneratedClaimTokens(cwd, claimId);
-    return tokens.status === 'present' &&
-      tokens.record.claimId === claimId &&
-      tokens.record.agentId === holder.agentId
-      ? { ...worktree, agentId: holder.agentId }
-      : null;
-  } catch {
-    return null;
-  }
+  return resolveStagedSessionClaimEvidence(claimId, worktreePath).evidence;
+}
+/** True when every occupied path for the claimed branch is `currentPath`. */
+function occupiedPathsAreCurrentWorktree(paths, currentPath) {
+  return (
+    paths.length > 0 &&
+    paths.every((path) => {
+      if (path === currentPath) {
+        return true;
+      }
+      try {
+        return realpathSync(path) === currentPath;
+      } catch {
+        return false;
+      }
+    })
+  );
 }
 /**
  * Prove that the owner-resume exception refers to this session's own
@@ -1668,19 +1935,73 @@ export function isCurrentSessionWorktreeOwner(
   ) {
     return false;
   }
-  return (
-    localWorktree.paths.length > 0 &&
-    localWorktree.paths.every((path) => {
-      if (path === currentPath) {
-        return true;
-      }
-      try {
-        return realpathSync(path) === currentPath;
-      } catch {
-        return false;
-      }
-    })
-  );
+  return occupiedPathsAreCurrentWorktree(localWorktree.paths, currentPath);
+}
+/**
+ * Evaluate whether this session owns `claim`, and report which proof failed.
+ * `owner` is the same verdict the boolean pair
+ * {@link resolveCurrentSessionClaimEvidence} plus
+ * {@link isCurrentSessionWorktreeOwner} gives; `evidence` adds the per-proof
+ * breakdown. `worktreePath` has the same meaning as there.
+ */
+export function evaluateCurrentSessionOwnerEvidence(
+  claim,
+  localWorktree,
+  worktreePath,
+) {
+  const staged = resolveStagedSessionClaimEvidence(claim.claimId, worktreePath);
+  const evidence = staged.evidence;
+  const agentAndBranchMatch =
+    evidence === null
+      ? null
+      : evidence.agentId === claim.agentId &&
+        evidence.branchName === claim.branch;
+  const pathsMatch =
+    evidence !== null &&
+    agentAndBranchMatch === true &&
+    localWorktree.status === 'occupied'
+      ? isCurrentSessionWorktreeOwner(
+          evidence.worktreePath,
+          evidence.branchName,
+          claim.branch,
+          localWorktree,
+        )
+      : null;
+  return {
+    owner: pathsMatch === true,
+    evidence: {
+      worktree_identity: staged.identity !== null,
+      claim_lock_matches: staged.lockMatches,
+      generated_tokens_match: staged.tokensMatch,
+      agent_and_branch_match: agentAndBranchMatch,
+      occupancy_probe: localWorktree.status,
+      occupancy_paths_match: pathsMatch,
+    },
+  };
+}
+/**
+ * The first proof that failed, in evaluation order, or `null` when every
+ * proof passed. The four booleans are scanned first, then a non-`occupied`
+ * probe, then a `false` path match.
+ */
+export function firstFailedOwnerProof(evidence) {
+  const booleans = [
+    'worktree_identity',
+    'claim_lock_matches',
+    'generated_tokens_match',
+    'agent_and_branch_match',
+  ];
+  for (const name of booleans) {
+    if (evidence[name] === false) {
+      return name;
+    }
+  }
+  if (evidence.occupancy_probe !== 'occupied') {
+    return 'occupancy_probe';
+  }
+  return evidence.occupancy_paths_match === false
+    ? 'occupancy_paths_match'
+    : null;
 }
 function normalizeWorktreeBranchName(branchName) {
   const value = String(branchName ?? '').trim();
@@ -1713,8 +2034,15 @@ function currentSessionOwnsOccupiedWorktree(
  * resolution from its own parsed policy/args instead of re-implementing this
  * wiring. `policy` intentionally takes the *raw* parsed config shape (as
  * returned by this file's own `loadPolicy`), not a normalized/flattened view.
+ * `nowIso` (#3675) overrides the wall clock for the annotation; a caller
+ * passes only an already-normalized ISO 8601 value.
  */
-export function buildClaimStateResolution(port, policy, currentClaimId) {
+export function buildClaimStateResolution(
+  port,
+  policy,
+  currentClaimId,
+  nowIso,
+) {
   const staleAgeMs =
     parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ?? DEFAULT_STALE_AGE_MS;
   const heartbeatIntervalMs =
@@ -1730,7 +2058,7 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
     heartbeatIntervalMs,
-    nowIso: new Date().toISOString(),
+    nowIso: nowIso ?? new Date().toISOString(),
     currentClaimId: currentClaimIdValue,
     currentSessionAgentId: currentSessionEvidence?.agentId ?? null,
     currentSessionWorktreePath: currentSessionEvidence?.worktreePath ?? null,
@@ -1738,6 +2066,10 @@ export function buildClaimStateResolution(port, policy, currentClaimId) {
     currentSessionOwnsClaimEvidence: currentSessionEvidence !== null,
     inspectLocalWorktree: (branchName) =>
       inspectLocalWorktreeBranch(branchName),
+    // The same test resume routing uses (#3675), so an adopter with forced
+    // handoff disabled keeps today's annotation.
+    forcedHandoffEnabled:
+      normalizePolicyConfig(policy).forcedHandoff.mode === 'human-gated',
   };
 }
 /**
@@ -2466,6 +2798,7 @@ function parseArgs(rawArgv) {
     policy: '',
     withClaimState: false,
     withReadiness: false,
+    withProgress: false,
     currentClaimId: '',
     concurrency: 0,
     noCache: false,
@@ -2506,6 +2839,10 @@ function parseArgs(rawArgv) {
     }
     if (token === '--with-readiness') {
       parsed.withReadiness = true;
+      continue;
+    }
+    if (token === '--with-progress') {
+      parsed.withProgress = true;
       continue;
     }
     if (token === '--no-cache') {
@@ -2556,7 +2893,7 @@ function parseArgs(rawArgv) {
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>] [--no-cache | --refresh-cache]
-  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>] [--no-cache | --refresh-cache]
+  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--with-progress] [--current-claim-id <id>] [--concurrency <n>] [--no-cache | --refresh-cache]
   node scripts/discover-roadmap-graph.mjs --purge-cache
 
   --issue and --all-roadmaps are mutually exclusive; exactly one is required.
@@ -2604,8 +2941,10 @@ function printHelp() {
   same claim and agent identity). A stale-claim occupancy bypass additionally
   requires the canonical current worktree path and symbolic branch to match
   the occupied path and active branch.
-  NOTE: claimEligible is a best-effort SOFT discovery hint. It does not
-  reproduce authoritative forced-handoff authorization or legacy active-claim
+  NOTE: claimEligible is a best-effort SOFT discovery hint that may over- or
+  under-report. With forcedHandoff.mode "human-gated" it follows a
+  forced-handoff transfer posted by a trusted marker author without checking
+  the handoff's authorization, and it does not reproduce legacy active-claim
   takeover rules. Trusted legacy claim/release evidence is used only for
   stale/released local-worktree occupancy checks; the authoritative A5 claim
   gate (idd-claim.instructions.md) remains the real protection.
@@ -2622,6 +2961,25 @@ function printHelp() {
   Absent the flag, NO extra API calls are made and no readiness field is emitted
   (the output shape is byte-stable). Like claimEligible this is a SOFT hint; the
   A3/A4/A4.5/A5 gates remain authoritative.
+
+  --with-progress (opt-in, --all-roadmaps only) prints bounded progress lines
+  to stderr, one JSON object per line keyed by iddProgress (stderr can also
+  carry plain-text warnings), and turns a rate limit, timeout, or admission
+  deadline into a recovery result instead of a crash. Example progress line:
+    {"iddProgress":{"helper":"discover-roadmap-graph","event":"progress","phase":"claim-state","unit":"leaves","completed":12,"known":19,"leavesKnown":19,"elapsedMs":8123}}
+  event is start, progress, complete, or interrupted (which adds "reason");
+  phase is root-discovery, traversal, claim-state, or readiness; known is
+  null until the phase knows its size. Lines carry counts only (never
+  titles, bodies, or error text), phase edges always print, and in-phase
+  updates are limited to one per 2 seconds. A complete report is
+  byte-identical to a run without the flag. An interrupted scan prints an
+  INCOMPLETE result on stdout and exits 75, for example:
+    {"mode":"all-roadmaps","status":"incomplete","incomplete":{"reason":"rate-limit","phase":"claim-state","lastCompletedPhase":"traversal","counts":{"unit":"leaves","completed":12,"known":19,"leavesKnown":19},"retryAt":"2026-10-01T03:15:00.000Z","retryAtSource":"server","exhausted":false,"recovery":{"safeToRerun":true,"sameArguments":true,"notBefore":"2026-10-01T03:15:00.000Z","arguments":["--all-roadmaps","--with-progress"]}}}
+  reason is rate-limit, timeout, or deadline; retryAt, retryAtSource, and
+  notBefore are null when no time is known. It carries no leaves and no
+  summary: it is NOT an empty or exhausted inventory and grants no claim
+  authority. Rerun the same arguments (see recovery.arguments) after
+  recovery.notBefore.
 
 Output schema (JSON mode) — --issue single-root report:
   {

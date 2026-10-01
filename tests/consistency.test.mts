@@ -1015,6 +1015,11 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxBytes: 104857600,
         retention: 'PT24H',
       },
+      loadControl: {
+        enabled: false,
+        maxConcurrent: 1,
+        maxWait: 'PT30S',
+      },
     },
   });
 
@@ -1224,6 +1229,11 @@ test('policy normalization provides default-safe values and supports aliases', (
           maxAge: 'PT5M',
           maxBytes: 104857600,
           retention: 'PT24H',
+        },
+        loadControl: {
+          enabled: false,
+          maxConcurrent: 1,
+          maxWait: 'PT30S',
         },
       },
     },

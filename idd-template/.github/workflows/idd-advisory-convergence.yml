@@ -167,9 +167,14 @@ jobs:
     # a private repository the same way the REST call above needs `actions`.
     # A job-level block replaces the workflow-level one entirely rather
     # than adding to it, so every previously-granted scope is repeated
-    # here too. The self-waiver job below never calls either of these, so
-    # its own job-level permissions (unaffected by this one) do not need
-    # them.
+    # here too. The self-waiver job below does call the check-suites read:
+    # `external-check-waiver`, which it runs, reads `Commit.checkSuites`
+    # through `fetchHeadObservedAt` for the default
+    # `idd-advisory-convergence` selector, and that job holds
+    # `checks: read` for it. It does not call the Actions run read; its own
+    # `actions: read` (kurone-kito/idd-skill#3683) is most likely for the
+    # `statusCheckRollup` read -- see its comment for what is and is not
+    # proven. Its job-level permissions are unaffected by this block.
     permissions:
       contents: read
       issues: read
@@ -465,12 +470,22 @@ jobs:
     # to `read` without re-running an equivalent live test.
     # `checks: read` / `statuses: read` (kurone-kito/idd-skill#2995): the
     # `--auto-bootstrap` path also reads `pr.statusCheckRollup`, which
-    # needs both scopes explicitly -- see the source repository's own
-    # copy of this file for the full investigation and evidence.
+    # needs both scopes explicitly (a third scope, `actions: read`, follows
+    # below) -- see the source repository's own copy of this file for the
+    # full investigation and evidence.
+    # `actions: read` (kurone-kito/idd-skill#3683): the same `gh pr view
+    # --json statusCheckRollup` request also selects `checkSuite {
+    # workflowRun }` for each check-run context, which is an Actions
+    # resource. A private adopter repository saw `Resource not accessible
+    # by integration (...checkSuite.workflowRun)` on every run of a pull
+    # request that touched an allowlisted path without it. Likely cause,
+    # not proven: no A/B probe was run and the public source repository
+    # cannot reproduce it -- see its copy of this file for the full note.
     permissions:
       contents: read
       pull-requests: write
       issues: write
+      actions: read
       checks: read
       statuses: read
     steps:

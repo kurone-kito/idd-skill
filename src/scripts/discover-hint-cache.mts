@@ -30,6 +30,7 @@ import {
   readThroughGithubApiCache,
   readThroughGithubApiCacheAsync,
 } from './github-api-read-cache.mts';
+import type { WindowsAclReader } from './windows-acl.mts';
 
 /** Bumped when a helper's cached output shape changes incompatibly. */
 const HINT_FORMAT_VERSION = 1;
@@ -84,6 +85,9 @@ export interface DiscoverHintDeps {
   storage?: Partial<GithubApiReadCacheStorage>;
   defaultDirectory?: string;
   leaseMaxWaitMs?: number;
+  /** Forwarded to the read cache; lets tests pin the platform and ACL reader. */
+  platform?: NodeJS.Platform;
+  windowsAclReader?: WindowsAclReader;
 }
 
 export interface DiscoverHintRequest<T> {
@@ -361,6 +365,10 @@ function baseInput(
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.isPidAlive ? { isPidAlive: deps.isPidAlive } : {}),
     ...(deps.pid !== undefined ? { pid: deps.pid } : {}),
+    ...(deps.platform ? { platform: deps.platform } : {}),
+    ...(deps.windowsAclReader
+      ? { windowsAclReader: deps.windowsAclReader }
+      : {}),
     ...(deps.storage ? { storage: deps.storage } : {}),
     ...(deps.defaultDirectory
       ? { defaultDirectory: deps.defaultDirectory }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -11,7 +11,13 @@ import {
   recordGeneratedClaimTokens,
   resolveGeneratedTokensPath,
 } from '../src/scripts/claim-lock.mts';
+import { readDiscoverHint } from '../src/scripts/discover-hint-cache.mts';
 import {
+  createDiscoverProgress,
+  isDiscoverIncompleteResult as isIncomplete,
+} from '../src/scripts/discover-progress.mts';
+import {
+  annotateLeafClaimState,
   buildClaimStateResolution,
   buildCommentLoader,
   buildIssueLoader,
@@ -21,20 +27,25 @@ import {
   classifyIssue,
   coalesceIssueLoader,
   enumerateAllRoadmapsGraph,
+  enumerateAllRoadmapsGraphWithRecovery,
   enumerateRoadmapGraph,
   extractKeywordReferences,
   extractRoadmapMarkerId,
   extractTaskListReferences,
   isClaimHeartbeatOverdue,
   isCurrentSessionWorktreeOwner,
+  isTaskListSubIssuePair,
   normalizeConcurrency,
   parseClaimHeartbeatIntervalMs,
   parseClaimStaleAgeMs,
   type SearchIssuesQuery,
   warnOnSearchResultCap,
 } from '../src/scripts/discover-roadmap-graph.mts';
+import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import type { LocalWorktreeInspection } from '../src/scripts/local-worktree-occupancy.mts';
+import { renderForcedHandoffComment } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { stubExecutable } from './test-utils.mts';
 
 /** Run `body` with `process.stderr.write` captured; return the joined output. */
@@ -1412,6 +1423,156 @@ test('does not flag two sources that share a Blocked-by target as a duplicate', 
     2,
   );
   assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('#3668: a task-list entry plus a native sub-issue link for one child is one membership, not a duplicate', async () => {
+  // A1.5's own follow-up linking writes both the task-list entry and the
+  // native sub-issue link for the same child, so every roadmap linked that
+  // way carries the pair. Both edges stay in the graph; only the
+  // diagnostic is skipped.
+  const issues = new Map([
+    [700, roadmapIssue(700, '- [ ] #701', 'membership-roadmap')],
+    [701, executionIssue(701, 'linked both ways')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 700 ? [701] : []),
+  });
+
+  // `edges` is emitted in a sorted order, so compare the relationship set.
+  assert.deepEqual(graph.edges.map((edge) => edge.relationship).sort(), [
+    'sub-issue',
+    'task-list',
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+  assert.equal(graph.summary.duplicateReferenceCount, 0);
+  assert.deepEqual(graph.executionCandidates, [701]);
+});
+
+test('#3668: isTaskListSubIssuePair accepts exactly task-list plus sub-issue on one source and target, in either order', () => {
+  const taskList = { source: 1, target: 2, relationship: 'task-list' };
+  const subIssue = { source: 1, target: 2, relationship: 'sub-issue' };
+  assert.equal(isTaskListSubIssuePair(taskList, subIssue), true);
+  assert.equal(isTaskListSubIssuePair(subIssue, taskList), true);
+
+  // The same relationship twice is the #2799 same-triple case, not this pair.
+  assert.equal(isTaskListSubIssuePair(taskList, taskList), false);
+  assert.equal(isTaskListSubIssuePair(subIssue, subIssue), false);
+  // Every other different-relationship pair stays an ambiguity.
+  for (const other of ['dependency', 'reference', 'closing-keyword']) {
+    const otherEdge = { source: 1, target: 2, relationship: other };
+    assert.equal(isTaskListSubIssuePair(taskList, otherEdge), false);
+    assert.equal(isTaskListSubIssuePair(otherEdge, taskList), false);
+    assert.equal(isTaskListSubIssuePair(subIssue, otherEdge), false);
+    assert.equal(isTaskListSubIssuePair(otherEdge, subIssue), false);
+  }
+  // A different source or target is never one membership.
+  assert.equal(
+    isTaskListSubIssuePair(taskList, { ...subIssue, source: 9 }),
+    false,
+  );
+  assert.equal(
+    isTaskListSubIssuePair(taskList, { ...subIssue, target: 9 }),
+    false,
+  );
+});
+
+test('#3668: a task-list entry plus a Blocked-by line for one child is still a duplicate', async () => {
+  const issues = new Map([
+    [
+      710,
+      roadmapIssue(710, '- [ ] #711\nBlocked by #711', 'ambiguous-roadmap'),
+    ],
+    [711, executionIssue(711, 'listed and blocking')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(710, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 710,
+      target: 711,
+      relationship: 'dependency',
+      evidence: 'Blocked by #711',
+      firstSeenFrom: 710,
+    },
+  ]);
+  assert.equal(graph.summary.duplicateReferenceCount, 1);
+});
+
+test('#3668: two identical task-list lines still collapse (#2799) and stay diagnostic-free beside a sub-issue link', async () => {
+  const issues = new Map([
+    [720, roadmapIssue(720, '- [ ] #721\n- [ ] #721', 'collapse-roadmap')],
+    [721, executionIssue(721, 'listed twice and linked')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(720, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 720 ? [721] : []),
+  });
+
+  // `edges` is emitted in a sorted order, so compare the relationship set.
+  assert.deepEqual(graph.edges.map((edge) => edge.relationship).sort(), [
+    'sub-issue',
+    'task-list',
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
+});
+
+test('#3668: a third relationship beside the task-list plus sub-issue pair is still reported once', async () => {
+  const issues = new Map([
+    [730, roadmapIssue(730, '- [ ] #731\nRefs #731', 'triple-roadmap')],
+    [731, executionIssue(731, 'listed, referenced and linked')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(730, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 730 ? [731] : []),
+  });
+
+  // `edges` is emitted in a sorted order, so compare the relationship set.
+  assert.deepEqual(graph.edges.map((edge) => edge.relationship).sort(), [
+    'reference',
+    'sub-issue',
+    'task-list',
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 730,
+      target: 731,
+      relationship: 'reference',
+      evidence: 'Refs #731',
+      firstSeenFrom: 730,
+    },
+  ]);
+});
+
+test('#3668: a sub-issue link beside a non-task-list relationship is still reported', async () => {
+  // With no task-list entry the first edge for the pair is the keyword edge,
+  // so the sub-issue link is one more different relationship, not a
+  // membership pair.
+  const issues = new Map([
+    [740, roadmapIssue(740, 'Blocked by #741', 'keyword-first-roadmap')],
+    [741, executionIssue(741, 'blocking and linked')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(740, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => (issueNumber === 740 ? [741] : []),
+  });
+
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 740,
+      target: 741,
+      relationship: 'sub-issue',
+      evidence: 'GitHub sub-issue #741',
+      firstSeenFrom: 740,
+    },
+  ]);
 });
 
 test('keeps traversing descendants when a shared node is reached through multiple paths', async () => {
@@ -2932,6 +3093,8 @@ function buildClaimState(
     staleAgeMs = CLAIM_STALE_AGE_MS,
     heartbeatIntervalMs = CLAIM_HEARTBEAT_INTERVAL_MS,
     inspectLocalWorktree,
+    nowIso = CLAIM_NOW,
+    forcedHandoffEnabled,
   }: {
     currentClaimId?: string;
     currentSessionAgentId?: string | null;
@@ -2942,6 +3105,8 @@ function buildClaimState(
     staleAgeMs?: number;
     heartbeatIntervalMs?: number;
     inspectLocalWorktree?: (branchName: string) => LocalWorktreeInspection;
+    nowIso?: string;
+    forcedHandoffEnabled?: boolean;
   } = {},
 ) {
   const trusted = new Set(trustedActors.map((value) => value.toLowerCase()));
@@ -2963,13 +3128,14 @@ function buildClaimState(
         trusted.has(String(login ?? '').toLowerCase()),
       staleAgeMs,
       heartbeatIntervalMs,
-      nowIso: CLAIM_NOW,
+      nowIso,
       currentClaimId,
       currentSessionAgentId,
       currentSessionWorktreePath,
       currentSessionBranch,
       currentSessionOwnsClaimEvidence,
       inspectLocalWorktree,
+      ...(forcedHandoffEnabled === undefined ? {} : { forcedHandoffEnabled }),
     },
   };
 }
@@ -4080,6 +4246,260 @@ test('heartbeatOverdue:false when a later trusted heartbeat repost refreshes the
   assert.equal(leaf701?.claimEligible, false);
 });
 
+// ---------------------------------------------------------------------------
+// Forced-handoff successor in the claim annotation (#3675). The replay thread
+// is the reporter's: a claim at 2026-09-29T16:42Z, then an issue-only handoff
+// by a trusted author at 2026-09-30T03:40:26Z.
+// ---------------------------------------------------------------------------
+
+const HANDOFF_ORIGINAL_CLAIM_AT = '2026-09-29T16:42:00Z';
+const HANDOFF_AT = '2026-09-30T03:40:26Z';
+const HANDOFF_NOW_EARLY = '2026-09-30T09:20:00Z';
+const HANDOFF_NOW_LATE = '2026-09-30T17:00:00Z';
+
+function handoffComment({
+  oldAgentId = 'agent-old',
+  oldClaimId = 'claim-old',
+  newAgentId = 'agent-new',
+  newClaimId = 'claim-new',
+  branch = 'issue/700-task',
+  forcedBy = 'kurone-kito',
+  author = 'kurone-kito',
+  createdAt = HANDOFF_AT,
+  lastEditedAt = null,
+}: {
+  oldAgentId?: string;
+  oldClaimId?: string;
+  newAgentId?: string;
+  newClaimId?: string;
+  branch?: string;
+  forcedBy?: string;
+  author?: string;
+  createdAt?: string;
+  lastEditedAt?: string | null;
+} = {}) {
+  return {
+    body: renderForcedHandoffComment({
+      oldAgentId,
+      oldClaimId,
+      newAgentId,
+      newClaimId,
+      branch,
+      forcedBy,
+      reason: 'operator-approved-recovery',
+      timestamp: createdAt,
+      contextScope: 'issue-only',
+    }),
+    createdAt,
+    author: { login: author },
+    lastEditedAt,
+  };
+}
+
+function handoffThread(...extra: unknown[]) {
+  return new Map<number, unknown[]>([
+    [
+      700,
+      [
+        claimComment('agent-old', 'claim-old', HANDOFF_ORIGINAL_CLAIM_AT),
+        ...extra,
+      ],
+    ],
+  ]);
+}
+
+test('a forced-handoff successor is reported with its own clocks at 09:20Z (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_EARLY,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-new',
+    agentId: 'agent-new',
+    heartbeatOverdue: false,
+  });
+  assert.equal(annotated.claimEligible, false);
+});
+
+test('a forced-handoff successor is heartbeat-overdue but not stale at 17:00Z (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_LATE,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-new',
+    agentId: 'agent-new',
+    heartbeatOverdue: true,
+  });
+  assert.equal(annotated.claimEligible, false);
+});
+
+test('without the forced-handoff mode the annotation keeps the displaced claim (#3675)', async () => {
+  for (const forcedHandoffEnabled of [undefined, false]) {
+    const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+      forcedHandoffEnabled,
+      nowIso: HANDOFF_NOW_LATE,
+    });
+
+    const annotated = await annotateLeafClaimState(700, resolution);
+
+    // 16:42Z -> 17:00Z next day is 24h18m: stale, and so takeover-eligible.
+    assert.deepEqual(annotated.activeClaim, {
+      present: true,
+      stale: true,
+      claimId: 'claim-old',
+      agentId: 'agent-old',
+      heartbeatOverdue: true,
+    });
+    assert.equal(annotated.claimEligible, true);
+  }
+});
+
+test('a handoff by an untrusted author is ignored even with the mode enabled (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment({ author: 'mallory' })),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.claimId, 'claim-old');
+  assert.equal(annotated.activeClaim.agentId, 'agent-old');
+});
+
+test('a thread with no handoff is unchanged with the mode enabled (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_EARLY,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-old',
+    agentId: 'agent-old',
+    heartbeatOverdue: true,
+  });
+});
+
+test('a handoff naming another claim, agent, or branch is ignored (#3675)', async () => {
+  for (const mismatch of [
+    { oldClaimId: 'claim-other' },
+    { oldAgentId: 'agent-other' },
+    { branch: 'issue/999-other' },
+  ]) {
+    const { resolution } = buildClaimState(
+      handoffThread(handoffComment(mismatch)),
+      { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+    );
+
+    const annotated = await annotateLeafClaimState(700, resolution);
+
+    assert.equal(annotated.activeClaim.claimId, 'claim-old');
+  }
+});
+
+test('an edited handoff marker is dropped (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment({ lastEditedAt: '2026-09-30T05:00:00Z' })),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.claimId, 'claim-old');
+});
+
+test('a handoff whose forced-by differs from its author is still followed (#3675)', async () => {
+  // The annotation is the lenient soft signal: authorization is not checked
+  // here, so the author/forced-by binding Resume routing applies stays off.
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment({ forcedBy: 'someone-else' })),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.claimId, 'claim-new');
+});
+
+test('a successor heartbeat after the handoff advances both clocks (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(
+      handoffComment(),
+      claimComment('agent-new', 'claim-new', '2026-09-30T20:00:00Z'),
+    ),
+    { forcedHandoffEnabled: true, nowIso: '2026-10-01T00:00:00Z' },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  // Without the heartbeat the handoff would be 20h20m old: overdue.
+  assert.deepEqual(annotated.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-new',
+    agentId: 'agent-new',
+    heartbeatOverdue: false,
+  });
+});
+
+test('releasing the successor leaves the issue unclaimed (#3675)', async () => {
+  const { resolution } = buildClaimState(
+    handoffThread(handoffComment(), {
+      body: '<!-- unclaimed-by: agent-new claim-new 2026-09-30T08:00:00Z -->',
+      createdAt: '2026-09-30T08:00:00Z',
+      author: { login: 'kurone-kito' },
+      lastEditedAt: null,
+    }),
+    { forcedHandoffEnabled: true, nowIso: HANDOFF_NOW_EARLY },
+  );
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.present, false);
+  assert.equal(annotated.claimEligible, true);
+});
+
+test('the successor claim is owned by the session that adopted it (#3675)', async () => {
+  const { resolution } = buildClaimState(handoffThread(handoffComment()), {
+    forcedHandoffEnabled: true,
+    nowIso: HANDOFF_NOW_EARLY,
+    currentClaimId: 'claim-new',
+    currentSessionAgentId: 'agent-new',
+    currentSessionOwnsClaimEvidence: true,
+  });
+
+  const annotated = await annotateLeafClaimState(700, resolution);
+
+  assert.equal(annotated.activeClaim.ownedByCurrentSession, true);
+});
+
+test('buildClaimStateResolution maps the forced-handoff mode to forcedHandoffEnabled (#3675)', () => {
+  const port = createFakeProviderAdapter({});
+  const enabled = (policy: Record<string, unknown>) =>
+    buildClaimStateResolution(port, policy, '').forcedHandoffEnabled;
+
+  assert.equal(enabled({ forcedHandoff: { mode: 'human-gated' } }), true);
+  assert.equal(enabled({ forcedHandoffMode: 'human-gated' }), true);
+  assert.equal(enabled({ 'forced-handoff': { mode: 'human-gated' } }), true);
+  assert.equal(enabled({}), false);
+  assert.equal(enabled({ forcedHandoff: { mode: 'disabled' } }), false);
+  assert.equal(enabled({ forcedHandoff: { mode: 'bogus' } }), false);
+});
+
 test('parseClaimHeartbeatIntervalMs rejects non-positive and garbage durations', () => {
   assert.equal(parseClaimHeartbeatIntervalMs('PT0S'), null);
   assert.equal(parseClaimHeartbeatIntervalMs('PT0H0M0S'), null);
@@ -4491,4 +4911,715 @@ test("buildCommentLoader delegates directly to the port's raw comment fetch (#22
       user: { login: 'kurone-kito' },
     },
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// #3598: `--with-progress` progress lines and the interruption recovery result.
+// ---------------------------------------------------------------------------
+
+/** A manual clock so the delayed-provider tests never wait on real time. */
+function progressClock(start = Date.parse('2026-10-01T00:00:00.000Z')) {
+  let current = start;
+  return {
+    now: () => current,
+    advance(ms: number) {
+      current += ms;
+    },
+  };
+}
+
+function progressTracker(clock: ReturnType<typeof progressClock>) {
+  const lines: string[] = [];
+  return {
+    lines,
+    events: () =>
+      lines.map(
+        (line) =>
+          (JSON.parse(line) as { iddProgress: Record<string, unknown> })
+            .iddProgress,
+      ),
+    progress: createDiscoverProgress({
+      write: (line) => lines.push(line),
+      now: clock.now,
+      minIntervalMs: 2000,
+    }),
+  };
+}
+
+/** Six open leaves under one roadmap root. */
+function progressGraphIssues() {
+  const issues = new Map<number, unknown>([
+    [
+      700,
+      roadmapIssue(
+        700,
+        [701, 702, 703, 704, 705, 706]
+          .map((number) => `- [ ] #${number}`)
+          .join('\n'),
+        'epic-progress',
+      ),
+    ],
+  ]);
+  for (const number of [701, 702, 703, 704, 705, 706]) {
+    issues.set(number, executionIssue(number, `leaf ${number}`));
+  }
+  return issues;
+}
+
+/** Fail like `gh` does when its own request is throttled or times out. */
+function ghFailureWith(fields: {
+  stderr?: string;
+  stdout?: string;
+  code?: string;
+  killed?: boolean;
+}): Error {
+  const error = new Error(
+    'Command failed: gh api graphql -f query=SECRET-COMMAND-LINE ghp_SECRET_TOKEN_123',
+  );
+  for (const [key, value] of Object.entries(fields)) {
+    Object.defineProperty(error, key, { value, enumerable: false });
+  }
+  return error;
+}
+
+test('--with-progress: a delayed provider yields bounded phase/count lines and an unchanged report (#3598)', async () => {
+  const issues = progressGraphIssues();
+  const clock = progressClock();
+  const tracker = progressTracker(clock);
+  const { resolution, seen } = buildClaimState(new Map());
+  // The provider is slow: each comment read costs 700 ms of (fake) time.
+  const delayedClaimState = {
+    ...resolution,
+    loadComments: async (issueNumber: number) => {
+      clock.advance(700);
+      await Promise.resolve();
+      return resolution.loadComments(issueNumber);
+    },
+  };
+
+  const withProgress = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: delayedClaimState,
+      readiness: readinessResolution(),
+    },
+    { progress: tracker.progress, now: clock.now },
+  );
+  const plain = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+    readiness: readinessResolution(),
+  });
+
+  // Same bytes as a run without the flag: progress never touches the report.
+  assert.equal(JSON.stringify(withProgress), JSON.stringify(plain));
+  assert.equal(seen.length >= 6, true, 'every leaf was annotated');
+
+  const events = tracker.events();
+  assert.deepEqual(
+    events
+      .filter((event) => event.event !== 'progress')
+      .map((event) => `${event.phase}:${event.event}`),
+    [
+      'root-discovery:start',
+      'root-discovery:complete',
+      'traversal:start',
+      'traversal:complete',
+      'claim-state:start',
+      'claim-state:complete',
+      'readiness:start',
+      'readiness:complete',
+    ],
+  );
+  const claimEvents = events.filter((event) => event.phase === 'claim-state');
+  assert.equal(claimEvents[0]?.known, 6);
+  assert.equal(claimEvents.at(-1)?.completed, 6);
+  // Six 700 ms reads (4.2 s) under a 2 s interval: a couple of updates at
+  // most, never one per read.
+  const midPhase = claimEvents.filter((event) => event.event === 'progress');
+  assert.ok(
+    midPhase.length >= 1 && midPhase.length <= 3,
+    `got ${midPhase.length}`,
+  );
+  assert.ok(
+    tracker.lines.length <= 14,
+    `bounded output, got ${tracker.lines.length} lines`,
+  );
+});
+
+test('--with-progress: an interruption after partial annotation returns a recovery result (#3598)', async () => {
+  const issues = progressGraphIssues();
+  const clock = progressClock();
+  const tracker = progressTracker(clock);
+  let reads = 0;
+  const { resolution } = buildClaimState(new Map());
+  const interruptedClaimState = {
+    ...resolution,
+    loadComments: async (issueNumber: number) => {
+      reads += 1;
+      if (reads === 4) {
+        throw createLoadControlRefusal({
+          outcome: 'not-dispatched',
+          reason: 'cooldown',
+          retryAt: '2026-10-01T00:12:00Z',
+          retryAtSource: 'server',
+        });
+      }
+      return resolution.loadComments(issueNumber);
+    },
+  };
+  const rerunArguments = [
+    '--all-roadmaps',
+    '--with-claim-state',
+    '--with-progress',
+  ];
+
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: interruptedClaimState,
+    },
+    { progress: tracker.progress, now: clock.now, rerunArguments },
+  );
+
+  assert.deepEqual(result, {
+    mode: 'all-roadmaps',
+    status: 'incomplete',
+    incomplete: {
+      reason: 'rate-limit',
+      phase: 'claim-state',
+      lastCompletedPhase: 'traversal',
+      counts: { unit: 'leaves', completed: 3, known: 6, leavesKnown: 6 },
+      retryAt: '2026-10-01T00:12:00.000Z',
+      retryAtSource: 'server',
+      exhausted: false,
+      recovery: {
+        safeToRerun: true,
+        sameArguments: true,
+        notBefore: '2026-10-01T00:12:00.000Z',
+        arguments: rerunArguments,
+      },
+    },
+  });
+  // Neither partial rows nor a zero count can be read from it.
+  assert.equal('leaves' in result, false);
+  assert.equal('summary' in result, false);
+  const last = tracker.events().at(-1);
+  assert.equal(last?.event, 'interrupted');
+  assert.equal(last?.reason, 'rate-limit');
+  assert.equal(last?.completed, 3);
+});
+
+test('--with-progress: an interrupted result is never stored and reports complete:false (#3588 contract)', async () => {
+  const { report, cache } = await readDiscoverHint({
+    helper: 'discover-roadmap-graph',
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    args: {},
+    policy: {},
+    noCache: true,
+    compute: () =>
+      enumerateAllRoadmapsGraphWithRecovery(
+        {
+          loadOpenRoadmapRoots: async () => {
+            throw ghFailureWith({ code: 'ETIMEDOUT' });
+          },
+        },
+        { progress: createDiscoverProgress() },
+      ),
+    hasCandidate: () => true,
+  });
+  assert.equal((report as { status?: string }).status, 'incomplete');
+  assert.equal(cache?.complete, false);
+});
+
+test('--with-progress: primary quota exhaustion during traversal reads its reset (#3598)', async () => {
+  const clock = progressClock();
+  const resetEpochSec = clock.now() / 1000 + 900;
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700, 800],
+      loadIssue: async (issueNumber) => {
+        if (issueNumber === 800) {
+          throw ghFailureWith({
+            stderr: [
+              'HTTP/2.0 403 Forbidden',
+              'x-ratelimit-remaining: 0',
+              `x-ratelimit-reset: ${resetEpochSec}`,
+              'x-ratelimit-resource: core',
+              '',
+              'gh: API rate limit exceeded for user ID 1. (HTTP 403)',
+            ].join('\n'),
+          });
+        }
+        return issueNumber === 700
+          ? roadmapIssue(700, '- [ ] #701', 'epic-a')
+          : executionIssue(701, 'leaf 701');
+      },
+    },
+    { progress: createDiscoverProgress({ now: clock.now }), now: clock.now },
+  );
+  assert.equal(isIncomplete(result), true);
+  if (!isIncomplete(result)) return;
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.phase, 'traversal');
+  assert.equal(result.incomplete.lastCompletedPhase, 'root-discovery');
+  // Root 700 finished; root 800 was in flight when the quota ran out.
+  assert.deepEqual(result.incomplete.counts, {
+    unit: 'roots',
+    completed: 1,
+    known: 2,
+    leavesKnown: 1,
+  });
+  assert.equal(result.incomplete.retryAt, '2026-10-01T00:15:00.000Z');
+  assert.equal(result.incomplete.retryAtSource, 'server');
+});
+
+test('--with-progress: a failure while building the options still prints an interrupted line (#3598)', async () => {
+  const tracker = progressTracker(progressClock());
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    () => {
+      throw createLoadControlRefusal({
+        outcome: 'not-dispatched',
+        reason: 'cooldown',
+        retryAt: '2026-10-01T00:05:00Z',
+        retryAtSource: 'server',
+      });
+    },
+    { progress: tracker.progress },
+  );
+  assert.equal(isIncomplete(result), true);
+  if (!isIncomplete(result)) return;
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  assert.equal(result.incomplete.counts.known, null);
+  assert.equal(result.incomplete.retryAt, '2026-10-01T00:05:00.000Z');
+  // Not silent on stderr: exactly one line, and it says what happened.
+  assert.deepEqual(
+    tracker.events().map((event) => [event.event, event.phase, event.reason]),
+    [['interrupted', 'root-discovery', 'rate-limit']],
+  );
+});
+
+test('--with-progress: a timeout in the root search is incomplete, not an empty scan (#3598)', async () => {
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => {
+        throw ghFailureWith({ code: 'ETIMEDOUT' });
+      },
+    },
+    { progress: createDiscoverProgress() },
+  );
+  assert.equal(isIncomplete(result), true);
+  if (!isIncomplete(result)) return;
+  assert.equal(result.incomplete.reason, 'timeout');
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  assert.equal(result.incomplete.lastCompletedPhase, null);
+  // Zero roots were never found: the size is unknown, not 0.
+  assert.equal(result.incomplete.counts.known, null);
+  assert.equal(result.incomplete.retryAt, null);
+  assert.equal(result.incomplete.recovery.notBefore, null);
+  assert.equal(result.incomplete.exhausted, false);
+});
+
+test('--with-progress: a complete empty scan is a normal report, not an incomplete result (#3598)', async () => {
+  const clock = progressClock();
+  const tracker = progressTracker(clock);
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    { loadOpenRoadmapRoots: async () => [] },
+    { progress: tracker.progress },
+  );
+  assert.equal(isIncomplete(result), false);
+  assert.equal('status' in result, false);
+  assert.deepEqual(
+    result,
+    await enumerateAllRoadmapsGraph({ loadOpenRoadmapRoots: async () => [] }),
+  );
+  const events = tracker.events();
+  assert.deepEqual(
+    events.map(
+      (event) =>
+        `${event.phase}:${event.event}:${event.completed}/${event.known}`,
+    ),
+    [
+      'root-discovery:start:0/null',
+      'root-discovery:complete:0/0',
+      'traversal:start:0/0',
+      'traversal:complete:0/0',
+    ],
+  );
+});
+
+test('--with-progress: an error that is not an interruption still rethrows (#3598)', async () => {
+  const tracker = progressTracker(progressClock());
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraphWithRecovery(
+        {
+          loadOpenRoadmapRoots: async () => [700],
+          loadIssue: async () => {
+            throw ghFailureWith({ stderr: 'gh: Bad credentials (HTTP 401)' });
+          },
+        },
+        { progress: tracker.progress },
+      ),
+    /Command failed/,
+  );
+  // The tracker is closed once the run is over, so nothing prints after it.
+  const before = tracker.lines.length;
+  tracker.progress.advance();
+  assert.equal(tracker.lines.length, before);
+});
+
+test('an interruption without --with-progress still throws exactly as before (#3598)', async () => {
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => {
+          throw ghFailureWith({ code: 'ETIMEDOUT' });
+        },
+      }),
+    /Command failed/,
+  );
+});
+
+test('--with-progress: progress lines and the result never carry tokens, bodies, or raw error text (#3598)', async () => {
+  const issues = new Map<number, unknown>([
+    [700, roadmapIssue(700, '- [ ] #701', 'epic-leak')],
+    [
+      701,
+      executionIssue(
+        701,
+        'ISSUE-BODY-SECRET do not print <!-- idd-skill-x -->',
+      ),
+    ],
+  ]);
+  const tracker = progressTracker(progressClock());
+  const { resolution } = buildClaimState(new Map());
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [700],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: {
+        ...resolution,
+        loadComments: async () => {
+          throw ghFailureWith({
+            stderr:
+              'gh: API rate limit exceeded for user ID 1. (HTTP 403) COMMENT-BODY-SECRET ghp_SECRET_TOKEN_123',
+          });
+        },
+      },
+    },
+    { progress: tracker.progress },
+  );
+  const everything = `${JSON.stringify(result)}\n${tracker.lines.join('')}`;
+  for (const secret of [
+    'ghp_SECRET_TOKEN_123',
+    'ISSUE-BODY-SECRET',
+    'COMMENT-BODY-SECRET',
+    'SECRET-COMMAND-LINE',
+    'Command failed',
+    'roadmap 700',
+    'issue 701',
+  ]) {
+    assert.equal(everything.includes(secret), false, `leaked ${secret}`);
+  }
+});
+
+test('a failed traversal fetch stops sibling workers from pulling more items (#3598)', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      700,
+      roadmapIssue(
+        700,
+        [701, 702, 703, 704, 705, 706, 707, 708]
+          .map((number) => `- [ ] #${number}`)
+          .join('\n'),
+        'epic-stop',
+      ),
+    ],
+  ]);
+  const loaded: number[] = [];
+  await assert.rejects(
+    () =>
+      enumerateRoadmapGraph(700, {
+        concurrency: 2,
+        loadIssue: async (issueNumber) => {
+          loaded.push(issueNumber);
+          if (issueNumber === 701) {
+            throw new Error('boom 701');
+          }
+          if (issueNumber !== 700) {
+            // Later than 701's rejection: the sibling is mid-item when the
+            // failure lands.
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          return issues.get(issueNumber) ?? executionIssue(issueNumber, '');
+        },
+      }),
+    /boom 701/,
+  );
+  // Let the sibling finish its in-flight item and, without the stop flag,
+  // keep draining the queue: the rejection alone settles the call early.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(
+    loaded.filter((issueNumber) => issueNumber > 702),
+    [],
+    'no item beyond the two in flight was requested after the failure',
+  );
+});
+
+test('CLI: --with-progress without --all-roadmaps is a usage error (#3598)', () => {
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
+          '--issue',
+          '700',
+          '--with-progress',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    /--with-progress requires --all-roadmaps/,
+  );
+});
+
+/** Run the built CLI in a config-free directory against a stubbed `gh`. */
+function runProgressCli(
+  ghBody: string,
+  extraArgs: string[],
+  { identity = true }: { identity?: boolean } = {},
+) {
+  const cwd = mkdtempSync(join(tmpdir(), 'idd-progress-cli-'));
+  const restore = stubExecutable('gh', ghBody);
+  try {
+    return spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
+        '--all-roadmaps',
+        ...(identity ? ['--owner', 'kurone-kito', '--repo', 'idd-skill'] : []),
+        '--with-progress',
+        ...extraArgs,
+      ],
+      { cwd, encoding: 'utf8', env: { ...process.env } },
+    );
+  } finally {
+    restore();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
+test('CLI: a rate-limited scan prints an incomplete result on stdout and exits 75 (#3598)', () => {
+  const child = runProgressCli(
+    `const args = process.argv.slice(2);
+if (args[0] === "search") {
+  process.stderr.write("gh: API rate limit exceeded for user ID 1. (HTTP 403) ghp_SECRET_TOKEN_123\\n");
+  process.exit(1);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+    ['--with-claim-state', '--no-cache'],
+  );
+  assert.equal(child.status, 75);
+  const result = JSON.parse(child.stdout) as {
+    status: string;
+    incomplete: {
+      reason: string;
+      phase: string;
+      recovery: { arguments: string[]; safeToRerun: boolean };
+    };
+    cache: { complete: boolean };
+    leaves?: unknown;
+  };
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  assert.equal(result.incomplete.recovery.safeToRerun, true);
+  assert.deepEqual(result.incomplete.recovery.arguments, [
+    '--all-roadmaps',
+    '--owner',
+    'kurone-kito',
+    '--repo',
+    'idd-skill',
+    '--with-claim-state',
+    '--with-progress',
+    '--no-cache',
+  ]);
+  assert.equal(result.cache.complete, false);
+  assert.equal('leaves' in result, false);
+  // Progress went to stderr as JSON lines and never leaked the token.
+  assert.equal(child.stderr.includes('ghp_SECRET_TOKEN_123'), false);
+  assert.equal(child.stdout.includes('ghp_SECRET_TOKEN_123'), false);
+  const progressLines = child.stderr
+    .split('\n')
+    .filter((line) => line.startsWith('{"iddProgress"'));
+  assert.ok(progressLines.length >= 2);
+  assert.equal(
+    (
+      JSON.parse(progressLines.at(-1) as string) as {
+        iddProgress: { event: string };
+      }
+    ).iddProgress.event,
+    'interrupted',
+  );
+});
+
+test('CLI: a complete empty scan keeps the report format, prints progress on stderr, and exits 0 (#3598)', () => {
+  const ghBody = `const args = process.argv.slice(2);
+if (args[0] === "search") {
+  process.stdout.write("[]\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`;
+  const withProgress = runProgressCli(ghBody, ['--no-cache']);
+  assert.equal(withProgress.status, 0);
+  const report = JSON.parse(withProgress.stdout) as Record<string, unknown>;
+  assert.equal(report.mode, 'all-roadmaps');
+  assert.deepEqual(report.leaves, []);
+  assert.equal('status' in report, false);
+  const progressLines = withProgress.stderr
+    .split('\n')
+    .filter((line) => line.startsWith('{"iddProgress"'));
+  assert.ok(progressLines.length >= 4, 'phase edges were printed');
+});
+
+test('CLI: a rate limit while resolving the repository is still an incomplete result (#3598)', () => {
+  const child = runProgressCli(
+    `const args = process.argv.slice(2);
+if (args[0] === "repo") {
+  process.stderr.write("gh: API rate limit exceeded for user ID 1. (HTTP 403)\\n");
+  process.exit(1);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+    ['--no-cache'],
+    { identity: false },
+  );
+  assert.equal(child.status, 75);
+  const result = JSON.parse(child.stdout) as {
+    status: string;
+    incomplete: {
+      reason: string;
+      phase: string;
+      counts: { known: number | null };
+      recovery: { arguments: string[] };
+    };
+  };
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.phase, 'root-discovery');
+  // The repository lookup ran before any phase: nothing is known yet.
+  assert.equal(result.incomplete.counts.known, null);
+  assert.deepEqual(result.incomplete.recovery.arguments, [
+    '--all-roadmaps',
+    '--with-progress',
+    '--no-cache',
+  ]);
+  // The lookup failed before any phase began, yet stderr still says so.
+  const events = child.stderr
+    .split('\n')
+    .filter((line) => line.startsWith('{"iddProgress"'))
+    .map((line) => JSON.parse(line).iddProgress);
+  assert.deepEqual(
+    events.map((event: { event: string; phase: string }) => [
+      event.event,
+      event.phase,
+    ]),
+    [['interrupted', 'root-discovery']],
+  );
+});
+
+test('CLI: the rerun arguments name every scope and flag of the invocation (#3598)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-progress-policy-'));
+  const policyPath = join(dir, 'policy.json');
+  writeFileSync(policyPath, '{}');
+  try {
+    const child = runProgressCli(
+      `const args = process.argv.slice(2);
+if (args[0] === "search") {
+  process.stderr.write("gh: You have exceeded a secondary rate limit. (HTTP 403)\\n");
+  process.exit(1);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+      [
+        '--policy',
+        policyPath,
+        '--with-claim-state',
+        '--with-readiness',
+        '--current-claim-id',
+        'claim-abc123',
+        '--concurrency',
+        '3',
+        '--refresh-cache',
+      ],
+    );
+    assert.equal(child.status, 75);
+    const result = JSON.parse(child.stdout) as {
+      incomplete: { recovery: { arguments: string[] } };
+    };
+    assert.deepEqual(result.incomplete.recovery.arguments, [
+      '--all-roadmaps',
+      '--owner',
+      'kurone-kito',
+      '--repo',
+      'idd-skill',
+      '--policy',
+      policyPath,
+      '--with-claim-state',
+      '--with-readiness',
+      '--current-claim-id',
+      'claim-abc123',
+      '--concurrency',
+      '3',
+      '--with-progress',
+      '--refresh-cache',
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: the --help progress and incomplete examples are valid JSON that match the schema (#3598)', () => {
+  const help = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), '--help'],
+    { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  const example = (prefix: string) => {
+    const line = help
+      .split('\n')
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith(prefix));
+    assert.ok(line, `missing help example starting ${prefix}`);
+    return JSON.parse(line);
+  };
+  const progress = example('{"iddProgress"') as {
+    iddProgress: Record<string, unknown>;
+  };
+  assert.equal(progress.iddProgress.helper, 'discover-roadmap-graph');
+  assert.equal(progress.iddProgress.phase, 'claim-state');
+  const incomplete = example('{"mode":"all-roadmaps","status":"incomplete"');
+  assert.deepEqual(
+    validate(
+      incomplete,
+      loadJson('schemas/discover-roadmap-incomplete.schema.json'),
+    ),
+    [],
+  );
 });

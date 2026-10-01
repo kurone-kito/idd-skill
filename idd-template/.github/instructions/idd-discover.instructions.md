@@ -216,12 +216,12 @@ reached only when every active discovery path returns zero: both paths
 for `orphan-first` and `roadmap-first` (orphan + roadmap fallback,
 either order); just the roadmap path for `roadmap`.
 
-**Helper flags (optional).** Both helpers accept `--with-claim-state`. A
-`cache.source: hint` only ranks: the pick must pass live A3–A5. If they
-reject it, rerun once with `--refresh-cache` before any no-work/parked/held
-call (the helper already refreshes an empty hint once); an incomplete
-refresh (`cache.complete: false`) is unknown/recovery. See
-`docs/idd-helper-scripts.md`.
+**Helper flags.** Both helpers take `--with-claim-state`.
+`cache.source: hint` only ranks: the pick must pass live A3–A5; if rejected,
+rerun once with `--refresh-cache` before any no-work/parked/held call.
+`cache.complete: false` is unknown/recovery; on `status: incomplete` rerun
+the same arguments after `incomplete.recovery.notBefore` (null: see
+`docs/idd-helper-scripts.md`).
 
 ## A1 — Find the roadmap
 

@@ -179,10 +179,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      `git branch --show-current` is `{branch-name}`; else hold).
      Require empty `git status --porcelain` and
      `git merge-base --is-ancestor HEAD "${PR_HEAD_SHA_F3}"`;
-     else hold. For paths in
-     `git ls-tree --full-tree -r --name-only "${PR_HEAD_SHA_F3}"`, run
-     `git ls-files -o --exclude-standard -- ":(top)$path"` and the same with
-     `-i`; either output holds. Use `git switch {branch-name}` (not
+     else hold. Run F2's
+     shadow-path check against `${PR_HEAD_SHA_F3}`; any output or failure
+     holds. Use `git switch {branch-name}` (not
      detached), recheck; reset on pass) — D3.5/D3.7 read local state, not
      the remote PR. Skip
      D3.5 steps 6-7 under the
@@ -580,8 +579,12 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    the upsert reports `create`, `update`, or `noop`; on `duplicate` or
    any other failure, keep the claim, re-validate, then post a hold
    comment with the helper output, and stop for repair. Re-validate
-   again; if it still
-   uses your `{claim-id}`, post `unclaimed-by` for your own
+   again; if it still uses your `{claim-id}`, for each issue in step
+   1's closing set (none: skip), read
+   `gh issue view {issue-number} --json state` once; if open,
+   re-validate, then close it as step 1 does (a racing close counts); if
+   either fails, hold as above with its error (no `unclaimed-by`, no
+   retry). Then post `unclaimed-by` for your own
    `{agent-id}` / `{claim-id}` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
    to release the claim now that cleanup is complete (`#2220`). If

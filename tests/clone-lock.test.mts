@@ -8,14 +8,17 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { devNull, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
   acquireCloneLock,
+  acquireCloneLockAtPath,
+  CLONE_LOCK_WINDOWS_DENIED_RETRIES,
   CloneLockTimeoutError,
   checkCloneLock,
   releaseCloneLock,
@@ -23,6 +26,10 @@ import {
   withCloneLock,
 } from '../src/scripts/clone-lock.mts';
 
+// Reaches the CJS side of `node:child_process` for the `execFileSync` patch
+// (propagated to the source module's ESM import by
+// `syncBuiltinESMExports`) in the #3664 retry tests at the end of this file.
+const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/clone-lock.mjs');
@@ -498,5 +505,521 @@ test('CLI: concurrent --exec invocations serialize the wrapped command — no tw
     }
   } finally {
     teardown(primary);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #3664: resolveCloneLockPath retries a spurious `git rev-parse` exit
+// (status 1, whitespace-only stderr) exactly once. Patches
+// `child_process.execFileSync` on the main thread (same technique as
+// tests/claim-lock.test.mts) and delegates every spawn the test does not
+// fail on purpose to the real git.
+// ---------------------------------------------------------------------------
+
+type RevParseStubAction =
+  | { throws: unknown }
+  | { returns: string }
+  // Run a different command with the caller's own spawn options, so the
+  // resulting failure is a real node-shaped `execFileSync` error.
+  | { substitute: { file: string; args: string[] } }
+  | undefined;
+
+function withRevParseStub(
+  decide: (spawnIndex: number) => RevParseStubAction,
+  body: () => void,
+): string[][] {
+  const cp = require('node:child_process');
+  const originalExecFileSync = cp.execFileSync;
+  const spawns: string[][] = [];
+  try {
+    cp.execFileSync = (...args: Parameters<typeof originalExecFileSync>) => {
+      const [file, cmdArgs] = args;
+      if (
+        file === 'git' &&
+        Array.isArray(cmdArgs) &&
+        cmdArgs[2] === 'rev-parse'
+      ) {
+        const index = spawns.length;
+        spawns.push([...cmdArgs]);
+        const action = decide(index);
+        if (action !== undefined) {
+          if ('throws' in action) {
+            throw action.throws;
+          }
+          if ('substitute' in action) {
+            return originalExecFileSync(
+              action.substitute.file,
+              action.substitute.args,
+              args[2],
+            );
+          }
+          return action.returns;
+        }
+      }
+      return originalExecFileSync(...args);
+    };
+    require('node:module').syncBuiltinESMExports();
+    body();
+  } finally {
+    cp.execFileSync = originalExecFileSync;
+    require('node:module').syncBuiltinESMExports();
+  }
+  return spawns;
+}
+
+function stubbedGitExit(
+  message: string,
+  fields: { status?: number | null; stdout?: string; stderr?: unknown },
+): Error {
+  return Object.assign(new Error(message), { signal: null, ...fields });
+}
+
+const SPURIOUS_CLONE_LOCK_EXITS: ReadonlyArray<{
+  name: string;
+  stdout: (realPath: string) => string;
+  stderr: string;
+}> = [
+  { name: 'empty stdout', stdout: () => '', stderr: '' },
+  {
+    name: 'a decoy stdout',
+    stdout: () => `${join(tmpdir(), 'idd-3664-absent-decoy', '.git')}\n`,
+    stderr: '',
+  },
+  { name: 'correct stdout', stdout: (realPath) => `${realPath}\n`, stderr: '' },
+  { name: 'whitespace-only stderr', stdout: () => '', stderr: '\n' },
+];
+
+for (const shape of SPURIOUS_CLONE_LOCK_EXITS) {
+  test(`resolveCloneLockPath: a spurious exit (status 1, ${shape.name}) is retried once and the retry's output is used (#3664)`, () => {
+    const primary = setupRepo();
+    try {
+      const expected = resolveCloneLockPath(primary);
+      const realGitDir = dirname(expected);
+      let resolved: string | undefined;
+      const spawns = withRevParseStub(
+        (index) =>
+          index === 0
+            ? {
+                throws: stubbedGitExit('stubbed spurious exit', {
+                  status: 1,
+                  stdout: shape.stdout(realGitDir),
+                  stderr: shape.stderr,
+                }),
+              }
+            : undefined,
+        () => {
+          resolved = resolveCloneLockPath(primary);
+        },
+      );
+      assert.equal(resolved, expected);
+      assert.equal(spawns.length, 2);
+    } finally {
+      teardown(primary);
+    }
+  });
+}
+
+test('resolveCloneLockPath: two consecutive spurious exits throw the second error unchanged after exactly two spawns (#3664)', () => {
+  const primary = setupRepo();
+  try {
+    const errors = [
+      stubbedGitExit('first spurious exit', {
+        status: 1,
+        stdout: '',
+        stderr: '',
+      }),
+      stubbedGitExit('second spurious exit', {
+        status: 1,
+        stdout: '',
+        stderr: ' \n',
+      }),
+    ];
+    let thrown: unknown;
+    const spawns = withRevParseStub(
+      (index) => ({ throws: errors[index] }),
+      () => {
+        try {
+          resolveCloneLockPath(primary);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.strictEqual(thrown, errors[1]);
+    assert.equal(spawns.length, 2);
+  } finally {
+    teardown(primary);
+  }
+});
+
+const NON_RETRYABLE_CLONE_LOCK_EXITS: ReadonlyArray<{
+  name: string;
+  fields: { status?: number | null; stdout?: string; stderr?: unknown };
+}> = [
+  {
+    name: 'non-whitespace stderr',
+    fields: { status: 1, stdout: '', stderr: 'fatal: boom\n' },
+  },
+  { name: 'status 128 with empty stderr', fields: { status: 128, stderr: '' } },
+  { name: 'a null status', fields: { status: null, stderr: '' } },
+  { name: 'a missing status', fields: { stderr: '' } },
+  { name: 'status 1 with a missing stderr', fields: { status: 1 } },
+  {
+    name: 'status 1 with a non-string stderr',
+    fields: { status: 1, stderr: Buffer.from('') },
+  },
+];
+
+for (const { name, fields } of NON_RETRYABLE_CLONE_LOCK_EXITS) {
+  test(`resolveCloneLockPath: a failure with ${name} is not retried and throws its own error after one spawn (#3664)`, () => {
+    const primary = setupRepo();
+    try {
+      const failure = stubbedGitExit('stubbed non-retryable exit', fields);
+      let thrown: unknown;
+      const spawns = withRevParseStub(
+        () => ({ throws: failure }),
+        () => {
+          try {
+            resolveCloneLockPath(primary);
+          } catch (error) {
+            thrown = error;
+          }
+        },
+      );
+      assert.strictEqual(thrown, failure);
+      assert.equal(spawns.length, 1);
+    } finally {
+      teardown(primary);
+    }
+  });
+}
+
+test('resolveCloneLockPath: a nonexistent repo path still fails after exactly one real git spawn (#3664)', () => {
+  const missing = join(tmpdir(), `idd-3664-missing-clone-${process.pid}`);
+  let thrown: unknown;
+  const spawns = withRevParseStub(
+    () => undefined,
+    () => {
+      try {
+        resolveCloneLockPath(missing);
+      } catch (error) {
+        thrown = error;
+      }
+    },
+  );
+  assert.ok(thrown instanceof Error, 'expected resolveCloneLockPath to throw');
+  assert.equal(spawns.length, 1);
+});
+
+test('resolveCloneLockPath: a real node exit-1 error built from its own spawn options is retried (#3664)', () => {
+  // Every other retry test feeds a hand-built error object; this one makes
+  // the lookup's real `execFileSync` options produce the error, so a future
+  // edit that drops `encoding: 'utf8'` (turning `stderr` into a Buffer and
+  // silently disabling the retry) cannot keep the suite green.
+  const primary = setupRepo();
+  try {
+    const expected = resolveCloneLockPath(primary);
+    let resolved: string | undefined;
+    const spawns = withRevParseStub(
+      (index) =>
+        index === 0
+          ? {
+              substitute: {
+                file: process.execPath,
+                args: ['-e', 'process.exit(1)'],
+              },
+            }
+          : undefined,
+      () => {
+        resolved = resolveCloneLockPath(primary);
+      },
+    );
+    assert.equal(resolved, expected);
+    assert.equal(spawns.length, 2);
+  } finally {
+    teardown(primary);
+  }
+});
+
+// --- #3679: a Windows EPERM/EACCES from the exclusive create ----------------
+
+/**
+ * Run `body` with `process.platform` forced to `platform` and the
+ * exclusive create of an `idd-clone.lock` file made to fail on demand, the
+ * same `syncBuiltinESMExports` technique the #3664 retry tests use. Only a
+ * `writeFileSync(<...>idd-clone.lock, ..., { flag: 'wx' })` call is
+ * intercepted; every other write passes through unchanged. `codeFor` gets
+ * the zero-based index of the intercepted attempt and returns the error
+ * code to inject, or `null` to let that attempt run for real. Returns how
+ * many creates were attempted.
+ *
+ * Time is controlled too, so no assertion depends on how long the host
+ * takes to run the loop: `Date.now` is a fake clock that starts at 0, and
+ * the loop's `Atomics.wait` back-off is replaced by a stub that advances
+ * that clock by the requested wait without sleeping. A stalled CI
+ * worker can therefore never expire a deadline early, and the bound-sized
+ * run no longer spends about three seconds of real time.
+ */
+function withLockCreateInjection(
+  platform: NodeJS.Platform,
+  codeFor: (attempt: number) => string | null,
+  body: () => void,
+): number {
+  const fsModule = require('node:fs') as typeof import('node:fs');
+  const originalWrite = fsModule.writeFileSync;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const originalNow = Date.now;
+  const originalWait = Atomics.wait;
+  let fakeNow = 0;
+  let attempts = 0;
+  fsModule.writeFileSync = ((...args: Parameters<typeof originalWrite>) => {
+    const [file, , options] = args;
+    const isLockCreate =
+      typeof file === 'string' &&
+      file.endsWith('idd-clone.lock') &&
+      typeof options === 'object' &&
+      options !== null &&
+      (options as { flag?: string }).flag === 'wx';
+    if (isLockCreate) {
+      const attempt = attempts;
+      attempts += 1;
+      const code = codeFor(attempt);
+      if (code !== null) {
+        throw Object.assign(
+          new Error(`${code}: injected on attempt ${attempt}, open '${file}'`),
+          { code },
+        );
+      }
+    }
+    return originalWrite(...args);
+  }) as typeof originalWrite;
+  Object.defineProperty(process, 'platform', {
+    value: platform,
+    configurable: true,
+  });
+  Date.now = () => fakeNow;
+  Atomics.wait = ((
+    _typedArray: unknown,
+    _index: unknown,
+    _value: unknown,
+    timeout?: number,
+  ) => {
+    fakeNow += timeout ?? 0;
+    return 'timed-out';
+  }) as typeof Atomics.wait;
+  require('node:module').syncBuiltinESMExports();
+  try {
+    body();
+  } finally {
+    Date.now = originalNow;
+    Atomics.wait = originalWait;
+    fsModule.writeFileSync = originalWrite;
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+    require('node:module').syncBuiltinESMExports();
+  }
+  return attempts;
+}
+
+function withLockDir(run: (lockPath: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-clone-lock-3679-'));
+  try {
+    run(join(dir, 'idd-clone.lock'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+for (const code of ['EPERM', 'EACCES']) {
+  test(`acquire (win32): ${code} on the first attempts is retried and the lock is then acquired with the caller's own body (#3679)`, () => {
+    withLockDir((lockPath) => {
+      let handle: { path: string; token: string } | undefined;
+      const attempts = withLockCreateInjection(
+        'win32',
+        (attempt) => (attempt < 3 ? code : null),
+        () => {
+          handle = acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+        },
+      );
+      assert.equal(attempts, 4);
+      assert.ok(handle);
+      assert.equal(handle.path, lockPath);
+      const body = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+        agentId: string;
+        token: string;
+        pid: number;
+      };
+      assert.equal(body.agentId, 'agent-win');
+      assert.equal(body.token, handle.token);
+      assert.equal(body.pid, process.pid);
+      releaseCloneLock(handle);
+    });
+  });
+}
+
+test('acquire (win32): an EPERM that never clears throws the last failing create error after exactly the bound plus one attempts, not a timeout (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    const attempts = withLockCreateInjection(
+      'win32',
+      () => 'EPERM',
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.equal(attempts, CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
+    assert.ok(thrown instanceof Error);
+    assert.ok(!(thrown instanceof CloneLockTimeoutError));
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+    assert.match(
+      thrown.message,
+      new RegExp(`injected on attempt ${CLONE_LOCK_WINDOWS_DENIED_RETRIES},`),
+    );
+  });
+});
+
+test('acquire (win32): a deadline shorter than the bound still throws the EPERM error, after the loop kept retrying (#3679)', () => {
+  // Fake clock: attempts at t = 0, 200, 400 and 500 ms (the last wait is
+  // clamped to the 100 ms left), then the deadline check throws.
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    const attempts = withLockCreateInjection(
+      'win32',
+      () => 'EPERM',
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 500);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.equal(attempts, 4);
+    assert.ok(attempts < CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
+    assert.ok(thrown instanceof Error);
+    assert.ok(!(thrown instanceof CloneLockTimeoutError));
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+  });
+});
+
+test('acquire (win32): an EEXIST ends a run of EPERM results and restarts the count (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    // Two denied creates, one lost round, then denied forever. Without a
+    // restart the bound would trip on the denied create that follows the
+    // lost round after BOUND - 2 more; with it, only after BOUND + 1.
+    const attempts = withLockCreateInjection(
+      'win32',
+      (attempt) => (attempt === 2 ? 'EEXIST' : 'EPERM'),
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.equal(attempts, 2 + 1 + CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+  });
+});
+
+test('acquire (win32): a create that succeeds on the last allowed retry is acquired (#3679)', () => {
+  withLockDir((lockPath) => {
+    let handle: { path: string; token: string } | undefined;
+    const attempts = withLockCreateInjection(
+      'win32',
+      (attempt) =>
+        attempt < CLONE_LOCK_WINDOWS_DENIED_RETRIES ? 'EPERM' : null,
+      () => {
+        handle = acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+      },
+    );
+    assert.equal(attempts, CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
+    assert.ok(handle);
+    releaseCloneLock(handle);
+  });
+});
+
+test('acquire (win32): any other error code is still thrown at once (#3679)', () => {
+  for (const code of ['ENOENT', 'EBUSY']) {
+    withLockDir((lockPath) => {
+      let thrown: unknown;
+      const attempts = withLockCreateInjection(
+        'win32',
+        () => code,
+        () => {
+          try {
+            acquireCloneLockAtPath(lockPath, 'agent-win', 60_000);
+          } catch (error) {
+            thrown = error;
+          }
+        },
+      );
+      assert.equal(attempts, 1, code);
+      assert.equal((thrown as NodeJS.ErrnoException).code, code);
+    });
+  }
+});
+
+test('acquire (win32): a denied create followed only by lost rounds still ends in CloneLockTimeoutError, not the stale denied error (#3679)', () => {
+  // Fake clock: the denied attempt at t = 0, a lost round at 200 ms and
+  // another at 300 ms, where the deadline check throws.
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    withLockCreateInjection(
+      'win32',
+      (attempt) => (attempt === 0 ? 'EPERM' : 'EEXIST'),
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-win', 300);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.ok(thrown instanceof CloneLockTimeoutError);
+  });
+});
+
+test('acquire (linux): an injected EPERM is thrown on the first attempt, with no retry (#3679)', () => {
+  withLockDir((lockPath) => {
+    let thrown: unknown;
+    const attempts = withLockCreateInjection(
+      'linux',
+      () => 'EPERM',
+      () => {
+        try {
+          acquireCloneLockAtPath(lockPath, 'agent-posix', 60_000);
+        } catch (error) {
+          thrown = error;
+        }
+      },
+    );
+    assert.equal(attempts, 1);
+    assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
+  });
+});
+
+test('acquire (win32 and linux): an injected EEXIST still loses the round and retries as before (#3679)', () => {
+  for (const platform of ['win32', 'linux'] as const) {
+    withLockDir((lockPath) => {
+      let handle: { path: string; token: string } | undefined;
+      const attempts = withLockCreateInjection(
+        platform,
+        (attempt) => (attempt < 2 ? 'EEXIST' : null),
+        () => {
+          handle = acquireCloneLockAtPath(lockPath, 'agent-a', 60_000);
+        },
+      );
+      assert.equal(attempts, 3, platform);
+      assert.ok(handle, platform);
+      releaseCloneLock(handle);
+    });
   }
 });

@@ -143,13 +143,13 @@ go directly to the table's first three rows (§MC): the helper's routing
 verdict (`state`/`action`) reflects claim state only, never merge or
 close state.
 
-Use helper output as evidence mapped to this table, not as an
-authoritative replacement:
+Use helper output as evidence, not as authority:
 
 - `state: already_owned` + `action: keep` → continue with the same
   `{claim-id}` route.
 - `state: owner_evidence_required` + `action: stop` → retry once with
-  `--worktree {path}`; if it persists, stop (not a live competitor).
+  `--worktree {path}`; if it persists, stop (not a live competitor) unless
+  a forced-handoff successor: §FH.
 - `state: unclaimed` + `action: re_claim` → no-active-claim route.
 - `state: stale` + `action: takeover` → stale-claim takeover route.
 - `state: local_worktree_occupied` + `action: stop` → a stale or released

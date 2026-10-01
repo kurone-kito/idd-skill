@@ -254,13 +254,20 @@ export function checkPathAItem(item: unknown): ItemResult {
   const markerType = classifyMarker(markerReply ?? '');
 
   if (decision === 'rejected') {
-    const markerPresent = markerType === 'rejected';
-    checks.markerPresent = markerPresent;
-    checks.markerMatchesDecision = markerPresent;
-    if (!markerPresent) {
-      issues.push(
-        'PATH A Rejected item is missing the required `**Rejected** — {reason}` marker reply.',
-      );
+    // E6 and E7 require a rejection reply only when the item's source is
+    // reviewer feedback. A `critique_finding` comes from the session's own
+    // critique pass and has no reviewer to reply to, so the marker checks
+    // stay `null` (not applicable) for it (#3669). Every reviewer-sourced
+    // type keeps the requirement.
+    if (type !== 'critique_finding') {
+      const markerPresent = markerType === 'rejected';
+      checks.markerPresent = markerPresent;
+      checks.markerMatchesDecision = markerPresent;
+      if (!markerPresent) {
+        issues.push(
+          'PATH A Rejected item is missing the required `**Rejected** — {reason}` marker reply.',
+        );
+      }
     }
 
     if (type === 'review_thread') {
@@ -440,6 +447,11 @@ function printHelp(): void {
   node scripts/review-disposition-verify.mjs --items '<json>' [--help]
 
 Input: JSON array of items or object with an 'items' key.
+
+A rejected PATH A item needs a '**Rejected** — {reason}' marker reply only
+when its source is reviewer feedback (review_thread, regular_comment,
+changes_requested). A rejected critique_finding comes from the session's
+own critique pass, has no reviewer to reply to, and needs no marker reply.
 
 Item shape:
 {
