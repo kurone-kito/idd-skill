@@ -752,6 +752,13 @@ test('resolveCloneLockPath: a real node exit-1 error built from its own spawn op
  * the zero-based index of the intercepted attempt and returns the error
  * code to inject, or `null` to let that attempt run for real. Returns how
  * many creates were attempted.
+ *
+ * Time is controlled too, so no assertion depends on how long the host
+ * takes to run the loop: `Date.now` is a fake clock that starts at 0, and
+ * the loop's `Atomics.wait` back-off is replaced by a stub that advances
+ * that clock by the requested wait without sleeping. A stalled CI
+ * worker can therefore never expire a deadline early, and the bound-sized
+ * run no longer spends about three seconds of real time.
  */
 function withLockCreateInjection(
   platform: NodeJS.Platform,
@@ -761,6 +768,9 @@ function withLockCreateInjection(
   const fsModule = require('node:fs') as typeof import('node:fs');
   const originalWrite = fsModule.writeFileSync;
   const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const originalNow = Date.now;
+  const originalWait = Atomics.wait;
+  let fakeNow = 0;
   let attempts = 0;
   fsModule.writeFileSync = ((...args: Parameters<typeof originalWrite>) => {
     const [file, , options] = args;
@@ -787,10 +797,22 @@ function withLockCreateInjection(
     value: platform,
     configurable: true,
   });
+  Date.now = () => fakeNow;
+  Atomics.wait = ((
+    _typedArray: unknown,
+    _index: unknown,
+    _value: unknown,
+    timeout?: number,
+  ) => {
+    fakeNow += timeout ?? 0;
+    return 'timed-out';
+  }) as typeof Atomics.wait;
   require('node:module').syncBuiltinESMExports();
   try {
     body();
   } finally {
+    Date.now = originalNow;
+    Atomics.wait = originalWait;
     fsModule.writeFileSync = originalWrite;
     if (originalPlatform) {
       Object.defineProperty(process, 'platform', originalPlatform);
@@ -862,6 +884,8 @@ test('acquire (win32): an EPERM that never clears throws the last failing create
 });
 
 test('acquire (win32): a deadline shorter than the bound still throws the EPERM error, after the loop kept retrying (#3679)', () => {
+  // Fake clock: attempts at t = 0, 200, 400 and 500 ms (the last wait is
+  // clamped to the 100 ms left), then the deadline check throws.
   withLockDir((lockPath) => {
     let thrown: unknown;
     const attempts = withLockCreateInjection(
@@ -875,8 +899,8 @@ test('acquire (win32): a deadline shorter than the bound still throws the EPERM 
         }
       },
     );
-    assert.ok(attempts >= 2, `expected at least two attempts, got ${attempts}`);
-    assert.ok(attempts <= CLONE_LOCK_WINDOWS_DENIED_RETRIES);
+    assert.equal(attempts, 4);
+    assert.ok(attempts < CLONE_LOCK_WINDOWS_DENIED_RETRIES + 1);
     assert.ok(thrown instanceof Error);
     assert.ok(!(thrown instanceof CloneLockTimeoutError));
     assert.equal((thrown as NodeJS.ErrnoException).code, 'EPERM');
@@ -944,6 +968,8 @@ test('acquire (win32): any other error code is still thrown at once (#3679)', ()
 });
 
 test('acquire (win32): a denied create followed only by lost rounds still ends in CloneLockTimeoutError, not the stale denied error (#3679)', () => {
+  // Fake clock: the denied attempt at t = 0, a lost round at 200 ms and
+  // another at 300 ms, where the deadline check throws.
   withLockDir((lockPath) => {
     let thrown: unknown;
     withLockCreateInjection(
