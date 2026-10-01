@@ -4946,13 +4946,15 @@ function presentRun(name: string, state: string, coveredByWaiver = false) {
   };
 }
 
-test('listBlockingPresentRunNames is non-empty exactly when the present-run conclusion is some-failing', () => {
+test('listBlockingPresentRunNames is non-empty exactly when the present-run conclusion is some-failing, except for a still-running status context', () => {
   const scenarios: {
     label: string;
     checks: ReturnType<typeof presentRun>[];
     identityUnresolved?: string[];
     conclusion: string;
     names: string[];
+    /** A still-running status context reads some-failing but is not named. */
+    namesOmitStillRunning?: boolean;
   }[] = [
     { label: 'no runs', checks: [], conclusion: 'none', names: [] },
     {
@@ -5047,6 +5049,26 @@ test('listBlockingPresentRunNames is non-empty exactly when the present-run conc
       names: ['a', 'c'],
     },
     {
+      label:
+        'a still-running commit status reads some-failing but is not named',
+      checks: [
+        presentRun('a', 'PENDING'),
+        presentRun('b', 'EXPECTED'),
+        presentRun('c', 'REQUESTED'),
+        presentRun('d', 'SUCCESS'),
+      ],
+      conclusion: 'some-failing',
+      names: [],
+      namesOmitStillRunning: true,
+    },
+    {
+      label:
+        'a still-running commit status beside a failure names only the failure',
+      checks: [presentRun('a', 'PENDING'), presentRun('b', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
       label: 'pending beside an unrecognized state names nothing',
       checks: [presentRun('a', 'QUEUED'), presentRun('b', 'MYSTERY')],
       conclusion: 'pending',
@@ -5099,11 +5121,13 @@ test('listBlockingPresentRunNames is non-empty exactly when the present-run conc
     const names = listBlockingPresentRunNames(scenario.checks, unresolved);
     assert.equal(conclusion, scenario.conclusion, scenario.label);
     assert.deepEqual(names, scenario.names, scenario.label);
-    assert.equal(
-      names.length > 0,
-      conclusion === 'some-failing',
-      `${scenario.label}: names are non-empty exactly when some-failing`,
-    );
+    if (!scenario.namesOmitStillRunning) {
+      assert.equal(
+        names.length > 0,
+        conclusion === 'some-failing',
+        `${scenario.label}: names are non-empty exactly when some-failing`,
+      );
+    }
   }
 });
 

@@ -36,6 +36,8 @@ import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   CI_FAILURE_CONCLUSION_STATES,
+  CI_PENDING_STATES,
+  CI_STATUS_CONTEXT_PENDING_STATES,
   classifyCiChecks,
   compareIsoTimestamps,
   isCompletedCiTimestamp,
@@ -254,13 +256,12 @@ const SUCCESS_STATES = new Set([
   'SKIPPED',
   'NOT_APPLICABLE',
 ]);
+// Built from the shared sets in protocol-helpers.mts so the present-run
+// fallback's names (#3670) and this bucketing cannot disagree about which
+// states are still running.
 const PENDING_STATES = new Set([
-  'QUEUED',
-  'IN_PROGRESS',
-  'WAITING',
-  'PENDING',
-  'EXPECTED',
-  'REQUESTED',
+  ...CI_PENDING_STATES,
+  ...CI_STATUS_CONTEXT_PENDING_STATES,
 ]);
 // Derived from the shared `CI_FAILURE_CONCLUSION_STATES` (protocol-helpers.mts)
 // plus `CANCELLED`, rather than an independently hand-maintained literal
@@ -1011,7 +1012,8 @@ export interface RequiredCiHeadAgreement {
    * downgrade fails closed even when its own state is green. Empty when a
    * required check is configured or no present run blocks (a pending,
    * cancelled-only, or empty run set). A run with no name cannot be named, so
-   * it is left out.
+   * it is left out, and so is a still-running commit status (`PENDING`,
+   * `EXPECTED`, `REQUESTED`), which is not a failure.
    */
   blockingPresentRunNames: string[];
   latestPassingCompletedAt: string;

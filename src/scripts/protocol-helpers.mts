@@ -5924,10 +5924,24 @@ function parseCompletedAt(value: string | null | undefined): number | null {
 }
 
 /** Check-run states that mean a run is still queued or running. */
-const CI_PENDING_STATES: ReadonlySet<string> = new Set([
+export const CI_PENDING_STATES: ReadonlySet<string> = new Set([
   'QUEUED',
   'IN_PROGRESS',
   'WAITING',
+]);
+
+/**
+ * Commit-status (StatusContext) states that also mean a run is still running.
+ * `ci-wait-state.mts` buckets them as pending alongside
+ * {@link CI_PENDING_STATES}, but `classifyCiChecks` leaves them unrecognized,
+ * so the present-run fallback reads them as `some-failing` (when no check-run
+ * pending state sits beside them). They are not named as blocking runs
+ * (#3670): a still-running status is not a failure.
+ */
+export const CI_STATUS_CONTEXT_PENDING_STATES: ReadonlySet<string> = new Set([
+  'PENDING',
+  'EXPECTED',
+  'REQUESTED',
 ]);
 
 /** Check-run states `classifyCiChecks` counts as passing. */
@@ -9652,6 +9666,7 @@ function classifyPresentRuns(
     if (
       !CI_FAILURE_CONCLUSION_STATES.has(check.state) &&
       !CI_PENDING_STATES.has(check.state) &&
+      !CI_STATUS_CONTEXT_PENDING_STATES.has(check.state) &&
       !CI_PASSING_STATES.has(check.state) &&
       check.state !== 'CANCELLED'
     ) {
@@ -9731,8 +9746,10 @@ export function resolvePresentRunConclusion(
  * conclusion (#3670). A run the advisory-convergence downgrade blocks is
  * included even when its own state is green, so callers name these runs as
  * blocking rather than failing. A run with no name cannot be named, so it is
- * left out: for named checks the result is non-empty exactly when the
- * conclusion is `some-failing`.
+ * left out, and so is a still-running status context
+ * ({@link CI_STATUS_CONTEXT_PENDING_STATES}), which the fallback can read as
+ * `some-failing` but is not a failure. Otherwise the result is non-empty
+ * exactly when the conclusion is `some-failing`.
  */
 export function listBlockingPresentRunNames(
   normalizedChecks: NormalizedPresentRun[],
