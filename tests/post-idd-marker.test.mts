@@ -876,6 +876,33 @@ test('an apply envelope validates against the schema', () => {
   assert.deepEqual(validate(envelope, schema), []);
 });
 
+test('operationLocal.watermarkFields is always an object: the schema rejects null and non-string values (#3622)', () => {
+  // The operation-local path throws before any envelope is printed when the
+  // derivation fails, so it never emits `null`; the schema must say so.
+  const operationLocalSchema = (
+    schema as { properties: { operationLocal: Record<string, unknown> } }
+  ).properties.operationLocal;
+  const capture = {
+    decision: 'publish',
+    reason: null,
+    snapshot: {},
+    watermarkFields: { 'head-sha': 'abc123' },
+    warnings: [],
+  };
+  assert.deepEqual(validate(capture, operationLocalSchema), []);
+  assert.ok(
+    validate({ ...capture, watermarkFields: null }, operationLocalSchema).some(
+      (message) => message.includes('watermarkFields'),
+    ),
+  );
+  assert.ok(
+    validate(
+      { ...capture, watermarkFields: { 'total-item-count': 1 } },
+      operationLocalSchema,
+    ).some((message) => message.includes('watermarkFields')),
+  );
+});
+
 test('the schema rejects an unknown field and a missing required field', () => {
   assert.notDeepEqual(
     validate(
