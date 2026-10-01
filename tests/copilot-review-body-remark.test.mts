@@ -266,6 +266,32 @@ test('an indented code block under the heading is not a remark (#3672)', () => {
   );
 });
 
+test('a closing hash run on the heading needs a space before it (#3672)', () => {
+  // #3688 review: `look###` is heading text, not a closing sequence.
+  for (const heading of [
+    '### Needs a closer look ###',
+    '### Needs a closer look #',
+    '### Needs a closer look \t ## ',
+  ]) {
+    assert.equal(
+      extractCopilotReviewBodyRemark(`${heading}\n\nThe remark.`),
+      'The remark.',
+      heading,
+    );
+  }
+  for (const heading of [
+    '### Needs a closer look###',
+    '### Needs a closer look#',
+    '### Needs a closer look ##x',
+  ]) {
+    assert.equal(
+      extractCopilotReviewBodyRemark(`${heading}\n\nThe remark.`),
+      null,
+      heading,
+    );
+  }
+});
+
 test('a label on an ATX heading line reads only that line (#3672)', () => {
   // A heading is one line, so the next line is a new paragraph.
   assert.equal(

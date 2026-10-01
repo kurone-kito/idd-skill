@@ -252,10 +252,12 @@ export function classifyCopilotReviewBody(
 /** `### 🔵 Needs a closer look` (any ATX level; the `🔵` marker, with or
  * without an emoji variation selector, is optional, since the real corpus
  * bodies carry it and older test fixtures do not). The phrase must end the
- * line, so `### Needs a closer look: text` is left to
+ * line, apart from an ATX closing `#` run, which needs a space before it
+ * (`look###` is heading text, not a closing run), so
+ * `### Needs a closer look: text` is left to
  * {@link REMARK_INLINE_LABEL_PATTERN}. */
 const REMARK_HEADING_PATTERN =
-  /^ {0,3}#{1,6}[ \t]+(?:🔵\uFE0F?[ \t]*)?needs a closer look[ \t#]*$/iu;
+  /^ {0,3}#{1,6}[ \t]+(?:🔵\uFE0F?[ \t]*)?needs a closer look(?:[ \t]+#+)?[ \t]*$/iu;
 
 /** Inline form, line-anchored: `🔵 Needs a closer look: text`, optionally
  * behind up to three leading spaces and a run of heading, bullet (`-`,
@@ -270,6 +272,7 @@ const REMARK_INLINE_LABEL_PATTERN =
   /^ {0,3}(?:[#*_+-][ \t#*_+-]*)?(?:🔵\uFE0F?[ \t*_]*)?needs a closer look[ \t*_]*:(?:[*_]{1,3}(?=[ \t]|$))?/iu;
 
 const REMARK_PHRASE_PATTERN = /needs a closer look/iu;
+
 /** The head of a body the Markdown masker may read, and the longest line it
  * may see: a remark sits at the top of a review body (every observed one
  * within its first hundred characters). Known limit, accepted for an
@@ -288,6 +291,7 @@ function boundedMaskInput(body: string): string {
     .map((line) => line.slice(0, MASK_LINE_CHARS))
     .join('\n');
 }
+
 const HAS_TEXT_PATTERN = /[\p{L}\p{N}]/u;
 const ATX_HEADING_LINE_PATTERN = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
 

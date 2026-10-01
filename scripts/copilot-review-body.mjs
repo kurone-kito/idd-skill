@@ -212,10 +212,12 @@ export function classifyCopilotReviewBody(body) {
 /** `### 🔵 Needs a closer look` (any ATX level; the `🔵` marker, with or
  * without an emoji variation selector, is optional, since the real corpus
  * bodies carry it and older test fixtures do not). The phrase must end the
- * line, so `### Needs a closer look: text` is left to
+ * line, apart from an ATX closing `#` run, which needs a space before it
+ * (`look###` is heading text, not a closing run), so
+ * `### Needs a closer look: text` is left to
  * {@link REMARK_INLINE_LABEL_PATTERN}. */
 const REMARK_HEADING_PATTERN =
-  /^ {0,3}#{1,6}[ \t]+(?:🔵\uFE0F?[ \t]*)?needs a closer look[ \t#]*$/iu;
+  /^ {0,3}#{1,6}[ \t]+(?:🔵\uFE0F?[ \t]*)?needs a closer look(?:[ \t]+#+)?[ \t]*$/iu;
 /** Inline form, line-anchored: `🔵 Needs a closer look: text`, optionally
  * behind up to three leading spaces and a run of heading, bullet (`-`,
  * `*`, `+`), or emphasis characters, for example
