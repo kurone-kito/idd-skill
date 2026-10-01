@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCodeRabbitEmbeddedFindings,
+  buildCopilotReviewBodyRemarks,
   collectReviewActivitySnapshot,
   normalizeComment,
   normalizeThread,
@@ -317,6 +318,12 @@ function runSnapshot(
     embeddedFindingCount: number;
     uncoveredCount: number;
   }[];
+  reviewBodyRemarks: {
+    reviewId: string;
+    author: string;
+    commitId: string;
+    remark: string;
+  }[];
 } {
   const restore = stubExecutable(
     'gh',
@@ -457,6 +464,8 @@ test('review-activity snapshot serializes CodeRabbit embedded findings from REST
       uncoveredCount: 0,
     },
   ]);
+  // #3672: a CodeRabbit-only review list adds no remark row.
+  assert.deepEqual(report.reviewBodyRemarks, []);
 });
 
 test('embeddedFindings reports uncoveredCount 1 for PR #1897 review 4863787336 when no thread belongs to that review', () => {
@@ -546,4 +555,180 @@ test('embeddedFindings does not treat a missing node_id as covering threads with
     ],
   );
   assert.equal(findings[0]?.uncoveredCount, 1);
+});
+
+// --- #3672: Copilot review-body remark as non-gating evidence --------------
+
+const REMARK = 'The unbounded read truncates at 1000 rows.';
+const REMARK_ONLY_BODY = `<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n### \u{1F535} Needs a closer look\n\n${REMARK}\n\n**Review effort:** Lite  \n**Findings:** None\n`;
+const NO_REMARK_BODY =
+  '<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Review effort:** Lite  \n**Findings:** None\n';
+const COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
+
+test('reviewBodyRemarks lists a Copilot COMMENTED review with a remark', () => {
+  assert.deepEqual(
+    buildCopilotReviewBodyRemarks([
+      {
+        node_id: 'PRR_remark',
+        commit_id: 'a'.repeat(40),
+        user: { login: COPILOT_LOGIN },
+        body: REMARK_ONLY_BODY,
+        state: 'COMMENTED',
+      },
+    ]),
+    [
+      {
+        reviewId: 'PRR_remark',
+        author: COPILOT_LOGIN,
+        commitId: 'a'.repeat(40),
+        remark: REMARK,
+      },
+    ],
+  );
+});
+
+test('reviewBodyRemarks omits other states, other authors, and a review with no remark', () => {
+  const base = { node_id: 'PRR_x', body: REMARK_ONLY_BODY };
+  assert.deepEqual(
+    buildCopilotReviewBodyRemarks([
+      { ...base, user: { login: COPILOT_LOGIN }, state: 'APPROVED' },
+      { ...base, user: { login: COPILOT_LOGIN }, state: 'CHANGES_REQUESTED' },
+      { ...base, user: { login: COPILOT_LOGIN }, state: 'DISMISSED' },
+      { ...base, user: { login: 'coderabbitai[bot]' }, state: 'COMMENTED' },
+      { ...base, user: { login: 'human-reviewer' }, state: 'COMMENTED' },
+      // A registrable lookalike of the Copilot login is not Copilot.
+      {
+        ...base,
+        user: { login: 'copilot-pull-request-reviewer1' },
+        state: 'COMMENTED',
+      },
+      {
+        node_id: 'PRR_none',
+        user: { login: COPILOT_LOGIN },
+        body: NO_REMARK_BODY,
+        state: 'COMMENTED',
+      },
+      {
+        node_id: 'PRR_empty',
+        user: { login: COPILOT_LOGIN },
+        state: 'COMMENTED',
+      },
+    ]),
+    [],
+  );
+});
+
+test('reviewBodyRemarks matches Copilot logins case-insensitively and defaults absent ids to empty', () => {
+  assert.deepEqual(
+    buildCopilotReviewBodyRemarks([
+      {
+        user: { login: ' Copilot ' },
+        body: `### Needs a closer look\n\n${REMARK}`,
+        state: 'COMMENTED',
+      },
+    ]),
+    [{ reviewId: '', author: 'Copilot', commitId: '', remark: REMARK }],
+  );
+});
+
+test('review-activity snapshot serializes reviewBodyRemarks from REST review data', () => {
+  const reviewNdjson = [
+    {
+      node_id: 'PRR_copilot_remark',
+      commit_id: SNAPSHOT_HEAD,
+      user: { login: COPILOT_LOGIN },
+      body: REMARK_ONLY_BODY,
+      state: 'COMMENTED',
+    },
+    {
+      node_id: 'PRR_copilot_clean',
+      commit_id: SNAPSHOT_HEAD,
+      user: { login: COPILOT_LOGIN },
+      body: NO_REMARK_BODY,
+      state: 'COMMENTED',
+    },
+    {
+      node_id: 'PRR_coderabbit',
+      commit_id: SNAPSHOT_HEAD,
+      user: { login: 'coderabbitai[bot]' },
+      body: REMARK_ONLY_BODY,
+      state: 'COMMENTED',
+    },
+  ]
+    .map((review) => JSON.stringify(review))
+    .join('\n');
+  const report = runSnapshot(
+    courtesyThreadGraphql('embedded finding thread'),
+    '',
+    `${reviewNdjson}\n`,
+  );
+  assert.deepEqual(report.reviewBodyRemarks, [
+    {
+      reviewId: 'PRR_copilot_remark',
+      author: COPILOT_LOGIN,
+      commitId: SNAPSHOT_HEAD,
+      remark: REMARK,
+    },
+  ]);
+  // The CodeRabbit-only field is untouched by the Copilot remark.
+  assert.deepEqual(
+    report.embeddedFindings.map((finding) => finding.reviewId),
+    ['PRR_coderabbit'],
+  );
+});
+
+function snapshotWithReviews(reviews: readonly object[]) {
+  return collectReviewActivitySnapshot({
+    prNumber: 3672,
+    owner: 'o',
+    repo: 'r',
+    trustedMarkerLoginsFlag: '',
+    advisoryBotLoginsFlag: '',
+    envTrustedMarkerActors: '',
+    envAdvisoryBotLogins: '',
+    port: {
+      resolveViewerLoginSafe: () => ({
+        viewerLogin: '',
+        viewerLoginUnavailable: true,
+      }),
+      getChangeRequestHeadShaAndAuthor: () => ({
+        headSha: 'c'.repeat(40),
+        authorLogin: 'someone',
+      }),
+      listChangeRequestChecks: () => [],
+      listReviews: () => [...reviews],
+      listWorkItemComments: () => [],
+      listChangeRequestReviewThreadsWithComments: () => [],
+      getReviewThreadCommentUserContentEdits: () => [],
+    },
+  });
+}
+
+test('a remark-only snapshot keeps effective, counters and every other field unchanged', () => {
+  const review = {
+    node_id: 'PRR_remark',
+    commit_id: 'c'.repeat(40),
+    user: { login: COPILOT_LOGIN },
+    state: 'COMMENTED',
+    submitted_at: '2026-10-01T00:00:00Z',
+  };
+  const withRemark = snapshotWithReviews([
+    { ...review, body: REMARK_ONLY_BODY },
+  ]);
+  const withoutRemark = snapshotWithReviews([
+    { ...review, body: '**Findings:** None' },
+  ]);
+  assert.equal(
+    (withRemark.reviewBodyRemarks as unknown[]).length,
+    1,
+    'the remark is surfaced',
+  );
+  assert.deepEqual(withoutRemark.reviewBodyRemarks, []);
+  // The review still counts as one item either way, and nothing else moves.
+  assert.deepEqual(withRemark.counts, { comments: 0, reviews: 1, threads: 0 });
+  assert.deepEqual(withRemark.effective, withoutRemark.effective);
+  const { reviewBodyRemarks: _withRemark, ...restWithRemark } = withRemark;
+  const { reviewBodyRemarks: _withoutRemark, ...restWithoutRemark } =
+    withoutRemark;
+  assert.deepEqual(restWithRemark, restWithoutRemark);
 });
