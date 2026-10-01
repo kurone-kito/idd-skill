@@ -31,6 +31,7 @@ import {
   ghTextUnbounded,
   resetGhAuthHostMemo,
   resolveGhApiHostname,
+  resolveGhOwnerRepo,
   resolveViewerLogin,
   safeGhText,
   viewerLoginFailureIsGraphqlEligible,
@@ -43,6 +44,7 @@ import {
   setGithubApiTelemetryPolicyForTests,
 } from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
+import { resolveCurrentGithubRepository } from '../src/scripts/provider-adapter-github.mts';
 import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
 
 // This source repository's own config enables load control (#3702), and the
@@ -2614,6 +2616,211 @@ test('combineOwnerRepoFlags: --owner with an empty-string --repo throws the same
     () => combineOwnerRepoFlags({ owner: 'kurone-kito', repo: '' }),
     /--owner requires --repo <name>/,
   );
+});
+
+// #3715: resolveGhOwnerRepo reads the current repository with ONE `gh repo
+// view` call, the shared replacement for every helper's former owner call
+// plus name call. The stub records each spawned argv, one JSON line per
+// process, so a regression to two calls fails the count.
+const REPO_VIEW_ARGV = ['repo', 'view', '--json', 'owner,name'];
+
+function repoViewBody(owner: string, name: string): string {
+  return `${JSON.stringify({ owner: { login: owner }, name })}\n`;
+}
+
+function withRepoViewStub<T>(
+  response: { stdout?: string; stderr?: string; exit?: number },
+  run: (spawned: () => string[][]) => T,
+): T {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-repo-view-'));
+  const argsFile = join(tempRoot, 'args.log');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)) + '\\n');
+process.stdout.write(${JSON.stringify(response.stdout ?? '')});
+process.stderr.write(${JSON.stringify(response.stderr ?? '')});
+process.exit(${response.exit ?? 0});
+`);
+  try {
+    return run(() => recordedArgs(argsFile));
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+test('resolveGhOwnerRepo: neither value given spawns exactly one `repo view --json owner,name` and trims both fields (#3715)', () => {
+  withRepoViewStub({ stdout: repoViewBody(' o ', ' r ') }, (spawned) => {
+    assert.deepEqual(resolveGhOwnerRepo(), { owner: 'o', repo: 'r' });
+    assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+  });
+});
+
+test('resolveGhOwnerRepo: an empty or null value counts as not given, like the former `args.owner || ghText(...)` (#3715)', () => {
+  for (const explicit of [
+    { owner: '', repo: '' },
+    { owner: null, repo: null },
+    { owner: undefined, repo: undefined },
+  ]) {
+    withRepoViewStub({ stdout: repoViewBody('o', 'r') }, (spawned) => {
+      assert.deepEqual(resolveGhOwnerRepo(explicit), { owner: 'o', repo: 'r' });
+      assert.equal(spawned().length, 1);
+    });
+  }
+});
+
+test('resolveGhOwnerRepo: one value given still spawns one process, keeps the given value and takes the other half from the response (#3715)', () => {
+  // Each flag value differs from the stubbed response, so a resolver that
+  // preferred the resolved value over the flag fails.
+  const cases = [
+    {
+      explicit: { owner: 'flag-owner' },
+      expected: { owner: 'flag-owner', repo: 'r' },
+    },
+    {
+      explicit: { repo: 'flag-repo' },
+      expected: { owner: 'o', repo: 'flag-repo' },
+    },
+    {
+      explicit: { owner: 'flag-owner', repo: '' },
+      expected: { owner: 'flag-owner', repo: 'r' },
+    },
+  ];
+  for (const { explicit, expected } of cases) {
+    withRepoViewStub({ stdout: repoViewBody('o', 'r') }, (spawned) => {
+      assert.deepEqual(resolveGhOwnerRepo(explicit), expected);
+      assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+    });
+  }
+});
+
+test('resolveGhOwnerRepo: forwards the caller options to ghText, so each site keeps its own timeout (#3715)', () => {
+  // The stub outlives the 50 ms timeout and then prints a valid response, so
+  // a resolver that dropped its options argument would resolve normally.
+  const restore = stubGh(`
+const start = Date.now();
+while (Date.now() - start < 2000) {
+  // busy-wait
+}
+process.stdout.write(${JSON.stringify(repoViewBody('o', 'r'))});
+`);
+  try {
+    assert.throws(
+      () => resolveGhOwnerRepo({}, { timeout: 50 }),
+      (error: unknown) => Object.hasOwn(error as object, 'ghCommand'),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('resolveGhOwnerRepo: both values given spawns no process and returns them as given (#3715)', () => {
+  withRepoViewStub({ stdout: repoViewBody('o', 'r') }, (spawned) => {
+    assert.deepEqual(resolveGhOwnerRepo({ owner: ' x ', repo: 'y' }), {
+      owner: ' x ',
+      repo: 'y',
+    });
+    assert.deepEqual(spawned(), []);
+  });
+});
+
+test('resolveGhOwnerRepo: a given value never needs the half it supplies, so a response lacking it does not throw (#3715)', () => {
+  withRepoViewStub({ stdout: '{"name":"r"}\n' }, () => {
+    assert.deepEqual(resolveGhOwnerRepo({ owner: 'x' }), {
+      owner: 'x',
+      repo: 'r',
+    });
+  });
+  withRepoViewStub({ stdout: '{"owner":{"login":"o"}}\n' }, () => {
+    assert.deepEqual(resolveGhOwnerRepo({ repo: 'y' }), {
+      owner: 'o',
+      repo: 'y',
+    });
+  });
+});
+
+test('resolveGhOwnerRepo: an empty or missing login or name resolves to an empty string for that field (#3715)', () => {
+  const cases: [string, { owner: string; repo: string }][] = [
+    ['{"owner":{"login":""},"name":""}', { owner: '', repo: '' }],
+    ['{}', { owner: '', repo: '' }],
+    ['{"owner":null,"name":7}', { owner: '', repo: '' }],
+    ['{"owner":{"login":"o"}}', { owner: 'o', repo: '' }],
+    ['{"owner":{},"name":"r"}', { owner: '', repo: 'r' }],
+  ];
+  for (const [stdout, expected] of cases) {
+    withRepoViewStub({ stdout: `${stdout}\n` }, () => {
+      assert.deepEqual(resolveGhOwnerRepo(), expected, stdout);
+    });
+  }
+});
+
+test('resolveGhOwnerRepo: a response coloured by CLICOLOR_FORCE or GH_FORCE_TTY still parses (#3715)', () => {
+  // gh colours `--json` output when either variable is set, where the former
+  // `--jq` calls printed plain text, so the resolver strips the SGR escapes.
+  const colored = JSON.stringify({ owner: { login: 'o' }, name: 'r' }, null, 2)
+    .replace(/"[^"]*"/g, (token) => `\u001B[32m${token}\u001B[m`)
+    .replace(/[{}]/g, (token) => `\u001B[1;38m${token}\u001B[m`);
+  assert.throws(() => JSON.parse(colored), SyntaxError);
+  withRepoViewStub({ stdout: `${colored}\n` }, () => {
+    assert.deepEqual(resolveGhOwnerRepo(), { owner: 'o', repo: 'r' });
+  });
+});
+
+test('resolveGhOwnerRepo: a non-zero gh exit throws the same tagged transport error ghText throws (#3715)', () => {
+  withRepoViewStub({ stderr: 'gh: repo view failed\n', exit: 1 }, (spawned) => {
+    assert.throws(
+      () => resolveGhOwnerRepo(),
+      (error: unknown) => {
+        assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
+        assert.match(
+          String((error as { stderr?: unknown }).stderr),
+          /repo view failed/,
+        );
+        assert.equal(classifyHelperError(error).kind, 'transport');
+        return true;
+      },
+    );
+    assert.equal(spawned().length, 1);
+  });
+});
+
+test('resolveGhOwnerRepo: a response that is not a JSON object throws a tagged transport error with no derivable HTTP status (#3715)', () => {
+  // The echoed text carries a 404 so a message that quoted the response would
+  // be classified `not-found`; a constant message never is.
+  for (const stdout of [
+    '',
+    'not json',
+    'null',
+    '[]',
+    '[{"owner":{"login":"o"},"name":"r"}]',
+    '"o/r"',
+    '42',
+    '{"message":"Not Found","status":"404"',
+  ]) {
+    withRepoViewStub({ stdout }, () => {
+      assert.throws(
+        () => resolveGhOwnerRepo(),
+        (error: unknown) => {
+          assert.equal(Object.hasOwn(error as object, 'ghCommand'), true);
+          const classified = classifyHelperError(error);
+          assert.equal(classified.kind, 'transport', JSON.stringify(stdout));
+          assert.equal(classified.httpStatus, null, JSON.stringify(stdout));
+          return true;
+        },
+        JSON.stringify(stdout),
+      );
+    });
+  }
+});
+
+test('resolveCurrentGithubRepository: spawns exactly one `repo view --json owner,name` process (#3715)', () => {
+  withRepoViewStub({ stdout: repoViewBody('o', 'r') }, (spawned) => {
+    assert.deepEqual(resolveCurrentGithubRepository(), {
+      owner: 'o',
+      repo: 'r',
+    });
+    assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+  });
 });
 
 const READ_CACHE_ENTRY = /^[0-9a-f]{64}\.json$/;
