@@ -1146,6 +1146,296 @@ test('getWorkItemForTraversalAsync rethrows after exhausting bounded attempts on
   assert.equal(calls, 3);
 });
 
+// #3682: a failed traversal call used to surface with its stderr and stdout
+// empty and nothing else, so a throttle, a 5xx, a killed process and a network
+// reset were indistinguishable. The wrapped error now states its exit
+// status, signal and killed flag in the message (on its own line, so a
+// line-anchored status pattern still classifies the rest) and on the
+// non-enumerable `status`, `signal` and `killed` properties.
+const EMPTY_OUTPUT_FAILURE = 'Command failed: gh api repos/o/r/issues/1 --jq .';
+
+test('getWorkItemForTraversalAsync reports exit status, signal and killed state once every bounded attempt fails without output (#3682)', async () => {
+  const cases: {
+    label: string;
+    evidence: Record<string, unknown>;
+    suffix: string;
+    status: number | null;
+    signal: string | null;
+    killed: boolean;
+  }[] = [
+    {
+      label: 'a plain non-zero exit',
+      evidence: { stderr: '', stdout: '', code: 1 },
+      suffix: 'exit status: 1; signal: none; killed: false',
+      status: 1,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a process killed by a signal',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: null,
+        signal: 'SIGKILL',
+        killed: true,
+      },
+      suffix: 'exit status: unknown; signal: SIGKILL; killed: true',
+      status: null,
+      signal: 'SIGKILL',
+      killed: true,
+    },
+    {
+      label:
+        'a process killed from outside, which Node does not flag as killed',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: null,
+        signal: 'SIGKILL',
+        killed: false,
+      },
+      suffix: 'exit status: unknown; signal: SIGKILL; killed: false',
+      status: null,
+      signal: 'SIGKILL',
+      killed: false,
+    },
+    {
+      label: 'a timeout',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: null,
+        signal: 'SIGTERM',
+        killed: true,
+      },
+      suffix: 'exit status: unknown; signal: SIGTERM; killed: true',
+      status: null,
+      signal: 'SIGTERM',
+      killed: true,
+    },
+    {
+      label: 'a string error code',
+      evidence: { stderr: '', stdout: '', code: 'ENOENT' },
+      suffix: 'exit status: ENOENT; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a status field instead of a code',
+      evidence: { stderr: '', stdout: '', status: 2 },
+      suffix: 'exit status: 2; signal: none; killed: false',
+      status: 2,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a status that wins over a code',
+      evidence: { stderr: '', stdout: '', status: 2, code: 3 },
+      suffix: 'exit status: 2; signal: none; killed: false',
+      status: 2,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a status that is not a safe integer',
+      evidence: { stderr: '', stdout: '', status: Number.NaN, code: 1.5 },
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a killed flag that is not the boolean true',
+      evidence: { stderr: '', stdout: '', code: 1, killed: 1 },
+      suffix: 'exit status: 1; signal: none; killed: false',
+      status: 1,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'a string code longer than the safe limit',
+      evidence: { stderr: '', stdout: '', code: 'A'.repeat(65) },
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'no evidence at all',
+      evidence: {},
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+    {
+      label: 'an unsafe code or signal that must never reach the message',
+      evidence: {
+        stderr: '',
+        stdout: '',
+        code: 'bad code\n!',
+        signal: 'SIG TERM',
+      },
+      suffix: 'exit status: unknown; signal: none; killed: false',
+      status: null,
+      signal: null,
+      killed: false,
+    },
+  ];
+  // Each exhausted retry sleeps for real (about 0.6-1.0 s), so the cases run
+  // together on separate adapters.
+  await Promise.all(
+    cases.map(async (entry) => {
+      let calls = 0;
+      const port = createGithubProviderAdapter(
+        'o',
+        'r',
+        fakeDeps({
+          ghTextAsync: async () => {
+            calls += 1;
+            throw Object.assign(
+              new Error(EMPTY_OUTPUT_FAILURE),
+              entry.evidence,
+            );
+          },
+        }),
+      );
+      const error = await port.getWorkItemForTraversalAsync(1).then(
+        () => null,
+        (rejected: unknown) => rejected,
+      );
+      assert.ok(error instanceof Error, entry.label);
+      assert.equal(calls, 3, `${entry.label}: bounded retry is unchanged`);
+      assert.ok(
+        error.message.startsWith(EMPTY_OUTPUT_FAILURE),
+        `${entry.label}: the original text stays first`,
+      );
+      assert.ok(
+        error.message.endsWith(`\n[${entry.suffix}]`),
+        `${entry.label}: suffix on its own line, got ${JSON.stringify(error.message)}`,
+      );
+      const carried = error as unknown as {
+        status: unknown;
+        signal: unknown;
+        killed: unknown;
+      };
+      assert.equal(carried.status, entry.status, entry.label);
+      assert.equal(carried.signal, entry.signal, entry.label);
+      assert.equal(carried.killed, entry.killed, entry.label);
+      for (const key of ['status', 'signal', 'killed']) {
+        assert.equal(
+          Object.keys(error).includes(key),
+          false,
+          `${entry.label}: ${key} stays non-enumerable`,
+        );
+      }
+    }),
+  );
+});
+
+test('getWorkItemForTraversalAsync survives a thrown value that is not an error object (#3682)', async () => {
+  // A rejection carrying null, undefined or a bare string has no evidence to
+  // read; the wrapper must still build its summary and suffix instead of
+  // throwing a TypeError out of the retry loop.
+  await Promise.all(
+    [null, undefined, 'boom'].map(async (thrown) => {
+      const port = createGithubProviderAdapter(
+        'o',
+        'r',
+        fakeDeps({
+          ghTextAsync: async () => {
+            throw thrown;
+          },
+        }),
+      );
+      const error = await port.getWorkItemForTraversalAsync(1).then(
+        () => null,
+        (rejected: unknown) => rejected,
+      );
+      assert.ok(error instanceof Error, String(thrown));
+      assert.equal(
+        error.message,
+        'gh api repos/o/r/issues/1 --jq . failed with no diagnostic output\n[exit status: unknown; signal: none; killed: false]',
+        String(thrown),
+      );
+    }),
+  );
+});
+
+test('getWorkItemForTraversalAsync still resolves a message-only 404 as not found after the suffix is added (#3682)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        throw Object.assign(new Error('gh: HTTP 404'), { code: 1 });
+      },
+    }),
+  );
+  assert.deepEqual(await port.getWorkItemForTraversalAsync(1), {
+    outcome: 'not-found',
+  });
+  assert.equal(calls, 1);
+});
+
+test('getWorkItemForTraversalAsync still retries an empty-output failure and returns the item once a later attempt succeeds (#3682)', async () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghTextAsync: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw Object.assign(new Error(EMPTY_OUTPUT_FAILURE), {
+            stderr: '',
+            stdout: '',
+            code: 1,
+          });
+        }
+        return JSON.stringify({ number: 1, title: 'issue 1' });
+      },
+    }),
+  );
+  assert.deepEqual(await port.getWorkItemForTraversalAsync(1), {
+    outcome: 'found',
+    item: { number: 1, title: 'issue 1' },
+  });
+  assert.equal(calls, 2);
+});
+
+test('getWorkItemForTraversalAsync keeps classifying a message-only HTTP status line after the suffix is added (#3682)', async () => {
+  // Both shapes put the status on a whole line of `.message` with empty
+  // streams, which `deriveGhHttpStatus` anchors to a line: a same-line suffix
+  // would have made them classify as no status, so they would be retried.
+  for (const message of [
+    'gh: HTTP 410',
+    'HTTP 410: Gone (https://api.github.com/repos/o/r/issues/1)',
+  ]) {
+    let calls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghTextAsync: async () => {
+          calls += 1;
+          throw Object.assign(new Error(message), { code: 1 });
+        },
+      }),
+    );
+    assert.deepEqual(
+      await port.getWorkItemForTraversalAsync(1),
+      { outcome: 'inaccessible' },
+      message,
+    );
+    assert.equal(calls, 1, `${message}: resolved without a retry`);
+  }
+});
+
 test('getWorkItemForTraversalAsync resolves not-found on a 404 immediately, without retry', async () => {
   let calls = 0;
   const port = createGithubProviderAdapter(
@@ -5365,7 +5655,14 @@ function assertEvidenceKept(error: unknown, expectedCode: string | null) {
     assert.equal(carried.killed, true);
   }
   // Non-enumerable: an uncaught error never prints the captured streams.
-  for (const key of ['code', 'killed', 'stderr', 'stdout']) {
+  for (const key of [
+    'code',
+    'killed',
+    'signal',
+    'status',
+    'stderr',
+    'stdout',
+  ]) {
     assert.equal(Object.keys(error as object).includes(key), false, key);
   }
   assert.equal((error as { cause?: unknown }).cause, undefined);

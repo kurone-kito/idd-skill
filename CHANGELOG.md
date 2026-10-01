@@ -60,6 +60,16 @@ discipline and has no tag.
   appends a read-before-retrying sentence to `mergeResult`. `merged`,
   `adminFallbackUsed` and the exit code are unchanged (#3681).
 
+### Changed
+
+- A failed `gh api` call while `discover-roadmap-graph` reads a descendant
+  issue now reports its exit status, its signal and whether the process was
+  killed: the error message ends with `[exit status: ...; signal: ...;
+  killed: ...]` on a line of its own, and the error carries `status`,
+  `signal` and `killed`. The call already made three attempts before the
+  error surfaced, and retry, backoff and the not-found handling are
+  unchanged; only the diagnosis was missing (#3682).
+
 ### Fixed
 
 - A failed fetch in the roadmap traversal's concurrent crawl now stops the

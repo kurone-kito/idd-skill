@@ -1519,6 +1519,31 @@ default below is unchanged.
   root roadmap, or incomplete `subIssues` GraphQL data throw. Missing or
   inaccessible descendants are reported in `diagnostics` instead of
   crashing.
+- **Failed traversal call (`#3682`).** A `gh api` call that fails while a
+  descendant issue is read ends the pass with an error whose message ends
+  with a line of its own (a load-control refusal is rethrown as it is, with
+  none of this, and with `--with-progress` a timeout or a throttle in an
+  `--all-roadmaps` scan is reported as an incomplete result instead):
+
+  ```text
+  [exit status: <n|code|unknown>; signal: <name|none>; killed: <true|false>]
+  ```
+
+  Here `code` stands for an error code such as `ENOENT`. The thrown error
+  carries the same values as `status`, `signal` and `killed`. A timeout
+  shows as `killed: true` with `SIGTERM` and no exit status; a process
+  killed from outside (for example by the out-of-memory killer) shows its
+  signal with `killed: false` and no exit status; a lookup that exited
+  non-zero shows its exit status and no signal. That failure was already
+  retried before it surfaced: up to three attempts, backed off by 200 ms
+  times the attempt number plus up to 200 ms of jitter. Only a 404
+  (resolved as not found), an inaccessible issue (a 403 naming an access,
+  visibility or SAML restriction, a 410 or a 451) and a load-control
+  refusal skip the retry. The suffix is diagnostic only: retry, backoff and
+  the not-found handling are unchanged. Observed 2026-09-30 in a private
+  downstream repository: one call failed with empty `stderr` and `stdout`
+  and ended an `--all-roadmaps` scan with exit 1, and a rerun of the same
+  command passed.
 - **Behavior boundary**: the helper is evidence-only. It may read issue
   bodies and GitHub sub-issue relationships, but it must not claim
   issues, edit roadmap bodies, close roadmap nodes, or decide readiness

@@ -2365,6 +2365,57 @@ function fetchReviewThreadsGeneric(
 // stderr/stdout text via the shared classifier instead, matching
 // discover-readiness-check.mts's isInaccessibleIssueLookupError.
 
+/** Safe to interpolate into a message: a signal name or an error code such as
+ * `SIGKILL` or `ENOENT`, never free text (#3682). */
+const TRANSPORT_EVIDENCE_TEXT = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
+ * The exit evidence of a failed `gh` child process (#3682): the first safe
+ * integer among `status` and a numeric `code`, else a safe string `code`
+ * (for example `ENOENT`) as text only, plus the signal name and whether the
+ * process was killed. Node's async `execFile` reports a timeout as
+ * `{ code: null, signal: 'SIGTERM', killed: true }`, so `code` alone cannot
+ * tell a kill from a failed lookup. `killed` is true only when Node itself
+ * sent the signal (a timeout), so a process killed from outside shows its
+ * signal with `killed: false`. A field that is absent or not of the expected
+ * type renders as `unknown` (the status), `none` (the signal) or `false`
+ * (the killed flag), never as a value.
+ */
+function readTransportExit(error: unknown): {
+  status: number | null;
+  statusText: string;
+  signal: string | null;
+  killed: boolean;
+} {
+  const source = error as {
+    status?: unknown;
+    code?: unknown;
+    signal?: unknown;
+    killed?: unknown;
+  } | null;
+  const numeric = [source?.status, source?.code].find(
+    (value): value is number =>
+      typeof value === 'number' && Number.isSafeInteger(value),
+  );
+  const codeText =
+    typeof source?.code === 'string' &&
+    TRANSPORT_EVIDENCE_TEXT.test(source.code)
+      ? source.code
+      : null;
+  const signal =
+    typeof source?.signal === 'string' &&
+    TRANSPORT_EVIDENCE_TEXT.test(source.signal)
+      ? source.signal
+      : null;
+  return {
+    status: numeric ?? null,
+    statusText:
+      numeric === undefined ? (codeText ?? 'unknown') : String(numeric),
+    signal,
+    killed: source?.killed === true,
+  };
+}
+
 /**
  * Wraps a failed `gh` error into a normalized `{ stderr, stdout }` shape
  * the shared classifier re-derives its status and wording classification
@@ -2405,14 +2456,27 @@ function wrapTraversalGhFailure(error: unknown, args: string[]): string {
   const summary =
     ghErrorText(error).trim() ||
     `gh ${args.join(' ')} failed with no diagnostic output`;
-  const wrapped = new Error(summary);
+  // #3682: an empty-stderr failure used to surface with nothing to tell a
+  // throttle, a 5xx, a killed process or a reset apart. The exit evidence
+  // goes on its OWN line: `deriveGhHttpStatus` anchors some patterns
+  // (`^gh: HTTP NNN$`, `^HTTP NNN ...(url)$`) to a whole line of `.message`
+  // when both streams are empty, and a same-line suffix would change how such
+  // a failure classifies and so whether it is retried.
+  const exit = readTransportExit(error);
+  const wrapped = new Error(
+    `${summary}\n[exit status: ${exit.statusText}; signal: ${exit.signal ?? 'none'}; killed: ${exit.killed}]`,
+  );
   // Kept verbatim and separate from the message for the classifier, but
   // hidden like every other rebuilt error (#3598): an uncaught error no
   // longer prints the captured streams a second time, and the message
-  // already carries the stderr text.
+  // already carries the stderr text. `status`, `signal` and `killed` (#3682)
+  // carry the same evidence the message suffix shows.
   for (const [key, value] of [
     ['stderr', stderr],
     ['stdout', stdout],
+    ['status', exit.status],
+    ['signal', exit.signal],
+    ['killed', exit.killed],
   ] as const) {
     Object.defineProperty(wrapped, key, {
       value,
