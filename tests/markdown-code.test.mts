@@ -379,7 +379,7 @@ test('findFencedCodeRanges recognizes a closed fence under wide list-marker padd
   // adjustment and never recognized as a fence at all. Confirmed
   // pre-existing on `main` before #1894/#1897 touched this file: with the
   // fence invisible, blankFencedCodeBlocks left the input completely
-  // unchanged, and stripMarkdownCodeRegions's inline-code-span regex then
+  // unchanged, and stripMarkdownCodeRegions's inline-code-span matching then
   // read the two unrelated 3-backtick runs as one open/close delimiter
   // pair, masking the content between them -- the dangerous direction,
   // since that path backs several consumers beyond checkTrustSafety

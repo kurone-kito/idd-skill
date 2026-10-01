@@ -109,26 +109,173 @@ export function blankFencedCodeBlocks(text: string): string {
   return out.join('\n');
 }
 
+/** One inline code span, as {@link findInlineCodeSpans} reports it. */
+export type InlineCodeSpan = {
+  /** Offset of the first opening backtick. */
+  index: number;
+  /** The opening backticks; the closer is the same length. */
+  ticks: string;
+  /** The text between the opener and the closer, never empty. */
+  inner: string;
+  /** Offset just past the closing backticks. */
+  end: number;
+};
+
 /**
- * Inline code span pattern (`...`, ``...``): the inner match allows a
- * single newline (CommonMark renders it as a space) but stops at a blank
- * line, which ends the paragraph: a code span cannot cross it. Allowing a
- * blank line would let a stray unclosed backtick mask a real dependency
- * line in a later paragraph — a fail-open miss. Shared by
+ * True when the line that starts at `from` is blank (spaces and tabs only,
+ * then a line feed, optionally preceded by a carriage return), which is
+ * what ends a paragraph.
+ */
+function blankLineStartsAt(text: string, from: number): boolean {
+  let cursor = from;
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  if (text[cursor] === '\r') cursor += 1;
+  return text[cursor] === '\n';
+}
+
+/**
+ * Append the spans of one segment, given its backtick runs in order (a run
+ * is a maximal stretch of backticks: `starts[i]` is its offset and
+ * `lengths[i]` its length).
+ *
+ * A start inside a run that ends at `runEnd`, with `left` backticks of that
+ * run still ahead of it, opens a span exactly when `2 * longest > left`,
+ * where `longest` is the longest run after this one in the segment. The
+ * opener then takes `min(left, longest)` backticks and the closer is the
+ * first later run at least that long. So the leftmost start is
+ * `runEnd - 2 * longest + 1` (no earlier than `from`), found without trying
+ * the starts before it. Each run is passed once, so the cost is linear.
+ */
+function collectSegmentSpans(
+  text: string,
+  starts: readonly number[],
+  lengths: readonly number[],
+  spans: InlineCodeSpan[],
+): void {
+  const count = starts.length;
+  const longestAfter = new Array<number>(count).fill(0);
+  for (let run = count - 2; run >= 0; run -= 1) {
+    longestAfter[run] = Math.max(longestAfter[run + 1], lengths[run + 1]);
+  }
+  let run = 0;
+  let from = starts[0];
+  while (run < count - 1) {
+    const runEnd = starts[run] + lengths[run];
+    const longest = longestAfter[run];
+    const open = Math.max(from, runEnd - 2 * longest + 1);
+    if (open >= runEnd) {
+      run += 1;
+      from = starts[run];
+      continue;
+    }
+    const tickCount = Math.min(runEnd - open, longest);
+    let closer = run + 1;
+    while (lengths[closer] < tickCount) closer += 1;
+    const closerStart = starts[closer];
+    spans.push({
+      index: open,
+      ticks: '`'.repeat(tickCount),
+      inner: text.slice(open + tickCount, closerStart),
+      end: closerStart + tickCount,
+    });
+    // Matching resumes at the end of the closer, which can be inside a
+    // longer run whose remaining backticks then open the next span.
+    run = closer;
+    from = closerStart + tickCount;
+  }
+}
+
+/**
+ * The inline code spans (`...`, ``...``) of `text`, in document order, in
+ * time linear in the length of `text`. Shared by
  * {@link stripMarkdownCodeRegions} and the inline-code-span wrap scan in
  * `code-span-wrap.mts`, so both stay in sync on what counts as a span.
+ *
+ * This is not CommonMark's exact-length rule, and it is deliberately not
+ * the CommonMark-aware {@link findInlineCodeRanges}. It reproduces, match
+ * for match, the regular expression these callers used before (the
+ * reference copy in `tests/markdown-code.test.mts` pins that), which cost
+ * about the cube of a backtick run's length when the run had no closer
+ * (observed 2026-10-01, issue #3705: 11 s for 4,000 backticks). Replacing
+ * it with a CommonMark scanner would change results, so keep the rules the
+ * old pattern encodes:
+ *
+ * - The inner text has at least one character.
+ * - Start positions are tried from left to right, including positions
+ *   inside a run of backticks, and at each start the opener runs from the
+ *   whole rest of the run down to shorter lengths.
+ * - An opener of `k` backticks at a start with `r` backticks left in its
+ *   run needs `2 * k > r`, because the first inner character must not begin
+ *   another run of `k`.
+ * - The closer starts at the first later run at least as long as the
+ *   opener, and may be just the leading characters of a longer run.
+ * - Matching resumes at the end of the closer, so the rest of a longer
+ *   closing run can open the next span.
+ * - A span may cross a newline, which CommonMark renders as a space, but
+ *   not one whose next line is blank (spaces and tabs only): that ends the
+ *   paragraph. Allowing it would let a stray unclosed backtick mask a real
+ *   dependency line in a later paragraph, a fail-open miss.
+ * - `\r\n` counts as one newline, and a carriage return that is not
+ *   followed by a line feed cannot be inside a span.
+ *
+ * A newline before a blank line, a lone carriage return and the end of the
+ * text each end a segment, and a span never reaches into another segment.
  */
-export const INLINE_CODE_SPAN_PATTERN =
-  /(`+)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)\1/g;
+export function findInlineCodeSpans(text: string): InlineCodeSpan[] {
+  const spans: InlineCodeSpan[] = [];
+  let starts: number[] = [];
+  let lengths: number[] = [];
+  const endSegment = (): void => {
+    if (starts.length > 1) collectSegmentSpans(text, starts, lengths, spans);
+    starts = [];
+    lengths = [];
+  };
+  const length = text.length;
+  let cursor = 0;
+  while (cursor < length) {
+    const char = text[cursor];
+    if (char === '`') {
+      let runEnd = cursor + 1;
+      while (text[runEnd] === '`') runEnd += 1;
+      starts.push(cursor);
+      lengths.push(runEnd - cursor);
+      cursor = runEnd;
+    } else if (char === '\n') {
+      if (blankLineStartsAt(text, cursor + 1)) endSegment();
+      cursor += 1;
+    } else if (char === '\r') {
+      if (text[cursor + 1] !== '\n') {
+        endSegment();
+        cursor += 1;
+      } else {
+        if (blankLineStartsAt(text, cursor + 2)) endSegment();
+        cursor += 2;
+      }
+    } else {
+      cursor += 1;
+    }
+  }
+  endSegment();
+  return spans;
+}
 
 export function stripMarkdownCodeRegions(text: string): string {
   // Inline code spans: mask the inner content so a quoted marker no longer
   // matches, keeping the backticks and surrounding text.
-  return blankFencedCodeBlocks(text).replace(
-    INLINE_CODE_SPAN_PATTERN,
-    (_match, ticks: string, inner: string) =>
-      `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
-  );
+  const blanked = blankFencedCodeBlocks(text);
+  const pieces: string[] = [];
+  let copied = 0;
+  for (const span of findInlineCodeSpans(blanked)) {
+    pieces.push(
+      blanked.slice(copied, span.index),
+      span.ticks,
+      span.inner.replace(/[^\r\n]/g, ' '),
+      span.ticks,
+    );
+    copied = span.end;
+  }
+  pieces.push(blanked.slice(copied));
+  return pieces.join('');
 }
 
 export type MarkdownCodeRange = { start: number; end: number };
