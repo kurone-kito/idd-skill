@@ -494,6 +494,37 @@ export function describeUnaddressedActivity(snapshot) {
       'so) before relying on this watermark.',
   ];
 }
+/**
+ * Findings a review carries only in its body, with no thread of their own
+ * (for example CodeRabbit's "outside the diff" blocks), as the snapshot's
+ * `embeddedFindings[].uncoveredCount` reports them (#3622). They advance the
+ * capture's item count and latest activity like a comment does, but they
+ * never show up in `dispositionEvidence`, so the boundary guard reads them
+ * separately. A thread is the only thing that covers a finding, so the count
+ * stays above zero after a plain-comment disposition; it is therefore not part
+ * of the `warnings` a standalone `--from-pr` prints, only of a refusal's.
+ */
+function countUncoveredEmbeddedFindings(snapshot) {
+  const findings = snapshot?.embeddedFindings;
+  if (!Array.isArray(findings)) return 0;
+  let total = 0;
+  for (const entry of findings) {
+    const uncovered = Number(entry?.uncoveredCount ?? 0);
+    if (Number.isInteger(uncovered) && uncovered > 0) total += uncovered;
+  }
+  return total;
+}
+function describeUncoveredEmbeddedFindings(snapshot) {
+  const count = countUncoveredEmbeddedFindings(snapshot);
+  if (count === 0) return [];
+  return [
+    count === 1
+      ? '1 review-body finding has no thread of its own, so the boundary ' +
+        'guard cannot treat that review as handled.'
+      : `${count} review-body findings have no thread of their own, so the ` +
+        'boundary guard cannot treat those reviews as handled.',
+  ];
+}
 function sameHeadActivityAdvanced(snapshot, prior) {
   const snap = snapshot ?? {};
   const count = snap.totalItemCount;
@@ -619,13 +650,13 @@ export function runOperationLocalSnapshotWatermark(input) {
   }
   if (
     input.priorBoundary &&
-    warnings.length > 0 &&
+    (warnings.length > 0 || countUncoveredEmbeddedFindings(snapshot) > 0) &&
     sameHeadActivityAdvanced(snapshot, input.priorBoundary)
   ) {
     return {
       snapshot,
       watermarkFields,
-      warnings,
+      warnings: [...warnings, ...describeUncoveredEmbeddedFindings(snapshot)],
       decision: 'refuse',
       reasonCode: 'same-head-activity',
       reason:
@@ -1204,17 +1235,23 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        Every other refusal still exits 1 (HEAD or
                        CI-completion mismatch, unreadable check state, or the
                        --prior-* guard below, which is checked before the
-                       defer).
+                       defer). Read operationLocal.decision to tell the runs
+                       apart, since --apply does not: publish posts the marker
+                       (exit 0); defer exits 0 with "mode": "dry-run" and
+                       posts nothing; refuse exits 1, posts nothing, and
+                       prints the same envelope on stdout next to the reason
+                       on stderr.
   --prior-head-sha <sha>
   --prior-total-item-count <n>
   --prior-max-activity-at <iso|none>
                        --operation-local only, and only together: the head-SHA,
-                       total-item-count and max-activity fields of an earlier
-                       watermark for the SAME HEAD. Refuses (exit 1) when that
-                       HEAD is not the live HEAD, or when the capture still
-                       holds undispositioned items and its activity has
-                       advanced past the boundary, so it routes back to triage
-                       instead of being marked handled.
+                       total-item-count and max-activity values E1 Step 1 saw
+                       for the SAME HEAD. Refuses (exit 1) when that HEAD is
+                       not the live HEAD, or when the capture still holds
+                       undispositioned comments or threads, or findings in a
+                       review body that has no thread for them, and its
+                       activity has advanced past the boundary, so it routes
+                       back to triage instead of being marked handled.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
@@ -1361,7 +1398,7 @@ copilot-unavailable is a brand-new terminal marker with no legacy form, so
 all five fields are required.
 
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
-the snapshot child (--type watermark only) so its counts match the manual
+the activity capture (--type watermark only) so its counts match the manual
 review-activity-snapshot path.
 --expected-head-sha pins a --type watermark --from-pr to the Step 1 stored
 HEAD and fails closed (no post) on drift instead of silently posting a newer

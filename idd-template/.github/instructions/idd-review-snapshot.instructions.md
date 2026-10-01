@@ -8,10 +8,8 @@ ReviewItems_snapshot is empty (E3).
 Before any E-phase mutation or GitHub side effect, apply the shared
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 The active claim must still use your current `{claim-id}` — this also
-serves as E1's phase-entry self-check:
-E1 re-fetches all of its state from GitHub on every entry, so, unlike
-B1/B3, there is no local plan or worktree artifact that could go stale
-between checks.
+serves as E1's phase-entry self-check: E1 re-fetches all state from
+GitHub on every entry, so, unlike B1/B3, no local artifact can go stale.
 
 After E3, empty → branch-sync unless Step 2 deferred → E15/E14 then E1.
 Non-empty → `idd-review-triage.instructions.md` (E4); a deferred handoff
@@ -110,14 +108,16 @@ helper runtime is enabled, prefer the **one-command** profile-selected
 post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
 --apply --operation-local` — one capture derives the fields; forward
-`--trusted-marker-logins`, plus, when the latest same-claim watermark
-is for this `{head-SHA}`, its fields as `--prior-head-sha`,
-`--prior-total-item-count`, `--prior-max-activity-at`). **Always pass
-`--expected-head-sha`
-with the exact `{head-SHA}` from Step 1** — the helper fails closed
-(posts nothing) if it disagrees with the fresh snapshot's live HEAD,
-rather than silently keying the watermark to a moved HEAD; on that
-failure, return to Step 1 and re-snapshot, do not retry Step 2 as-is.
+`--trusted-marker-logins` and Step 1's boundary as `--prior-head-sha
+{head-SHA} --prior-total-item-count {total-item-count}
+--prior-max-activity-at {max-activity-updatedAt}`). **Always pass
+`--expected-head-sha` with the exact `{head-SHA}` from Step 1**: a moved
+HEAD or `operationLocal.decision: refuse` (`same-head-activity`: new
+undispositioned or uncovered review-body activity since Step 1) exits 1,
+posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
+as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
+(required checks not passing): skip the after-posting steps and follow
+the CI-incomplete routing above.
 The manual six-field fallback requires `idd-ci` producer-aware proof:
 required `(checkName, workflowName)` producers pass and advisory
 identity/event verify; raw `gh pr checks` is insufficient. Emit/manual
@@ -130,8 +130,7 @@ _{agent-id}: review triage snapshot — IDD automation marker. Do not edit._
 ```
 
 The HTML comment is the machine-readable token; the italic line is a
-visible note for human readers. Match the PR body's language for the
-visible note (default English if ambiguous).
+visible note in the PR body's language (English if ambiguous).
 
 **Nothing appended after the note.** As with `claimed-by`/`unclaimed-by`
 in `idd-claim.instructions.md`, a `review-watermark` (and
@@ -144,12 +143,11 @@ still detectable as a malformed marker
 `idd-review-triage.instructions.md` for the related disposition-marker
 no-code-fence note.
 
-- **`{head-SHA}`**: the value read at the very start of Step 1, before
-  any fetching. F2 uses this to detect pushes that occurred between E1's
-  snapshot and the watermark comment post.
+- **`{head-SHA}`**: the value read at the very start of Step 1. F2 uses
+  it to detect pushes between E1's snapshot and the watermark post.
 - **`{latest-ci-completed-at}`**: the `completedAt` of the latest CI
-  pass observed during this E1 snapshot (or `none`). F2 uses this to
-  detect a new CI pass that completed after the snapshot fetch.
+  pass observed during this E1 snapshot (or `none`). F2 uses it to
+  detect a new CI pass completed after the snapshot fetch.
 - **E1 execution marker**: the GitHub-assigned `createdAt` of this
   comment (set server-side), used only to verify watermark recency —
   activity/CI freshness are tracked via the data fields above.

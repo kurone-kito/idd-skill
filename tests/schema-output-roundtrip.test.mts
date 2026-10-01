@@ -230,10 +230,11 @@ const SCHEMA_OUTPUT_COVERAGE: CoverageEntry[] = [
     status: 'uncovered',
     reason:
       'post-idd-marker.mts assembles PostIddMarkerResult only inside its ' +
-      'non-exported postMarker()/runReviewActivitySnapshot() CLI paths, ' +
-      'both of which perform direct gh network calls; no exported pure ' +
-      'builder produces the full envelope. Extraction is out of scope for ' +
-      'this test-only change (#1723 proposed change #2).',
+      'non-exported main() CLI path, which performs direct gh network ' +
+      'calls (the in-process collectReviewActivitySnapshot() capture and ' +
+      'the required-check read); no exported pure builder produces the ' +
+      'full envelope. Extraction is out of scope for this test-only ' +
+      'change (#1723 proposed change #2).',
   },
   {
     schema: 'pre-merge-readiness.schema.json',

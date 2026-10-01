@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -42,6 +42,7 @@ import {
   loadJson,
   validate,
 } from '../src/scripts/validate-schemas.mts';
+import { PR_1897_REVIEW_4863787336 } from './coderabbit-pr-1897-review.mts';
 import { stubExecutable } from './test-utils.mts';
 
 // A real 40-hex SHA — the watermark/baseline/advisory renderers require it.
@@ -875,6 +876,33 @@ test('an apply envelope validates against the schema', () => {
   assert.deepEqual(validate(envelope, schema), []);
 });
 
+test('operationLocal.watermarkFields is always an object: the schema rejects null and non-string values (#3622)', () => {
+  // The operation-local path throws before any envelope is printed when the
+  // derivation fails, so it never emits `null`; the schema must say so.
+  const operationLocalSchema = (
+    schema as { properties: { operationLocal: Record<string, unknown> } }
+  ).properties.operationLocal;
+  const capture = {
+    decision: 'publish',
+    reason: null,
+    snapshot: {},
+    watermarkFields: { 'head-sha': 'abc123' },
+    warnings: [],
+  };
+  assert.deepEqual(validate(capture, operationLocalSchema), []);
+  assert.ok(
+    validate({ ...capture, watermarkFields: null }, operationLocalSchema).some(
+      (message) => message.includes('watermarkFields'),
+    ),
+  );
+  assert.ok(
+    validate(
+      { ...capture, watermarkFields: { 'total-item-count': 1 } },
+      operationLocalSchema,
+    ).some((message) => message.includes('watermarkFields')),
+  );
+});
+
 test('the schema rejects an unknown field and a missing required field', () => {
   assert.notDeepEqual(
     validate(
@@ -1327,12 +1355,15 @@ function watermarkFromPrGhStub(
     rollupHeadSha?: string;
     rulesBody?: string;
     commentsBody?: string;
+    /** REST `pulls/<n>/reviews` payload (JSON text); default no reviews. */
+    reviewsBody?: string;
     /** Raw GraphQL body for the review-threads query (#3655). */
     threadsBody?: string;
     /** Raw GraphQL body for the `userContentEdits` `nodes(ids:)` query. */
     editsBody?: string;
   } = {},
 ): string {
+  const reviewsBody = JSON.stringify(options.reviewsBody ?? '[]');
   const rollup = JSON.stringify(
     statusCheckRollupResponse(
       options.rollupHeadSha ?? headSha,
@@ -1409,7 +1440,7 @@ ${
 if (args[0] === 'api' && args[1] === 'graphql') {
   out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } }, nodes: [{ id: 'C_1', lastEditedAt: null }] } }));
 }
-if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out(${reviewsBody});
 if (args[0] === 'api' && /rules\\/branches\\//.test(args[1])) out(${rulesBody});
 if (args[0] === 'api' && /\\/protection$/.test(args[1])) out('{}');
 if (args[0] === 'api' && /contents\\/\\.github\\/idd\\/config\\.json/.test(args[1])) out('e30=');
@@ -1939,7 +1970,7 @@ test('--from-pr fails closed on an explicit non-pr --target', () => {
  * .headRefOid` call resolves offline to `headSha`, without needing the full
  * review-activity-snapshot stub the watermark tests use above. Any other
  * invocation is treated as unexpected (proving the advisory --from-pr path
- * never spawns the heavier snapshot child). Returns the cleanup callback.
+ * makes no activity-capture call). Returns the cleanup callback.
  */
 function withHeadShaOnlyGhStub(headSha: string): () => void {
   return stubExecutable(
@@ -5729,6 +5760,446 @@ test('operation-local refuses newly actionable same-HEAD activity past a stored 
   assert.equal(handled.decision, 'publish');
 });
 
+// #3622: a review whose only findings sit in its body (for example
+// CodeRabbit's "outside the diff" blocks) advances the capture's item count
+// and latest activity, but never shows up in `dispositionEvidence`, so the
+// guard used to stay silent for it.
+const EMBEDDED_BOUNDARY = {
+  headSha: OPERATION_LOCAL_SHA,
+  totalItemCount: 1,
+  maxActivityUpdatedAt: '2026-06-25T10:30:00Z',
+};
+
+function snapshotWithEmbeddedFindings(
+  embeddedFindings: unknown,
+  overrides: Record<string, unknown> = {},
+) {
+  return operationLocalSnapshot({
+    totalItemCount: 2,
+    maxActivityUpdatedAt: '2026-06-25T10:45:00Z',
+    embeddedFindings,
+    ...overrides,
+  });
+}
+
+test('operation-local refuses a review that arrived after the boundary and carries only uncovered body findings (#3622)', () => {
+  const refused = runOperationLocalSnapshotWatermark({
+    prNumber: 3622,
+    priorBoundary: EMBEDDED_BOUNDARY,
+    collectRichActivity: () =>
+      snapshotWithEmbeddedFindings([
+        { reviewId: 'PRR_new', embeddedFindingCount: 2, uncoveredCount: 2 },
+      ]),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(refused.decision, 'refuse');
+  assert.equal(refused.reasonCode, 'same-head-activity');
+  assert.deepEqual(refused.warnings, [
+    '2 review-body findings have no thread of their own, so the boundary ' +
+      'guard cannot treat those reviews as handled.',
+  ]);
+});
+
+test('operation-local publishes when the body findings are covered, absent, or older than the boundary (#3622)', () => {
+  for (const [label, embeddedFindings, overrides] of [
+    [
+      'covered by a thread',
+      [{ reviewId: 'PRR_new', embeddedFindingCount: 2, uncoveredCount: 0 }],
+      {},
+    ],
+    ['none reported', [], {}],
+    ['field absent', undefined, {}],
+    ['malformed field', 'not-an-array', {}],
+    [
+      'no activity past the boundary',
+      [{ reviewId: 'PRR_old', embeddedFindingCount: 1, uncoveredCount: 1 }],
+      { totalItemCount: 1, maxActivityUpdatedAt: '2026-06-25T10:30:00Z' },
+    ],
+  ] as const) {
+    const result = runOperationLocalSnapshotWatermark({
+      prNumber: 3622,
+      priorBoundary: EMBEDDED_BOUNDARY,
+      collectRichActivity: () =>
+        snapshotWithEmbeddedFindings(embeddedFindings, { ...overrides }),
+      readRequiredCiAgreement: () => passingAgreement(),
+    });
+    assert.equal(result.decision, 'publish', label);
+  }
+});
+
+test('operation-local does not refuse uncovered body findings without a stored boundary (#3622)', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3622,
+    collectRichActivity: () =>
+      snapshotWithEmbeddedFindings([
+        { reviewId: 'PRR_new', embeddedFindingCount: 1, uncoveredCount: 1 },
+      ]),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(result.decision, 'publish');
+  // Body findings only ever show up in a refusal's warnings, so a standalone
+  // --from-pr and an --operation-local run without a boundary print what they
+  // printed before.
+  assert.deepEqual(result.warnings, []);
+});
+
+test('describeUnaddressedActivity ignores review-body findings, which only a refusal reports (#3622)', () => {
+  assert.deepEqual(
+    describeUnaddressedActivity({
+      embeddedFindings: [
+        { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+      ],
+    }),
+    [],
+  );
+});
+
+test('a refusal reports the summed uncovered body findings next to the undispositioned-item warning (#3622)', () => {
+  const refuse = (snapshot: Record<string, unknown>) =>
+    runOperationLocalSnapshotWatermark({
+      prNumber: 3622,
+      priorBoundary: EMBEDDED_BOUNDARY,
+      collectRichActivity: () => snapshotWithEmbeddedFindings([], snapshot),
+      readRequiredCiAgreement: () => passingAgreement(),
+    });
+  const many = refuse({
+    embeddedFindings: [
+      { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+      { reviewId: 'PRR_b', embeddedFindingCount: 3, uncoveredCount: 0 },
+      { reviewId: 'PRR_c', embeddedFindingCount: 2, uncoveredCount: 2 },
+      null,
+      { reviewId: 'PRR_d', uncoveredCount: -4 },
+      { reviewId: 'PRR_e', uncoveredCount: 'x' },
+    ],
+  });
+  assert.equal(many.decision, 'refuse');
+  assert.deepEqual(many.warnings, [
+    '3 review-body findings have no thread of their own, so the boundary ' +
+      'guard cannot treat those reviews as handled.',
+  ]);
+  const one = refuse({
+    embeddedFindings: [
+      { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+    ],
+  });
+  assert.deepEqual(one.warnings, [
+    '1 review-body finding has no thread of its own, so the boundary guard ' +
+      'cannot treat that review as handled.',
+  ]);
+  const both = refuse({
+    dispositionEvidence: {
+      missingRegularCommentCount: 1,
+      missingThreadCount: 0,
+      soleCauseAckOnlyPostDisposition: false,
+    },
+    embeddedFindings: [
+      { reviewId: 'PRR_a', embeddedFindingCount: 1, uncoveredCount: 1 },
+    ],
+  });
+  assert.equal(both.decision, 'refuse');
+  assert.equal(both.warnings.length, 2);
+  assert.match(both.warnings[0], /^1 comment has no disposition evidence/);
+  assert.match(both.warnings[1], /^1 review-body finding has no thread/);
+});
+
+// ---------------------------------------------------------------------------
+// #3622: `--operation-local` through the CLI. The offline `gh` stub answers the
+// activity capture and the required-check read, and records every comment POST
+// so a run can be told from a deferred or refused one by what it posted.
+// ---------------------------------------------------------------------------
+
+function operationLocalCliStub(
+  options: Parameters<typeof watermarkFromPrGhStub>[1],
+  postLogPath: string,
+): string {
+  const prelude = `const __fs = require('node:fs');
+const __args = process.argv.slice(2);
+if (__args[0] === 'api' && __args.includes('--method') && __args[__args.indexOf('--method') + 1] === 'POST') {
+  const __sent = JSON.parse(__fs.readFileSync(0, 'utf8'));
+  __fs.appendFileSync(${JSON.stringify(postLogPath)}, JSON.stringify({ args: __args, body: __sent.body }) + '\\n');
+  process.stdout.write(JSON.stringify({ id: 9001, html_url: 'https://github.com/o/r/issues/1200#issuecomment-9001', body: __sent.body }));
+  process.exit(0);
+}
+`;
+  return prelude + watermarkFromPrGhStub(SHA, options);
+}
+
+/** The slice of the CLI's JSON envelope these tests read. */
+interface OperationLocalCliEnvelope {
+  mode?: string;
+  body?: string;
+  commentId?: number;
+  warnings?: string[];
+  operationLocal: {
+    decision: string;
+    reason: string | null;
+    watermarkFields: Record<string, string>;
+  };
+}
+
+interface OperationLocalCliRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  posts: { args: string[]; body: string }[];
+  json: OperationLocalCliEnvelope | null;
+}
+
+function runOperationLocalCli(
+  extraArgs: readonly string[],
+  stubOptions: Parameters<typeof watermarkFromPrGhStub>[1] = {},
+): OperationLocalCliRun {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-operation-local-cli-'));
+  const postLog = join(tempRoot, 'posts.jsonl');
+  const restore = stubExecutable(
+    'gh',
+    operationLocalCliStub(stubOptions, postLog),
+  );
+  try {
+    const { status, stdout, stderr } = runWatermarkCli([...extraArgs]);
+    return {
+      status,
+      stdout,
+      stderr,
+      posts: existsSync(postLog)
+        ? readFileSync(postLog, 'utf8')
+            .split('\n')
+            .filter((line) => line.length > 0)
+            .map((line) => JSON.parse(line))
+        : [],
+      json: stdout.trim().startsWith('{') ? JSON.parse(stdout) : null,
+    };
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+/** The boundary flags of one stored watermark, for the stub's HEAD. */
+function boundaryFlags(count: string, maxActivityAt: string): string[] {
+  return [
+    '--prior-head-sha',
+    SHA,
+    '--prior-total-item-count',
+    count,
+    '--prior-max-activity-at',
+    maxActivityAt,
+  ];
+}
+
+test('--operation-local dry-run publishes the same marker body plus the operationLocal envelope (#3622)', () => {
+  const plain = runOperationLocalCli([]);
+  const local = runOperationLocalCli(['--operation-local']);
+  assert.equal(plain.status, 0);
+  assert.equal(local.status, 0);
+  assert.equal(local.json?.mode, 'dry-run');
+  assert.equal(local.json?.body, plain.json?.body);
+  assert.deepEqual(local.json?.warnings, plain.json?.warnings);
+  assert.equal(local.json?.operationLocal.decision, 'publish');
+  assert.equal(local.json?.operationLocal.reason, null);
+  assert.equal(local.json?.operationLocal.watermarkFields['head-sha'], SHA);
+  assert.equal(plain.json !== null && 'operationLocal' in plain.json, false);
+  assert.deepEqual(local.posts, []);
+});
+
+test('--operation-local --apply POSTs exactly one marker whose body is the dry-run body (#3622)', () => {
+  const dryRun = runOperationLocalCli(['--operation-local']);
+  const applied = runOperationLocalCli(['--operation-local', '--apply']);
+  assert.equal(applied.status, 0);
+  assert.equal(applied.json?.mode, 'apply');
+  assert.equal(applied.json?.commentId, 9001);
+  assert.equal(applied.json?.operationLocal.decision, 'publish');
+  assert.equal(applied.posts.length, 1);
+  assert.equal(applied.posts[0].body, dryRun.json?.body);
+});
+
+test('--operation-local refuses new same-HEAD activity past a stored boundary given as count 0 or none (#3622)', () => {
+  for (const [count, maxActivityAt] of [
+    ['0', 'none'],
+    ['0', '2026-06-25T10:00:00Z'],
+    ['1', '2026-06-25T10:00:00Z'],
+  ] as const) {
+    for (const apply of [false, true]) {
+      const run = runOperationLocalCli([
+        '--operation-local',
+        ...boundaryFlags(count, maxActivityAt),
+        ...(apply ? ['--apply'] : []),
+      ]);
+      const label = `${count}/${maxActivityAt}${apply ? ' --apply' : ''}`;
+      assert.equal(run.status, 1, label);
+      assert.match(run.stderr, /fresh triage/, label);
+      assert.equal(run.json?.mode, 'dry-run', label);
+      assert.equal(run.json?.operationLocal.decision, 'refuse', label);
+      assert.equal('body' in (run.json ?? {}), false, label);
+      assert.deepEqual(run.posts, [], label);
+    }
+  }
+});
+
+test('--operation-local publishes when nothing arrived past the stored boundary (#3622)', () => {
+  const unchanged = runOperationLocalCli([
+    '--operation-local',
+    ...boundaryFlags('1', '2026-06-25T10:30:00Z'),
+  ]);
+  assert.equal(unchanged.status, 0);
+  assert.equal(unchanged.json?.operationLocal.decision, 'publish');
+  const empty = runOperationLocalCli(
+    ['--operation-local', ...boundaryFlags('0', 'none')],
+    { commentsBody: '[]' },
+  );
+  assert.equal(empty.status, 0);
+  assert.equal(empty.json?.operationLocal.decision, 'publish');
+});
+
+test('--operation-local evaluates the boundary guard before the defer for failing required checks (#3622)', () => {
+  const failing = {
+    rollupNodes: [rollupCheck('lint', 'FAILURE')],
+    rulesBody: REQUIRED_LINT_RULE,
+  };
+  // No boundary: the required-check failure defers, exit 0, nothing posted.
+  const deferred = runOperationLocalCli(
+    ['--operation-local', '--apply'],
+    failing,
+  );
+  assert.equal(deferred.status, 0);
+  assert.equal(deferred.json?.mode, 'dry-run');
+  assert.equal(deferred.json?.operationLocal.decision, 'defer');
+  assert.match(
+    deferred.json?.operationLocal.reason ?? '',
+    /required checks are not passing/,
+  );
+  assert.equal('body' in (deferred.json ?? {}), false);
+  assert.deepEqual(deferred.posts, []);
+  // The same failing checks with a boundary the capture already passed: the
+  // guard refuses first, so the caller gets the triage route, not a retry.
+  const refused = runOperationLocalCli(
+    ['--operation-local', '--apply', ...boundaryFlags('0', 'none')],
+    failing,
+  );
+  assert.equal(refused.status, 1);
+  assert.equal(refused.json?.operationLocal.decision, 'refuse');
+  assert.match(refused.stderr, /fresh triage/);
+  assert.deepEqual(refused.posts, []);
+});
+
+test('--operation-local refuses a review that arrived after the boundary and carries only uncovered body findings (#3622)', () => {
+  const review = JSON.stringify([
+    {
+      id: 555,
+      node_id: 'PRR_coderabbit_body_only',
+      user: { login: 'coderabbitai[bot]' },
+      body: PR_1897_REVIEW_4863787336,
+      state: 'COMMENTED',
+      submitted_at: '2026-06-25T10:50:00Z',
+      commit_id: SHA,
+    },
+  ]);
+  const options = { commentsBody: '[]', reviewsBody: review };
+  const refused = runOperationLocalCli(
+    ['--operation-local', ...boundaryFlags('0', 'none')],
+    options,
+  );
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /fresh triage/);
+  assert.equal(refused.json?.operationLocal.decision, 'refuse');
+  assert.match(
+    refused.json?.warnings?.[0] ?? '',
+    /^\d+ review-body findings? (has|have) no thread of (its|their) own/,
+  );
+  // The same capture publishes once the boundary already contains the review.
+  const publishes = runOperationLocalCli(
+    ['--operation-local', ...boundaryFlags('1', '2026-06-25T10:50:00Z')],
+    options,
+  );
+  assert.equal(publishes.status, 0);
+  assert.equal(publishes.json?.operationLocal.decision, 'publish');
+  // The uncovered body finding is reported by a refusal only.
+  assert.equal('warnings' in (publishes.json ?? {}), false);
+});
+
+// #3622: the stated outcomes are read by callers in three places -- the E1
+// Step 2 instruction, `--help`, and the helper reference (prose plus the
+// exit-code row) -- so each is pinned to the behavior the CLI tests above
+// exercise (defer exits 0 with `mode: "dry-run"`, refuse exits 1 with the
+// envelope on stdout, and the guard runs before the defer).
+function collapsedText(path: string): string {
+  return readFileSync(new URL(path, import.meta.url), 'utf8').replace(
+    /\s+/g,
+    ' ',
+  );
+}
+
+test('--help states the defer exit code and the refusal envelope (#3622)', () => {
+  const help = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { encoding: 'utf8' },
+  ).replace(/\s+/g, ' ');
+  assert.match(help, /Read operationLocal\.decision to tell the runs apart/);
+  assert.match(help, /publish posts the marker \(exit 0\)/);
+  assert.match(help, /defer exits 0 with "mode": "dry-run" and posts nothing/);
+  assert.match(
+    help,
+    /refuse exits 1, posts nothing, and prints the same envelope on stdout next to the reason on stderr/,
+  );
+  assert.match(help, /which is checked before the defer/);
+  assert.match(help, /values E1 Step 1 saw for the SAME HEAD/);
+  assert.match(help, /findings in a review body that has no thread for them/);
+});
+
+test('the E1 Step 2 instruction names the Step 1 boundary and the three outcomes (#3622)', () => {
+  const step2 = collapsedText(
+    '../idd-template/.github/instructions/idd-review-snapshot.instructions.md',
+  );
+  assert.ok(
+    step2.includes(
+      '--prior-head-sha {head-SHA} --prior-total-item-count {total-item-count} --prior-max-activity-at {max-activity-updatedAt}',
+    ),
+    'Step 2 must pass the Step 1 values as the --prior-* boundary',
+  );
+  assert.match(step2, /operationLocal\.decision: refuse/);
+  assert.match(step2, /`same-head-activity`: new undispositioned or uncovered/);
+  assert.match(step2, /exits 1, posting nothing/);
+  assert.match(
+    step2,
+    /`decision: defer` exits 0 \(`mode: "dry-run"`\), posting nothing/,
+  );
+  assert.match(step2, /skip the after-posting steps/);
+});
+
+test('the helper reference and its exit-code row state the defer exit code and the refusal envelope (#3622)', () => {
+  const reference = collapsedText('../idd-template/docs/idd-helper-scripts.md');
+  assert.match(
+    reference,
+    /`--operation-local` outcomes: `--apply` does not say which run happened, so read the envelope's `operationLocal\.decision`\./,
+  );
+  assert.match(
+    reference,
+    /`defer` \(required checks not passing\) exits `0`, prints `mode: "dry-run"`, and posts nothing/,
+  );
+  assert.match(
+    reference,
+    /`refuse` \(`same-head-activity`, a moved HEAD, or a CI-completion mismatch\) exits `1`, posts nothing, and prints the same envelope on stdout/,
+  );
+  assert.match(
+    reference,
+    /The `--prior-\*` guard is evaluated before the defer/,
+  );
+  const rowLine = readFileSync(
+    new URL('../idd-template/docs/idd-helper-scripts.md', import.meta.url),
+    'utf8',
+  )
+    .split('\n')
+    .find((line) => line.startsWith('| `post-idd-marker.mjs`'));
+  assert.ok(rowLine, 'the exit-code table must keep a post-idd-marker.mjs row');
+  // Columns: helper | usage | not-found / transport | gate | internal.
+  const gateCell = rowLine.split('|')[4] ?? '';
+  assert.match(gateCell, /--operation-local/);
+  assert.match(gateCell, /`refuse` decision/);
+  assert.match(gateCell, /exits `1` and prints the envelope on stdout/);
+  assert.match(gateCell, /`defer` \(required checks not passing\) exits `0`/);
+});
+
 test('operation-local orders same-HEAD activity by instant, not timestamp text (#3592)', () => {
   const laterFractional = runOperationLocalSnapshotWatermark({
     prNumber: 3592,
@@ -5916,7 +6387,7 @@ test('the operationLocal envelope schema requires every view field, including re
     decision: 'publish',
     reason: null,
     snapshot: {},
-    watermarkFields: null,
+    watermarkFields: { 'head-sha': SHA },
     warnings: [],
   };
   const envelope = {
