@@ -8,6 +8,8 @@ import {
   findHtmlCommentRanges,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
+  MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN,
+  MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN,
   maskMarkdownCodeRegionsPreservingPositions,
   maskMarkdownForScan,
   mergeMarkdownCodeRanges,
@@ -1916,4 +1918,192 @@ test('findHtmlCommentRanges still masks an unterminated "<!--" inside an open ra
   assert.deepEqual(findHtmlCommentRanges(body), [
     { start: 5, end: body.length },
   ]);
+});
+
+// Issue #3704: the custom (CommonMark type 7) HTML block opener patterns
+// used to backtrack cubically on an unclosed tag followed by a long run of
+// blanks (and, for the line pattern, on a complete tag followed by text),
+// because three adjacent quantifiers (`[ \t]+`, `[^<>]*?`, `[ \t]*`) could
+// all match the same whitespace. Observed 2026-10-01 on the old patterns:
+// about 7 s for a 4,000-blank run through every entry point below, against
+// a few milliseconds for the rewrite at 100,000.
+// Each guard times the 4,000-blank call and asserts its ceiling before the
+// 100,000-blank call runs, so a regression to the old shape fails after
+// about 7 s instead of hanging the suite. The ceiling stays far above the
+// rewritten cost to ride out a loaded shared host; on a failure here,
+// rerun this file alone before suspecting a regression.
+const HTML_OPENER_LINEAR_CEILING_MS = 2000;
+const HTML_OPENER_BLANK_RUN_SIZES = [4000, 100_000];
+
+function assertHtmlOpenerLinear(
+  label: string,
+  buildText: (blanks: string) => string,
+  run: (text: string) => unknown,
+): void {
+  for (const size of HTML_OPENER_BLANK_RUN_SIZES) {
+    const text = buildText(' '.repeat(size));
+    const start = performance.now();
+    run(text);
+    const elapsedMs = performance.now() - start;
+    assert.ok(
+      elapsedMs < HTML_OPENER_LINEAR_CEILING_MS,
+      `${label} took ${Math.round(elapsedMs)} ms for a ${size}-blank run (ceiling ${HTML_OPENER_LINEAR_CEILING_MS} ms)`,
+    );
+  }
+}
+
+test('findHtmlBlockRanges stays linear on an unclosed custom tag opener followed by blanks (#3704)', () => {
+  assertHtmlOpenerLinear(
+    'findHtmlBlockRanges',
+    (blanks) => `<a${blanks}`,
+    (text) => findHtmlBlockRanges(text),
+  );
+});
+
+test('findHtmlBlockRanges stays linear on an unclosed custom tag opener after a blank line (#3704)', () => {
+  assertHtmlOpenerLinear(
+    'findHtmlBlockRanges',
+    (blanks) => `para\n\n<a${blanks}`,
+    (text) => findHtmlBlockRanges(text),
+  );
+});
+
+test('findHtmlBlockRanges stays linear on an unclosed custom tag opener as a list item after a paragraph (#3704)', () => {
+  assertHtmlOpenerLinear(
+    'findHtmlBlockRanges',
+    (blanks) => `para\n- <a${blanks}`,
+    (text) => findHtmlBlockRanges(text),
+  );
+});
+
+test('findHtmlBlockRanges stays linear on a complete custom tag followed by text after a long blank run (#3704)', () => {
+  assertHtmlOpenerLinear(
+    'findHtmlBlockRanges',
+    (blanks) => `<span${blanks}>x`,
+    (text) => findHtmlBlockRanges(text),
+  );
+});
+
+test('findHtmlBlockRanges stays linear on a complete custom tag followed by text after a blank line (#3704)', () => {
+  assertHtmlOpenerLinear(
+    'findHtmlBlockRanges',
+    (blanks) => `para\n\n<span${blanks}>x`,
+    (text) => findHtmlBlockRanges(text),
+  );
+});
+
+test("maskMarkdownForScan with htmlBlocks 'mask' stays linear on an unclosed custom tag opener followed by blanks (#3704)", () => {
+  assertHtmlOpenerLinear(
+    "maskMarkdownForScan({ htmlBlocks: 'mask' })",
+    (blanks) => `<a${blanks}`,
+    (text) => maskMarkdownForScan(text, { htmlBlocks: 'mask' }),
+  );
+});
+
+// Each text puts a backtick next to the crafted line, so
+// `findInlineCodeRanges` asks `findMarkdownBlockBoundary` about it (the
+// shared pattern, on the opening line, on a lazily continued line, or on an
+// earlier line). A bare crafted line with no backtick never reaches it.
+const HTML_OPENER_BACKTICK_SHAPES: readonly {
+  readonly label: string;
+  readonly buildText: (blanks: string) => string;
+}[] = [
+  {
+    label: 'a code span after the opener on one line',
+    buildText: (blanks) => `<a${blanks}\`x\``,
+  },
+  {
+    label: 'a list item holding the opener and a code span',
+    buildText: (blanks) => `- <a${blanks}\`x\``,
+  },
+  {
+    label: 'a blockquote holding the opener and a code span',
+    buildText: (blanks) => `> <a${blanks}\`x\``,
+  },
+  {
+    label: 'an unmatched backtick line before the opener line',
+    buildText: (blanks) => `\`x\n<a${blanks}\n`,
+  },
+  {
+    label: 'a quoted opener line followed by a quoted code span line',
+    buildText: (blanks) => `> <a${blanks}\n> \`x\`\n`,
+  },
+];
+
+for (const { label, buildText } of HTML_OPENER_BACKTICK_SHAPES) {
+  test(`maskMarkdownForScan with default options stays linear on ${label} (#3704)`, () => {
+    assertHtmlOpenerLinear('maskMarkdownForScan', buildText, (text) =>
+      maskMarkdownForScan(text),
+    );
+  });
+
+  test(`findMarkdownCodeRanges stays linear on ${label} (#3704)`, () => {
+    assertHtmlOpenerLinear('findMarkdownCodeRanges', buildText, (text) =>
+      findMarkdownCodeRanges(text),
+    );
+  });
+}
+
+// The two patterns before issue #3704, kept verbatim as the reference the
+// rewritten patterns must agree with on every string.
+const OLD_CUSTOM_HTML_BLOCK_START_PATTERN =
+  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>/u;
+const OLD_CUSTOM_HTML_BLOCK_START_LINE_PATTERN =
+  /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^<>]*?)?[ \t]*\/?>[ \t]*$/u;
+
+test('the custom HTML block opener patterns accept exactly the strings the pre-#3704 patterns accepted (all strings of length 0 to 7)', () => {
+  const alphabet = ['<', '>', '/', 'a', '-', ' ', '\t', '"'];
+  const maxLength = 7;
+  const pairs = [
+    {
+      name: 'MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN',
+      oldPattern: OLD_CUSTOM_HTML_BLOCK_START_PATTERN,
+      newPattern: MARKDOWN_CUSTOM_HTML_BLOCK_START_PATTERN,
+      matches: 0,
+      disagreements: [] as string[],
+    },
+    {
+      name: 'MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN',
+      oldPattern: OLD_CUSTOM_HTML_BLOCK_START_LINE_PATTERN,
+      newPattern: MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN,
+      matches: 0,
+      disagreements: [] as string[],
+    },
+  ];
+  let total = 0;
+  const visit = (candidate: string): void => {
+    total += 1;
+    for (const pair of pairs) {
+      const oldAccepts = pair.oldPattern.test(candidate);
+      if (oldAccepts) {
+        pair.matches += 1;
+      }
+      if (oldAccepts !== pair.newPattern.test(candidate)) {
+        pair.disagreements.push(JSON.stringify(candidate));
+      }
+    }
+    if (candidate.length === maxLength) {
+      return;
+    }
+    for (const character of alphabet) {
+      visit(candidate + character);
+    }
+  };
+  visit('');
+
+  // 8^0 + 8^1 + ... + 8^7: the enumeration really covered every string.
+  assert.equal(total, 2_396_745);
+  for (const pair of pairs) {
+    assert.deepEqual(
+      pair.disagreements.slice(0, 10),
+      [],
+      `${pair.name} disagrees with its pre-#3704 text on ${pair.disagreements.length} string(s)`,
+    );
+    // Both classes must occur, or the agreement above proves nothing.
+    assert.ok(pair.matches > 0, `${pair.name}: no matching string enumerated`);
+    assert.ok(
+      pair.matches < total,
+      `${pair.name}: no non-matching string enumerated`,
+    );
+  }
 });
