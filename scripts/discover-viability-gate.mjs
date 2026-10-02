@@ -374,6 +374,98 @@ const CREDENTIAL_BARE_APPROVAL_FOLLOW_ON_PATTERN =
   /[.;:!?\n]\s*(?:[-*]\s+|\d+[.)]\s+)?(?:(?:the|a|an)\s+)?(?:approval|access|permission|authorization)\s+(?:(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:grant|provide|supply|create|obtain|generate|approve|share|enable)\b|(?=[.!?]|$))|(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$)))/i;
 const CREDENTIAL_ACTOR_FOLLOW_ON_PATTERN =
   /(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s|')?\s+\b(?:must|require[sd]?|requiring|needed|needs?|shall|has\s+to|have\s+to)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|\b(?:provide|supply|create|obtain|generate|approve|grant|share|enable)\b|(?=[.!?]|$))|(?:^|[.;:!?\n]\s+)(?:(?:the|a|an)\s+)?(?:maintainer|operator|owner|team|customer|administrator|external|third-?party|human)(?:'s|')?\s+(?:approval|decision|input|review|access|permission|authorization)\s+\b(?:is|are|was|were)\s+(?:required|necessary|essential|needed)\b[^.;:!?\n]{0,80}(?:\b(?:before|until)\b|(?=[.!?]|$))/i;
+// A bare `key` or `token` is ordinary vocabulary (a configuration key, a
+// lexer token) unless the text around it says a value must come from outside
+// the change (#3721). Every other positive route in
+// isDescribedSecurityVocabulary needs a descriptive word to be present, so
+// plain configuration prose fell through to the default deny. This route
+// inverts that for these two nouns only: the noun is ordinary unless one
+// entry of BARE_NOUN_DEPENDENCY_RULES matches the same window
+// `isSecurityStatus` reads (about 80 characters either side, not merely the
+// same sentence); the `forward` entry additionally reads up to 160 characters
+// after the noun, through isFollowedByCredentialRequirement.
+//
+// This is a shape rule, and it deliberately fails open: a dependency worded
+// with a verb or an actor this table lacks passes, where the default deny
+// used to fail it (correctly), along with the ordinary prose it failed as a
+// nuisance. tests/discover-viability-gate.test.mts pins every entry with at
+// least one row that fails today and passes once that entry is removed, so a
+// new entry needs a new row. The route only adds a pass, so text that passed
+// before cannot fail now. The security-status words, the `credential`
+// handling and the early-return deny routes stay in front of it unchanged.
+const BARE_KEY_OR_TOKEN_PATTERN = /^(?:keys?|tokens?)$/i;
+// An external actor counts unless a hyphen continues the word: the issue
+// footer says "human-oriented", which names no actor.
+const BARE_NOUN_EXTERNAL_ACTOR_PATTERN = new RegExp(
+  String.raw`\b${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b(?!-\w)`,
+  'i',
+);
+function cueRule(id, pattern) {
+  return { id, matches: (windowText) => pattern.test(windowText) };
+}
+/**
+ * The dependency cues (each verb in its inflected forms, with a few common
+ * `re-` forms), plus the two shapes the file already has. No table covers
+ * every wording; the tests pin what it does cover. The array is exported, and
+ * deliberately mutable, only so the tests can remove one entry at a time and
+ * prove that a row passes without it; production code never mutates it. Keep
+ * every pattern free of the `g` and `y` flags, because `RegExp.prototype.test`
+ * is then stateful.
+ */
+export const BARE_NOUN_DEPENDENCY_RULES = [
+  cueRule('need', /\bneed(?:s|ed|ing)?\b/i),
+  cueRule('require', /\brequir(?:e|es|ed|ing)\b/i),
+  cueRule('wait', /\bwait(?:s|ed|ing)?\b/i),
+  cueRule('await', /\bawait(?:s|ed|ing)?\b/i),
+  cueRule('blocked', /\bblock(?:ed|ing)\b/i),
+  cueRule('pending', /\bpending\b/i),
+  cueRule('lack', /\black(?:s|ed|ing)?\b/i),
+  cueRule('obtain', /\bobtain(?:s|ed|ing)?\b/i),
+  cueRule('acquire', /\b(?:acquire|acquires|acquired|acquiring)\b/i),
+  cueRule('procure', /\bprocur(?:e|es|ed|ing)\b/i),
+  cueRule('ask', /\bask(?:s|ed|ing)?\b/i),
+  cueRule('request', /\brequest(?:s|ed|ing)?\b/i),
+  cueRule('contact', /\bcontact(?:s|ed|ing)?\b/i),
+  cueRule('send', /\b(?:re-?)?(?:send(?:s|ing)?|sent)\b/i),
+  cueRule('give', /\b(?:give|gives|giving|given|gave)\b/i),
+  cueRule('provide', /\bprovid(?:e|es|ed|ing)\b/i),
+  cueRule('supply', /\bsuppl(?:y|ies|ied|ying)\b/i),
+  // The verb forms need an object after them, because `issue` is also the
+  // everyday noun for a tracker entry (the object list is a heuristic: a
+  // phrase such as `the issue key` still reads as the verb and fails, as it
+  // did before); the participle `issued` is never that noun, so it counts on
+  // its own.
+  cueRule(
+    'issue',
+    /\b(?:re-?)?(?:issues?|issued|issuing)\s+(?:a|an|the|new|us|them|me|him|her|one|it|another|keys?|tokens?)\b|\b(?:re-?)?issued\b/i,
+  ),
+  cueRule('generate', /\b(?:re-?)?generat(?:e|es|ed|ing)\b/i),
+  cueRule('share', /\b(?:share|shares|shared|sharing)\b/i),
+  cueRule('deliver', /\bdeliver(?:s|ed|ing)?\b/i),
+  cueRule('grant', /\bgrant(?:s|ed|ing)?\b/i),
+  cueRule(
+    'hand over',
+    /\bhand(?:s|ed|ing)?-?over\b|\bhand(?:s|ed|ing)?\s+(?:[\w-]+\s+){0,3}?over\b/i,
+  ),
+  cueRule('depend', /\bdepend(?:s|ed|ing)?\b/i),
+  cueRule('arrive', /\barriv(?:e|es|ed|ing)\b/i),
+  cueRule('missing', /\bmissing\b/i),
+  // The requirement words the broad check below already counts for these
+  // nouns; this route would otherwise drop them. Bare `must`, `shall` and
+  // `has to` stay out: `The key must exist in the schema.` is ordinary.
+  cueRule('necessary', /\bnecessary\b/i),
+  cueRule('mandatory', /\bmandatory\b/i),
+  cueRule('essential', /\bessential\b/i),
+  {
+    id: 'actor',
+    matches: (windowText) => BARE_NOUN_EXTERNAL_ACTOR_PATTERN.test(windowText),
+  },
+  {
+    id: 'forward',
+    matches: (_windowText, corpus, matchEnd) =>
+      isFollowedByCredentialRequirement(corpus, matchEnd),
+  },
+];
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -1002,6 +1094,14 @@ function isFollowedByGenericMentionNoun(corpus, matchIndex, matchEnd) {
     )
   );
 }
+function isOrdinaryBareKeyOrToken(vocabulary, windowText, corpus, matchEnd) {
+  return (
+    BARE_KEY_OR_TOKEN_PATTERN.test(vocabulary) &&
+    !BARE_NOUN_DEPENDENCY_RULES.some((rule) =>
+      rule.matches(windowText, corpus, matchEnd),
+    )
+  );
+}
 function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   const vocabulary = corpus.slice(matchIndex, matchEnd);
   if (!SECURITY_VOCABULARY_PATTERN.test(vocabulary)) {
@@ -1028,7 +1128,7 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
   const contextEnd = Math.min(corpus.length, matchEnd + 100);
   const context = corpus.slice(contextStart, contextEnd);
   const isProgrammingVocabulary =
-    /^(?:keys?|tokens?)$/i.test(vocabulary) &&
+    BARE_KEY_OR_TOKEN_PATTERN.test(vocabulary) &&
     /\b(?:parser|parsing|lexer|lexical|grammar|lookahead|cache|caching|lookup|deterministic|compiler|tokenizer|syntax|ast|identifier|dictionary|hash|index|binding|bindings|pagination|cursor|page|keymap|token-based)\b/i.test(
       context,
     ) &&
@@ -1106,6 +1206,16 @@ function isDescribedSecurityVocabulary(corpus, matchIndex, matchEnd) {
     CREDENTIAL_LOCAL_BEHAVIOR_PATTERN.test(
       `${requirementContextBefore} ${vocabulary} ${requirementContextAfter}`,
     )
+  ) {
+    return true;
+  }
+  // #3721: a bare `key` or `token` in ordinary prose. Consulted after every
+  // early-return deny route and the local-operation, local-feature and
+  // local-behavior routes, and before the broad requirement check, which it
+  // overrides for these two nouns (a bare `must` is not a dependency cue).
+  if (
+    !isSecurityStatus &&
+    isOrdinaryBareKeyOrToken(vocabulary, statusContext, corpus, matchEnd)
   ) {
     return true;
   }
