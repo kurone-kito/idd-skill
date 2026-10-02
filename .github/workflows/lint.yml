@@ -19,11 +19,20 @@ permissions:
   contents: read
 jobs:
   lint:
-    runs-on: ubuntu-slim
-    # Observed run duration is ~35-135s (gh api .../jobs started_at/
-    # completed_at); 15 min bounds pathological hangs with ~7x headroom
-    # over the slowest observed run.
-    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    # Historical ubuntu-slim runs (#3728): 94 successes had a median of
+    # 521s, p90 of 671s, and maximum of 858s. Three further runs
+    # (36730573670, 36752800229, 36955823310) were cancelled at 920-944s
+    # with the maximum-execution annotation; they also set this 15-minute
+    # job timeout, so they do not alone identify which timer fired. GitHub
+    # documents ubuntu-slim's hard 15-minute cap, also seen in #3665 when a
+    # 20-minute job was cancelled at 15m. The first ubuntu-latest PR run
+    # (#3730, run 37040216385) used Ubuntu 24.04.5 and Node v22.23.3; the
+    # Node floor assertion passed without setup-node. Its lint job took
+    # 171s, including 159s for protocol tests. This is below the 300s
+    # threshold and the 10-minute timeout is more than twice the lint
+    # duration. See issue #3728 for source run details.
+    timeout-minutes: 10
     steps:
       # fetch-depth: 0 is required by audit-docs' changed-file diff bases.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,6 +53,7 @@ jobs:
       # actually what the check enforces.
       - name: Assert Node.js floor
         run: |
+          node --version
           node -e '
             const versionParts = process.versions.node.split(".");
             const [major, minor, patch] = versionParts.map(Number);
@@ -81,7 +91,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Unlike the `lint` job's `ubuntu-slim` runner, this repository has
+      # Unlike the `lint` job's `ubuntu-latest` runner, this repository has
       # no established preinstalled-Node contract for `windows-latest` --
       # pin explicitly rather than relying on whatever ships in the image.
       # `24.x` (not a narrower range) matches every other workflow's own
@@ -100,7 +110,7 @@ jobs:
       # unlikely in practice, but not impossible (e.g. a transient
       # registry lag), and this job runs the exact same `.mts` test-suite
       # entry point that step guards. `shell: bash` is required here --
-      # unlike the `lint` job's `ubuntu-slim` runner, `windows-latest`'s
+      # unlike the `lint` job's `ubuntu-latest` runner, `windows-latest`'s
       # default `run:` shell is PowerShell, which cannot parse this
       # bash/POSIX-quoted script; GitHub's Windows runner images ship
       # Git for Windows' bash for exactly this cross-shell-reuse case.

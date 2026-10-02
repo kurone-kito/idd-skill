@@ -1,5 +1,5 @@
-// Guards two of #2322's acceptance criteria and one of #3665's against
-// future workflow edits:
+// Guards two of #2322's acceptance criteria, one of #3665's, and one of
+// #3728's against future workflow edits:
 // (1) none of the four required status-check workflows ever gains a path
 // filter on its pull_request trigger or renames its job id (a path-filtered
 // required check never reports for a change outside its filter, which
@@ -11,6 +11,9 @@
 // default stays ubuntu-slim for downstream callers (GitHub caps a job on
 // the single-CPU ubuntu-slim runner at 15 minutes, which cancelled the
 // required check although timeout-minutes was 20).
+// (4) the required `lint` job stays on `ubuntu-latest`: issue #3728 recorded
+// cancellation annotations for runs 36730573670, 36752800229, and
+// 36955823310; the workflow comment preserves their timer ambiguity.
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -313,5 +316,14 @@ test('pnpm-boundary.yml keeps ubuntu-slim as the declared runner input default',
     inputsRunner,
     /^ {8}default: ubuntu-slim$/m,
     'pnpm-boundary.yml: inputs.runner.default must stay ubuntu-slim -- the documented default for downstream workflow_call callers in docs/customization.md (#3665)',
+  );
+});
+
+test('lint.yml keeps the lint job on ubuntu-latest past the ubuntu-slim cap', () => {
+  const jobBody = extractJobBody(readWorkflow('lint.yml'), 'lint');
+  assert.match(
+    jobBody,
+    /^ {4}runs-on: ubuntu-latest$/m,
+    'lint.yml: the lint job must use ubuntu-latest; ubuntu-slim has a hard 15-minute cap, and issue #3728 recorded cancellation annotations for runs 36730573670, 36752800229, and 36955823310',
   );
 });
