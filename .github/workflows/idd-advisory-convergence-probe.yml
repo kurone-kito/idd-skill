@@ -21,7 +21,7 @@ defaults:
 
 jobs:
   probe-self-waiver-token-scopes:
-    if: ${{ inputs.probe_token_scopes == true }}
+    if: ${{ inputs.probe_token_scopes == true && github.ref_name == github.event.repository.default_branch }}
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:

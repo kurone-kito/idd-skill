@@ -64,6 +64,15 @@ test('token-scope probes use a separate non-required workflow', () => {
     assert.match(text, /^name: IDD self-waiver token-scope probe$/m);
     assert.match(text, /^ {2}probe-self-waiver-token-scopes:$/m);
     assert.doesNotMatch(text, /^ {2}idd-advisory-convergence:$/m);
+    const onBlock = text.slice(
+      text.indexOf('\non:'),
+      text.indexOf('\npermissions:'),
+    );
+    assert.deepEqual(
+      [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]),
+      ['workflow_dispatch'],
+      `${path}: probe must trigger only on manual dispatch`,
+    );
   }
 });
 
@@ -280,9 +289,21 @@ test('standalone self-waiver token-scope probe is opt-in, read-only, and matches
     );
     assert.match(
       probe,
-      /^ {4}if: \$\{\{ inputs\.probe_token_scopes == true \}\}$/m,
+      /^ {4}if: \$\{\{ inputs\.probe_token_scopes == true && github\.ref_name == github\.event\.repository\.default_branch \}\}$/m,
       `${path}: separate manual probe workflow must require the opt-in input`,
     );
+    if (path.startsWith('idd-template/')) {
+      assert.match(
+        onBlock,
+        /^ {6}runner:\n {8}description: Runner label \(defaults to CI_RUNNER_LABEL or ubuntu-slim\)\n {8}required: false\n {8}type: string$/m,
+        `${path}: runner must have no default so CI_RUNNER_LABEL can apply`,
+      );
+      assert.match(
+        probe,
+        /^ {4}runs-on: \$\{\{ inputs\.runner \|\| vars\.CI_RUNNER_LABEL \|\| 'ubuntu-slim' \}\}$/m,
+        `${path}: explicit runner, CI_RUNNER_LABEL, and ubuntu-slim fallback order must be preserved`,
+      );
+    }
     assert.match(
       probe,
       /^ {10}PR_NUMBER: \$\{\{ inputs\.pr_number \}\}$/m,
@@ -381,7 +402,7 @@ test('onboarding guide documents the probe scopes and self-waiver write permissi
   assert.match(section, /select[\s\S]*branch/i);
   assert.match(section, /PR number from this repository/i);
   assert.match(section, /at least one[\s\S]*Actions check run/i);
-  assert.match(section, /standalone optional workflow, not a required check/i);
+  assert.match(section, /optional workflow, not a required check/i);
   assert.match(
     section,
     /does not[\s\S]*run or skip the required convergence job/i,

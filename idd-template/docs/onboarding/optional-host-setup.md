@@ -382,9 +382,9 @@ and its comment-refresh companion
 [`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.13.0/idd-template/.github/workflows/idd-advisory-convergence-comment.yml);
 copy both files into `.github/workflows/`, then register only the required
 job id `idd-advisory-convergence` — the companion is non-required.
-Neither is wired in by importing the rest of `idd-template/`, since a
-new required-status-check-able workflow is a deliberate adopter
-decision, not a default.
+Importing does not register required checks.
+The probe is not imported by default; copy
+`idd-advisory-convergence-probe.yml` there only if needed.
 
 Adjust commands for your helper-runtime profile; the template uses
 floating `@v4`. Its runner defaults to `ubuntu-slim`; choose a `runner`
@@ -397,9 +397,11 @@ issue-comment endpoint on `issues: read`, alongside
 
 ### Waiver probe
 
-Standalone optional workflow, not a required check. In Actions, open
-IDD self-waiver token-scope probe > Run workflow. Select a branch
-containing the probe workflow, enter a PR number from this repository
+Optional workflow, not a required check. In Actions, open
+IDD self-waiver token-scope probe > Run workflow and select the trusted
+default branch, never the PR branch. GitHub runs the selected ref's
+workflow, so PR refs could change permissions or steps; the job checks
+the default branch (#3720). Enter a PR number from this repository
 with at least one Actions check run, and set
 `probe_token_scopes: true`.
 
