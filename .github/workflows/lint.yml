@@ -26,8 +26,12 @@ jobs:
     # with the maximum-execution annotation; they also set this 15-minute
     # job timeout, so they do not alone identify which timer fired. GitHub
     # documents ubuntu-slim's hard 15-minute cap, also seen in #3665 when a
-    # 20-minute job was cancelled at 15m. ubuntu-latest pnpm-boundary runs
-    # topped out at 271s. See issue #3728 for source run details.
+    # 20-minute job was cancelled at 15m. The first ubuntu-latest PR run
+    # (#3730, run 37040216385) used Ubuntu 24.04.5 and Node v22.23.3; the
+    # Node floor assertion passed without setup-node. Its lint job took
+    # 171s, including 159s for protocol tests. This is below the 300s
+    # threshold and the 10-minute timeout is more than twice the lint
+    # duration. See issue #3728 for source run details.
     timeout-minutes: 10
     steps:
       # fetch-depth: 0 is required by audit-docs' changed-file diff bases.
