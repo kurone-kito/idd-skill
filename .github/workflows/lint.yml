@@ -29,8 +29,9 @@ jobs:
     # 20-minute job was cancelled at 15m. The first ubuntu-latest PR run
     # (#3730, run 37040216385) used Ubuntu 24.04.5 and Node v22.23.3; the
     # Node floor assertion passed without setup-node. Its lint job took
-    # 171s, including 159s for protocol tests. This is below the 300s
-    # threshold and the 10-minute timeout is more than twice the lint
+    # 171s, including 159s for protocol tests. The slowest pnpm-boundary
+    # job on ubuntu-latest took 271s. The lint job is below the 300s
+    # threshold, and its 10-minute timeout is more than twice that lint
     # duration. See issue #3728 for source run details.
     timeout-minutes: 10
     steps:
