@@ -248,6 +248,43 @@ test('triage-a4-limited_scope fails on an unexcluded BROAD_SCOPE_PATTERN phrase 
   assert.equal(findingResult(report, 'triage-a4-limited_scope'), 'fail');
 });
 
+test('triage-a4-autonomous_completion passes ordinary key prose in a Proposed change but still fails a dependency (#3721)', () => {
+  const title = 'chore(config): tidy the settings file';
+  const ordinary = orphanBody().replace(
+    'Do the thing.',
+    [
+      'Leave every other key alone.',
+      'A misspelled key would still validate.',
+      'The yq checks pin the key names.',
+    ].join('\n'),
+  );
+  const ordinaryReport = auditAuthoredIssue(ordinary, {
+    shape: 'orphan',
+    title,
+  });
+  assert.equal(
+    findingResult(ordinaryReport, 'triage-a4-autonomous_completion'),
+    'pass',
+  );
+  assert.equal(ordinaryReport.passed, true);
+
+  // The audit never passes structural evidence, so a dependency is not
+  // demoted here either (the issue keeps that rule).
+  const dependent = orphanBody().replace(
+    'Do the thing.',
+    'We need the deploy key from ops.',
+  );
+  const dependentReport = auditAuthoredIssue(dependent, {
+    shape: 'orphan',
+    title,
+  });
+  assert.equal(dependentReport.passed, false);
+  assert.equal(
+    findingResult(dependentReport, 'triage-a4-autonomous_completion'),
+    'fail',
+  );
+});
+
 test('a failing triage finding is downgraded to a warning (not a failure) under --expect-bucket', () => {
   const body = withAuthoringBucket(
     childBody().replace(

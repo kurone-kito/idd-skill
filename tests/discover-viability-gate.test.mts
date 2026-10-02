@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  BARE_NOUN_DEPENDENCY_RULES,
   evaluateA4Viability,
+  evaluateAutonomousCompletion,
   evaluateDiscoverViability,
   parseArgs,
   renderCsv,
@@ -3572,4 +3574,303 @@ test('does not let a quoted completion blocker pass (#3522)', () => {
   });
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
+});
+
+// --- #3721: a bare `key` or `token` in ordinary prose -----------------------
+//
+// One table, so the next ordinary sentence is a new row instead of a new
+// bespoke test. Lists A to D are the issue's replay lists, verbatim; the rows
+// marked "added" go beyond them. Every body is the whole issue body, under
+// the issue's own title. `pins` names the one entry of
+// BARE_NOUN_DEPENDENCY_RULES a List D row exists for: the mutation test
+// below removes each entry in turn and expects its rows to pass, so a new
+// entry needs a new row.
+
+const BARE_NOUN_TITLE = 'chore(config): tidy the settings file';
+const EXTERNAL_COORDINATION_EVIDENCE =
+  'External coordination or manual decision signal detected';
+
+type BareNounList = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
+
+interface BareNounRow {
+  list: BareNounList;
+  body: string;
+  /** List D rows only: the id of the rule entry this row pins. */
+  pins?: string;
+}
+
+const BARE_NOUN_LIST_EXPECTATIONS: Record<
+  BareNounList,
+  { pass: boolean; summary: string }
+> = {
+  A: { pass: true, summary: 'ordinary prose now passes' },
+  B: { pass: true, summary: 'prose that already passed keeps passing' },
+  C: { pass: false, summary: 'a value someone else must supply keeps failing' },
+  D: { pass: false, summary: 'one dependency cue per row keeps failing' },
+  E: {
+    pass: false,
+    summary: 'a security-status word or `credential` keeps failing (added)',
+  },
+  F: { pass: true, summary: 'more ordinary prose passes (added)' },
+};
+
+const BARE_NOUN_ROWS: readonly BareNounRow[] = [
+  // List A: fails on main, ordinary prose.
+  { list: 'A', body: 'Leave every other key alone.' },
+  { list: 'A', body: 'A misspelled key would still validate.' },
+  { list: 'A', body: 'The yq checks pin the key names.' },
+  { list: 'A', body: 'Keep the key order stable.' },
+  { list: 'A', body: 'Sort the keys alphabetically.' },
+  { list: 'A', body: 'The key must exist in the schema.' },
+  { list: 'A', body: 'The token count is logged on every run.' },
+  { list: 'A', body: 'Tokens are split on whitespace.' },
+  // List B: passes on main and must keep passing.
+  { list: 'B', body: 'Each key in the YAML file keeps its current value.' },
+  { list: 'B', body: 'Rename the key and update every reference to it.' },
+  { list: 'B', body: 'Rename the timeout key in settings.json.' },
+  { list: 'B', body: 'Do not rename any other key.' },
+  { list: 'B', body: 'Validate the key names with yq.' },
+  { list: 'B', body: 'Leave every other setting alone.' },
+  { list: 'B', body: 'Every key in config.yaml must be documented.' },
+  { list: 'B', body: 'Duplicate keys are rejected by the parser.' },
+  // List C: a value that someone outside the change must supply. The first
+  // five rows carry cues; the last three carry none and are denied by an
+  // early-return route, so they pin where the new route is consulted.
+  {
+    list: 'C',
+    body: 'The API key must be provided before the script runs.',
+  },
+  {
+    list: 'C',
+    body: 'The new key must be provided before the script runs.',
+  },
+  {
+    list: 'C',
+    body: 'A deploy key must be provided by the maintainers before work starts.',
+  },
+  {
+    list: 'C',
+    body: 'The vendor must send the SSH key before work can start.',
+  },
+  {
+    list: 'C',
+    body: 'Obtain the API key from the vendor, then run the script.',
+  },
+  { list: 'C', body: 'We cannot ship without a token.' },
+  { list: 'C', body: 'Fetch the token from infra.' },
+  { list: 'C', body: 'Retrieve the key from ops.' },
+  // List D: each row carries exactly one dependency cue.
+  { list: 'D', body: 'We need the deploy key from ops.', pins: 'need' },
+  { list: 'D', body: 'The release requires a token.', pins: 'require' },
+  { list: 'D', body: 'Waiting for the key.', pins: 'wait' },
+  { list: 'D', body: 'Blocked on the new token.', pins: 'blocked' },
+  { list: 'D', body: 'We lack a key for the staging host.', pins: 'lack' },
+  { list: 'D', body: 'The key has to be obtained.', pins: 'obtain' },
+  { list: 'D', body: 'The key was acquired by ops.', pins: 'acquire' },
+  { list: 'D', body: 'Procure a key for the runner.', pins: 'procure' },
+  { list: 'D', body: 'Ask ops for a key.', pins: 'ask' },
+  { list: 'D', body: 'A key was requested.', pins: 'request' },
+  { list: 'D', body: 'Contact ops for the key.', pins: 'contact' },
+  { list: 'D', body: 'Please send me the key.', pins: 'send' },
+  { list: 'D', body: 'A key was sent by ops yesterday.', pins: 'send' },
+  { list: 'D', body: 'Someone must give us a token first.', pins: 'give' },
+  { list: 'D', body: 'The token was given to us by finance.', pins: 'give' },
+  { list: 'D', body: 'The key will be provided by ops.', pins: 'provide' },
+  { list: 'D', body: 'Supply the token to the runner.', pins: 'supply' },
+  {
+    list: 'D',
+    body: 'Work cannot start until the key is issued.',
+    pins: 'issue',
+  },
+  { list: 'D', body: 'The key still has to be generated.', pins: 'generate' },
+  { list: 'D', body: 'Share the key with the runner.', pins: 'share' },
+  { list: 'D', body: 'Deliver the key to the runner.', pins: 'deliver' },
+  { list: 'D', body: 'Grant us a key.', pins: 'grant' },
+  { list: 'D', body: 'Hand over the key.', pins: 'hand over' },
+  {
+    list: 'D',
+    body: 'Once the key is handed over, continue.',
+    pins: 'hand over',
+  },
+  { list: 'D', body: 'This depends on a key.', pins: 'depend' },
+  { list: 'D', body: 'A key will arrive on Friday.', pins: 'arrive' },
+  { list: 'D', body: 'The deploy key is missing.', pins: 'missing' },
+  { list: 'D', body: 'The key is pending.', pins: 'pending' },
+  // The external-actor word.
+  {
+    list: 'D',
+    body: 'The deploy key lives with the maintainers.',
+    pins: 'actor',
+  },
+  // The forward requirement shape.
+  { list: 'D', body: 'A new key must be created first.', pins: 'forward' },
+  // The window is wider than one sentence, and than one line.
+  {
+    list: 'D',
+    body: 'Ops holds the deploy key. Nothing can start until they send it.',
+    pins: 'send',
+  },
+  {
+    list: 'D',
+    body: '- The deploy key\n- Needs to come from ops',
+    pins: 'need',
+  },
+  // List D, added: a row the removal run showed to be missing for `await`.
+  { list: 'D', body: 'We await the new key.', pins: 'await' },
+  // List D, added: the base form of the `issue` verb (a same-sentence
+  // `issue` word reads as a tracker entry elsewhere, so the row names the
+  // verb after a requirement, which the broad check still denies on main).
+  {
+    list: 'D',
+    body: 'The key must exist; ops will issue us one.',
+    pins: 'issue',
+  },
+  // List D, added: other inflected and `re-` forms of listed cues, and the
+  // separated form of the phrasal verb.
+  { list: 'D', body: 'Ops issues the key every Monday.', pins: 'issue' },
+  { list: 'D', body: 'Ops will be issuing keys.', pins: 'issue' },
+  { list: 'D', body: 'The key was reissued by ops.', pins: 'issue' },
+  { list: 'D', body: 'Please resend the key.', pins: 'send' },
+  {
+    list: 'D',
+    body: 'The key must be regenerated by ops.',
+    pins: 'generate',
+  },
+  { list: 'D', body: 'Please hand the key over.', pins: 'hand over' },
+  { list: 'D', body: 'Please handover the key.', pins: 'hand over' },
+  // List D, added: the requirement words the broad check already counted.
+  {
+    list: 'D',
+    body: 'A deploy key is necessary for the release.',
+    pins: 'necessary',
+  },
+  { list: 'D', body: 'A deploy key is mandatory.', pins: 'mandatory' },
+  { list: 'D', body: 'The staging key is essential.', pins: 'essential' },
+  // List E, added: the route never sees these. `credential` is not a bare
+  // `key` or `token`, and a security-status word in the window denies.
+  { list: 'E', body: 'Leave every other credential alone.' },
+  { list: 'E', body: 'The credentials count is logged on every run.' },
+  { list: 'E', body: 'Leave the API key alone.' },
+  { list: 'E', body: 'Keep the production key order stable.' },
+  { list: 'E', body: 'Sort the secret keys alphabetically.' },
+  // List F, added: a hyphen continues "human", so the actor cue does not
+  // apply (every issue footer says "human-oriented").
+  { list: 'F', body: 'Sort the keys in a human-oriented order.' },
+  {
+    list: 'F',
+    body:
+      'Leave every other key alone.\n\n---\n\n_Autopilot suitability: 4 / 5 ' +
+      '-- higher is more autopilot-suitable; below the configured floor is ' +
+      'human-oriented._',
+  },
+];
+
+function evaluateBareNounBody(body: string) {
+  return evaluateAutonomousCompletion({
+    number: 3721,
+    title: BARE_NOUN_TITLE,
+    body,
+    state: 'OPEN',
+  });
+}
+
+for (const list of ['A', 'B', 'C', 'D', 'E', 'F'] as const) {
+  const expectation = BARE_NOUN_LIST_EXPECTATIONS[list];
+  test(`#3721: list ${list}, ${expectation.summary}`, () => {
+    const rows = BARE_NOUN_ROWS.filter((row) => row.list === list);
+    assert.ok(rows.length > 0, `list ${list} has rows`);
+    const mismatches: string[] = [];
+    for (const row of rows) {
+      const result = evaluateBareNounBody(row.body);
+      if (result.pass !== expectation.pass) {
+        mismatches.push(
+          `${JSON.stringify(row.body)} -> pass=${result.pass}: ${result.evidence}`,
+        );
+      } else if (
+        !expectation.pass &&
+        !result.evidence.includes(EXTERNAL_COORDINATION_EVIDENCE)
+      ) {
+        mismatches.push(
+          `${JSON.stringify(row.body)} failed with unexpected evidence: ${result.evidence}`,
+        );
+      }
+    }
+    assert.deepEqual(mismatches, []);
+  });
+}
+
+test('#3721: the rule table names every cue the issue lists, once each', () => {
+  const ids = BARE_NOUN_DEPENDENCY_RULES.map((rule) => rule.id);
+  assert.equal(new Set(ids).size, ids.length, 'rule ids are unique');
+  const issueCues = [
+    'need',
+    'require',
+    'wait',
+    'await',
+    'blocked',
+    'pending',
+    'lack',
+    'obtain',
+    'acquire',
+    'procure',
+    'ask',
+    'request',
+    'contact',
+    'send',
+    'give',
+    'provide',
+    'supply',
+    'issue',
+    'generate',
+    'share',
+    'deliver',
+    'grant',
+    'hand over',
+    'depend',
+    'arrive',
+    'missing',
+    'actor',
+    'forward',
+  ];
+  assert.deepEqual(
+    issueCues.filter((id) => !ids.includes(id)),
+    [],
+  );
+});
+
+test('#3721: removing any one rule makes the rows pinned to it pass', () => {
+  const ids = BARE_NOUN_DEPENDENCY_RULES.map((rule) => rule.id);
+  for (const row of BARE_NOUN_ROWS) {
+    if (row.pins !== undefined) {
+      assert.ok(
+        ids.includes(row.pins),
+        `${JSON.stringify(row.body)} pins an unknown rule "${row.pins}"`,
+      );
+    }
+  }
+  for (const id of ids) {
+    const pinned = BARE_NOUN_ROWS.filter((row) => row.pins === id);
+    assert.ok(pinned.length > 0, `rule "${id}" is pinned by no row`);
+    const index = BARE_NOUN_DEPENDENCY_RULES.findIndex(
+      (rule) => rule.id === id,
+    );
+    const removed = BARE_NOUN_DEPENDENCY_RULES.splice(index, 1);
+    try {
+      assert.equal(removed.length, 1);
+      for (const row of pinned) {
+        assert.equal(
+          evaluateBareNounBody(row.body).pass,
+          true,
+          `without rule "${id}", ${JSON.stringify(row.body)} should pass`,
+        );
+      }
+    } finally {
+      BARE_NOUN_DEPENDENCY_RULES.splice(index, 0, ...removed);
+    }
+  }
+  assert.deepEqual(
+    BARE_NOUN_DEPENDENCY_RULES.map((rule) => rule.id),
+    ids,
+    'the table is restored in its original order',
+  );
 });
