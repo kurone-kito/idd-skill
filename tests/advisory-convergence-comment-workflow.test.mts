@@ -39,6 +39,32 @@ test('required advisory-convergence workflows keep the required job id', () => {
   }
 });
 
+test('token-scope probe runs do not cancel normal workflow runs for the same PR', () => {
+  for (const path of REQUIRED_PATHS) {
+    const workflow = readWorkflow(path);
+    const group = workflow.match(/^ {2}group: (.+)$/m)?.[1];
+    assert.ok(group, `${path}: workflow must declare a concurrency group`);
+    assert.match(
+      group,
+      /inputs\.probe_token_scopes == true && '-probe' \|\| ''/,
+      `${path}: opt-in probe runs must use a separate concurrency group`,
+    );
+    if (path.startsWith('idd-template/')) {
+      assert.match(
+        group,
+        /format\('dispatch-\{0\}', inputs\.pr_number\)/,
+        `${path}: normal manual re-checks must keep their existing group`,
+      );
+    } else {
+      assert.match(
+        group,
+        /github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| inputs\.pr_number/,
+        `${path}: normal runs must keep their existing group`,
+      );
+    }
+  }
+});
+
 test('required advisory-convergence workflows no longer trigger on review comments', () => {
   for (const path of REQUIRED_PATHS) {
     const text = readWorkflow(path);
@@ -282,6 +308,12 @@ test('self-waiver token-scope probe is opt-in, read-only, and matches the helper
       `${path}: probe must derive the gh host from the Actions server URL`,
     );
     assert.match(probe, /gh pr view/);
+    assert.match(
+      probe,
+      /--jq 'any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\)'/,
+      `${path}: probe must verify an Actions check run exercised the rollup query`,
+    );
+    assert.match(probe, /has no Actions check run/);
     assert.match(probe, /Read-only self-waiver query probe succeeded/);
     assert.doesNotMatch(
       probe,
@@ -340,6 +372,7 @@ test('onboarding guide documents the probe scopes and self-waiver write permissi
   assert.match(section, /Actions[\s\S]*Run workflow/i);
   assert.match(section, /select[\s\S]*branch/i);
   assert.match(section, /PR number from this repository/i);
+  assert.match(section, /at least one[\s\S]*Actions check run/i);
   assert.match(section, /`Resource not accessible by integration`/);
   assert.match(section, /`issues: write`/);
   assert.match(section, /`pull-requests: write`/);

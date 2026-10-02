@@ -399,7 +399,8 @@ issue-comment endpoint on `issues: read`, alongside
 
 Manual only, not a required check. On the default branch, open Actions >
 IDD advisory-convergence gate > Run workflow. Select a branch containing
-this workflow, enter a PR number from this repository, and set
+this workflow, enter a PR number from this repository with at least one
+Actions check run, and set
 `probe_token_scopes: true`.
 
 | Read scope            |

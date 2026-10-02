@@ -66,7 +66,7 @@ concurrency:
   # -- defeating the whole no-human-click point of that job). A new push
   # still correctly cancels a STALE run of the SAME event type for the
   # same PR.
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || format('{0}-{1}', github.event_name, github.event.pull_request.number || inputs.pr_number) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || format('{0}-{1}', github.event_name, github.event.pull_request.number || inputs.pr_number) }}${{ inputs.probe_token_scopes == true && '-probe' || '' }}
 on:
   # Trigger-migration finished state (kurone-kito/idd-skill#2764 Phase
   # 2): only pull_request_target is declared below. GitHub always
@@ -100,7 +100,7 @@ on:
         type: string
         default: ubuntu-slim
       probe_token_scopes:
-        description: Run a read-only probe of self-waiver PR status-check permissions
+        description: Probe a PR with an Actions check run for self-waiver read access
         required: false
         type: boolean
         default: false
@@ -984,8 +984,12 @@ jobs:
             fi
             export GH_HOST="$SERVER_HOST"
           fi
-          gh pr view "$PR_NUMBER" \
+          HAS_ACTION_CHECKS=$(gh pr view "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
-            >/dev/null
-          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER."
+            --jq 'any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0))')
+          if [ "$HAS_ACTION_CHECKS" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER has no Actions check run; choose a PR with at least one check run."
+            exit 1
+          fi
+          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER with Actions check runs."

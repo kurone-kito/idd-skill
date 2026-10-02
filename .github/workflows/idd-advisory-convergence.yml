@@ -24,7 +24,7 @@ concurrency:
   # protects the genuine run from that instance the same way. Splitting
   # the groups by event name still lets a new push correctly cancel a
   # STALE run of the SAME event type for the same PR.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}${{ inputs.probe_token_scopes == true && '-probe' || '' }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
 # ("Copilot's") review has converged on the current PR HEAD, using the
@@ -329,7 +329,7 @@ on:
         required: true
         type: number
       probe_token_scopes:
-        description: Run a read-only probe of self-waiver PR status-check permissions
+        description: Probe a PR with an Actions check run for self-waiver read access
         required: false
         type: boolean
         default: false
@@ -802,8 +802,12 @@ jobs:
             fi
             export GH_HOST="$SERVER_HOST"
           fi
-          gh pr view "$PR_NUMBER" \
+          HAS_ACTION_CHECKS=$(gh pr view "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
-            >/dev/null
-          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER."
+            --jq 'any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0))')
+          if [ "$HAS_ACTION_CHECKS" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER has no Actions check run; choose a PR with at least one check run."
+            exit 1
+          fi
+          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER with Actions check runs."
