@@ -614,6 +614,7 @@ test('exact syncPair: a hand edit on one of two mirrors blocks the whole run and
   setFile(dir, 'src/x.md', 'x two\n');
   setFile(dir, 'src/y.md', 'y two\n');
 
+  const recordBefore = readFileSync(writeRecordPath(dir), 'utf8');
   const refused = run(dir, '--apply');
   assert.equal(refused.status, 1);
   assert.equal(
@@ -621,9 +622,11 @@ test('exact syncPair: a hand edit on one of two mirrors blocks the whole run and
     refusalMessage('src/y.md', 'out/y/same.md', 'exact'),
   );
   assert.ok(!refused.stderr.includes('out/x/same.md'));
-  // The refusal aborts the run before the write step: neither mirror moves.
+  // The refusal aborts the run before the write step: neither mirror moves
+  // and nothing is recorded.
   assert.equal(read(dir, 'out/x/same.md'), 'x one\n');
   assert.equal(read(dir, 'out/y/same.md'), 'y hand edit\n');
+  assert.equal(readFileSync(writeRecordPath(dir), 'utf8'), recordBefore);
 
   // Reverting the hand edit to the committed content lifts the refusal
   // without --force, and both mirrors regenerate.
@@ -634,6 +637,36 @@ test('exact syncPair: a hand edit on one of two mirrors blocks the whole run and
   assert.match(applied.stdout, /Synced 2 file\(s\)\./);
   assert.equal(read(dir, 'out/x/same.md'), 'x two\n');
   assert.equal(read(dir, 'out/y/same.md'), 'y two\n');
+});
+
+test('exact syncPair: a write that throws part-way still records the mirrors already written (#3717)', (t) => {
+  const dir = committedTwoMirrors(t);
+  setFile(dir, 'src/x.md', 'x one\n');
+  setFile(dir, 'src/y.md', 'y one\n');
+  // A directory where the second mirror belongs makes its write throw after
+  // the first mirror has already been written (the pairs run in manifest
+  // order).
+  rmSync(join(dir, 'out/y/same.md'));
+  mkdirSync(join(dir, 'out/y/same.md'));
+
+  const failed = run(dir, '--apply');
+  assert.notEqual(failed.status, 0);
+  assert.equal(read(dir, 'out/x/same.md'), 'x one\n');
+  // Only the mirror whose write returned is recorded (the re-apply below
+  // proves the recorded hash is the one on disk); the failed one has none.
+  const record = JSON.parse(readFileSync(writeRecordPath(dir), 'utf8'));
+  assert.deepEqual(Object.keys(record), ['out/x/same.md']);
+
+  // Once the failure is cleared, the recorded mirror re-applies without
+  // --force; had its record been dropped, it would be refused as a hand edit.
+  rmSync(join(dir, 'out/y/same.md'), { recursive: true });
+  git(dir, 'checkout', '--', 'out/y/same.md');
+  setFile(dir, 'src/x.md', 'x two\n');
+  const applied = run(dir, '--apply');
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(applied.stderr, '');
+  assert.equal(read(dir, 'out/x/same.md'), 'x two\n');
+  assert.equal(read(dir, 'out/y/same.md'), 'y one\n');
 });
 
 test('exact syncPair: linked worktrees keep separate records, so interleaved applies are never refused (#3717)', (t) => {

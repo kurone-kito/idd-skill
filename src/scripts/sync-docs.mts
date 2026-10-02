@@ -34,27 +34,30 @@
  * matches its last commit, just stale relative to `source`) is unaffected
  * and still syncs silently, as before.
  *
- * The tool's own earlier output (#3717): after one `--apply` a mirror
- * differs from its last commit, and once `source` changes again it differs
- * from the new generation too, which no function of those three contents can
- * tell apart from a hand edit. So every successful `--apply` records the
- * SHA-256 of the normalized content it wrote for each `exact`/`concreted`
- * target, keyed by the manifest `target` string, in one JSON file named
+ * The tool's own earlier output (#3717): after one `--apply` a mirror differs
+ * from its last commit, and once `source` changes again it differs from the
+ * new generation too, which no function of those three contents can tell
+ * apart from a hand edit. So every successful `--apply` records the SHA-256
+ * of the normalized content it wrote for each `exact`/`concreted` target,
+ * keyed by the manifest `target` string, in one JSON file named
  * `idd-sync-docs-written.json`. It lives directly under the directory that
  * `git rev-parse --absolute-git-dir` prints when run with the sync root (the
  * nearest `package.json` directory) as its working directory: `.git/` in the
- * primary worktree and `.git/worktrees/<name>/` in a linked one, so each worktree keeps its own record (never
- * `--git-common-dir`, which linked worktrees share) and a linked worktree's
- * record is removed with it. A target whose on-disk content already has its
- * recorded hash is the tool's own output and is regenerated without
- * `--force`; anything else is judged as above. The record is untracked by
- * construction, and `--check` or an aborted run writes nothing. A missing,
- * unreadable, corrupt (including valid JSON that is not an object) or
- * unwritable record, or no usable git directory, never crashes, never fails a
- * run that would otherwise exit 0, and never turns a refusal into an
- * overwrite: such a target is simply judged by the last-commit comparison
- * alone. One file serves a whole worktree, so two package roots inside one
- * worktree share it and a same-named target in each can only cost a refusal.
+ * primary worktree and `.git/worktrees/<name>/` in a linked one, so each
+ * worktree keeps its own record (never `--git-common-dir`, which linked
+ * worktrees share) and a linked worktree's record is removed with it. A
+ * target whose on-disk content already has its recorded hash is the tool's
+ * own output and is regenerated without `--force`; anything else is judged as
+ * above. The record is untracked by construction. Only the write step
+ * records: a `--check` run, and a run refused before it, writes nothing; a
+ * write that throws part-way still attempts to record the targets already
+ * written. A missing, unreadable, corrupt (including valid JSON that is not
+ * an object) or unwritable record, or no usable git directory, never
+ * crashes, never fails a run that would otherwise exit 0, and never turns a
+ * refusal into an overwrite: such a target is simply judged by the
+ * last-commit comparison alone. One file serves a whole worktree, so two
+ * package roots inside one worktree share it and a same-named target in each
+ * can only cost a refusal.
  */
 
 // #3240: side-effect-only import, kept first so an unsupported Node (where
@@ -620,20 +623,20 @@ function doStripPrefix(file: string, prefix: string | undefined): string {
 }
 
 /**
- * True when `current` (the target's on-disk content, already known to
- * differ from the freshly generated content) is an at-risk local edit: it
- * is neither the content the last `--apply` that wrote `target` recorded
- * (the tool's own output, #3717 -- see the record described in this file's
- * header comment) nor equal to the target's last-committed content, so regenerating
- * would discard something no commit or earlier run accounts for. A target
- * that is merely stale relative to its source (it matches its last commit)
- * is not an edit. Any failure reading git state (untracked file, no HEAD,
- * git unavailable) falls back to the pre-#1765 behavior: untracked/unreadable
- * git state proceeds like there is nothing to protect, since a missing
- * git baseline can never distinguish "stale" from "locally edited" and
- * this guard must not block a repository or profile that never had this
- * protection in the first place. A missing or damaged record only removes
- * the first exemption, so it can make this stricter, never more permissive.
+ * True when `current` (the target's on-disk content, already known to differ
+ * from the freshly generated content) is an at-risk local edit: it is neither
+ * the content the last `--apply` that wrote `target` recorded (the tool's own
+ * output, #3717 -- see the record described in this file's header comment)
+ * nor equal to the target's last-committed content, so regenerating would
+ * discard something no commit or earlier run accounts for. A target that is
+ * merely stale relative to its source (it matches its last commit) is not an
+ * edit. Any failure reading git state (untracked file, no HEAD, git
+ * unavailable) falls back to the pre-#1765 behavior: untracked/unreadable git
+ * state proceeds like there is nothing to protect, since a missing git
+ * baseline can never distinguish "stale" from "locally edited" and this guard
+ * must not block a repository or profile that never had this protection in
+ * the first place. A missing or damaged record only removes the first
+ * exemption, so it can make this stricter, never more permissive.
  */
 function hasUncommittedTargetEdit(target: string, current: string): boolean {
   if (readWriteRecord().get(target) === sha256(normalizeText(current))) {
