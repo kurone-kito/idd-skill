@@ -11,9 +11,9 @@
 // default stays ubuntu-slim for downstream callers (GitHub caps a job on
 // the single-CPU ubuntu-slim runner at 15 minutes, which cancelled the
 // required check although timeout-minutes was 20).
-// (4) the required `lint` job stays on `ubuntu-latest`: issue #3728 measured
-// full runs beyond the hard 15-minute `ubuntu-slim` cap (cancellation
-// annotations on runs 36730573670, 36752800229, and 36955823310).
+// (4) the required `lint` job stays on `ubuntu-latest`: issue #3728 recorded
+// cancellation annotations for runs 36730573670, 36752800229, and
+// 36955823310; the workflow comment preserves their timer ambiguity.
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
