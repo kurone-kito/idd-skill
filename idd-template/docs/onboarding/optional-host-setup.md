@@ -403,6 +403,9 @@ this workflow, enter a PR number from this repository with at least one
 Actions check run, and set
 `probe_token_scopes: true`.
 
+An opt-in probe dispatch skips the normal required gate job so it cannot
+affect the selected PR branch.
+
 | Read scope            |
 | --------------------- |
 | `contents: read`      |

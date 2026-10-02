@@ -155,11 +155,13 @@ jobs:
     # whole "no human click required" point of the bootstrap path.
     # `if: ${{ !cancelled() }}` overrides `needs:`'s own default (a
     # skipped dependency job skips its dependents too) -- this job must
-    # still run on every trigger, including `workflow_dispatch` or a
-    # `pull_request` run where the self-waiver job's own `if:` skips it
-    # outright, and a non-allowlisted PR where it runs but posts nothing.
+    # still run on every non-probe trigger: an ordinary
+    # `workflow_dispatch` re-check, a `pull_request` run where the
+    # self-waiver job skips, or a non-allowlisted PR. An opt-in probe
+    # dispatch skips this required context so it cannot affect the
+    # selected PR branch.
     needs: idd-advisory-convergence-self-waiver
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.probe_token_scopes != true) }}
     # Job-level override of the workflow-level `permissions:` block above,
     # adding `actions: read` (Codex review, PR #2895): `port.getWorkflowRun`
     # (the self-referential-bootstrap-auto trust verification) calls

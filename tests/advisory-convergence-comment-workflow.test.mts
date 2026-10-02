@@ -39,6 +39,28 @@ test('required advisory-convergence workflows keep the required job id', () => {
   }
 });
 
+test('opt-in token-scope probe dispatches skip the required gate job', () => {
+  for (const path of REQUIRED_PATHS) {
+    const text = readWorkflow(path);
+    const jobMatch = text.match(/^ {2}idd-advisory-convergence:\n/m);
+    assert.ok(
+      jobMatch?.index !== undefined,
+      `${path} must keep the required gate job`,
+    );
+    const afterJob = text.slice(jobMatch.index + jobMatch[0].length);
+    const nextSibling = afterJob.match(/^ {2}\S/m);
+    const jobBody =
+      nextSibling?.index === undefined
+        ? afterJob
+        : afterJob.slice(0, nextSibling.index);
+    assert.match(
+      jobBody,
+      /^ {4}if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'workflow_dispatch' \|\| inputs\.probe_token_scopes != true\) \}\}$/m,
+      `${path}: only opt-in probe dispatches must skip the required gate job`,
+    );
+  }
+});
+
 test('token-scope probe runs do not cancel normal workflow runs for the same PR', () => {
   for (const path of REQUIRED_PATHS) {
     const workflow = readWorkflow(path);
@@ -373,6 +395,7 @@ test('onboarding guide documents the probe scopes and self-waiver write permissi
   assert.match(section, /select[\s\S]*branch/i);
   assert.match(section, /PR number from this repository/i);
   assert.match(section, /at least one[\s\S]*Actions check run/i);
+  assert.match(section, /skips the normal required gate job/i);
   assert.match(section, /`Resource not accessible by integration`/);
   assert.match(section, /`issues: write`/);
   assert.match(section, /`pull-requests: write`/);
