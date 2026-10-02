@@ -85,6 +85,19 @@ discipline and has no tag.
   workflow run, an Actions resource; it is not proven, because no A/B probe
   was run. Adopters who copied the workflow should add the scope to their
   own copy (#3683).
+- A4's `autonomous_completion` criterion no longer fails ordinary
+  configuration or data prose that uses the bare noun `key` or `token`, such
+  as `Leave every other key alone.`; it reads the noun as ordinary vocabulary
+  unless the surrounding text carries a security-status word, a dependency cue
+  (need, wait, obtain, send, provide, missing, and the other inflected cues the
+  rule lists), an external-actor word, or a forward requirement. The change
+  only adds a pass: no text that passed before fails now. It is a shape rule
+  that fails open, so a dependency worded with a cue the rule lacks (for
+  example `Get a deploy key from ops.`) now passes where it failed before.
+  `credential` handling, the other A4 criteria and the A4.5 checks are
+  unchanged. The authoring audit keeps its own rules (it never passes
+  structural evidence, so it never demotes) and simply inherits the new A4
+  verdict (#3721).
 
 ## [0.13.0] - 2026-09-27
 
