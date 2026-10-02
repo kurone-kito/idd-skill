@@ -780,19 +780,30 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      issues: read
       pull-requests: read
       actions: read
       checks: read
       statuses: read
     steps:
-      - name: Probe status-check-rollup read access
+      - name: Probe self-waiver read access
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
+          if [ -z "${GH_HOST:-}" ]; then
+            SERVER_HOST=$(printf '%s' "$GITHUB_SERVER_URL" \
+              | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/+$##' \
+              | tr '[:upper:]' '[:lower:]')
+            if [ -z "$SERVER_HOST" ]; then
+              echo "::error::Could not determine GitHub host from GITHUB_SERVER_URL."
+              exit 1
+            fi
+            export GH_HOST="$SERVER_HOST"
+          fi
           gh pr view "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
             >/dev/null
-          echo "Read-only statusCheckRollup probe succeeded for PR #$PR_NUMBER."
+          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER."

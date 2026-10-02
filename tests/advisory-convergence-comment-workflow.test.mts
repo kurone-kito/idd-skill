@@ -23,6 +23,7 @@ const PROBE_READ_PERMISSIONS = [
   'actions: read',
   'checks: read',
   'contents: read',
+  'issues: read',
   'pull-requests: read',
   'statuses: read',
 ] as const;
@@ -269,8 +270,19 @@ test('self-waiver token-scope probe is opt-in, read-only, and matches the helper
       /--repo "\$GITHUB_REPOSITORY"/,
       `${path}: probe must query the current repository`,
     );
+    const hostSetup = probe.search(/if \[ -z "\$\{GH_HOST:-\}" \]; then/);
+    const query = probe.indexOf('gh pr view');
+    assert.ok(
+      hostSetup >= 0 && hostSetup < query,
+      `${path}: probe must set GH_HOST before gh runs without a local repository`,
+    );
+    assert.match(
+      probe,
+      /GITHUB_SERVER_URL[\s\S]*?export GH_HOST="\$SERVER_HOST"/,
+      `${path}: probe must derive the gh host from the Actions server URL`,
+    );
     assert.match(probe, /gh pr view/);
-    assert.match(probe, /Read-only statusCheckRollup probe succeeded/);
+    assert.match(probe, /Read-only self-waiver query probe succeeded/);
     assert.doesNotMatch(
       probe,
       /external-check-waiver|gh api|gh pr comment|--method|labels|required_status_checks/,
@@ -291,7 +303,7 @@ test('self-waiver token-scope probe is opt-in, read-only, and matches the helper
     assert.deepEqual(
       actualPermissions,
       [...PROBE_READ_PERMISSIONS].sort(),
-      `${path}: probe must grant exactly the five requested read-only scopes`,
+      `${path}: probe must grant exactly the six requested read-only scopes`,
     );
   }
 });
@@ -325,10 +337,14 @@ test('onboarding guide documents the probe scopes and self-waiver write permissi
   }
   assert.match(section, /not a required check/i);
   assert.match(section, /`probe_token_scopes: true`/);
+  assert.match(section, /Actions[\s\S]*Run workflow/i);
+  assert.match(section, /select[\s\S]*branch/i);
+  assert.match(section, /PR number from this repository/i);
   assert.match(section, /`Resource not accessible by integration`/);
   assert.match(section, /`issues: write`/);
   assert.match(section, /`pull-requests: write`/);
-  assert.match(section, /public success cannot prove private access/i);
+  assert.match(section, /private access.*unverified/i);
+  assert.match(section, /retest in a private repo/i);
 });
 
 test('every job that invokes external-check-waiver keeps actions: read, checks: read and statuses: read in both advisory-convergence workflow copies (kurone-kito/idd-skill#3683)', () => {

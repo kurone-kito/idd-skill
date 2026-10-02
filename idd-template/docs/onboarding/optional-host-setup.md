@@ -386,41 +386,37 @@ Neither is wired in by importing the rest of `idd-template/`, since a
 new required-status-check-able workflow is a deliberate adopter
 decision, not a default.
 
-Adjust the command to your helper-runtime profile, and the
-`actions/checkout` version if needed — the mirrored file intentionally
-uses the floating `@v4` form. The shipped runner default is
-`ubuntu-slim`; override it via the `runner` workflow input or the
-`CI_RUNNER_LABEL` repository variable (Settings > Secrets and
-variables > Actions > Variables) rather than hand-editing `runs-on` —
-a self-hosted label is **required**, not optional, on GitHub Enterprise
-Server (no GitHub-hosted runners at all) and on any org that mandates
-self-hosted runners even on github.com/GHEC. This source repository's
-own copy instead pins a specific `actions/checkout` SHA and hardcodes a
-custom runner label — appropriate for its own hardened, dogfooded CI,
-not a requirement for adopters. The workflow is read-only, querying
-reviews, threads, and waiver markers only; `issues: read` is required
-alongside `pull-requests: read` because the helper reads PR conversation
-comments via the issue-comments REST endpoint, which GitHub gates
-under the Issues permission category even for a pull request.
+Adjust commands for your helper-runtime profile; the template uses
+floating `@v4`. Its runner defaults to `ubuntu-slim`; choose a `runner`
+input or `CI_RUNNER_LABEL` variable instead. GHES and orgs requiring
+self-hosted runners need a self-hosted label. This repo's copy pins
+checkout and uses a custom runner; adopters need neither. The workflow
+reads reviews, threads, waiver markers and PR comments. GitHub gates its
+issue-comment endpoint on `issues: read`, alongside
+`pull-requests: read`.
 
 ### Waiver probe
 
-Manual probe, not a required check: use this repo's `pr_number`
-and `probe_token_scopes: true`.
+Manual only, not a required check. On the default branch, open Actions >
+IDD advisory-convergence gate > Run workflow. Select a branch containing
+this workflow, enter a PR number from this repository, and set
+`probe_token_scopes: true`.
 
 | Read scope            |
 | --------------------- |
 | `contents: read`      |
+| `issues: read`        |
 | `pull-requests: read` |
 | `actions: read`       |
 | `checks: read`        |
 | `statuses: read`      |
 
-Success confirms access. `Resource not accessible by integration`
-signals denial; check Actions settings. Waiver grants `issues: write`
-(issue comments) and `pull-requests: write` (marker post); probe has
-neither. Public success cannot prove private access; test in an adopter
-repo.
+The probe uses the helper's full query, including
+`closingIssuesReferences`; private access to that field is unverified,
+so `issues: read` is precautionary. Success confirms query access.
+`Resource not accessible by integration` means check Actions settings.
+Waiver posting separately needs `issues: write` and
+`pull-requests: write`; the probe has neither. Retest in a private repo.
 
 **Protect the workflow definition with CODEOWNERS.** A
 `pull_request`-triggered workflow runs its definition from the PR's
