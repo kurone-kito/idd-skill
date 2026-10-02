@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   cpSync,
   mkdirSync,
@@ -40,27 +40,34 @@ function read(dir: string, rel: string): string {
   return readFileSync(join(dir, rel), 'utf8');
 }
 
+// Runs the built sync-docs.mjs inside `dir`. `spawnSync` (not `execFileSync`)
+// so stderr is captured on exit-0 runs too: a run that prints a diagnostic
+// and still exits 0 must not look silent. `extraEnv` is layered over the
+// sanitized fixture environment.
+function runWithEnv(
+  dir: string,
+  args: string[],
+  extraEnv: NodeJS.ProcessEnv = {},
+): RunResult {
+  const result = spawnSync(
+    process.execPath,
+    [join(dir, 'scripts', 'sync-docs.mjs'), ...args],
+    {
+      cwd: dir,
+      env: { ...fixtureEnv(), ...extraEnv },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  return {
+    status: typeof result.status === 'number' ? result.status : 1,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? (result.error ? String(result.error) : ''),
+  };
+}
+
 function run(dir: string, ...args: string[]): RunResult {
-  try {
-    const stdout = execFileSync(
-      process.execPath,
-      [join(dir, 'scripts', 'sync-docs.mjs'), ...args],
-      {
-        cwd: dir,
-        env: fixtureEnv(),
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
-    return { status: 0, stdout, stderr: '' };
-  } catch (error) {
-    const e = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
-    return {
-      status: typeof e.status === 'number' ? e.status : 1,
-      stdout: typeof e.stdout === 'string' ? e.stdout : '',
-      stderr: typeof e.stderr === 'string' ? e.stderr : '',
-    };
-  }
+  return runWithEnv(dir, args);
 }
 
 // Runs the REAL repo's built audit-docs.mjs (not copied into the fixture,
