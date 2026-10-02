@@ -3186,10 +3186,42 @@ emission into a
 smaller module would shrink it, never eliminate it. The rest of each
 listed file's surface -- most of it, since each implements far more
 than this one trust path -- remains genuinely bootstrappable as
-described above. For the residual case, the
+described above. The same old-copy-decides shape has a permission-scope
+instance. `pull_request_target` evaluates the base branch's copy of the
+workflow, so a pull request that adds a scope the base's own helper
+already needs (such as `actions: read`) to the
+`idd-advisory-convergence-self-waiver` job's `permissions:` block is
+judged by a base copy that lacks it. In a private repository, where read
+scopes are enforced (the public source repository has not reproduced
+it), that job is expected to be red on that pull request, and on every
+allowlisted pull request until the base carries the scope: its step
+"Post the self-referential-bootstrap-auto waiver" fails with
+`Resource not accessible by integration` on `checkSuite.workflowRun`,
+while the verdict job `idd-advisory-convergence`, which still runs after
+a failed posting job, can pass. A rerun is not expected to clear it, and
+when that signature and a diff that adds a scope to that `permissions:`
+block both match, there is no second cause to look for. This applies
+only where that step runs (not for a fork pull request, and under the
+`instructions-only` profile the job runs its own notice step instead and
+stays green). Until the base carries the scope, even a private
+repository with a runnable profile and no waiver policy covering
+`idd-advisory-convergence` sees the job red instead of the `::notice::`
+that the co-requisite in `customization.md` promises, because the
+pull-request read that fails comes before the policy check that prints
+the notice. Once the base carries the scope, that promise holds again,
+and an open pull request clears on its next push or reopen, because each
+starts a new `pull_request_target` run from the updated base copy, and a
+rerun does not. Where the self-waiver job counts toward the `ci` blocker
+(it is one of the required checks, or no required checks are
+configured), autonomous F2 and F3 stop at that blocked gate, and these
+docs define no merge route for this case. Observed on 2026-09-30 and
+2026-10-02 in a private adopter pinned to v0.13.0
+(kurone-kito/idd-skill#3683). For the residual case of a bug inside the
+trust-chain code that leaves the verdict check
+`idd-advisory-convergence` itself unable to pass, the
 [maintainer-authorized waiver backstop](#external-check-waiver-contract)
-this repository already configures is the documented human off-ramp
-for precisely this situation, not a gap this mechanism itself needs to
+this repository already configures is the documented human off-ramp for
+precisely this situation, not a gap this mechanism itself needs to
 close.
 
 ### Out-of-loop marker contract
