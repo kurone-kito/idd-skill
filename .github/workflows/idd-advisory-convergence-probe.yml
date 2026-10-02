@@ -1,0 +1,62 @@
+name: IDD self-waiver token-scope probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to probe in this repository
+        required: true
+        type: number
+      probe_token_scopes:
+        description: Run the read-only self-waiver access probe
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe-self-waiver-token-scopes:
+    if: ${{ inputs.probe_token_scopes == true }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+      - name: Probe self-waiver read access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          NORMALIZED_GH_HOST=$(printf '%s' "${GH_HOST:-}" \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+          if [ -z "$NORMALIZED_GH_HOST" ]; then
+            SERVER_HOST=$(printf '%s' "$GITHUB_SERVER_URL" \
+              | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/+$##' \
+              | tr '[:upper:]' '[:lower:]')
+            if [ -z "$SERVER_HOST" ]; then
+              echo "::error::Could not determine GitHub host from GITHUB_SERVER_URL."
+              exit 1
+            fi
+            NORMALIZED_GH_HOST="$SERVER_HOST"
+          fi
+          export GH_HOST="$NORMALIZED_GH_HOST"
+          HAS_ACTION_CHECKS=$(gh pr view "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
+            --jq 'any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0))')
+          if [ "$HAS_ACTION_CHECKS" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER has no Actions check run; choose a PR with at least one check run."
+            exit 1
+          fi
+          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER with Actions check runs."

@@ -397,14 +397,14 @@ issue-comment endpoint on `issues: read`, alongside
 
 ### Waiver probe
 
-Manual only, not a required check. On the default branch, open Actions >
-IDD advisory-convergence gate > Run workflow. Select a branch containing
-this workflow, enter a PR number from this repository with at least one
-Actions check run, and set
+Standalone optional workflow, not a required check. In Actions, open
+IDD self-waiver token-scope probe > Run workflow. Select a branch
+containing the probe workflow, enter a PR number from this repository
+with at least one Actions check run, and set
 `probe_token_scopes: true`.
 
-An opt-in probe dispatch skips the normal required gate job so it cannot
-affect the selected PR branch.
+The separate workflow creates only the probe check context; it does not
+run or skip the required convergence job.
 
 | Read scope            |
 | --------------------- |

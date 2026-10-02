@@ -24,7 +24,7 @@ concurrency:
   # protects the genuine run from that instance the same way. Splitting
   # the groups by event name still lets a new push correctly cancel a
   # STALE run of the SAME event type for the same PR.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}${{ inputs.probe_token_scopes == true && '-probe' || '' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
 # ("Copilot's") review has converged on the current PR HEAD, using the
@@ -328,11 +328,6 @@ on:
         description: PR number to re-check (e.g. after posting a maintainer waiver)
         required: true
         type: number
-      probe_token_scopes:
-        description: Probe a PR with an Actions check run for self-waiver read access
-        required: false
-        type: boolean
-        default: false
 permissions:
   contents: read
   issues: read
@@ -369,12 +364,11 @@ jobs:
     # whole "no human click required" point of the bootstrap path.
     # `if: ${{ !cancelled() }}` overrides `needs:`'s own default (a
     # skipped dependency job skips its dependents too) -- this job must
-    # still run on every non-probe trigger: a `pull_request` run where
-    # the self-waiver job skips, a non-allowlisted PR, or an ordinary
-    # manual re-check. An opt-in probe dispatch skips this required
-    # context so it cannot affect the selected PR branch.
+    # still run on every trigger, including a `pull_request` run where
+    # the self-waiver job's own `if:` skips it outright, and a
+    # non-allowlisted PR where it runs but posts nothing.
     needs: idd-advisory-convergence-self-waiver
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.probe_token_scopes != true) }}
+    if: ${{ !cancelled() }}
     # Job-level override of the workflow-level `permissions:` block above,
     # adding `actions: read` (Codex review, PR #2895): `port.getWorkflowRun`
     # (the self-referential-bootstrap-auto trust verification) calls
@@ -775,40 +769,3 @@ jobs:
           # outlives a short artifact retention -- keep the repository
           # default so the artifact stays listable for the marker's full
           # validity window.
-  probe-self-waiver-token-scopes:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_token_scopes == true }}
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: read
-      pull-requests: read
-      actions: read
-      checks: read
-      statuses: read
-    steps:
-      - name: Probe self-waiver read access
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-        run: |
-          if [ -z "${GH_HOST:-}" ]; then
-            SERVER_HOST=$(printf '%s' "$GITHUB_SERVER_URL" \
-              | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/+$##' \
-              | tr '[:upper:]' '[:lower:]')
-            if [ -z "$SERVER_HOST" ]; then
-              echo "::error::Could not determine GitHub host from GITHUB_SERVER_URL."
-              exit 1
-            fi
-            export GH_HOST="$SERVER_HOST"
-          fi
-          HAS_ACTION_CHECKS=$(gh pr view "$PR_NUMBER" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
-            --jq 'any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0))')
-          if [ "$HAS_ACTION_CHECKS" != "true" ]; then
-            echo "::error::PR #$PR_NUMBER has no Actions check run; choose a PR with at least one check run."
-            exit 1
-          fi
-          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER with Actions check runs."

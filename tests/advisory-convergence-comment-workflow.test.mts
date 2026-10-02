@@ -14,6 +14,11 @@ const REQUIRED_PATHS = [
   'idd-template/.github/workflows/idd-advisory-convergence.yml',
 ] as const;
 
+const PROBE_PATHS = [
+  '.github/workflows/idd-advisory-convergence-probe.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence-probe.yml',
+] as const;
+
 const COMMENT_PATHS = [
   '.github/workflows/idd-advisory-convergence-comment.yml',
   'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
@@ -39,51 +44,26 @@ test('required advisory-convergence workflows keep the required job id', () => {
   }
 });
 
-test('opt-in token-scope probe dispatches skip the required gate job', () => {
+test('token-scope probes use a separate non-required workflow', () => {
   for (const path of REQUIRED_PATHS) {
     const text = readWorkflow(path);
-    const jobMatch = text.match(/^ {2}idd-advisory-convergence:\n/m);
-    assert.ok(
-      jobMatch?.index !== undefined,
-      `${path} must keep the required gate job`,
-    );
-    const afterJob = text.slice(jobMatch.index + jobMatch[0].length);
-    const nextSibling = afterJob.match(/^ {2}\S/m);
-    const jobBody =
-      nextSibling?.index === undefined
-        ? afterJob
-        : afterJob.slice(0, nextSibling.index);
+    const requiredJob = jobBlocks(text).get('idd-advisory-convergence');
+    assert.ok(requiredJob, `${path} must keep the required gate job`);
     assert.match(
-      jobBody,
-      /^ {4}if: \$\{\{ !cancelled\(\) && \(github\.event_name != 'workflow_dispatch' \|\| inputs\.probe_token_scopes != true\) \}\}$/m,
-      `${path}: only opt-in probe dispatches must skip the required gate job`,
+      requiredJob,
+      /^ {4}if: \$\{\{ !cancelled\(\) \}\}$/m,
+      `${path}: manual re-checks must still run the required gate`,
+    );
+    assert.doesNotMatch(
+      text,
+      /probe_token_scopes|probe-self-waiver-token-scopes/,
     );
   }
-});
-
-test('token-scope probe runs do not cancel normal workflow runs for the same PR', () => {
-  for (const path of REQUIRED_PATHS) {
-    const workflow = readWorkflow(path);
-    const group = workflow.match(/^ {2}group: (.+)$/m)?.[1];
-    assert.ok(group, `${path}: workflow must declare a concurrency group`);
-    assert.match(
-      group,
-      /inputs\.probe_token_scopes == true && '-probe' \|\| ''/,
-      `${path}: opt-in probe runs must use a separate concurrency group`,
-    );
-    if (path.startsWith('idd-template/')) {
-      assert.match(
-        group,
-        /format\('dispatch-\{0\}', inputs\.pr_number\)/,
-        `${path}: normal manual re-checks must keep their existing group`,
-      );
-    } else {
-      assert.match(
-        group,
-        /github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| inputs\.pr_number/,
-        `${path}: normal runs must keep their existing group`,
-      );
-    }
+  for (const path of PROBE_PATHS) {
+    const text = readWorkflow(path);
+    assert.match(text, /^name: IDD self-waiver token-scope probe$/m);
+    assert.match(text, /^ {2}probe-self-waiver-token-scopes:$/m);
+    assert.doesNotMatch(text, /^ {2}idd-advisory-convergence:$/m);
   }
 });
 
@@ -271,7 +251,7 @@ function jobBlocks(text: string): Map<string, string> {
   return blocks;
 }
 
-test('self-waiver token-scope probe is opt-in, read-only, and matches the helper query', () => {
+test('standalone self-waiver token-scope probe is opt-in, read-only, and matches the helper query', () => {
   const helper = readFileSync(
     `${REPO_ROOT}/src/scripts/external-check-waiver.mts`,
     'utf8',
@@ -281,7 +261,7 @@ test('self-waiver token-scope probe is opt-in, read-only, and matches the helper
   )?.[1];
   assert.ok(helperFields, 'fetchPullRequest must declare its --json fields');
 
-  for (const path of REQUIRED_PATHS) {
+  for (const path of PROBE_PATHS) {
     const workflow = readWorkflow(path);
     const onBlock = workflow.slice(
       workflow.indexOf('\non:'),
@@ -300,8 +280,8 @@ test('self-waiver token-scope probe is opt-in, read-only, and matches the helper
     );
     assert.match(
       probe,
-      /^ {4}if: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.probe_token_scopes == true \}\}$/m,
-      `${path}: probe must require both workflow_dispatch and the opt-in input`,
+      /^ {4}if: \$\{\{ inputs\.probe_token_scopes == true \}\}$/m,
+      `${path}: separate manual probe workflow must require the opt-in input`,
     );
     assert.match(
       probe,
@@ -318,15 +298,21 @@ test('self-waiver token-scope probe is opt-in, read-only, and matches the helper
       /--repo "\$GITHUB_REPOSITORY"/,
       `${path}: probe must query the current repository`,
     );
-    const hostSetup = probe.search(/if \[ -z "\$\{GH_HOST:-\}" \]; then/);
+    const hostSetup = probe.search(
+      /NORMALIZED_GH_HOST=\$\(printf '%s' "\$\{GH_HOST:-\}"/,
+    );
     const query = probe.indexOf('gh pr view');
     assert.ok(
       hostSetup >= 0 && hostSetup < query,
-      `${path}: probe must set GH_HOST before gh runs without a local repository`,
+      `${path}: probe must normalize GH_HOST before gh runs without a local repository`,
+    );
+    assert.ok(
+      probe.includes("sed 's/^[[:space:]]*//; s/[[:space:]]*$//'"),
+      `${path}: probe must treat whitespace-only GH_HOST as unset`,
     );
     assert.match(
       probe,
-      /GITHUB_SERVER_URL[\s\S]*?export GH_HOST="\$SERVER_HOST"/,
+      /if \[ -z "\$NORMALIZED_GH_HOST" \][\s\S]*?GITHUB_SERVER_URL[\s\S]*?NORMALIZED_GH_HOST="\$SERVER_HOST"[\s\S]*?export GH_HOST="\$NORMALIZED_GH_HOST"/,
       `${path}: probe must derive the gh host from the Actions server URL`,
     );
     assert.match(probe, /gh pr view/);
@@ -395,7 +381,11 @@ test('onboarding guide documents the probe scopes and self-waiver write permissi
   assert.match(section, /select[\s\S]*branch/i);
   assert.match(section, /PR number from this repository/i);
   assert.match(section, /at least one[\s\S]*Actions check run/i);
-  assert.match(section, /skips the normal required gate job/i);
+  assert.match(section, /standalone optional workflow, not a required check/i);
+  assert.match(
+    section,
+    /does not[\s\S]*run or skip the required convergence job/i,
+  );
   assert.match(section, /`Resource not accessible by integration`/);
   assert.match(section, /`issues: write`/);
   assert.match(section, /`pull-requests: write`/);
