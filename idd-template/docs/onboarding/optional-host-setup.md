@@ -403,6 +403,25 @@ alongside `pull-requests: read` because the helper reads PR conversation
 comments via the issue-comments REST endpoint, which GitHub gates
 under the Issues permission category even for a pull request.
 
+### Waiver probe
+
+Manual probe, not a required check: use this repo's `pr_number`
+and `probe_token_scopes: true`.
+
+| Read scope            |
+| --------------------- |
+| `contents: read`      |
+| `pull-requests: read` |
+| `actions: read`       |
+| `checks: read`        |
+| `statuses: read`      |
+
+Success confirms access. `Resource not accessible by integration`
+signals denial; check Actions settings. Waiver grants `issues: write`
+(issue comments) and `pull-requests: write` (marker post); probe has
+neither. Public success cannot prove private access; test in an adopter
+repo.
+
 **Protect the workflow definition with CODEOWNERS.** A
 `pull_request`-triggered workflow runs its definition from the PR's
 synthetic merge ref before any job step can perform the trusted `main`

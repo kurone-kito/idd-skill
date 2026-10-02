@@ -328,6 +328,11 @@ on:
         description: PR number to re-check (e.g. after posting a maintainer waiver)
         required: true
         type: number
+      probe_token_scopes:
+        description: Run a read-only probe of self-waiver PR status-check permissions
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
   issues: read
@@ -769,3 +774,25 @@ jobs:
           # outlives a short artifact retention -- keep the repository
           # default so the artifact stays listable for the marker's full
           # validity window.
+  probe-self-waiver-token-scopes:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_token_scopes == true }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+      - name: Probe status-check-rollup read access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          gh pr view "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
+            >/dev/null
+          echo "Read-only statusCheckRollup probe succeeded for PR #$PR_NUMBER."

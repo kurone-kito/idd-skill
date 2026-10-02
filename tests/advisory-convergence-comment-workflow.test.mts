@@ -19,6 +19,14 @@ const COMMENT_PATHS = [
   'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
 ] as const;
 
+const PROBE_READ_PERMISSIONS = [
+  'actions: read',
+  'checks: read',
+  'contents: read',
+  'pull-requests: read',
+  'statuses: read',
+] as const;
+
 test('required advisory-convergence workflows keep the required job id', () => {
   for (const path of REQUIRED_PATHS) {
     const text = readWorkflow(path);
@@ -213,6 +221,115 @@ function jobBlocks(text: string): Map<string, string> {
   });
   return blocks;
 }
+
+test('self-waiver token-scope probe is opt-in, read-only, and matches the helper query', () => {
+  const helper = readFileSync(
+    `${REPO_ROOT}/src/scripts/external-check-waiver.mts`,
+    'utf8',
+  );
+  const helperFields = helper.match(
+    /function fetchPullRequest\([\s\S]*?'--json',\s*'([^']+)'/,
+  )?.[1];
+  assert.ok(helperFields, 'fetchPullRequest must declare its --json fields');
+
+  for (const path of REQUIRED_PATHS) {
+    const workflow = readWorkflow(path);
+    const onBlock = workflow.slice(
+      workflow.indexOf('\non:'),
+      workflow.indexOf('\npermissions:'),
+    );
+    assert.match(
+      onBlock,
+      /^ {6}probe_token_scopes:\n {8}description: .+\n {8}required: false\n {8}type: boolean\n {8}default: false$/m,
+      `${path}: probe_token_scopes must be an optional boolean defaulting to false`,
+    );
+
+    const probe = jobBlocks(workflow).get('probe-self-waiver-token-scopes');
+    assert.ok(
+      probe,
+      `${path}: workflow must contain the token-scope probe job`,
+    );
+    assert.match(
+      probe,
+      /^ {4}if: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.probe_token_scopes == true \}\}$/m,
+      `${path}: probe must require both workflow_dispatch and the opt-in input`,
+    );
+    assert.match(
+      probe,
+      /^ {10}PR_NUMBER: \$\{\{ inputs\.pr_number \}\}$/m,
+      `${path}: probe must use the existing current-repository PR number input`,
+    );
+    assert.match(
+      probe,
+      /^ {10}GH_TOKEN: \$\{\{ github\.token \}\}$/m,
+      `${path}: probe must authenticate gh with this run's GITHUB_TOKEN`,
+    );
+    assert.match(
+      probe,
+      /--repo "\$GITHUB_REPOSITORY"/,
+      `${path}: probe must query the current repository`,
+    );
+    assert.match(probe, /gh pr view/);
+    assert.match(probe, /Read-only statusCheckRollup probe succeeded/);
+    assert.doesNotMatch(
+      probe,
+      /external-check-waiver|gh api|gh pr comment|--method|labels|required_status_checks/,
+      `${path}: probe must not invoke a waiver or write operation`,
+    );
+    const probeFields = probe.match(/--json\s+([^\s\\]+)/)?.[1];
+    assert.equal(
+      probeFields,
+      helperFields,
+      `${path}: probe query fields must match fetchPullRequest exactly`,
+    );
+
+    const permissions = probe.match(/^ {4}permissions:\n((?: {6}.*\n)+)/m)?.[1];
+    assert.ok(permissions, `${path}: probe must declare job-level permissions`);
+    const actualPermissions = [...permissions.matchAll(/^ {6}([\w-]+: \w+)$/gm)]
+      .map((match) => match[1])
+      .sort();
+    assert.deepEqual(
+      actualPermissions,
+      [...PROBE_READ_PERMISSIONS].sort(),
+      `${path}: probe must grant exactly the five requested read-only scopes`,
+    );
+  }
+});
+
+test('onboarding guide documents the probe scopes and self-waiver write permissions', () => {
+  const guide = readFileSync(
+    `${REPO_ROOT}/idd-template/docs/onboarding/optional-host-setup.md`,
+    'utf8',
+  );
+  const heading = '### Waiver probe';
+  const start = guide.indexOf(heading);
+  assert.notEqual(
+    start,
+    -1,
+    'onboarding guide must explain the token-scope probe',
+  );
+  const afterHeading = guide.slice(start + heading.length);
+  const nextHeading = afterHeading.search(/^#{1,3} /m);
+  const section =
+    nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+  const tableRows = section
+    .split('\n')
+    .filter((line) => line.startsWith('| `'));
+
+  for (const permission of PROBE_READ_PERMISSIONS) {
+    const cell = `\`${permission}\``;
+    assert.ok(
+      tableRows.some((line) => line.split('|')[1]?.trim() === cell),
+      `onboarding guide table must include ${permission}`,
+    );
+  }
+  assert.match(section, /not a required check/i);
+  assert.match(section, /`probe_token_scopes: true`/);
+  assert.match(section, /`Resource not accessible by integration`/);
+  assert.match(section, /`issues: write`/);
+  assert.match(section, /`pull-requests: write`/);
+  assert.match(section, /public success cannot prove private access/i);
+});
 
 test('every job that invokes external-check-waiver keeps actions: read, checks: read and statuses: read in both advisory-convergence workflow copies (kurone-kito/idd-skill#3683)', () => {
   for (const path of REQUIRED_PATHS) {
