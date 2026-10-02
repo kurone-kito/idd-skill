@@ -32,6 +32,28 @@
  * unless `--force` is passed. A target with no uncommitted state (on-disk
  * matches its last commit, just stale relative to `source`) is unaffected
  * and still syncs silently, as before.
+ *
+ * The tool's own earlier output (#3717): after one `--apply` a mirror
+ * differs from its last commit, and once `source` changes again it differs
+ * from the new generation too, which no function of those three contents can
+ * tell apart from a hand edit. So every successful `--apply` records the
+ * SHA-256 of the normalized content it wrote for each `exact`/`concreted`
+ * target, keyed by the manifest `target` string, in one JSON file named
+ * `idd-sync-docs-written.json`. It lives directly under the directory that
+ * `git rev-parse --absolute-git-dir` prints when run with the sync root (the
+ * nearest `package.json` directory) as its working directory: `.git/` in the
+ * primary worktree and `.git/worktrees/<name>/` in a linked one, so each worktree keeps its own record (never
+ * `--git-common-dir`, which linked worktrees share) and a linked worktree's
+ * record is removed with it. A target whose on-disk content already has its
+ * recorded hash is the tool's own output and is regenerated without
+ * `--force`; anything else is judged as above. The record is untracked by
+ * construction, and `--check` or an aborted run writes nothing. A missing,
+ * unreadable, corrupt (including valid JSON that is not an object) or
+ * unwritable record, or no usable git directory, never crashes, never fails a
+ * run that would otherwise exit 0, and never turns a refusal into an
+ * overwrite: such a target is simply judged by the last-commit comparison
+ * alone. One file serves a whole worktree, so two package roots inside one
+ * worktree share it and a same-named target in each can only cost a refusal.
  */
 // #3240: side-effect-only import, kept first so an unsupported Node (where
 // `import.meta.main` is `undefined`, not `false`) fails loudly before this
@@ -39,6 +61,7 @@
 // See node-runtime-guard.mts.
 import './node-runtime-guard.mjs';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
@@ -103,6 +126,19 @@ let nonZeroExit = false;
 // variable (the same reason diffs/skippedPairs/nonZeroExit stay at module
 // scope), so it cannot move fully inside main() the way `apply` does.
 let force = false;
+// #3717: the record of what the previous successful --apply wrote. Every
+// binding below is read by code that main() reaches, so each stays declared
+// above the `import.meta.main` call, exactly like `force`: a `const`/`let`
+// declared below it is still in its temporal dead zone when main() runs and
+// throws a ReferenceError on first use.
+const WRITE_RECORD_FILE = 'idd-sync-docs-written.json';
+// Targets of the exact/concreted pairs: only these are guarded, so only these
+// are recorded.
+const guardedTargets = new Set();
+// `undefined` = not resolved yet; `null` = no usable git directory.
+let writeRecordPath;
+let writeRecord;
+let writeRecordDirty = false;
 if (import.meta.main) {
   main();
 }
@@ -148,11 +184,20 @@ function main() {
     process.exit(1);
   }
   let written = 0;
-  for (const { target, content } of diffs) {
-    mkdirSync(dirname(join(root, target)), { recursive: true });
-    writeFileSync(join(root, target), content, 'utf8');
-    console.log(`  synced: ${target}`);
-    written++;
+  try {
+    for (const { target, content } of diffs) {
+      mkdirSync(dirname(join(root, target)), { recursive: true });
+      writeFileSync(join(root, target), content, 'utf8');
+      console.log(`  synced: ${target}`);
+      written++;
+      if (guardedTargets.has(target)) {
+        recordWrite(target, content);
+      }
+    }
+  } finally {
+    // Also covers a write that throws part-way: the targets already written
+    // are still recorded.
+    saveWriteRecord();
   }
   console.log(`\nSynced ${written} file(s).`);
   if (skippedPairs.length > 0) {
@@ -182,6 +227,7 @@ function processSyncPairs(pairs) {
     }
     seenTargets.add(target);
     if (mode === 'exact' || mode === 'concreted') {
+      guardedTargets.add(target);
       const sourceText = readText(source);
       let generated = normalizeText(
         applyReplacements(sourceText, replacements),
@@ -468,17 +514,24 @@ function doStripPrefix(file, prefix) {
 }
 /**
  * True when `current` (the target's on-disk content, already known to
- * differ from the freshly generated content) also differs from the
- * target's last-committed content -- i.e. an uncommitted, at-risk local
- * edit exists, not just a target that is legitimately stale relative to
- * its source. Any failure reading git state (untracked file, no HEAD, git
- * unavailable) falls back to the pre-#1765 behavior: untracked/unreadable
+ * differ from the freshly generated content) is an at-risk local edit: it
+ * is neither the content the last `--apply` that wrote `target` recorded
+ * (the tool's own output, #3717 -- see the record described in this file's
+ * header comment) nor equal to the target's last-committed content, so regenerating
+ * would discard something no commit or earlier run accounts for. A target
+ * that is merely stale relative to its source (it matches its last commit)
+ * is not an edit. Any failure reading git state (untracked file, no HEAD,
+ * git unavailable) falls back to the pre-#1765 behavior: untracked/unreadable
  * git state proceeds like there is nothing to protect, since a missing
  * git baseline can never distinguish "stale" from "locally edited" and
  * this guard must not block a repository or profile that never had this
- * protection in the first place.
+ * protection in the first place. A missing or damaged record only removes
+ * the first exemption, so it can make this stricter, never more permissive.
  */
 function hasUncommittedTargetEdit(target, current) {
+  if (readWriteRecord().get(target) === sha256(normalizeText(current))) {
+    return false;
+  }
   let committed;
   try {
     committed = execFileSync('git', ['show', `HEAD:${target}`], {
@@ -490,6 +543,72 @@ function hasUncommittedTargetEdit(target, current) {
     return false;
   }
   return normalizeText(current) !== normalizeText(committed);
+}
+function sha256(text) {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+function resolveWriteRecordPath() {
+  if (writeRecordPath === undefined) {
+    try {
+      const gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      writeRecordPath = gitDir === '' ? null : join(gitDir, WRITE_RECORD_FILE);
+    } catch {
+      writeRecordPath = null;
+    }
+  }
+  return writeRecordPath;
+}
+function readWriteRecord() {
+  if (writeRecord === undefined) {
+    const record = new Map();
+    writeRecord = record;
+    const path = resolveWriteRecordPath();
+    if (path !== null) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          !Array.isArray(parsed)
+        ) {
+          for (const [key, value] of Object.entries(parsed)) {
+            if (typeof value === 'string') {
+              record.set(key, value);
+            }
+          }
+        }
+      } catch {
+        // Missing, unreadable or corrupt: treated as no record at all.
+      }
+    }
+  }
+  return writeRecord;
+}
+function recordWrite(target, content) {
+  readWriteRecord().set(target, sha256(normalizeText(content)));
+  writeRecordDirty = true;
+}
+function saveWriteRecord() {
+  const path = resolveWriteRecordPath();
+  if (!writeRecordDirty || path === null) {
+    return;
+  }
+  try {
+    const record = readWriteRecord();
+    const entries = {};
+    for (const key of [...record.keys()].sort()) {
+      entries[key] = record.get(key);
+    }
+    writeFileSync(path, `${JSON.stringify(entries, null, 2)}\n`, 'utf8');
+  } catch {
+    // The record only lets the guard recognize the tool's own output; a
+    // failed save leaves a later guarded target refused (the safe direction)
+    // and must never change this run's exit status.
+  }
 }
 function readText(relPath) {
   try {
