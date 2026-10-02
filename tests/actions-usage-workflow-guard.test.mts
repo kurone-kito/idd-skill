@@ -100,6 +100,54 @@ function extractJobBody(text: string, jobId: string): string {
     : afterStart.slice(0, nextSiblingMatch.index);
 }
 
+/** Extracts one named step's body from a job, stopping before the next
+ * step. The exact step header keeps comments or similarly named steps
+ * elsewhere in the workflow from satisfying a step-specific guard. */
+function extractNamedStepBody(
+  text: string,
+  jobId: string,
+  stepName: string,
+): string {
+  const jobBody = extractJobBody(text, jobId);
+  const lines = jobBody.split('\n');
+  const start = lines.indexOf(`      - name: ${stepName}`);
+  assert.notEqual(
+    start,
+    -1,
+    `step ${JSON.stringify(stepName)} not found in job ${jobId}`,
+  );
+  const nextStep = lines.findIndex(
+    (line, index) => index > start && /^ {6}- /.test(line),
+  );
+  return lines.slice(start, nextStep === -1 ? undefined : nextStep).join('\n');
+}
+
+/** Returns the executable lines from a step's literal `run: |` block.
+ * YAML comments outside that scalar are not included, and shell comment
+ * lines inside it are removed before a command-specific assertion runs. */
+function executableLinesFromLiteralRun(stepBody: string): string[] {
+  const lines = stepBody.split('\n');
+  const runStart = lines.findIndex((line) => /^ {8}run: \|[+-]?$/.test(line));
+  assert.notEqual(runStart, -1, 'step must have a literal run: | block');
+
+  const scriptLines: string[] = [];
+  for (const line of lines.slice(runStart + 1)) {
+    if (line.trim() === '') {
+      scriptLines.push('');
+      continue;
+    }
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (indent <= 8) {
+      break;
+    }
+    scriptLines.push(line.slice(10));
+  }
+
+  return scriptLines
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+}
+
 /** Extracts the indented body of the `key:` line that sits at exactly
  * `indent` spaces in `text`: every following line that is blank or indented
  * deeper than the key, up to the first line that is neither. Asserts the key
@@ -325,5 +373,37 @@ test('lint.yml keeps the lint job on ubuntu-latest past the ubuntu-slim cap', ()
     jobBody,
     /^ {4}runs-on: ubuntu-latest$/m,
     'lint.yml: the lint job must use ubuntu-latest; ubuntu-slim has a hard 15-minute cap, and issue #3728 recorded cancellation annotations for runs 36730573670, 36752800229, and 36955823310',
+  );
+});
+
+test('lint.yml logs Node.js version before asserting the Node floor', () => {
+  const stepBody = extractNamedStepBody(
+    readWorkflow('lint.yml'),
+    'lint',
+    'Assert Node.js floor',
+  );
+  const executableLines = executableLinesFromLiteralRun(stepBody);
+  const versionLogIndex = executableLines.indexOf('node --version');
+  const floorAssertionIndex = executableLines.findIndex((line) =>
+    /^node -e ['"]$/.test(line),
+  );
+
+  assert.ok(
+    executableLines.join('\n').includes('process.versions.node.split(".")'),
+    'lint.yml: the named step must retain the Node engines.node floor assertion',
+  );
+  assert.notEqual(
+    versionLogIndex,
+    -1,
+    'lint.yml: Assert Node.js floor must execute node --version',
+  );
+  assert.notEqual(
+    floorAssertionIndex,
+    -1,
+    'lint.yml: Assert Node.js floor must execute its node -e assertion',
+  );
+  assert.ok(
+    versionLogIndex < floorAssertionIndex,
+    'lint.yml: node --version must run before the node -e floor assertion',
   );
 });
