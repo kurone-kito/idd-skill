@@ -62,7 +62,7 @@ jobs:
             }
           '
       - name: Run protocol tests
-        run: node --test tests/*.test.mts
+        run: node --test --import ./tests/isolate-state.mts tests/*.test.mts
       - name: Run workshop integrity check
         run: node scripts/verify-workshop-integrity.mjs --format table
   lint-windows:

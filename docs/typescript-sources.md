@@ -170,11 +170,18 @@ type-checked directly.
 The test suite is typed TypeScript (`tests/*.test.mts`). Tests are not
 distributed and are never emitted — `tsconfig.build.json` excludes
 `tests`, and both lanes run them directly via Node's native type
-stripping (`node --test tests/*.test.mts`). Unit tests import the typed
-`src/scripts/*.mts` sources so assertions are checked against the real
-signatures; CLI/integration tests keep spawning the emitted
-`scripts/*.mjs` / `bin/*.mjs` artifacts, which is exactly what adopters
-execute.
+stripping (`node --test` with the `tests/isolate-state.mts` preload;
+`pnpm run test:scripts` runs the same command). The preload gives each
+test file's process a throwaway per-user state root and fails the file
+when it writes below an `idd-*` entry there (observed 2026-10-01 while
+working on issue kurone-kito/idd-skill#3702: four test files wrote into
+the shared per-user state directory while passing every assertion; fixed
+per test in kurone-kito/idd-skill#3711, guarded by
+kurone-kito/idd-skill#3725). Running one file with plain `node --test`
+bypasses that guard. Unit tests import the typed `src/scripts/*.mts`
+sources so assertions are checked against the real signatures;
+CLI/integration tests keep spawning the emitted `scripts/*.mjs` /
+`bin/*.mjs` artifacts, which is exactly what adopters execute.
 
 ### Regenerating `deepEqual` fixtures
 

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -833,6 +835,13 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
   // (the closingIssuesReferences scoping check), but it must NOT fail on
   // the "requires --claim-issue" validation gate --claimless is meant to
   // skip.
+  //
+  // The helper runs from a scratch working directory, not the repository
+  // root: it reads this repository's config through its working directory,
+  // which enables load control, so with a token variable exported it would
+  // write a slot file under the per-user state directory before `gh` fails
+  // to spawn (#3725).
+  const scratch = mkdtempSync(join(tmpdir(), 'idd-claimless-cli-'));
   try {
     execFileSync(
       process.execPath,
@@ -848,7 +857,7 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
         '**Accepted** — operator-authorized, no linked issue',
       ],
       {
-        cwd: REPO_ROOT,
+        cwd: scratch,
         encoding: 'utf8',
         env: { ...process.env, PATH: '' },
         // #3434: suppress the duplicate raw-stderr relay execFileSync
@@ -861,6 +870,8 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
     const failure = error as { status?: number; stderr?: string };
     assert.notEqual(failure.status, undefined);
     assert.doesNotMatch(failure.stderr ?? '', /requires the --claim-issue/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 });
 

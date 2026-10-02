@@ -77,14 +77,14 @@
   "scripts": {
     "prepare": "husky",
     "lint": "pnpm run lint:minimum",
-    "lint:minimum": "node scripts/audit-docs.mjs --check && node scripts/audit-dead-exports.mjs --check && pnpm run typecheck && pnpm run build:check && biome check --error-on-warnings && dprint check \"**/*.md\" && node --test tests/*.test.mts && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
+    "lint:minimum": "node scripts/audit-docs.mjs --check && node scripts/audit-dead-exports.mjs --check && pnpm run typecheck && pnpm run build:check && biome check --error-on-warnings && dprint check \"**/*.md\" && node --test --import ./tests/isolate-state.mts tests/*.test.mts && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
     "lint:fix": "biome check --write --error-on-warnings && dprint fmt \"**/*.md\" && markdownlint-cli2 --fix \"**/*.md\" && markdownlint-cli2 \"**/*.md\" && cspell lint \"**\" --no-progress",
     "lint:precommit": "biome check --error-on-warnings && dprint check \"**/*.md\" && markdownlint-cli2 \"**/*.md\"",
     "typecheck": "tsc -p tsconfig.json",
     "build": "node scripts/build-ts.mjs",
     "build:check": "pnpm run build && git diff HEAD --exit-code -- scripts bin .gitattributes && node scripts/check-untracked-artifacts.mjs",
     "test": "pnpm run test:scripts",
-    "test:scripts": "node --test tests/*.test.mts",
+    "test:scripts": "node --test --import ./tests/isolate-state.mts tests/*.test.mts",
     "fixtures:update": "node scripts/update-fixtures.mjs",
     "docs:sync": "node scripts/sync-docs.mjs --apply",
     "docs:sync:check": "node scripts/sync-docs.mjs --check"
