@@ -122,9 +122,112 @@ function extractNamedStepBody(
   return lines.slice(start, nextStep === -1 ? undefined : nextStep).join('\n');
 }
 
+/** Removes shell here-document bodies from a script, including multiple
+ * redirections on one command and quoted delimiters. The redirection line
+ * remains executable; body text and delimiter lines do not. Quoted shell
+ * strings, comments, and here-document delimiters are scanned with shell
+ * quoting rules so text inside a command argument cannot start a here-doc. */
+function excludeHereDocumentBodies(lines: string[]): string[] {
+  const executableLines: string[] = [];
+  const pending: { delimiter: string; stripTabs: boolean }[] = [];
+  let quote: "'" | '"' | null = null;
+
+  for (const line of lines) {
+    if (pending.length > 0) {
+      const current = pending[0];
+      const candidate = current.stripTabs ? line.replace(/^\t+/, '') : line;
+      if (candidate === current.delimiter) {
+        pending.shift();
+      }
+      continue;
+    }
+
+    executableLines.push(line);
+    for (let index = 0; index < line.length; index += 1) {
+      const character = line[index];
+      if (quote === "'") {
+        if (character === "'") {
+          quote = null;
+        }
+        continue;
+      }
+      if (quote === '"') {
+        if (character === '\\') {
+          index += 1;
+        } else if (character === '"') {
+          quote = null;
+        }
+        continue;
+      }
+
+      if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+        break;
+      }
+      if (character === "'" || character === '"') {
+        quote = character;
+        continue;
+      }
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (
+        character !== '<' ||
+        line[index + 1] !== '<' ||
+        line[index + 2] === '<'
+      ) {
+        continue;
+      }
+
+      let delimiterStart = index + 2;
+      const stripTabs = line[delimiterStart] === '-';
+      if (stripTabs) {
+        delimiterStart += 1;
+      }
+      while (/\s/.test(line[delimiterStart] ?? '')) {
+        delimiterStart += 1;
+      }
+      const openingQuote = line[delimiterStart];
+      let delimiter: string | undefined;
+      let delimiterEnd = delimiterStart;
+      if (openingQuote === "'" || openingQuote === '"') {
+        delimiterEnd = line.indexOf(openingQuote, delimiterStart + 1);
+        if (delimiterEnd !== -1) {
+          delimiter = line.slice(delimiterStart + 1, delimiterEnd);
+        }
+      } else if (openingQuote === '\\') {
+        delimiterStart += 1;
+        delimiterEnd = delimiterStart;
+        while (
+          delimiterEnd < line.length &&
+          !/[\s;&|()<>]/.test(line[delimiterEnd])
+        ) {
+          delimiterEnd += 1;
+        }
+        delimiter = line.slice(delimiterStart, delimiterEnd);
+      } else {
+        delimiterEnd = delimiterStart;
+        while (
+          delimiterEnd < line.length &&
+          !/[\s;&|()<>]/.test(line[delimiterEnd])
+        ) {
+          delimiterEnd += 1;
+        }
+        delimiter = line.slice(delimiterStart, delimiterEnd);
+      }
+      if (delimiter) {
+        pending.push({ delimiter, stripTabs });
+        index = delimiterEnd;
+      }
+    }
+  }
+
+  return executableLines;
+}
+
 /** Returns the executable lines from a step's literal `run: |` block.
- * YAML comments outside that scalar are not included, and shell comment
- * lines inside it are removed before a command-specific assertion runs. */
+ * YAML comments outside that scalar, shell comments, and here-document
+ * body text are excluded before a command-specific assertion runs. */
 function executableLinesFromLiteralRun(stepBody: string): string[] {
   const lines = stepBody.split('\n');
   const runStart = lines.findIndex((line) => /^ {8}run: \|[+-]?$/.test(line));
@@ -143,9 +246,143 @@ function executableLinesFromLiteralRun(stepBody: string): string[] {
     scriptLines.push(line.slice(10));
   }
 
-  return scriptLines
+  return excludeHereDocumentBodies(scriptLines)
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('#'));
+}
+
+/** Asserts the named step logs Node before running the existing engine
+ * floor assertion. Keeping this pure lets regression tests supply a
+ * synthetic step containing non-executable shell text. */
+type ShellCommand = { words: string[] };
+
+/** Splits a shell script into basic commands while keeping quoted multiline
+ * arguments as one word. This guard only needs simple word boundaries and
+ * command separators, not shell expansion or execution. */
+function parseShellCommands(lines: string[]): ShellCommand[] {
+  const commands: ShellCommand[] = [];
+  let words: string[] = [];
+  let word = '';
+  let wordStarted = false;
+  let quote: "'" | '"' | null = null;
+
+  const finishWord = () => {
+    if (wordStarted) {
+      words.push(word);
+      word = '';
+      wordStarted = false;
+    }
+  };
+  const finishCommand = () => {
+    finishWord();
+    if (words.length > 0) {
+      commands.push({ words });
+      words = [];
+    }
+  };
+
+  for (const line of lines) {
+    let escapedNewline = false;
+    for (let index = 0; index < line.length; index += 1) {
+      const character = line[index];
+      if (quote === "'") {
+        if (character === "'") {
+          quote = null;
+        } else {
+          word += character;
+        }
+        continue;
+      }
+      if (quote === '"') {
+        if (character === '"') {
+          quote = null;
+        } else if (character === '\\' && index + 1 < line.length) {
+          index += 1;
+          word += line[index];
+        } else {
+          word += character;
+        }
+        continue;
+      }
+
+      if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+        break;
+      }
+      if (character === '\\') {
+        if (index + 1 === line.length) {
+          escapedNewline = true;
+        } else {
+          index += 1;
+          word += line[index];
+          wordStarted = true;
+        }
+        continue;
+      }
+      if (character === "'" || character === '"') {
+        if (!wordStarted) {
+          wordStarted = true;
+        }
+        quote = character;
+        continue;
+      }
+      if (/\s/.test(character)) {
+        finishWord();
+        continue;
+      }
+      if (';|&()'.includes(character)) {
+        finishCommand();
+        continue;
+      }
+      if (!wordStarted) {
+        wordStarted = true;
+      }
+      word += character;
+    }
+
+    if (quote !== null) {
+      word += '\n';
+    } else if (!escapedNewline) {
+      finishCommand();
+    }
+  }
+  finishCommand();
+  return commands;
+}
+
+function assertNodeVersionLogBeforeFloor(stepBody: string): void {
+  const lines = executableLinesFromLiteralRun(stepBody);
+  const commands = parseShellCommands(lines);
+  const versionLogIndex = commands.findIndex(
+    ({ words }) => words[0] === 'node' && words[1] === '--version',
+  );
+  const floorAssertionIndex = commands.findIndex(
+    ({ words }) => words[0] === 'node' && words[1] === '-e',
+  );
+
+  assert.notEqual(
+    versionLogIndex,
+    -1,
+    'lint.yml: Assert Node.js floor must execute node --version',
+  );
+  assert.notEqual(
+    floorAssertionIndex,
+    -1,
+    'lint.yml: Assert Node.js floor must execute its node -e assertion',
+  );
+  const assertionScript = commands[floorAssertionIndex].words[2] ?? '';
+  assert.ok(
+    assertionScript.includes(
+      'const versionParts = process.versions.node.split(".")',
+    ) &&
+      assertionScript.includes('const ok =') &&
+      assertionScript.includes('if (!ok)') &&
+      assertionScript.includes('process.exit(1)'),
+    'lint.yml: node -e must retain the Node engines.node floor assertion and its failing path',
+  );
+  assert.ok(
+    versionLogIndex < floorAssertionIndex,
+    'lint.yml: node --version must run before the node -e floor assertion',
+  );
 }
 
 /** Extracts the indented body of the `key:` line that sits at exactly
@@ -377,33 +614,49 @@ test('lint.yml keeps the lint job on ubuntu-latest past the ubuntu-slim cap', ()
 });
 
 test('lint.yml logs Node.js version before asserting the Node floor', () => {
-  const stepBody = extractNamedStepBody(
-    readWorkflow('lint.yml'),
-    'lint',
-    'Assert Node.js floor',
+  assertNodeVersionLogBeforeFloor(
+    extractNamedStepBody(
+      readWorkflow('lint.yml'),
+      'lint',
+      'Assert Node.js floor',
+    ),
   );
-  const executableLines = executableLinesFromLiteralRun(stepBody);
-  const versionLogIndex = executableLines.indexOf('node --version');
-  const floorAssertionIndex = executableLines.findIndex((line) =>
-    /^node -e ['"]$/.test(line),
-  );
+});
 
-  assert.ok(
-    executableLines.join('\n').includes('process.versions.node.split(".")'),
-    'lint.yml: the named step must retain the Node engines.node floor assertion',
+test('a command inside a quoted here-document cannot satisfy the Node log guard', () => {
+  const stepBody = [
+    '      - name: Assert Node.js floor',
+    '        run: |',
+    "          : <<'COMMENT'",
+    '            node --version',
+    '          COMMENT',
+    "          node -e '",
+    '            process.versions.node.split(".");',
+    "          '",
+  ].join('\n');
+
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /Assert Node\.js floor must execute node --version/,
   );
-  assert.notEqual(
-    versionLogIndex,
-    -1,
-    'lint.yml: Assert Node.js floor must execute node --version',
-  );
-  assert.notEqual(
-    floorAssertionIndex,
-    -1,
-    'lint.yml: Assert Node.js floor must execute its node -e assertion',
-  );
-  assert.ok(
-    versionLogIndex < floorAssertionIndex,
-    'lint.yml: node --version must run before the node -e floor assertion',
+});
+
+test('a command inside a multiline shell string cannot satisfy the Node log guard', () => {
+  const stepBody = [
+    '      - name: Assert Node.js floor',
+    '        run: |',
+    "          printf '%s\\n' 'example text",
+    '          node --version',
+    "          still quoted'",
+    "          node -e '",
+    '            const versionParts = process.versions.node.split(".");',
+    '            const ok = false;',
+    '            if (!ok) { process.exit(1); }',
+    "          '",
+  ].join('\n');
+
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /Assert Node\.js floor must execute node --version/,
   );
 });
