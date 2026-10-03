@@ -110,12 +110,15 @@ function extractNamedStepBody(
 ): string {
   const jobBody = extractJobBody(text, jobId);
   const lines = jobBody.split('\n');
-  const start = lines.indexOf(`      - name: ${stepName}`);
-  assert.notEqual(
-    start,
-    -1,
-    `step ${JSON.stringify(stepName)} not found in job ${jobId}`,
+  const matchingSteps = lines
+    .map((line, index) => (line === `      - name: ${stepName}` ? index : -1))
+    .filter((index) => index !== -1);
+  assert.equal(
+    matchingSteps.length,
+    1,
+    `expected exactly one step ${JSON.stringify(stepName)} in job ${jobId}, found ${matchingSteps.length}`,
   );
+  const start = matchingSteps[0];
   const nextStep = lines.findIndex(
     (line, index) => index > start && /^ {6}- /.test(line),
   );
@@ -175,6 +178,11 @@ function assertLintJobEnforcesNodeFloor(jobBody: string): void {
     /^ {4}continue-on-error\s*:/m,
     'lint.yml: lint job must not set continue-on-error',
   );
+  assert.doesNotMatch(
+    jobBody,
+    /^ {4}(?:needs|'needs'|"needs")\s*:/m,
+    'lint.yml: lint job must not depend on a prerequisite that can skip it',
+  );
 }
 
 const SHELL_ESCAPED_SINGLE_QUOTE = "'\"'\"'";
@@ -183,13 +191,10 @@ function assertLintJobUsesDefaultShell(
   jobBody: string,
   workflow: string,
 ): void {
-  const workflowDefaults = /^defaults:$/m.test(workflow)
-    ? extractKeyBlock(workflow, 0, 'defaults')
-    : '';
   assert.doesNotMatch(
-    workflowDefaults,
-    /^ {4}shell\s*:/m,
-    'lint.yml: workflow defaults must not override the default shell',
+    workflow,
+    /^(?:defaults|'defaults'|"defaults")\s*:/m,
+    'lint.yml: workflow must not declare defaults that can override the default shell',
   );
   assert.doesNotMatch(
     jobBody,
@@ -495,6 +500,30 @@ test('a conditionally skipped lint job cannot satisfy the Node log guard', () =>
   }
 });
 
+test('a prerequisite-dependent lint job cannot skip the Node floor guard', () => {
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    needs: gate'),
+    /lint job must not depend on a prerequisite that can skip it/,
+  );
+});
+
+test('duplicate Node floor step names are rejected as ambiguous', () => {
+  const workflow = [
+    'jobs:',
+    '  lint:',
+    '    steps:',
+    '      - name: Assert Node.js floor',
+    '        run: node --version',
+    '      - name: Assert Node.js floor',
+    '        run: node -e "process.exit(1)"',
+  ].join('\n');
+
+  assert.throws(
+    () => extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
+    /expected exactly one step .* found 2/,
+  );
+});
+
 test('a command inside a quoted here-document cannot satisfy the Node log guard', () => {
   const stepBody = [
     '      - name: Assert Node.js floor',
@@ -601,8 +630,17 @@ test('custom shell templates cannot skip Node floor execution', () => {
         '',
         'defaults:\n  run:\n    shell: bash -n {0}',
       ),
-    /workflow defaults must not override the default shell/,
+    /workflow must not declare defaults/,
   );
+  for (const workflow of [
+    'defaults: # trailing YAML comment\n  run:\n    shell: bash -n {0}',
+    '"defaults" : &lint-defaults\n  run:\n    shell: bash -n {0}',
+  ]) {
+    assert.throws(
+      () => assertLintJobUsesDefaultShell('', workflow),
+      /workflow must not declare defaults/,
+    );
+  }
 });
 
 test('a comment after an escaped newline cannot satisfy the Node log guard', () => {
