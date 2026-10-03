@@ -1777,11 +1777,15 @@ before writing the issue's completion digest or releasing the claim. A
 two-parent merge derives the candidate head from parent 2. On a
 `human_merge` resume, F2.5 did not write an F3 digest, so F4 repairs it
 after cleanup from independently proven merge evidence. For a
-one-parent squash/rebase, F4 takes the candidate only from the latest
-trusted same-claim F2 watermark when it matches the live PR head; after
-cleanup, step 5's branch-tip comparison must match too. The digest
-cannot supply its own head proof. Missing or mismatched evidence keeps
-the claim active. Repair carries the `F3 merged` phase
+one-parent squash/rebase, F4 carries the latest trusted same-claim F2
+watermark SHA before comment cleanup can minimize its marker, and
+captures the branch tip before removing the worktree. Both must match
+the live PR head; the digest cannot supply its own head proof. These
+inputs were added after review found cleanup could otherwise remove the
+only proof sources (PR `#3741` review comments `#4173311932`,
+`#4173311978`, and `#4173312001`; preventive, no observed incident yet
+for a completed F4 missing these values). Missing or mismatched evidence
+keeps the claim active. Repair carries the `F3 merged` phase
 and one `Last checked` value through dry-run, apply, and confirmation,
 with claim ownership revalidated around apply. A duplicate, failed
 validation, or inconclusive result stops before either completion write,

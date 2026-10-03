@@ -2950,13 +2950,13 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   const f4Start = text.indexOf('## F4 — Cleanup');
   const f4End = text.indexOf('\n## F5', f4Start);
   const earlyDigestCheck = text.indexOf(
-    '2. Re-validate the claim; confirm the post-merge digest',
+    '2. Re-validate claim; confirm the PR digest',
     f4Start,
   );
   const prDigestCheck = text.indexOf('7. After steps 4–6', f4Start);
   const issueDigest = text.indexOf('Phase: F4 complete', prDigestCheck);
   const claimRelease = text.indexOf(
-    'Then post `unclaimed-by` for your own',
+    'Finally, while the claim still matches',
     issueDigest,
   );
   assert.ok(
@@ -2974,57 +2974,73 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   const earlyCheck = text.slice(earlyDigestCheck, prDigestCheck);
   assert.match(
     earlyCheck,
-    /If\s+`human_merge` left none, step 7 repairs it after cleanup/,
+    /If `human_merge` left\s+none, retain the claim; step 7 repairs it after cleanup/,
   );
-  assert.match(earlyCheck, /retain the\s+claim meanwhile/);
+  assert.match(
+    earlyCheck,
+    /Before step\s+3, carry the latest trusted same-claim\s+F2 watermark SHA as\s+`\{f2-head-SHA\}`/,
+  );
   assert.match(finalCheck, /After steps 4–6/);
   assert.match(finalCheck, /Require PR `MERGED`/);
   assert.match(finalCheck, /mergeCommit\.oid/);
   assert.match(finalCheck, /1–2 non-empty\s+parents/);
   assert.match(finalCheck, /`F3 merged` `Authoritative by`/);
-  assert.match(finalCheck, /Derive `PR_HEAD_SHA_F3` from parent 2/);
-  assert.match(finalCheck, /only\s+the latest trusted same-claim F2 watermark/);
-  assert.match(finalCheck, /require live\s+`headRefOid` to match/);
-  assert.match(finalCheck, /Step 5's carried branch-tip SHA for one\s+parent/);
-  assert.match(finalCheck, /Never use digest head as proof/);
+  assert.match(finalCheck, /`PR_HEAD_SHA_F3` is parent 2/);
+  assert.match(finalCheck, /else only\s+carried `\{f2-head-SHA\}`/);
+  assert.match(finalCheck, /Require live\s+`headRefOid` to match/);
+  assert.match(finalCheck, /Step 5's `\{branch-tip-SHA\}`/);
+  assert.match(finalCheck, /Never use digest head\s+as proof/);
   assert.match(
     finalCheck,
-    /Use both proven, distinct\s+full SHAs in `F3 merged` `Authoritative by`/,
+    /Upsert `F3 merged` `Authoritative by` with both proven,\s+distinct full SHAs/,
   );
   assert.match(
     finalCheck,
-    /even when\s+`human_merge` skipped F3 or the digest is missing\/stale/,
+    /even if\s+`human_merge` skipped F3 or the digest is\s+missing\/stale/,
   );
   assert.match(finalCheck, /Hold on\s+duplicate, invalid, or incomplete proof/);
+  const step5Start = text.indexOf(
+    '\n5. Run from the **primary worktree**',
+    f4Start,
+  );
+  const step6Start = text.indexOf(
+    '\n6. If GitHub auto-delete is disabled',
+    step5Start,
+  );
+  const step5 = text.slice(step5Start, step6Start);
+  assert.match(
+    step5,
+    /Before removing the worktree, carry `\{branch-tip-SHA\}` =\s+`git rev-parse \{branch-name\}` to step 7/,
+  );
+  assert.ok(
+    step5.indexOf('Before removing the worktree') <
+      step5.indexOf('git worktree remove <path>'),
+  );
   assert.match(finalCheck, /Phase: F3 merged/);
   assert.match(finalCheck, /Claim: \{agent-id\} \/ \{claim-id\}/);
   assert.match(finalCheck, /Branch: \{branch-name\}/);
   assert.match(finalCheck, /Open blockers: none/);
   assert.match(finalCheck, /Next action: F4 cleanup then F5 discover/);
   assert.match(finalCheck, /`Authoritative by` both SHAs/);
-  assert.match(finalCheck, /Use one `--last-checked`/);
+  assert.match(finalCheck, /Use one `--last-checked` throughout/);
   assert.match(finalCheck, /create`\/`update/);
   assert.match(
     finalCheck,
-    /Apply each `create`\/`update` with\s+`--claim-issue \{issue-number\} --claim-id \{claim-id\} --agent-id \{agent-id\}`/,
+    /Apply `create`\/`update` with\s+`--claim-issue \{issue-number\} --claim-id \{claim-id\} --agent-id \{agent-id\}`/,
   );
-  assert.match(finalCheck, /re-validate before and after apply/);
+  assert.match(finalCheck, /re-validate before\/after/);
   assert.match(
     finalCheck,
-    /Lost ownership stops confirmation\s+and later F4 mutations/,
+    /Lost ownership stops confirmation\s+and later\s+F4 mutations/,
   );
-  assert.match(finalCheck, /identical fields and\s+timestamp/);
+  assert.match(finalCheck, /identical fields\/timestamp/);
   assert.match(finalCheck, /Confirm `noop` with identical fields/);
   assert.match(
     finalCheck,
-    /Keep the claim on duplicate, invalid, or inconclusive\s+results/,
+    /On\s+duplicate, invalid, or inconclusive results, keep claim, re-validate\s+before hold/,
   );
-  assert.match(
-    finalCheck,
-    /Keep the claim on duplicate,[\s\S]*?Re-validate before hold/,
-  );
-  assert.match(finalCheck, /stop before issue digest or\s+`unclaimed-by`/);
-  assert.match(finalCheck, /If lost, post no hold/);
+  assert.match(finalCheck, /stop before issue digest or unclaim/);
+  assert.match(finalCheck, /if\s+lost, post no hold/);
 });
 
 test('idd-work.instructions.md confines every bare `main` mention to the B1 trusted-checkout contract (#2274)', () => {
