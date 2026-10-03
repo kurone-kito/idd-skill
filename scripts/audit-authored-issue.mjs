@@ -355,6 +355,8 @@ const REFERENCE_STYLE_LINK_USAGE_PATTERN = /\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
 // trigger fires.
+const CLEANUP_EVIDENCE_EXPECTED_SHAPES =
+  'expected either `{ "collections": [...], "mutations": [...] }` or a full sweep report with `cleanupEvidence: { "collections": [...], "mutations": [...] }`';
 const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h', default: false },
   '--shape': { type: 'string' },
@@ -3639,73 +3641,126 @@ function normalizeEvidenceAuthor(author) {
 }
 export function readCleanupEvidenceFile(path) {
   const raw = readFileSync(resolve(process.cwd(), path), 'utf8');
-  const parsed = JSON.parse(raw);
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${path} must contain a JSON object`);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${path} must contain valid JSON: ${detail}`);
   }
-  const record = parsed;
-  const collections = Array.isArray(record.collections)
-    ? record.collections.map((entry, index) => {
-        const collection = entry;
+  if (!isCleanupEvidenceRecord(parsed)) {
+    throw new Error(
+      `${path} must be a JSON object; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+    );
+  }
+  const hasDirectEvidence =
+    Object.hasOwn(parsed, 'collections') || Object.hasOwn(parsed, 'mutations');
+  const hasWrappedEvidence = Object.hasOwn(parsed, 'cleanupEvidence');
+  if (!hasDirectEvidence && !hasWrappedEvidence) {
+    throw new Error(
+      `${path} has no recognized cleanup-evidence shape; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+    );
+  }
+  const direct = hasDirectEvidence
+    ? parseCleanupEvidenceRecord(parsed, path)
+    : undefined;
+  const wrapped = hasWrappedEvidence
+    ? parseCleanupEvidenceRecord(
+        parsed.cleanupEvidence,
+        `${path}.cleanupEvidence`,
+      )
+    : undefined;
+  if (
+    direct !== undefined &&
+    wrapped !== undefined &&
+    JSON.stringify(direct) !== JSON.stringify(wrapped)
+  ) {
+    throw new Error(
+      `${path} contains conflicting direct and wrapped cleanup evidence; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+    );
+  }
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (wrapped !== undefined) {
+    return wrapped;
+  }
+  throw new Error(
+    `${path} has no recognized cleanup-evidence shape; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+  );
+}
+function isCleanupEvidenceRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function parseCleanupEvidenceRecord(value, path) {
+  if (!isCleanupEvidenceRecord(value)) {
+    throw new Error(
+      `${path} must be an object with array fields collections and mutations; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+    );
+  }
+  if (!Array.isArray(value.collections) || !Array.isArray(value.mutations)) {
+    throw new Error(
+      `${path} must contain array fields collections and mutations; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+    );
+  }
+  const collections = value.collections.map((entry, index) => {
+    if (
+      !isCleanupEvidenceRecord(entry) ||
+      typeof entry.owner !== 'string' ||
+      typeof entry.repo !== 'string' ||
+      typeof entry.issue !== 'number' ||
+      !Array.isArray(entry.comments)
+    ) {
+      throw new Error(
+        `${path}.collections[${index}] must have owner, repo, issue, and comments; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+      );
+    }
+    return {
+      owner: entry.owner,
+      repo: entry.repo,
+      issue: entry.issue,
+      comments: entry.comments.map((comment, commentIndex) => {
         if (
-          typeof collection.owner !== 'string' ||
-          typeof collection.repo !== 'string' ||
-          typeof collection.issue !== 'number' ||
-          !Array.isArray(collection.comments)
+          !isCleanupEvidenceRecord(comment) ||
+          typeof comment.body !== 'string'
         ) {
           throw new Error(
-            `${path}.collections[${index}] must have owner, repo, issue, and comments`,
+            `${path}.collections[${index}].comments[${commentIndex}] must be an object with a string body; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
           );
         }
+        const author = normalizeEvidenceAuthor(comment.author);
         return {
-          owner: collection.owner,
-          repo: collection.repo,
-          issue: collection.issue,
-          comments: collection.comments.map((comment, commentIndex) => {
-            const item = comment;
-            if (typeof item.body !== 'string') {
-              throw new Error(
-                `${path}.collections[${index}].comments[${commentIndex}] is missing a string body`,
-              );
-            }
-            const author = normalizeEvidenceAuthor(item.author);
-            return {
-              body: item.body,
-              ...(typeof item.id === 'string' ? { id: item.id } : {}),
-              ...(author !== undefined ? { author } : {}),
-              ...(typeof item.createdAt === 'string'
-                ? { createdAt: item.createdAt }
-                : {}),
-              ...(typeof item.isMinimized === 'boolean'
-                ? { isMinimized: item.isMinimized }
-                : {}),
-            };
-          }),
-        };
-      })
-    : [];
-  const mutations = Array.isArray(record.mutations)
-    ? record.mutations.map((entry, index) => {
-        const mutation = entry;
-        if (
-          typeof mutation.subjectId !== 'string' ||
-          typeof mutation.status !== 'string'
-        ) {
-          throw new Error(
-            `${path}.mutations[${index}] must have string subjectId and status`,
-          );
-        }
-        const author = normalizeEvidenceAuthor(mutation.author);
-        return {
-          subjectId: mutation.subjectId,
-          status: mutation.status,
-          ...(typeof mutation.reason === 'string'
-            ? { reason: mutation.reason }
-            : {}),
+          body: comment.body,
+          ...(typeof comment.id === 'string' ? { id: comment.id } : {}),
           ...(author !== undefined ? { author } : {}),
+          ...(typeof comment.createdAt === 'string'
+            ? { createdAt: comment.createdAt }
+            : {}),
+          ...(typeof comment.isMinimized === 'boolean'
+            ? { isMinimized: comment.isMinimized }
+            : {}),
         };
-      })
-    : [];
+      }),
+    };
+  });
+  const mutations = value.mutations.map((entry, index) => {
+    if (
+      !isCleanupEvidenceRecord(entry) ||
+      typeof entry.subjectId !== 'string' ||
+      typeof entry.status !== 'string'
+    ) {
+      throw new Error(
+        `${path}.mutations[${index}] must have string subjectId and status; ${CLEANUP_EVIDENCE_EXPECTED_SHAPES}`,
+      );
+    }
+    const author = normalizeEvidenceAuthor(entry.author);
+    return {
+      subjectId: entry.subjectId,
+      status: entry.status,
+      ...(typeof entry.reason === 'string' ? { reason: entry.reason } : {}),
+      ...(author !== undefined ? { author } : {}),
+    };
+  });
   return { collections, mutations };
 }
 function configuredJournalIssue(config) {
@@ -4059,9 +4114,12 @@ Options:
                                     new-issue publication-intent cross-check
                                     when --comments-file, --new-issue, and
                                     --issue are also given
-  --cleanup-evidence-file <path>   optional JSON {collections, mutations} from a
-                                    sweep run with --with-cleanup-evidence
-                                    (#3593). Applied only to the minimization
+  --cleanup-evidence-file <path>   JSON direct {collections, mutations} or a full
+                                    sweep report with cleanupEvidence containing
+                                    those arrays (--with-cleanup-evidence, #3593).
+                                    Pass the sweep report as-is; malformed,
+                                    unrecognized, or conflicting forms fail with
+                                    an error. Applied only to the minimization
                                     backlog copy: a confirmed applied or
                                     already-minimized mutation sets isMinimized
                                     true on the matching comment id. Other
