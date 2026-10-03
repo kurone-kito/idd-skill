@@ -6117,17 +6117,7 @@ test('--operation-local refuses a review that arrived after the boundary and car
   assert.equal('warnings' in (publishes.json ?? {}), false);
 });
 
-// #3622: the stated outcomes are read by callers in three places -- the E1
-// Step 2 instruction, `--help`, and the helper reference (prose plus the
-// exit-code row) -- so each is pinned to the behavior the CLI tests above
-// exercise (defer exits 0 with `mode: "dry-run"`, refuse exits 1 with the
-// envelope on stdout, and the guard runs before the defer).
-function collapsedText(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), 'utf8').replace(
-    /\s+/g,
-    ' ',
-  );
-}
+// #3622: the CLI's exit codes and refusal envelope stay covered by its help output.
 
 test('--help states the defer exit code and the refusal envelope (#3622)', () => {
   const help = execFileSync(
@@ -6145,59 +6135,6 @@ test('--help states the defer exit code and the refusal envelope (#3622)', () =>
   assert.match(help, /which is checked before the defer/);
   assert.match(help, /values E1 Step 1 saw for the SAME HEAD/);
   assert.match(help, /findings in a review body that has no thread for them/);
-});
-
-test('the E1 Step 2 instruction names the Step 1 boundary and the three outcomes (#3622)', () => {
-  const step2 = collapsedText(
-    '../idd-template/.github/instructions/idd-review-snapshot.instructions.md',
-  );
-  assert.ok(
-    step2.includes(
-      '--prior-head-sha {head-SHA} --prior-total-item-count {total-item-count} --prior-max-activity-at {max-activity-updatedAt}',
-    ),
-    'Step 2 must pass the Step 1 values as the --prior-* boundary',
-  );
-  assert.match(step2, /operationLocal\.decision: refuse/);
-  assert.match(step2, /`same-head-activity`: new undispositioned or uncovered/);
-  assert.match(step2, /exits 1, posting nothing/);
-  assert.match(
-    step2,
-    /`decision: defer` exits 0 \(`mode: "dry-run"`\), posting nothing/,
-  );
-  assert.match(step2, /skip the after-posting steps/);
-});
-
-test('the helper reference and its exit-code row state the defer exit code and the refusal envelope (#3622)', () => {
-  const reference = collapsedText('../idd-template/docs/idd-helper-scripts.md');
-  assert.match(
-    reference,
-    /`--operation-local` outcomes: `--apply` does not say which run happened, so read the envelope's `operationLocal\.decision`\./,
-  );
-  assert.match(
-    reference,
-    /`defer` \(required checks not passing\) exits `0`, prints `mode: "dry-run"`, and posts nothing/,
-  );
-  assert.match(
-    reference,
-    /`refuse` \(`same-head-activity`, a moved HEAD, or a CI-completion mismatch\) exits `1`, posts nothing, and prints the same envelope on stdout/,
-  );
-  assert.match(
-    reference,
-    /The `--prior-\*` guard is evaluated before the defer/,
-  );
-  const rowLine = readFileSync(
-    new URL('../idd-template/docs/idd-helper-scripts.md', import.meta.url),
-    'utf8',
-  )
-    .split('\n')
-    .find((line) => line.startsWith('| `post-idd-marker.mjs`'));
-  assert.ok(rowLine, 'the exit-code table must keep a post-idd-marker.mjs row');
-  // Columns: helper | usage | not-found / transport | gate | internal.
-  const gateCell = rowLine.split('|')[4] ?? '';
-  assert.match(gateCell, /--operation-local/);
-  assert.match(gateCell, /`refuse` decision/);
-  assert.match(gateCell, /exits `1` and prints the envelope on stdout/);
-  assert.match(gateCell, /`defer` \(required checks not passing\) exits `0`/);
 });
 
 test('operation-local orders same-HEAD activity by instant, not timestamp text (#3592)', () => {

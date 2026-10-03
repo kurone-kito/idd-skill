@@ -6,7 +6,7 @@
 // .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type {
   ContextCeilingBundleStat,
@@ -62,6 +62,7 @@ import {
   collectMarkdownLinkAuditViolations,
   resolveDistributedFileSet,
 } from './markdown-link-audit.mts';
+import { collectRepositoryPolicyViolations } from './repository-policy-audit.mts';
 
 interface ReadmePair {
   id: string;
@@ -304,6 +305,14 @@ function main(): void {
     manifest.generatedBlocks ?? [],
   );
   checkLiteGateParity(manifest.liteGateParity);
+  if (existsSync(join(root, 'src/scripts/repository-policy-audit.mts'))) {
+    errors.push(
+      ...collectRepositoryPolicyViolations(root).map(
+        (violation) =>
+          `${violation.ruleId}: ${violation.path}: ${violation.message}`,
+      ),
+    );
+  }
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();

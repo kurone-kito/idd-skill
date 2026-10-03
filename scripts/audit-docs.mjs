@@ -5,7 +5,7 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import {
   buildOkfIndexRows,
@@ -45,6 +45,7 @@ import {
   collectMarkdownLinkAuditViolations,
   resolveDistributedFileSet,
 } from './markdown-link-audit.mjs';
+import { collectRepositoryPolicyViolations } from './repository-policy-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
@@ -193,6 +194,14 @@ function main() {
     manifest.generatedBlocks ?? [],
   );
   checkLiteGateParity(manifest.liteGateParity);
+  if (existsSync(join(root, 'src/scripts/repository-policy-audit.mts'))) {
+    errors.push(
+      ...collectRepositoryPolicyViolations(root).map(
+        (violation) =>
+          `${violation.ruleId}: ${violation.path}: ${violation.message}`,
+      ),
+    );
+  }
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();

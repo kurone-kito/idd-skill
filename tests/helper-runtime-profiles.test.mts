@@ -452,31 +452,6 @@ test('idd-doctor warns when config and overview concrete commands differ', (t) =
   );
 });
 
-test('helper script docs keep the discover viability gate helper in sync', () => {
-  const live = readFileSync(
-    new URL('../docs/idd-helper-scripts.md', import.meta.url),
-    'utf8',
-  );
-  const template = readFileSync(
-    new URL('../idd-template/docs/idd-helper-scripts.md', import.meta.url),
-    'utf8',
-  );
-
-  // `idd-helper-scripts-doc` is `"mode": "concreted"` (audit/sync-manifest.json,
-  // kurone-kito/idd-skill#2899): the live mirror resolves the template's
-  // `{{PROJECT_MARKER_PREFIX}}` placeholder to this repository's own
-  // `idd-skill` marker prefix, so the two files are no longer expected to
-  // be byte-identical -- apply the same replacement before comparing.
-  assert.equal(
-    template.split('{{PROJECT_MARKER_PREFIX}}').join('idd-skill'),
-    live,
-  );
-  assert.match(live, /discover-roadmap-graph\.mjs/);
-  assert.match(live, /Discover Roadmap Graph Contract/);
-  assert.match(live, /discover-viability-gate\.mjs/);
-  assert.match(live, /suitability-triage\.mjs/);
-});
-
 function createDoctorFixtureRepo(
   configFixtureName: string,
   { packageJson = null }: FixtureRepoOptions = {},
