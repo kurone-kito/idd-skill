@@ -122,6 +122,15 @@ function extractNamedStepBody(
   return lines.slice(start, nextStep === -1 ? undefined : nextStep).join('\n');
 }
 
+function isShellCommentStart(line: string, index: number): boolean {
+  return (
+    line[index] === '#' &&
+    (index === 0 ||
+      /\s/.test(line[index - 1]) ||
+      ';|&()<>'.includes(line[index - 1]))
+  );
+}
+
 /** Removes shell here-document bodies from a script, including multiple
  * redirections on one command and quoted delimiters. The redirection line
  * remains executable; body text and delimiter lines do not. Quoted shell
@@ -160,7 +169,7 @@ function excludeHereDocumentBodies(lines: string[]): string[] {
         continue;
       }
 
-      if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+      if (isShellCommentStart(line, index)) {
         break;
       }
       if (character === "'" || character === '"') {
@@ -255,16 +264,42 @@ function executableLinesFromLiteralRun(stepBody: string): string[] {
  * floor assertion. Keeping this pure lets regression tests supply a
  * synthetic step containing non-executable shell text. */
 type ShellCommand = { words: string[] };
+type ParsedShellScript = {
+  commands: ShellCommand[];
+  hasShellOperator: boolean;
+  hasControlFlow: boolean;
+};
+
+const SHELL_CONTROL_WORDS = new Set([
+  'case',
+  'do',
+  'done',
+  'elif',
+  'else',
+  'esac',
+  'fi',
+  'for',
+  'function',
+  'if',
+  'select',
+  'then',
+  'until',
+  'while',
+]);
+
+const REQUIRED_NODE_FLOOR_EXPRESSION =
+  'const ok = !isPrerelease && ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) || (major === 24 && minor >= 2) || major >= 26);';
 
 /** Splits a shell script into basic commands while keeping quoted multiline
  * arguments as one word. This guard only needs simple word boundaries and
  * command separators, not shell expansion or execution. */
-function parseShellCommands(lines: string[]): ShellCommand[] {
+function parseShellCommands(lines: string[]): ParsedShellScript {
   const commands: ShellCommand[] = [];
   let words: string[] = [];
   let word = '';
   let wordStarted = false;
   let quote: "'" | '"' | null = null;
+  let hasShellOperator = false;
 
   const finishWord = () => {
     if (wordStarted) {
@@ -305,7 +340,7 @@ function parseShellCommands(lines: string[]): ShellCommand[] {
         continue;
       }
 
-      if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+      if (isShellCommentStart(line, index)) {
         break;
       }
       if (character === '\\') {
@@ -329,7 +364,8 @@ function parseShellCommands(lines: string[]): ShellCommand[] {
         finishWord();
         continue;
       }
-      if (';|&()'.includes(character)) {
+      if (';|&()<>'.includes(character)) {
+        hasShellOperator = true;
         finishCommand();
         continue;
       }
@@ -346,14 +382,22 @@ function parseShellCommands(lines: string[]): ShellCommand[] {
     }
   }
   finishCommand();
-  return commands;
+  return {
+    commands,
+    hasShellOperator,
+    hasControlFlow: commands.some(({ words }) =>
+      words.some((word) => SHELL_CONTROL_WORDS.has(word)),
+    ),
+  };
 }
 
 function assertNodeVersionLogBeforeFloor(stepBody: string): void {
   const lines = executableLinesFromLiteralRun(stepBody);
-  const commands = parseShellCommands(lines);
+  const parsedScript = parseShellCommands(lines);
+  const { commands } = parsedScript;
   const versionLogIndex = commands.findIndex(
-    ({ words }) => words[0] === 'node' && words[1] === '--version',
+    ({ words }) =>
+      words.length === 2 && words[0] === 'node' && words[1] === '--version',
   );
   const floorAssertionIndex = commands.findIndex(
     ({ words }) => words[0] === 'node' && words[1] === '-e',
@@ -369,14 +413,32 @@ function assertNodeVersionLogBeforeFloor(stepBody: string): void {
     -1,
     'lint.yml: Assert Node.js floor must execute its node -e assertion',
   );
-  const assertionScript = commands[floorAssertionIndex].words[2] ?? '';
   assert.ok(
-    assertionScript.includes(
+    !parsedScript.hasShellOperator && !parsedScript.hasControlFlow,
+    'lint.yml: node --version must be an unconditional standalone command that logs stdout',
+  );
+  assert.equal(
+    versionLogIndex,
+    0,
+    'lint.yml: node --version must be the first shell command in the step',
+  );
+  assert.equal(
+    floorAssertionIndex,
+    1,
+    'lint.yml: the Node floor assertion must execute immediately after the version log',
+  );
+  const assertionScript = commands[floorAssertionIndex].words[2] ?? '';
+  const normalizedAssertionScript = assertionScript.replace(/\s+/g, ' ');
+  assert.ok(
+    normalizedAssertionScript.includes(
       'const versionParts = process.versions.node.split(".")',
     ) &&
-      assertionScript.includes('const ok =') &&
-      assertionScript.includes('if (!ok)') &&
-      assertionScript.includes('process.exit(1)'),
+      normalizedAssertionScript.includes(
+        'const [major, minor, patch] = versionParts.map(Number)',
+      ) &&
+      normalizedAssertionScript.includes(REQUIRED_NODE_FLOOR_EXPRESSION) &&
+      normalizedAssertionScript.includes('if (!ok)') &&
+      normalizedAssertionScript.includes('process.exit(1)'),
     'lint.yml: node -e must retain the Node engines.node floor assertion and its failing path',
   );
   assert.ok(
@@ -658,5 +720,80 @@ test('a command inside a multiline shell string cannot satisfy the Node log guar
   assert.throws(
     () => assertNodeVersionLogBeforeFloor(stepBody),
     /Assert Node\.js floor must execute node --version/,
+  );
+});
+
+const SYNTHETIC_FLOOR_ASSERTION = [
+  '            const versionParts = process.versions.node.split(".");',
+  '            const [major, minor, patch] = versionParts.map(Number);',
+  '            const ok =',
+  '              !isPrerelease &&',
+  '              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||',
+  '                (major === 24 && minor >= 2) ||',
+  '                major >= 26);',
+  '            if (!ok) { process.exit(1); }',
+];
+
+function syntheticFloorStep(
+  shellLines: string[],
+  assertionLines = SYNTHETIC_FLOOR_ASSERTION,
+): string {
+  return [
+    '      - name: Assert Node.js floor',
+    '        run: |',
+    ...shellLines.map((line) => `          ${line}`),
+    "          node -e '",
+    ...assertionLines,
+    "          '",
+  ].join('\n');
+}
+
+test('redirected or conditional Node commands cannot satisfy the Node log guard', () => {
+  for (const shellLines of [
+    ['node --version >node-version.txt'],
+    ['false && node --version'],
+    ['if false', 'then', 'node --version', 'fi'],
+    ['output=$(node --version)'],
+  ]) {
+    assert.throws(
+      () => assertNodeVersionLogBeforeFloor(syntheticFloorStep(shellLines)),
+      /node --version must be an unconditional standalone command that logs stdout/,
+      `accepted shell lines: ${shellLines.join('\\n')}`,
+    );
+  }
+});
+
+test('a shell comment after a command operator cannot satisfy the Node log guard', () => {
+  const stepBody = syntheticFloorStep([':;# node --version']);
+
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /Assert Node\.js floor must execute node --version/,
+  );
+});
+
+test('an earlier shell exit cannot bypass either required Node command', () => {
+  const stepBody = syntheticFloorStep(['exit 0', 'node --version']);
+
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /node --version must be the first shell command in the step/,
+  );
+});
+
+test('a constant result cannot replace the Node engines floor comparison', () => {
+  const stepBody = syntheticFloorStep(
+    ['node --version'],
+    [
+      '            const versionParts = process.versions.node.split(".");',
+      '            const [major, minor, patch] = versionParts.map(Number);',
+      '            const ok = true;',
+      '            if (!ok) { process.exit(1); }',
+    ],
+  );
+
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /must retain the Node engines\.node floor assertion and its failing path/,
   );
 });
