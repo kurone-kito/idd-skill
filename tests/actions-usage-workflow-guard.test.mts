@@ -311,28 +311,47 @@ const REQUIRED_NODE_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES.join(' ')
   .replace(/\s+/g, ' ')
   .trim();
 
-function assertNoNodeOptions(text: string, scope: string): void {
+function assertNoExecutionPreloads(text: string, scope: string): void {
   const lines = text.split('\n');
   const scalarContent = yamlBlockScalarContentFlags(lines);
-  const configuresOrReferencesNodeOptions = lines.some((line, index) => {
+  const usesUnresolvedEnvironmentAlias = lines.some((line, index) => {
+    if (scalarContent[index]) {
+      return false;
+    }
+    return /(?:^|[{,])\s*(?:env|'env'|"env")\s*:\s*\*[A-Za-z0-9_.-]+/.test(
+      stripYamlComment(line),
+    );
+  });
+  assert.equal(
+    usesUnresolvedEnvironmentAlias,
+    false,
+    'lint.yml: ' +
+      scope +
+      ' must not use an unresolved env alias because its preload values cannot be verified',
+  );
+
+  const configuresOrReferencesPreload = lines.some((line, index) => {
     if (scalarContent[index]) {
       const shellLine = line.trimStart();
-      return !shellLine.startsWith('#') && /\bNODE_OPTIONS\b/.test(shellLine);
+      return (
+        !shellLine.startsWith('#') &&
+        /\b(?:NODE_OPTIONS|BASH_ENV)\b/.test(shellLine)
+      );
     }
     const uncommented = stripYamlComment(line);
-    return /(?:^|[{,])\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS")\s*:/.test(
+    return /(?:^|[{,])\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS"|BASH_ENV|'BASH_ENV'|"BASH_ENV")\s*:/.test(
       uncommented,
     );
   });
   assert.equal(
-    configuresOrReferencesNodeOptions,
+    configuresOrReferencesPreload,
     false,
-    `lint.yml: ${scope} must not configure or reference NODE_OPTIONS, which can preload code before the floor assertion`,
+    `lint.yml: ${scope} must not configure or reference NODE_OPTIONS or BASH_ENV, which can execute code before the floor assertion`,
   );
 }
 
 function assertLintJobEnforcesNodeFloor(jobBody: string): void {
-  assertNoNodeOptions(jobBody, 'lint job or its steps');
+  assertNoExecutionPreloads(jobBody, 'lint job or its steps');
   assert.doesNotMatch(
     jobBody,
     /^ {4}(?:if|'if'|"if")\s*:/m,
@@ -356,7 +375,7 @@ function assertLintJobUsesDefaultShell(
   jobBody: string,
   workflow: string,
 ): void {
-  assertNoNodeOptions(
+  assertNoExecutionPreloads(
     extractWorkflowEnvironmentBlock(workflow),
     'workflow environment',
   );
@@ -380,7 +399,7 @@ function assertLintJobUsesDefaultShell(
 /** Asserts the named step logs Node before running the exact engine-floor
  * assertion. Synthetic steps exercise rejected shell shapes. */
 function assertNodeVersionLogBeforeFloor(stepBody: string): void {
-  assertNoNodeOptions(stepBody, 'Assert Node.js floor step');
+  assertNoExecutionPreloads(stepBody, 'Assert Node.js floor step');
   assert.doesNotMatch(
     stepBody,
     /^ {8}(?:if|'if'|"if")\s*:/m,
@@ -934,65 +953,98 @@ test('custom shell templates cannot skip Node floor execution', () => {
   }
 });
 
-test('NODE_OPTIONS preloads are rejected at workflow, job, and step scopes', () => {
+test('NODE_OPTIONS and BASH_ENV preloads are rejected at every lint scope', () => {
   const options = '--require=./exit.cjs';
-  const assignments = [
-    `NODE_OPTIONS: ${options}`,
-    `"NODE_OPTIONS": ${options}`,
-    `{ NODE_OPTIONS: ${options} }`,
-    `{ CI: true, NODE_OPTIONS: ${options} }`,
-  ];
-  for (const assignment of assignments) {
-    const jobEnvironment = assignment.startsWith('{')
-      ? `    env: ${assignment}`
-      : `    env:\n      ${assignment}`;
-    const workflowEnvironment = assignment.startsWith('{')
-      ? `env: ${assignment}`
-      : `env:\n  ${assignment}`;
-    const stepEnvironment = assignment.startsWith('{')
-      ? `        env: ${assignment}`
-      : `        env:\n          ${assignment}`;
-    assert.throws(
-      () => assertLintJobEnforcesNodeFloor(jobEnvironment),
-      /lint job or its steps must not configure or reference NODE_OPTIONS/,
-    );
-    assert.throws(
-      () => assertLintJobUsesDefaultShell('', workflowEnvironment),
-      /workflow environment must not configure or reference NODE_OPTIONS/,
-    );
+  for (const variable of ['NODE_OPTIONS', 'BASH_ENV']) {
+    const assignments = [
+      variable + ': ' + options,
+      '"' + variable + '": ' + options,
+      '{ ' + variable + ': ' + options + ' }',
+      '{ CI: true, ' + variable + ': ' + options + ' }',
+    ];
+    for (const assignment of assignments) {
+      const jobEnvironment = assignment.startsWith('{')
+        ? '    env: ' + assignment
+        : '    env:\n      ' + assignment;
+      const workflowEnvironment = assignment.startsWith('{')
+        ? 'env: ' + assignment
+        : 'env:\n  ' + assignment;
+      const stepEnvironment = assignment.startsWith('{')
+        ? '        env: ' + assignment
+        : '        env:\n          ' + assignment;
+      assert.throws(
+        () => assertLintJobEnforcesNodeFloor(jobEnvironment),
+        /lint job or its steps must not configure or reference NODE_OPTIONS or BASH_ENV/,
+      );
+      assert.throws(
+        () => assertLintJobUsesDefaultShell('', workflowEnvironment),
+        /workflow environment must not configure or reference NODE_OPTIONS or BASH_ENV/,
+      );
 
-    const stepBody = syntheticFloorStep(['node --version']).replace(
-      '        run: |',
-      `${stepEnvironment}\n        run: |`,
+      const stepBody = syntheticFloorStep(['node --version']).replace(
+        '        run: |',
+        stepEnvironment + '\n        run: |',
+      );
+      assert.throws(
+        () => assertNodeVersionLogBeforeFloor(stepBody),
+        /Assert Node\.js floor step must not configure or reference NODE_OPTIONS or BASH_ENV/,
+      );
+    }
+
+    const scriptWrite =
+      'echo ' + variable + '=' + options + ' >> "$GITHUB_ENV"';
+    assert.throws(
+      () =>
+        assertLintJobEnforcesNodeFloor(
+          '    steps:\n      - run: |\n          ' + scriptWrite,
+        ),
+      /lint job or its steps must not configure or reference NODE_OPTIONS or BASH_ENV/,
     );
     assert.throws(
-      () => assertNodeVersionLogBeforeFloor(stepBody),
-      /Assert Node\.js floor step must not configure or reference NODE_OPTIONS/,
+      () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([scriptWrite])),
+      /Assert Node\.js floor step must not configure or reference NODE_OPTIONS or BASH_ENV/,
     );
   }
-
-  const scriptWrite = `echo NODE_OPTIONS=${options} >> "$GITHUB_ENV"`;
-  assert.throws(
-    () =>
-      assertLintJobEnforcesNodeFloor(
-        `    steps:\n      - run: |\n          ${scriptWrite}`,
-      ),
-    /lint job or its steps must not configure or reference NODE_OPTIONS/,
-  );
-  assert.throws(
-    () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([scriptWrite])),
-    /Assert Node\.js floor step must not configure or reference NODE_OPTIONS/,
-  );
 });
 
 test('a workflow env anchor keeps its mapping body in the preload scan', () => {
+  for (const variable of ['NODE_OPTIONS', 'BASH_ENV']) {
+    assert.throws(
+      () =>
+        assertLintJobUsesDefaultShell(
+          '',
+          'env: &lint-env\n  ' + variable + ': --require=./exit.cjs',
+        ),
+      /workflow environment must not configure or reference NODE_OPTIONS or BASH_ENV/,
+    );
+  }
+});
+
+test('unresolved environment aliases are rejected at workflow, job, and step scopes', () => {
+  const workflow = [
+    'jobs:',
+    '  windows:',
+    '    env: &windows-env',
+    '      BASH_ENV: ./exit.sh',
+    '  lint:',
+    '    env: *windows-env',
+  ].join('\n');
   assert.throws(
-    () =>
-      assertLintJobUsesDefaultShell(
-        '',
-        'env: &lint-env\n  NODE_OPTIONS: --require=./exit.cjs',
-      ),
-    /workflow environment must not configure or reference NODE_OPTIONS/,
+    () => assertLintJobEnforcesNodeFloor(extractJobBody(workflow, 'lint')),
+    /lint job or its steps must not use an unresolved env alias/,
+  );
+  assert.throws(
+    () => assertLintJobUsesDefaultShell('', 'env: *shared-env'),
+    /workflow environment must not use an unresolved env alias/,
+  );
+
+  const stepBody = syntheticFloorStep(['node --version']).replace(
+    '        run: |',
+    '        env: *shared-env\n        run: |',
+  );
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /Assert Node\.js floor step must not use an unresolved env alias/,
   );
 });
 
@@ -1008,6 +1060,7 @@ test('comments and an independent workflow job cannot trigger the lint preload g
     '  lint-windows:',
     '    env:',
     '      NODE_OPTIONS: --require=./windows-only.cjs',
+    '      BASH_ENV: ./windows-only.sh',
   ].join('\n');
   const lintJob = extractJobBody(workflow, 'lint');
 
