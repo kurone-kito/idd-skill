@@ -1774,12 +1774,14 @@ stale at the release boundary.
 
 F4 now repeats the PR-digest check after worktree and branch cleanup,
 before writing the issue's completion digest or releasing the claim. It
-binds the expected `F3 merged` digest to the merge commit and its second
-parent, the PR head actually merged, and carries one `Last checked` value
-through dry-run, repair, and confirmation. A duplicate, failed
+binds the expected `F3 merged` digest to the merge commit and matched
+PR head: parent 2 for a two-parent merge, or the already verified F3
+head for a one-parent squash/rebase merge. It carries one `Last checked`
+value through dry-run, repair, and confirmation. A duplicate, failed
 validation, or inconclusive result keeps the claim active and stops
 before either completion write, preserving the claim as the repair
-authority.
+authority (#3739; preventive; no observed incident yet for an
+unverifiable single-parent head).
 
 ## Instruction delivery
 
