@@ -1773,18 +1773,18 @@ therefore leaves no ordinary repair path when the PR digest is still
 stale at the release boundary.
 
 F4 now repeats the PR-digest check after worktree and branch cleanup,
-before writing the issue's completion digest or releasing the claim. It
-binds the expected `F3 merged` digest to the merge commit and its
-independently recorded PR head: a compliant F3 merge has exactly two
-parents, and parent 2 must match that head. A one-parent squash/rebase
-merge has no independent head binding under F3's merge-commit contract,
-so F4 holds instead of trusting the digest being checked. Repair carries
-the `F3 merged` phase and one `Last checked` value through dry-run,
-apply, and confirmation, with claim ownership revalidated around apply.
-A duplicate, failed validation, or inconclusive result keeps the claim
-active and stops before either completion write, preserving the claim as
-the repair authority (kurone-kito/idd-skill#3739; preventive; no
-observed incident yet for an unverifiable single-parent head).
+before writing the issue's completion digest or releasing the claim. A
+two-parent merge binds the digest head to parent 2. A one-parent
+squash/rebase merge is accepted only when the trusted same-claim F2
+watermark, live PR head, and F4 step 5 branch-tip comparison all agree;
+the digest cannot supply its own head proof. Missing or mismatched
+evidence keeps the claim active. Repair carries the `F3 merged` phase
+and one `Last checked` value through dry-run, apply, and confirmation,
+with claim ownership revalidated around apply. A duplicate, failed
+validation, or inconclusive result stops before either completion write,
+preserving the claim as the repair authority
+(kurone-kito/idd-skill#3739; preventive; no observed incident yet for
+unverifiable merge-head evidence).
 
 ## Instruction delivery
 

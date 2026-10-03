@@ -553,25 +553,23 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 6. If GitHub auto-delete is disabled: delete the remote branch too.
    (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
 7. After steps 4–6, repeat step 2's PR-digest check before the issue
-   digest. Fetch `mergeCommit.oid`; require live PR `MERGED`, its
-   matching SHA, and two non-empty parents. Bind `F3 merged`
-   `Authoritative by` to that SHA and a distinct full `PR_HEAD_SHA_F3`
-   equal to parent 2. F3 mandates merge commits; hold one-parent
-   squash/rebase merges, which lack an independently bound head.
-   Hold on missing, ambiguous, or mismatched values. Never use live
-   `headRefOid`; it may advance after merge.
-   Use one `--last-checked` value. Dry-run with `Phase: F3 merged`,
+   digest. Fetch `mergeCommit.oid`; require PR `MERGED`, a full SHA, and
+   one or two non-empty parents. `F3 merged` `Authoritative by` must name
+   the merge SHA and distinct full `PR_HEAD_SHA_F3`. With two parents,
+   parent 2 must match it. With one parent, require that head, the latest
+   trusted same-claim F2 watermark SHA, live `headRefOid`, and Step 5's
+   branch-tip match all equal; the digest is not proof. Hold on missing,
+   ambiguous, or mismatched evidence.
+   Use one `--last-checked`. Dry-run fields: `Phase: F3 merged`,
    `Claim: {agent-id} / {claim-id}`, `Branch: {branch-name}`,
-   `Open blockers: none`,
-   `Next action: F4 cleanup then F5 discover`, and `Authoritative by`
-   both SHAs. For each `create`/`update`, apply with
+   `Open blockers: none`, `Next action: F4 cleanup then F5 discover`,
+   `Authoritative by` both SHAs. Apply each `create`/`update` with
    `--claim-issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}`;
-   re-validate immediately before and after apply. If lost, stop before
-   confirmation and later F4 mutations. Confirm dry-run `noop` with the
-   same fields and timestamp. Duplicate digests, invalid state/SHA/parents,
-   or inconclusive checks keep the claim active.
-   Re-validate before a hold, then stop before the issue digest and
-   `unclaimed-by` (#3728/#3730). If ownership was lost, post no hold.
+   re-validate before and after apply. Lost ownership stops confirmation
+   and later F4 mutations. Confirm `noop` with identical fields and
+   timestamp. Keep the claim on duplicate, invalid, or inconclusive
+   results. Re-validate before hold; stop before issue digest or
+   `unclaimed-by` (#3728/#3730). If lost, post no hold.
    Re-validate the active claim before each mutation below. If it
    still uses your `{claim-id}`, upsert the claimed issue's own digest
    with `Phase: F4 complete`, `Claim: none`, `Branch: none`, `Open
