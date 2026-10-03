@@ -14,13 +14,23 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-03
+
 ### Added
 
+- GitHub helper requests can share a host-local cooldown and bounded
+  admission policy. Safe request-cost and GraphQL throttle observations
+  expose load details for diagnostics; the distributed load-control default
+  stays off (#3585, #3586, #3619).
 - On Windows the host-local read cache now verifies that a configured
   `githubApi.readCache.directory` grants access only to the current user,
   `SYSTEM`, and Administrators (read by SID with `whoami` and `icacls`), and
   degrades to a live read otherwise or when the ACL cannot be read; the
   default `LOCALAPPDATA` location stays trusted (#3623).
+- An opt-in authenticated host-local cache can reuse eligible REST reads,
+  partitioning entries by an opaque hash of the effective credential context
+  without storing raw tokens. If the cache is unavailable, requests continue
+  live (#3587).
 - `discover-roadmap-graph` and `discover-orphan-filter` can serve their whole
   output from a short-lived hint when `githubApi.readCache.enabled` is true,
   so an unchanged repeat within `maxAge` starts no discovery request (#3588).
@@ -30,7 +40,7 @@ discipline and has no tag.
   optional `cache` object; a hint with no startable candidate is recomputed
   once before exhaustion is believed, an incomplete read is never stored, and
   claim, unclaim, merge, and closure helpers drop the hints. The distributed
-  default stays off.
+  default stays off (#3588).
 - `pre-merge-readiness` reports `deferFollowUps`, and F3 now blocks on
   `deferred-followup-unreconciled` when an open follow-up deferred from the
   pull request's origin issue is never named on the pull request, and on
@@ -59,9 +69,53 @@ discipline and has no tag.
   `postFailureState` (`state`, `mergedAt`, `headRefOid`) to the verdict, and
   appends a read-before-retrying sentence to `mergeResult`. `merged`,
   `adminFallbackUsed` and the exit code are unchanged (#3681).
+- `local-worktree-recovery` consolidates manual local-worktree recovery into
+  one dry-run-first CLI. Mutating recovery still requires an explicit
+  operator confirmation that no live session owns the worktree (#3550).
+- An opt-in, read-only probe checks the full self-waiver query using the
+  default-branch workflow after a trusted collaborator comments
+  `/idd-probe-token-scopes` on a pull request. It uses six read-only token
+  scopes, including `issues: read` for `closingIssuesReferences`, and never
+  checks out pull-request code, posts a waiver, or otherwise mutates repository
+  state (#3720, #3735).
+- Review activity snapshots surface Copilot review-body remarks as non-gating
+  evidence, and `resume-claim-routing` adds `--assert` with the owner proof
+  used by its routing decision (#3667, #3672).
+- Before audit and publication, issue-authoring reviews completed roadmap,
+  child, and orphan drafts. It can use a dedicated or user-global
+  draft-review delegate, which receives a bounded JSON draft and evidence
+  packet; the native reviewer remains available when no delegate is usable
+  (#3599, #3600, #3625, #3631).
+- Template-mirror onboarding requires a clean target and a retained
+  checkpoint commit before substitution, so verification can compare the
+  result with the actual pre-import state (#3571).
+- The IDD workflow guide adds a host-capacity preflight for parallel workers
+  and bounded, read-only critique guidance with a Claude Code recipe
+  (#3677, #3713, #3714).
 
 ### Changed
 
+- Recovery verifies that a new Copilot review request registered after the
+  new HEAD commit before counting another recovery cycle. E1 triage can start
+  while CI is pending; required checks still gate the watermark and merge
+  (#3500, #3577).
+- The PR authoring guide waits for GitHub's asynchronous
+  `closingIssuesReferences` registration for PRs created within four hours
+  before treating a missing closing link as a body defect (#3656).
+- Review snapshots date advisory-bot thread edits after disposition using the
+  same history evidence as merge readiness (#3655).
+- CI-wait guidance warns that `--watch --required` may return immediately
+  when no required checks are configured and directs agents to wait on all
+  visible checks instead (#3673).
+- CI guidance documents REST alternatives for the specific GraphQL reads
+  observed hitting GitHub's secondary rate limit; it does not claim a
+  universal REST fallback (#3560).
+- Merge-readiness output now explains why an unconfigured required-check set
+  deferred watermarking, names blocking runs, and gives the next step (#3670).
+- Private-repository guidance explains why a self-waiver permission change
+  can remain red until the updated workflow is on the target branch (#3722).
+- Release tags must be signed annotated tags created by a maintainer
+  for the exact version-bump pull request's merge commit (#3567).
 - A failed `gh api` call while `discover-roadmap-graph` reads a descendant
   issue now reports its exit status, its signal and whether the process was
   killed: the error message ends with `[exit status: ...; signal: ...;
@@ -72,6 +126,22 @@ discipline and has no tag.
 
 ### Fixed
 
+- `rerun-advisory-convergence` can reconcile an ordinary
+  `rerun-budget-held` check only when a distinct later workflow run for the
+  same check and HEAD has a verified passing result; ambiguous or stale
+  evidence remains held (#3539).
+- Worktree-cleanup guidance no longer mistakes tag-only detached submodule
+  refs for unpushed commits (#3540).
+- `discover-roadmap-graph` treats a task-list entry and a matching native
+  sub-issue link for the same child as one membership, while still reporting
+  other duplicate relationships (#3668).
+- Merge execution passes recorded activation nonces through its final check,
+  and F4's fast-forward command overrides `merge.autoStash` so Git cannot
+  stash away a dirty-primary blocker (#3669, #3678).
+- `advisory-convergence`, `advisory-wait-state`,
+  `rerun-advisory-convergence`, `idd-merge-execute`, and
+  `pre-merge-readiness` accept numeric-offset ISO 8601 `--now` values
+  and normalize them to UTC (#3551).
 - A failed fetch in the roadmap traversal's concurrent crawl now stops the
   other workers from starting new items, so an interrupted scan no longer
   keeps sending requests into a throttled API (#3598).
@@ -98,6 +168,18 @@ discipline and has no tag.
   unchanged. The authoring audit keeps its own rules (it never passes
   structural evidence, so it never demotes) and simply inherits the new A4
   verdict (#3721).
+- Markdown audit patterns for inline code spans and custom HTML block
+  openers run in linear time on long input (#3707, #3712).
+- `sync-docs` can safely re-apply generated output, while cache leases,
+  Windows clone locks, claim handoffs, merge guards, and review watermarks
+  handle the edge cases covered by this release (#3620, #3622, #3627, #3664,
+  #3645, #3675, #3700, #3699, #3651, #3703, #3717).
+- `idd-onboard --verify` detects schema drift against the pre-import Git
+  baseline and allows intentionally held import entries to remain absent,
+  while unheld missing targets still block verification (#3574, #3578).
+- Before releasing its claim, F4 verifies that each issue in the merged
+  pull request's closing set is closed; a failed state read or close keeps
+  the claim held (#3650).
 
 ## [0.13.0] - 2026-09-27
 
@@ -131,6 +213,13 @@ discover, review, and recovery hardening since the 0.12.2 cut.
   and IDD-comment classification (#3197, #3421, #3437, #3452).
 - Audit tooling detects lite safety-gate drift and production exports
   covered only by their own test file (#3428, #3487).
+- Delegated C1/E10 critique passes have an optional positive ISO 8601 wait
+  ceiling, `critiqueLoop.subagentWaitCeiling`, defaulting to `PT20M` (#3546).
+- `pre-merge-readiness` blocks a pull request whose closing references do not
+  match its deliberate closing set (#3353).
+- `resume-claim-routing` accepts `--format json`, ownership-provenance
+  failures include evidence, and vendored-Node adopters can invoke the
+  advisory-comment debounce helper (#3203, #3219, #3247).
 
 ### Changed
 
@@ -155,6 +244,18 @@ discover, review, and recovery hardening since the 0.12.2 cut.
 - D3.5 scripted rebase recovery now guards abbreviated todo commands
   and `rebase.updateRefs`, verifies rewritten messages, and records a
   hold before D4 if a stray close remains (#3555).
+- Cleanup audit apply passes reuse one report snapshot and support a time
+  budget; claim-lock acquisition avoids repeated Git subprocesses on
+  concurrent Windows workers. Linked-issue trust configuration is also
+  loaded once per resolution (#3499, #3530, #3464).
+- Issue-authoring reuse checks include issues closed as not planned and
+  rejected pull requests, and deferred review-fix follow-ups use the narrow
+  auto-release path (#3377, #3451).
+- Helper and adopter documentation now identify the `isRoadmap` and
+  `suppressedCount` output fields, explain digest-comment exclusion
+  accurately, distinguish source-only pnpm examples, correct resume routing,
+  and document literal-brace placeholders (#3489, #3445, #3439, #3329,
+  #3392, #3235).
 
 ### Fixed
 
@@ -183,6 +284,30 @@ discover, review, and recovery hardening since the 0.12.2 cut.
   are more reliable, including CommonMark fence handling,
   generated-from banners, template-link audits, and CI timeout evidence
   (#3204, #3232, #3236, #3303, #3352, #3356, #3424, #3477, #3481).
+- E10 now requires the critique pass after every fix and defines recovery if
+  a session discovers that it skipped the pass (#3534).
+- Discover skips issues parked during a provider outage, and roadmap claims
+  post the required activation nonce (#3418, #3410).
+- Onboarding confines policy-document writes to safe destinations and limits
+  placeholder scans to imported files (#3408, #3389).
+- Resume routing fails closed when linked pull-request lookup is unavailable;
+  GitHub CLI status parsing and CI protection-read errors preserve the
+  difference between unavailable evidence and a successful result (#3386,
+  #3382, #3350).
+- Lite submission runs validation before every push, while pre-merge guidance
+  covers the closing-set gate and code-caused CI recovery route (#3414, #3409,
+  #3385).
+- Review handling keeps comments awaiting a maintainer decision active,
+  recognizes configured primary-bot identities across REST and GraphQL,
+  checks classifier wording against a real bot corpus, and removes the
+  editable pull-request trigger from the advisory workflow (#3388, #3345,
+  #3433, #3425).
+- Marker identity encoding is collision-safe, helper keys avoid raw NUL bytes,
+  and marker minimization accepts a leading `--` (#3387, #3359, #3360).
+- Lite merge handoff releases the worker claim for a separate merge agent,
+  B1 setup is exempt from the sibling-worktree guard, and F4 guidance handles
+  removed working directories and dirty primary worktrees (#3366, #3364,
+  #3202, #3201).
 
 ## [0.12.2] - 2026-09-22
 
