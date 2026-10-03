@@ -3011,7 +3011,37 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     headProof,
     /configured `trustedMarkerActors`[\s\S]*`created_at`[\s\S]*`updated_at` must equal `created_at`/,
   );
-  assert.match(headProof, /gh issue comment \{issue-number\} --body/);
+  assert.match(
+    headProof,
+    /Reuse a\s+valid trusted marker[\s\S]*without requiring the branch ref\s+to exist/,
+  );
+  const issueCommentRead = headProof.indexOf("claimed issue's comments");
+  const reusableProof = headProof.indexOf(
+    'valid trusted marker for this active claim',
+  );
+  const freshCapture = headProof.indexOf('If no reusable marker exists');
+  const branchLookup = headProof.indexOf('`git rev-parse {branch-name}`');
+  assert.ok(
+    issueCommentRead >= 0 &&
+      reusableProof > issueCommentRead &&
+      freshCapture > reusableProof &&
+      branchLookup > freshCapture,
+    'F4 must read and reuse a valid marker before requiring the branch ref',
+  );
+  assert.match(
+    headProof,
+    /If the ref exists, require its tip to equal the stored branch\s+tip; if it is absent, continue only through the resume-safe cleanup\s+guards below/,
+  );
+  assert.match(
+    headProof,
+    /If no reusable marker exists, capture the latest trusted\s+same-claim F2 watermark SHA and the branch tip with\s+`git rev-parse \{branch-name\}`/,
+  );
+  assert.match(
+    headProof,
+    /F4_MARKER_BODY=\$\(printf[\s\S]*jq -n --arg body "\$F4_MARKER_BODY" '\{body: \$body\}'[\s\S]*gh api --method POST[\s\S]*--input -/,
+  );
+  assert.match(headProof, /visible note after it/);
+  assert.doesNotMatch(headProof, /gh issue comment \{issue-number\} --body/);
   assert.match(
     headProof,
     /If the write response\s+is ambiguous, reconcile by reading comments; never post another marker\s+blindly/,
@@ -3057,7 +3087,7 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     earlyCheck,
-    /Before step\s+3, capture the latest trusted same-claim F2 watermark SHA as\s+`\{f2-head-SHA\}` and `\{branch-tip-SHA\}`/,
+    /Before step\s+3, follow the \[F4 Head Proof\][\s\S]*reuse its trusted marker before reading a branch ref/,
   );
   assert.match(earlyCheck, /idd-resume-detail\.md#f4-head-proof/);
   assert.match(finalCheck, /After steps 4–6/);

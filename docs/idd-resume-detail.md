@@ -312,14 +312,20 @@ with better evidence, never a mechanical removal.
 
 F4's final PR-digest check may run after PR comments and branch refs have
 been removed. Keep the one-parent proof on the claimed issue so a fresh
-session can repeat the check after a hold (PR `#3741` review comment
-`#4173683166`; preventive, no observed incident yet).
+session can repeat the check after a hold (PR `#3741` review comments
+`#4173683166`, `#4173965043`, `#4173965808`, and `#4173965831`; preventive,
+no observed incident yet).
 
-Before F4 step 3, capture the latest trusted same-claim F2 watermark SHA
-as `{f2-head-SHA}` and the branch tip with
-`git rev-parse {branch-name}` as `{branch-tip-SHA}`. Require both to be
-full 40-hex values and equal. Persist this exact marker on the claimed
-issue:
+Before F4 step 3, revalidate the claim and local lock, then read the
+claimed issue's comments before inspecting the local branch. Reuse a
+valid trusted marker for this active claim, including its stored
+`{f2-head-SHA}` and `{branch-tip-SHA}`, without requiring the branch ref
+to exist. If the ref exists, require its tip to equal the stored branch
+tip; if it is absent, continue only through the resume-safe cleanup
+guards below. If no reusable marker exists, capture the latest trusted
+same-claim F2 watermark SHA and the branch tip with
+`git rev-parse {branch-name}`. Require both to be full 40-hex values and
+equal. Persist this exact marker on the claimed issue:
 
 ```text
 <!-- idd-f4-head-proof: v1 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} -->
@@ -341,11 +347,18 @@ with conflicting values, malformed fields, or any edit is ambiguous and
 holds F4. Do not treat an untrusted marker as a conflict or as proof.
 
 If no trusted marker exists, revalidate the claim and local lock before
-posting:
+posting. The comment body must start with the marker token and include a
+visible note after it; `gh issue comment` and `gh api -f body=` silently
+reject HTML-only operational markers (PR `#3741` review comment
+`#4173965040`). POST a JSON document instead:
 
 ```sh
-gh issue comment {issue-number} --body \
-  '<!-- idd-f4-head-proof: v1 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} -->'
+F4_MARKER_BODY=$(printf '%s\n\n_%s: F4 head-proof marker. Do not edit._' \
+  '<!-- idd-f4-head-proof: v1 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} -->' \
+  '{agent-id}')
+jq -n --arg body "$F4_MARKER_BODY" '{body: $body}' | \
+  gh api --method POST \
+    'repos/{owner}/{repo}/issues/{issue-number}/comments' --input -
 ```
 
 Fetch the comments again and confirm the exact body, trusted author,

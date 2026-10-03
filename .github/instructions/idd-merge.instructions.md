@@ -323,12 +323,10 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    #{pr-number}."`.
 2. Re-validate claim; confirm the PR digest. If `human_merge` left
    none, retain the claim; step 7 repairs it after cleanup. Before step
-   3, capture the latest trusted same-claim F2 watermark SHA as
-   `{f2-head-SHA}` and `{branch-tip-SHA}` from
-   `git rev-parse {branch-name}`. Require equal full 40-hex values.
-   Follow the [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
-   and hold if it cannot be authenticated. Keep the proof through F4.
-   Do not use the digest as proof.
+   3, follow the [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof):
+   reuse its trusted marker before reading a branch ref, and capture
+   fresh equal full SHAs only when no reusable proof exists. Keep the
+   proof through F4; do not use the digest as proof.
 3. Run merged-PR comment cleanup (must not run before F3 succeeds).
    Re-validate the active claim before each GitHub minimization
    mutation.
