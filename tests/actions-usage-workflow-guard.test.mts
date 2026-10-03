@@ -134,6 +134,7 @@ function literalRunLinesFromStep(stepBody: string): string[] {
   assert.notEqual(runStart, -1, 'step must have a literal run: | block');
 
   const scriptLines: string[] = [];
+  let contentIndent: number | undefined;
   for (const line of lines.slice(runStart + 1)) {
     if (line.trim() === '') {
       scriptLines.push('');
@@ -143,7 +144,12 @@ function literalRunLinesFromStep(stepBody: string): string[] {
     if (indent <= 8) {
       break;
     }
-    scriptLines.push(line.slice(10));
+    if (contentIndent === undefined) {
+      contentIndent = indent;
+    } else if (indent < contentIndent) {
+      break;
+    }
+    scriptLines.push(line.slice(contentIndent));
   }
 
   return scriptLines;
@@ -167,7 +173,16 @@ const REQUIRED_NODE_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES.join(' ')
   .replace(/\s+/g, ' ')
   .trim();
 
+function assertNoNodeOptions(text: string, scope: string): void {
+  assert.doesNotMatch(
+    text,
+    /\bNODE_OPTIONS\b/,
+    `lint.yml: ${scope} must not configure or reference NODE_OPTIONS, which can preload code before the floor assertion`,
+  );
+}
+
 function assertLintJobEnforcesNodeFloor(jobBody: string): void {
+  assertNoNodeOptions(jobBody, 'lint job or its steps');
   assert.doesNotMatch(
     jobBody,
     /^ {4}(?:if|'if'|"if")\s*:/m,
@@ -191,6 +206,7 @@ function assertLintJobUsesDefaultShell(
   jobBody: string,
   workflow: string,
 ): void {
+  assertNoNodeOptions(workflow, 'lint workflow');
   assert.doesNotMatch(
     workflow,
     /^(?:defaults|'defaults'|"defaults")\s*:/m,
@@ -206,6 +222,7 @@ function assertLintJobUsesDefaultShell(
 /** Asserts the named step logs Node before running the exact engine-floor
  * assertion. Synthetic steps exercise rejected shell shapes. */
 function assertNodeVersionLogBeforeFloor(stepBody: string): void {
+  assertNoNodeOptions(stepBody, 'Assert Node.js floor step');
   assert.doesNotMatch(
     stepBody,
     /^ {8}(?:if|'if'|"if")\s*:/m,
@@ -558,6 +575,24 @@ test('a command inside a quoted here-document cannot satisfy the Node log guard'
   );
 });
 
+test('a nine-space shell comment cannot satisfy the Node version log guard', () => {
+  const stepBody = [
+    '      - name: Assert Node.js floor',
+    '        run: |',
+    '         # node --version',
+    "         node -e '",
+    '           const versionParts = process.versions.node.split(".");',
+    '           const ok = false;',
+    '           if (!ok) { process.exit(1); }',
+    "         '",
+  ].join('\n');
+
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /Assert Node\.js floor must execute node --version/,
+  );
+});
+
 test('a command inside a multiline shell string cannot satisfy the Node log guard', () => {
   const stepBody = [
     '      - name: Assert Node.js floor',
@@ -687,6 +722,35 @@ test('custom shell templates cannot skip Node floor execution', () => {
     assert.throws(
       () => assertLintJobUsesDefaultShell('', workflow),
       /workflow must not declare defaults/,
+    );
+  }
+});
+
+test('NODE_OPTIONS preloads are rejected at workflow, job, and step scopes', () => {
+  const options = '--require=./exit.cjs';
+  const assignments = [
+    `NODE_OPTIONS: ${options}`,
+    `"NODE_OPTIONS": ${options}`,
+    `env: { NODE_OPTIONS: ${options} }`,
+    `echo NODE_OPTIONS=${options} >> "$GITHUB_ENV"`,
+  ];
+  for (const assignment of assignments) {
+    assert.throws(
+      () => assertLintJobEnforcesNodeFloor(`    env:\n      ${assignment}`),
+      /lint job or its steps must not configure or reference NODE_OPTIONS/,
+    );
+    assert.throws(
+      () => assertLintJobUsesDefaultShell('', `env:\n  ${assignment}`),
+      /lint workflow must not configure or reference NODE_OPTIONS/,
+    );
+
+    const stepBody = syntheticFloorStep(['node --version']).replace(
+      '        run: |',
+      `        env:\n          ${assignment}\n        run: |`,
+    );
+    assert.throws(
+      () => assertNodeVersionLogBeforeFloor(stepBody),
+      /Assert Node\.js floor step must not configure or reference NODE_OPTIONS/,
     );
   }
 });
