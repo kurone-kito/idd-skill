@@ -1,21 +1,9 @@
 name: IDD self-waiver token-scope probe
 
+# issue_comment uses the workflow definition from the repository's default branch.
 on:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: PR number to probe in this repository
-        required: true
-        type: number
-      runner:
-        description: Runner label (defaults to CI_RUNNER_LABEL or ubuntu-slim)
-        required: false
-        type: string
-      probe_token_scopes:
-        description: Run the read-only self-waiver access probe
-        required: false
-        type: boolean
-        default: false
+  issue_comment:
+    types: [created]
 
 permissions: {}
 
@@ -25,8 +13,8 @@ defaults:
 
 jobs:
   probe-self-waiver-token-scopes:
-    if: ${{ inputs.probe_token_scopes == true && github.ref_name == github.event.repository.default_branch }}
-    runs-on: ${{ inputs.runner || vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
+    if: ${{ github.event.issue.pull_request != null && github.event.comment.body == '/idd-probe-token-scopes' && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') }}
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-slim' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -40,7 +28,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           NORMALIZED_GH_HOST=$(printf '%s' "${GH_HOST:-}" \
             | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')

@@ -397,16 +397,23 @@ issue-comment endpoint on `issues: read`, alongside
 
 ### Waiver probe
 
-Optional workflow, not a required check. In Actions, open
-IDD self-waiver token-scope probe > Run workflow and select the trusted
-default branch, never the PR branch. GitHub runs the selected ref's
-workflow, so PR refs could change permissions or steps; the job checks
-the default branch (#3720). Enter a PR number from this repository
-with at least one Actions check run, and set
-`probe_token_scopes: true`.
+Optional, non-required. Copy `idd-advisory-convergence-probe.yml` to
+`.github/workflows/idd-advisory-convergence-probe.yml` on the default
+branch. `issue_comment` runs the default-branch copy.
 
-The separate workflow creates only the probe check context; it does not
-run or skip the required convergence job.
+Post this on the target PR:
+
+```text
+/idd-probe-token-scopes
+```
+
+New PR comments by `OWNER`, `MEMBER`, or `COLLABORATOR` run; plain-issue
+comments, edits, other text, and other associations do not. It gets PR number
+and repo from the event. No ref input, checkout, PR code, comment write, or
+required-gate change occurs.
+
+Full helper query includes `closingIssuesReferences` and needs an Actions
+check run. Permissions:
 
 | Read scope            |
 | --------------------- |
@@ -417,14 +424,13 @@ run or skip the required convergence job.
 | `checks: read`        |
 | `statuses: read`      |
 
-The probe uses the helper's full query, including
-`closingIssuesReferences`; private access to that field is unverified,
-so `issues: read` is precautionary. Success confirms query access.
-`Resource not accessible by integration` means check Actions settings.
-Waiver posting separately needs `issues: write` and
-`pull-requests: write`; the probe has neither. Retest in a private repo.
+Success confirms only this run's token access in this repo. Access errors mean
+denied reads; check token and Actions settings. `issues: read` covers
+`closingIssuesReferences`. Public success does not prove private access; test
+there. Waiver writes need `issues: write` and `pull-requests: write`;
+the probe has neither.
 
-**Protect the workflow definition with CODEOWNERS.** A
+**Protect the required workflow definition with CODEOWNERS.** A
 `pull_request`-triggered workflow runs its definition from the PR's
 synthetic merge ref before any job step can perform the trusted `main`
 checkout, so that checkout protects the helper and config the job runs

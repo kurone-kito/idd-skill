@@ -70,8 +70,13 @@ test('token-scope probes use a separate non-required workflow', () => {
     );
     assert.deepEqual(
       [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]),
-      ['workflow_dispatch'],
-      `${path}: probe must trigger only on manual dispatch`,
+      ['issue_comment'],
+      `${path}: probe must trigger only on issue comments`,
+    );
+    assert.match(
+      onBlock,
+      /^ {4}types: \[created\]$/m,
+      `${path}: probe must handle only newly created comments`,
     );
   }
 });
@@ -260,7 +265,7 @@ function jobBlocks(text: string): Map<string, string> {
   return blocks;
 }
 
-test('standalone self-waiver token-scope probe is opt-in, read-only, and matches the helper query', () => {
+test('comment-triggered self-waiver token-scope probe is trusted, read-only, and matches the helper query', () => {
   const helper = readFileSync(
     `${REPO_ROOT}/src/scripts/external-check-waiver.mts`,
     'utf8',
@@ -276,11 +281,28 @@ test('standalone self-waiver token-scope probe is opt-in, read-only, and matches
       workflow.indexOf('\non:'),
       workflow.indexOf('\npermissions:'),
     );
+    assert.deepEqual(
+      [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]),
+      ['issue_comment'],
+      `${path}: probe must use only issue_comment`,
+    );
     assert.match(
       onBlock,
-      /^ {6}probe_token_scopes:\n {8}description: .+\n {8}required: false\n {8}type: boolean\n {8}default: false$/m,
-      `${path}: probe_token_scopes must be an optional boolean defaulting to false`,
+      /^ {4}types: \[created\]$/m,
+      `${path}: probe must run only for newly created comments`,
     );
+    assert.doesNotMatch(
+      onBlock,
+      /workflow_dispatch|pull_request|push|workflow_call/,
+      `${path}: probe must not expose another trigger or selected ref`,
+    );
+    assert.match(
+      workflow,
+      /^# issue_comment uses the workflow definition from the repository's default branch\.$/m,
+    );
+    assert.match(workflow, /^name: IDD self-waiver token-scope probe$/m);
+    assert.match(workflow, /^ {2}probe-self-waiver-token-scopes:$/m);
+    assert.doesNotMatch(workflow, /^ {2}idd-advisory-convergence:$/m);
 
     const probe = jobBlocks(workflow).get('probe-self-waiver-token-scopes');
     assert.ok(
@@ -289,25 +311,27 @@ test('standalone self-waiver token-scope probe is opt-in, read-only, and matches
     );
     assert.match(
       probe,
-      /^ {4}if: \$\{\{ inputs\.probe_token_scopes == true && github\.ref_name == github\.event\.repository\.default_branch \}\}$/m,
-      `${path}: separate manual probe workflow must require the opt-in input`,
+      /^ {4}if: \$\{\{ github\.event\.issue\.pull_request != null && github\.event\.comment\.body == '\/idd-probe-token-scopes' && \(github\.event\.comment\.author_association == 'OWNER' \|\| github\.event\.comment\.author_association == 'MEMBER' \|\| github\.event\.comment\.author_association == 'COLLABORATOR'\) \}\}$/m,
+      `${path}: job must require a PR, the exact command, and a trusted author association`,
+    );
+    assert.doesNotMatch(
+      probe,
+      /inputs\.|github\.ref|workflow_dispatch|actions\/checkout|git clone/,
+      `${path}: probe must not accept caller-selected inputs or execute checked-out content`,
     );
     if (path.startsWith('idd-template/')) {
       assert.match(
-        onBlock,
-        /^ {6}runner:\n {8}description: Runner label \(defaults to CI_RUNNER_LABEL or ubuntu-slim\)\n {8}required: false\n {8}type: string$/m,
-        `${path}: runner must have no default so CI_RUNNER_LABEL can apply`,
-      );
-      assert.match(
         probe,
-        /^ {4}runs-on: \$\{\{ inputs\.runner \|\| vars\.CI_RUNNER_LABEL \|\| 'ubuntu-slim' \}\}$/m,
-        `${path}: explicit runner, CI_RUNNER_LABEL, and ubuntu-slim fallback order must be preserved`,
+        /^ {4}runs-on: \$\{\{ vars\.CI_RUNNER_LABEL \|\| 'ubuntu-slim' \}\}$/m,
+        `${path}: runner must keep the CI_RUNNER_LABEL and ubuntu-slim fallback`,
       );
+    } else {
+      assert.match(probe, /^ {4}runs-on: ubuntu-slim$/m);
     }
     assert.match(
       probe,
-      /^ {10}PR_NUMBER: \$\{\{ inputs\.pr_number \}\}$/m,
-      `${path}: probe must use the existing current-repository PR number input`,
+      /^ {10}PR_NUMBER: \$\{\{ github\.event\.issue\.number \}\}$/m,
+      `${path}: PR number must come only from the issue_comment event`,
     );
     assert.match(
       probe,
@@ -318,6 +342,12 @@ test('standalone self-waiver token-scope probe is opt-in, read-only, and matches
       probe,
       /--repo "\$GITHUB_REPOSITORY"/,
       `${path}: probe must query the current repository`,
+    );
+    const run = probe.slice(probe.indexOf('\n        run:'));
+    assert.doesNotMatch(
+      run,
+      /github\.event\.comment|COMMENT_BODY/,
+      `${path}: comment text must not be interpolated into a shell command`,
     );
     const hostSetup = probe.search(
       /NORMALIZED_GH_HOST=\$\(printf '%s' "\$\{GH_HOST:-\}"/,
@@ -346,8 +376,8 @@ test('standalone self-waiver token-scope probe is opt-in, read-only, and matches
     assert.match(probe, /Read-only self-waiver query probe succeeded/);
     assert.doesNotMatch(
       probe,
-      /external-check-waiver|gh api|gh pr comment|--method|labels|required_status_checks/,
-      `${path}: probe must not invoke a waiver or write operation`,
+      /external-check-waiver|gh api|gh issue|gh pr comment|--method|labels|required_status_checks/,
+      `${path}: probe must not invoke a waiver, comment, label, or required-check write operation`,
     );
     const probeFields = probe.match(/--json\s+([^\s\\]+)/)?.[1];
     assert.equal(
@@ -369,7 +399,7 @@ test('standalone self-waiver token-scope probe is opt-in, read-only, and matches
   }
 });
 
-test('onboarding guide documents the probe scopes and self-waiver write permissions', () => {
+test('onboarding guide explains how to run the trusted default-branch probe', () => {
   const guide = readFileSync(
     `${REPO_ROOT}/idd-template/docs/onboarding/optional-host-setup.md`,
     'utf8',
@@ -396,22 +426,23 @@ test('onboarding guide documents the probe scopes and self-waiver write permissi
       `onboarding guide table must include ${permission}`,
     );
   }
-  assert.match(section, /not a required check/i);
-  assert.match(section, /`probe_token_scopes: true`/);
-  assert.match(section, /Actions[\s\S]*Run workflow/i);
-  assert.match(section, /select[\s\S]*branch/i);
-  assert.match(section, /PR number from this repository/i);
-  assert.match(section, /at least one[\s\S]*Actions check run/i);
-  assert.match(section, /optional workflow, not a required check/i);
-  assert.match(
-    section,
-    /does not[\s\S]*run or skip the required convergence job/i,
-  );
-  assert.match(section, /`Resource not accessible by integration`/);
+  assert.match(section, /non-required/i);
+  assert.match(section, /idd-advisory-convergence-probe\.yml/);
+  assert.match(section, /default branch/i);
+  assert.match(section, /issue_comment/i);
+  assert.match(section, /post this on the target PR/i);
+  assert.match(section, /```text\n\/idd-probe-token-scopes\n```/);
+  assert.match(section, /`OWNER`, `MEMBER`, or `COLLABORATOR`/);
+  assert.match(section, /edits/i);
+  assert.match(section, /no ref input, checkout, PR code/i);
+  assert.match(section, /comment write/i);
+  assert.match(section, /Actions\s+check\s+run/i);
+  assert.match(section, /only this run's token access in this repo/i);
+  assert.match(section, /access errors mean\s+denied reads/i);
   assert.match(section, /`issues: write`/);
   assert.match(section, /`pull-requests: write`/);
-  assert.match(section, /private access.*unverified/i);
-  assert.match(section, /retest in a private repo/i);
+  assert.match(section, /public success does not prove private access/i);
+  assert.match(section, /required-gate change/i);
 });
 
 test('every job that invokes external-check-waiver keeps actions: read, checks: read and statuses: read in both advisory-convergence workflow copies (kurone-kito/idd-skill#3683)', () => {
