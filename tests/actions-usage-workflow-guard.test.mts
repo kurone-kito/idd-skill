@@ -93,19 +93,43 @@ function jobIds(text: string): string[] {
 function extractJobBody(text: string, jobId: string): string {
   const lines = text.split('\n');
   const scalarContent = yamlBlockScalarContentFlags(lines);
+  const jobsStartIndex = lines.findIndex(
+    (line, index) =>
+      !scalarContent[index] &&
+      /^(?:jobs|'jobs'|"jobs")\s*:\s*$/.test(stripYamlComment(line)),
+  );
+  assert.notEqual(jobsStartIndex, -1, 'root jobs mapping not found');
+  const jobsEndIndex = lines.findIndex(
+    (line, index) =>
+      index > jobsStartIndex &&
+      !scalarContent[index] &&
+      line.trim() !== '' &&
+      !line.trimStart().startsWith('#') &&
+      !/^\s/.test(line),
+  );
   const startIndex = lines.findIndex(
-    (line, index) => !scalarContent[index] && line === `  ${jobId}:`,
+    (line, index) =>
+      index > jobsStartIndex &&
+      (jobsEndIndex === -1 || index < jobsEndIndex) &&
+      !scalarContent[index] &&
+      line === `  ${jobId}:`,
   );
   assert.notEqual(startIndex, -1, `job ${jobId} not found`);
   const nextSiblingIndex = lines.findIndex(
     (line, index) =>
-      index > startIndex && !scalarContent[index] && /^ {2}(?!#)\S/.test(line),
+      index > startIndex &&
+      (jobsEndIndex === -1 || index < jobsEndIndex) &&
+      !scalarContent[index] &&
+      /^ {2}(?!#)\S/.test(line),
   );
+  const endIndex =
+    nextSiblingIndex === -1
+      ? jobsEndIndex
+      : jobsEndIndex === -1
+        ? nextSiblingIndex
+        : Math.min(nextSiblingIndex, jobsEndIndex);
   return lines
-    .slice(
-      startIndex + 1,
-      nextSiblingIndex === -1 ? undefined : nextSiblingIndex,
-    )
+    .slice(startIndex + 1, endIndex === -1 ? undefined : endIndex)
     .join('\n');
 }
 
@@ -431,6 +455,48 @@ function hasEnvironmentMergeKey(
   return false;
 }
 
+/** Rejects YAML merge keys at the direct property indentation of a mapping. */
+function hasYamlMergeKeyAtIndent(text: string, indent: number): boolean {
+  const lines = text.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const mergeKey = /^(?:<<|'<<'|"<<")\s*:/;
+  return lines.some(
+    (line, index) =>
+      !scalarContent[index] &&
+      line.startsWith(' '.repeat(indent)) &&
+      mergeKey.test(stripYamlComment(line).slice(indent)),
+  );
+}
+
+/** Returns the lint job's `steps:` mapping body when it is present. */
+function findJobStepsBlock(jobBody: string): string | undefined {
+  const jobLines = jobBody.split('\n');
+  const jobScalarContent = yamlBlockScalarContentFlags(jobLines);
+  const stepsStart = jobLines.findIndex(
+    (line, index) =>
+      !jobScalarContent[index] &&
+      /^ {4}(?:steps|'steps'|"steps")\s*:/.test(stripYamlComment(line)),
+  );
+  if (stepsStart === -1) {
+    return undefined;
+  }
+  const nextJobProperty = jobLines.findIndex(
+    (line, index) =>
+      index > stepsStart &&
+      !jobScalarContent[index] &&
+      /^ {4}(?!#)\S/.test(line),
+  );
+  return jobLines
+    .slice(stepsStart + 1, nextJobProperty === -1 ? undefined : nextJobProperty)
+    .join('\n');
+}
+
+/** Rejects merge keys on any individual step mapping in the lint job. */
+function hasStepLevelYamlMergeKey(jobBody: string): boolean {
+  const stepsBlock = findJobStepsBlock(jobBody);
+  return stepsBlock !== undefined && hasYamlMergeKeyAtIndent(stepsBlock, 8);
+}
+
 /** Extracts one named step's body from the job's `steps` mapping, stopping
  * before the next step. Similar headers elsewhere in the job cannot satisfy
  * a step-specific guard. */
@@ -440,24 +506,12 @@ function extractNamedStepBody(
   stepName: string,
 ): string {
   const jobBody = extractJobBody(text, jobId);
-  const jobLines = jobBody.split('\n');
-  const jobScalarContent = yamlBlockScalarContentFlags(jobLines);
-  const stepsStart = jobLines.findIndex(
-    (line, index) =>
-      !jobScalarContent[index] &&
-      /^ {4}(?:steps|'steps'|"steps")\s*:/.test(stripYamlComment(line)),
+  const stepsBlock = findJobStepsBlock(jobBody);
+  assert.ok(
+    stepsBlock !== undefined,
+    `steps mapping not found in job ${jobId}`,
   );
-  assert.notEqual(stepsStart, -1, `steps mapping not found in job ${jobId}`);
-  const nextJobProperty = jobLines.findIndex(
-    (line, index) =>
-      index > stepsStart &&
-      !jobScalarContent[index] &&
-      /^ {4}(?!#)\S/.test(line),
-  );
-  const lines = jobLines.slice(
-    stepsStart + 1,
-    nextJobProperty === -1 ? undefined : nextJobProperty,
-  );
+  const lines = stepsBlock.split('\n');
   const scalarContent = yamlBlockScalarContentFlags(lines);
   const matchingSteps = lines
     .map((line, index) =>
@@ -584,6 +638,16 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
 
 function assertLintJobEnforcesNodeFloor(jobBody: string): void {
   assertNoNodeExecutionOverrides(jobBody, 'lint job or its steps');
+  assert.equal(
+    hasYamlMergeKeyAtIndent(jobBody, 4),
+    false,
+    'lint.yml: lint job must not use YAML merge keys that can inherit job controls',
+  );
+  assert.equal(
+    hasStepLevelYamlMergeKey(jobBody),
+    false,
+    'lint.yml: lint job steps must not use YAML merge keys that can inherit step controls',
+  );
   assert.doesNotMatch(
     jobBody,
     /^ {4}(?:if|'if'|"if")\s*:/m,
@@ -632,6 +696,11 @@ function assertLintJobUsesDefaultShell(
  * assertion. Synthetic steps exercise rejected shell shapes. */
 function assertNodeVersionLogBeforeFloor(stepBody: string): void {
   assertNoNodeExecutionOverrides(stepBody, 'Assert Node.js floor step');
+  assert.equal(
+    hasYamlMergeKeyAtIndent(stepBody, 8),
+    false,
+    'lint.yml: Assert Node.js floor step must not use YAML merge keys that can inherit step controls',
+  );
   assert.doesNotMatch(
     stepBody,
     /^ {8}(?:if|'if'|"if")\s*:/m,
@@ -1057,6 +1126,25 @@ test('job extraction ignores job-like headers inside YAML block scalars', () => 
   assert.doesNotMatch(lintJob, /continue-on-error/);
 });
 
+test('job extraction only searches the root jobs mapping', () => {
+  const workflow = [
+    'metadata:',
+    '  lint:',
+    '    runs-on: ubuntu-latest',
+    'jobs:',
+    '  lint:',
+    '    if: false',
+    '    steps:',
+    '      - name: Other step',
+    '        run: echo ok',
+  ].join('\n');
+
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor(extractJobBody(workflow, 'lint')),
+    /lint job must not be conditionally skipped/,
+  );
+});
+
 test('anchored or quoted-key block scalars cannot impersonate the lint job', () => {
   for (const scalarHeader of [
     'metadata: &note |',
@@ -1465,6 +1553,30 @@ test('YAML merge keys in env mappings are rejected at every lint scope', () => {
     assertLintJobEnforcesNodeFloor(
       '    strategy:\n      matrix:\n        <<: *shared-matrix',
     ),
+  );
+});
+
+test('YAML merge keys cannot inherit lint job or step controls', () => {
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    <<: *disabled'),
+    /lint job must not use YAML merge keys that can inherit job controls/,
+  );
+
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        '    steps:\n      - name: Prepare Node\n        <<: *disabled',
+      ),
+    /lint job steps must not use YAML merge keys that can inherit step controls/,
+  );
+
+  const floorStep = syntheticFloorStep(['node --version']).replace(
+    '        run: |',
+    '        <<: *disabled\n        run: |',
+  );
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(floorStep),
+    /Assert Node\.js floor step must not use YAML merge keys that can inherit step controls/,
   );
 });
 
