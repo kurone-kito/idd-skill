@@ -1080,7 +1080,24 @@ in this preamble, since the fallback differs per helper.
   `audit-authored-issue.mjs --cleanup-evidence-file`. Confirmed
   applied or already-minimized results set `isMinimized`; other
   outcomes do not. The evidence is not an ownership input. The default
-  report omits the field.
+  report omits the field. The audit helper accepts either the direct
+  `{collections, mutations}` object or the complete sweep report as-is,
+  reading those arrays from `cleanupEvidence`. It requires both arrays
+  and rejects unknown, malformed, or conflicting shapes. This avoids
+  the silent `not applicable` backlog result observed on 2026-10-03 in
+  issue #3740 when the complete report was passed directly.
+
+  ```sh
+  node scripts/sweep-authoring-markers.mjs \
+    --issue owner/repo#123 \
+    --trusted-marker-logins maintainer-login \
+    --with-cleanup-evidence > sweep.json
+  node scripts/audit-authored-issue.mjs \
+    --shape child --body-file issue.md \
+    --current-repo owner/repo --issue 123 \
+    --cleanup-evidence-file sweep.json
+  ```
+
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 - `scripts/disposition-non-review-notices.mjs` for dry-run/apply
