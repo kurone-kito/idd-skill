@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,12 +28,13 @@ const CLI_PATH = join(REPO_ROOT, 'scripts/audit-authored-issue.mjs');
  * recovered from there instead of being mistaken for a usage/crash error.
  */
 function runCli(args: string[]): {
-  findings: { id: string; result: string }[];
+  findings: { id: string; result: string; detail?: string }[];
 } {
   try {
     const stdout = execFileSync(process.execPath, [CLI_PATH, ...args], {
       encoding: 'utf8',
       timeout: 60_000,
+      cwd: REPO_ROOT,
     });
     return JSON.parse(stdout);
   } catch (error) {
@@ -43,6 +44,14 @@ function runCli(args: string[]): {
     }
     throw error;
   }
+}
+
+function runCliRaw(args: string[]) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    cwd: REPO_ROOT,
+  });
 }
 
 function suitabilityFooter(score: number): string {
@@ -5145,5 +5154,164 @@ test('readCleanupEvidenceFile normalizes an author object to its login (#3593)',
     assert.equal(evidence.mutations?.[0]?.author, 'trusted-bot');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('cleanup evidence CLI accepts direct and complete sweep report inputs (#3740)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-cleanup-evidence-shapes-'));
+  try {
+    const bodyPath = join(tempRoot, 'issue.md');
+    const directPath = join(tempRoot, 'direct.json');
+    const reportPath = join(tempRoot, 'sweep-report.json');
+    const unconfirmedPath = join(tempRoot, 'unconfirmed.json');
+    const evidence = {
+      collections: [
+        {
+          owner: 'kurone-kito',
+          repo: 'idd-skill',
+          issue: 9001,
+          comments: [
+            {
+              id: 'IC_old',
+              body: canonicalOwnerMarkerBody({ mode: 'acquire' }),
+              author: 'kurone-kito',
+            },
+            {
+              id: 'IC_new',
+              body: canonicalOwnerMarkerBody({ mode: 'release' }),
+              author: 'kurone-kito',
+            },
+          ],
+        },
+        {
+          owner: 'kurone-kito',
+          repo: 'idd-skill',
+          issue: 2674,
+          comments: [],
+        },
+      ],
+      mutations: [
+        { subjectId: 'IC_old', status: 'applied', author: 'kurone-kito' },
+      ],
+    };
+    writeFileSync(bodyPath, orphanBody());
+    writeFileSync(directPath, JSON.stringify(evidence));
+    writeFileSync(
+      unconfirmedPath,
+      JSON.stringify({ ...evidence, mutations: [] }),
+    );
+    writeFileSync(
+      reportPath,
+      JSON.stringify({
+        mode: 'apply',
+        classifier: 'matchCanonicalAuthoringMarkerFamily',
+        markerPrefix: 'idd-skill',
+        trustedMarkerActors: ['kurone-kito'],
+        trustedMarkerActorsSource: 'flag',
+        issues: [],
+        families: {},
+        items: [],
+        cleanupEvidence: evidence,
+      }),
+    );
+
+    const baseArgs = [
+      '--shape',
+      'orphan',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+      '--current-repo',
+      'kurone-kito/idd-skill',
+      '--issue',
+      '9001',
+      '--label',
+      'status:authoring',
+      '--trusted-marker-logins',
+      'kurone-kito',
+    ];
+    const runWithEvidence = (path: string) =>
+      runCli([...baseArgs, '--cleanup-evidence-file', path]).findings.find(
+        (entry) => entry.id === 'authoring-marker-minimization-backlog',
+      );
+    const direct = runWithEvidence(directPath);
+    const wrapped = runWithEvidence(reportPath);
+    const unconfirmed = runWithEvidence(unconfirmedPath);
+
+    assert.equal(direct?.result, 'pass');
+    assert.equal(wrapped?.result, 'pass');
+    assert.match(direct?.detail ?? '', /authoring-owner: 0\b/);
+    assert.match(direct?.detail ?? '', /authoring-publication-intent: 0\b/);
+    assert.doesNotMatch(direct?.detail ?? '', /not applicable/);
+    assert.equal(wrapped?.detail, direct?.detail);
+    assert.match(unconfirmed?.detail ?? '', /authoring-owner: 1\b/);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('cleanup evidence CLI rejects unrecognized, malformed, and conflicting forms (#3740)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-cleanup-evidence-invalid-'));
+  try {
+    const bodyPath = join(tempRoot, 'issue.md');
+    const evidencePath = join(tempRoot, 'evidence.json');
+    writeFileSync(bodyPath, orphanBody());
+    const args = [
+      '--shape',
+      'orphan',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+      '--current-repo',
+      'kurone-kito/idd-skill',
+      '--issue',
+      '9001',
+      '--label',
+      'status:authoring',
+      '--cleanup-evidence-file',
+      evidencePath,
+    ];
+    const invalidInputs = [
+      ['unrecognized', { mode: 'apply' }],
+      ['missing direct array', { collections: [] }],
+      [
+        'non-array wrapped field',
+        { cleanupEvidence: { collections: [], mutations: null } },
+      ],
+      ['malformed collection', { collections: [null], mutations: [] }],
+      [
+        'conflicting forms',
+        {
+          collections: [],
+          mutations: [],
+          cleanupEvidence: {
+            collections: [
+              { owner: 'other', repo: 'repo', issue: 1, comments: [] },
+            ],
+            mutations: [],
+          },
+        },
+      ],
+    ] as const;
+
+    for (const [name, input] of invalidInputs) {
+      writeFileSync(evidencePath, JSON.stringify(input));
+      const result = runCliRaw(args);
+      assert.equal(result.error, undefined, `${name}: CLI process starts`);
+      assert.notEqual(
+        result.status,
+        0,
+        `${name}: CLI rejects invalid evidence`,
+      );
+      assert.match(
+        result.stderr ?? '',
+        /expected either.*collections.*mutations/s,
+        `${name}: diagnostic names the supported evidence shapes`,
+      );
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });

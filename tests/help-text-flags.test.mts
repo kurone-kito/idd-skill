@@ -465,3 +465,18 @@ for (const helper of COVERED_HELPERS) {
     );
   });
 }
+
+test('audit-authored-issue --help explains both cleanup evidence shapes (#3740)', () => {
+  const helpText = execFileSync(
+    process.execPath,
+    [join(scriptsDir, 'audit-authored-issue.mjs'), '--help'],
+    { encoding: 'utf8', timeout: 30_000 },
+  );
+  assert.match(helpText, /direct \{collections, mutations\} or a full/);
+  assert.match(helpText, /full\s+sweep report with cleanupEvidence containing/);
+  assert.match(helpText, /Pass the sweep report as-is/);
+  assert.match(
+    helpText,
+    /malformed,\s*unrecognized, or conflicting forms fail/,
+  );
+});
