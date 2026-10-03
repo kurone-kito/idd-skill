@@ -287,8 +287,22 @@ const SHELL_CONTROL_WORDS = new Set([
   'while',
 ]);
 
-const REQUIRED_NODE_FLOOR_EXPRESSION =
-  'const ok = !isPrerelease && ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) || (major === 24 && minor >= 2) || major >= 26);';
+const NODE_FLOOR_ASSERTION_LINES = [
+  'const versionParts = process.versions.node.split(".");',
+  'const [major, minor, patch] = versionParts.map(Number);',
+  'const isPrerelease = versionParts.some((part) => part.includes("-"));',
+  'const ok = !isPrerelease && ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) || (major === 24 && minor >= 2) || major >= 26);',
+  'if (!ok) {',
+  '  console.error(',
+  '    "Node " + process.version + " does not satisfy this " +',
+  '    "repository\'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",',
+  '  );',
+  '  process.exit(1);',
+  '}',
+];
+const REQUIRED_NODE_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES.join(' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 /** Splits a shell script into basic commands while keeping quoted multiline
  * arguments as one word. This guard only needs simple word boundaries and
@@ -392,6 +406,11 @@ function parseShellCommands(lines: string[]): ParsedShellScript {
 }
 
 function assertNodeVersionLogBeforeFloor(stepBody: string): void {
+  assert.doesNotMatch(
+    stepBody,
+    /^ {8}if\s*:/m,
+    'lint.yml: Assert Node.js floor step must not be conditionally skipped',
+  );
   const lines = executableLinesFromLiteralRun(stepBody);
   const parsedScript = parseShellCommands(lines);
   const { commands } = parsedScript;
@@ -428,17 +447,10 @@ function assertNodeVersionLogBeforeFloor(stepBody: string): void {
     'lint.yml: the Node floor assertion must execute immediately after the version log',
   );
   const assertionScript = commands[floorAssertionIndex].words[2] ?? '';
-  const normalizedAssertionScript = assertionScript.replace(/\s+/g, ' ');
-  assert.ok(
-    normalizedAssertionScript.includes(
-      'const versionParts = process.versions.node.split(".")',
-    ) &&
-      normalizedAssertionScript.includes(
-        'const [major, minor, patch] = versionParts.map(Number)',
-      ) &&
-      normalizedAssertionScript.includes(REQUIRED_NODE_FLOOR_EXPRESSION) &&
-      normalizedAssertionScript.includes('if (!ok)') &&
-      normalizedAssertionScript.includes('process.exit(1)'),
+  const normalizedAssertionScript = assertionScript.replace(/\s+/g, ' ').trim();
+  assert.equal(
+    normalizedAssertionScript,
+    REQUIRED_NODE_FLOOR_ASSERTION,
     'lint.yml: node -e must retain the Node engines.node floor assertion and its failing path',
   );
   assert.ok(
@@ -723,16 +735,7 @@ test('a command inside a multiline shell string cannot satisfy the Node log guar
   );
 });
 
-const SYNTHETIC_FLOOR_ASSERTION = [
-  '            const versionParts = process.versions.node.split(".");',
-  '            const [major, minor, patch] = versionParts.map(Number);',
-  '            const ok =',
-  '              !isPrerelease &&',
-  '              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||',
-  '                (major === 24 && minor >= 2) ||',
-  '                major >= 26);',
-  '            if (!ok) { process.exit(1); }',
-];
+const SYNTHETIC_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES;
 
 function syntheticFloorStep(
   shellLines: string[],
@@ -743,10 +746,27 @@ function syntheticFloorStep(
     '        run: |',
     ...shellLines.map((line) => `          ${line}`),
     "          node -e '",
-    ...assertionLines,
+    ...assertionLines.map(
+      (line) => `            ${line.replaceAll("'", "'\"'\"'")}`,
+    ),
     "          '",
   ].join('\n');
 }
+
+test('a conditionally skipped workflow step cannot satisfy the Node log guard', () => {
+  for (const condition of ['false', '${' + '{ false }}']) {
+    const stepBody = syntheticFloorStep(['node --version']).replace(
+      '        run: |',
+      `        if: ${condition}\n        run: |`,
+    );
+
+    assert.throws(
+      () => assertNodeVersionLogBeforeFloor(stepBody),
+      /step must not be conditionally skipped/,
+      `accepted step condition: ${condition}`,
+    );
+  }
+});
 
 test('redirected or conditional Node commands cannot satisfy the Node log guard', () => {
   for (const shellLines of [
@@ -785,10 +805,10 @@ test('a constant result cannot replace the Node engines floor comparison', () =>
   const stepBody = syntheticFloorStep(
     ['node --version'],
     [
-      '            const versionParts = process.versions.node.split(".");',
-      '            const [major, minor, patch] = versionParts.map(Number);',
-      '            const ok = true;',
-      '            if (!ok) { process.exit(1); }',
+      'const versionParts = process.versions.node.split(".");',
+      'const [major, minor, patch] = versionParts.map(Number);',
+      'const ok = true;',
+      'if (!ok) { process.exit(1); }',
     ],
   );
 
@@ -796,4 +816,19 @@ test('a constant result cannot replace the Node engines floor comparison', () =>
     () => assertNodeVersionLogBeforeFloor(stepBody),
     /must retain the Node engines\.node floor assertion and its failing path/,
   );
+});
+
+test('commented or unreachable JavaScript cannot satisfy the Node floor guard', () => {
+  for (const assertionLines of [
+    ['/*', ...SYNTHETIC_FLOOR_ASSERTION, '*/'],
+    ['process.exit(0);', ...SYNTHETIC_FLOOR_ASSERTION],
+  ]) {
+    assert.throws(
+      () =>
+        assertNodeVersionLogBeforeFloor(
+          syntheticFloorStep(['node --version'], assertionLines),
+        ),
+      /must retain the Node engines\.node floor assertion and its failing path/,
+    );
+  }
 });
