@@ -100,6 +100,135 @@ function extractJobBody(text: string, jobId: string): string {
     : afterStart.slice(0, nextSiblingMatch.index);
 }
 
+/** Marks lines that belong to YAML literal or folded block scalars. The
+ * implicit indentation is the first non-empty content line, per YAML's
+ * block-scalar rules. */
+function yamlBlockScalarContentFlags(lines: string[]): boolean[] {
+  const contentFlags = lines.map(() => false);
+  let activeContentIndent: number | undefined;
+  let pendingHeaderIndent: number | undefined;
+  let pendingExplicitContentIndent: number | undefined;
+
+  for (const [index, line] of lines.entries()) {
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (activeContentIndent !== undefined) {
+      if (line.trim() === '') {
+        contentFlags[index] = true;
+        continue;
+      }
+      if (indent >= activeContentIndent) {
+        contentFlags[index] = true;
+        continue;
+      }
+      activeContentIndent = undefined;
+    }
+
+    if (pendingHeaderIndent !== undefined) {
+      if (line.trim() === '') {
+        continue;
+      }
+      const contentIndent =
+        pendingExplicitContentIndent ??
+        (indent > pendingHeaderIndent ? indent : undefined);
+      pendingHeaderIndent = undefined;
+      pendingExplicitContentIndent = undefined;
+      if (contentIndent !== undefined && indent >= contentIndent) {
+        contentFlags[index] = true;
+        activeContentIndent = contentIndent;
+        continue;
+      }
+    }
+
+    const header = line.match(
+      /^([ ]*)(?:-\s+)?[^:\n]+:\s*[|>](?:([+-]?[1-9]|[1-9][+-]))?\s*(?:#.*)?$/,
+    );
+    if (header) {
+      pendingHeaderIndent = header[1].length;
+      const explicitIndent = header[2]?.match(/[1-9]/)?.[0];
+      pendingExplicitContentIndent = explicitIndent
+        ? pendingHeaderIndent + Number(explicitIndent)
+        : undefined;
+    }
+  }
+
+  return contentFlags;
+}
+
+/** Removes a YAML comment from one line without treating a quoted `#` as
+ * a comment marker. */
+function stripYamlComment(line: string): string {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (doubleQuoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      if (character === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      doubleQuoted = true;
+    } else if (character === "'") {
+      singleQuoted = true;
+    } else if (
+      character === '#' &&
+      (index === 0 || /\s/.test(line[index - 1]))
+    ) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+
+/** Extracts only the root workflow `env` mapping, leaving independent jobs
+ * and comments outside the lint job's execution scope. */
+function extractWorkflowEnvironmentBlock(text: string): string {
+  const lines = text.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const start = lines.findIndex(
+    (line, index) =>
+      !scalarContent[index] &&
+      /^(?:env|'env'|"env")\s*:/.test(stripYamlComment(line)),
+  );
+  if (start === -1) {
+    return '';
+  }
+
+  const header = stripYamlComment(lines[start]);
+  const inlineValue = header.match(/^(?:env|'env'|"env")\s*:(.*)$/)?.[1];
+  if (inlineValue?.trim()) {
+    return header;
+  }
+
+  const block = [header];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) {
+      block.push(line);
+      continue;
+    }
+    if (/^\s/.test(line)) {
+      block.push(line);
+      continue;
+    }
+    break;
+  }
+  return block.join('\n');
+}
+
 /** Extracts one named step's body from a job, stopping before the next
  * step. The exact step header keeps comments or similarly named steps
  * elsewhere in the workflow from satisfying a step-specific guard. */
@@ -110,8 +239,13 @@ function extractNamedStepBody(
 ): string {
   const jobBody = extractJobBody(text, jobId);
   const lines = jobBody.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
   const matchingSteps = lines
-    .map((line, index) => (line === `      - name: ${stepName}` ? index : -1))
+    .map((line, index) =>
+      !scalarContent[index] && line === `      - name: ${stepName}`
+        ? index
+        : -1,
+    )
     .filter((index) => index !== -1);
   assert.equal(
     matchingSteps.length,
@@ -120,7 +254,8 @@ function extractNamedStepBody(
   );
   const start = matchingSteps[0];
   const nextStep = lines.findIndex(
-    (line, index) => index > start && /^ {6}- /.test(line),
+    (line, index) =>
+      index > start && !scalarContent[index] && /^ {6}- /.test(line),
   );
   return lines.slice(start, nextStep === -1 ? undefined : nextStep).join('\n');
 }
@@ -174,9 +309,21 @@ const REQUIRED_NODE_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES.join(' ')
   .trim();
 
 function assertNoNodeOptions(text: string, scope: string): void {
-  assert.doesNotMatch(
-    text,
-    /\bNODE_OPTIONS\b/,
+  const lines = text.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const configuresOrReferencesNodeOptions = lines.some((line, index) => {
+    if (scalarContent[index]) {
+      const shellLine = line.trimStart();
+      return !shellLine.startsWith('#') && /\bNODE_OPTIONS\b/.test(shellLine);
+    }
+    const uncommented = stripYamlComment(line);
+    return /(?:^|\{)\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS")\s*:/.test(
+      uncommented,
+    );
+  });
+  assert.equal(
+    configuresOrReferencesNodeOptions,
+    false,
     `lint.yml: ${scope} must not configure or reference NODE_OPTIONS, which can preload code before the floor assertion`,
   );
 }
@@ -206,7 +353,10 @@ function assertLintJobUsesDefaultShell(
   jobBody: string,
   workflow: string,
 ): void {
-  assertNoNodeOptions(workflow, 'lint workflow');
+  assertNoNodeOptions(
+    extractWorkflowEnvironmentBlock(workflow),
+    'workflow environment',
+  );
   assert.doesNotMatch(
     workflow,
     /^(?:defaults|'defaults'|"defaults")\s*:/m,
@@ -582,6 +732,28 @@ test('duplicate Node floor step names are rejected as ambiguous', () => {
   );
 });
 
+test('a YAML block scalar cannot impersonate the named Node floor step', () => {
+  const workflow = [
+    'jobs:',
+    '  lint:',
+    '    fake: |',
+    '      - name: Assert Node.js floor',
+    '        run: |',
+    '          node --version',
+    "          node -e '",
+    '            process.exit(0);',
+    "          '\n",
+    '    steps:',
+    '      - name: Other step',
+    '        run: echo ok',
+  ].join('\n');
+
+  assert.throws(
+    () => extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
+    /expected exactly one step .* found 0/,
+  );
+});
+
 test('a command inside a quoted here-document cannot satisfy the Node log guard', () => {
   const stepBody = [
     '      - name: Assert Node.js floor',
@@ -764,28 +936,68 @@ test('NODE_OPTIONS preloads are rejected at workflow, job, and step scopes', () 
   const assignments = [
     `NODE_OPTIONS: ${options}`,
     `"NODE_OPTIONS": ${options}`,
-    `env: { NODE_OPTIONS: ${options} }`,
-    `echo NODE_OPTIONS=${options} >> "$GITHUB_ENV"`,
+    `{ NODE_OPTIONS: ${options} }`,
   ];
   for (const assignment of assignments) {
+    const jobEnvironment = assignment.startsWith('{')
+      ? `    env: ${assignment}`
+      : `    env:\n      ${assignment}`;
+    const workflowEnvironment = assignment.startsWith('{')
+      ? `env: ${assignment}`
+      : `env:\n  ${assignment}`;
+    const stepEnvironment = assignment.startsWith('{')
+      ? `        env: ${assignment}`
+      : `        env:\n          ${assignment}`;
     assert.throws(
-      () => assertLintJobEnforcesNodeFloor(`    env:\n      ${assignment}`),
+      () => assertLintJobEnforcesNodeFloor(jobEnvironment),
       /lint job or its steps must not configure or reference NODE_OPTIONS/,
     );
     assert.throws(
-      () => assertLintJobUsesDefaultShell('', `env:\n  ${assignment}`),
-      /lint workflow must not configure or reference NODE_OPTIONS/,
+      () => assertLintJobUsesDefaultShell('', workflowEnvironment),
+      /workflow environment must not configure or reference NODE_OPTIONS/,
     );
 
     const stepBody = syntheticFloorStep(['node --version']).replace(
       '        run: |',
-      `        env:\n          ${assignment}\n        run: |`,
+      `${stepEnvironment}\n        run: |`,
     );
     assert.throws(
       () => assertNodeVersionLogBeforeFloor(stepBody),
       /Assert Node\.js floor step must not configure or reference NODE_OPTIONS/,
     );
   }
+
+  const scriptWrite = `echo NODE_OPTIONS=${options} >> "$GITHUB_ENV"`;
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        `    steps:\n      - run: |\n          ${scriptWrite}`,
+      ),
+    /lint job or its steps must not configure or reference NODE_OPTIONS/,
+  );
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([scriptWrite])),
+    /Assert Node\.js floor step must not configure or reference NODE_OPTIONS/,
+  );
+});
+
+test('comments and an independent workflow job cannot trigger the lint preload guard', () => {
+  const workflow = [
+    '# NODE_OPTIONS: this comment does not configure the lint job.',
+    'jobs:',
+    '  lint:',
+    '    # NODE_OPTIONS: this comment does not configure the lint job.',
+    '    steps:',
+    '      - name: Other step',
+    '        run: echo ok',
+    '  lint-windows:',
+    '    env:',
+    '      NODE_OPTIONS: --require=./windows-only.cjs',
+  ].join('\n');
+  const lintJob = extractJobBody(workflow, 'lint');
+
+  assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(lintJob));
+  assert.doesNotThrow(() => assertLintJobUsesDefaultShell(lintJob, workflow));
 });
 
 test('a comment after an escaped newline cannot satisfy the Node log guard', () => {
