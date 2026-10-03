@@ -3007,34 +3007,35 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     /Require `MERGED`, a full merge oid, `\.sha` equal to that oid, and 1–2\s+full 40-hex parent SHAs/,
   );
   assert.match(headProof, /Ignore comments from untrusted authors/);
+  assert.match(headProof, /shared \[trusted marker actor policy\]/);
   assert.match(
     headProof,
-    /configured `trustedMarkerActors`[\s\S]*`created_at`[\s\S]*`updated_at` must equal `created_at`/,
+    /live Write\/Maintain\/Admin collaborator permission when\s+`markerTrust\.allowCollaboratorMarkers` is enabled/,
   );
+  assert.match(headProof, /not a later heartbeat of the same claim/);
+  assert.match(headProof, /`updated_at` must equal\s+`created_at`/);
   assert.match(
     headProof,
-    /Reuse a\s+valid trusted marker[\s\S]*without requiring the branch ref\s+to exist/,
+    /First look\s+for a reusable, valid proof[\s\S]*without requiring the branch ref\s+to exist/,
   );
   const issueCommentRead = headProof.indexOf("claimed issue's comments");
-  const reusableProof = headProof.indexOf(
-    'valid trusted marker for this active claim',
-  );
-  const freshCapture = headProof.indexOf('If no reusable marker exists');
+  const reusableProof = headProof.indexOf('for a reusable, valid proof');
+  const freshCapture = headProof.indexOf('If no reusable proof exists');
   const branchLookup = headProof.indexOf('`git rev-parse {branch-name}`');
   assert.ok(
     issueCommentRead >= 0 &&
       reusableProof > issueCommentRead &&
       freshCapture > reusableProof &&
       branchLookup > freshCapture,
-    'F4 must read and reuse a valid marker before requiring the branch ref',
+    'F4 must read and reuse a valid proof before requiring the branch ref',
   );
   assert.match(
     headProof,
-    /If the ref exists, require its tip to equal the stored branch\s+tip; if it is absent, continue only through the resume-safe cleanup\s+guards below/,
+    /If the ref exists,\s+require its tip to equal the stored branch tip; if absent, continue only\s+through the resume-safe cleanup guards below/,
   );
   assert.match(
     headProof,
-    /If no reusable marker exists, capture the latest trusted\s+same-claim F2 watermark SHA and the branch tip with\s+`git rev-parse \{branch-name\}`/,
+    /take `\{f2-head-SHA\}` from the E1 `review-watermark` that F2 validated[\s\S]*latest valid same-claim `review-watermark`[\s\S]*not a separate\s+F2 watermark format[\s\S]*`git rev-parse \{branch-name\}`/,
   );
   assert.match(
     headProof,
@@ -3056,19 +3057,19 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /Before worktree removal, revalidate the claim and confirm the local\s+branch tip still equals `\{branch-tip-SHA\}`/,
+    /Before worktree removal, revalidate the claim and compare the path with\s+`git worktree list --porcelain`/,
   );
   assert.match(
     headProof,
-    /For a resumed step 5, check\s+the path against `git worktree list --porcelain`/,
+    /If both are absent, skip\s+inspection\/removal; the local branch may also be absent, and if it still\s+exists its tip must equal `\{branch-tip-SHA\}`/,
   );
   assert.match(
     headProof,
-    /if both the path and\s+its worktree registration are absent, skip its inspection and removal/,
+    /If both are present, require\s+the local branch to exist and its tip to equal `\{branch-tip-SHA\}`, then\s+run the normal safety inspection/,
   );
   assert.match(
     headProof,
-    /Delete the local branch with `git branch\s+-d` only when it exists; absence is already complete/,
+    /Delete the local branch with\s+`git branch\s+-d` only when it exists; absence is already complete/,
   );
   assert.match(
     headProof,
@@ -3076,7 +3077,7 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /verified absence is complete\. After deletion, confirm absence with the\s+same query/,
+    /returned full SHA equals\s+`\{branch-tip-SHA\}`; hold on any mismatch[\s\S]*`git push origin --delete \{branch-name\}`[\s\S]*confirm absence with the\s+same query/,
   );
   assert.match(headProof, /live branch ref is checked before cleanup/);
   const finalCheck = text.slice(prDigestCheck, issueDigest);

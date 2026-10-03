@@ -313,19 +313,24 @@ with better evidence, never a mechanical removal.
 F4's final PR-digest check may run after PR comments and branch refs have
 been removed. Keep the one-parent proof on the claimed issue so a fresh
 session can repeat the check after a hold (PR `#3741` review comments
-`#4173683166`, `#4173965043`, `#4173965808`, and `#4173965831`; preventive,
-no observed incident yet).
+`#4173683166`, `#4173965043`, `#4173965808`, `#4173965831`, `#4174056090`,
+`#4174056093`, `#4174056098`, and `#4174056101`; preventive, no observed
+incident yet).
 
 Before F4 step 3, revalidate the claim and local lock, then read the
-claimed issue's comments before inspecting the local branch. Reuse a
-valid trusted marker for this active claim, including its stored
-`{f2-head-SHA}` and `{branch-tip-SHA}`, without requiring the branch ref
-to exist. If the ref exists, require its tip to equal the stored branch
-tip; if it is absent, continue only through the resume-safe cleanup
-guards below. If no reusable marker exists, capture the latest trusted
-same-claim F2 watermark SHA and the branch tip with
-`git rev-parse {branch-name}`. Require both to be full 40-hex values and
-equal. Persist this exact marker on the claimed issue:
+claimed issue's comments before inspecting the local branch. First look
+for a reusable, valid proof for the active claim and PR; it restores both
+stored SHAs without requiring the branch ref to exist. If the ref exists,
+require its tip to equal the stored branch tip; if absent, continue only
+through the resume-safe cleanup guards below. If no reusable proof exists,
+take `{f2-head-SHA}` from the E1 `review-watermark` that F2 validated (on
+a fresh resume, restore the latest valid same-claim `review-watermark`
+from the PR comments). This is the review-snapshot marker, not a separate
+F2 watermark format. Apply the shared trusted-marker policy below; if no
+such watermark can be authenticated, hold before cleanup. Capture the
+branch tip with `git rev-parse {branch-name}` as `{branch-tip-SHA}`.
+Require both to be full 40-hex values and equal. Persist this exact marker
+on the claimed issue:
 
 ```text
 <!-- idd-f4-head-proof: v1 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} -->
@@ -338,13 +343,18 @@ gh api --paginate \
   "repos/{owner}/{repo}/issues/{issue-number}/comments"
 ```
 
-Ignore comments from untrusted authors. A reusable proof must match the
-active claim ID, PR number, branch, and both SHAs; its author must be in
-the configured `trustedMarkerActors`; its `created_at` must not precede
-the active claim; and `updated_at` must equal `created_at`. Identical
-duplicate markers carry the same proof. A trusted marker for this claim
-with conflicting values, malformed fields, or any edit is ambiguous and
-holds F4. Do not treat an untrusted marker as a conflict or as proof.
+Ignore comments from untrusted authors. Resolve author trust using the
+shared [trusted marker actor policy](../.github/instructions/idd-overview-core.instructions.md#trusted-marker-actors),
+including live Write/Maintain/Admin collaborator permission when
+`markerTrust.allowCollaboratorMarkers` is enabled; the configured list
+alone is not the complete policy. A reusable proof must match the active
+claim ID, PR number, branch, and both SHAs. Its `created_at` must not
+precede the initial trusted claim activation for this claim ID and branch
+(not a later heartbeat of the same claim), and `updated_at` must equal
+`created_at`. Identical duplicate markers carry the same proof. A trusted
+marker for this claim with conflicting values, malformed fields, or any
+edit is ambiguous and holds F4. Do not treat an untrusted marker as a
+conflict or as proof.
 
 If no trusted marker exists, revalidate the claim and local lock before
 posting. The comment body must start with the marker token and include a
@@ -368,22 +378,25 @@ blindly. A missing or inconclusive proof holds before cleanup. The proof
 is an issue comment, so merged-PR cleanup cannot remove it; retain it
 through claim release.
 
-Before worktree removal, revalidate the claim and confirm the local
-branch tip still equals `{branch-tip-SHA}`. For a resumed step 5, check
-the path against `git worktree list --porcelain`: if both the path and
-its worktree registration are absent, skip its inspection and removal;
-if both are present, run the normal safety inspection. A missing path
-with a registration, or a present path without one, holds as an
-inconsistent worktree state. Delete the local branch with `git branch
--d` only when it exists; absence is already complete. Keep the existing
-unmerged-branch hold path.
+Before worktree removal, revalidate the claim and compare the path with
+`git worktree list --porcelain`. If the path and registration disagree,
+hold as an inconsistent worktree state. If both are absent, skip
+inspection/removal; the local branch may also be absent, and if it still
+exists its tip must equal `{branch-tip-SHA}`. If both are present, require
+the local branch to exist and its tip to equal `{branch-tip-SHA}`, then
+run the normal safety inspection. Delete the local branch with
+`git branch -d` only when it exists; absence is already complete. Keep
+the existing unmerged-branch hold path.
 
 For step 6, query `git ls-remote --exit-code origin
-refs/heads/{branch-name}`. Delete the remote branch only when present;
-verified absence is complete. After deletion, confirm absence with the
-same query. Hold on lookup or deletion errors other than confirmed
-absence. These guards let a fresh F4 pass resume after cleanup without
-repeating destructive operations.
+refs/heads/{branch-name}` immediately before deletion. Delete the remote
+branch only when present and its returned full SHA equals
+`{branch-tip-SHA}`; hold on any mismatch. Then delete it with
+`git push origin --delete {branch-name}` and confirm absence with the
+same query. Verified absence is already complete. Hold on lookup or
+deletion errors other than confirmed absence. This tip check prevents a
+resumed cleanup from deleting commits added after the proof
+(PR `#3741` review comment `#4174056101`).
 
 After cleanup, step 7 rereads the trusted issue marker and live PR state:
 
