@@ -112,6 +112,82 @@ function extractJobBody(text: string, jobId: string): string {
 /** Marks lines that belong to YAML literal or folded block scalars. The
  * implicit indentation is the first non-empty content line, per YAML's
  * block-scalar rules. */
+function yamlMappingColonIndex(line: string): number {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (doubleQuoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      if (character === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+      break;
+    }
+    if (character === '"') {
+      doubleQuoted = true;
+    } else if (character === "'") {
+      singleQuoted = true;
+    } else if (
+      character === ':' &&
+      (index + 1 === line.length || /\s/.test(line[index + 1]))
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function yamlBlockScalarHeader(
+  line: string,
+): { contentHeaderIndent: number; explicitIndent?: number } | undefined {
+  const leadingIndent = line.match(/^ */)?.[0].length ?? 0;
+  let content = line.slice(leadingIndent);
+  let contentHeaderIndent = leadingIndent;
+  if (/^-\s/.test(content)) {
+    content = content.slice(1).trimStart();
+    const sequenceMappingColon = yamlMappingColonIndex(content);
+    if (sequenceMappingColon !== -1) {
+      contentHeaderIndent += 2;
+      content = content.slice(sequenceMappingColon + 1);
+    }
+  } else {
+    const mappingColon = yamlMappingColonIndex(content);
+    if (mappingColon === -1) {
+      return undefined;
+    }
+    content = content.slice(mappingColon + 1);
+  }
+
+  const value = stripYamlComment(content).trim();
+  const header = value.match(
+    /^(?:(?:&[^\s]+|![^\s]+)\s+)*(?:[|>])(?:([+-]?[1-9]|[1-9][+-]))?$/,
+  );
+  if (!header) {
+    return undefined;
+  }
+  const explicitIndent = header[1]?.match(/[1-9]/)?.[0];
+  return {
+    contentHeaderIndent,
+    ...(explicitIndent ? { explicitIndent: Number(explicitIndent) } : {}),
+  };
+}
+
 function yamlBlockScalarContentFlags(lines: string[]): boolean[] {
   const contentFlags = lines.map(() => false);
   let activeContentIndent: number | undefined;
@@ -148,14 +224,11 @@ function yamlBlockScalarContentFlags(lines: string[]): boolean[] {
       }
     }
 
-    const header = line.match(
-      /^([ ]*)(?:-\s+)?[^:\n]+:\s*[|>](?:([+-]?[1-9]|[1-9][+-]))?\s*(?:#.*)?$/,
-    );
+    const header = yamlBlockScalarHeader(line);
     if (header) {
-      pendingHeaderIndent = header[1].length;
-      const explicitIndent = header[2]?.match(/[1-9]/)?.[0];
-      pendingExplicitContentIndent = explicitIndent
-        ? pendingHeaderIndent + Number(explicitIndent)
+      pendingHeaderIndent = header.contentHeaderIndent;
+      pendingExplicitContentIndent = header.explicitIndent
+        ? pendingHeaderIndent + header.explicitIndent
         : undefined;
     }
   }
@@ -295,6 +368,69 @@ function extractWorkflowEnvironmentBlock(text: string): string {
   return block.join('\n');
 }
 
+/** Rejects merge keys inside env mappings because their inherited values
+ * cannot be verified by the line-based override scan. */
+function hasEnvironmentMergeKey(
+  lines: string[],
+  scalarContent: boolean[],
+): boolean {
+  let environmentIndent: number | undefined;
+  let flowMapDepth = 0;
+  const mergeKey = /(?:^|[{,])\s*(?:<<|'<<'|"<<")\s*:/;
+
+  for (const [index, line] of lines.entries()) {
+    if (scalarContent[index]) {
+      continue;
+    }
+    const uncommented = stripYamlComment(line);
+    if (uncommented.trim() === '') {
+      continue;
+    }
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (
+      environmentIndent !== undefined &&
+      flowMapDepth === 0 &&
+      indent <= environmentIndent
+    ) {
+      environmentIndent = undefined;
+    }
+
+    const environmentHeader = uncommented.match(
+      /^([ ]*)(?:env|'env'|"env")\s*:(.*)$/,
+    );
+    if (environmentHeader) {
+      const value = environmentHeader[2];
+      if (mergeKey.test(value)) {
+        return true;
+      }
+      const trimmedValue = value.trim();
+      flowMapDepth = yamlFlowMapBraceDelta(value);
+      const startsBlockMapping =
+        trimmedValue === '' ||
+        /^(?:(?:&[^\s]+|![^\s]+)\s+)*(?:&[^\s]+|![^\s]+)$/.test(trimmedValue);
+      environmentIndent =
+        flowMapDepth > 0 || startsBlockMapping
+          ? environmentHeader[1].length
+          : undefined;
+      continue;
+    }
+
+    if (
+      environmentIndent !== undefined &&
+      (flowMapDepth > 0 || indent > environmentIndent)
+    ) {
+      if (mergeKey.test(uncommented)) {
+        return true;
+      }
+      if (flowMapDepth > 0) {
+        flowMapDepth += yamlFlowMapBraceDelta(uncommented);
+      }
+    }
+  }
+
+  return false;
+}
+
 /** Extracts one named step's body from the job's `steps` mapping, stopping
  * before the next step. Similar headers elsewhere in the job cannot satisfy
  * a step-specific guard. */
@@ -394,6 +530,12 @@ const REQUIRED_NODE_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES.join(' ')
 function assertNoNodeExecutionOverrides(text: string, scope: string): void {
   const lines = text.split('\n');
   const scalarContent = yamlBlockScalarContentFlags(lines);
+  const usesEnvironmentMergeKey = hasEnvironmentMergeKey(lines, scalarContent);
+  assert.equal(
+    usesEnvironmentMergeKey,
+    false,
+    `lint.yml: ${scope} must not use YAML merge keys in env mappings because merged Node overrides cannot be verified`,
+  );
   const usesUnresolvedEnvironmentAlias = lines.some((line, index) => {
     if (scalarContent[index]) {
       return false;
@@ -907,6 +1049,30 @@ test('job extraction ignores job-like headers inside YAML block scalars', () => 
   assert.doesNotMatch(lintJob, /continue-on-error/);
 });
 
+test('anchored or quoted-key block scalars cannot impersonate the lint job', () => {
+  for (const scalarHeader of [
+    'metadata: &note |',
+    '"metadata: note": &note |',
+  ]) {
+    const workflow = [
+      scalarHeader,
+      '  lint:',
+      '    runs-on: ubuntu-latest',
+      'jobs:',
+      '  lint:',
+      '    if: false',
+      '    steps:',
+      '      - name: Other step',
+      '        run: echo ok',
+    ].join('\n');
+    const lintJob = extractJobBody(workflow, 'lint');
+    assert.throws(
+      () => assertLintJobEnforcesNodeFloor(lintJob),
+      /lint job must not be conditionally skipped/,
+    );
+  }
+});
+
 test('a command inside a quoted here-document cannot satisfy the Node log guard', () => {
   const stepBody = [
     '      - name: Assert Node.js floor',
@@ -1244,6 +1410,34 @@ test('PATH overrides and GITHUB_PATH writes are rejected at every lint scope', (
   assert.throws(
     () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([pathWrite])),
     rejection,
+  );
+});
+
+test('YAML merge keys in env mappings are rejected at every lint scope', () => {
+  const rejection = /must not use YAML merge keys in env mappings/;
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    env:\n      <<: *shared-env'),
+    rejection,
+  );
+  assert.throws(
+    () => assertLintJobUsesDefaultShell('', 'env:\n  <<: *shared-env'),
+    rejection,
+  );
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    env: { <<: *shared-env }'),
+    rejection,
+  );
+
+  const stepBody = syntheticFloorStep(['node --version']).replace(
+    '        run: |',
+    '        env:\n          <<: *shared-env\n        run: |',
+  );
+  assert.throws(() => assertNodeVersionLogBeforeFloor(stepBody), rejection);
+
+  assert.doesNotThrow(() =>
+    assertLintJobEnforcesNodeFloor(
+      '    strategy:\n      matrix:\n        <<: *shared-matrix',
+    ),
   );
 });
 
