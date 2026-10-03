@@ -1780,8 +1780,8 @@ head for a one-parent squash/rebase merge. It carries one `Last checked`
 value through dry-run, repair, and confirmation. A duplicate, failed
 validation, or inconclusive result keeps the claim active and stops
 before either completion write, preserving the claim as the repair
-authority (#3739; preventive; no observed incident yet for an
-unverifiable single-parent head).
+authority (kurone-kito/idd-skill#3739; preventive; no observed
+incident yet for an unverifiable single-parent head).
 
 ## Instruction delivery
 

@@ -2953,7 +2953,7 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     '2. Confirm the post-merge digest update',
     f4Start,
   );
-  const prDigestCheck = text.indexOf('7. Before the issue digest', f4Start);
+  const prDigestCheck = text.indexOf('7. After steps 4–6', f4Start);
   const issueDigest = text.indexOf('Phase: F4 complete', prDigestCheck);
   const claimRelease = text.indexOf(
     'Then post `unclaimed-by` for your own',
@@ -2971,46 +2971,49 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     'F4 must verify the PR digest before the issue digest and claim release',
   );
   const finalCheck = text.slice(prDigestCheck, issueDigest);
-  assert.match(finalCheck, /after\s+steps\s+4–6/);
-  assert.match(finalCheck, /Read `state,mergeCommit` from the live PR/);
-  assert.match(finalCheck, /state `MERGED`/);
+  assert.match(finalCheck, /After steps 4–6/);
+  assert.match(finalCheck, /Require live PR state `MERGED`/);
   assert.match(finalCheck, /mergeCommit\.oid/);
-  assert.match(finalCheck, /fetched commit with a matching SHA/);
+  assert.match(finalCheck, /fetch `mergeCommit\.oid` and\s+match its SHA/);
   assert.match(finalCheck, /one or two non-empty parents/);
-  assert.match(finalCheck, /Parent 2 is the merged head/);
-  assert.ok(finalCheck.includes('one-parent squash/rebase, reuse the matched'));
   assert.match(
     finalCheck,
-    /head SHA verified from step 2's `F3 merged` digest/,
+    /F3 merged` digest `Authoritative by` to name exactly that merge SHA/,
   );
-  assert.match(finalCheck, /If unverified,\s+hold/);
-  assert.match(finalCheck, /live `headRefOid`, which may advance after merge/);
+  assert.match(finalCheck, /one distinct full `PR_HEAD_SHA_F3`/);
+  assert.match(finalCheck, /for two parents, parent 2\s+must match it/);
+  assert.match(finalCheck, /Reuse that head for one-parent squash\/rebase/);
+  assert.match(finalCheck, /Hold on\s+missing, ambiguous, or mismatched/);
+  assert.match(
+    finalCheck,
+    /Never use live\s+`headRefOid`, which may advance after merge/,
+  );
   assert.match(finalCheck, /Claim: \{agent-id\} \/ \{claim-id\}/);
   assert.match(finalCheck, /Branch: \{branch-name\}/);
   assert.match(finalCheck, /Open blockers: none/);
   assert.match(finalCheck, /Next action: F4 cleanup then F5 discover/);
-  assert.match(finalCheck, /Authoritative by`[\s\S]*?both verified SHAs/);
-  assert.match(
-    finalCheck,
-    /Capture one `--last-checked` value for all digest calls/,
-  );
+  assert.match(finalCheck, /`Authoritative by` both SHAs/);
+  assert.match(finalCheck, /Capture one `--last-checked` value for all calls/);
   assert.match(finalCheck, /create`\/`update/);
   assert.match(
     finalCheck,
-    /--claim-issue \{issue-number\} --claim-id \{claim-id\} --agent-id \{agent-id\}/,
+    /apply\s+with `--claim-issue \{issue-number\} --claim-id \{claim-id\} --agent-id \{agent-id\}`/,
   );
-  assert.match(finalCheck, /use identical fields and timestamp/);
+  assert.match(finalCheck, /re-validate immediately before apply/);
+  assert.match(finalCheck, /same fields and timestamp/);
   assert.match(finalCheck, /confirm a dry-run\s+`noop`/);
   assert.match(
     finalCheck,
-    /Duplicate digests, invalid state\/SHA\/parents,[\s\S]*?inconclusive I\/O or verification/,
+    /Duplicate digests,[\s\S]*?invalid\s+state\/SHA\/parents,[\s\S]*?inconclusive checks/,
   );
-  assert.match(finalCheck, /inconclusive I\/O or verification/);
   assert.match(
     finalCheck,
-    /keep the claim active[\s\S]*?Re-validate\s+before posting a hold/,
+    /keep the claim active[\s\S]*?Re-validate before a hold/,
   );
-  assert.match(finalCheck, /stop before\s+the issue digest and `unclaimed-by`/);
+  assert.match(
+    finalCheck,
+    /stop before\s+the issue digest and\s+`unclaimed-by`/,
+  );
   assert.match(finalCheck, /If ownership was\s+lost,\s+post no hold/);
 });
 

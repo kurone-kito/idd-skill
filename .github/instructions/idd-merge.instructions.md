@@ -552,26 +552,24 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
 6. If GitHub auto-delete is disabled: delete the remote branch too.
    (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
-7. Before the issue digest, repeat step 2's PR-digest check after
-   steps 4–6. Read `state,mergeCommit` from the live PR; require
-   state `MERGED`, non-empty
-   `mergeCommit.oid`, and a fetched commit with a matching SHA. Accept
-   one or two non-empty parents. Parent 2 is the merged head for a
-   two-parent commit; for one-parent squash/rebase, reuse the matched
-   head SHA verified from step 2's `F3 merged` digest. If unverified,
-   hold. Never use live `headRefOid`, which may advance after merge.
-   Capture one `--last-checked` value for all digest calls. Dry-run
-   with `Claim: {agent-id} / {claim-id}`, `Branch: {branch-name}`,
+7. After steps 4–6, repeat step 2's PR-digest check before the issue
+   digest. Require live PR state `MERGED`; fetch `mergeCommit.oid` and
+   match its SHA. Accept one or two non-empty parents. Require step 2's
+   `F3 merged` digest `Authoritative by` to name exactly that merge SHA
+   and one distinct full `PR_HEAD_SHA_F3`; for two parents, parent 2
+   must match it. Reuse that head for one-parent squash/rebase. Hold on
+   missing, ambiguous, or mismatched values. Never use live
+   `headRefOid`, which may advance after merge.
+   Capture one `--last-checked` value for all calls. Dry-run with
+   `Claim: {agent-id} / {claim-id}`, `Branch: {branch-name}`,
    `Open blockers: none`, `Next action: F4 cleanup then F5 discover`,
-   and `Authoritative by` both verified SHAs. For `create`/`update`,
-   re-validate before apply with
-   `--claim-issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}`;
-   use identical fields and timestamp, re-validate, and confirm a dry-run
-   `noop`. Duplicate digests, invalid state/SHA/parents, or
-   inconclusive I/O or verification keep the claim active. Re-validate
-   before posting a hold, then stop before
-   the issue digest and `unclaimed-by` (#3728/#3730). If ownership was
-   lost, post no hold.
+   and `Authoritative by` both SHAs. For each `create`/`update`, apply
+   with `--claim-issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}`;
+   re-validate immediately before apply and confirm a dry-run `noop`
+   with the same fields and timestamp. Duplicate digests, invalid
+   state/SHA/parents, or inconclusive checks keep the claim active.
+   Re-validate before a hold, then stop before the issue digest and
+   `unclaimed-by` (#3728/#3730). If ownership was lost, post no hold.
    Re-validate the active claim before each mutation below. If it
    still uses your `{claim-id}`, upsert the claimed issue's own digest
    with `Phase: F4 complete`, `Claim: none`, `Branch: none`, `Open
