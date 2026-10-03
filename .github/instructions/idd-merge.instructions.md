@@ -321,10 +321,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    issue in D3's deliberate closing set explicitly, not only the
    claimed issue: `gh issue close {issue-number} --comment "Merged via
    #{pr-number}."`.
-2. Confirm the post-merge digest update above exists or repair it after
-   re-validating the claim. Do not minimize the digest as an
-   operational marker unless a future cleanup policy explicitly
-   supports digest retirement.
+2. Re-validate the claim; confirm the post-merge digest. If
+   `human_merge` left none, step 7 repairs it after cleanup; retain the
+   claim meanwhile. Do not minimize it unless cleanup policy permits.
 3. Run merged-PR comment cleanup (must not run before F3 succeeds).
    Re-validate the active claim before each GitHub minimization
    mutation.
@@ -552,14 +551,15 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
 6. If GitHub auto-delete is disabled: delete the remote branch too.
    (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
-7. After steps 4–6, repeat step 2's PR-digest check before the issue
-   digest. Fetch `mergeCommit.oid`; require PR `MERGED`, a full SHA, and
-   one or two non-empty parents. `F3 merged` `Authoritative by` must name
-   the merge SHA and distinct full `PR_HEAD_SHA_F3`. With two parents,
-   parent 2 must match it. With one parent, require that head, the latest
-   trusted same-claim F2 watermark SHA, live `headRefOid`, and Step 5's
-   branch-tip match all equal; the digest is not proof. Hold on missing,
-   ambiguous, or mismatched evidence.
+7. After steps 4–6, verify/repair the PR digest before the issue digest.
+   Require PR `MERGED`, full `mergeCommit.oid`, and 1–2 non-empty
+   parents. Derive `PR_HEAD_SHA_F3` from parent 2 (two parents) or only
+   the latest trusted same-claim F2 watermark (one); require live
+   `headRefOid` to match, plus Step 5's carried branch-tip SHA for one
+   parent. Never use digest head as proof. Use both proven, distinct
+   full SHAs in `F3 merged` `Authoritative by` to create/update even when
+   `human_merge` skipped F3 or the digest is missing/stale. Hold on
+   duplicate, invalid, or incomplete proof.
    Use one `--last-checked`. Dry-run fields: `Phase: F3 merged`,
    `Claim: {agent-id} / {claim-id}`, `Branch: {branch-name}`,
    `Open blockers: none`, `Next action: F4 cleanup then F5 discover`,

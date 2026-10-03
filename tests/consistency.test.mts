@@ -2950,7 +2950,7 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   const f4Start = text.indexOf('## F4 — Cleanup');
   const f4End = text.indexOf('\n## F5', f4Start);
   const earlyDigestCheck = text.indexOf(
-    '2. Confirm the post-merge digest update',
+    '2. Re-validate the claim; confirm the post-merge digest',
     f4Start,
   );
   const prDigestCheck = text.indexOf('7. After steps 4–6', f4Start);
@@ -2971,24 +2971,32 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     'F4 must verify the PR digest before the issue digest and claim release',
   );
   const finalCheck = text.slice(prDigestCheck, issueDigest);
+  const earlyCheck = text.slice(earlyDigestCheck, prDigestCheck);
+  assert.match(
+    earlyCheck,
+    /If\s+`human_merge` left none, step 7 repairs it after cleanup/,
+  );
+  assert.match(earlyCheck, /retain the\s+claim meanwhile/);
   assert.match(finalCheck, /After steps 4–6/);
-  assert.match(finalCheck, /require PR `MERGED`/);
+  assert.match(finalCheck, /Require PR `MERGED`/);
   assert.match(finalCheck, /mergeCommit\.oid/);
-  assert.match(finalCheck, /Fetch `mergeCommit\.oid`/);
-  assert.match(finalCheck, /one or two non-empty parents/);
+  assert.match(finalCheck, /1–2 non-empty\s+parents/);
   assert.match(finalCheck, /`F3 merged` `Authoritative by`/);
-  assert.match(finalCheck, /distinct full `PR_HEAD_SHA_F3`/);
-  assert.match(finalCheck, /With two parents,[\s\S]*?parent 2 must match it/);
+  assert.match(finalCheck, /Derive `PR_HEAD_SHA_F3` from parent 2/);
+  assert.match(finalCheck, /only\s+the latest trusted same-claim F2 watermark/);
+  assert.match(finalCheck, /require live\s+`headRefOid` to match/);
+  assert.match(finalCheck, /Step 5's carried branch-tip SHA for one\s+parent/);
+  assert.match(finalCheck, /Never use digest head as proof/);
   assert.match(
     finalCheck,
-    /With one parent,[\s\S]*?latest\s+trusted same-claim F2 watermark SHA,[\s\S]*?live `headRefOid`,[\s\S]*?Step 5's\s+branch-tip match all equal/,
+    /Use both proven, distinct\s+full SHAs in `F3 merged` `Authoritative by`/,
   );
-  assert.match(finalCheck, /the digest is not proof/);
+  assert.match(
+    finalCheck,
+    /even when\s+`human_merge` skipped F3 or the digest is missing\/stale/,
+  );
+  assert.match(finalCheck, /Hold on\s+duplicate, invalid, or incomplete proof/);
   assert.match(finalCheck, /Phase: F3 merged/);
-  assert.match(
-    finalCheck,
-    /Hold on missing,\s+ambiguous, or mismatched evidence/,
-  );
   assert.match(finalCheck, /Claim: \{agent-id\} \/ \{claim-id\}/);
   assert.match(finalCheck, /Branch: \{branch-name\}/);
   assert.match(finalCheck, /Open blockers: none/);

@@ -1509,11 +1509,14 @@ stale at the release boundary.
 
 F4 now repeats the PR-digest check after worktree and branch cleanup,
 before writing the issue's completion digest or releasing the claim. A
-two-parent merge binds the digest head to parent 2. A one-parent
-squash/rebase merge is accepted only when the trusted same-claim F2
-watermark, live PR head, and F4 step 5 branch-tip comparison all agree;
-the digest cannot supply its own head proof. Missing or mismatched
-evidence keeps the claim active. Repair carries the `F3 merged` phase
+two-parent merge binds the digest head to parent 2. On a `human_merge`
+resume, F2.5 did not write an F3 digest, so F4 repairs it from live
+merge evidence. For a one-parent squash/rebase, F4 takes the candidate
+only from the latest trusted same-claim F2 watermark when it matches the live
+PR head; after cleanup, step 5's branch-tip comparison must match too.
+The digest cannot supply its own head proof. Missing or mismatched
+evidence keeps the claim active. Repair
+carries the `F3 merged` phase
 and one `Last checked` value through dry-run, apply, and confirmation,
 with claim ownership revalidated around apply. A duplicate, failed
 validation, or inconclusive result stops before either completion write,
