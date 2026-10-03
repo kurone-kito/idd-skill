@@ -211,7 +211,10 @@ function extractWorkflowEnvironmentBlock(text: string): string {
   const header = stripYamlComment(lines[start]);
   const inlineValue = header.match(/^(?:env|'env'|"env")\s*:(.*)$/)?.[1];
   if (inlineValue?.trim()) {
-    return header;
+    const value = inlineValue.trim();
+    if (value.startsWith('{') || !/^(?:&[^\s]+|![^\s]+)(?:\s|$)/.test(value)) {
+      return header;
+    }
   }
 
   const block = [header];
@@ -317,7 +320,7 @@ function assertNoNodeOptions(text: string, scope: string): void {
       return !shellLine.startsWith('#') && /\bNODE_OPTIONS\b/.test(shellLine);
     }
     const uncommented = stripYamlComment(line);
-    return /(?:^|\{)\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS")\s*:/.test(
+    return /(?:^|[{,])\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS")\s*:/.test(
       uncommented,
     );
   });
@@ -937,6 +940,7 @@ test('NODE_OPTIONS preloads are rejected at workflow, job, and step scopes', () 
     `NODE_OPTIONS: ${options}`,
     `"NODE_OPTIONS": ${options}`,
     `{ NODE_OPTIONS: ${options} }`,
+    `{ CI: true, NODE_OPTIONS: ${options} }`,
   ];
   for (const assignment of assignments) {
     const jobEnvironment = assignment.startsWith('{')
@@ -978,6 +982,17 @@ test('NODE_OPTIONS preloads are rejected at workflow, job, and step scopes', () 
   assert.throws(
     () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([scriptWrite])),
     /Assert Node\.js floor step must not configure or reference NODE_OPTIONS/,
+  );
+});
+
+test('a workflow env anchor keeps its mapping body in the preload scan', () => {
+  assert.throws(
+    () =>
+      assertLintJobUsesDefaultShell(
+        '',
+        'env: &lint-env\n  NODE_OPTIONS: --require=./exit.cjs',
+      ),
+    /workflow environment must not configure or reference NODE_OPTIONS/,
   );
 });
 
