@@ -318,8 +318,12 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    #{pr-number}."`.
 2. Re-validate claim; confirm the PR digest. If `human_merge` left
    none, retain the claim; step 7 repairs it after cleanup. Before step
-   3, carry the latest trusted same-claim F2 watermark SHA as
-   `{f2-head-SHA}`. Do not minimize the digest unless policy permits.
+   3, capture the latest trusted same-claim F2 watermark SHA as
+   `{f2-head-SHA}` and `{branch-tip-SHA}` from
+   `git rev-parse {branch-name}`. Require equal full 40-hex values.
+   Follow the [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
+   and hold if it cannot be authenticated. Keep the proof through F4.
+   Do not use the digest as proof.
 3. Run merged-PR comment cleanup (must not run before F3 succeeds).
    Re-validate the active claim before each GitHub minimization
    mutation.
@@ -531,8 +535,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    or removed`, and only after leftovers are preserved. Revalidate
    `--worktree` immediately before that retry.
    [Removed-cwd](../../docs/idd-helper-scripts.md#f4-branch-failure-routes).
-   Before removing the worktree, carry `{branch-tip-SHA}` =
-   `git rev-parse {branch-name}` to step 7.
+   Before removing the worktree, revalidate the claim and confirm
+   `git rev-parse {branch-name}` still equals the proof's
+   `{branch-tip-SHA}`.
    Then:
 
    - `git worktree remove <path>`.
@@ -550,16 +555,13 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 6. If GitHub auto-delete is disabled: delete the remote branch too.
    (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
 7. After steps 4–6, verify/repair the PR digest before the issue digest.
-   Read `state`, `mergeCommit.oid`, and `headRefOid` live with
-   `gh pr view {pr-number} --json state,mergeCommit,headRefOid`; require
-   `MERGED` and a full merge oid. Read the commit object with
-   `gh api repos/{owner}/{repo}/git/commits/{mergeCommit.oid}`; require
-   `.sha` to equal the oid and 1–2 `.parents[].sha` values, all full
-   40-hex. Hold on any read or shape failure. `PR_HEAD_SHA_F3` is parent
-   2 (two parents), else only
-   carried `{f2-head-SHA}`. Require live `headRefOid` to match; for one
-   parent, also match Step 5's `{branch-tip-SHA}`. Never use digest head
-   as proof. Upsert `F3 merged` `Authoritative by` with both proven,
+   Follow [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof);
+   hold on any read or shape failure. Bind its trusted marker to this
+   claim, PR, branch, and live `headRefOid`. Set `PR_HEAD_SHA_F3` to
+   parent 2 (two parents), else the proof's `{f2-head-SHA}`; require both
+   SHAs and the selected value to equal `headRefOid`. Never use digest
+   head as proof.
+   Upsert `F3 merged` `Authoritative by` with both proven,
    distinct full SHAs, even if `human_merge` skipped F3 or the digest is
    missing/stale. Hold on duplicate, invalid, or incomplete proof.
    Use one `--last-checked` throughout. Dry-run fields: `Phase: F3 merged`,

@@ -1783,11 +1783,12 @@ captures the branch tip before removing the worktree. Both must match
 the live PR head; the digest cannot supply its own head proof. These
 inputs were added after review found cleanup could otherwise remove the
 only proof sources, the merged-PR resume route skipped F2 capture, the
-detail guide omitted that step, and the provider view omitted commit
-parents (PR `#3741` review comments
+detail guide omitted that step, the branch-tip proof was only in the
+prior session's memory after branch deletion, and the provider view
+omitted commit parents (PR `#3741` review comments
 `#4173311932`, `#4173311978`, `#4173312001`, `#4173458244`, and
-`#4173461374`, and `#4173600915`; preventive, no completed F4 failure has been
-observed). Missing or mismatched evidence
+`#4173461374`, `#4173600915`, and `#4173683166`; preventive, no completed
+F4 failure has been observed). Missing or mismatched evidence
 keeps the claim active. Repair carries the `F3 merged` phase
 and one `Last checked` value through dry-run, apply, and confirmation,
 with claim ownership revalidated around apply. A duplicate, failed

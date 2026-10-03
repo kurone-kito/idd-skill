@@ -2982,6 +2982,48 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     resumeDetail,
     /runs the full `idd-merge\.instructions\.md` F4\s+contract \(steps 2 and 4-7,/,
   );
+  const headProofStart = resumeDetail.indexOf('## F4 Head Proof');
+  const headProofEnd = resumeDetail.indexOf('\n## ', headProofStart + 1);
+  const headProof = resumeDetail.slice(headProofStart, headProofEnd);
+  assert.ok(headProofStart >= 0 && headProofEnd > headProofStart);
+  assert.match(
+    headProof,
+    /idd-f4-head-proof: v1 pr=\{pr-number\} claim=\{claim-id\} branch=\{branch-name\} f2=\{f2-head-SHA\} branch-tip=\{branch-tip-SHA\}/,
+  );
+  assert.match(
+    headProof,
+    /gh api --paginate[\s\S]*issues\/\{issue-number\}\/comments/,
+  );
+  assert.match(
+    headProof,
+    /gh pr view \{pr-number\} --json state,mergeCommit,headRefOid/,
+  );
+  assert.match(
+    headProof,
+    /gh api repos\/\{owner\}\/\{repo\}\/git\/commits\/\{mergeCommit\.oid\}/,
+  );
+  assert.match(
+    headProof,
+    /Require `MERGED`, a full merge oid, `\.sha` equal to that oid, and 1–2\s+full 40-hex parent SHAs/,
+  );
+  assert.match(headProof, /Ignore comments from untrusted authors/);
+  assert.match(
+    headProof,
+    /configured `trustedMarkerActors`[\s\S]*`created_at`[\s\S]*`updated_at` must equal `created_at`/,
+  );
+  assert.match(headProof, /gh issue comment \{issue-number\} --body/);
+  assert.match(
+    headProof,
+    /If the write response\s+is ambiguous, reconcile by reading comments; never post another marker\s+blindly/,
+  );
+  assert.match(
+    headProof,
+    /For a\s+two-parent merge, parent 2 must equal both stored SHAs and the live PR\s+`headRefOid`/,
+  );
+  assert.match(
+    headProof,
+    /for a one-parent\s+merge, use the stored F2 SHA as\s+`PR_HEAD_SHA_F3` and require the branch\s+tip and live\s+`headRefOid` to\s+equal it/,
+  );
   const finalCheck = text.slice(prDigestCheck, issueDigest);
   const earlyCheck = text.slice(earlyDigestCheck, prDigestCheck);
   assert.match(
@@ -2990,31 +3032,26 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     earlyCheck,
-    /Before step\s+3, carry the latest trusted same-claim\s+F2 watermark SHA as\s+`\{f2-head-SHA\}`/,
+    /Before step\s+3, capture the latest trusted same-claim F2 watermark SHA as\s+`\{f2-head-SHA\}` and `\{branch-tip-SHA\}`/,
   );
+  assert.match(earlyCheck, /idd-resume-detail\.md#f4-head-proof/);
   assert.match(finalCheck, /After steps 4–6/);
-  assert.match(finalCheck, /`MERGED` and a full merge oid/);
-  assert.match(finalCheck, /mergeCommit\.oid/);
   assert.match(
     finalCheck,
-    /`gh pr view \{pr-number\} --json state,mergeCommit,headRefOid`/,
+    /Follow \[F4 Head Proof\][\s\S]*hold on any read or shape failure/,
   );
   assert.match(
     finalCheck,
-    /`gh api repos\/\{owner\}\/\{repo\}\/git\/commits\/\{mergeCommit\.oid\}`/,
+    /Bind its trusted marker to this\s+claim, PR, branch, and live `headRefOid`/,
   );
-  assert.match(
-    finalCheck,
-    /1–2 `\.parents\[\]\.sha` values, all full\s+40-hex/,
-  );
-  assert.match(finalCheck, /Hold on any read or shape failure/);
-  assert.match(finalCheck, /1–2 `\.parents\[\]\.sha` values/);
   assert.match(finalCheck, /`F3 merged` `Authoritative by`/);
-  assert.match(finalCheck, /`PR_HEAD_SHA_F3` is parent\s+2/);
-  assert.match(finalCheck, /else only\s+carried `\{f2-head-SHA\}`/);
-  assert.match(finalCheck, /Require live\s+`headRefOid` to match/);
-  assert.match(finalCheck, /Step 5's `\{branch-tip-SHA\}`/);
-  assert.match(finalCheck, /Never use digest head\s+as proof/);
+  assert.match(finalCheck, /Set\s+`PR_HEAD_SHA_F3` to\s+parent\s+2/);
+  assert.match(finalCheck, /else the proof's\s+`\{f2-head-SHA\}`/);
+  assert.match(
+    finalCheck,
+    /require both\s+SHAs and the selected value to equal `headRefOid`/,
+  );
+  assert.match(finalCheck, /Never use digest\s+head\s+as proof/);
   assert.match(
     finalCheck,
     /Upsert `F3 merged` `Authoritative by` with both proven,\s+distinct full SHAs/,
@@ -3035,7 +3072,7 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   const step5 = text.slice(step5Start, step6Start);
   assert.match(
     step5,
-    /Before removing the worktree, carry `\{branch-tip-SHA\}` =\s+`git rev-parse \{branch-name\}` to step 7/,
+    /Before removing the worktree, revalidate the claim and confirm\s+`git rev-parse \{branch-name\}` still equals the proof's\s+`\{branch-tip-SHA\}`/,
   );
   assert.ok(
     step5.indexOf('Before removing the worktree') <

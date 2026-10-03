@@ -308,6 +308,69 @@ naming this session as displaced, or a merged PR whose issue was never
 claimed at all) the same way: each needs a human or a future resume pass
 with better evidence, never a mechanical removal.
 
+## F4 Head Proof
+
+F4's final PR-digest check may run after PR comments and branch refs have
+been removed. Keep the one-parent proof on the claimed issue so a fresh
+session can repeat the check after a hold (PR `#3741` review comment
+`#4173683166`; preventive, no observed incident yet).
+
+Before F4 step 3, capture the latest trusted same-claim F2 watermark SHA
+as `{f2-head-SHA}` and the branch tip with
+`git rev-parse {branch-name}` as `{branch-tip-SHA}`. Require both to be
+full 40-hex values and equal. Persist this exact marker on the claimed
+issue:
+
+```text
+<!-- idd-f4-head-proof: v1 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} -->
+```
+
+Read issue comments with:
+
+```sh
+gh api --paginate \
+  "repos/{owner}/{repo}/issues/{issue-number}/comments"
+```
+
+Ignore comments from untrusted authors. A reusable proof must match the
+active claim ID, PR number, branch, and both SHAs; its author must be in
+the configured `trustedMarkerActors`; its `created_at` must not precede
+the active claim; and `updated_at` must equal `created_at`. Identical
+duplicate markers carry the same proof. A trusted marker for this claim
+with conflicting values, malformed fields, or any edit is ambiguous and
+holds F4. Do not treat an untrusted marker as a conflict or as proof.
+
+If no trusted marker exists, revalidate the claim and local lock before
+posting:
+
+```sh
+gh issue comment {issue-number} --body \
+  '<!-- idd-f4-head-proof: v1 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} -->'
+```
+
+Fetch the comments again and confirm the exact body, trusted author,
+`created_at`, and `updated_at` before continuing. If the write response
+is ambiguous, reconcile by reading comments; never post another marker
+blindly. A missing or inconclusive proof holds before cleanup. The proof
+is an issue comment, so merged-PR cleanup cannot remove it; retain it
+through claim release.
+
+Before worktree removal, revalidate the claim and confirm the local
+branch tip still equals `{branch-tip-SHA}`. After cleanup, step 7 rereads
+the trusted issue marker and live PR state:
+
+```sh
+gh pr view {pr-number} --json state,mergeCommit,headRefOid
+gh api repos/{owner}/{repo}/git/commits/{mergeCommit.oid}
+```
+
+Require `MERGED`, a full merge oid, `.sha` equal to that oid, and 1–2
+full 40-hex parent SHAs. Hold on any read or shape failure. For a
+two-parent merge, parent 2 must equal both stored SHAs and the live PR
+`headRefOid`; for a one-parent merge, use the stored F2 SHA as
+`PR_HEAD_SHA_F3` and require the branch tip and live `headRefOid` to
+equal it. The PR digest remains display state, never proof.
+
 ## §W1 — PR exists (1 match), no worktree
 
 Run `git fetch origin` from the primary worktree (this is a
