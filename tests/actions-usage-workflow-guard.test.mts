@@ -176,7 +176,7 @@ function yamlBlockScalarHeader(
 
   const value = stripYamlComment(content).trim();
   const header = value.match(
-    /^(?:(?:&[^\s]+|![^\s]+)\s+)*(?:[|>])(?:([+-]?[1-9]|[1-9][+-]))?$/,
+    /^(?:(?:&[^\s]+|![^\s]+)\s+)*(?:[|>])(?:([+-]?[1-9]|[1-9][+-]|[+-]))?$/,
   );
   if (!header) {
     return undefined;
@@ -552,19 +552,27 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
       ' must not use an unresolved env alias because its preload values cannot be verified',
   );
 
+  const executionOverrideToken =
+    /\b(?:NODE_OPTIONS|BASH_ENV|PATH|GITHUB_PATH)\b|\bBASH_FUNC_node%%/;
   const configuresOrReferencesOverride = lines.some((line, index) => {
     if (scalarContent[index]) {
       const shellLine = line.trimStart();
       return (
-        !shellLine.startsWith('#') &&
-        /\b(?:NODE_OPTIONS|BASH_ENV|PATH|GITHUB_PATH)\b|\bBASH_FUNC_node%%/.test(
-          shellLine,
-        )
+        !shellLine.startsWith('#') && executionOverrideToken.test(shellLine)
       );
     }
     const uncommented = stripYamlComment(line);
-    return /(?:^|[{,])\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS"|BASH_ENV|'BASH_ENV'|"BASH_ENV"|BASH_FUNC_node%%|'BASH_FUNC_node%%'|"BASH_FUNC_node%%"|PATH|'PATH'|"PATH"|GITHUB_PATH|'GITHUB_PATH'|"GITHUB_PATH")\s*:/.test(
-      uncommented,
+    const configuresOverride =
+      /(?:^|[{,])\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS"|BASH_ENV|'BASH_ENV'|"BASH_ENV"|BASH_FUNC_node%%|'BASH_FUNC_node%%'|"BASH_FUNC_node%%"|PATH|'PATH'|"PATH"|GITHUB_PATH|'GITHUB_PATH'|"GITHUB_PATH")\s*:/.test(
+        uncommented,
+      );
+    const inlineRunValue = uncommented.match(
+      /^\s*(?:-\s*)?(?:run|'run'|"run")\s*:(.*)$/,
+    )?.[1];
+    return (
+      configuresOverride ||
+      (inlineRunValue !== undefined &&
+        executionOverrideToken.test(inlineRunValue))
     );
   });
   assert.equal(
@@ -1053,6 +1061,8 @@ test('anchored or quoted-key block scalars cannot impersonate the lint job', () 
   for (const scalarHeader of [
     'metadata: &note |',
     '"metadata: note": &note |',
+    'metadata: |-',
+    'metadata: |+',
   ]) {
     const workflow = [
       scalarHeader,
@@ -1409,6 +1419,23 @@ test('PATH overrides and GITHUB_PATH writes are rejected at every lint scope', (
   );
   assert.throws(
     () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([pathWrite])),
+    rejection,
+  );
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        '    steps:\n      - run: echo /tmp/fake-bin >> "$GITHUB_PATH"',
+      ),
+    rejection,
+  );
+  assert.throws(
+    () =>
+      assertNodeVersionLogBeforeFloor(
+        [
+          '      - name: Assert Node.js floor',
+          '        run: echo NODE_OPTIONS=--require=./exit.cjs >> "$GITHUB_ENV"',
+        ].join('\n'),
+      ),
     rejection,
   );
 });
