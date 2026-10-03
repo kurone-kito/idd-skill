@@ -1495,6 +1495,27 @@ caught by A4.5's supersession signals; the one documented window is
 about three minutes, for kurone-kito/idd-skill#3597), so the rule rests
 on the repeated hand repairs, not on the window.
 
+### F4 verifies the PR digest before it releases the claim
+
+Observed 2026-10-02 while completing kurone-kito/idd-skill#3728:
+pull request [`kurone-kito/idd-skill#3730`](https://github.com/kurone-kito/idd-skill/pull/3730)
+merged at `9113400ec41ab0a05e406a0621509a9f75acdfd2`, but its
+live PR digest still said `F2 merge readiness`. F4 wrote the claimed
+issue's digest as complete and posted `unclaimed-by`; a later dry-run of
+`live-status-digest --pr 3730` returned `update`, while the normal claim
+gate no longer allowed repair after release. An earlier F4 check alone
+therefore leaves no ordinary repair path when the PR digest is still
+stale at the release boundary.
+
+F4 now repeats the PR-digest check after worktree and branch cleanup,
+before writing the issue's completion digest or releasing the claim. It
+binds the expected `F3 merged` digest to the merge commit and its second
+parent, the PR head actually merged, and carries one `Last checked` value
+through dry-run, repair, and confirmation. A duplicate, failed
+validation, or inconclusive result keeps the claim active and stops
+before either completion write, preserving the claim as the repair
+authority.
+
 ## Instruction delivery
 
 ### Skill-based on-demand delivery of phase instructions: no-go (2026-07-16)

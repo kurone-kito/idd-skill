@@ -2943,6 +2943,68 @@ test('idd-merge.instructions.md F4 routes the worktree-in-use, diverged, and unm
   assert.match(step5, /operator[\s\S]{0,40}branch\s+-D/);
 });
 
+test('idd-merge.instructions.md F4 verifies the PR digest before the issue digest and claim release (#3739)', () => {
+  const text = readText(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  const f4Start = text.indexOf('## F4 — Cleanup');
+  const f4End = text.indexOf('\n## F5', f4Start);
+  const earlyDigestCheck = text.indexOf(
+    '2. Confirm the post-merge digest update',
+    f4Start,
+  );
+  const prDigestCheck = text.indexOf(
+    '7. Before the issue digest below',
+    f4Start,
+  );
+  const issueDigest = text.indexOf('Phase: F4 complete', prDigestCheck);
+  const claimRelease = text.indexOf(
+    'Then post `unclaimed-by` for your own',
+    issueDigest,
+  );
+  assert.ok(
+    f4Start >= 0 &&
+      f4End > f4Start &&
+      earlyDigestCheck > f4Start &&
+      earlyDigestCheck < prDigestCheck &&
+      prDigestCheck > f4Start &&
+      issueDigest > prDigestCheck &&
+      claimRelease > issueDigest &&
+      claimRelease < f4End,
+    'F4 must verify the PR digest before the issue digest and claim release',
+  );
+  const finalCheck = text.slice(prDigestCheck, issueDigest);
+  assert.match(finalCheck, /after\s+steps\s+4–6/);
+  assert.match(finalCheck, /state,mergeCommit/);
+  assert.match(finalCheck, /require\s+`MERGED`/);
+  assert.match(finalCheck, /mergeCommit\.oid/);
+  assert.match(finalCheck, /exactly\s+two\s+non-empty\s+parent\s+SHAs/);
+  assert.match(finalCheck, /second\s+parent\s+as\s+`PR_HEAD_SHA_F3`/);
+  assert.match(
+    finalCheck,
+    /live\s+`headRefOid`\s+can\s+change\s+after\s+merge/,
+  );
+  assert.match(finalCheck, /Phase: F3\s+merged/);
+  assert.match(finalCheck, /Claim: \{claim-id\}/);
+  assert.match(finalCheck, /Branch: \{branch-name\}/);
+  assert.match(finalCheck, /Open blockers: none/);
+  assert.match(finalCheck, /F4 cleanup then F5 discover/);
+  assert.match(
+    finalCheck,
+    /--last-checked[\s\S]*?confirming dry-run `noop`;\s+continue only on `noop`/,
+  );
+  assert.match(finalCheck, /On duplicate,[\s\S]*?state not `MERGED`/);
+  assert.match(finalCheck, /empty\/mismatched SHAs/);
+  assert.match(finalCheck, /parent\s+count\s+other\s+than\s+two/);
+  assert.match(finalCheck, /post a hold/);
+  assert.match(
+    finalCheck,
+    /stop\s+before\s+the\s+issue digest and `unclaimed-by`/,
+  );
+  assert.match(finalCheck, /inconclusive reads, writes, or verification/);
+  assert.match(finalCheck, /keep\s+the\s+claim\s+active/);
+});
+
 test('idd-work.instructions.md confines every bare `main` mention to the B1 trusted-checkout contract (#2274)', () => {
   const text = readText(
     'idd-template/.github/instructions/idd-work.instructions.md',
