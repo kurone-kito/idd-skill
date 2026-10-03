@@ -241,16 +241,33 @@ function extractWorkflowEnvironmentBlock(text: string): string {
   return block.join('\n');
 }
 
-/** Extracts one named step's body from a job, stopping before the next
- * step. The exact step header keeps comments or similarly named steps
- * elsewhere in the workflow from satisfying a step-specific guard. */
+/** Extracts one named step's body from the job's `steps` mapping, stopping
+ * before the next step. Similar headers elsewhere in the job cannot satisfy
+ * a step-specific guard. */
 function extractNamedStepBody(
   text: string,
   jobId: string,
   stepName: string,
 ): string {
   const jobBody = extractJobBody(text, jobId);
-  const lines = jobBody.split('\n');
+  const jobLines = jobBody.split('\n');
+  const jobScalarContent = yamlBlockScalarContentFlags(jobLines);
+  const stepsStart = jobLines.findIndex(
+    (line, index) =>
+      !jobScalarContent[index] &&
+      /^ {4}(?:steps|'steps'|"steps")\s*:/.test(stripYamlComment(line)),
+  );
+  assert.notEqual(stepsStart, -1, `steps mapping not found in job ${jobId}`);
+  const nextJobProperty = jobLines.findIndex(
+    (line, index) =>
+      index > stepsStart &&
+      !jobScalarContent[index] &&
+      /^ {4}(?!#)\S/.test(line),
+  );
+  const lines = jobLines.slice(
+    stepsStart + 1,
+    nextJobProperty === -1 ? undefined : nextJobProperty,
+  );
   const scalarContent = yamlBlockScalarContentFlags(lines);
   const matchingSteps = lines
     .map((line, index) =>
@@ -774,6 +791,26 @@ test('a YAML block scalar cannot impersonate the named Node floor step', () => {
     "          node -e '",
     '            process.exit(0);',
     "          '\n",
+    '    steps:',
+    '      - name: Other step',
+    '        run: echo ok',
+  ].join('\n');
+
+  assert.throws(
+    () => extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
+    /expected exactly one step .* found 0/,
+  );
+});
+
+test('a same-named list item outside job.steps cannot impersonate the floor step', () => {
+  const workflow = [
+    'jobs:',
+    '  lint:',
+    '    metadata:',
+    '      - name: Assert Node.js floor',
+    '        run: |',
+    '          node --version',
+    '          node -e "process.exit(0)"',
     '    steps:',
     '      - name: Other step',
     '        run: echo ok',
