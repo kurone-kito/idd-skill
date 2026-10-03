@@ -382,14 +382,15 @@ test('comment-triggered self-waiver token-scope probe is trusted, read-only, and
     assert.match(probe, /gh pr view/);
     assert.match(
       probe,
-      /--jq '\[any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\), any\(\.statusCheckRollup\[\]\?; \.__typename == "StatusContext"\)\] \| map\(tostring\) \| join\(" "\)'/,
-      `${path}: probe must verify Actions and legacy status contexts exercised both read scopes`,
+      /--jq '\[any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\), any\(\.statusCheckRollup\[\]\?; \.__typename == "StatusContext"\), any\(\.closingIssuesReferences\[\]\?; \.number > 0\)\] \| map\(tostring\) \| join\(" "\)'/,
+      `${path}: probe must verify Actions, legacy status, and a linked issue exercise all read scopes`,
     );
     assert.match(probe, /has no Actions check run/);
     assert.match(probe, /has no legacy status context/);
+    assert.match(probe, /has no linked closing issue/);
     assert.match(
       probe,
-      /Read-only self-waiver query probe succeeded for PR .*Actions and legacy status contexts/,
+      /Read-only self-waiver query probe succeeded for PR .*Actions, legacy status, and a linked issue/,
     );
     assert.doesNotMatch(
       probe,
@@ -454,7 +455,10 @@ test('onboarding guide explains how to run the trusted default-branch probe', ()
   assert.match(section, /other casing/i);
   assert.match(section, /no ref input, checkout, PR code/i);
   assert.match(section, /comment write/i);
-  assert.match(section, /Actions\s+check\s+run\s+and a legacy status context/i);
+  assert.match(
+    section,
+    /Actions\s+check,\s+legacy status,\s+and linked\s+issue/i,
+  );
   assert.match(section, /this run's token access here/i);
   assert.match(section, /denied reads point to token or\s+Actions settings/i);
   assert.match(section, /`issues: write`/);

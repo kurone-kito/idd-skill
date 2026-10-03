@@ -412,8 +412,8 @@ comments, edits, other text, other casing, and other associations do not. It
 gets PR number and repo from the event. No ref input, checkout, PR code,
 comment write, or required-gate change occurs.
 
-Full helper query includes `closingIssuesReferences` and needs an Actions
-check run and a legacy status context. Permissions:
+`closingIssuesReferences` needs an Actions check, legacy status, and linked
+issue. Permissions:
 
 | Read scope            |
 | --------------------- |
