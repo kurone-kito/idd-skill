@@ -304,6 +304,19 @@ const REQUIRED_NODE_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES.join(' ')
   .replace(/\s+/g, ' ')
   .trim();
 
+function assertLintJobEnforcesNodeFloor(jobBody: string): void {
+  assert.doesNotMatch(
+    jobBody,
+    /^ {4}if\s*:/m,
+    'lint.yml: lint job must not be conditionally skipped',
+  );
+  assert.doesNotMatch(
+    jobBody,
+    /^ {4}continue-on-error\s*:/m,
+    'lint.yml: lint job must not set continue-on-error',
+  );
+}
+
 /** Splits a shell script into basic commands while keeping quoted multiline
  * arguments as one word. This guard only needs simple word boundaries and
  * command separators, not shell expansion or execution. */
@@ -410,6 +423,11 @@ function assertNodeVersionLogBeforeFloor(stepBody: string): void {
     stepBody,
     /^ {8}if\s*:/m,
     'lint.yml: Assert Node.js floor step must not be conditionally skipped',
+  );
+  assert.doesNotMatch(
+    stepBody,
+    /^ {8}continue-on-error\s*:/m,
+    'lint.yml: Assert Node.js floor step must not set continue-on-error',
   );
   const lines = executableLinesFromLiteralRun(stepBody);
   const parsedScript = parseShellCommands(lines);
@@ -688,13 +706,21 @@ test('lint.yml keeps the lint job on ubuntu-latest past the ubuntu-slim cap', ()
 });
 
 test('lint.yml logs Node.js version before asserting the Node floor', () => {
+  const workflow = readWorkflow('lint.yml');
+  assertLintJobEnforcesNodeFloor(extractJobBody(workflow, 'lint'));
   assertNodeVersionLogBeforeFloor(
-    extractNamedStepBody(
-      readWorkflow('lint.yml'),
-      'lint',
-      'Assert Node.js floor',
-    ),
+    extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
   );
+});
+
+test('a conditionally skipped lint job cannot satisfy the Node log guard', () => {
+  for (const condition of ['false', '${' + '{ false }}']) {
+    assert.throws(
+      () => assertLintJobEnforcesNodeFloor(`    if: ${condition}`),
+      /lint job must not be conditionally skipped/,
+      `accepted job condition: ${condition}`,
+    );
+  }
 });
 
 test('a command inside a quoted here-document cannot satisfy the Node log guard', () => {
@@ -766,6 +792,22 @@ test('a conditionally skipped workflow step cannot satisfy the Node log guard', 
       `accepted step condition: ${condition}`,
     );
   }
+});
+
+test('job or step continue-on-error cannot hide a Node floor failure', () => {
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    continue-on-error: true'),
+    /lint job must not set continue-on-error/,
+  );
+
+  const stepBody = syntheticFloorStep(['node --version']).replace(
+    '        run: |',
+    '        continue-on-error: true\n        run: |',
+  );
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /floor step must not set continue-on-error/,
+  );
 });
 
 test('redirected or conditional Node commands cannot satisfy the Node log guard', () => {
