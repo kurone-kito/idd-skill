@@ -2972,36 +2972,40 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   const finalCheck = text.slice(prDigestCheck, issueDigest);
   assert.match(finalCheck, /After steps 4–6/);
-  assert.match(finalCheck, /Require live PR state `MERGED`/);
+  assert.match(finalCheck, /require live PR `MERGED`/);
   assert.match(finalCheck, /mergeCommit\.oid/);
-  assert.match(finalCheck, /fetch `mergeCommit\.oid` and\s+match its SHA/);
-  assert.match(finalCheck, /one or two non-empty parents/);
+  assert.match(finalCheck, /Fetch `mergeCommit\.oid`;[\s\S]*?matching SHA/);
+  assert.match(finalCheck, /two non-empty parents/);
+  assert.match(finalCheck, /Bind `F3 merged`\s+`Authoritative by` to that SHA/);
   assert.match(
     finalCheck,
-    /F3 merged` digest `Authoritative by` to name exactly that merge SHA/,
+    /distinct full `PR_HEAD_SHA_F3`\s+equal to parent 2/,
   );
-  assert.match(finalCheck, /one distinct full `PR_HEAD_SHA_F3`/);
-  assert.match(finalCheck, /for two parents, parent 2\s+must match it/);
-  assert.match(finalCheck, /Reuse that head for one-parent squash\/rebase/);
-  assert.match(finalCheck, /Hold on\s+missing, ambiguous, or mismatched/);
+  assert.match(finalCheck, /hold one-parent\s+squash\/rebase merges/);
+  assert.match(finalCheck, /Phase: F3 merged/);
+  assert.match(finalCheck, /Hold on\s+missing, ambiguous, or\s+mismatched/);
   assert.match(
     finalCheck,
-    /Never use live\s+`headRefOid`, which may advance after merge/,
+    /Never use live\s+`headRefOid`; it may advance after merge/,
   );
   assert.match(finalCheck, /Claim: \{agent-id\} \/ \{claim-id\}/);
   assert.match(finalCheck, /Branch: \{branch-name\}/);
   assert.match(finalCheck, /Open blockers: none/);
   assert.match(finalCheck, /Next action: F4 cleanup then F5 discover/);
-  assert.match(finalCheck, /`Authoritative by` both SHAs/);
-  assert.match(finalCheck, /Capture one `--last-checked` value for all calls/);
+  assert.match(finalCheck, /and `Authoritative by`\s+both SHAs/);
+  assert.match(finalCheck, /Use one `--last-checked` value/);
   assert.match(finalCheck, /create`\/`update/);
   assert.match(
     finalCheck,
-    /apply\s+with `--claim-issue \{issue-number\} --claim-id \{claim-id\} --agent-id \{agent-id\}`/,
+    /apply\s+with\s+`--claim-issue \{issue-number\} --claim-id \{claim-id\} --agent-id \{agent-id\}`/,
   );
-  assert.match(finalCheck, /re-validate immediately before apply/);
-  assert.match(finalCheck, /same fields and timestamp/);
-  assert.match(finalCheck, /confirm a dry-run\s+`noop`/);
+  assert.match(finalCheck, /re-validate immediately before and after apply/);
+  assert.match(
+    finalCheck,
+    /If lost,\s+stop before\s+confirmation and later F4 mutations/,
+  );
+  assert.match(finalCheck, /same fields and\s+timestamp/);
+  assert.match(finalCheck, /Confirm dry-run\s+`noop`/);
   assert.match(
     finalCheck,
     /Duplicate digests,[\s\S]*?invalid\s+state\/SHA\/parents,[\s\S]*?inconclusive checks/,
