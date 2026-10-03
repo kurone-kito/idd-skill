@@ -29,7 +29,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
+          if [[ "$COMMENT_BODY" != '/idd-probe-token-scopes' ]]; then
+            echo "Ignoring a comment that does not exactly match the probe command."
+            exit 0
+          fi
           NORMALIZED_GH_HOST=$(printf '%s' "${GH_HOST:-}" \
             | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
           if [ -z "$NORMALIZED_GH_HOST" ]; then
@@ -43,12 +48,17 @@ jobs:
             NORMALIZED_GH_HOST="$SERVER_HOST"
           fi
           export GH_HOST="$NORMALIZED_GH_HOST"
-          HAS_ACTION_CHECKS=$(gh pr view "$PR_NUMBER" \
+          READ_SCOPE_EVIDENCE=$(gh pr view "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
             --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
-            --jq 'any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0))')
+            --jq '[any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0)), any(.statusCheckRollup[]?; .__typename == "StatusContext")] | map(tostring) | join(" ")')
+          read -r HAS_ACTION_CHECKS HAS_LEGACY_STATUS_CONTEXT <<< "$READ_SCOPE_EVIDENCE"
           if [ "$HAS_ACTION_CHECKS" != "true" ]; then
             echo "::error::PR #$PR_NUMBER has no Actions check run; choose a PR with at least one check run."
             exit 1
           fi
-          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER with Actions check runs."
+          if [ "$HAS_LEGACY_STATUS_CONTEXT" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER has no legacy status context; choose a PR with an Actions check run and a legacy status context."
+            exit 1
+          fi
+          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER with Actions and legacy status contexts."

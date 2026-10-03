@@ -408,12 +408,12 @@ Post this on the target PR:
 ```
 
 New PR comments by `OWNER`, `MEMBER`, or `COLLABORATOR` run; plain-issue
-comments, edits, other text, and other associations do not. It gets PR number
-and repo from the event. No ref input, checkout, PR code, comment write, or
-required-gate change occurs.
+comments, edits, other text, other casing, and other associations do not. It
+gets PR number and repo from the event. No ref input, checkout, PR code,
+comment write, or required-gate change occurs.
 
 Full helper query includes `closingIssuesReferences` and needs an Actions
-check run. Permissions:
+check run and a legacy status context. Permissions:
 
 | Read scope            |
 | --------------------- |
@@ -424,10 +424,10 @@ check run. Permissions:
 | `checks: read`        |
 | `statuses: read`      |
 
-Success confirms only this run's token access in this repo. Access errors mean
-denied reads; check token and Actions settings. `issues: read` covers
+Success confirms this run's token access here. Denied reads point to token or
+Actions settings. `issues: read` covers
 `closingIssuesReferences`. Public success does not prove private access; test
-there. Waiver writes need `issues: write` and `pull-requests: write`;
+privately. Waiver writes need `issues: write` and `pull-requests: write`;
 the probe has neither.
 
 **Protect the required workflow definition with CODEOWNERS.** A

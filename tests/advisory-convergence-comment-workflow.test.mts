@@ -335,6 +335,11 @@ test('comment-triggered self-waiver token-scope probe is trusted, read-only, and
     );
     assert.match(
       probe,
+      /^ {10}COMMENT_BODY: \$\{\{ github\.event\.comment\.body \}\}$/m,
+      `${path}: comment text must be passed through an environment variable`,
+    );
+    assert.match(
+      probe,
       /^ {10}GH_TOKEN: \$\{\{ github\.token \}\}$/m,
       `${path}: probe must authenticate gh with this run's GITHUB_TOKEN`,
     );
@@ -346,8 +351,16 @@ test('comment-triggered self-waiver token-scope probe is trusted, read-only, and
     const run = probe.slice(probe.indexOf('\n        run:'));
     assert.doesNotMatch(
       run,
-      /github\.event\.comment|COMMENT_BODY/,
+      /\$\{\{\s*github\.event\.comment/,
       `${path}: comment text must not be interpolated into a shell command`,
+    );
+    const exactCommandGuard = run.indexOf(
+      `if [[ "$COMMENT_BODY" != '/idd-probe-token-scopes' ]]; then`,
+    );
+    const probeQuery = run.indexOf('gh pr view');
+    assert.ok(
+      exactCommandGuard >= 0 && exactCommandGuard < probeQuery,
+      `${path}: shell must case-sensitively reject non-exact commands before API reads`,
     );
     const hostSetup = probe.search(
       /NORMALIZED_GH_HOST=\$\(printf '%s' "\$\{GH_HOST:-\}"/,
@@ -369,11 +382,15 @@ test('comment-triggered self-waiver token-scope probe is trusted, read-only, and
     assert.match(probe, /gh pr view/);
     assert.match(
       probe,
-      /--jq 'any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\)'/,
-      `${path}: probe must verify an Actions check run exercised the rollup query`,
+      /--jq '\[any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\), any\(\.statusCheckRollup\[\]\?; \.__typename == "StatusContext"\)\] \| map\(tostring\) \| join\(" "\)'/,
+      `${path}: probe must verify Actions and legacy status contexts exercised both read scopes`,
     );
     assert.match(probe, /has no Actions check run/);
-    assert.match(probe, /Read-only self-waiver query probe succeeded/);
+    assert.match(probe, /has no legacy status context/);
+    assert.match(
+      probe,
+      /Read-only self-waiver query probe succeeded for PR .*Actions and legacy status contexts/,
+    );
     assert.doesNotMatch(
       probe,
       /external-check-waiver|gh api|gh issue|gh pr comment|--method|labels|required_status_checks/,
@@ -434,11 +451,12 @@ test('onboarding guide explains how to run the trusted default-branch probe', ()
   assert.match(section, /```text\n\/idd-probe-token-scopes\n```/);
   assert.match(section, /`OWNER`, `MEMBER`, or `COLLABORATOR`/);
   assert.match(section, /edits/i);
+  assert.match(section, /other casing/i);
   assert.match(section, /no ref input, checkout, PR code/i);
   assert.match(section, /comment write/i);
-  assert.match(section, /Actions\s+check\s+run/i);
-  assert.match(section, /only this run's token access in this repo/i);
-  assert.match(section, /access errors mean\s+denied reads/i);
+  assert.match(section, /Actions\s+check\s+run\s+and a legacy status context/i);
+  assert.match(section, /this run's token access here/i);
+  assert.match(section, /denied reads point to token or\s+Actions settings/i);
   assert.match(section, /`issues: write`/);
   assert.match(section, /`pull-requests: write`/);
   assert.match(section, /public success does not prove private access/i);
