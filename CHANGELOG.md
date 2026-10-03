@@ -89,6 +89,8 @@ discipline and has no tag.
 
 ### Changed
 
+- Release tags must be signed annotated tags created by a maintainer
+  for the exact version-bump pull request's merge commit (#3567).
 - A failed `gh api` call while `discover-roadmap-graph` reads a descendant
   issue now reports its exit status, its signal and whether the process was
   killed: the error message ends with `[exit status: ...; signal: ...;
@@ -180,8 +182,6 @@ discover, review, and recovery hardening since the 0.12.2 cut.
 
 ### Changed
 
-- Release tags must be signed annotated tags created by a maintainer
-  for the exact version-bump pull request's merge commit (#3567).
 - Helper execution now has explicit package-manager and vendored-Node
   behavior, clearer unsupported-runtime failures, and bounded error
   output; the migration is covered by platform-aware helper tests
