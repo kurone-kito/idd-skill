@@ -101,6 +101,10 @@ discipline and has no tag.
 
 ### Fixed
 
+- `advisory-convergence`, `advisory-wait-state`,
+  `rerun-advisory-convergence`, `idd-merge-execute`, and
+  `pre-merge-readiness` accept numeric-offset ISO 8601 `--now` values
+  and normalize them to UTC (#3551).
 - A failed fetch in the roadmap traversal's concurrent crawl now stops the
   other workers from starting new items, so an interrupted scan no longer
   keeps sending requests into a throttled API (#3598).
