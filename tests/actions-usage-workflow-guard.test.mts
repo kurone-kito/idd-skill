@@ -584,6 +584,28 @@ function hasYamlMergeKeyAtIndent(text: string, indent: number): boolean {
   );
 }
 
+/** Rejects escaped, tagged, or anchored mapping keys at structural
+ * control-property indentation because the line-based checks below cannot
+ * resolve them. */
+function hasUnverifiableYamlKeyAtIndent(text: string, indent: number): boolean {
+  const lines = text.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const unverifiableKey =
+    /^(?:"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"|!{1,2}[^\s]+\s+(?:'[^']*'|"[^"\\]*(?:\\.[^"\\]*)*"|[^\s,{]+))\s*:/;
+  const decoratedKey = /^(?:(?:&[^\s]+|!{1,2}[^\s]+)\s+)+\S/;
+  return lines.some((line, index) => {
+    if (scalarContent[index] || !line.startsWith(' '.repeat(indent))) {
+      return false;
+    }
+    const key = line.slice(indent);
+    return (
+      unverifiableKey.test(key) ||
+      decoratedKey.test(key) ||
+      /^\?(?:\s|$)/.test(key)
+    );
+  });
+}
+
 /** Returns the lint job's `steps:` mapping body when it is present. */
 function findJobStepsBlock(jobBody: string): string | undefined {
   const jobLines = jobBody.split('\n');
@@ -632,7 +654,28 @@ function findStepsThroughFloorCheck(jobBody: string): string | undefined {
 /** Rejects merge keys on steps that can affect the floor-check execution. */
 function hasStepLevelYamlMergeKey(jobBody: string): boolean {
   const stepsBlock = findStepsThroughFloorCheck(jobBody);
-  return stepsBlock !== undefined && hasYamlMergeKeyAtIndent(stepsBlock, 8);
+  if (stepsBlock === undefined) {
+    return false;
+  }
+  const lines = stepsBlock.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  return lines.some((line, index) => {
+    if (scalarContent[index]) {
+      return false;
+    }
+    const uncommented = stripYamlComment(line);
+    if (/^ {8}(?:<<|'<<'|"<<")\s*:/.test(uncommented)) {
+      return true;
+    }
+    if (!/^ {6}-\s/.test(uncommented)) {
+      return false;
+    }
+    const sequenceItem = uncommented.slice(8);
+    return (
+      /^\*[A-Za-z0-9_.-]+(?:\s|$)/.test(sequenceItem) ||
+      /(?:^|[{,])\s*(?:<<|'<<'|"<<")\s*:/.test(sequenceItem)
+    );
+  });
 }
 
 /** Extracts one named step's body from the job's `steps` mapping, stopping
@@ -750,7 +793,7 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
   );
 
   const executionOverrideToken =
-    /\b(?:NODE_OPTIONS|BASH_ENV|PATH|GITHUB_PATH)\b|\bBASH_FUNC_node%%/;
+    /\b(?:NODE_OPTIONS|BASH_ENV|SHELLOPTS|PATH|GITHUB_PATH|GITHUB_ENV)\b|\bBASH_FUNC_node%%/;
   const configuresOrReferencesOverride = lines.some((line, index) => {
     if (scalarContent[index]) {
       const shellLine = line.trimStart();
@@ -760,7 +803,7 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
     }
     const uncommented = stripYamlComment(line);
     const configuresOverride =
-      /(?:^|[{,])\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS"|BASH_ENV|'BASH_ENV'|"BASH_ENV"|BASH_FUNC_node%%|'BASH_FUNC_node%%'|"BASH_FUNC_node%%"|PATH|'PATH'|"PATH"|GITHUB_PATH|'GITHUB_PATH'|"GITHUB_PATH")\s*:/.test(
+      /(?:^|[{,])\s*(?:NODE_OPTIONS|'NODE_OPTIONS'|"NODE_OPTIONS"|BASH_ENV|'BASH_ENV'|"BASH_ENV"|SHELLOPTS|'SHELLOPTS'|"SHELLOPTS"|BASH_FUNC_node%%|'BASH_FUNC_node%%'|"BASH_FUNC_node%%"|PATH|'PATH'|"PATH"|GITHUB_PATH|'GITHUB_PATH'|"GITHUB_PATH"|GITHUB_ENV|'GITHUB_ENV'|"GITHUB_ENV")\s*:/.test(
         uncommented,
       );
     const inlineRunValue = uncommented.match(
@@ -775,7 +818,7 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
   assert.equal(
     configuresOrReferencesOverride,
     false,
-    `lint.yml: ${scope} must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH, which can bypass the floor assertion`,
+    `lint.yml: ${scope} must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV, which can bypass the floor assertion`,
   );
 }
 
@@ -788,6 +831,21 @@ function assertLintJobEnforcesNodeFloor(jobBody: string): void {
   assertNoNodeExecutionOverrides(
     relevantSteps ?? findJobStepsBlock(jobBody) ?? '',
     'lint job steps through the Node floor check',
+  );
+  assert.equal(
+    hasUnverifiableYamlKeyAtIndent(jobBody, 4),
+    false,
+    'lint.yml: lint job control keys must not be escaped, tagged, anchored, or explicit YAML keys',
+  );
+  assert.equal(
+    hasUnverifiableYamlKeyAtIndent(relevantSteps ?? '', 8),
+    false,
+    'lint.yml: lint step control keys must not be escaped, tagged, anchored, or explicit YAML keys',
+  );
+  assert.doesNotMatch(
+    jobBody,
+    /^ {4}(?:container|'container'|"container")\s*:/m,
+    'lint.yml: lint job must not use a container that can override the Node floor environment',
   );
   assert.equal(
     hasYamlMergeKeyAtIndent(jobBody, 4),
@@ -822,6 +880,11 @@ function assertLintJobUsesDefaultShell(
   jobBody: string,
   workflow: string,
 ): void {
+  assert.equal(
+    hasUnverifiableYamlKeyAtIndent(workflow, 0),
+    false,
+    'lint.yml: workflow root keys must not be escaped, tagged, anchored, or explicit YAML keys',
+  );
   assertNoNodeExecutionOverrides(
     extractWorkflowEnvironmentBlock(workflow),
     'workflow environment',
@@ -842,6 +905,11 @@ function assertLintJobUsesDefaultShell(
  * assertion. Synthetic steps exercise rejected shell shapes. */
 function assertNodeVersionLogBeforeFloor(stepBody: string): void {
   assertNoNodeExecutionOverrides(stepBody, 'Assert Node.js floor step');
+  assert.equal(
+    hasUnverifiableYamlKeyAtIndent(stepBody, 8),
+    false,
+    'lint.yml: Assert Node.js floor step control keys must not be escaped, tagged, anchored, or explicit YAML keys',
+  );
   assert.equal(
     hasYamlMergeKeyAtIndent(stepBody, 8),
     false,
@@ -1492,9 +1560,10 @@ test('custom shell templates cannot skip Node floor execution', () => {
   }
 });
 
-test('NODE_OPTIONS and BASH_ENV preloads are rejected at every lint scope', () => {
-  const options = '--require=./exit.cjs';
-  for (const variable of ['NODE_OPTIONS', 'BASH_ENV']) {
+test('Node and Bash startup overrides are rejected at every lint scope', () => {
+  for (const variable of ['NODE_OPTIONS', 'BASH_ENV', 'SHELLOPTS']) {
+    const options =
+      variable === 'SHELLOPTS' ? 'noexec' : '--require=./exit.cjs';
     const assignments = [
       variable + ': ' + options,
       '"' + variable + '": ' + options,
@@ -1513,11 +1582,11 @@ test('NODE_OPTIONS and BASH_ENV preloads are rejected at every lint scope', () =
         : '        env:\n          ' + assignment;
       assert.throws(
         () => assertLintJobEnforcesNodeFloor(jobEnvironment),
-        /must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+        /must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
       );
       assert.throws(
         () => assertLintJobUsesDefaultShell('', workflowEnvironment),
-        /workflow environment must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+        /workflow environment must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
       );
 
       const stepBody = syntheticFloorStep(['node --version']).replace(
@@ -1526,7 +1595,7 @@ test('NODE_OPTIONS and BASH_ENV preloads are rejected at every lint scope', () =
       );
       assert.throws(
         () => assertNodeVersionLogBeforeFloor(stepBody),
-        /Assert Node\.js floor step must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+        /Assert Node\.js floor step must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
       );
     }
 
@@ -1537,11 +1606,11 @@ test('NODE_OPTIONS and BASH_ENV preloads are rejected at every lint scope', () =
         assertLintJobEnforcesNodeFloor(
           '    steps:\n      - run: |\n          ' + scriptWrite,
         ),
-      /must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+      /must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
     );
     assert.throws(
       () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([scriptWrite])),
-      /Assert Node\.js floor step must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+      /Assert Node\.js floor step must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
     );
   }
 });
@@ -1555,7 +1624,7 @@ test('exported Node shell functions are rejected at every lint scope', () => {
     `{ CI: true, "BASH_FUNC_node%%": "${functionBody}" }`,
   ];
   const rejection =
-    /must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/;
+    /must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/;
 
   for (const assignment of assignments) {
     const jobEnvironment = assignment.startsWith('{')
@@ -1601,7 +1670,7 @@ test('exported Node shell functions are rejected at every lint scope', () => {
   );
 });
 
-test('PATH overrides and GITHUB_PATH writes are rejected at every lint scope', () => {
+test('PATH overrides and Actions environment file writes are rejected', () => {
   const assignments = [
     'PATH: /tmp/fake-bin',
     '"PATH": /tmp/fake-bin',
@@ -1609,7 +1678,7 @@ test('PATH overrides and GITHUB_PATH writes are rejected at every lint scope', (
     '{ CI: true, "PATH": /tmp/fake-bin }',
   ];
   const rejection =
-    /must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/;
+    /must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/;
 
   for (const assignment of assignments) {
     const jobEnvironment = assignment.startsWith('{')
@@ -1670,6 +1739,18 @@ test('PATH overrides and GITHUB_PATH writes are rejected at every lint scope', (
       ),
     rejection,
   );
+  const indirectWrite = `printf '%s%s=%s\\n' NODE_ OPTIONS --require=./exit.cjs >> "$GITHUB_ENV"`;
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        '    steps:\n      - run: |\n          ' + indirectWrite,
+      ),
+    rejection,
+  );
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([indirectWrite])),
+    rejection,
+  );
 });
 
 test('YAML merge keys in env mappings are rejected at every lint scope', () => {
@@ -1714,6 +1795,44 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
     /lint job steps must not use YAML merge keys that can inherit step controls/,
   );
 
+  const sequenceItemMerge = [
+    '    steps:',
+    '      - &base-step',
+    '        name: Prepare Node',
+    '        run: echo setup',
+    '      - <<: *base-step',
+    '        name: Assert Node.js floor',
+  ].join('\n');
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor(sequenceItemMerge),
+    /lint job steps must not use YAML merge keys that can inherit step controls/,
+  );
+
+  const wholeStepAlias = [
+    '    steps:',
+    '      - &base-step',
+    '        name: Skipped step',
+    '        if: false',
+    '        run: echo skipped',
+    '      - *base-step',
+    '      - name: Assert Node.js floor',
+  ].join('\n');
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor(wholeStepAlias),
+    /lint job steps must not use YAML merge keys that can inherit step controls/,
+  );
+
+  const commentAndScalar = [
+    '    steps:',
+    '      - name: Document merge syntax',
+    '        run: |',
+    '          echo "<<: *disabled"',
+    '          echo "*whole-step"',
+    '      # - *commented-step',
+    ...syntheticFloorStep(['node --version']).split('\n'),
+  ].join('\n');
+  assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(commentAndScalar));
+
   const floorStep = syntheticFloorStep(['node --version']).replace(
     '        run: |',
     '        <<: *disabled\n        run: |',
@@ -1735,6 +1854,8 @@ test('later lint steps may set their own environment and shell', () => {
     '        env:',
     '          PATH: /tmp/fake-bin',
     '        run: echo /tmp/fake-bin >> "$GITHUB_PATH"',
+    '      - name: Later environment setup',
+    '        run: echo NODE_OPTIONS=--require=./later.cjs >> "$GITHUB_ENV"',
   ].join('\n');
   const jobBody = extractJobBody(workflow, 'lint');
 
@@ -1777,6 +1898,63 @@ test('escaped or tagged YAML env keys cannot hide Node execution overrides', () 
   );
 });
 
+test('escaped YAML control keys cannot skip or hide the floor guard', () => {
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    "i\\u0066": false'),
+    /lint job control keys must not be escaped/,
+  );
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    &skip if: false'),
+    /lint job control keys must not be escaped/,
+  );
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    !!str if: false'),
+    /lint job control keys must not be escaped/,
+  );
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        '    steps:\n      - name: Assert Node.js floor\n        "i\\u0066": false',
+      ),
+    /lint step control keys must not be escaped/,
+  );
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        '    steps:\n      - name: Assert Node.js floor\n        &skip if: false',
+      ),
+    /lint step control keys must not be escaped/,
+  );
+
+  const escapedShell = syntheticFloorStep(['node --version']).replace(
+    '        run: |',
+    '        "sh\\u0065ll": bash\n        run: |',
+  );
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(escapedShell),
+    /step control keys must not be escaped/,
+  );
+
+  assert.throws(
+    () =>
+      assertLintJobUsesDefaultShell(
+        '',
+        '"e\\u006ev":\n  NODE_OPTIONS: --require=./exit.cjs',
+      ),
+    /workflow root keys must not be escaped/,
+  );
+});
+
+test('lint job cannot move the Node floor check into a container', () => {
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        '    container:\n      image: node:26\n      env:\n        NODE_OPTIONS: --require=./exit.cjs',
+      ),
+    /lint job must not use a container/,
+  );
+});
+
 test('a workflow env anchor keeps its mapping body in the preload scan', () => {
   for (const variable of ['NODE_OPTIONS', 'BASH_ENV']) {
     assert.throws(
@@ -1785,7 +1963,7 @@ test('a workflow env anchor keeps its mapping body in the preload scan', () => {
           '',
           'env: &lint-env\n  ' + variable + ': --require=./exit.cjs',
         ),
-      /workflow environment must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+      /workflow environment must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
     );
   }
 });
@@ -1806,7 +1984,7 @@ test('multiline root environment flow mappings remain in the override scan', () 
     ].join('\n');
     assert.throws(
       () => assertLintJobUsesDefaultShell('', workflow),
-      /workflow environment must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+      /workflow environment must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
     );
   }
 });
