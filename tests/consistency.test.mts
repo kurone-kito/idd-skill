@@ -2977,6 +2977,11 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     resumeText,
     /\| PR merged; claim = this session's verified `\{claim-id\}`\s+\| Run F4 steps 2, 4-7 \(guarded\);/,
   );
+  const resumeDetail = readText('idd-template/docs/idd-resume-detail.md');
+  assert.match(
+    resumeDetail,
+    /runs the full `idd-merge\.instructions\.md` F4\s+contract \(steps 2 and 4-7,/,
+  );
   const finalCheck = text.slice(prDigestCheck, issueDigest);
   const earlyCheck = text.slice(earlyDigestCheck, prDigestCheck);
   assert.match(

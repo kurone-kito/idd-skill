@@ -255,7 +255,7 @@ a still-open decision.
 
 **Ownership condition.** The owned row (active claim = this session's
 verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
-contract (steps 4-7, plus step 1 when `{development-branch}` is not the
+contract (steps 2 and 4-7, plus step 1 when `{development-branch}` is not the
 default branch and a closing-set issue is still open) because this session
 can satisfy F4's own claim-revalidation gate at each mutation. On this row,
 `{branch}` is the active claim's own `branch:` field — the same binding
