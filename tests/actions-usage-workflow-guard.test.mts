@@ -408,6 +408,11 @@ function parseShellCommands(lines: string[]): ParsedShellScript {
       finishCommand();
     }
   }
+  assert.equal(
+    quote,
+    null,
+    'lint.yml: shell script must not leave a quote open',
+  );
   finishCommand();
   return {
     commands,
@@ -807,6 +812,18 @@ test('job or step continue-on-error cannot hide a Node floor failure', () => {
   assert.throws(
     () => assertNodeVersionLogBeforeFloor(stepBody),
     /floor step must not set continue-on-error/,
+  );
+});
+
+test('an unterminated shell quote cannot satisfy the Node floor guard', () => {
+  const stepBody = syntheticFloorStep(['node --version']).replace(
+    /\n {10}'$/,
+    '',
+  );
+
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepBody),
+    /shell script must not leave a quote open/,
   );
 });
 
