@@ -1782,9 +1782,11 @@ watermark SHA before comment cleanup can minimize its marker, and
 captures the branch tip before removing the worktree. Both must match
 the live PR head; the digest cannot supply its own head proof. These
 inputs were added after review found cleanup could otherwise remove the
-only proof sources (PR `#3741` review comments `#4173311932`,
-`#4173311978`, and `#4173312001`; preventive, no observed incident yet
-for a completed F4 missing these values). Missing or mismatched evidence
+only proof sources, the merged-PR resume route skipped F2 capture, and
+the provider view omitted commit parents (PR `#3741` review comments
+`#4173311932`, `#4173311978`, `#4173312001`, `#4173458244`, and
+`#4173461374`; preventive, no completed F4 failure has been
+observed). Missing or mismatched evidence
 keeps the claim active. Repair carries the `F3 merged` phase
 and one `Last checked` value through dry-run, apply, and confirmation,
 with claim ownership revalidated around apply. A duplicate, failed

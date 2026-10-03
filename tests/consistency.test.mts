@@ -2970,6 +2970,13 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
       claimRelease < f4End,
     'F4 must verify the PR digest before the issue digest and claim release',
   );
+  const resumeText = readText(
+    'idd-template/.github/instructions/idd-resume.instructions.md',
+  );
+  assert.match(
+    resumeText,
+    /\| PR merged; claim = this session's verified `\{claim-id\}`\s+\| Run F4 steps 2, 4-7 \(guarded\);/,
+  );
   const finalCheck = text.slice(prDigestCheck, issueDigest);
   const earlyCheck = text.slice(earlyDigestCheck, prDigestCheck);
   assert.match(
@@ -2981,11 +2988,24 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     /Before step\s+3, carry the latest trusted same-claim\s+F2 watermark SHA as\s+`\{f2-head-SHA\}`/,
   );
   assert.match(finalCheck, /After steps 4–6/);
-  assert.match(finalCheck, /Require PR `MERGED`/);
+  assert.match(finalCheck, /`MERGED` and a full merge oid/);
   assert.match(finalCheck, /mergeCommit\.oid/);
-  assert.match(finalCheck, /1–2 non-empty\s+parents/);
+  assert.match(
+    finalCheck,
+    /`gh pr view \{pr-number\} --json state,mergeCommit,headRefOid`/,
+  );
+  assert.match(
+    finalCheck,
+    /`gh api repos\/\{owner\}\/\{repo\}\/git\/commits\/\{mergeCommit\.oid\}`/,
+  );
+  assert.match(
+    finalCheck,
+    /1–2 `\.parents\[\]\.sha` values, all full\s+40-hex/,
+  );
+  assert.match(finalCheck, /Hold on any read or shape failure/);
+  assert.match(finalCheck, /1–2 `\.parents\[\]\.sha` values/);
   assert.match(finalCheck, /`F3 merged` `Authoritative by`/);
-  assert.match(finalCheck, /`PR_HEAD_SHA_F3` is parent 2/);
+  assert.match(finalCheck, /`PR_HEAD_SHA_F3` is parent\s+2/);
   assert.match(finalCheck, /else only\s+carried `\{f2-head-SHA\}`/);
   assert.match(finalCheck, /Require live\s+`headRefOid` to match/);
   assert.match(finalCheck, /Step 5's `\{branch-tip-SHA\}`/);

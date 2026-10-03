@@ -550,8 +550,13 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 6. If GitHub auto-delete is disabled: delete the remote branch too.
    (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
 7. After steps 4–6, verify/repair the PR digest before the issue digest.
-   Require PR `MERGED`, full `mergeCommit.oid`, and 1–2 non-empty
-   parents. `PR_HEAD_SHA_F3` is parent 2 (two parents), else only
+   Read `state`, `mergeCommit.oid`, and `headRefOid` live with
+   `gh pr view {pr-number} --json state,mergeCommit,headRefOid`; require
+   `MERGED` and a full merge oid. Read the commit object with
+   `gh api repos/{owner}/{repo}/git/commits/{mergeCommit.oid}`; require
+   `.sha` to equal the oid and 1–2 `.parents[].sha` values, all full
+   40-hex. Hold on any read or shape failure. `PR_HEAD_SHA_F3` is parent
+   2 (two parents), else only
    carried `{f2-head-SHA}`. Require live `headRefOid` to match; for one
    parent, also match Step 5's `{branch-tip-SHA}`. Never use digest head
    as proof. Upsert `F3 merged` `Authoritative by` with both proven,

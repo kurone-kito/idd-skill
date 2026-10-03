@@ -182,7 +182,7 @@ stop before re-claim or takeover; never treat failure as no match.
 
 | Claim state                                                                                    | Route                                                                                               |
 | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| PR merged; claim = this session's verified `{claim-id}`                                        | Run F4 steps 4-7 (guarded); also step 1 if non-default branch + open closing issue; STOP (§MC)      |
+| PR merged; claim = this session's verified `{claim-id}`                                        | Run F4 steps 2, 4-7 (guarded); also step 1 if non-default branch + open closing issue; STOP (§MC)   |
 | PR merged; claim released (no active claim); its branch = `{branch}`; no local worktree for it | Run F4 step 4 + step 5's `git branch -d` only (guarded); skip steps 6-7; STOP (§MC)                 |
 | FH evidence names this session's already-verified `{claim-id}`                                 | STOP — current session is displaced; do not push, comment, resolve, request reviewers, or merge     |
 | Issue closed with no PR merged, or any other closed/merged state                               | Post a hold comment naming the state; STOP — never remove a worktree or branch                      |
