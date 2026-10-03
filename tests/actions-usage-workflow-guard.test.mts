@@ -94,7 +94,7 @@ function extractJobBody(text: string, jobId: string): string {
   const startMatch = text.match(new RegExp(`^ {2}${jobId}:$`, 'm'));
   assert.ok(startMatch?.index !== undefined, `job ${jobId} not found`);
   const afterStart = text.slice(startMatch.index + startMatch[0].length);
-  const nextSiblingMatch = afterStart.match(/^ {2}\S/m);
+  const nextSiblingMatch = afterStart.match(/^ {2}(?!#)\S/m);
   return nextSiblingMatch?.index === undefined
     ? afterStart
     : afterStart.slice(0, nextSiblingMatch.index);
@@ -211,6 +211,11 @@ function assertLintJobUsesDefaultShell(
     workflow,
     /^(?:defaults|'defaults'|"defaults")\s*:/m,
     'lint.yml: workflow must not declare defaults that can override the default shell',
+  );
+  assert.doesNotMatch(
+    jobBody,
+    /^ {4}(?:defaults|'defaults'|"defaults")\s*:/m,
+    'lint.yml: lint job must not declare defaults that can override the default shell',
   );
   assert.doesNotMatch(
     jobBody,
@@ -517,6 +522,26 @@ test('a conditionally skipped lint job cannot satisfy the Node log guard', () =>
   }
 });
 
+test('a YAML comment cannot hide a later lint job condition', () => {
+  const workflow = [
+    'jobs:',
+    '  lint:',
+    '    steps:',
+    '      - name: Assert Node.js floor',
+    '        run: |',
+    '          node --version',
+    '  # This comment does not end the lint job.',
+    '    if: false',
+    '  other:',
+    '    runs-on: ubuntu-latest',
+  ].join('\n');
+
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor(extractJobBody(workflow, 'lint')),
+    /lint job must not be conditionally skipped/,
+  );
+});
+
 test('a prerequisite-dependent lint job cannot skip the Node floor guard', () => {
   assert.throws(
     () => assertLintJobEnforcesNodeFloor('    needs: gate'),
@@ -705,7 +730,15 @@ test('custom shell templates cannot skip Node floor execution', () => {
         '    defaults:\n      run:\n        shell: bash -n {0}',
         '',
       ),
-    /lint job and its steps must not override the default shell/,
+    /lint job must not declare defaults/,
+  );
+  assert.throws(
+    () =>
+      assertLintJobUsesDefaultShell(
+        "    defaults: { run: { shell: 'bash -n {0}' } }",
+        '',
+      ),
+    /lint job must not declare defaults/,
   );
   assert.throws(
     () =>
