@@ -1514,9 +1514,12 @@ two-parent merge derives the candidate head from parent 2. On a
 after cleanup from independently proven merge evidence. For a
 one-parent squash/rebase, F4 carries the latest trusted same-claim F2
 watermark SHA before comment cleanup can minimize its marker, and
-captures the branch tip before removing the worktree. Both must match
-the live PR head; the digest cannot supply its own head proof. These
-inputs were added after review found cleanup could otherwise remove the
+captures the branch tip before removing the worktree. The values stay
+separate: the watermark identifies the reviewed snapshot, and the branch
+tip binds local cleanup. F4 derives the merged PR head independently and
+compares it with the live `.head.sha`. The
+digest cannot supply its own head proof. These inputs were added after
+review found cleanup could otherwise remove the
 only proof sources, the merged-PR resume route skipped F2 capture, the
 detail guide omitted that step, the branch-tip proof was only in the
 prior session's memory after branch deletion, resumed F4 could repeat
@@ -1532,6 +1535,11 @@ validation, or inconclusive result stops before either completion write,
 preserving the claim as the repair authority
 (kurone-kito/idd-skill#3739; preventive; no observed incident yet for
 unverifiable merge-head evidence).
+
+When GitHub auto-delete is disabled, the profile-selected
+`delete-remote-branch` helper performs the expected-SHA lease deletion
+and verifies the result through the permitted helper command surface
+(PR `#3741` Codex review comment `#4174479403`).
 
 ## Instruction delivery
 

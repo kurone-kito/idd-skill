@@ -209,6 +209,19 @@
         }
       }
     },
+    "idd-delete-remote-branch.mjs": {
+      "migrated": true,
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-discover-orphan-filter.mjs": {
       "migrated": true,
       "runs": {

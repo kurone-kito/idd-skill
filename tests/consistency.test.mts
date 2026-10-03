@@ -3127,17 +3127,22 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /For step 6, query `git ls-remote --exit-code origin\s+"refs\/heads\/\$BRANCH_NAME"`/,
+    /For step 6, use the profile-selected `delete-remote-branch` helper[\s\S]*default dry-run[\s\S]*`--apply`[\s\S]*argument-vector[\s\S]*`--force-with-lease`[\s\S]*confirms absence/,
   );
   assert.match(
     headProof,
-    /returned full SHA equals the verified\s+`PR_HEAD_SHA_F3`[\s\S]*git push "--force-with-lease=refs\/heads\/\$BRANCH_NAME:\$PR_HEAD_SHA_F3"[\s\S]*origin ":refs\/heads\/\$BRANCH_NAME"[\s\S]*If the push is rejected, query the ref again[\s\S]*present with another SHA, hold without deleting\s+it[\s\S]*confirm absence/,
+    /node scripts\/delete-remote-branch\.mjs[\s\S]*--branch "\$BRANCH_NAME" --expected-sha "\$PR_HEAD_SHA_F3"[\s\S]*--apply/,
+  );
+  assert.doesNotMatch(
+    headProof,
+    /git push/,
+    'F4 must route the protected remote deletion through the helper',
   );
   assert.match(
     headProof,
     /local branch ref is checked against `branch-tip-SHA`/,
   );
-  assert.match(headProof, /CodeRabbit review comment `#4174140998`/);
+  assert.match(headProof, /CodeRabbit\s+review comment `#4174140998`/);
   assert.match(
     headProof,
     /git check-ref-format "refs\/heads\/\$BRANCH_NAME"[\s\S]*Never paste a recovered branch name into shell source/,

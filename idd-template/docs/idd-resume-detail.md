@@ -437,29 +437,36 @@ run the normal safety inspection. Delete the local branch with
 already complete. Keep
 the existing unmerged-branch hold path.
 
-For step 6, query `git ls-remote --exit-code origin
-"refs/heads/$BRANCH_NAME"` immediately before deletion. Delete the remote
-branch only when present and its returned full SHA equals the verified
-`PR_HEAD_SHA_F3` for this merged PR. Bind the deletion atomically to that
-expected SHA and quote the ref arguments:
+For step 6, use the profile-selected `delete-remote-branch` helper with
+`BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. Its default dry-run
+must report `would-delete` with the expected SHA, or `already-absent`;
+then run the same command with `--apply`. The helper checks the live
+remote ref and default branch, uses an argument-vector
+`--force-with-lease` compare-and-delete, and confirms absence. Continue
+only for `deleted` or `already-absent`; any mismatch, default-branch
+refusal, failed mutation, or inconclusive confirmation holds F4. For
+example, the vendored-node form is:
 
 ```sh
-git push "--force-with-lease=refs/heads/$BRANCH_NAME:$PR_HEAD_SHA_F3" \
-  origin ":refs/heads/$BRANCH_NAME"
+node scripts/delete-remote-branch.mjs \
+  --branch "$BRANCH_NAME" --expected-sha "$PR_HEAD_SHA_F3"
+node scripts/delete-remote-branch.mjs \
+  --branch "$BRANCH_NAME" --expected-sha "$PR_HEAD_SHA_F3" --apply
 ```
 
-If the push is rejected, query the ref again. Confirmed absence is already
-complete; if the ref is present with another SHA, hold without deleting
-it. After a successful deletion, confirm absence with the same query.
-Hold on lookup, deletion, or confirmation errors unless absence is
-confirmed. This compare-and-delete closes the race where a push could
-advance the remote branch after the tip check but before deletion (PR
-`#3741` CodeRabbit review comment `#4174140998`); comparing against the
-verified merged head permits a stale local branch tip while still
-holding if the remote has moved past the merged PR head (PR `#3741`
-review comment `#4174335516`). The initial SHA check also prevents
-deleting commits added after the proof (PR `#3741` review comment
-`#4174056101`).
+Use the helper runtime manifest's canonical command form for
+package-manager or ephemeral-npx. If helper runtime is unavailable, hold
+and ask an authorized operator to perform the atomic deletion; do not
+wrap, quote, or otherwise disguise a command that the active tool policy
+denies. This keeps compare-and-delete available through the explicitly
+permitted helper surface (PR `#3741` Codex review comment
+`#4174479403`). The helper's SHA lease closes the race where a push could
+advance the remote branch after the tip check (PR `#3741` CodeRabbit
+review comment `#4174140998`); comparing against the verified merged
+head permits a stale local branch tip while still holding if the remote
+has moved past the merged PR head (PR `#3741` review comment
+`#4174335516`). The initial SHA check also prevents deleting commits
+added after the proof (PR `#3741` review comment `#4174056101`).
 
 Before persisting proof, immediately before step 3, and after cleanup in
 step 7, read the merged PR and its merge commit through GitHub's REST API.
