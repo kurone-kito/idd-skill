@@ -392,6 +392,55 @@ function extractWorkflowEnvironmentBlock(text: string): string {
   return block.join('\n');
 }
 
+/** Extracts only the lint job's root `env` mapping. */
+function extractJobEnvironmentBlock(jobBody: string): string {
+  const lines = jobBody.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const start = lines.findIndex(
+    (line, index) =>
+      !scalarContent[index] &&
+      /^ {4}(?:env|'env'|"env")\s*:/.test(stripYamlComment(line)),
+  );
+  if (start === -1) {
+    return '';
+  }
+
+  const header = stripYamlComment(lines[start]);
+  const inlineValue = header.match(/^ {4}(?:env|'env'|"env")\s*:(.*)$/)?.[1];
+  if (inlineValue?.trim()) {
+    const value = inlineValue.trim();
+    if (value.startsWith('{')) {
+      const block = [header];
+      let braceDepth = yamlFlowMapBraceDelta(header);
+      for (const line of lines.slice(start + 1)) {
+        block.push(line);
+        braceDepth += yamlFlowMapBraceDelta(line);
+        if (braceDepth <= 0) {
+          break;
+        }
+      }
+      return block.join('\n');
+    }
+    if (!/^(?:&[^\s]+|![^\s]+)(?:\s|$)/.test(value)) {
+      return header;
+    }
+  }
+
+  const block = [header];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) {
+      block.push(line);
+      continue;
+    }
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (indent <= 4) {
+      break;
+    }
+    block.push(line);
+  }
+  return block.join('\n');
+}
+
 /** Rejects merge keys inside env mappings because their inherited values
  * cannot be verified by the line-based override scan. */
 function hasEnvironmentMergeKey(
@@ -455,6 +504,73 @@ function hasEnvironmentMergeKey(
   return false;
 }
 
+/** Rejects escaped or tagged env keys that the literal-name scan cannot decode. */
+function hasUnverifiableEnvironmentKey(
+  lines: string[],
+  scalarContent: boolean[],
+): boolean {
+  let environmentIndent: number | undefined;
+  let flowMapDepth = 0;
+  const unverifiableKey =
+    /(?:^|[{,])\s*(?:"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"|!{1,2}[^\s]+\s+(?:'[^']*'|"[^"]*"|[^\s,{]+))\s*:/;
+  const explicitKeyIndicator = /(?:^|[{,])\s*\?(?:\s|$)/;
+
+  for (const [index, line] of lines.entries()) {
+    if (scalarContent[index]) {
+      continue;
+    }
+    const uncommented = stripYamlComment(line);
+    if (uncommented.trim() === '') {
+      continue;
+    }
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (
+      environmentIndent !== undefined &&
+      flowMapDepth === 0 &&
+      indent <= environmentIndent
+    ) {
+      environmentIndent = undefined;
+    }
+
+    const environmentHeader = uncommented.match(
+      /^([ ]*)(?:env|'env'|"env")\s*:(.*)$/,
+    );
+    if (environmentHeader) {
+      const value = environmentHeader[2];
+      if (unverifiableKey.test(value) || explicitKeyIndicator.test(value)) {
+        return true;
+      }
+      const trimmedValue = value.trim();
+      flowMapDepth = yamlFlowMapBraceDelta(value);
+      const startsBlockMapping =
+        trimmedValue === '' ||
+        /^(?:(?:&[^\s]+|![^\s]+)\s+)*(?:&[^\s]+|![^\s]+)$/.test(trimmedValue);
+      environmentIndent =
+        flowMapDepth > 0 || startsBlockMapping
+          ? environmentHeader[1].length
+          : undefined;
+      continue;
+    }
+
+    if (
+      environmentIndent !== undefined &&
+      (flowMapDepth > 0 || indent > environmentIndent)
+    ) {
+      if (
+        unverifiableKey.test(uncommented) ||
+        explicitKeyIndicator.test(uncommented)
+      ) {
+        return true;
+      }
+      if (flowMapDepth > 0) {
+        flowMapDepth += yamlFlowMapBraceDelta(uncommented);
+      }
+    }
+  }
+
+  return false;
+}
+
 /** Rejects YAML merge keys at the direct property indentation of a mapping. */
 function hasYamlMergeKeyAtIndent(text: string, indent: number): boolean {
   const lines = text.split('\n');
@@ -491,9 +607,31 @@ function findJobStepsBlock(jobBody: string): string | undefined {
     .join('\n');
 }
 
-/** Rejects merge keys on any individual step mapping in the lint job. */
-function hasStepLevelYamlMergeKey(jobBody: string): boolean {
+/** Returns the lint job steps through the floor-check step. */
+function findStepsThroughFloorCheck(jobBody: string): string | undefined {
   const stepsBlock = findJobStepsBlock(jobBody);
+  if (stepsBlock === undefined) {
+    return undefined;
+  }
+  const lines = stepsBlock.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const floorStep = lines.findIndex(
+    (line, index) =>
+      !scalarContent[index] && line === '      - name: Assert Node.js floor',
+  );
+  if (floorStep === -1) {
+    return stepsBlock;
+  }
+  const nextStep = lines.findIndex(
+    (line, index) =>
+      index > floorStep && !scalarContent[index] && /^ {6}- /.test(line),
+  );
+  return lines.slice(0, nextStep === -1 ? undefined : nextStep).join('\n');
+}
+
+/** Rejects merge keys on steps that can affect the floor-check execution. */
+function hasStepLevelYamlMergeKey(jobBody: string): boolean {
+  const stepsBlock = findStepsThroughFloorCheck(jobBody);
   return stepsBlock !== undefined && hasYamlMergeKeyAtIndent(stepsBlock, 8);
 }
 
@@ -590,6 +728,11 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
     false,
     `lint.yml: ${scope} must not use YAML merge keys in env mappings because merged Node overrides cannot be verified`,
   );
+  assert.equal(
+    hasUnverifiableEnvironmentKey(lines, scalarContent),
+    false,
+    `lint.yml: ${scope} must not use escaped or tagged YAML env keys because their resolved names cannot be verified`,
+  );
   const usesUnresolvedEnvironmentAlias = lines.some((line, index) => {
     if (scalarContent[index]) {
       return false;
@@ -637,7 +780,15 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
 }
 
 function assertLintJobEnforcesNodeFloor(jobBody: string): void {
-  assertNoNodeExecutionOverrides(jobBody, 'lint job or its steps');
+  assertNoNodeExecutionOverrides(
+    extractJobEnvironmentBlock(jobBody),
+    'lint job environment',
+  );
+  const relevantSteps = findStepsThroughFloorCheck(jobBody);
+  assertNoNodeExecutionOverrides(
+    relevantSteps ?? findJobStepsBlock(jobBody) ?? '',
+    'lint job steps through the Node floor check',
+  );
   assert.equal(
     hasYamlMergeKeyAtIndent(jobBody, 4),
     false,
@@ -684,11 +835,6 @@ function assertLintJobUsesDefaultShell(
     jobBody,
     /^ {4}(?:defaults|'defaults'|"defaults")\s*:/m,
     'lint.yml: lint job must not declare defaults that can override the default shell',
-  );
-  assert.doesNotMatch(
-    jobBody,
-    /^ {8}(?:shell|'shell'|"shell")\s*:/m,
-    'lint.yml: lint job and its steps must not override the default shell',
   );
 }
 
@@ -1299,18 +1445,16 @@ test('quoted YAML step keys cannot bypass skip or failure guards', () => {
 });
 
 test('custom shell templates cannot skip Node floor execution', () => {
-  assert.throws(
-    () => assertLintJobUsesDefaultShell('        shell: bash -n {0}', ''),
-    /lint job and its steps must not override the default shell/,
-  );
   for (const quote of ["'", '"']) {
     assert.throws(
       () =>
-        assertLintJobUsesDefaultShell(
-          `        ${quote}shell${quote}: bash -n {0}`,
-          '',
+        assertNodeVersionLogBeforeFloor(
+          syntheticFloorStep(['node --version']).replace(
+            '        run: |',
+            `        ${quote}shell${quote}: bash -n {0}\n        run: |`,
+          ),
         ),
-      /lint job and its steps must not override the default shell/,
+      /floor step must use the default shell/,
     );
   }
   assert.throws(
@@ -1369,7 +1513,7 @@ test('NODE_OPTIONS and BASH_ENV preloads are rejected at every lint scope', () =
         : '        env:\n          ' + assignment;
       assert.throws(
         () => assertLintJobEnforcesNodeFloor(jobEnvironment),
-        /lint job or its steps must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+        /must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
       );
       assert.throws(
         () => assertLintJobUsesDefaultShell('', workflowEnvironment),
@@ -1393,7 +1537,7 @@ test('NODE_OPTIONS and BASH_ENV preloads are rejected at every lint scope', () =
         assertLintJobEnforcesNodeFloor(
           '    steps:\n      - run: |\n          ' + scriptWrite,
         ),
-      /lint job or its steps must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
+      /must not configure or reference NODE_OPTIONS, BASH_ENV, BASH_FUNC_node%%, PATH, or GITHUB_PATH/,
     );
     assert.throws(
       () => assertNodeVersionLogBeforeFloor(syntheticFloorStep([scriptWrite])),
@@ -1580,6 +1724,59 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
   );
 });
 
+test('later lint steps may set their own environment and shell', () => {
+  const workflow = [
+    'jobs:',
+    '  lint:',
+    '    steps:',
+    ...syntheticFloorStep(['node --version']).split('\n'),
+    '      - name: Later protocol test',
+    '        shell: pwsh',
+    '        env:',
+    '          PATH: /tmp/fake-bin',
+    '        run: echo /tmp/fake-bin >> "$GITHUB_PATH"',
+  ].join('\n');
+  const jobBody = extractJobBody(workflow, 'lint');
+
+  assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(jobBody));
+  assert.doesNotThrow(() => assertLintJobUsesDefaultShell(jobBody, workflow));
+  assert.doesNotThrow(() =>
+    assertNodeVersionLogBeforeFloor(
+      extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
+    ),
+  );
+});
+
+test('escaped or tagged YAML env keys cannot hide Node execution overrides', () => {
+  const rejection = /must not use escaped or tagged YAML env keys/;
+  for (const environment of [
+    '    env:\n      "\\u004eODE_OPTIONS": --require=./exit.cjs',
+    '    env: { "\\u004eODE_OPTIONS": --require=./exit.cjs }',
+    '    env:\n      !!str NODE_OPTIONS: --require=./exit.cjs',
+    '    env:\n      ? "\\u004eODE_OPTIONS"\n      : --require=./exit.cjs',
+  ]) {
+    assert.throws(() => assertLintJobEnforcesNodeFloor(environment), rejection);
+  }
+
+  assert.throws(
+    () =>
+      assertLintJobUsesDefaultShell(
+        '',
+        'env: { "\\u004eODE_OPTIONS": --require=./exit.cjs }',
+      ),
+    rejection,
+  );
+
+  const stepEnvironment = syntheticFloorStep(['node --version']).replace(
+    '        run: |',
+    '        env:\n          "\\u004eODE_OPTIONS": --require=./exit.cjs\n        run: |',
+  );
+  assert.throws(
+    () => assertNodeVersionLogBeforeFloor(stepEnvironment),
+    rejection,
+  );
+});
+
 test('a workflow env anchor keeps its mapping body in the preload scan', () => {
   for (const variable of ['NODE_OPTIONS', 'BASH_ENV']) {
     assert.throws(
@@ -1625,7 +1822,7 @@ test('unresolved environment aliases are rejected at workflow, job, and step sco
   ].join('\n');
   assert.throws(
     () => assertLintJobEnforcesNodeFloor(extractJobBody(workflow, 'lint')),
-    /lint job or its steps must not use an unresolved env alias/,
+    /must not use an unresolved env alias/,
   );
   assert.throws(
     () => assertLintJobUsesDefaultShell('', 'env: *shared-env'),
