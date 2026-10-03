@@ -86,9 +86,34 @@ discipline and has no tag.
   draft-review delegate, which receives a bounded JSON draft and evidence
   packet; the native reviewer remains available when no delegate is usable
   (#3599, #3600, #3625, #3631).
+- Template-mirror onboarding requires a clean target and a retained
+  checkpoint commit before substitution, so verification can compare the
+  result with the actual pre-import state (#3571).
+- The IDD workflow guide adds a host-capacity preflight for parallel workers
+  and bounded, read-only critique guidance with a Claude Code recipe
+  (#3677, #3713, #3714).
 
 ### Changed
 
+- Recovery verifies that a new Copilot review request registered after the
+  new HEAD commit before counting another recovery cycle. E1 triage can start
+  while CI is pending; required checks still gate the watermark and merge
+  (#3500, #3577).
+- The PR authoring guide waits for GitHub's asynchronous
+  `closingIssuesReferences` registration for PRs created within four hours
+  before treating a missing closing link as a body defect (#3656).
+- Review snapshots date advisory-bot thread edits after disposition using the
+  same history evidence as merge readiness (#3655).
+- CI-wait guidance warns that `--watch --required` may return immediately
+  when no required checks are configured and directs agents to wait on all
+  visible checks instead (#3673).
+- CI guidance documents REST alternatives for the specific GraphQL reads
+  observed hitting GitHub's secondary rate limit; it does not claim a
+  universal REST fallback (#3560).
+- Merge-readiness output now explains why an unconfigured required-check set
+  deferred watermarking, names blocking runs, and gives the next step (#3670).
+- Private-repository guidance explains why a self-waiver permission change
+  can remain red until the updated workflow is on the target branch (#3722).
 - Release tags must be signed annotated tags created by a maintainer
   for the exact version-bump pull request's merge commit (#3567).
 - A failed `gh api` call while `discover-roadmap-graph` reads a descendant
@@ -101,6 +126,18 @@ discipline and has no tag.
 
 ### Fixed
 
+- `rerun-advisory-convergence` can reconcile an ordinary
+  `rerun-budget-held` check only when a distinct later workflow run for the
+  same check and HEAD has a verified passing result; ambiguous or stale
+  evidence remains held (#3539).
+- Worktree-cleanup guidance no longer mistakes tag-only detached submodule
+  refs for unpushed commits (#3540).
+- `discover-roadmap-graph` treats a task-list entry and a matching native
+  sub-issue link for the same child as one membership, while still reporting
+  other duplicate relationships (#3668).
+- Merge execution passes recorded activation nonces through its final check,
+  and F4's fast-forward command overrides `merge.autoStash` so Git cannot
+  stash away a dirty-primary blocker (#3669, #3678).
 - `advisory-convergence`, `advisory-wait-state`,
   `rerun-advisory-convergence`, `idd-merge-execute`, and
   `pre-merge-readiness` accept numeric-offset ISO 8601 `--now` values
@@ -136,7 +173,7 @@ discipline and has no tag.
 - `sync-docs` can safely re-apply generated output, while cache leases,
   Windows clone locks, claim handoffs, merge guards, and review watermarks
   handle the edge cases covered by this release (#3620, #3622, #3627, #3664,
-  #3675, #3700, #3699, #3651, #3703, #3717).
+  #3645, #3675, #3700, #3699, #3651, #3703, #3717).
 - `idd-onboard --verify` detects schema drift against the pre-import Git
   baseline and allows intentionally held import entries to remain absent,
   while unheld missing targets still block verification (#3574, #3578).
