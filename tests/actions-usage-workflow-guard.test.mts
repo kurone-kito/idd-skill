@@ -170,12 +170,12 @@ const REQUIRED_NODE_FLOOR_ASSERTION = NODE_FLOOR_ASSERTION_LINES.join(' ')
 function assertLintJobEnforcesNodeFloor(jobBody: string): void {
   assert.doesNotMatch(
     jobBody,
-    /^ {4}if\s*:/m,
+    /^ {4}(?:if|'if'|"if")\s*:/m,
     'lint.yml: lint job must not be conditionally skipped',
   );
   assert.doesNotMatch(
     jobBody,
-    /^ {4}continue-on-error\s*:/m,
+    /^ {4}(?:continue-on-error|'continue-on-error'|"continue-on-error")\s*:/m,
     'lint.yml: lint job must not set continue-on-error',
   );
   assert.doesNotMatch(
@@ -198,7 +198,7 @@ function assertLintJobUsesDefaultShell(
   );
   assert.doesNotMatch(
     jobBody,
-    /^ {8}shell\s*:/m,
+    /^ {8}(?:shell|'shell'|"shell")\s*:/m,
     'lint.yml: lint job and its steps must not override the default shell',
   );
 }
@@ -208,17 +208,17 @@ function assertLintJobUsesDefaultShell(
 function assertNodeVersionLogBeforeFloor(stepBody: string): void {
   assert.doesNotMatch(
     stepBody,
-    /^ {8}if\s*:/m,
+    /^ {8}(?:if|'if'|"if")\s*:/m,
     'lint.yml: Assert Node.js floor step must not be conditionally skipped',
   );
   assert.doesNotMatch(
     stepBody,
-    /^ {8}continue-on-error\s*:/m,
+    /^ {8}(?:continue-on-error|'continue-on-error'|"continue-on-error")\s*:/m,
     'lint.yml: Assert Node.js floor step must not set continue-on-error',
   );
   assert.doesNotMatch(
     stepBody,
-    /^ {8}shell\s*:/m,
+    /^ {8}(?:shell|'shell'|"shell")\s*:/m,
     'lint.yml: Assert Node.js floor step must use the default shell',
   );
   const lines = literalRunLinesFromStep(stepBody)
@@ -507,6 +507,22 @@ test('a prerequisite-dependent lint job cannot skip the Node floor guard', () =>
   );
 });
 
+test('quoted YAML job keys cannot bypass skip or failure guards', () => {
+  for (const quote of ["'", '"']) {
+    assert.throws(
+      () => assertLintJobEnforcesNodeFloor(`    ${quote}if${quote}: false`),
+      /lint job must not be conditionally skipped/,
+    );
+    assert.throws(
+      () =>
+        assertLintJobEnforcesNodeFloor(
+          `    ${quote}continue-on-error${quote}: true`,
+        ),
+      /lint job must not set continue-on-error/,
+    );
+  }
+});
+
 test('duplicate Node floor step names are rejected as ambiguous', () => {
   const workflow = [
     'jobs:',
@@ -611,11 +627,43 @@ test('job or step continue-on-error cannot hide a Node floor failure', () => {
   );
 });
 
+test('quoted YAML step keys cannot bypass skip or failure guards', () => {
+  for (const quote of ["'", '"']) {
+    const conditionalStep = syntheticFloorStep(['node --version']).replace(
+      '        run: |',
+      `        ${quote}if${quote}: false\n        run: |`,
+    );
+    assert.throws(
+      () => assertNodeVersionLogBeforeFloor(conditionalStep),
+      /step must not be conditionally skipped/,
+    );
+
+    const continueOnErrorStep = syntheticFloorStep(['node --version']).replace(
+      '        run: |',
+      `        ${quote}continue-on-error${quote}: true\n        run: |`,
+    );
+    assert.throws(
+      () => assertNodeVersionLogBeforeFloor(continueOnErrorStep),
+      /floor step must not set continue-on-error/,
+    );
+  }
+});
+
 test('custom shell templates cannot skip Node floor execution', () => {
   assert.throws(
     () => assertLintJobUsesDefaultShell('        shell: bash -n {0}', ''),
     /lint job and its steps must not override the default shell/,
   );
+  for (const quote of ["'", '"']) {
+    assert.throws(
+      () =>
+        assertLintJobUsesDefaultShell(
+          `        ${quote}shell${quote}: bash -n {0}`,
+          '',
+        ),
+      /lint job and its steps must not override the default shell/,
+    );
+  }
   assert.throws(
     () =>
       assertLintJobUsesDefaultShell(
