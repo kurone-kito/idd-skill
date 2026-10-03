@@ -319,13 +319,16 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    the repository's default branch, GitHub did not auto-close any issue
    on merge (see `idd-pr-submit.instructions.md` D3.5) — close each
    issue in D3's deliberate closing set explicitly, not only the
-   claimed issue: `gh issue close {issue-number} --comment "Merged via
-   #{pr-number}."`.
+   claimed issue. Revalidate the active claim immediately before each
+   `gh issue close`; if it no longer matches this session, stop before
+   that close and every later F4 mutation. Then run
+   `gh issue close {issue-number} --comment "Merged via #{pr-number}."`.
+
 2. Re-validate claim; confirm the PR digest. If `human_merge` left
    none, retain the claim; step 7 repairs it after cleanup. Before step
    3, follow the [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof):
    reuse its trusted marker before reading a branch ref, and capture
-   fresh equal full SHAs only when no reusable proof exists. Keep the
+   fresh proof values only when no reusable proof exists. Keep the
    proof through F4; do not use the digest as proof.
 3. Run merged-PR comment cleanup (must not run before F3 succeeds).
    Re-validate the active claim before each GitHub minimization

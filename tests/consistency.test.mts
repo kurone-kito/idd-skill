@@ -2970,6 +2970,20 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
       claimRelease < f4End,
     'F4 must verify the PR digest before the issue digest and claim release',
   );
+  const closeStepStart = text.indexOf(
+    '1. **Non-default development branch**',
+    f4Start,
+  );
+  const closeStepEnd = text.indexOf('\n2. Re-validate claim', closeStepStart);
+  assert.ok(
+    closeStepStart >= 0 && closeStepEnd > closeStepStart,
+    'F4 step 1 boundaries not found',
+  );
+  const closeStep = text.slice(closeStepStart, closeStepEnd);
+  assert.match(
+    closeStep,
+    /Revalidate the active claim immediately before each\s+`gh issue close`[\s\S]*if it no longer matches this session, stop before\s+that close and every later F4 mutation/,
+  );
   const resumeText = readText(
     'idd-template/.github/instructions/idd-resume.instructions.md',
   );
@@ -2982,13 +2996,17 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     resumeDetail,
     /runs the full `idd-merge\.instructions\.md` F4\s+contract \(steps 2-7,[\s\S]*includes step 3's merged-PR comment cleanup/,
   );
+  assert.match(
+    resumeDetail,
+    /When this\s+route includes step 1, revalidate immediately before each closing-set\s+`gh issue close` as well \(PR `#3741` review comment `#4174332509`\)/,
+  );
   const headProofStart = resumeDetail.indexOf('## F4 Head Proof');
   const headProofEnd = resumeDetail.indexOf('\n## ', headProofStart + 1);
   const headProof = resumeDetail.slice(headProofStart, headProofEnd);
   assert.ok(headProofStart >= 0 && headProofEnd > headProofStart);
   assert.match(
     headProof,
-    /idd-f4-head-proof: v1 pr=\{pr-number\} claim=\{claim-id\} branch=\{branch-name\} f2=\{f2-head-SHA\} branch-tip=\{branch-tip-SHA\}/,
+    /idd-f4-head-proof: v2 pr=\{pr-number\} claim=\{claim-id\} branch=\{branch-name\} f2=\{f2-head-SHA\} branch-tip=\{branch-tip-SHA\} merge=\{merge-commit-SHA\} head=\{pr-head-SHA\}/,
   );
   assert.match(
     headProof,
@@ -3048,10 +3066,10 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /only after validating the live merged PR with the\s+same reads and parent rules in step 7 below[\s\S]*`PR_HEAD_SHA_F3` and live PR `\.head\.sha` to equal both stored SHAs/,
+    /keep the values separate[\s\S]*Do not require either to equal the merged PR\s+head[\s\S]*Derive\s+the merged PR head independently[\s\S]*including the verified merge commit and resulting\s+`PR_HEAD_SHA_F3`/,
   );
   const liveHeadPreflight = headProof.indexOf(
-    'only after validating the live merged PR',
+    'First run the REST and commit-object validation below',
   );
   const proofPost = headProof.indexOf('F4_MARKER_BODY=$(');
   const proofVerified = headProof.indexOf('Fetch the comments again');
@@ -3067,7 +3085,11 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /Immediately before step 3, revalidate the claim and repeat the live\s+merged-PR check from step 7[\s\S]*Step 7 repeats the validation after cleanup/,
+    /Immediately before step 3, revalidate the claim and repeat the live\s+merged-PR check from step 7[\s\S]*Step\s+7 repeats the validation after cleanup/,
+  );
+  assert.match(
+    headProof,
+    /With a newly posted proof, require the same\s+merge commit and PR head observed before posting[\s\S]*with a reused proof,\s+require both values to match the marker's `merge` and `head` fields/,
   );
   assert.match(
     headProof,
@@ -3081,11 +3103,11 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /For a two-parent merge, set `PR_HEAD_SHA_F3` to parent 2 and require it\s+to equal both stored SHAs and the live PR `\.head\.sha`/,
+    /For a two-parent merge, set `PR_HEAD_SHA_F3` to parent 2 and require it\s+to equal `PR_HEAD_SHA_LIVE`/,
   );
   assert.match(
     headProof,
-    /For a one-parent\s+merge \(squash or rebase\), use the live PR `\.head\.sha` as\s+`PR_HEAD_SHA_F3` and require it to equal both stored SHAs/,
+    /For a one-parent merge \(squash or rebase\),\s+set `PR_HEAD_SHA_F3` to `PR_HEAD_SHA_LIVE`[\s\S]*Neither path requires the\s+merged head to equal the F2 watermark or local branch tip/,
   );
   assert.match(
     headProof,
@@ -3109,9 +3131,12 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /returned full SHA equals\s+`\{branch-tip-SHA\}`[\s\S]*git push "--force-with-lease=refs\/heads\/\$BRANCH_NAME:\$BRANCH_TIP_SHA"[\s\S]*origin ":refs\/heads\/\$BRANCH_NAME"[\s\S]*If the push is rejected, query the ref again[\s\S]*present with another SHA, hold without deleting\s+it[\s\S]*confirm absence/,
+    /returned full SHA equals the verified\s+`PR_HEAD_SHA_F3`[\s\S]*git push "--force-with-lease=refs\/heads\/\$BRANCH_NAME:\$PR_HEAD_SHA_F3"[\s\S]*origin ":refs\/heads\/\$BRANCH_NAME"[\s\S]*If the push is rejected, query the ref again[\s\S]*present with another SHA, hold without deleting\s+it[\s\S]*confirm absence/,
   );
-  assert.match(headProof, /live branch ref is checked before cleanup/);
+  assert.match(
+    headProof,
+    /local branch ref is checked against `branch-tip-SHA`/,
+  );
   assert.match(headProof, /CodeRabbit review comment `#4174140998`/);
   assert.match(
     headProof,
@@ -3120,6 +3145,10 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   assert.match(
     headProof,
     /F4_MARKER_TOKEN=\$\(printf[\s\S]*branch=%s[\s\S]*"\$BRANCH_NAME"/,
+  );
+  assert.match(
+    headProof,
+    /F4_MARKER_TOKEN=\$\(printf[\s\S]*merge=%s head=%s[\s\S]*"\$BRANCH_TIP_SHA" "\$MERGE_COMMIT_SHA" "\$PR_HEAD_SHA_F3"/,
   );
   assert.match(headProof, /CodeRabbit review\s+comment\s+`#4174140996`/);
   const finalCheck = text.slice(prDigestCheck, issueDigest);

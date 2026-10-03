@@ -257,7 +257,9 @@ a still-open decision.
 verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
 contract (steps 2-7, plus step 1 when `{development-branch}` is not the
 default branch and a closing-set issue is still open) because this session
-can satisfy F4's own claim-revalidation gate at each mutation. This
+can satisfy F4's own claim-revalidation gate at each mutation. When this
+route includes step 1, revalidate immediately before each closing-set
+`gh issue close` as well (PR `#3741` review comment `#4174332509`). This
 includes step 3's merged-PR comment cleanup, which must not be skipped on
 resume (PR `#3741`'s current-head Copilot overview, review
 `#5401871731`). On this row,
@@ -314,11 +316,12 @@ with better evidence, never a mechanical removal.
 ## F4 Head Proof
 
 F4's final PR-digest check may run after PR comments and branch refs have
-been removed. Keep the one-parent proof on the claimed issue so a fresh
-session can repeat the check after a hold (PR `#3741` review comments
-`#4173683166`, `#4173965043`, `#4173965808`, `#4173965831`, `#4174056090`,
-`#4174056093`, `#4174056098`, `#4174056101`, and `#4174123484`; preventive,
-no observed incident yet).
+been removed. Keep the review watermark, local cleanup tip, and verified
+merged-PR SHA pair on the claimed issue so a fresh session can repeat the
+check after a hold (PR `#3741` review comments `#4173683166`,
+`#4173965043`, `#4173965808`, `#4173965831`, `#4174056090`,
+`#4174056093`, `#4174056098`, `#4174056101`, `#4174123484`, and
+`#4174335516`; preventive, no observed incident yet).
 
 Before F4 step 3, revalidate the claim and local lock, then read the
 claimed issue's comments before inspecting the local branch. First look
@@ -350,17 +353,21 @@ argument that receives it (PR `#3741` CodeRabbit review comment
 `#4174140996`). Capture the branch tip with
 `git rev-parse --verify "refs/heads/$BRANCH_NAME"` as
 `{branch-tip-SHA}`.
-Require both to be full 40-hex values and equal. Persist this exact marker
-on the claimed issue only after validating the live merged PR with the
-same reads and parent rules in step 7 below. Require its resulting
-`PR_HEAD_SHA_F3` and live PR `.head.sha` to equal both stored SHAs; hold
-before posting or cleanup on a mismatch, malformed merge commit, or read
-failure. This prevents a stale F2 pair from becoming an immutable proof
-for a different merged head (PR `#3741` review comment
-`#4174123484`).
+Require each to be a full 40-hex value and keep the values separate: the
+F2 watermark identifies the reviewed snapshot, while `{branch-tip-SHA}`
+binds local-branch cleanup. Do not require either to equal the merged PR
+head. A contributor can advance the PR after F2 while the local branch
+remains at an older tip (PR `#3741` review comment `#4174335516`). Derive
+the merged PR head independently from the live PR and merge commit in
+step 7 below. Persist this proof on the claimed issue only after that
+validation succeeds, including the verified merge commit and resulting
+`PR_HEAD_SHA_F3`; hold before posting or cleanup on a malformed merge
+commit, conflicting proof, or read failure. This prevents a stale F2
+snapshot from becoming proof for a different merged head (PR `#3741`
+review comment `#4174123484`).
 
 ```text
-<!-- idd-f4-head-proof: v1 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} -->
+<!-- idd-f4-head-proof: v2 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} merge={merge-commit-SHA} head={pr-head-SHA} -->
 ```
 
 Read issue comments with:
@@ -375,7 +382,7 @@ shared [trusted marker actor policy](../.github/instructions/idd-overview-core.i
 including live Write/Maintain/Admin collaborator permission when
 `markerTrust.allowCollaboratorMarkers` is enabled; the configured list
 alone is not the complete policy. A reusable proof must match the active
-claim ID, PR number, branch, and both SHAs. Its `created_at` must not
+claim ID, PR number, branch, and all four SHAs. Its `created_at` must not
 precede the initial trusted claim activation for this claim ID and branch
 (not a later heartbeat of the same claim), and `updated_at` must equal
 `created_at`. Identical duplicate markers carry the same proof. A trusted
@@ -384,15 +391,19 @@ edit is ambiguous and holds F4. Do not treat an untrusted marker as a
 conflict or as proof.
 
 If no trusted marker exists, revalidate the claim and local lock before
-posting. The comment body must start with the marker token and include a
-visible note after it; `gh issue comment` and `gh api -f body=` silently
+posting. First run the REST and commit-object validation below and set
+`MERGE_COMMIT_SHA` and `PR_HEAD_SHA_F3`; the marker records those verified
+values as well as the F2 watermark and local branch tip. The comment body
+must start with the marker token and include a visible note after it;
+`gh issue comment` and `gh api -f body=` silently
 reject HTML-only operational markers (PR `#3741` review comment
 `#4173965040`). POST a JSON document instead:
 
 ```sh
 F4_MARKER_TOKEN=$(printf \
-  '<!-- idd-f4-head-proof: v1 pr=%s claim=%s branch=%s f2=%s branch-tip=%s -->' \
-  "$PR_NUMBER" "$CLAIM_ID" "$BRANCH_NAME" "$F2_HEAD_SHA" "$BRANCH_TIP_SHA")
+  '<!-- idd-f4-head-proof: v2 pr=%s claim=%s branch=%s f2=%s branch-tip=%s merge=%s head=%s -->' \
+  "$PR_NUMBER" "$CLAIM_ID" "$BRANCH_NAME" "$F2_HEAD_SHA" \
+  "$BRANCH_TIP_SHA" "$MERGE_COMMIT_SHA" "$PR_HEAD_SHA_F3")
 F4_MARKER_BODY=$(printf '%s\n\n_%s: F4 head-proof marker. Do not edit._' \
   "$F4_MARKER_TOKEN" "$AGENT_ID")
 jq -n --arg body "$F4_MARKER_BODY" '{body: $body}' | \
@@ -409,10 +420,11 @@ through claim release.
 
 Immediately before step 3, revalidate the claim and repeat the live
 merged-PR check from step 7. With a newly posted proof, require the same
-merge commit and head SHA observed before posting; with a reused proof,
-require the live head to equal its stored SHA pair. Hold before cleanup
-if either check changed. Step 7 repeats the validation after cleanup to
-catch a later race.
+merge commit and PR head observed before posting; with a reused proof,
+require both values to match the marker's `merge` and `head` fields. Keep
+the marker's F2 watermark and local branch-tip values separate from the
+merged-PR head. Hold before cleanup if the proof or live PR changed. Step
+7 repeats the validation after cleanup to catch a later race.
 
 Before worktree removal, revalidate the claim and compare the path with
 `git worktree list --porcelain`. If the path and registration disagree,
@@ -427,12 +439,12 @@ the existing unmerged-branch hold path.
 
 For step 6, query `git ls-remote --exit-code origin
 "refs/heads/$BRANCH_NAME"` immediately before deletion. Delete the remote
-branch only when present and its returned full SHA equals
-`{branch-tip-SHA}`. Bind the deletion atomically to that expected SHA and
-quote the ref arguments:
+branch only when present and its returned full SHA equals the verified
+`PR_HEAD_SHA_F3` for this merged PR. Bind the deletion atomically to that
+expected SHA and quote the ref arguments:
 
 ```sh
-git push "--force-with-lease=refs/heads/$BRANCH_NAME:$BRANCH_TIP_SHA" \
+git push "--force-with-lease=refs/heads/$BRANCH_NAME:$PR_HEAD_SHA_F3" \
   origin ":refs/heads/$BRANCH_NAME"
 ```
 
@@ -442,12 +454,18 @@ it. After a successful deletion, confirm absence with the same query.
 Hold on lookup, deletion, or confirmation errors unless absence is
 confirmed. This compare-and-delete closes the race where a push could
 advance the remote branch after the tip check but before deletion (PR
-`#3741` CodeRabbit review comment `#4174140998`); the initial SHA check
-also prevents deleting commits added after the proof (PR `#3741` review
-comment `#4174056101`).
+`#3741` CodeRabbit review comment `#4174140998`); comparing against the
+verified merged head permits a stale local branch tip while still
+holding if the remote has moved past the merged PR head (PR `#3741`
+review comment `#4174335516`). The initial SHA check also prevents
+deleting commits added after the proof (PR `#3741` review comment
+`#4174056101`).
 
 Before persisting proof, immediately before step 3, and after cleanup in
 step 7, read the merged PR and its merge commit through GitHub's REST API.
+For a new proof, do the first read now, before constructing the marker;
+for a reused proof, require the derived merge/head pair to equal the
+marker's `merge` and `head` values on each read.
 Set `PR_NUMBER` from the matched PR, and set `CLAIM_ID`, `F2_HEAD_SHA`,
 `BRANCH_NAME`, `BRANCH_TIP_SHA`, and `AGENT_ID` from the already validated
 F4 context. Keep recovered values in quoted shell variables.
@@ -463,7 +481,7 @@ if ! printf '%s' "$PR_DATA" | jq -e '
   exit 1
 fi
 MERGE_COMMIT_SHA=$(printf '%s' "$PR_DATA" | jq -r '.merge_commit_sha')
-PR_HEAD_SHA_F3=$(printf '%s' "$PR_DATA" | jq -r '.head.sha')
+PR_HEAD_SHA_LIVE=$(printf '%s' "$PR_DATA" | jq -r '.head.sha')
 MERGE_COMMIT_DATA=$(gh api \
   "repos/{owner}/{repo}/git/commits/$MERGE_COMMIT_SHA")
 ```
@@ -477,17 +495,17 @@ The REST pull-request endpoint defines `merge_commit_sha` for merge,
 squash, and rebase methods (for rebase it is the commit at which the base
 branch was updated; see [GitHub's pull request REST API](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)).
 For a two-parent merge, set `PR_HEAD_SHA_F3` to parent 2 and require it
-to equal both stored SHAs and the live PR `.head.sha`. For a one-parent
-merge (squash or rebase), use the live PR `.head.sha` as
-`PR_HEAD_SHA_F3` and require it to equal both stored SHAs. The PR's
-`merged` status and `.head.sha` bind the original PR head for one-parent
-methods; do not infer that head from the resulting commit's parent.
-Before cleanup, a newly posted proof also requires the same merge commit
-and PR head observed before posting; a reused proof requires the live PR
-head to equal its stored SHA pair. After cleanup, step 7 rereads the
+to equal `PR_HEAD_SHA_LIVE`. For a one-parent merge (squash or rebase),
+set `PR_HEAD_SHA_F3` to `PR_HEAD_SHA_LIVE`; the PR's `merged` status and
+`.head.sha` bind the original PR head for these methods, so do not infer
+that head from the resulting commit's parent. Neither path requires the
+merged head to equal the F2 watermark or local branch tip. When reusing a
+proof, require the live merge SHA and `PR_HEAD_SHA_F3` to match its
+`merge` and `head` fields; before cleanup, a newly posted proof requires
+the same pair observed before posting. After cleanup, step 7 rereads the
 trusted issue marker and repeats this API validation before repairing the
-PR digest. The live branch ref is checked before cleanup; the PR digest
-remains display state, never proof.
+PR digest. The local branch ref is checked against `branch-tip-SHA`;
+the PR digest remains display state, never proof.
 
 ## §W1 — PR exists (1 match), no worktree
 
