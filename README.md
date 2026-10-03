@@ -65,7 +65,7 @@ with since May 2026:
 - **Not zero-failure by design** — edge cases found in production
   come back as issues, and the loop fixes itself.
 
-_As of 2026-08._
+_As of 2026-10._
 
 <!-- token-cost-readme:start -->
 
