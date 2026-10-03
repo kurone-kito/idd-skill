@@ -356,8 +356,23 @@ is an issue comment, so merged-PR cleanup cannot remove it; retain it
 through claim release.
 
 Before worktree removal, revalidate the claim and confirm the local
-branch tip still equals `{branch-tip-SHA}`. After cleanup, step 7 rereads
-the trusted issue marker and live PR state:
+branch tip still equals `{branch-tip-SHA}`. For a resumed step 5, check
+the path against `git worktree list --porcelain`: if both the path and
+its worktree registration are absent, skip its inspection and removal;
+if both are present, run the normal safety inspection. A missing path
+with a registration, or a present path without one, holds as an
+inconsistent worktree state. Delete the local branch with `git branch
+-d` only when it exists; absence is already complete. Keep the existing
+unmerged-branch hold path.
+
+For step 6, query `git ls-remote --exit-code origin
+refs/heads/{branch-name}`. Delete the remote branch only when present;
+verified absence is complete. After deletion, confirm absence with the
+same query. Hold on lookup or deletion errors other than confirmed
+absence. These guards let a fresh F4 pass resume after cleanup without
+repeating destructive operations.
+
+After cleanup, step 7 rereads the trusted issue marker and live PR state:
 
 ```sh
 gh pr view {pr-number} --json state,mergeCommit,headRefOid
@@ -366,10 +381,11 @@ gh api repos/{owner}/{repo}/git/commits/{mergeCommit.oid}
 
 Require `MERGED`, a full merge oid, `.sha` equal to that oid, and 1–2
 full 40-hex parent SHAs. Hold on any read or shape failure. For a
-two-parent merge, parent 2 must equal both stored SHAs and the live PR
-`headRefOid`; for a one-parent merge, use the stored F2 SHA as
-`PR_HEAD_SHA_F3` and require the branch tip and live `headRefOid` to
-equal it. The PR digest remains display state, never proof.
+two-parent merge, set `PR_HEAD_SHA_F3` to parent 2 and require it to equal
+both stored SHAs and the live PR `headRefOid`; for a one-parent merge,
+set it to the stored F2 SHA and require both stored SHAs and the live
+`headRefOid` to equal it. The live branch ref is checked before cleanup;
+the PR digest remains display state, never proof.
 
 ## §W1 — PR exists (1 match), no worktree
 

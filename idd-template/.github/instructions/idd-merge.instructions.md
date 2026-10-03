@@ -535,9 +535,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    or removed`, and only after leftovers are preserved. Revalidate
    `--worktree` immediately before that retry.
    [Removed-cwd](../../docs/idd-helper-scripts.md#f4-branch-failure-routes).
-   Before removing the worktree, revalidate the claim and confirm
-   `git rev-parse {branch-name}` still equals the proof's
-   `{branch-tip-SHA}`.
+   Resume-safe absence checks and the pre-removal branch-tip check are in
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof).
    Then:
 
    - `git worktree remove <path>`.
@@ -552,15 +551,14 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      none`); otherwise hold `local-branch-unmerged-commits`, stop
      before step 7, keep claim.
 
-6. If GitHub auto-delete is disabled: delete the remote branch too.
+6. If GitHub auto-delete is disabled, delete the remote branch per
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof).
    (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
-7. After steps 4–6, verify/repair the PR digest before the issue digest.
-   Follow [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof);
-   hold on any read or shape failure. Bind its trusted marker to this
-   claim, PR, branch, and live `headRefOid`. Set `PR_HEAD_SHA_F3` to
-   parent 2 (two parents), else the proof's `{f2-head-SHA}`; require both
-   SHAs and the selected value to equal `headRefOid`. Never use digest
-   head as proof.
+7. After steps 4–6, follow the
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
+   to verify/repair the PR digest before the issue digest. Hold on failed
+   or ambiguous evidence. Use its proof-bound `PR_HEAD_SHA_F3`; never
+   use digest head as proof.
    Upsert `F3 merged` `Authoritative by` with both proven,
    distinct full SHAs, even if `human_merge` skipped F3 or the digest is
    missing/stale. Hold on duplicate, invalid, or incomplete proof.

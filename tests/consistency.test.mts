@@ -3018,12 +3018,37 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /For a\s+two-parent merge, parent 2 must equal both stored SHAs and the live PR\s+`headRefOid`/,
+    /For a\s+two-parent merge, set `PR_HEAD_SHA_F3` to parent 2 and require it to equal\s+both stored SHAs and the live PR\s+`headRefOid`/,
   );
   assert.match(
     headProof,
-    /for a one-parent\s+merge, use the stored F2 SHA as\s+`PR_HEAD_SHA_F3` and require the branch\s+tip and live\s+`headRefOid` to\s+equal it/,
+    /for a one-parent\s+merge,\s+set it to the stored F2 SHA and require both stored SHAs and the live\s+`headRefOid` to equal it/,
   );
+  assert.match(
+    headProof,
+    /Before worktree removal, revalidate the claim and confirm the local\s+branch tip still equals `\{branch-tip-SHA\}`/,
+  );
+  assert.match(
+    headProof,
+    /For a resumed step 5, check\s+the path against `git worktree list --porcelain`/,
+  );
+  assert.match(
+    headProof,
+    /if both the path and\s+its worktree registration are absent, skip its inspection and removal/,
+  );
+  assert.match(
+    headProof,
+    /Delete the local branch with `git branch\s+-d` only when it exists; absence is already complete/,
+  );
+  assert.match(
+    headProof,
+    /For step 6, query `git ls-remote --exit-code origin\s+refs\/heads\/\{branch-name\}`/,
+  );
+  assert.match(
+    headProof,
+    /verified absence is complete\. After deletion, confirm absence with the\s+same query/,
+  );
+  assert.match(headProof, /live branch ref is checked before cleanup/);
   const finalCheck = text.slice(prDigestCheck, issueDigest);
   const earlyCheck = text.slice(earlyDigestCheck, prDigestCheck);
   assert.match(
@@ -3038,20 +3063,11 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   assert.match(finalCheck, /After steps 4–6/);
   assert.match(
     finalCheck,
-    /Follow \[F4 Head Proof\][\s\S]*hold on any read or shape failure/,
-  );
-  assert.match(
-    finalCheck,
-    /Bind its trusted marker to this\s+claim, PR, branch, and live `headRefOid`/,
+    /follow the\s+\[F4 Head Proof\][\s\S]*Hold on failed\s+or ambiguous evidence/,
   );
   assert.match(finalCheck, /`F3 merged` `Authoritative by`/);
-  assert.match(finalCheck, /Set\s+`PR_HEAD_SHA_F3` to\s+parent\s+2/);
-  assert.match(finalCheck, /else the proof's\s+`\{f2-head-SHA\}`/);
-  assert.match(
-    finalCheck,
-    /require both\s+SHAs and the selected value to equal `headRefOid`/,
-  );
-  assert.match(finalCheck, /Never use digest\s+head\s+as proof/);
+  assert.match(finalCheck, /Use its proof-bound `PR_HEAD_SHA_F3`/);
+  assert.match(finalCheck, /never\s+use digest\s+head\s+as proof/);
   assert.match(
     finalCheck,
     /Upsert `F3 merged` `Authoritative by` with both proven,\s+distinct full SHAs/,
@@ -3070,12 +3086,11 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
     step5Start,
   );
   const step5 = text.slice(step5Start, step6Start);
-  assert.match(
-    step5,
-    /Before removing the worktree, revalidate the claim and confirm\s+`git rev-parse \{branch-name\}` still equals the proof's\s+`\{branch-tip-SHA\}`/,
-  );
+  assert.match(step5, /Resume-safe absence checks/);
+  const step6 = text.slice(step6Start, prDigestCheck);
+  assert.match(step6, /delete the remote branch per/);
   assert.ok(
-    step5.indexOf('Before removing the worktree') <
+    step5.indexOf('Resume-safe absence checks') <
       step5.indexOf('git worktree remove <path>'),
   );
   assert.match(finalCheck, /Phase: F3 merged/);
