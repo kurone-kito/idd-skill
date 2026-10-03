@@ -8,7 +8,7 @@ tags: [onboarding, host-setup]
 # Onboarding Reference — Optional Host Setup
 
 Use this reference alongside
-[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.13.0/idd-template/ONBOARDING.md)
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.14.0/idd-template/ONBOARDING.md)
 when you want to enable one of the optional host-level integrations it
 mentions but does not walk through inline. None of these steps are
 required to finish the hearing or the core import.
@@ -377,9 +377,9 @@ workflow turns "Copilot's review converged on the current PR HEAD" from
 an instruction the execution model must choose to honor into a
 status check GitHub itself can enforce. It is opt-in — the template
 already mirrors the workflow at
-[`idd-template/.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.13.0/idd-template/.github/workflows/idd-advisory-convergence.yml)
+[`idd-template/.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.14.0/idd-template/.github/workflows/idd-advisory-convergence.yml)
 and its comment-refresh companion
-[`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.13.0/idd-template/.github/workflows/idd-advisory-convergence-comment.yml);
+[`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.14.0/idd-template/.github/workflows/idd-advisory-convergence-comment.yml);
 copy both files into `.github/workflows/`, then register only the required
 job id `idd-advisory-convergence` — the companion is non-required.
 Importing does not register required checks.
@@ -526,7 +526,7 @@ default branch (or the equivalent ruleset requirement) together with
 **Dismiss stale pull request approvals when new commits are pushed**,
 so approval always applies to the revision that actually merges —
 without both settings, CODEOWNERS only routes a review request rather
-than gating merge. The [dry-run — Readiness assessment](https://github.com/kurone-kito/idd-skill/blob/v0.13.0/idd-template/ONBOARDING.md#dry-run--readiness-assessment)
+than gating merge. The [dry-run — Readiness assessment](https://github.com/kurone-kito/idd-skill/blob/v0.14.0/idd-template/ONBOARDING.md#dry-run--readiness-assessment)
 report's `CODEOWNERS present` item checks only that a CODEOWNERS file
 exists, not path coverage, producer binding, or these review settings
 (preventive; no observed incident yet).

@@ -180,6 +180,8 @@ discover, review, and recovery hardening since the 0.12.2 cut.
 
 ### Changed
 
+- Release tags must be signed annotated tags created by a maintainer
+  for the exact version-bump pull request's merge commit (#3567).
 - Helper execution now has explicit package-manager and vendored-Node
   behavior, clearer unsupported-runtime failures, and bounded error
   output; the migration is covered by platform-aware helper tests
