@@ -314,41 +314,24 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    the repository's default branch, GitHub did not auto-close any issue
    on merge (see `idd-pr-submit.instructions.md` D3.5) — close each
    issue in D3's deliberate closing set explicitly, not only the
-   claimed issue: `gh issue close {issue-number} --comment "Merged via
-   #{pr-number}."`.
-2. Confirm the post-merge digest update above exists or repair it after
-   re-validating the claim. Do not minimize the digest as an
-   operational marker unless a future cleanup policy explicitly
-   supports digest retirement.
+   claimed issue. Revalidate the active claim immediately before each
+   `gh issue close`; if it no longer matches this session, stop before
+   that close and every later F4 mutation. Then run
+   `gh issue close {issue-number} --comment "Merged via #{pr-number}."`.
+
+2. Re-validate claim; confirm the PR digest. If `human_merge` left
+   none, retain the claim; step 7 repairs it after cleanup. Before step
+   3, follow the [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof):
+   reuse its trusted marker before reading a branch ref, and capture
+   fresh proof values only when no reusable proof exists. Keep the
+   proof through F4; do not use the digest as proof.
 3. Run merged-PR comment cleanup (must not run before F3 succeeds).
    Re-validate the active claim before each GitHub minimization
    mutation.
 
-   Apply the following cleanup policy rules when evaluating candidates:
-
-   - Feedback or review parent comments may be minimized as `RESOLVED`
-     only after every actionable child review comment/thread under that
-     parent is accepted or rejected, replied to as required, and
-     resolved.
-   - Known review-bot regular PR comments may be minimized only after
-     merge, with a clear completed-review or stale-notification signal
-     (a CodeRabbit no-action summary, a summary/review-trigger
-     acknowledgement with a matching later IDD disposition, or — for
-     CodeRabbit summaries specifically — once all its review threads
-     are resolved with fresh IDD dispositions).
-   - Bot review parent bodies without associated review threads
-     (including Copilot error review bodies) are skipped by default
-     unless a future policy narrows a safe cleanup class for them.
-   - Trusted IDD operational marker comments may be minimized as
-     `OUTDATED` only after merge, once the marker is no longer needed
-     for resume, advisory wait, or review-currency checks. Candidate
-     prefixes: `<!-- review-watermark:`, `<!-- review-baseline:`,
-     `advisory-wait:`, `advisory-wait-recovery:`, `<!-- advisory-wait:`,
-     `advisory-reroll:`.
-   - Do not minimize comments with unresolved maintainer decisions,
-     active holds, failed-CI context maintainers still need,
-     non-operational human discussion, or content still in active F2/F3
-     gates.
+   Apply the [Timing](../../docs/idd-comment-minimization.md#timing) and
+   [Candidate Rules](../../docs/idd-comment-minimization.md#candidate-rules)
+   to every candidate; skip anything those rules exclude.
 
    **Mandatory apply decision tree** — follow this sequence; no path
    may exit without a recorded reason when cleanup candidates exist. In
@@ -553,6 +536,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    or removed`, and only after leftovers are preserved. Revalidate
    `--worktree` immediately before that retry.
    [Removed-cwd](../../docs/idd-helper-scripts.md#f4-branch-failure-routes).
+   Resume-safe absence checks and the pre-removal branch-tip check are in
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof).
    Then:
 
    - `git worktree remove <path>`.
@@ -567,30 +552,39 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      none`); otherwise hold `local-branch-unmerged-commits`, stop
      before step 7, keep claim.
 
-6. If GitHub auto-delete is disabled: delete the remote branch too.
+6. If GitHub auto-delete is disabled, delete the remote branch per
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof).
    (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
-7. Re-validate the active claim before each mutation below. If it
-   still uses your `{claim-id}`, upsert the claimed issue's own digest
-   with `Phase: F4 complete`, `Claim: none`, `Branch: none`, `Open
-   blockers: none`, `Next action: none`, and `Authoritative by`
-   pointing to the merge commit — mirroring F3's own PR-digest
-   upsert, but for the issue, so a closed/merged issue never sticks
-   at a stale digest phase (`#3079`). Proceed only when
-   the upsert reports `create`, `update`, or `noop`; on `duplicate` or
-   any other failure, keep the claim, re-validate, then post a hold
-   comment with the helper output, and stop for repair. Re-validate
-   again; if it still uses your `{claim-id}`, for each issue in step
-   1's closing set (none: skip), read
-   `gh issue view {issue-number} --json state` once; if open,
-   re-validate, then close it as step 1 does (a racing close counts); if
-   either fails, hold as above with its error (no `unclaimed-by`, no
-   retry). Then post `unclaimed-by` for your own
-   `{agent-id}` / `{claim-id}` (see
+7. After steps 4–6, follow the
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
+   to verify/repair the PR digest before the issue digest. Hold on failed
+   or ambiguous evidence. Use its proof-bound `PR_HEAD_SHA_F3`; never
+   use digest head as proof.
+   Upsert `F3 merged` `Authoritative by` with both proven,
+   distinct full SHAs, even if `human_merge` skipped F3 or the digest is
+   missing/stale. Hold on duplicate, invalid, or incomplete proof.
+   Use one `--last-checked` throughout. Dry-run fields: `Phase: F3 merged`,
+   `Claim: {agent-id} / {claim-id}`, `Branch: {branch-name}`,
+   `Open blockers: none`, `Next action: F4 cleanup then F5 discover`,
+   `Authoritative by` both SHAs. Apply `create`/`update` with
+   `--claim-issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}`;
+   re-validate before/after. Lost ownership stops confirmation and later
+   F4 mutations. Confirm `noop` with identical fields/timestamp. On
+   duplicate, invalid, or inconclusive results, keep claim, re-validate
+   before hold, and stop before issue digest or unclaim (#3728/#3730); if
+   lost, post no hold.
+   Re-validate before each mutation below. While your claim remains
+   active, upsert the issue digest with `Phase: F4 complete`, `Claim:
+   none`, `Branch: none`, `Open blockers: none`, `Next action: none`,
+   and `Authoritative by` the merge SHA (#3079). Accept only
+   `create`/`update`/`noop`; otherwise keep claim, re-validate, post the
+   helper-output hold, and stop. For each issue in step 1's closing set,
+   re-validate, read state once, then re-validate before closing if open
+   (a racing close counts). On failure, hold; do not retry or unclaim.
+   Finally, while the claim still matches, post your
+   `{agent-id}` / `{claim-id}` `unclaimed-by` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
-   to release the claim now that cleanup is complete (`#2220`). If
-   either re-validation finds anything other than your `{claim-id}`
-   — including no active claim — stop that mutation: the claim was
-   lost.
+   to release it (#2220). If ownership is lost, stop all later mutations.
 
 ## F5 — Loop
 

@@ -1760,6 +1760,52 @@ is mostly caught by A4.5's supersession signals; the one documented
 window is about three minutes, for #3597), so the rule rests on the
 repeated hand repairs, not on the window.
 
+### F4 verifies the PR digest before it releases the claim
+
+Observed 2026-10-02 while completing kurone-kito/idd-skill#3728:
+pull request [`kurone-kito/idd-skill#3730`](https://github.com/kurone-kito/idd-skill/pull/3730)
+merged at `9113400ec41ab0a05e406a0621509a9f75acdfd2`, but its
+live PR digest still said `F2 merge readiness`. F4 wrote the claimed
+issue's digest as complete and posted `unclaimed-by`; a later dry-run of
+`live-status-digest --pr 3730` returned `update`, while the normal claim
+gate no longer allowed repair after release. An earlier F4 check alone
+therefore leaves no ordinary repair path when the PR digest is still
+stale at the release boundary.
+
+F4 now repeats the PR-digest check after worktree and branch cleanup,
+before writing the issue's completion digest or releasing the claim. A
+two-parent merge derives the candidate head from parent 2. On a
+`human_merge` resume, F2.5 did not write an F3 digest, so F4 repairs it
+after cleanup from independently proven merge evidence. For a
+one-parent squash/rebase, F4 carries the latest trusted same-claim F2
+watermark SHA before comment cleanup can minimize its marker, and
+captures the branch tip before removing the worktree. The values stay
+separate: the watermark identifies the reviewed snapshot, and the branch
+tip binds local cleanup. F4 derives the merged PR head independently and
+compares it with the live `.head.sha`. The
+digest cannot supply its own head proof. These inputs were added after
+review found cleanup could otherwise remove the
+only proof sources, the merged-PR resume route skipped F2 capture, the
+detail guide omitted that step, the branch-tip proof was only in the
+prior session's memory after branch deletion, resumed F4 could repeat
+cleanup against absent worktrees and refs, and the provider view omitted
+commit parents (PR `#3741` review comments
+`#4173311932`, `#4173311978`, `#4173312001`, `#4173458244`, and
+`#4173461374`, `#4173600915`, `#4173683166`, and `#4173871269`; preventive,
+no completed F4 failure has been observed). Missing or mismatched evidence
+keeps the claim active. Repair carries the `F3 merged` phase
+and one `Last checked` value through dry-run, apply, and confirmation,
+with claim ownership revalidated around apply. A duplicate, failed
+validation, or inconclusive result stops before either completion write,
+preserving the claim as the repair authority
+(kurone-kito/idd-skill#3739; preventive; no observed incident yet for
+unverifiable merge-head evidence).
+
+When GitHub auto-delete is disabled, the profile-selected
+`delete-remote-branch` helper performs the expected-SHA lease deletion
+and verifies the result through the permitted helper command surface
+(PR `#3741` Codex review comment `#4174479403`).
+
 ## Instruction delivery
 
 ### Skill-based on-demand delivery of phase instructions: no-go (2026-07-16)

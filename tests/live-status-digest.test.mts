@@ -1273,6 +1273,89 @@ if (apiArgs[0] === 'graphql') {
   );
 }
 
+test('ordinary PR digest apply accepts a claim-bound non-default PR with no closing issue references (#3739)', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-live-status-pr-no-closing-refs-'),
+  );
+  const statePath = join(tempRoot, 'state.json');
+  const logPath = join(tempRoot, 'gh-args.jsonl');
+  const claimTimestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      comments: [],
+      mutations: 0,
+      evidence: 0,
+      viewer: 'maintainer',
+      prNumber: '55',
+      mergedAt: null,
+      linkedIssues: [],
+      claimIssueNumber: '123',
+      claimComments: [
+        {
+          id: 999,
+          created_at: claimTimestamp,
+          body: `<!-- claimed-by: repair-agent repair-claim supersedes: none ${claimTimestamp} branch: issue/123-task -->`,
+          user: { login: 'maintainer' },
+        },
+      ],
+    }),
+  );
+  const restore = stubPrRepairGh(statePath, logPath);
+  try {
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/live-status-digest.mjs'),
+          '--repo',
+          'owner/repo',
+          '--pr',
+          '55',
+          '--phase',
+          'F3 merged',
+          '--claim',
+          'repair-agent / repair-claim',
+          '--branch',
+          'issue/123-task',
+          '--last-checked',
+          claimTimestamp,
+          '--open-blockers',
+          'none',
+          '--next-action',
+          'F4 cleanup then F5 discover',
+          '--authoritative-by',
+          `merge ${'a'.repeat(40)} and PR head ${'b'.repeat(40)}`,
+          '--claim-issue',
+          '123',
+          '--claim-id',
+          'repair-claim',
+          '--agent-id',
+          'repair-agent',
+          '--apply',
+          '--format',
+          'json',
+        ],
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      ),
+    ) as { action: string; applied: boolean };
+    assert.equal(result.action, 'create');
+    assert.equal(result.applied, true);
+    const afterApply = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      comments: { body: string }[];
+      evidence: number;
+    };
+    assert.equal(afterApply.evidence, 1);
+    assert.match(
+      afterApply.comments[0]?.body ?? '',
+      /<!-- idd-live-status: current -->/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('duplicate repair CLI supports --pr targets bound to a single linked claim issue (#3158)', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-live-status-repair-pr-cli-'),

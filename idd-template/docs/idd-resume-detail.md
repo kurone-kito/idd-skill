@@ -255,9 +255,14 @@ a still-open decision.
 
 **Ownership condition.** The owned row (active claim = this session's
 verified `{claim-id}`) runs the full `idd-merge.instructions.md` F4
-contract (steps 4-7, plus step 1 when `{development-branch}` is not the
+contract (steps 2-7, plus step 1 when `{development-branch}` is not the
 default branch and a closing-set issue is still open) because this session
-can satisfy F4's own claim-revalidation gate at each mutation. On this row,
+can satisfy F4's own claim-revalidation gate at each mutation. When this
+route includes step 1, revalidate immediately before each closing-set
+`gh issue close` as well (PR `#3741` review comment `#4174332509`). This
+includes step 3's merged-PR comment cleanup, which must not be skipped on
+resume (PR `#3741`'s current-head Copilot overview, review
+`#5401871731`). On this row,
 `{branch}` is the active claim's own `branch:` field — the same binding
 Step 2 uses, available here without waiting for Step 2 because the claim
 is already verified. This is also
@@ -307,6 +312,207 @@ competing claim, an unverified worktree state, forced-handoff evidence
 naming this session as displaced, or a merged PR whose issue was never
 claimed at all) the same way: each needs a human or a future resume pass
 with better evidence, never a mechanical removal.
+
+## F4 Head Proof
+
+F4's final PR-digest check may run after PR comments and branch refs have
+been removed. Keep the review watermark, local cleanup tip, and verified
+merged-PR SHA pair on the claimed issue so a fresh session can repeat the
+check after a hold (PR `#3741` review comments `#4173683166`,
+`#4173965043`, `#4173965808`, `#4173965831`, `#4174056090`,
+`#4174056093`, `#4174056098`, `#4174056101`, `#4174123484`, and
+`#4174335516`; preventive, no observed incident yet).
+
+Before F4 step 3, revalidate the claim and local lock, then read the
+claimed issue's comments before inspecting the local branch. First look
+for a reusable, valid proof for the active claim and PR; it restores both
+stored SHAs without requiring the branch ref to exist. If the ref exists,
+require its tip to equal the stored branch tip; if absent, continue only
+through the resume-safe cleanup guards below. If no reusable proof exists,
+take `{f2-head-SHA}` from the E1 `review-watermark` that F2 validated (on
+a fresh resume, restore the latest valid same-claim `review-watermark`
+from the PR comments). This is the review-snapshot marker, not a separate
+F2 watermark format. Apply the shared trusted-marker policy below; if no
+such watermark can be authenticated, hold before cleanup. Bind
+`{branch-name}` to the exact trusted active-claim record; after a
+takeover or recovery, use only the verified successor's active-claim
+record. Retain that record as JSON data and extract `.branch` into
+`BRANCH_NAME` with `jq -er '.branch'`. Require it to match the row's
+verified claim branch, then validate it before use:
+
+```sh
+BRANCH_NAME=$(printf '%s' "$VERIFIED_CLAIM_JSON" | jq -er '.branch')
+if ! git check-ref-format "refs/heads/$BRANCH_NAME"; then
+  # Hold and stop F4.
+  exit 1
+fi
+```
+
+Never paste a recovered branch name into shell source; quote every shell
+argument that receives it (PR `#3741` CodeRabbit review comment
+`#4174140996`). Capture the branch tip with
+`git rev-parse --verify "refs/heads/$BRANCH_NAME"` as
+`{branch-tip-SHA}`.
+Require each to be a full 40-hex value and keep the values separate: the
+F2 watermark identifies the reviewed snapshot, while `{branch-tip-SHA}`
+binds local-branch cleanup. Do not require either to equal the merged PR
+head. A contributor can advance the PR after F2 while the local branch
+remains at an older tip (PR `#3741` review comment `#4174335516`). Derive
+the merged PR head independently from the live PR and merge commit in
+step 7 below. Persist this proof on the claimed issue only after that
+validation succeeds, including the verified merge commit and resulting
+`PR_HEAD_SHA_F3`; hold before posting or cleanup on a malformed merge
+commit, conflicting proof, or read failure. This prevents a stale F2
+snapshot from becoming proof for a different merged head (PR `#3741`
+review comment `#4174123484`).
+
+```text
+<!-- idd-f4-head-proof: v2 pr={pr-number} claim={claim-id} branch={branch-name} f2={f2-head-SHA} branch-tip={branch-tip-SHA} merge={merge-commit-SHA} head={pr-head-SHA} -->
+```
+
+Read issue comments with:
+
+```sh
+gh api --paginate \
+  "repos/{owner}/{repo}/issues/{issue-number}/comments"
+```
+
+Ignore comments from untrusted authors. Resolve author trust using the
+shared [trusted marker actor policy](../.github/instructions/idd-overview-core.instructions.md#trusted-marker-actors),
+including live Write/Maintain/Admin collaborator permission when
+`markerTrust.allowCollaboratorMarkers` is enabled; the configured list
+alone is not the complete policy. A reusable proof must match the active
+claim ID, PR number, branch, and all four SHAs. Its `created_at` must not
+precede the initial trusted claim activation for this claim ID and branch
+(not a later heartbeat of the same claim), and `updated_at` must equal
+`created_at`. Identical duplicate markers carry the same proof. A trusted
+marker for this claim with conflicting values, malformed fields, or any
+edit is ambiguous and holds F4. Do not treat an untrusted marker as a
+conflict or as proof.
+
+If no trusted marker exists, revalidate the claim and local lock before
+posting. First run the REST and commit-object validation below and set
+`MERGE_COMMIT_SHA` and `PR_HEAD_SHA_F3`; the marker records those verified
+values as well as the F2 watermark and local branch tip. The comment body
+must start with the marker token and include a visible note after it;
+`gh issue comment` and `gh api -f body=` silently
+reject HTML-only operational markers (PR `#3741` review comment
+`#4173965040`). POST a JSON document instead:
+
+```sh
+F4_MARKER_TOKEN=$(printf \
+  '<!-- idd-f4-head-proof: v2 pr=%s claim=%s branch=%s f2=%s branch-tip=%s merge=%s head=%s -->' \
+  "$PR_NUMBER" "$CLAIM_ID" "$BRANCH_NAME" "$F2_HEAD_SHA" \
+  "$BRANCH_TIP_SHA" "$MERGE_COMMIT_SHA" "$PR_HEAD_SHA_F3")
+F4_MARKER_BODY=$(printf '%s\n\n_%s: F4 head-proof marker. Do not edit._' \
+  "$F4_MARKER_TOKEN" "$AGENT_ID")
+jq -n --arg body "$F4_MARKER_BODY" '{body: $body}' | \
+  gh api --method POST \
+    'repos/{owner}/{repo}/issues/{issue-number}/comments' --input -
+```
+
+Fetch the comments again and confirm the exact body, trusted author,
+`created_at`, and `updated_at` before continuing. If the write response
+is ambiguous, reconcile by reading comments; never post another marker
+blindly. A missing or inconclusive proof holds before cleanup. The proof
+is an issue comment, so merged-PR cleanup cannot remove it; retain it
+through claim release.
+
+Immediately before step 3, revalidate the claim and repeat the live
+merged-PR check from step 7. With a newly posted proof, require the same
+merge commit and PR head observed before posting; with a reused proof,
+require both values to match the marker's `merge` and `head` fields. Keep
+the marker's F2 watermark and local branch-tip values separate from the
+merged-PR head. Hold before cleanup if the proof or live PR changed. Step
+7 repeats the validation after cleanup to catch a later race.
+
+Before worktree removal, revalidate the claim and compare the path with
+`git worktree list --porcelain`. If the path and registration disagree,
+hold as an inconsistent worktree state. If both are absent, skip
+inspection/removal; the local branch may also be absent, and if it still
+exists its tip must equal `{branch-tip-SHA}`. If both are present, require
+the local branch to exist and its tip to equal `{branch-tip-SHA}`, then
+run the normal safety inspection. Delete the local branch with
+`git branch -d -- "$BRANCH_NAME"` only when it exists; absence is
+already complete. Keep
+the existing unmerged-branch hold path.
+
+For step 6, use the profile-selected `delete-remote-branch` helper with
+`BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. Its default dry-run
+must report `would-delete` with the expected SHA, or `already-absent`;
+then run the same command with `--apply`. The helper checks the live
+remote ref and default branch, uses an argument-vector
+`--force-with-lease` compare-and-delete, and confirms absence. Continue
+only for `deleted` or `already-absent`; any mismatch, default-branch
+refusal, failed mutation, or inconclusive confirmation holds F4. For
+example, the vendored-node form is:
+
+```sh
+node scripts/delete-remote-branch.mjs \
+  --branch "$BRANCH_NAME" --expected-sha "$PR_HEAD_SHA_F3"
+node scripts/delete-remote-branch.mjs \
+  --branch "$BRANCH_NAME" --expected-sha "$PR_HEAD_SHA_F3" --apply
+```
+
+Use the helper runtime manifest's canonical command form for
+package-manager or ephemeral-npx. If helper runtime is unavailable, hold
+and ask an authorized operator to perform the atomic deletion; do not
+wrap, quote, or otherwise disguise a command that the active tool policy
+denies. This keeps compare-and-delete available through the explicitly
+permitted helper surface (PR `#3741` Codex review comment
+`#4174479403`). The helper's SHA lease closes the race where a push could
+advance the remote branch after the tip check (PR `#3741` CodeRabbit
+review comment `#4174140998`); comparing against the verified merged
+head permits a stale local branch tip while still holding if the remote
+has moved past the merged PR head (PR `#3741` review comment
+`#4174335516`). The initial SHA check also prevents deleting commits
+added after the proof (PR `#3741` review comment `#4174056101`).
+
+Before persisting proof, immediately before step 3, and after cleanup in
+step 7, read the merged PR and its merge commit through GitHub's REST API.
+For a new proof, do the first read now, before constructing the marker;
+for a reused proof, require the derived merge/head pair to equal the
+marker's `merge` and `head` values on each read.
+Set `PR_NUMBER` from the matched PR, and set `CLAIM_ID`, `F2_HEAD_SHA`,
+`BRANCH_NAME`, `BRANCH_TIP_SHA`, and `AGENT_ID` from the already validated
+F4 context. Keep recovered values in quoted shell variables.
+
+```sh
+PR_DATA=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER")
+if ! printf '%s' "$PR_DATA" | jq -e '
+  .state == "closed" and .merged == true and
+  (.merge_commit_sha | test("^[0-9a-f]{40}$")) and
+  (.head.sha | test("^[0-9a-f]{40}$"))
+' >/dev/null; then
+  # Post a hold, keep the claim, and stop F4.
+  exit 1
+fi
+MERGE_COMMIT_SHA=$(printf '%s' "$PR_DATA" | jq -r '.merge_commit_sha')
+PR_HEAD_SHA_LIVE=$(printf '%s' "$PR_DATA" | jq -r '.head.sha')
+MERGE_COMMIT_DATA=$(gh api \
+  "repos/{owner}/{repo}/git/commits/$MERGE_COMMIT_SHA")
+```
+
+Do not interpolate `MERGE_COMMIT_SHA` into the commit endpoint until the
+PR state and both SHAs pass the guard above. Each API read must succeed.
+Require the commit object's `.sha` to equal `merge_commit_sha`, and
+require exactly one or two parent objects with full 40-hex SHAs; hold on
+any read or shape failure.
+The REST pull-request endpoint defines `merge_commit_sha` for merge,
+squash, and rebase methods (for rebase it is the commit at which the base
+branch was updated; see [GitHub's pull request REST API](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)).
+For a two-parent merge, set `PR_HEAD_SHA_F3` to parent 2 and require it
+to equal `PR_HEAD_SHA_LIVE`. For a one-parent merge (squash or rebase),
+set `PR_HEAD_SHA_F3` to `PR_HEAD_SHA_LIVE`; the PR's `merged` status and
+`.head.sha` bind the original PR head for these methods, so do not infer
+that head from the resulting commit's parent. Neither path requires the
+merged head to equal the F2 watermark or local branch tip. When reusing a
+proof, require the live merge SHA and `PR_HEAD_SHA_F3` to match its
+`merge` and `head` fields; before cleanup, a newly posted proof requires
+the same pair observed before posting. After cleanup, step 7 rereads the
+trusted issue marker and repeats this API validation before repairing the
+PR digest. The local branch ref is checked against `branch-tip-SHA`;
+the PR digest remains display state, never proof.
 
 ## §W1 — PR exists (1 match), no worktree
 

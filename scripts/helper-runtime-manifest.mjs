@@ -277,6 +277,15 @@ const HELPER_COMMANDS = [
       'Resolve the effective C-phase critiqueLoop.telemetryHook and, with --invoke, fire-and-forget invoke it.',
   },
   {
+    id: 'delete-remote-branch',
+    scriptName: 'idd:delete-remote-branch',
+    binName: 'idd-delete-remote-branch',
+    entryPath: 'scripts/delete-remote-branch.mjs',
+    vendoredCommand: 'node scripts/delete-remote-branch.mjs',
+    description:
+      'Delete a verified merged-PR branch with an expected-SHA lease and post-delete confirmation.',
+  },
+  {
     id: 'discover-orphan-filter',
     scriptName: 'idd:discover-orphan-filter',
     binName: 'idd-discover-orphan-filter',

@@ -199,6 +199,7 @@ const COVERED_HELPERS = [
   'discover-readiness-check',
   'discover-shared-file-overlap',
   'discover-viability-gate',
+  'delete-remote-branch',
   'disposition-non-review-notices',
   'external-check-waiver',
   'force-handoff',

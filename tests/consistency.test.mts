@@ -2943,6 +2943,290 @@ test('idd-merge.instructions.md F4 routes the worktree-in-use, diverged, and unm
   assert.match(step5, /operator[\s\S]{0,40}branch\s+-D/);
 });
 
+test('idd-merge.instructions.md F4 verifies the PR digest before the issue digest and claim release (#3739)', () => {
+  const text = readText(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  const f4Start = text.indexOf('## F4 — Cleanup');
+  const f4End = text.indexOf('\n## F5', f4Start);
+  const earlyDigestCheck = text.indexOf(
+    '2. Re-validate claim; confirm the PR digest',
+    f4Start,
+  );
+  const prDigestCheck = text.indexOf('7. After steps 4–6', f4Start);
+  const issueDigest = text.indexOf('Phase: F4 complete', prDigestCheck);
+  const claimRelease = text.indexOf(
+    'Finally, while the claim still matches',
+    issueDigest,
+  );
+  assert.ok(
+    f4Start >= 0 &&
+      f4End > f4Start &&
+      earlyDigestCheck > f4Start &&
+      earlyDigestCheck < prDigestCheck &&
+      prDigestCheck > f4Start &&
+      issueDigest > prDigestCheck &&
+      claimRelease > issueDigest &&
+      claimRelease < f4End,
+    'F4 must verify the PR digest before the issue digest and claim release',
+  );
+  const closeStepStart = text.indexOf(
+    '1. **Non-default development branch**',
+    f4Start,
+  );
+  const closeStepEnd = text.indexOf('\n2. Re-validate claim', closeStepStart);
+  assert.ok(
+    closeStepStart >= 0 && closeStepEnd > closeStepStart,
+    'F4 step 1 boundaries not found',
+  );
+  const closeStep = text.slice(closeStepStart, closeStepEnd);
+  assert.match(
+    closeStep,
+    /Revalidate the active claim immediately before each\s+`gh issue close`[\s\S]*if it no longer matches this session, stop before\s+that close and every later F4 mutation/,
+  );
+  const resumeText = readText(
+    'idd-template/.github/instructions/idd-resume.instructions.md',
+  );
+  assert.match(
+    resumeText,
+    /\| PR merged; claim = this session's verified `\{claim-id\}`\s+\| Run F4 steps 2-7 \(guarded\);/,
+  );
+  const resumeDetail = readText('idd-template/docs/idd-resume-detail.md');
+  assert.match(
+    resumeDetail,
+    /runs the full `idd-merge\.instructions\.md` F4\s+contract \(steps 2-7,[\s\S]*includes step 3's merged-PR comment cleanup/,
+  );
+  assert.match(
+    resumeDetail,
+    /When this\s+route includes step 1, revalidate immediately before each closing-set\s+`gh issue close` as well \(PR `#3741` review comment `#4174332509`\)/,
+  );
+  const headProofStart = resumeDetail.indexOf('## F4 Head Proof');
+  const headProofEnd = resumeDetail.indexOf('\n## ', headProofStart + 1);
+  const headProof = resumeDetail.slice(headProofStart, headProofEnd);
+  assert.ok(headProofStart >= 0 && headProofEnd > headProofStart);
+  assert.match(
+    headProof,
+    /idd-f4-head-proof: v2 pr=\{pr-number\} claim=\{claim-id\} branch=\{branch-name\} f2=\{f2-head-SHA\} branch-tip=\{branch-tip-SHA\} merge=\{merge-commit-SHA\} head=\{pr-head-SHA\}/,
+  );
+  assert.match(
+    headProof,
+    /gh api --paginate[\s\S]*issues\/\{issue-number\}\/comments/,
+  );
+  assert.match(
+    headProof,
+    /gh api "repos\/\{owner\}\/\{repo\}\/pulls\/\$PR_NUMBER"[\s\S]*\.merge_commit_sha \| test\([\s\S]*\.head\.sha \| test\(/,
+  );
+  assert.match(
+    headProof,
+    /\.state == "closed" and \.merged == true[\s\S]*merge_commit_sha[\s\S]*git\/commits\/\$MERGE_COMMIT_SHA[\s\S]*commit object's `\.sha` to equal `merge_commit_sha`/,
+  );
+  assert.ok(
+    headProof.indexOf('.merge_commit_sha | test') <
+      headProof.indexOf('MERGE_COMMIT_DATA=$(gh api'),
+    'F4 must validate the merge SHA before using it in the commit endpoint',
+  );
+  assert.match(
+    headProof,
+    /\.state == "closed" and \.merged == true[\s\S]*require exactly\s+one or two parent objects with full 40-hex SHAs/,
+  );
+  assert.match(headProof, /GitHub's pull request REST API/);
+  assert.doesNotMatch(headProof, /mergeCommit\.oid|headRefOid/);
+  assert.match(headProof, /Ignore comments from untrusted authors/);
+  assert.match(headProof, /shared \[trusted marker actor policy\]/);
+  assert.match(
+    headProof,
+    /live Write\/Maintain\/Admin collaborator permission when\s+`markerTrust\.allowCollaboratorMarkers` is enabled/,
+  );
+  assert.match(headProof, /not a later heartbeat of the same claim/);
+  assert.match(headProof, /`updated_at` must equal\s+`created_at`/);
+  assert.match(
+    headProof,
+    /First look\s+for a reusable, valid proof[\s\S]*without requiring the branch ref\s+to exist/,
+  );
+  const issueCommentRead = headProof.indexOf("claimed issue's comments");
+  const reusableProof = headProof.indexOf('for a reusable, valid proof');
+  const freshCapture = headProof.indexOf('If no reusable proof exists');
+  const branchLookup = headProof.indexOf(
+    '`git rev-parse --verify "refs/heads/$BRANCH_NAME"`',
+  );
+  assert.ok(
+    issueCommentRead >= 0 &&
+      reusableProof > issueCommentRead &&
+      freshCapture > reusableProof &&
+      branchLookup > freshCapture,
+    'F4 must read and reuse a valid proof before requiring the branch ref',
+  );
+  assert.match(
+    headProof,
+    /If the ref exists,\s+require its tip to equal the stored branch tip; if absent, continue only\s+through the resume-safe cleanup guards below/,
+  );
+  assert.match(
+    headProof,
+    /take `\{f2-head-SHA\}` from the E1 `review-watermark` that F2 validated[\s\S]*latest valid same-claim `review-watermark`[\s\S]*not a separate\s+F2 watermark format[\s\S]*`git rev-parse --verify "refs\/heads\/\$BRANCH_NAME"`/,
+  );
+  assert.match(
+    headProof,
+    /keep the values separate[\s\S]*Do not require either to equal the merged PR\s+head[\s\S]*Derive\s+the merged PR head independently[\s\S]*including the verified merge commit and resulting\s+`PR_HEAD_SHA_F3`/,
+  );
+  const liveHeadPreflight = headProof.indexOf(
+    'First run the REST and commit-object validation below',
+  );
+  const proofPost = headProof.indexOf('F4_MARKER_BODY=$(');
+  const proofVerified = headProof.indexOf('Fetch the comments again');
+  const preCleanupCheck = headProof.indexOf(
+    'Immediately before step 3, revalidate the claim',
+  );
+  assert.ok(
+    liveHeadPreflight >= 0 &&
+      liveHeadPreflight < proofPost &&
+      proofPost < proofVerified &&
+      proofVerified < preCleanupCheck,
+    'F4 must verify the merged head before posting proof and recheck before cleanup',
+  );
+  assert.match(
+    headProof,
+    /Immediately before step 3, revalidate the claim and repeat the live\s+merged-PR check from step 7[\s\S]*Step\s+7 repeats the validation after cleanup/,
+  );
+  assert.match(
+    headProof,
+    /With a newly posted proof, require the same\s+merge commit and PR head observed before posting[\s\S]*with a reused proof,\s+require both values to match the marker's `merge` and `head` fields/,
+  );
+  assert.match(
+    headProof,
+    /F4_MARKER_BODY=\$\(printf[\s\S]*jq -n --arg body "\$F4_MARKER_BODY" '\{body: \$body\}'[\s\S]*gh api --method POST[\s\S]*--input -/,
+  );
+  assert.match(headProof, /visible note after it/);
+  assert.doesNotMatch(headProof, /gh issue comment \{issue-number\} --body/);
+  assert.match(
+    headProof,
+    /If the write response\s+is ambiguous, reconcile by reading comments; never post another marker\s+blindly/,
+  );
+  assert.match(
+    headProof,
+    /For a two-parent merge, set `PR_HEAD_SHA_F3` to parent 2 and require it\s+to equal `PR_HEAD_SHA_LIVE`/,
+  );
+  assert.match(
+    headProof,
+    /For a one-parent merge \(squash or rebase\),\s+set `PR_HEAD_SHA_F3` to `PR_HEAD_SHA_LIVE`[\s\S]*Neither path requires the\s+merged head to equal the F2 watermark or local branch tip/,
+  );
+  assert.match(
+    headProof,
+    /Before worktree removal, revalidate the claim and compare the path with\s+`git worktree list --porcelain`/,
+  );
+  assert.match(
+    headProof,
+    /If both are absent, skip\s+inspection\/removal; the local branch may also be absent, and if it still\s+exists its tip must equal `\{branch-tip-SHA\}`/,
+  );
+  assert.match(
+    headProof,
+    /If both are present, require\s+the local branch to exist and its tip to equal `\{branch-tip-SHA\}`, then\s+run the normal safety inspection/,
+  );
+  assert.match(
+    headProof,
+    /Delete the local branch with\s+`git branch -d -- "\$BRANCH_NAME"` only when it exists; absence is\s+already complete/,
+  );
+  assert.match(
+    headProof,
+    /For step 6, use the profile-selected `delete-remote-branch` helper[\s\S]*default dry-run[\s\S]*`--apply`[\s\S]*argument-vector[\s\S]*`--force-with-lease`[\s\S]*confirms absence/,
+  );
+  assert.match(
+    headProof,
+    /node scripts\/delete-remote-branch\.mjs[\s\S]*--branch "\$BRANCH_NAME" --expected-sha "\$PR_HEAD_SHA_F3"[\s\S]*--apply/,
+  );
+  assert.doesNotMatch(
+    headProof,
+    /git push/,
+    'F4 must route the protected remote deletion through the helper',
+  );
+  assert.match(
+    headProof,
+    /local branch ref is checked against `branch-tip-SHA`/,
+  );
+  assert.match(headProof, /CodeRabbit\s+review comment `#4174140998`/);
+  assert.match(
+    headProof,
+    /git check-ref-format "refs\/heads\/\$BRANCH_NAME"[\s\S]*Never paste a recovered branch name into shell source/,
+  );
+  assert.match(
+    headProof,
+    /F4_MARKER_TOKEN=\$\(printf[\s\S]*branch=%s[\s\S]*"\$BRANCH_NAME"/,
+  );
+  assert.match(
+    headProof,
+    /F4_MARKER_TOKEN=\$\(printf[\s\S]*merge=%s head=%s[\s\S]*"\$BRANCH_TIP_SHA" "\$MERGE_COMMIT_SHA" "\$PR_HEAD_SHA_F3"/,
+  );
+  assert.match(headProof, /CodeRabbit review\s+comment\s+`#4174140996`/);
+  const finalCheck = text.slice(prDigestCheck, issueDigest);
+  const earlyCheck = text.slice(earlyDigestCheck, prDigestCheck);
+  assert.match(
+    earlyCheck,
+    /If `human_merge` left\s+none, retain the claim; step 7 repairs it after cleanup/,
+  );
+  assert.match(
+    earlyCheck,
+    /Before step\s+3, follow the \[F4 Head Proof\][\s\S]*reuse its trusted marker before reading a branch ref/,
+  );
+  assert.match(earlyCheck, /idd-resume-detail\.md#f4-head-proof/);
+  assert.match(finalCheck, /After steps 4–6/);
+  assert.match(
+    finalCheck,
+    /follow the\s+\[F4 Head Proof\][\s\S]*Hold on failed\s+or ambiguous evidence/,
+  );
+  assert.match(finalCheck, /`F3 merged` `Authoritative by`/);
+  assert.match(finalCheck, /Use its proof-bound `PR_HEAD_SHA_F3`/);
+  assert.match(finalCheck, /never\s+use digest\s+head\s+as proof/);
+  assert.match(
+    finalCheck,
+    /Upsert `F3 merged` `Authoritative by` with both proven,\s+distinct full SHAs/,
+  );
+  assert.match(
+    finalCheck,
+    /even if\s+`human_merge` skipped F3 or the digest is\s+missing\/stale/,
+  );
+  assert.match(finalCheck, /Hold on\s+duplicate, invalid, or incomplete proof/);
+  const step5Start = text.indexOf(
+    '\n5. Run from the **primary worktree**',
+    f4Start,
+  );
+  const step6Start = text.indexOf(
+    '\n6. If GitHub auto-delete is disabled',
+    step5Start,
+  );
+  const step5 = text.slice(step5Start, step6Start);
+  assert.match(step5, /Resume-safe absence checks/);
+  const step6 = text.slice(step6Start, prDigestCheck);
+  assert.match(step6, /delete the remote branch per/);
+  assert.ok(
+    step5.indexOf('Resume-safe absence checks') <
+      step5.indexOf('git worktree remove <path>'),
+  );
+  assert.match(finalCheck, /Phase: F3 merged/);
+  assert.match(finalCheck, /Claim: \{agent-id\} \/ \{claim-id\}/);
+  assert.match(finalCheck, /Branch: \{branch-name\}/);
+  assert.match(finalCheck, /Open blockers: none/);
+  assert.match(finalCheck, /Next action: F4 cleanup then F5 discover/);
+  assert.match(finalCheck, /`Authoritative by` both SHAs/);
+  assert.match(finalCheck, /Use one `--last-checked` throughout/);
+  assert.match(finalCheck, /create`\/`update/);
+  assert.match(
+    finalCheck,
+    /Apply `create`\/`update` with\s+`--claim-issue \{issue-number\} --claim-id \{claim-id\} --agent-id \{agent-id\}`/,
+  );
+  assert.match(finalCheck, /re-validate before\/after/);
+  assert.match(
+    finalCheck,
+    /Lost ownership stops confirmation\s+and later\s+F4 mutations/,
+  );
+  assert.match(finalCheck, /identical fields\/timestamp/);
+  assert.match(finalCheck, /Confirm `noop` with identical fields/);
+  assert.match(
+    finalCheck,
+    /On\s+duplicate, invalid, or inconclusive results, keep claim, re-validate\s+before hold/,
+  );
+  assert.match(finalCheck, /stop before issue digest or unclaim/);
+  assert.match(finalCheck, /if\s+lost, post no hold/);
+});
+
 test('idd-work.instructions.md confines every bare `main` mention to the B1 trusted-checkout contract (#2274)', () => {
   const text = readText(
     'idd-template/.github/instructions/idd-work.instructions.md',
