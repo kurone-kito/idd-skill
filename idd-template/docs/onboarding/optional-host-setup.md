@@ -382,28 +382,55 @@ and its comment-refresh companion
 [`idd-template/.github/workflows/idd-advisory-convergence-comment.yml`](https://github.com/kurone-kito/idd-skill/blob/v0.13.0/idd-template/.github/workflows/idd-advisory-convergence-comment.yml);
 copy both files into `.github/workflows/`, then register only the required
 job id `idd-advisory-convergence` — the companion is non-required.
-Neither is wired in by importing the rest of `idd-template/`, since a
-new required-status-check-able workflow is a deliberate adopter
-decision, not a default.
+Importing does not register required checks.
+The probe is not imported by default; copy
+`idd-advisory-convergence-probe.yml` there only if needed.
 
-Adjust the command to your helper-runtime profile, and the
-`actions/checkout` version if needed — the mirrored file intentionally
-uses the floating `@v4` form. The shipped runner default is
-`ubuntu-slim`; override it via the `runner` workflow input or the
-`CI_RUNNER_LABEL` repository variable (Settings > Secrets and
-variables > Actions > Variables) rather than hand-editing `runs-on` —
-a self-hosted label is **required**, not optional, on GitHub Enterprise
-Server (no GitHub-hosted runners at all) and on any org that mandates
-self-hosted runners even on github.com/GHEC. This source repository's
-own copy instead pins a specific `actions/checkout` SHA and hardcodes a
-custom runner label — appropriate for its own hardened, dogfooded CI,
-not a requirement for adopters. The workflow is read-only, querying
-reviews, threads, and waiver markers only; `issues: read` is required
-alongside `pull-requests: read` because the helper reads PR conversation
-comments via the issue-comments REST endpoint, which GitHub gates
-under the Issues permission category even for a pull request.
+Adjust commands for your helper-runtime profile; the template uses
+floating `@v4`. Its runner defaults to `ubuntu-slim`; choose a `runner`
+input or `CI_RUNNER_LABEL` variable instead. GHES and orgs requiring
+self-hosted runners need a self-hosted label. This repo's copy pins
+checkout and uses a custom runner; adopters need neither. The workflow
+reads reviews, threads, waiver markers and PR comments. GitHub gates its
+issue-comment endpoint on `issues: read`, alongside
+`pull-requests: read`.
 
-**Protect the workflow definition with CODEOWNERS.** A
+### Waiver probe
+
+Optional, non-required. Copy `idd-advisory-convergence-probe.yml` to
+`.github/workflows/idd-advisory-convergence-probe.yml` on the default
+branch. `issue_comment` runs the default-branch copy.
+
+Post this on the target PR:
+
+```text
+/idd-probe-token-scopes
+```
+
+New PR comments by `OWNER`, `MEMBER`, or `COLLABORATOR` run; plain-issue
+comments, edits, other text, other casing, and other associations do not. It
+gets PR number and repo from the event. No ref input, checkout, PR code,
+comment write, or required-gate change occurs.
+
+`closingIssuesReferences` needs an Actions check, legacy status, and linked
+issue. Permissions:
+
+| Read scope            |
+| --------------------- |
+| `contents: read`      |
+| `issues: read`        |
+| `pull-requests: read` |
+| `actions: read`       |
+| `checks: read`        |
+| `statuses: read`      |
+
+Success confirms this run's token access here. Denied reads point to token or
+Actions settings. `issues: read` covers
+`closingIssuesReferences`. Public success does not prove private access; test
+privately. Waiver writes need `issues: write` and `pull-requests: write`;
+the probe has neither.
+
+**Protect the required workflow definition with CODEOWNERS.** A
 `pull_request`-triggered workflow runs its definition from the PR's
 synthetic merge ref before any job step can perform the trusted `main`
 checkout, so that checkout protects the helper and config the job runs

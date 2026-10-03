@@ -1,0 +1,68 @@
+name: IDD self-waiver token-scope probe
+
+# issue_comment uses the workflow definition from the repository's default branch.
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  probe-self-waiver-token-scopes:
+    if: ${{ github.event.issue.pull_request != null && github.event.comment.body == '/idd-probe-token-scopes' && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+      - name: Probe self-waiver read access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          if [[ "$COMMENT_BODY" != '/idd-probe-token-scopes' ]]; then
+            echo "Ignoring a comment that does not exactly match the probe command."
+            exit 0
+          fi
+          NORMALIZED_GH_HOST=$(printf '%s' "${GH_HOST:-}" \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+          if [ -z "$NORMALIZED_GH_HOST" ]; then
+            SERVER_HOST=$(printf '%s' "$GITHUB_SERVER_URL" \
+              | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/+$##' \
+              | tr '[:upper:]' '[:lower:]')
+            if [ -z "$SERVER_HOST" ]; then
+              echo "::error::Could not determine GitHub host from GITHUB_SERVER_URL."
+              exit 1
+            fi
+            NORMALIZED_GH_HOST="$SERVER_HOST"
+          fi
+          export GH_HOST="$NORMALIZED_GH_HOST"
+          READ_SCOPE_EVIDENCE=$(gh pr view "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
+            --jq '[any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0)), any(.statusCheckRollup[]?; .__typename == "StatusContext"), any(.closingIssuesReferences[]?; .number > 0)] | map(tostring) | join(" ")')
+          read -r HAS_ACTION_CHECKS HAS_LEGACY_STATUS_CONTEXT HAS_CLOSING_ISSUE <<< "$READ_SCOPE_EVIDENCE"
+          if [ "$HAS_ACTION_CHECKS" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER has no Actions check run; choose a PR with at least one check run."
+            exit 1
+          fi
+          if [ "$HAS_LEGACY_STATUS_CONTEXT" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER has no legacy status context; choose a PR with an Actions check run and a legacy status context."
+            exit 1
+          fi
+          if [ "$HAS_CLOSING_ISSUE" != "true" ]; then
+            echo "::error::PR #$PR_NUMBER has no linked closing issue; choose a PR with a linked issue to exercise closingIssuesReferences."
+            exit 1
+          fi
+          echo "Read-only self-waiver query probe succeeded for PR #$PR_NUMBER with Actions, legacy status, and a linked issue."

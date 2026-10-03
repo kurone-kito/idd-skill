@@ -14,9 +14,23 @@ const REQUIRED_PATHS = [
   'idd-template/.github/workflows/idd-advisory-convergence.yml',
 ] as const;
 
+const PROBE_PATHS = [
+  '.github/workflows/idd-advisory-convergence-probe.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence-probe.yml',
+] as const;
+
 const COMMENT_PATHS = [
   '.github/workflows/idd-advisory-convergence-comment.yml',
   'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
+] as const;
+
+const PROBE_READ_PERMISSIONS = [
+  'actions: read',
+  'checks: read',
+  'contents: read',
+  'issues: read',
+  'pull-requests: read',
+  'statuses: read',
 ] as const;
 
 test('required advisory-convergence workflows keep the required job id', () => {
@@ -26,6 +40,43 @@ test('required advisory-convergence workflows keep the required job id', () => {
       text,
       /^ {2}idd-advisory-convergence:$/m,
       `${path} must keep job id idd-advisory-convergence`,
+    );
+  }
+});
+
+test('token-scope probes use a separate non-required workflow', () => {
+  for (const path of REQUIRED_PATHS) {
+    const text = readWorkflow(path);
+    const requiredJob = jobBlocks(text).get('idd-advisory-convergence');
+    assert.ok(requiredJob, `${path} must keep the required gate job`);
+    assert.match(
+      requiredJob,
+      /^ {4}if: \$\{\{ !cancelled\(\) \}\}$/m,
+      `${path}: manual re-checks must still run the required gate`,
+    );
+    assert.doesNotMatch(
+      text,
+      /probe_token_scopes|probe-self-waiver-token-scopes/,
+    );
+  }
+  for (const path of PROBE_PATHS) {
+    const text = readWorkflow(path);
+    assert.match(text, /^name: IDD self-waiver token-scope probe$/m);
+    assert.match(text, /^ {2}probe-self-waiver-token-scopes:$/m);
+    assert.doesNotMatch(text, /^ {2}idd-advisory-convergence:$/m);
+    const onBlock = text.slice(
+      text.indexOf('\non:'),
+      text.indexOf('\npermissions:'),
+    );
+    assert.deepEqual(
+      [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]),
+      ['issue_comment'],
+      `${path}: probe must trigger only on issue comments`,
+    );
+    assert.match(
+      onBlock,
+      /^ {4}types: \[created\]$/m,
+      `${path}: probe must handle only newly created comments`,
     );
   }
 });
@@ -213,6 +264,208 @@ function jobBlocks(text: string): Map<string, string> {
   });
   return blocks;
 }
+
+test('comment-triggered self-waiver token-scope probe is trusted, read-only, and matches the helper query', () => {
+  const helper = readFileSync(
+    `${REPO_ROOT}/src/scripts/external-check-waiver.mts`,
+    'utf8',
+  );
+  const helperFields = helper.match(
+    /function fetchPullRequest\([\s\S]*?'--json',\s*'([^']+)'/,
+  )?.[1];
+  assert.ok(helperFields, 'fetchPullRequest must declare its --json fields');
+
+  for (const path of PROBE_PATHS) {
+    const workflow = readWorkflow(path);
+    const onBlock = workflow.slice(
+      workflow.indexOf('\non:'),
+      workflow.indexOf('\npermissions:'),
+    );
+    assert.deepEqual(
+      [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]),
+      ['issue_comment'],
+      `${path}: probe must use only issue_comment`,
+    );
+    assert.match(
+      onBlock,
+      /^ {4}types: \[created\]$/m,
+      `${path}: probe must run only for newly created comments`,
+    );
+    assert.doesNotMatch(
+      onBlock,
+      /workflow_dispatch|pull_request|push|workflow_call/,
+      `${path}: probe must not expose another trigger or selected ref`,
+    );
+    assert.match(
+      workflow,
+      /^# issue_comment uses the workflow definition from the repository's default branch\.$/m,
+    );
+    assert.match(workflow, /^name: IDD self-waiver token-scope probe$/m);
+    assert.match(workflow, /^ {2}probe-self-waiver-token-scopes:$/m);
+    assert.doesNotMatch(workflow, /^ {2}idd-advisory-convergence:$/m);
+
+    const probe = jobBlocks(workflow).get('probe-self-waiver-token-scopes');
+    assert.ok(
+      probe,
+      `${path}: workflow must contain the token-scope probe job`,
+    );
+    assert.match(
+      probe,
+      /^ {4}if: \$\{\{ github\.event\.issue\.pull_request != null && github\.event\.comment\.body == '\/idd-probe-token-scopes' && \(github\.event\.comment\.author_association == 'OWNER' \|\| github\.event\.comment\.author_association == 'MEMBER' \|\| github\.event\.comment\.author_association == 'COLLABORATOR'\) \}\}$/m,
+      `${path}: job must require a PR, the exact command, and a trusted author association`,
+    );
+    assert.doesNotMatch(
+      probe,
+      /inputs\.|github\.ref|workflow_dispatch|actions\/checkout|git clone/,
+      `${path}: probe must not accept caller-selected inputs or execute checked-out content`,
+    );
+    if (path.startsWith('idd-template/')) {
+      assert.match(
+        probe,
+        /^ {4}runs-on: \$\{\{ vars\.CI_RUNNER_LABEL \|\| 'ubuntu-slim' \}\}$/m,
+        `${path}: runner must keep the CI_RUNNER_LABEL and ubuntu-slim fallback`,
+      );
+    } else {
+      assert.match(probe, /^ {4}runs-on: ubuntu-slim$/m);
+    }
+    assert.match(
+      probe,
+      /^ {10}PR_NUMBER: \$\{\{ github\.event\.issue\.number \}\}$/m,
+      `${path}: PR number must come only from the issue_comment event`,
+    );
+    assert.match(
+      probe,
+      /^ {10}COMMENT_BODY: \$\{\{ github\.event\.comment\.body \}\}$/m,
+      `${path}: comment text must be passed through an environment variable`,
+    );
+    assert.match(
+      probe,
+      /^ {10}GH_TOKEN: \$\{\{ github\.token \}\}$/m,
+      `${path}: probe must authenticate gh with this run's GITHUB_TOKEN`,
+    );
+    assert.match(
+      probe,
+      /--repo "\$GITHUB_REPOSITORY"/,
+      `${path}: probe must query the current repository`,
+    );
+    const run = probe.slice(probe.indexOf('\n        run:'));
+    assert.doesNotMatch(
+      run,
+      /\$\{\{\s*github\.event\.comment/,
+      `${path}: comment text must not be interpolated into a shell command`,
+    );
+    const exactCommandGuard = run.indexOf(
+      `if [[ "$COMMENT_BODY" != '/idd-probe-token-scopes' ]]; then`,
+    );
+    const probeQuery = run.indexOf('gh pr view');
+    assert.ok(
+      exactCommandGuard >= 0 && exactCommandGuard < probeQuery,
+      `${path}: shell must case-sensitively reject non-exact commands before API reads`,
+    );
+    const hostSetup = probe.search(
+      /NORMALIZED_GH_HOST=\$\(printf '%s' "\$\{GH_HOST:-\}"/,
+    );
+    const query = probe.indexOf('gh pr view');
+    assert.ok(
+      hostSetup >= 0 && hostSetup < query,
+      `${path}: probe must normalize GH_HOST before gh runs without a local repository`,
+    );
+    assert.ok(
+      probe.includes("sed 's/^[[:space:]]*//; s/[[:space:]]*$//'"),
+      `${path}: probe must treat whitespace-only GH_HOST as unset`,
+    );
+    assert.match(
+      probe,
+      /if \[ -z "\$NORMALIZED_GH_HOST" \][\s\S]*?GITHUB_SERVER_URL[\s\S]*?NORMALIZED_GH_HOST="\$SERVER_HOST"[\s\S]*?export GH_HOST="\$NORMALIZED_GH_HOST"/,
+      `${path}: probe must derive the gh host from the Actions server URL`,
+    );
+    assert.match(probe, /gh pr view/);
+    assert.match(
+      probe,
+      /--jq '\[any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\), any\(\.statusCheckRollup\[\]\?; \.__typename == "StatusContext"\), any\(\.closingIssuesReferences\[\]\?; \.number > 0\)\] \| map\(tostring\) \| join\(" "\)'/,
+      `${path}: probe must verify Actions, legacy status, and a linked issue exercise all read scopes`,
+    );
+    assert.match(probe, /has no Actions check run/);
+    assert.match(probe, /has no legacy status context/);
+    assert.match(probe, /has no linked closing issue/);
+    assert.match(
+      probe,
+      /Read-only self-waiver query probe succeeded for PR .*Actions, legacy status, and a linked issue/,
+    );
+    assert.doesNotMatch(
+      probe,
+      /external-check-waiver|gh api|gh issue|gh pr comment|--method|labels|required_status_checks/,
+      `${path}: probe must not invoke a waiver, comment, label, or required-check write operation`,
+    );
+    const probeFields = probe.match(/--json\s+([^\s\\]+)/)?.[1];
+    assert.equal(
+      probeFields,
+      helperFields,
+      `${path}: probe query fields must match fetchPullRequest exactly`,
+    );
+
+    const permissions = probe.match(/^ {4}permissions:\n((?: {6}.*\n)+)/m)?.[1];
+    assert.ok(permissions, `${path}: probe must declare job-level permissions`);
+    const actualPermissions = [...permissions.matchAll(/^ {6}([\w-]+: \w+)$/gm)]
+      .map((match) => match[1])
+      .sort();
+    assert.deepEqual(
+      actualPermissions,
+      [...PROBE_READ_PERMISSIONS].sort(),
+      `${path}: probe must grant exactly the six requested read-only scopes`,
+    );
+  }
+});
+
+test('onboarding guide explains how to run the trusted default-branch probe', () => {
+  const guide = readFileSync(
+    `${REPO_ROOT}/idd-template/docs/onboarding/optional-host-setup.md`,
+    'utf8',
+  );
+  const heading = '### Waiver probe';
+  const start = guide.indexOf(heading);
+  assert.notEqual(
+    start,
+    -1,
+    'onboarding guide must explain the token-scope probe',
+  );
+  const afterHeading = guide.slice(start + heading.length);
+  const nextHeading = afterHeading.search(/^#{1,3} /m);
+  const section =
+    nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+  const tableRows = section
+    .split('\n')
+    .filter((line) => line.startsWith('| `'));
+
+  for (const permission of PROBE_READ_PERMISSIONS) {
+    const cell = `\`${permission}\``;
+    assert.ok(
+      tableRows.some((line) => line.split('|')[1]?.trim() === cell),
+      `onboarding guide table must include ${permission}`,
+    );
+  }
+  assert.match(section, /non-required/i);
+  assert.match(section, /idd-advisory-convergence-probe\.yml/);
+  assert.match(section, /default branch/i);
+  assert.match(section, /issue_comment/i);
+  assert.match(section, /post this on the target PR/i);
+  assert.match(section, /```text\n\/idd-probe-token-scopes\n```/);
+  assert.match(section, /`OWNER`, `MEMBER`, or `COLLABORATOR`/);
+  assert.match(section, /edits/i);
+  assert.match(section, /other casing/i);
+  assert.match(section, /no ref input, checkout, PR code/i);
+  assert.match(section, /comment write/i);
+  assert.match(
+    section,
+    /Actions\s+check,\s+legacy status,\s+and linked\s+issue/i,
+  );
+  assert.match(section, /this run's token access here/i);
+  assert.match(section, /denied reads point to token or\s+Actions settings/i);
+  assert.match(section, /`issues: write`/);
+  assert.match(section, /`pull-requests: write`/);
+  assert.match(section, /public success does not prove private access/i);
+  assert.match(section, /required-gate change/i);
+});
 
 test('every job that invokes external-check-waiver keeps actions: read, checks: read and statuses: read in both advisory-convergence workflow copies (kurone-kito/idd-skill#3683)', () => {
   for (const path of REQUIRED_PATHS) {
