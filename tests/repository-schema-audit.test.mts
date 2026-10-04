@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import { extractImportSpecifiers } from '../src/scripts/lint-source-boundaries.mts';
 import {
+  collectRepositorySchemaViolations,
   detectJournalPatternDrift,
   detectOutputCoverageDrift,
   detectPhaseGraphNormalizationDrift,
@@ -29,6 +30,7 @@ import {
   extractRegexLiteralSource,
   extractResumeDecisionRoutes,
   extractResumeRouteEnum,
+  maskLeadingComments,
   ONBOARDING_STEP1B_COMPANIONS,
   type PhaseResolver,
   SCHEMA_OUTPUT_COVERAGE,
@@ -500,6 +502,23 @@ for (const { name, edit, expected } of INSPECTION_CASES) {
   });
 }
 
+test('collectRepositorySchemaViolations runs every rule once', () => {
+  const resolved: string[] = [];
+  const violations = collectRepositorySchemaViolations(writeTree(cleanTree()), {
+    normalizePhaseId: (token) => token,
+    resolvePhase: (input) => {
+      resolved.push(input);
+      if (input === 'stop' || input === 'A') {
+        throw Object.assign(new Error('unknown'), { code: 'unknown_phase_id' });
+      }
+      return { canonicalPhaseId: input, matchedBy: 'canonical' };
+    },
+  });
+  assert.deepEqual(violations, []);
+  // Four documented routes plus the bare `A` probe, once each.
+  assert.deepEqual(resolved, ['D1', 'E1', 'Esync', 'stop', 'A']);
+});
+
 test('--help prints usage, and a usage error exits 2 without inspecting anything', () => {
   const help = runCli(['--help']);
   assert.equal(help.status, 0);
@@ -572,6 +591,27 @@ test('the CLI runs with bare Node from a copy that has no node_modules', () => {
   const failing = run(writeTree(files));
   assert.equal(failing.status, 1, failing.stderr);
   assert.deepEqual(reportedRules(failing.stderr), [
+    'SCHEMA-TYPE-CATALOG schemas/notes.txt',
+  ]);
+});
+
+test('without --root the CLI audits the bundle root of its own location, whatever the cwd', () => {
+  // The scratch tree carries a copy of the CLI closure and the policy schema
+  // as the bundle-root marker, so the default root is the scratch tree.
+  const files = cleanTree();
+  files.set('schemas/notes.txt', 'stray');
+  const root = writeTree(files);
+  mkdirSync(join(root, 'scripts'));
+  for (const name of scriptClosure('repository-schema-audit.mjs')) {
+    copyFileSync(join(REPO_ROOT, 'scripts', name), join(root, 'scripts', name));
+  }
+  const result = spawnSync(
+    process.execPath,
+    [join(root, 'scripts', 'repository-schema-audit.mjs')],
+    { cwd: tmpdir(), encoding: 'utf8' },
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.deepEqual(reportedRules(result.stderr), [
     'SCHEMA-TYPE-CATALOG schemas/notes.txt',
   ]);
 });
@@ -660,6 +700,53 @@ test('extractRegexLiteralSource reads a regex literal with escaped slashes, clas
     'a[/]b\\/c',
   );
   assert.equal(extractRegexLiteralSource(source, 'MISSING'), null);
+});
+
+test('extractRegexLiteralSource ignores a commented-out declaration before the live one', () => {
+  const live = 'export const PATTERN = /live/;';
+  for (const dead of [
+    '// const PATTERN = /old/;',
+    '  // export const PATTERN = /old/;',
+    '/* const PATTERN = /old/; */',
+    '/**\n * const PATTERN = /old/;\n */',
+    '/*\nconst PATTERN = /old/;\n*/',
+  ]) {
+    assert.equal(
+      extractRegexLiteralSource(`${dead}\n${live}\n`, 'PATTERN'),
+      'live',
+      dead,
+    );
+  }
+  assert.equal(
+    extractRegexLiteralSource('// const PATTERN = /old/;\n', 'PATTERN'),
+    null,
+  );
+  // A declaration that merely ends a longer name is not the constant.
+  assert.equal(
+    extractRegexLiteralSource('export const MY_PATTERN = /x/;\n', 'PATTERN'),
+    null,
+  );
+});
+
+test('maskLeadingComments blanks comments that start a line and keeps the line structure', () => {
+  const source = [
+    '// line comment',
+    'const a = "//not a comment";',
+    '/* one-line block */ const b = 1;',
+    '/*',
+    ' still a comment',
+    '*/ const c = 2;',
+    'const d = /x/; // trailing comment stays',
+  ].join('\n');
+  assert.deepEqual(maskLeadingComments(source).split('\n'), [
+    '',
+    'const a = "//not a comment";',
+    ' const b = 1;',
+    '',
+    '',
+    ' const c = 2;',
+    'const d = /x/; // trailing comment stays',
+  ]);
 });
 
 test('detectJournalPatternDrift compares after normalizing the escaped slash only', () => {

@@ -42,7 +42,7 @@
 // unreadable or malformed input, or an inventory that came back empty (a rule
 // that inspects nothing would otherwise pass vacuously). Never writes, makes
 // no GitHub call, and imports only `node:` builtins plus the phase-id
-// resolver, whose own closure is node-only.
+// resolver and the bundle-root resolver, whose own closures are node-only.
 
 // #3240: keep the runtime check first so an unsupported Node version fails
 // loudly before import.meta.main is evaluated.
@@ -50,6 +50,7 @@ import './node-runtime-guard.mts';
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mts';
 import { normalizePhaseIdToken, resolvePhaseId } from './phase-id-resolver.mts';
 
 /** One finding: a rule hit, or an inspection that could not complete. */
@@ -808,8 +809,47 @@ export function checkSchemaOutputCoverage(root: string): SchemaRuleResult {
 }
 
 /**
+ * `text` with every comment that starts a line blanked out (the line structure
+ * is kept), so a commented-out declaration is never read as live code: a line
+ * that starts with `//`, and a block comment that starts a line, through its
+ * closing marker. Only comments that begin a line are masked, so a comment
+ * marker inside a string or a regex literal is left alone.
+ */
+export function maskLeadingComments(text: string): string {
+  let inBlock = false;
+  return text
+    .split('\n')
+    .map((line) => {
+      let rest = line;
+      if (inBlock) {
+        const end = rest.indexOf('*/');
+        if (end === -1) {
+          return '';
+        }
+        inBlock = false;
+        rest = rest.slice(end + 2);
+      }
+      const trimmed = rest.trimStart();
+      if (trimmed.startsWith('//')) {
+        return '';
+      }
+      if (trimmed.startsWith('/*')) {
+        const end = trimmed.indexOf('*/', 2);
+        if (end === -1) {
+          inBlock = true;
+          return '';
+        }
+        return trimmed.slice(end + 2);
+      }
+      return rest;
+    })
+    .join('\n');
+}
+
+/**
  * The source text of the regex literal assigned to the constant `name` (the
- * characters between the slashes), or null when no such declaration exists.
+ * characters between the slashes), or null when no such live declaration
+ * exists. Declarations inside comments that start a line are ignored.
  * Character classes and escaped characters may contain a slash.
  */
 export function extractRegexLiteralSource(
@@ -817,9 +857,10 @@ export function extractRegexLiteralSource(
   name: string,
 ): string | null {
   const declaration = new RegExp(
-    `\\bconst\\s+${name}\\s*(?::[^=\\n]+)?=\\s*/((?:\\\\.|\\[(?:\\\\.|[^\\]\\\\])*\\]|[^/\\\\\\n\\[])+)/[a-z]*\\s*;`,
+    `^[ \\t]*(?:export[ \\t]+)?const[ \\t]+${name}[ \\t]*(?::[^=\\n]+)?=\\s*/((?:\\\\.|\\[(?:\\\\.|[^\\]\\\\])*\\]|[^/\\\\\\n\\[])+)/[a-z]*\\s*;`,
+    'm',
   );
-  return declaration.exec(sourceText)?.[1] ?? null;
+  return declaration.exec(maskLeadingComments(sourceText))?.[1] ?? null;
 }
 
 /**
@@ -1302,12 +1343,11 @@ function compareText(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
-/** Every violation of every rule, ordered by rule, path and message. */
-export function collectRepositorySchemaViolations(
-  root: string,
-  dependencies: SchemaAuditDependencies = DEFAULT_DEPENDENCIES,
+/** Every violation of the given rule results, ordered by rule, path and message. */
+export function sortSchemaAuditViolations(
+  results: readonly SchemaRuleResult[],
 ): SchemaAuditViolation[] {
-  return runSchemaAuditRules(root, dependencies)
+  return results
     .flatMap((result) => result.violations)
     .sort(
       (a, b) =>
@@ -1317,6 +1357,15 @@ export function collectRepositorySchemaViolations(
     );
 }
 
+/** Runs every rule once and returns every violation, in report order. */
+// audit:ignore-dead-export: audit-docs loads this through a guarded dynamic import of the generated artifact, which the static audit cannot follow
+export function collectRepositorySchemaViolations(
+  root: string,
+  dependencies: SchemaAuditDependencies = DEFAULT_DEPENDENCIES,
+): SchemaAuditViolation[] {
+  return sortSchemaAuditViolations(runSchemaAuditRules(root, dependencies));
+}
+
 const USAGE =
   'usage: node scripts/repository-schema-audit.mjs [--root <repository>] [--help]\n';
 
@@ -1324,7 +1373,7 @@ const USAGE =
 export function runRepositorySchemaAuditCli(
   argv: readonly string[] = process.argv.slice(2),
 ): number {
-  let root = resolve('.');
+  let root: string | null = null;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') {
@@ -1348,8 +1397,16 @@ export function runRepositorySchemaAuditCli(
     );
     return 2;
   }
+  // The default root is resolved only when no --root was given, so a copy of
+  // this script outside a checkout can still inspect an explicit tree.
+  try {
+    root = root ?? resolveBundleRoot(import.meta.dirname);
+  } catch (error) {
+    process.stderr.write(`repository-schema-audit: ${describeError(error)}\n`);
+    return 2;
+  }
   const results = runSchemaAuditRules(root);
-  const violations = collectRepositorySchemaViolations(root);
+  const violations = sortSchemaAuditViolations(results);
   if (violations.length > 0) {
     for (const item of violations) {
       process.stderr.write(`${item.ruleId} ${item.path}: ${item.message}\n`);
