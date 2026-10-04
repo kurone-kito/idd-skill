@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
@@ -18,7 +17,6 @@ import {
   escapeMarkdownTableCell,
   extractOkfIndexFields,
   generatedFromBanner,
-  globFiles,
   injectGeneratedFromBanner,
   inspectHelperRuntimeConfig,
   isBannerScopedInstructionTarget,
@@ -31,8 +29,6 @@ import {
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
 import { readJson, readText } from './test-utils.mts';
-
-const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('placeholder scenarios detect clean and dirty post-onboarding fixtures', () => {
   const clean = collectPlaceholderHits(
@@ -513,44 +509,6 @@ test('doc budget guard unions size budgets across an array of per-glob entries',
   assert.match(
     drifted.errors[0],
     /doc-budget-drift: README\.md states 30,000 bytes/,
-  );
-});
-
-test('live manifest instructionSizeBudgets covers both the dogfooding and idd-template instruction globs', () => {
-  // Regression guard for #1667: the manifest must keep a dedicated entry
-  // for the canonical idd-template source, not just the dogfooding copy,
-  // or a future structure-mode divergence can silently exceed the shared
-  // byte cap on the idd-template side again.
-  const manifest = readJson('audit/sync-manifest.json') as {
-    instructionSizeBudgets?: { id?: string; glob?: string }[];
-  };
-  const budgets = manifest.instructionSizeBudgets;
-  assert.ok(
-    Array.isArray(budgets),
-    'instructionSizeBudgets must be an array of per-glob budget entries',
-  );
-  // Assert inclusion, not an exact-array match: audit/README.md explicitly
-  // encourages adding further per-glob entries later, and this guard must
-  // not start failing the day a third one lands.
-  const globs = budgets.map((budget) => budget.glob);
-  for (const requiredGlob of [
-    '.github/instructions/idd-*.instructions.md',
-    'idd-template/.github/instructions/idd-*.instructions.md',
-  ]) {
-    assert.ok(
-      globs.includes(requiredGlob),
-      `instructionSizeBudgets is missing an entry for ${requiredGlob}`,
-    );
-  }
-  const ids = budgets.map((budget) => budget.id);
-  assert.ok(
-    ids.every((id) => typeof id === 'string' && id.trim().length > 0),
-    'each instructionSizeBudgets entry needs a non-empty id',
-  );
-  assert.equal(
-    new Set(ids).size,
-    ids.length,
-    'each instructionSizeBudgets entry needs a distinct id to disambiguate audit output',
   );
 });
 
@@ -1647,42 +1605,6 @@ test('collectEnginesRangeMirrorViolations: reports an unreadable mirror file ins
   ]);
 });
 
-test("audit/sync-manifest.json's guarded repo state: this repository's own engines.node mirrors are currently in sync", () => {
-  const packageJson = readJson('package.json') as {
-    engines?: { node?: unknown };
-  };
-  const violations = collectEnginesRangeMirrorViolations(
-    packageJson.engines?.node,
-    [
-      { file: '.nvmrc', mode: 'low-bound-line' },
-      { file: '.node-version', mode: 'low-bound-line' },
-      { file: '.tool-versions', mode: 'low-bound-contains' },
-      { file: '.github/workflows/lint.yml', mode: 'full-range' },
-      {
-        file: '.github/workflows/idd-advisory-convergence.yml',
-        mode: 'full-range',
-      },
-      {
-        file: '.github/workflows/idd-advisory-convergence-comment.yml',
-        mode: 'full-range',
-      },
-      {
-        file: '.github/workflows/pnpm-boundary-node22-floor.yml',
-        mode: 'low-bound-contains',
-      },
-      { file: '.github/CONTRIBUTING.md', mode: 'full-range' },
-      { file: '.github/CONTRIBUTING.ja.md', mode: 'full-range' },
-      { file: '.github/CONTRIBUTING.zh.md', mode: 'full-range' },
-      { file: 'docs/typescript-sources.md', mode: 'full-range' },
-      { file: 'docs/workshop/README.md', mode: 'components' },
-      { file: 'docs/stalled-session-quiet-check.md', mode: 'components' },
-      { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
-    ],
-    readText,
-  );
-  assert.deepEqual(violations, []);
-});
-
 // =============================================================================
 // collectBinExecutableModeViolations (#1971) -- the bin/*.mjs shebang vs.
 // tracked-executable-mode guard shared by audit-docs.mts's
@@ -1768,37 +1690,6 @@ test('collectBinExecutableModeViolations: reports an unreadable file instead of 
   assert.deepEqual(violations, [
     'bin-executable-mode: bin/idd-missing.mjs: could not be read',
   ]);
-});
-
-test("this repository's own bin/**/*.mjs files are currently all tracked executable (#1971 guarded repo state)", () => {
-  const repoFiles = execFileSync(
-    'git',
-    ['ls-files', '--cached', '--others', '--exclude-standard'],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  )
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .sort();
-  const binFiles = globFiles('bin/**/*.mjs', repoFiles);
-  assert.ok(binFiles.length > 0, 'expected at least one bin/*.mjs file');
-  const modeOutput = execFileSync(
-    'git',
-    ['ls-files', '-s', '--', ...binFiles],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
-  );
-  const modes = new Map<string, string>();
-  for (const line of modeOutput.split(/\r?\n/).filter(Boolean)) {
-    const match = /^(\d+)\s+\S+\s+\S+\t(.+)$/.exec(line);
-    if (match) {
-      modes.set(match[2], match[1]);
-    }
-  }
-  const violations = collectBinExecutableModeViolations(
-    binFiles,
-    readText,
-    (file) => modes.get(file) ?? null,
-  );
-  assert.deepEqual(violations, []);
 });
 
 // =============================================================================

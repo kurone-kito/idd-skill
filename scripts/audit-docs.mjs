@@ -99,6 +99,10 @@ const ENGINES_RANGE_MIRRORS = [
     mode: 'full-range',
   },
   {
+    file: '.github/workflows/idd-advisory-convergence-comment.yml',
+    mode: 'full-range',
+  },
+  {
     file: '.github/workflows/pnpm-boundary-node22-floor.yml',
     mode: 'low-bound-contains',
   },
@@ -240,6 +244,7 @@ async function main() {
           `repository-instruction-audit/${ruleId}: ${path}: ${message}`,
       ),
     );
+    await checkRepositoryInventoryAudit();
   }
   checkReadmePairs(manifest.readmePairs ?? []);
   checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
@@ -325,6 +330,38 @@ async function checkRepositoryPolicy() {
       ...collectRepositoryPolicyViolations(root).map(
         (violation) =>
           `${violation.ruleId}: ${violation.path}: ${violation.message}`,
+      ),
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    errors.push(
+      `${source}: could not load generated artifact ${emitted}: ${detail}`,
+    );
+  }
+}
+async function checkRepositoryInventoryAudit() {
+  const source = 'src/scripts/repository-inventory-audit.mts';
+  const emitted = 'scripts/repository-inventory-audit.mjs';
+  if (
+    !repoFiles.includes(source) ||
+    !repoFiles.includes(emitted) ||
+    !existsSync(join(root, source)) ||
+    !existsSync(join(root, emitted)) ||
+    errors.some(
+      (error) =>
+        error.startsWith(`${source}:`) || error.startsWith(`${emitted}:`),
+    )
+  ) {
+    return;
+  }
+  try {
+    const { collectRepositoryInventoryViolations } = await import(
+      './repository-inventory-audit.mjs'
+    );
+    errors.push(
+      ...collectRepositoryInventoryViolations(root).map(
+        ({ ruleId, path, message }) =>
+          `repository-inventory-audit/${ruleId}: ${path}: ${message}`,
       ),
     );
   } catch (error) {

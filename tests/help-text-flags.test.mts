@@ -1,9 +1,37 @@
 import { strict as assert } from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { COVERED_HELPERS } from '../src/scripts/repository-inventory-audit.mts';
+
+const UNIVERSAL_FLAGS = new Set(['--help']);
+// Per-helper allowlist for a flag literal that appears in --help prose but
+// belongs to a DIFFERENT command -- cited as a cross-reference or worked
+// example, not documentation of this helper's own parser. Each entry names
+// the owning command so the exclusion stays auditable.
+const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  'audit-authored-issue': [
+    // sweep-authoring-markers.mjs's flag, cited to name the cleanup evidence
+    // producer (#3593).
+    '--with-cleanup-evidence',
+  ],
+  'claim-lock': [
+    // Git options and a resume-claim-routing option cited as cross-tool examples.
+    '--absolute-git-dir',
+    '--git-common-dir',
+    '--fresh-claim-gate',
+  ],
+  'verify-install-deps': [
+    // A pnpm install flag shown as the value of this helper's own option.
+    '--frozen-lockfile',
+  ],
+  'sweep-authoring-markers': [
+    // An option owned by minimize-superseded-markers, cited by contrast.
+    '--allow-untrusted',
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // Why this test exists (#1676)
@@ -17,9 +45,9 @@ import { fileURLToPath } from 'node:url';
 // agrees with that same helper's own declared flag spec.
 //
 // Coverage: every src/scripts/*.mts helper that declares a FLAG_SPEC-style
-// object (see COVERED_HELPERS below; its exact count isn't restated here so
-// this comment can't drift from the list -- the meta-consistency test keeps
-// the list itself honest against the live source tree). Earlier drafts of
+// object (see the imported COVERED_HELPERS ledger; its exact count isn't
+// restated here so this comment can't drift from the list -- the source audit
+// keeps the list itself honest against the source tree). Earlier drafts of
 // this test scoped coverage to helpers with a function literally named
 // printHelp(), but that ties participation to a naming convention rather
 // than to whether --help is actually renderable -- and the real sweep below
@@ -30,11 +58,12 @@ import { fileURLToPath } from 'node:url';
 // being added to COVERED_HELPERS: --help exits 0 in well under a second
 // with no gh/network I/O, and its FLAG_SPEC block parses cleanly. A helper
 // is excluded only when it has no FLAG_SPEC at all -- nothing declarative
-// to compare against (see EXCLUDED_HELPERS below: most via a hand-rolled
-// parseArgs() loop, one via node:util's parseArgs() directly with bare
-// option keys, one via an ad-hoc argv.includes('--help') check -- each with
-// a one-line reason there, mirroring tests/flag-name-matrix.test.mts's
-// explicit `helpers` style rather than silent discovery).
+// to compare against (see the reasoned exclusion ledger in
+// `src/scripts/repository-inventory-audit.mts`: most use a hand-rolled
+// parseArgs() loop, one uses node:util's parseArgs() directly with bare
+// option keys, and one uses an ad-hoc argv.includes('--help') check -- each
+// has a one-line reason, mirroring tests/flag-name-matrix.test.mts's explicit
+// `helpers` style rather than silent discovery).
 //
 // Rendering choice: this test spawns each covered helper's *compiled*
 // scripts/<name>.mjs with --help and captures real stdout, rather than
@@ -57,21 +86,12 @@ function readSource(helper: string): string {
   return readFileSync(join(srcScriptsDir, `${helper}.mts`), 'utf8');
 }
 
-/** True when `src` declares a `<NAME>_FLAG_SPEC = { ... }` object -- the
- * declarative flag spec consumed by `parseCliArgs()` (see cli-args.mts).
- * This is the sole participation gate for this test: see the header comment
- * above for why a help-*printer* naming convention is not used instead. */
-function hasFlagSpec(src: string): boolean {
-  return /_FLAG_SPEC\s*=\s*\{/.test(src);
-}
-
 /**
  * Extracts the body of the first `const <NAME>_FLAG_SPEC = { ... } as
  * const;` declaration in `src`. Every covered helper's spec closes with the
  * literal `} as const;` on its own line -- verified across every helper in
- * COVERED_HELPERS below, and enforced structurally by TypeScript (the
- * `as const` assertion is what makes `parseCliArgs`'s generic flag-name
- * inference work).
+ * imported COVERED_HELPERS ledger, and enforced structurally by TypeScript (the
+ * `as const` assertion is what makes `parseCliArgs` generic inference work).
  */
 function extractFlagSpecBlock(src: string, helper: string): string {
   const match = src.match(/_FLAG_SPEC\s*=\s*\{([\s\S]*?)\n\} as const;/);
@@ -135,169 +155,6 @@ function extractDocumentedFlags(helpText: string): Set<string> {
 // already mention `[--help]` in their Usage line and many don't;
 // standardizing that is a legitimate, separate follow-up, not this test's
 // concern.
-const UNIVERSAL_FLAGS = new Set(['--help']);
-
-// Per-helper allowlist for a flag literal that appears in --help prose but
-// belongs to a DIFFERENT command -- cited as a cross-reference or worked
-// example, not documentation of this helper's own parser. Each entry names
-// the owning command so the exclusion stays auditable.
-const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  'audit-authored-issue': [
-    // sweep-authoring-markers.mjs's own flag, cited so this helper's
-    // --cleanup-evidence-file description names the sweep mode that
-    // writes the file (#3593).
-    '--with-cleanup-evidence',
-  ],
-  'claim-lock': [
-    // `git rev-parse --absolute-git-dir` / `--git-common-dir` -- git flags,
-    // not claim-lock's own.
-    '--absolute-git-dir',
-    '--git-common-dir',
-    // resume-claim-routing.mjs's own flag, cited as a cross-tool example of
-    // how to re-verify claim state before an authorized takeover.
-    '--fresh-claim-gate',
-  ],
-  'verify-install-deps': [
-    // Part of the `pnpm install ...` string passed as the *value* of this
-    // helper's own --install-command in the worked example, not a flag
-    // verify-install-deps.mjs itself parses.
-    '--frozen-lockfile',
-  ],
-  'sweep-authoring-markers': [
-    // minimize-superseded-markers.mjs's own flag, cited by contrast: this
-    // helper's --help explains it has no --allow-untrusted escape hatch of
-    // its own (its "newest" determination depends on the trust filter),
-    // unlike a direct minimize-superseded-markers.mjs call.
-    '--allow-untrusted',
-  ],
-};
-
-// Explicit covered-helper list (mirrors tests/flag-name-matrix.test.mts's
-// `helpers` style): every src/scripts/*.mts helper that declares a
-// FLAG_SPEC-style object, built by hand rather than by silent discovery --
-// see the header comment above for why this isn't narrowed to only helpers
-// with a function literally named printHelp().
-const COVERED_HELPERS = [
-  'actions-usage-report',
-  'advisory-comment-debounce',
-  'advisory-convergence',
-  'advisory-wait-state',
-  'audit-authored-issue',
-  'audit-pr-cleanup',
-  'authoring-owner-provenance',
-  'branch-conflict-state',
-  'branch-name',
-  'ci-wait-policy',
-  'ci-wait-state',
-  'claim-approval-gate',
-  'claim-lock',
-  'clone-lock',
-  'copilot-review-wave-audit',
-  'token-cost-event',
-  'token-cost-harvest',
-  'token-cost-report',
-  'discover-readiness-check',
-  'discover-shared-file-overlap',
-  'discover-viability-gate',
-  'delete-remote-branch',
-  'disposition-non-review-notices',
-  'external-check-waiver',
-  'force-handoff',
-  'forced-handoff-marker',
-  'helper-runtime-manifest',
-  'idd-critique-delegate',
-  'idd-critique-harvest',
-  'idd-critique-report',
-  'idd-critique-telemetry-hook',
-  'idd-doctor',
-  'idd-issue-authoring-delegate',
-  'idd-roadmap-audit-execute',
-  'idd-suggest-untrusted-labelers',
-  'live-status-digest',
-  'local-validation-evidence',
-  'local-worktree-recovery',
-  'merged-pr-feedback-sweep',
-  'phase-id-resolver',
-  'pre-merge-readiness',
-  'provider-health',
-  'provider-outage-declaration',
-  'provider-outage-park',
-  'rerun-advisory-convergence',
-  'resolve-review-thread',
-  'resume-claim-routing',
-  'resume-route-selection',
-  'review-activity-snapshot',
-  'review-comment-origin',
-  'review-disposition-verify',
-  'select-desynced-index',
-  'snapshot-issue-body-corpus',
-  'stalled-session-quiet-check',
-  'suitability-close-execute',
-  'suitability-triage',
-  'sweep-authoring-markers',
-  'verify-import-mirror',
-  'verify-install-deps',
-  'verify-workshop-integrity',
-] as const;
-
-// Every other src/scripts/*.mts helper that has some CLI --help surface but
-// no FLAG_SPEC object to compare it against, with a one-line reason it
-// cannot participate in this check (issue #1676's acceptance criteria
-// requires this be visible rather than invisible). Verified against the
-// complete non-FLAG_SPEC universe under src/scripts/ (every file without a
-// FLAG_SPEC declaration, not just files matching one specific pattern): for
-// each, `--help` was compared against an unrecognized-flag invocation to
-// tell a genuine --help path from a helper that just silently ignores
-// unknown flags and runs its normal behavior regardless (e.g.
-// audit-code-span-wrap, check-pnpm-boundary, sync-docs, validate-schemas
-// all do the latter and are correctly absent from this list; audit-docs and
-// build-ts print a generic invalid-usage/crash message for *any*
-// unrecognized flag, not --help specifically, and are absent for the same
-// reason).
-const EXCLUDED_HELPERS: readonly { helper: string; reason: string }[] = [
-  {
-    helper: 'discover-orphan-filter',
-    reason:
-      'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
-  },
-  {
-    helper: 'discover-roadmap-graph',
-    reason:
-      'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
-  },
-  {
-    helper: 'emit-marker',
-    reason:
-      'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
-  },
-  {
-    helper: 'idd-merge-execute',
-    reason:
-      'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
-  },
-  {
-    helper: 'idd-onboard',
-    reason:
-      'hand-rolled parseArgs() loop, no declarative FLAG_SPEC object to compare',
-  },
-  {
-    helper: 'post-idd-marker',
-    reason:
-      'hand-rolled parseArgs() loop (own local function) with a USAGE constant, no declarative FLAG_SPEC object to compare',
-  },
-  {
-    helper: 'minimize-superseded-markers',
-    reason:
-      "calls node:util's parseArgs() directly with bare (non-dashed) option keys, not the shared cli-args.mts FLAG_SPEC convention -- no declarative --dashed spec to compare",
-  },
-  {
-    helper: 'update-fixtures',
-    reason:
-      "ad-hoc argv.includes('--help') check against a HELP constant, no declarative FLAG_SPEC object to compare",
-  },
-];
-
-// ---------------------------------------------------------------------------
 // Unit tests for the two pure extractors, over synthetic fixtures -- proves
 // each direction of drift is actually detected (not just that the real
 // per-helper sweep below happens to pass today). Mirrors
@@ -360,68 +217,6 @@ test('a flag documented but not declared is detected as drift', () => {
   );
   const undeclared = [...documented].filter((flag) => !declared.has(flag));
   assert.deepEqual(undeclared, ['--extra']);
-});
-
-// ---------------------------------------------------------------------------
-// Meta-consistency guard: catches a covered/excluded list going stale (a
-// helper gaining or losing FLAG_SPEC without this file being updated),
-// independent of the real per-helper sweep below.
-// ---------------------------------------------------------------------------
-
-test('COVERED_HELPERS and EXCLUDED_HELPERS stay consistent with live FLAG_SPEC presence', () => {
-  const coveredSet = new Set<string>(COVERED_HELPERS);
-  const excludedSet = new Set(EXCLUDED_HELPERS.map((entry) => entry.helper));
-
-  assert.equal(
-    coveredSet.size,
-    COVERED_HELPERS.length,
-    'COVERED_HELPERS has a duplicate entry',
-  );
-  assert.equal(
-    excludedSet.size,
-    EXCLUDED_HELPERS.length,
-    'EXCLUDED_HELPERS has a duplicate entry',
-  );
-  for (const helper of coveredSet) {
-    assert.ok(
-      !excludedSet.has(helper),
-      `${helper} is listed in both COVERED_HELPERS and EXCLUDED_HELPERS`,
-    );
-  }
-
-  // Every FLAG_SPEC-bearing helper under src/scripts/ must be explicitly
-  // covered -- a new one appearing here without being added to
-  // COVERED_HELPERS (after being individually vetted per the header
-  // comment) would otherwise run with zero drift coverage, silently.
-  const allHelperNames = readdirSync(srcScriptsDir)
-    .filter((name) => name.endsWith('.mts'))
-    .map((name) => name.slice(0, -'.mts'.length));
-
-  for (const name of allHelperNames) {
-    if (hasFlagSpec(readSource(name))) {
-      assert.ok(
-        coveredSet.has(name),
-        `${name} declares a FLAG_SPEC object but is missing from COVERED_HELPERS`,
-      );
-    }
-  }
-
-  for (const helper of COVERED_HELPERS) {
-    assert.ok(
-      hasFlagSpec(readSource(helper)),
-      `${helper} is listed as covered but no longer declares a FLAG_SPEC object`,
-    );
-  }
-
-  // An excluded entry's reason is "no FLAG_SPEC to compare" -- if the helper
-  // gained one, the reason no longer holds and it belongs in
-  // COVERED_HELPERS instead (after the same per-helper vetting).
-  for (const { helper } of EXCLUDED_HELPERS) {
-    assert.ok(
-      !hasFlagSpec(readSource(helper)),
-      `${helper} is listed as excluded (no FLAG_SPEC) but now declares one -- move it to COVERED_HELPERS`,
-    );
-  }
 });
 
 // ---------------------------------------------------------------------------

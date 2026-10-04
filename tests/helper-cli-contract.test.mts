@@ -36,7 +36,6 @@ interface RunExpectation {
 }
 
 interface BinTableEntry {
-  migrated: true;
   runs: {
     unknownFlag: RunExpectation;
     noArgs: RunExpectation;
@@ -213,19 +212,6 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
     [],
     `bins missing from tests/fixtures/helper-cli-contract.json: ${missing.join(', ')}`,
   );
-});
-
-test('helper-cli-contract fixture: every discovered bin is migrated onto runHelperCli', () => {
-  // #3346 completed the migration for every remaining bin -- there is no
-  // longer a partial, hand-kept list to grow batch by batch (contrast the
-  // earlier #3342/#3343/#3344/#3346-marker-handoff/#3346-provider batches,
-  // each of which extended an explicit array here). Any future bin missing
-  // its own migration would show up here as a shorter migratedBins list
-  // than DISCOVERED_BINS, not as a silently-accepted "not yet migrated" row.
-  const migratedBins = DISCOVERED_BINS.filter(
-    (bin) => TABLE.bins[bin]?.migrated,
-  ).sort();
-  assert.deepEqual(migratedBins, DISCOVERED_BINS);
 });
 
 // --- per-bin sweep -------------------------------------------------------

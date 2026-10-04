@@ -1,8 +1,7 @@
 {
-  "description": "Per-bin CLI contract fixture for #3342's opt-in JSON error envelope. Discovered bins (every bin/idd-*.mjs) are cross-checked against this table's `bins` keys by tests/helper-cli-contract.test.mts -- a bin missing here fails the test, and deleting any single row does too. #3346 completed the migration onto runHelperCli for every packaged bin, so every row now carries a `runs` entry -- there is no more `migrated: false` state for a row to carry or for the test to accept. runs.unknownFlag / runs.noArgs record the documented exitCode/kind for the two standard contract runs (an unknown flag, and no arguments at all) against a fake gh that always fails; the unknownFlag run must be kind usage. extraScenarios lists additional named, bin-specific runs beyond the two standard ones, each with valid arguments that let the helper reach a (fake, always-failing) gh call: pre-merge-readiness's ghTransportFailure503 (the #2806 case, asserting its existing {\"error\": ...} stdout JSON and exit code 1 stay unchanged while its envelope kind is now transport), and discover-readiness-check / discover-viability-gate / authoring-owner-provenance / resume-claim-routing's ghTransportFailure503ViaProviderPort (a regression case, #3342: none of these four call gh-exec.mts directly for their issue lookup -- they go through ProviderPort.getWorkItem(), whose non-404 failure path wraps the original gh-exec.mts-tagged error as `.cause` on a brand-new Error, so classifyHelperError must walk the cause chain to classify it as transport instead of losing it to internal -- observed against the built bins before that walk existed: the same args against a fake `gh: HTTP 503` reported `kind: internal`). resume-claim-routing's own row additionally sets `ghScript` (see tests/helper-cli-contract.test.mts's ExtraScenario.ghScript doc comment): its runCli calls resolveViewerLogin and listWorkItemComments before getWorkItem -- both ProviderPort methods that pass gh-exec.mts's tagged error straight through unwrapped, unlike getWorkItem's own toProviderError re-wrap -- so the shared always-fails stub would fail on one of those first and never actually exercise the .cause-wrapped path this scenario exists to cover; this row's own gh script lets both succeed and fails only the issue lookup.",
+  "description": "Per-bin CLI contract fixture for #3342's opt-in JSON error envelope. Discovered bins (every bin/idd-*.mjs) are cross-checked against this table's `bins` keys by tests/helper-cli-contract.test.mts -- a bin missing here fails the test, and deleting any single row does too. #3346 completed the migration onto runHelperCli for every packaged bin; structural migration coverage now lives in the repository inventory audit. runs.unknownFlag / runs.noArgs record the documented exitCode/kind for the two standard contract runs (an unknown flag, and no arguments at all) against a fake gh that always fails; the unknownFlag run must be kind usage. extraScenarios lists additional named, bin-specific runs beyond the two standard ones, each with valid arguments that let the helper reach a (fake, always-failing) gh call: pre-merge-readiness's ghTransportFailure503 (the #2806 case, asserting its existing {\"error\": ...} stdout JSON and exit code 1 stay unchanged while its envelope kind is now transport), and discover-readiness-check / discover-viability-gate / authoring-owner-provenance / resume-claim-routing's ghTransportFailure503ViaProviderPort (a regression case, #3342: none of these four call gh-exec.mts directly for their issue lookup -- they go through ProviderPort.getWorkItem(), whose non-404 failure path wraps the original gh-exec.mts-tagged error as `.cause` on a brand-new Error, so classifyHelperError must walk the cause chain to classify it as transport instead of losing it to internal -- observed against the built bins before that walk existed: the same args against a fake `gh: HTTP 503` reported `kind: internal`). resume-claim-routing's own row additionally sets `ghScript` (see tests/helper-cli-contract.test.mts's ExtraScenario.ghScript doc comment): its runCli calls resolveViewerLogin and listWorkItemComments before getWorkItem -- both ProviderPort methods that pass gh-exec.mts's tagged error straight through unwrapped, unlike getWorkItem's own toProviderError re-wrap -- so the shared always-fails stub would fail on one of those first and never actually exercise the .cause-wrapped path this scenario exists to cover; this row's own gh script lets both succeed and fails only the issue lookup.",
   "bins": {
     "idd-advisory-comment-debounce.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -15,7 +14,6 @@
       }
     },
     "idd-advisory-convergence.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -28,7 +26,6 @@
       }
     },
     "idd-advisory-wait-state.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -41,7 +38,6 @@
       }
     },
     "idd-audit-authored-issue.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 2,
@@ -54,7 +50,6 @@
       }
     },
     "idd-audit-pr-cleanup.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 2,
@@ -67,7 +62,6 @@
       }
     },
     "idd-authoring-owner-provenance.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -80,7 +74,6 @@
       }
     },
     "idd-authoring-set-members.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -93,7 +86,6 @@
       }
     },
     "idd-branch-conflict-state.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -106,7 +98,6 @@
       }
     },
     "idd-branch-name.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -119,7 +110,6 @@
       }
     },
     "idd-ci-wait-policy.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -132,7 +122,6 @@
       }
     },
     "idd-ci-wait-state.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -145,7 +134,6 @@
       }
     },
     "idd-claim-approval-gate.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -158,7 +146,6 @@
       }
     },
     "idd-claim-lock.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -171,7 +158,6 @@
       }
     },
     "idd-clone-lock.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -184,7 +170,6 @@
       }
     },
     "idd-critique-delegate.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -197,7 +182,6 @@
       }
     },
     "idd-critique-telemetry-hook.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -210,7 +194,6 @@
       }
     },
     "idd-delete-remote-branch.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -223,7 +206,6 @@
       }
     },
     "idd-discover-orphan-filter.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -236,7 +218,6 @@
       }
     },
     "idd-discover-readiness-check.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -249,7 +230,6 @@
       }
     },
     "idd-discover-roadmap-graph.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -262,7 +242,6 @@
       }
     },
     "idd-discover-shared-file-overlap.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -275,7 +254,6 @@
       }
     },
     "idd-discover-viability-gate.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -288,7 +266,6 @@
       }
     },
     "idd-disposition-non-review-notices.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -301,7 +278,6 @@
       }
     },
     "idd-doctor.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -314,7 +290,6 @@
       }
     },
     "idd-emit-marker.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -327,7 +302,6 @@
       }
     },
     "idd-external-check-waiver.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -340,7 +314,6 @@
       }
     },
     "idd-force-handoff.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -353,7 +326,6 @@
       }
     },
     "idd-forced-handoff-marker.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -366,7 +338,6 @@
       }
     },
     "idd-helper-bundle-manifest.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -379,7 +350,6 @@
       }
     },
     "idd-issue-authoring-delegate.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -392,7 +362,6 @@
       }
     },
     "idd-live-status-digest.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 2,
@@ -405,7 +374,6 @@
       }
     },
     "idd-local-validation-evidence.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -418,7 +386,6 @@
       }
     },
     "idd-local-worktree-recovery.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -431,7 +398,6 @@
       }
     },
     "idd-merge-execute.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -444,7 +410,6 @@
       }
     },
     "idd-merged-pr-feedback-sweep.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -457,7 +422,6 @@
       }
     },
     "idd-minimize-superseded-markers.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 2,
@@ -470,7 +434,6 @@
       }
     },
     "idd-onboard.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 2,
@@ -483,7 +446,6 @@
       }
     },
     "idd-phase-id-resolver.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -496,7 +458,6 @@
       }
     },
     "idd-post-idd-marker.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -509,7 +470,6 @@
       }
     },
     "idd-pre-merge-readiness.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -522,7 +482,6 @@
       }
     },
     "idd-provider-health.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -535,7 +494,6 @@
       }
     },
     "idd-provider-outage-declaration.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -548,7 +506,6 @@
       }
     },
     "idd-provider-outage-park.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -561,7 +518,6 @@
       }
     },
     "idd-rerun-advisory-convergence.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -574,7 +530,6 @@
       }
     },
     "idd-resolve-review-thread.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -587,7 +542,6 @@
       }
     },
     "idd-resume-claim-routing.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -600,7 +554,6 @@
       }
     },
     "idd-resume-route-selection.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -613,7 +566,6 @@
       }
     },
     "idd-review-activity-snapshot.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -626,7 +578,6 @@
       }
     },
     "idd-review-comment-origin.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -639,7 +590,6 @@
       }
     },
     "idd-review-disposition-verify.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -652,7 +602,6 @@
       }
     },
     "idd-roadmap-audit-execute.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -665,7 +614,6 @@
       }
     },
     "idd-select-desynced-index.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -678,7 +626,6 @@
       }
     },
     "idd-stalled-session-quiet-check.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -691,7 +638,6 @@
       }
     },
     "idd-suggest-untrusted-labelers.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -704,7 +650,6 @@
       }
     },
     "idd-suitability-close-execute.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -717,7 +662,6 @@
       }
     },
     "idd-suitability-triage.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 1,
@@ -730,7 +674,6 @@
       }
     },
     "idd-sweep-authoring-markers.mjs": {
-      "migrated": true,
       "runs": {
         "unknownFlag": {
           "exitCode": 2,

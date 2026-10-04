@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -453,77 +447,6 @@ test('fails when an omittedByDesign entry also carries a helperGate', () => {
     violations[0],
     /helperGate is not meaningful on an omittedByDesign entry/,
   );
-});
-
-// --- Real-manifest regression -------------------------------------------
-
-function readRepoFile(path: string): string | null {
-  try {
-    return readFileSync(join(REPO_ROOT, path), 'utf8').replace(/\r\n?/g, '\n');
-  } catch {
-    return null;
-  }
-}
-
-test('the real liteGateParity registry has no violations against the current tree', () => {
-  const manifest = JSON.parse(
-    readRepoFile('audit/sync-manifest.json') ?? '{}',
-  ) as {
-    liteGateParity?: unknown;
-  };
-  assert.ok(
-    Array.isArray(manifest.liteGateParity),
-    'expected a liteGateParity array',
-  );
-  assert.ok(
-    (manifest.liteGateParity as unknown[]).length > 0,
-    'expected at least one liteGateParity entry',
-  );
-  assert.deepEqual(
-    collectLiteGateParityViolations(manifest.liteGateParity, readRepoFile),
-    [],
-  );
-});
-
-test("deleting a real seed entry's lite fragment is detected", () => {
-  const manifest = JSON.parse(
-    readRepoFile('audit/sync-manifest.json') ?? '{}',
-  ) as {
-    liteGateParity: {
-      id: string;
-      lite?: { file: string; contains?: string };
-    }[];
-  };
-  const target = manifest.liteGateParity.find(
-    (entry) => entry.id === 'b1-primary-worktree-exemption',
-  );
-  assert.ok(target, 'expected the b1-primary-worktree-exemption seed entry');
-  const liteLocation = target?.lite as { file: string; contains: string };
-  assert.ok(liteLocation?.contains, 'expected a contains fragment to remove');
-
-  const realLiteText = readRepoFile(liteLocation.file);
-  assert.ok(realLiteText, `expected to read ${liteLocation.file}`);
-  assert.ok(
-    realLiteText.includes(liteLocation.contains),
-    'expected the fragment to be present before deletion',
-  );
-  const mutatedText = realLiteText.replace(liteLocation.contains, '');
-
-  const scratchFiles: Record<string, string> = {
-    [liteLocation.file]: mutatedText,
-  };
-  const readWithScratchOverride = (path: string): string | null =>
-    Object.hasOwn(scratchFiles, path) ? scratchFiles[path] : readRepoFile(path);
-
-  const violations = collectLiteGateParityViolations(
-    manifest.liteGateParity,
-    readWithScratchOverride,
-  );
-  const matching = violations.filter((violation) =>
-    violation.startsWith('b1-primary-worktree-exemption:'),
-  );
-  assert.equal(matching.length, 1);
-  assert.match(matching[0], /contains fragment not found/);
 });
 
 function runAuditDocs(cwd: string): { status: number; stderr: string } {
