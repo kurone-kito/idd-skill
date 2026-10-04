@@ -34,9 +34,10 @@
 //
 // The expected `.gitattributes` content is the HEAD blob with its
 // scripts/*.mjs block rewritten from the banner-derived set of the fresh emit
-// (generatedScriptNames over the temporary scripts/ directory), exactly the
-// derivation `build` uses, so the two always agree on which sources are
-// generated.
+// (generatedScriptNames over the temporary scripts/ directory): the same
+// banner scan `build` applies to the on-disk scripts/ directory, so the two
+// agree on which sources are generated (they differ only for a bannered
+// artifact with no source, which is reported as not-emitted anyway).
 //
 // Top-level imports are `node:` builtins plus build-ts.mts (itself
 // dependency-free at import time): tsc and Biome are resolved lazily inside
@@ -97,7 +98,10 @@ export interface ArtifactSnapshot {
   readonly emitted: ReadonlyMap<string, Buffer>;
   /** The artifact paths the `src/**` sources are expected to produce. */
   readonly expectedPaths: readonly string[];
-  /** Working-tree bytes; a path that does not exist on disk is absent. */
+  /**
+   * Working-tree bytes of every artifact on disk (tracked or not) plus the
+   * committed and emitted paths; a path that does not exist is absent.
+   */
   readonly working: ReadonlyMap<string, Buffer>;
 }
 
@@ -145,8 +149,19 @@ export function compareArtifacts(snapshot: ArtifactSnapshot): Finding[] {
   const { committed, emitted, expectedPaths, working } = snapshot;
   const findings: Finding[] = [];
   const noOutput = new Set(expectedPaths.filter((path) => !emitted.has(path)));
+  // A working-tree artifact with neither a source nor a HEAD copy (untracked
+  // or only staged) is a path of its own: the index is deliberately never
+  // consulted, so it must be found by looking at the files themselves.
+  const workingOnly = [...working.keys()].filter((path) =>
+    ARTIFACT_PATH_PATTERN.test(path),
+  );
   const paths = [
-    ...new Set([...emitted.keys(), ...committed.keys(), ...noOutput]),
+    ...new Set([
+      ...emitted.keys(),
+      ...committed.keys(),
+      ...noOutput,
+      ...workingOnly,
+    ]),
   ].sort();
   for (const path of paths) {
     const fresh = emitted.get(path);
@@ -178,6 +193,11 @@ export function compareArtifacts(snapshot: ArtifactSnapshot): Finding[] {
       add(
         'not-emitted',
         'committed at HEAD but no source emits it any more (stale or hand-written artifact): remove it with `git rm`',
+      );
+    } else if (fresh === undefined && copy !== undefined) {
+      add(
+        'not-emitted',
+        'present in the working tree (untracked or only staged) but no source emits it: delete it, or add its source',
       );
     } else if (
       fresh !== undefined &&
@@ -346,6 +366,14 @@ function readIfPresent(path: string): Buffer | undefined {
   }
 }
 
+/** `rmSync` retries a busy file at most `maxRetries` times, `retryDelay` ms apart. */
+export const TEMP_REMOVE_OPTIONS = {
+  force: true,
+  maxRetries: 5,
+  recursive: true,
+  retryDelay: 100,
+} as const;
+
 /**
  * Remove the temporary emit directory with a bounded retry (Windows may hold
  * a just-closed file briefly). Returns a warning instead of throwing: a
@@ -357,12 +385,7 @@ function readIfPresent(path: string): Buffer | undefined {
 export function removeTempDir(
   dir: string,
   remove: (path: string) => void = (path) => {
-    rmSync(path, {
-      force: true,
-      maxRetries: 5,
-      recursive: true,
-      retryDelay: 100,
-    });
+    rmSync(path, TEMP_REMOVE_OPTIONS);
   },
 ): string | undefined {
   try {
@@ -451,7 +474,14 @@ export function verifyBuildArtifacts(
     }
 
     const working = new Map<string, Buffer>();
-    for (const path of [...committed.keys(), ...emitted.keys()]) {
+    const onDisk = ARTIFACT_ROOTS.flatMap((dir) =>
+      listFiles(join(root, dir), '.mjs').map((path) => `${dir}/${path}`),
+    );
+    for (const path of new Set([
+      ...committed.keys(),
+      ...emitted.keys(),
+      ...onDisk,
+    ])) {
       const copy = readIfPresent(join(root, path));
       if (copy !== undefined) {
         working.set(path, copy);
