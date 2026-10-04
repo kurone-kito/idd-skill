@@ -860,40 +860,6 @@ test('CLI: a claim marker dry run posts nothing and keeps the hints', () => {
   }
 });
 
-// Static guard: every helper that closes an issue, merges a PR, or posts a
-// claim/unclaim marker must drop the cached hints, so a new mutating path
-// cannot silently leave a stale hint serving a claimed or closed target.
-test('every mutating helper path invalidates the discover hints', () => {
-  const scriptsDir = join(REPO_ROOT, 'src', 'scripts');
-  const mutators = /\.(?:closeWorkItem|mergeChangeRequest(?:Admin)?AtRepo)\(/;
-  const missing: string[] = [];
-  for (const name of readdirSync(scriptsDir)) {
-    if (!name.endsWith('.mts') || name.startsWith('provider-')) continue;
-    const source = readFileSync(join(scriptsDir, name), 'utf8');
-    if (mutators.test(source) && !source.includes('invalidateDiscoverHints(')) {
-      missing.push(name);
-    }
-  }
-  assert.deepEqual(missing, []);
-  // `force-handoff` reaches the invalidation through an injectable option so
-  // unit tests stay off the host cache; its two post sites call that option.
-  const expectedHooks: Record<string, [token: string, count: number]> = {
-    'post-idd-marker.mts': ['invalidateDiscoverHints(', 1],
-    'idd-merge-execute.mts': ['invalidateDiscoverHints(', 2],
-    'idd-roadmap-audit-execute.mts': ['invalidateDiscoverHints(', 2],
-    'suitability-close-execute.mts': ['invalidateDiscoverHints(', 2],
-    'force-handoff.mts': ['invalidateHints(', 2],
-  };
-  for (const [name, [token, count]] of Object.entries(expectedHooks)) {
-    const source = readFileSync(join(scriptsDir, name), 'utf8');
-    assert.equal(
-      source.split(token).length - 1,
-      count,
-      `${name} should call ${token} ${count} time(s)`,
-    );
-  }
-});
-
 test('a warm union repeat serves claim-state annotations without a comment read', async () => {
   const fx = fixture();
   const t = tracker([
@@ -940,34 +906,4 @@ test('a warm union repeat serves claim-state annotations without a comment read'
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }
-});
-
-// Static guard: the hint is a ranking aid only. The two Discover
-// enumeration helpers are its sole readers, and no gate module imports the
-// hint layer, so a live A3-A5 check cannot be served from it.
-test('only the two Discover enumeration helpers read the hint layer', () => {
-  const scriptsDir = join(REPO_ROOT, 'src', 'scripts');
-  const readers: string[] = [];
-  const importers: string[] = [];
-  for (const name of readdirSync(scriptsDir)) {
-    if (!name.endsWith('.mts') || name === 'discover-hint-cache.mts') continue;
-    const source = readFileSync(join(scriptsDir, name), 'utf8');
-    if (/\breadDiscoverHint\b/.test(source)) readers.push(name);
-    if (source.includes("from './discover-hint-cache.mts'")) {
-      importers.push(name);
-    }
-  }
-  assert.deepEqual(readers.sort(), [
-    'discover-orphan-filter.mts',
-    'discover-roadmap-graph.mts',
-  ]);
-  assert.deepEqual(importers.sort(), [
-    'discover-orphan-filter.mts',
-    'discover-roadmap-graph.mts',
-    'force-handoff.mts',
-    'idd-merge-execute.mts',
-    'idd-roadmap-audit-execute.mts',
-    'post-idd-marker.mts',
-    'suitability-close-execute.mts',
-  ]);
 });

@@ -42,6 +42,8 @@ jobs:
           persist-credentials: false
       - name: Run documentation audit
         run: node scripts/audit-docs.mjs --check
+      - name: Run bare-Node source contract audit
+        run: node scripts/lint-source-contracts.mjs
       # The test suite is typed `.mts` executed via Node's native type
       # stripping (unflagged since 22.18), and this lane also invokes
       # migrated helper CLIs directly (e.g. verify-workshop-integrity.mjs
