@@ -193,25 +193,38 @@ async function main() {
     }
   }
   const isSourcePackage = packageName === '@kurone-kito/idd-skill';
+  let originUrl = null;
   let sourceOriginNotice = null;
-  if (isSourcePackage) {
-    try {
-      const originUrl = execFileSync(
-        'git',
-        ['-C', root, 'remote', 'get-url', 'origin'],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
-      ).trim();
-      if (!isSourceRepositoryOriginUrl(originUrl)) {
-        sourceOriginNotice =
-          'repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks';
-      }
-    } catch {
-      sourceOriginNotice =
-        'repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks';
-    }
-    if (sourceOriginNotice) {
-      notices.push(sourceOriginNotice);
-    }
+  try {
+    originUrl = execFileSync(
+      'git',
+      ['-C', root, 'remote', 'get-url', 'origin'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    ).trim();
+  } catch {
+    // An unavailable origin is relevant only when package metadata already
+    // identifies this checkout as the source repository.
+  }
+  const hasCanonicalSourceOrigin =
+    originUrl !== null && isSourceRepositoryOriginUrl(originUrl);
+  const shouldRunSourceChecks = isSourcePackage || hasCanonicalSourceOrigin;
+  if (isSourcePackage && originUrl === null) {
+    sourceOriginNotice =
+      'repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks';
+    errors.push(
+      'repository-instruction-audit/source-origin: package.json: source repository origin URL is unavailable, so repository identity inspection is incomplete',
+    );
+  } else if (isSourcePackage && !hasCanonicalSourceOrigin) {
+    sourceOriginNotice =
+      'repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks';
+  } else if (hasCanonicalSourceOrigin && !isSourcePackage) {
+    sourceOriginNotice =
+      'repository-instruction-audit: canonical source origin matched but package identity differs; running source checks';
+  }
+  if (sourceOriginNotice) {
+    notices.push(sourceOriginNotice);
+  }
+  if (shouldRunSourceChecks) {
     errors.push(
       ...collectRepositoryInstructionViolations(root).map(
         ({ ruleId, path, message }) =>

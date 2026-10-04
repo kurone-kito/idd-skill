@@ -160,6 +160,7 @@ const manifest = {
   generatedBlocks: [
     {
       id: 'idd-template-core-files',
+      file: 'idd-template/ONBOARDING.md',
       paths: [
         'idd-template/docs/onboarding/agent-entry-and-verification.md',
         'idd-template/docs/onboarding/placeholders.md',
@@ -358,11 +359,12 @@ function runAudit(root: string) {
 
 function writeAggregateFixture(
   origin: 'canonical' | 'fork' | 'missing',
+  packageName = '@kurone-kito/idd-skill',
 ): string {
   const files = {
     ...baseFiles,
     'AGENTS.md': baseFiles['AGENTS.md'].replace('## Branch strategy\n', ''),
-    'package.json': JSON.stringify({ name: '@kurone-kito/idd-skill' }),
+    'package.json': JSON.stringify({ name: packageName }),
   };
   const root = writeFixture(files);
   execFileSync('git', ['init', '--quiet'], { cwd: root, env: fixtureEnv() });
@@ -465,11 +467,52 @@ test('audit-docs reports unavailable origin and still runs source contracts', ()
       output,
       /notice: repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks/u,
     );
-    assert.doesNotMatch(output, /repository-instruction-audit\.source-origin/u);
+    assert.match(
+      output,
+      /repository-instruction-audit\/source-origin: package\.json: source repository origin URL is unavailable/u,
+    );
     assert.doesNotMatch(output, /No such remote 'origin'/u);
     assert.match(
       output,
       /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit-docs runs source contracts from canonical origin after package rename', () => {
+  const root = writeAggregateFixture('canonical', '@example/renamed-package');
+  try {
+    const result = runAggregateAudit(root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 1, output);
+    assert.match(
+      output,
+      /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
+    );
+    assert.match(
+      output,
+      /notice: repository-instruction-audit: canonical source origin matched but package identity differs; running source checks/u,
+    );
+    assert.doesNotMatch(output, /repository-instruction-audit\/source-origin/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit-docs rejects duplicate generated markers through the aggregate', () => {
+  const root = writeAggregateFixture('canonical');
+  try {
+    const target = join(root, 'idd-template/ONBOARDING.md');
+    const marker = '<!-- audit:generated id=idd-template-core-files -->';
+    writeFileSync(target, `${readFileSync(target, 'utf8')}\n${marker}\n`);
+    const result = runAggregateAudit(root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.notEqual(result.status, 0, output);
+    assert.match(
+      output,
+      /idd-template-core-files: idd-template\/ONBOARDING\.md must contain exactly one <!-- audit:generated id=idd-template-core-files --> \(found 2\)/u,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
