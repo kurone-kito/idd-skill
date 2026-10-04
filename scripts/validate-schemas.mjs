@@ -281,8 +281,8 @@ export function validateConfigSection(config, schema, sectionKey) {
 /**
  * Load and parse a JSON file by path relative to repository root.
  */
-export function loadJson(relPath) {
-  return JSON.parse(readFileSync(join(ROOT, relPath), 'utf8'));
+export function loadJson(relPath, root = ROOT) {
+  return JSON.parse(readFileSync(join(root, relPath), 'utf8'));
 }
 /**
  * Check referential integrity of a phase-graph data object.
@@ -321,9 +321,14 @@ export function validatePhaseGraph(data) {
 /**
  * Validate a fixture against its schema.
  */
-export function validateFixture(schemaPath, fixturePath, expectValid) {
-  const schema = loadJson(schemaPath);
-  const fixture = loadJson(fixturePath);
+export function validateFixture(
+  schemaPath,
+  fixturePath,
+  expectValid,
+  root = ROOT,
+) {
+  const schema = loadJson(schemaPath, root);
+  const fixture = loadJson(fixturePath, root);
   const keyErrors = checkSchemaKeywords(schema);
   if (keyErrors.length > 0) {
     return {
@@ -386,9 +391,97 @@ export function discoverSchemaCases(root) {
   }
   return { cases, missing };
 }
-// CLI: run all schemas and fixtures when invoked directly.
-if (import.meta.main) {
-  const { cases, missing } = discoverSchemaCases(ROOT);
+/**
+ * Live repository instances validated in addition to the discovered
+ * `fixtures/schemas/` pairs, each against its own schema:
+ *
+ * - `schemas/phase-graph.json` is DATA (an instance of
+ *   `phase-graph.schema.json`) and also gets the referential-integrity pass
+ *   of `validatePhaseGraph` through `validateFixture`'s dedicated hook.
+ * - The live hearing catalog is an onboarding-time source artifact, not a
+ *   `fixtures/schemas` pair (#2279).
+ * - `.github/idd/config.json` is the repository's own policy file (#3751);
+ *   its live test used to be the only guard that it still validates.
+ */
+export const LIVE_INSTANCE_CASES = [
+  {
+    schemaPath: 'schemas/phase-graph.schema.json',
+    fixturePath: 'schemas/phase-graph.json',
+    expectValid: true,
+  },
+  {
+    schemaPath: 'schemas/onboarding-hearing-catalog.schema.json',
+    fixturePath: 'idd-template/docs/onboarding/hearing-catalog.json',
+    expectValid: true,
+  },
+  {
+    schemaPath: 'schemas/policy.schema.json',
+    fixturePath: '.github/idd/config.json',
+    expectValid: true,
+  },
+];
+function parseCliArguments(argv) {
+  let root = null;
+  let help = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--help' || argument === '-h') {
+      help = true;
+      continue;
+    }
+    if (argument === '--root') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) {
+        throw new Error('--root requires a directory path');
+      }
+      root = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`unknown argument: ${argument}`);
+  }
+  return { root, help };
+}
+/**
+ * CLI entry: validates every discovered schema/fixture pair and the live
+ * instances in `LIVE_INSTANCE_CASES`. Exit 0 when all cases pass, 1 on any
+ * failure or incomplete inspection (an unreadable live file, a schema without
+ * its fixture pair, an empty schema inventory), 2 on a usage error.
+ * `--root <dir>` inspects another repository tree (used by the fixture tests).
+ */
+export function runValidateSchemasCli(argv = process.argv.slice(2)) {
+  let root;
+  try {
+    const parsed = parseCliArguments(argv);
+    if (parsed.help) {
+      console.log(
+        'Usage: node scripts/validate-schemas.mjs [--root <repository>] [--help]',
+      );
+      return 0;
+    }
+    root = parsed.root ?? ROOT;
+  } catch (error) {
+    console.error(
+      `validate-schemas: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 2;
+  }
+  let discovered;
+  try {
+    discovered = discoverSchemaCases(root);
+  } catch (error) {
+    console.error(
+      `✗  schemas: cannot list the schema inventory: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
+  const { cases, missing } = discovered;
+  if (cases.length === 0 && missing.length === 0) {
+    console.error(
+      '✗  schemas: no *.schema.json file to validate; an empty inventory would pass vacuously',
+    );
+    return 1;
+  }
   if (missing.length > 0) {
     for (const entry of missing) {
       console.error(
@@ -399,28 +492,25 @@ if (import.meta.main) {
       `\n${missing.length} schema(s) have no fixtures. Add ` +
         `fixtures/schemas/<name>.valid.json and <name>.invalid.json for each.`,
     );
-    process.exit(1);
+    return 1;
   }
-  // phase-graph additionally validates its live data file (referential
-  // integrity via validateFixture's dedicated validatePhaseGraph hook) as an
-  // explicit override beyond the discovered valid/invalid fixture pair.
-  cases.push({
-    schemaPath: 'schemas/phase-graph.schema.json',
-    fixturePath: 'schemas/phase-graph.json',
-    expectValid: true,
-  });
-  // Live hearing catalog is an onboarding-time source artifact, not a
-  // fixtures/schemas pair. Validate it the same way phase-graph.json is
-  // validated as extra live data (#2279).
-  cases.push({
-    schemaPath: 'schemas/onboarding-hearing-catalog.schema.json',
-    fixturePath: 'idd-template/docs/onboarding/hearing-catalog.json',
-    expectValid: true,
-  });
   let failed = 0;
-  for (const { schemaPath, fixturePath, expectValid } of cases) {
-    const result = validateFixture(schemaPath, fixturePath, expectValid);
+  for (const { schemaPath, fixturePath, expectValid } of [
+    ...cases,
+    ...LIVE_INSTANCE_CASES,
+  ]) {
     const label = expectValid ? 'valid' : 'invalid';
+    let result;
+    try {
+      result = validateFixture(schemaPath, fixturePath, expectValid, root);
+    } catch (error) {
+      result = {
+        ok: false,
+        errors: [
+          `cannot read ${schemaPath} or ${fixturePath}: ${error instanceof Error ? error.message : String(error)}`,
+        ],
+      };
+    }
     if (result.ok) {
       console.log(`✓  ${fixturePath} (${label})`);
     } else {
@@ -432,8 +522,11 @@ if (import.meta.main) {
   }
   if (failed > 0) {
     console.error(`\n${failed} case(s) failed.`);
-    process.exit(1);
-  } else {
-    console.log('\nAll cases passed.');
+    return 1;
   }
+  console.log('\nAll cases passed.');
+  return 0;
+}
+if (import.meta.main) {
+  process.exitCode = runValidateSchemasCli();
 }
