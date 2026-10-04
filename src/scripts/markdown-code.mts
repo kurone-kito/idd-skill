@@ -382,7 +382,7 @@ export const MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN =
 // CommonMark §4.1: a thematic break is 3+ matching -, _, or * characters,
 // each optionally followed by spaces/tabs -- interior spacing is allowed
 // (e.g. `_ _ _`), unlike the tightly-packed run already covered above.
-const MARKDOWN_THEMATIC_BREAK_PATTERN =
+export const MARKDOWN_THEMATIC_BREAK_PATTERN =
   /^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/u;
 // CommonMark type-1 raw-text HTML elements (script/pre/style/textarea) only
 // end at a line containing their matching closing tag -- unlike the other

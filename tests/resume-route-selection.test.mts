@@ -637,6 +637,36 @@ test('collector still resumes after an interrupting one ordered marker', () => {
   assert.equal(input.prNumber, 3150);
 });
 
+test('collector preserves a closer after a non-interrupting ordered lookalike in prose', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: 'Intro paragraph\n10. > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector ignores a quote nested in a non-one list item at a block boundary', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: '10. > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
 test('collector handles large indented code samples without matching their text', () => {
   const indentedCode = Array.from(
     { length: 8_000 },
@@ -691,6 +721,31 @@ test('collector avoids rescanning long nested ordered lists without quotes', () 
   );
 });
 
+test('collector avoids rescanning shallow ordered quote runs', () => {
+  const orderedQuotes = Array.from(
+    { length: 8_000 },
+    (_, index) => `10. > quoted item ${index}`,
+  ).join('\n');
+  const startedAt = performance.now();
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: `${orderedQuotes}\n\nCloses #9000`,
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+  assert.ok(
+    elapsedMs < 2_000,
+    `shallow ordered quote run took ${elapsedMs.toFixed(1)} ms (limit 2000 ms)`,
+  );
+});
+
 test('collector resumes scanning after a blockquote paragraph is interrupted', () => {
   const input = collectResumePrInput([
     {
@@ -704,6 +759,41 @@ test('collector resumes scanning after a blockquote paragraph is interrupted', (
   assert.equal(input.prAmbiguous, false);
   assert.equal(input.prCount, 1);
   assert.equal(input.prNumber, 3150);
+});
+
+test('collector resumes after spaced thematic breaks and custom HTML blocks', () => {
+  for (const body of [
+    '> Quoted prose\n- - -\nCloses #3145',
+    '> <widget>\nCloses #3145',
+  ]) {
+    const input = collectResumePrInput([
+      {
+        number: 3150,
+        title: 'implementation PR',
+        body,
+        url: 'https://example.test/pr/3150',
+      },
+    ]);
+
+    assert.equal(input.prAmbiguous, false);
+    assert.equal(input.prCount, 1);
+    assert.equal(input.prNumber, 3150);
+  }
+});
+
+test('collector keeps custom HTML tags inside an open quoted paragraph', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: '> Quoted prose\n<widget>\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
 });
 
 test('collector scans real prose after a quoted indented code block', () => {
