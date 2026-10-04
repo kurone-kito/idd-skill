@@ -1199,14 +1199,14 @@ const RULES: readonly RuleDefinition[] = [
       const contents = text(WORK);
       if (findBareMainLines(contents).length === 0)
         fail(WORK, 'B1 trusted-checkout guidance is missing');
-      const unallowed = findUnallowedMainLines(
+      const violations = findUnallowedMainLines(
         contents,
         B1_TRUSTED_CHECKOUT_MAIN_LINES,
       );
-      if (unallowed.length > 0)
+      if (violations.length > 0)
         fail(
           WORK,
-          `main appears outside the B1 allowlist: ${unallowed.join(' | ')}`,
+          `main appears outside the B1 allowlist: ${violations.join(' | ')}`,
         );
     },
   },

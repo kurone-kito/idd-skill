@@ -132,7 +132,8 @@ function replaceFixtureText(
   replacement: string,
 ): { path: string; contents: string } {
   const original = documents.get(path);
-  assert.ok(original?.includes(needle), `${path} must contain ${needle}`);
+  assert.ok(original, `${path} must be covered by the positive fixture`);
+  assert.ok(original.includes(needle), `${path} must contain ${needle}`);
   return { path, contents: original.replace(needle, replacement) };
 }
 
@@ -155,7 +156,8 @@ function replaceFixtureTextEverywhere(
   replacement: string,
 ): { path: string; contents: string } {
   const original = documents.get(path);
-  assert.ok(original?.includes(needle), `${path} must contain ${needle}`);
+  assert.ok(original, `${path} must be covered by the positive fixture`);
+  assert.ok(original.includes(needle), `${path} must contain ${needle}`);
   return { path, contents: original.replaceAll(needle, replacement) };
 }
 
