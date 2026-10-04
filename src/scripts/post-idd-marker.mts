@@ -1731,7 +1731,7 @@ export interface MarkerCandidateComment {
  * {@link createGithubProviderAdapter} (`listWorkItemComments`), like every
  * other read in this migrated file (#2266) -- `post-idd-marker.mts` must
  * never construct a `gh` call of its own
- * (`tests/provider-port-migration-guard.test.mts`). A comment missing a
+ * (lint-source-boundaries' PROVIDER-PORT-MIGRATED rule). A comment missing a
  * `nodeId` (defensive: the real adapter always populates it from REST's
  * `node_id`) normalizes to `''`, which the finder functions below already
  * skip.

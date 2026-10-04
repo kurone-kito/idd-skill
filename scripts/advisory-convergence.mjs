@@ -2643,9 +2643,9 @@ function isPaginatedResponseLimitError(error) {
  *
  * Deliberately self-contained (reuses this file's own `sleepSync`, does
  * NOT import `gh-exec.mts`'s async `withBoundedRetry`): this file is
- * already migrated onto `provider-port.mts`
- * (`provider-port-migration-guard.test.mts`), which forbids regaining a
- * direct `gh-exec.mts` import; several of the wrapped port methods below
+ * already migrated onto `provider-port.mts` (lint-source-boundaries'
+ * PROVIDER-PORT-MIGRATED rule), which forbids regaining a direct
+ * `gh-exec.mts` import; several of the wrapped port methods below
  * are also called, with no retry, by many other synchronous callers
  * across the codebase, so converting them (and this file's own synchronous call
  * chain) to `async` to use the Promise-based `withBoundedRetry` would

@@ -4843,7 +4843,7 @@ function fetchIssue(repoRef, issueNumber) {
  * deleted/ghost editor account, same contract as
  * `provider-adapter-github.mts`'s `getWorkItemUserContentEdits`. This
  * file is not yet migrated onto `provider-port.mts` (see
- * `tests/provider-port-migration-guard.test.mts`'s `MIGRATED_HELPERS`
+ * `lint-source-boundaries.mts`'s `MIGRATED_HELPERS`
  * list), so it makes its own direct `gh api graphql` call rather than
  * adopting the port abstraction mid-issue; the query and its pagination
  * (Codex/CodeRabbit review, PR #2840) mirror that adapter's own.

@@ -671,7 +671,7 @@
         },
         {
           "from": "| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |",
-          "to": "| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |"
+          "to": "| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |"
         },
         {
           "from": "| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |",
