@@ -45,9 +45,15 @@ import {
   collectMarkdownLinkAuditViolations,
   resolveDistributedFileSet,
 } from './markdown-link-audit.mjs';
+import { collectRepositoryInstructionViolations } from './repository-instruction-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
+export function isSourceRepositoryOriginUrl(originUrl) {
+  return /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)kurone-kito\/idd-skill(?:\.git)?$/iu.test(
+    originUrl.trim(),
+  );
+}
 const errors = [];
 const notices = [];
 // Populated by main() only when this module runs as the CLI entrypoint
@@ -164,6 +170,35 @@ async function main() {
   manifest = JSON.parse(readText(manifestPath));
   repoFiles = listRepoFiles();
   changedFiles = listChangedFiles();
+  // This extra contract suite belongs to the source repository. audit-docs is
+  // also invoked against minimal temporary roots by its own manifest tests;
+  // those roots intentionally do not carry this repository's instruction
+  // corpus. The standalone detector CLI accepts explicit fixture roots.
+  const packageJsonPath = join(root, 'package.json');
+  const packageName = existsSync(packageJsonPath)
+    ? JSON.parse(readFileSync(packageJsonPath, 'utf8')).name
+    : undefined;
+  let isSourceRepository = packageName === '@kurone-kito/idd-skill';
+  if (isSourceRepository) {
+    try {
+      const originUrl = execFileSync(
+        'git',
+        ['-C', root, 'remote', 'get-url', 'origin'],
+        { encoding: 'utf8' },
+      ).trim();
+      isSourceRepository = isSourceRepositoryOriginUrl(originUrl);
+    } catch {
+      isSourceRepository = false;
+    }
+  }
+  if (isSourceRepository) {
+    errors.push(
+      ...collectRepositoryInstructionViolations(root).map(
+        ({ ruleId, path, message }) =>
+          `repository-instruction-audit/${ruleId}: ${path}: ${message}`,
+      ),
+    );
+  }
   checkReadmePairs(manifest.readmePairs ?? []);
   checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
   checkGeneratedBlocks(manifest.generatedBlocks ?? []);
@@ -490,9 +525,16 @@ function checkGeneratedBlocks(blocks) {
     const text = readText(block.file);
     const startMarker = `<!-- audit:generated id=${block.id} -->`;
     const endMarker = '<!-- /audit:generated -->';
+    const markerCount = text.split(startMarker).length - 1;
     const start = text.indexOf(startMarker);
     if (start === -1) {
       errors.push(`${block.id}: ${block.file} is missing ${startMarker}`);
+      continue;
+    }
+    if (markerCount !== 1) {
+      errors.push(
+        `${block.id}: ${block.file} must contain exactly one ${startMarker} (found ${markerCount})`,
+      );
       continue;
     }
     const innerStart = start + startMarker.length;

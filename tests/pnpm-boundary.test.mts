@@ -1,12 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import { findPnpmCommandLeaks } from '../src/scripts/check-pnpm-boundary.mts';
-
-const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('passes when template command rows avoid pnpm', () => {
   const overview = `
@@ -48,16 +43,4 @@ test('passes when command rows use npm, yarn, or npx examples', () => {
 `;
 
   assert.deepEqual(findPnpmCommandLeaks(overview), []);
-});
-
-test('helper runtime docs avoid pnpm-only command assumptions', () => {
-  const files = [
-    'docs/idd-helper-scripts.md',
-    'idd-template/docs/idd-helper-scripts.md',
-  ];
-
-  for (const file of files) {
-    const text = readFileSync(join(REPO_ROOT, file), 'utf8');
-    assert.doesNotMatch(text, /`[^`\n]*\bpnpm\s+\S+[^`\n]*`/i, file);
-  }
 });
