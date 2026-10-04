@@ -21,8 +21,17 @@ import {
   repositoryPolicyRuleIds,
   repositoryPolicyRulePaths,
 } from '../src/scripts/repository-policy-audit.mts';
+import { fixtureEnv } from './test-utils.mts';
 
 const REPOSITORY_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const AUDIT_DOCS_CLI = join(REPOSITORY_ROOT, 'scripts/audit-docs.mjs');
+const AUDIT_HELP_PROBE_PATHS = [
+  'scripts/audit-pr-cleanup.mjs',
+  'scripts/minimize-superseded-markers.mjs',
+  'scripts/post-idd-marker.mjs',
+  'scripts/resume-claim-routing.mjs',
+  'scripts/suitability-close-execute.mjs',
+];
 const POSITIVE_FIXTURE = new URL(
   './fixtures/repository-policy-audit/positive.json',
   import.meta.url,
@@ -123,6 +132,110 @@ function runCli(
     encoding: 'utf8' as const,
     env: { PATH: emptyPath },
   });
+}
+
+function runAuditDocs(fixtureRoot: string): {
+  status: number | null;
+  stderr: string;
+  stdout: string;
+} {
+  const result = spawnSync(process.execPath, [AUDIT_DOCS_CLI, '--check'], {
+    cwd: fixtureRoot,
+    encoding: 'utf8' as const,
+    env: fixtureEnv(),
+  });
+  return {
+    status: result.status,
+    stderr: String(result.stderr ?? ''),
+    stdout: String(result.stdout ?? ''),
+  };
+}
+
+function materializeAuditOverviewPairs(
+  fixtureRoot: string,
+  documents: RepositoryPolicyDocuments,
+): void {
+  for (const [configPath, overviewPath] of [
+    [
+      '.github/idd/config.json',
+      '.github/instructions/idd-overview-core.instructions.md',
+    ],
+    [
+      'idd-template/.github/idd/config.json',
+      'idd-template/.github/instructions/idd-overview-core.instructions.md',
+    ],
+  ]) {
+    const configText = documents.get(configPath);
+    assert.ok(configText, `${configPath} must be covered by the fixture`);
+    const config = JSON.parse(configText) as {
+      commands?: Record<string, unknown>;
+      issueScope?: unknown;
+      orphanFirstPolicy?: unknown;
+    };
+    const rows: [string, unknown][] = [
+      ['install-deps', config.commands?.['install-deps']],
+      ['fix-validate', config.commands?.['fix-validate']],
+      ['pre-push-validate', config.commands?.['pre-push-validate']],
+      ['post-fix-validate', config.commands?.['post-fix-validate']],
+      ['issue-scope', config.issueScope],
+      ['orphan-first-policy', config.orphanFirstPolicy],
+    ];
+    const overview = `${rows
+      .map(([key, value]) => {
+        assert.ok(typeof value === 'string', `${key} must be configured`);
+        return `| **${key}** | \`${value}\` |`;
+      })
+      .join('\n')}\n`;
+    const target = join(fixtureRoot, overviewPath);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, overview, 'utf8');
+  }
+}
+
+function materializeLiteParityAnchors(fixtureRoot: string): void {
+  for (const [path, heading, evidence] of [
+    [
+      'idd-template/.github/instructions/idd-review-snapshot.instructions.md',
+      'E1 — Fetch review items into ReviewItems_snapshot',
+      'regardless of the last-speaker exclusion',
+    ],
+    [
+      'idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md',
+      'Step 3 — Filter into ReviewItems_snapshot',
+      'with `**Awaiting maintainer decision**` — exclude periodic',
+    ],
+  ]) {
+    const target = join(fixtureRoot, path);
+    const contents = readFileSync(target, 'utf8');
+    writeFileSync(
+      target,
+      `## ${heading}\n\n${evidence}\n\n${contents}`,
+      'utf8',
+    );
+  }
+}
+
+function materializeAuditHelperProbes(fixtureRoot: string): void {
+  for (const path of AUDIT_HELP_PROBE_PATHS) {
+    const source = join(REPOSITORY_ROOT, path);
+    const result = spawnSync(process.execPath, [source, '--help'], {
+      cwd: REPOSITORY_ROOT,
+      encoding: 'utf8' as const,
+      env: fixtureEnv(),
+    });
+    assert.equal(
+      result.status,
+      0,
+      `${path} --help must work for the audit fixture: ${String(result.stderr)}`,
+    );
+    const target = join(fixtureRoot, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(
+      target,
+      `process.stdout.write(${JSON.stringify(`${result.stdout}${result.stderr}`)});\n`,
+      'utf8',
+    );
+  }
 }
 
 function replaceFixtureText(
@@ -576,6 +689,62 @@ test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) 
     );
   }
   assert.deepEqual(readdirSync(emptyPath), []);
+});
+
+test('audit-docs reports policy violations when the audit source is present', (t) => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-repository-policy-audit-docs-'),
+  );
+  t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+
+  const fixtureRoot = join(tempRoot, 'fixture');
+  const documents = readPositiveFixture();
+  materializeDocuments(fixtureRoot, documents);
+  materializeLiteParityAnchors(fixtureRoot);
+  materializeAuditOverviewPairs(fixtureRoot, documents);
+  mkdirSync(join(fixtureRoot, 'audit'), { recursive: true });
+  const sourceManifest = JSON.parse(
+    readFileSync(join(REPOSITORY_ROOT, 'audit/sync-manifest.json'), 'utf8'),
+  ) as { liteGateParity?: unknown[] };
+  const liteParityEntry = sourceManifest.liteGateParity?.find(
+    (entry) =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      'id' in entry &&
+      (entry as { id?: unknown }).id === 'awaiting-decision-regular-comment',
+  );
+  assert.ok(liteParityEntry, 'the fixture must use a live lite parity row');
+  writeFileSync(
+    join(fixtureRoot, 'audit/sync-manifest.json'),
+    JSON.stringify({ fileSets: [], liteGateParity: [liteParityEntry] }),
+    'utf8',
+  );
+  for (const path of [
+    'src/scripts/repository-policy-audit.mts',
+    'scripts/repository-policy-audit.mjs',
+  ]) {
+    const target = join(fixtureRoot, path);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(join(REPOSITORY_ROOT, path), target);
+  }
+  materializeAuditHelperProbes(fixtureRoot);
+  execFileSync('git', ['init', '--quiet', '--initial-branch=main'], {
+    cwd: fixtureRoot,
+    env: fixtureEnv(),
+  });
+  execFileSync('git', ['add', '-A'], { cwd: fixtureRoot, env: fixtureEnv() });
+
+  const positive = runAuditDocs(fixtureRoot);
+  assert.equal(positive.status, 0, positive.stderr || positive.stdout);
+
+  const mutation = makeRuleViolation('helper-runtime-docs', documents);
+  writeFileSync(join(fixtureRoot, mutation.path), mutation.contents, 'utf8');
+  const negative = runAuditDocs(fixtureRoot);
+  assert.equal(negative.status, 1, negative.stderr || negative.stdout);
+  assert.match(
+    negative.stderr,
+    /helper-runtime-docs: docs\/idd-helper-scripts\.md:/,
+  );
 });
 
 test('incomplete document snapshots fail closed with the missing rule path', () => {
