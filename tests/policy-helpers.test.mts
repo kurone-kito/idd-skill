@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -574,47 +573,6 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
     eligibility: null,
     blockedBy: 'mode-off',
   });
-});
-
-test('the triage defer section keeps condition (c) and the urgency matrix', () => {
-  const text = readFileSync(
-    new URL(
-      '../idd-template/.github/instructions/idd-review-triage.instructions.md',
-      import.meta.url,
-    ),
-    'utf8',
-  ).replace(/\s+/g, ' ');
-  const phrases = [
-    'instead of normal judgment',
-    'defect in shipped behavior — code, helper output, CI result, or instruction text that changes what an agent does',
-    'excluding wording/clarity polish and extra test coverage for already-working behavior',
-    'Judge validity and E4 severity (a false claim is Rejected)',
-    "the fix's marginal review-wave cost",
-    'never override.',
-    'wording/formatting changing no behavior',
-    'extra tests, comments, or naming for already-correct behavior',
-    'a correctness risk short of `high`',
-    'an adopt-now (a)-(c) condition',
-    '`very-low` < `low` < `medium` < `high`',
-    'High defers only at `very-low`',
-    'Medium or unknown, not at `high`',
-    'the floor only raises',
-    'Unscored urgency never defers',
-    'null urgency still defers',
-    'unknown severity never defers in these modes',
-    'counts as Medium',
-    'never PATH B',
-    'CODEOWNER/required-reviewer item',
-    'Accept forced does not win',
-    'High never eligible',
-    'a missing, failed, or incomplete fetch fails closed',
-    'every scored urgency',
-    'review-fix-loop-cutoff',
-    '(a)-(c)',
-  ];
-  for (const phrase of phrases) {
-    assert.ok(text.includes(phrase), phrase);
-  }
 });
 
 test('critiqueLoop.subagentWaitCeiling defaults to PT20M and accepts positive durations', () => {

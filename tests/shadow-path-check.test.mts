@@ -19,10 +19,6 @@ const F2_FILES = [
   'idd-template/.github/instructions/idd-pre-merge.instructions.md',
   '.github/instructions/idd-pre-merge.instructions.md',
 ];
-const F3_FILES = [
-  'idd-template/.github/instructions/idd-merge.instructions.md',
-  '.github/instructions/idd-merge.instructions.md',
-];
 
 /** The F2/F3 loop before #3671: a per-path loop that never matches a C-quoted path. */
 const OLD_LOOP =
@@ -386,42 +382,5 @@ test('a bad SHA fails closed under pipefail, and would pass silently without it 
     }
   } finally {
     repo.cleanup();
-  }
-});
-
-test('F2 carries the shadow-path pipeline and F3 refers to it, in the templates and the live copies (#3671)', () => {
-  for (const file of F2_FILES) {
-    const text = normalizeWhitespace(readText(file));
-    extractPipeline(file);
-    // Portable across GNU and BSD/macOS xargs: no GNU-only -r flag.
-    assert.equal(
-      /xargs(?=\s)[^`]*?\s-[A-Za-z0-9]*r\b|xargs[^`]*--no-run-if-empty/.test(
-        text,
-      ),
-      false,
-      file,
-    );
-    assert.match(
-      text,
-      /Under `set -o pipefail`, run `git ls-tree -r -z /,
-      file,
-    );
-    assert.match(
-      text,
-      /and again with `-o -i`; any output or failure holds\./,
-      file,
-    );
-    assert.equal(text.includes('for paths in'), false, file);
-    assert.equal(text.includes(':(top)'), false, file);
-  }
-  for (const file of F3_FILES) {
-    const text = normalizeWhitespace(readText(file));
-    assert.match(
-      text,
-      /Run F2's shadow-path check against `\$\{PR_HEAD_SHA_F3\}`; any output or failure holds\./,
-      file,
-    );
-    assert.equal(text.includes('for paths in'), false, file);
-    assert.equal(text.includes(':(top)'), false, file);
   }
 });

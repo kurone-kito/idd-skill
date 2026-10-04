@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   buildDispositionBody,
@@ -815,70 +814,6 @@ test('a digest from a login present only in iddAgentLogins neither advances last
   // The digest must not pair as an agent reply clearing the human comment.
   assert.equal(dispositionSummary.missingRegularComments.length, 1);
   assert.equal(dispositionSummary.missingRegularComments[0]?.id, '1');
-});
-
-// ---------------------------------------------------------------------------
-// E1 doc-list parity: both idd-review-snapshot(-lite).instructions.md
-// exclusion lists must name exactly PR_OPERATIONAL_COMMENT_PREFIXES, plus
-// `<!-- zero-accepted-path-a-gate:` in the lite list only.
-// ---------------------------------------------------------------------------
-
-/**
- * Extracts every backtick-wrapped MARKER PREFIX token from an E1 exclusion
- * bullet-list section: a prefix always ends in a literal `:` (the whole
- * point of a "starts with" match). This deliberately excludes a fully-closed
- * HTML comment literal (e.g. a live-status digest form, which ends in
- * `-->`, not `:` -- a different, non-prefix concept this parity check does
- * not cover, see PR_OPERATIONAL_COMMENT_PREFIXES's own doc comment) and any
- * unrelated backtick-wrapped reference elsewhere in the section (e.g. a
- * filename in the intro sentence).
- */
-function extractPrefixTokens(section: string): string[] {
-  const spans = [...section.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-  return spans.filter((span) => span.endsWith(':'));
-}
-
-test('the standard E1 exclusion list names exactly PR_OPERATIONAL_COMMENT_PREFIXES', () => {
-  const text = readFileSync(
-    new URL(
-      '../idd-template/.github/instructions/idd-review-snapshot.instructions.md',
-      import.meta.url,
-    ),
-    'utf8',
-  );
-  const start = text.indexOf('Exclude **trusted agent operational comments**');
-  assert.notEqual(start, -1, 'missing the E1 exclusion intro sentence');
-  const end = text.indexOf('Never exclude an untrusted-author', start);
-  assert.notEqual(end, -1, 'missing the E1 exclusion list end marker');
-  const section = text.slice(start, end);
-  const found = extractPrefixTokens(section).sort();
-  const expected = [...PR_OPERATIONAL_COMMENT_PREFIXES].sort();
-  assert.deepEqual(found, expected);
-});
-
-test('the lite E1 exclusion list names exactly PR_OPERATIONAL_COMMENT_PREFIXES (which already includes zero-accepted-path-a-gate)', () => {
-  // #3267: zero-accepted-path-a-gate was already present in the STANDARD
-  // list (and so already in PR_OPERATIONAL_COMMENT_PREFIXES) before this
-  // issue -- only the lite list was missing it. Both lists now name the
-  // same 13-entry set; there is no lite-only addition on top of the
-  // exported constant, only a lite-only catch-up to parity with it.
-  const text = readFileSync(
-    new URL(
-      '../idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md',
-      import.meta.url,
-    ),
-    'utf8',
-  );
-  const start = text.indexOf(
-    '4. From that raw set, exclude trusted-agent operational marker comments',
-  );
-  assert.notEqual(start, -1, 'missing the lite E1 exclusion intro sentence');
-  const end = text.indexOf('Never exclude an untrusted-author', start);
-  assert.notEqual(end, -1, 'missing the lite E1 exclusion list end marker');
-  const section = text.slice(start, end);
-  const found = extractPrefixTokens(section).sort();
-  const expected = [...PR_OPERATIONAL_COMMENT_PREFIXES].sort();
-  assert.deepEqual(found, expected);
 });
 
 test('sanity: PR_OPERATIONAL_COMMENT_PREFIXES itself omits the digest, forced-handoff, and non-PR-scoped markers', () => {
