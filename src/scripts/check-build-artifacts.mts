@@ -126,8 +126,9 @@ export interface ArtifactSnapshot {
   readonly working: ReadonlyMap<string, Buffer>;
   /**
    * File kinds (executable bit, symlink) at HEAD and in the working tree, for
-   * the paths present in both. Omitted when the platform or `core.fileMode`
-   * says the executable bit is not tracked, and then only symlinks differ.
+   * the paths present in both. Where git does not track the executable bit
+   * (`core.fileMode` false) the caller has already folded `executable` into
+   * `file`, so only a symlink can differ. Omitted, nothing is compared.
    */
   readonly kinds?: {
     readonly committed: ReadonlyMap<string, FileKind>;
@@ -263,7 +264,7 @@ export function compareArtifacts(snapshot: ArtifactSnapshot): Finding[] {
     ) {
       add(
         'local-edit',
-        `the working-tree copy is ${kinds?.working.get(path)} but HEAD records ${kinds?.committed.get(path)} (nothing was changed; restore it with chmod or git checkout)`,
+        `the working-tree copy is ${kinds?.working.get(path)} but HEAD records ${kinds?.committed.get(path)} (nothing was changed; restore it with chmod or git checkout, or run 'git config core.fileMode false' on a filesystem without an executable bit)`,
       );
     }
   }
@@ -400,14 +401,19 @@ function executableBitTracked(root: string, run: ProcessRunner): boolean {
   return process.platform !== 'win32';
 }
 
-/** The working-tree kind of `path`, or undefined when nothing is there. */
+/**
+ * The working-tree kind of `path`, or undefined when nothing is there. A
+ * symlink recorded at HEAD is compared by kind only: its blob is the link
+ * target, not file content, and none exists under scripts/ or bin/ today.
+ */
 function workingKind(path: string): FileKind | undefined {
   try {
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) {
       return 'symlink';
     }
-    return (stat.mode & 0o111) !== 0 ? 'executable' : 'file';
+    // git looks only at the owner execute bit (ce_permissions, mode & 0100).
+    return (stat.mode & 0o100) !== 0 ? 'executable' : 'file';
   } catch (error) {
     if (isAbsent(error)) {
       return undefined;

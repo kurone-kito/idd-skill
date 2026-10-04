@@ -203,7 +203,7 @@ export function compareArtifacts(snapshot) {
     ) {
       add(
         'local-edit',
-        `the working-tree copy is ${kinds?.working.get(path)} but HEAD records ${kinds?.committed.get(path)} (nothing was changed; restore it with chmod or git checkout)`,
+        `the working-tree copy is ${kinds?.working.get(path)} but HEAD records ${kinds?.committed.get(path)} (nothing was changed; restore it with chmod or git checkout, or run 'git config core.fileMode false' on a filesystem without an executable bit)`,
       );
     }
   }
@@ -329,14 +329,19 @@ function executableBitTracked(root, run) {
   }
   return process.platform !== 'win32';
 }
-/** The working-tree kind of `path`, or undefined when nothing is there. */
+/**
+ * The working-tree kind of `path`, or undefined when nothing is there. A
+ * symlink recorded at HEAD is compared by kind only: its blob is the link
+ * target, not file content, and none exists under scripts/ or bin/ today.
+ */
 function workingKind(path) {
   try {
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) {
       return 'symlink';
     }
-    return (stat.mode & 0o111) !== 0 ? 'executable' : 'file';
+    // git looks only at the owner execute bit (ce_permissions, mode & 0100).
+    return (stat.mode & 0o100) !== 0 ? 'executable' : 'file';
   } catch (error) {
     if (isAbsent(error)) {
       return undefined;

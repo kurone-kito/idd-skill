@@ -1284,8 +1284,14 @@ test('real tools: a changed executable bit is reported where git tracks it and i
   skip:
     SKIP ||
     (process.platform === 'win32' ? 'no executable bit on win32' : false),
-}, () => {
+}, (t) => {
   const fx = fixture();
+  // `git init` records core.fileMode=false on a filesystem without an
+  // executable bit (FAT, some mounts); there is nothing to test there.
+  if (git(fx.root, 'config', '--bool', 'core.fileMode').trim() === 'false') {
+    t.skip('this filesystem does not support the executable bit');
+    return;
+  }
   const shim = join(fx.root, 'bin', 'beta.mjs');
   chmodSync(shim, 0o755);
   commitAll(fx.root, 'record the bin shim as executable');
@@ -1300,6 +1306,14 @@ test('real tools: a changed executable bit is reported where git tracks it and i
   }).findings;
   assert.deepEqual(kindsByPath(lost), ['bin/beta.mjs=local-edit']);
   assert.match(lost[0]?.detail ?? '', /is file but HEAD records executable/);
+  // git reads only the owner execute bit: group/other execute alone is plain.
+  chmodSync(shim, 0o611);
+  assert.deepEqual(
+    kindsByPath(
+      verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    ),
+    ['bin/beta.mjs=local-edit'],
+  );
   chmodSync(shim, 0o755);
   const gained = join(fx.root, 'scripts', 'alpha.mjs');
   chmodSync(gained, 0o755);
