@@ -78,7 +78,7 @@
   "scripts": {
     "prepare": "husky",
     "lint": "pnpm run lint:minimum",
-    "lint:minimum": "node scripts/audit-docs.mjs --check && pnpm run lint:contracts && pnpm run lint:boundaries && node scripts/audit-dead-exports.mjs --check && pnpm run typecheck && pnpm run build:check && biome check --error-on-warnings && dprint check \"**/*.md\" && node --test --import ./tests/isolate-state.mts tests/*.test.mts && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
+    "lint:minimum": "node scripts/audit-docs.mjs --check && pnpm run lint:contracts && pnpm run lint:boundaries && pnpm run audit:schemas && node scripts/audit-dead-exports.mjs --check && pnpm run typecheck && pnpm run build:check && biome check --error-on-warnings && dprint check \"**/*.md\" && node --test --import ./tests/isolate-state.mts tests/*.test.mts && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
     "lint:fix": "biome check --write --error-on-warnings && dprint fmt \"**/*.md\" && markdownlint-cli2 --fix \"**/*.md\" && markdownlint-cli2 \"**/*.md\" && cspell lint \"**\" --no-progress",
     "lint:precommit": "biome check --error-on-warnings && dprint check \"**/*.md\" && markdownlint-cli2 \"**/*.md\"",
     "typecheck": "tsc -p tsconfig.json",
@@ -86,6 +86,7 @@
     "build:check": "node src/scripts/check-build-artifacts.mts && node src/scripts/check-untracked-artifacts.mts",
     "lint:contracts": "node scripts/lint-source-contracts.mjs",
     "lint:boundaries": "node scripts/lint-source-boundaries.mjs",
+    "audit:schemas": "node scripts/validate-schemas.mjs",
     "test": "pnpm run test:scripts",
     "test:scripts": "node --test --import ./tests/isolate-state.mts tests/*.test.mts",
     "fixtures:update": "node scripts/update-fixtures.mjs",
