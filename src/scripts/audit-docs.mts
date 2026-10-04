@@ -252,7 +252,10 @@ const GENERATED_MODE_PLACEHOLDER_EXEMPTIONS: Readonly<Record<string, string>> =
   };
 
 if (import.meta.main) {
-  void main();
+  void main().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }
 
 // The CLI body. Guarded behind `import.meta.main` so importing this module

@@ -412,6 +412,12 @@ const RULES = [
       requirePattern(
         path,
         fallback,
+        /case "\$AW3S_ENTRY" in[\s\S]*?pending \| non-pending\) ;;[\s\S]*?AW3-S entry must be pending or non-pending[\s\S]*?esac[\s\S]*?if \[ "\$AW3S_ENTRY" = "pending" \][\s\S]*?--remove-reviewer/,
+        'AW3-S entry validation before pending reviewer removal',
+      );
+      requirePattern(
+        path,
+        fallback,
         /case "\$REGISTRATION_STATUS"[\s\S]*?2\)[\s\S]*?exit 2/,
         'unexpected registration status failure',
       );

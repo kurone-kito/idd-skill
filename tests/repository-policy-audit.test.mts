@@ -196,6 +196,7 @@ function runCli(
 function runAuditDocs(
   executable: string,
   fixtureRoot: string,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): {
   status: number | null;
   stderr: string;
@@ -204,7 +205,7 @@ function runAuditDocs(
   const result = spawnSync(process.execPath, [executable, '--check'], {
     cwd: fixtureRoot,
     encoding: 'utf8' as const,
-    env: fixtureEnv(),
+    env: { ...fixtureEnv(), ...envOverrides },
   });
   return {
     status: result.status,
@@ -346,6 +347,49 @@ function replaceFixturePatternEverywhere(
   assert.ok(original, `${path} must be covered by the positive fixture`);
   assert.match(original, pattern, `${path} must match ${pattern}`);
   return { path, contents: original.replace(pattern, replacement) };
+}
+
+function moveAw3sEntryValidationAfterPendingRemoval(
+  documents: RepositoryPolicyDocuments,
+): RuleViolationMutation {
+  const path = 'idd-template/docs/idd-advisory-wait-shell-fallback.md';
+  const original = documents.get(path);
+  assert.ok(original, `${path} must be covered by the positive fixture`);
+  const validationStart = original.indexOf('case "$AW3S_ENTRY" in');
+  assert.notEqual(validationStart, -1, `${path} must validate AW3S_ENTRY`);
+  const validationEndMarker = '\nesac';
+  const validationEnd = original.indexOf(validationEndMarker, validationStart);
+  assert.notEqual(validationEnd, -1, `${path} must close AW3S_ENTRY case`);
+  const validationEndExclusive = validationEnd + validationEndMarker.length;
+  const validation = original.slice(validationStart, validationEndExclusive);
+  const withoutValidation =
+    original.slice(0, validationStart) + original.slice(validationEndExclusive);
+  const pendingBranchStart = withoutValidation.indexOf(
+    'if [ "$AW3S_ENTRY" = "pending" ]; then',
+  );
+  assert.notEqual(
+    pendingBranchStart,
+    -1,
+    `${path} must remove the reviewer only for a pending entry`,
+  );
+  const pendingBranchEnd = withoutValidation.indexOf(
+    '\nfi\n\n# Step 3',
+    pendingBranchStart,
+  );
+  assert.notEqual(
+    pendingBranchEnd,
+    -1,
+    `${path} must close the pending-only removal branch`,
+  );
+  const insertAt = pendingBranchEnd + '\nfi'.length;
+  return {
+    path,
+    contents:
+      withoutValidation.slice(0, insertAt) +
+      '\n' +
+      validation +
+      withoutValidation.slice(insertAt),
+  };
 }
 
 function appendFixtureText(
@@ -763,6 +807,42 @@ test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) 
     writeFileSync(target, original);
   }
 
+  const orderMutation =
+    moveAw3sEntryValidationAfterPendingRemoval(initialContents);
+  const orderOriginal = initialContents.get(orderMutation.path);
+  assert.ok(orderOriginal, `${orderMutation.path} must be in the fixture`);
+  const orderSnapshot = new Map(initialContents);
+  orderSnapshot.set(orderMutation.path, orderMutation.contents);
+  const expectedDiagnosticPath =
+    orderMutation.diagnosticPath ?? orderMutation.path;
+  assert.ok(
+    collectRepositoryPolicyViolationsFromDocuments(orderSnapshot).some(
+      (violation) =>
+        violation.ruleId === 'advisory-fallback-order' &&
+        violation.path === expectedDiagnosticPath,
+    ),
+    'advisory-fallback-order must reject pending removal before AW3S_ENTRY validation',
+  );
+  writeFileSync(join(fixtureRoot, orderMutation.path), orderMutation.contents);
+  const orderResult = runCliAndAssertReadOnly(
+    executable,
+    fixtureRoot,
+    emptyPath,
+    initialIndexTree,
+  );
+  assert.equal(
+    orderResult.status,
+    1,
+    `advisory-fallback-order: ${String(orderResult.stderr)}`,
+  );
+  assert.ok(
+    String(orderResult.stderr).includes(
+      `advisory-fallback-order: ${expectedDiagnosticPath}:`,
+    ),
+    `advisory-fallback-order did not report its relative path:\n${String(orderResult.stderr)}`,
+  );
+  writeFileSync(join(fixtureRoot, orderMutation.path), orderOriginal);
+
   for (const [path, contents] of initialContents) {
     assert.equal(
       readFileSync(join(fixtureRoot, path), 'utf8'),
@@ -811,6 +891,16 @@ test('audit-docs reports policy violations when the audit source is present', (t
 
   const positive = runAuditDocs(auditDocs, fixtureRoot);
   assert.equal(positive.status, 0, positive.stderr || positive.stdout);
+
+  const manifestPath = join(fixtureRoot, 'audit/sync-manifest.json');
+  const validManifest = readFileSync(manifestPath, 'utf8');
+  writeFileSync(manifestPath, '{', 'utf8');
+  const rejectedManifest = runAuditDocs(auditDocs, fixtureRoot, {
+    NODE_OPTIONS: '--unhandled-rejections=warn',
+  });
+  assert.equal(rejectedManifest.status, 1, rejectedManifest.stderr);
+  assert.match(rejectedManifest.stderr, /SyntaxError/);
+  writeFileSync(manifestPath, validManifest, 'utf8');
 
   const mutation = makeRuleViolation('helper-runtime-docs', documents);
   writeFileSync(join(fixtureRoot, mutation.path), mutation.contents, 'utf8');
