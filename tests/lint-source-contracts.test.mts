@@ -178,8 +178,14 @@ test('missing Discover hooks and unauthorized readers/importers are reported', (
       result.stderr,
       /DISCOVER-HINT-HOOK-COUNT src\/scripts\/post-idd-marker\.mts:/,
     );
-    assert.match(result.stderr, /DISCOVER-HINT-READER-ALLOWLIST/);
-    assert.match(result.stderr, /DISCOVER-HINT-IMPORTER-ALLOWLIST/);
+    assert.match(
+      result.stderr,
+      /DISCOVER-HINT-READER-ALLOWLIST src\/scripts\//,
+    );
+    assert.match(
+      result.stderr,
+      /DISCOVER-HINT-IMPORTER-ALLOWLIST src\/scripts\//,
+    );
   } finally {
     fixture.cleanup();
   }
