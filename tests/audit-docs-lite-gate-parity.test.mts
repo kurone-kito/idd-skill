@@ -601,3 +601,40 @@ test('source repository audit fails when both inventory audit files are absent',
     /repository-inventory-audit-required-file: scripts\/repository-inventory-audit\.mjs: required source audit file is missing or untracked/,
   );
 });
+
+test('source repository audit rejects untracked inventory audit files', (t) => {
+  const fixture = initFixture();
+  t.after(fixture.cleanup);
+  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
+  writeFileSync(
+    join(fixture.dir, 'package.json'),
+    '{"name":"@kurone-kito/idd-skill"}\n',
+  );
+  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
+  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
+  execFileSync('git', ['add', '-A'], {
+    cwd: fixture.dir,
+    env: fixtureEnv(),
+  });
+
+  for (const path of [
+    'src/scripts/repository-inventory-audit.mts',
+    'scripts/repository-inventory-audit.mjs',
+  ]) {
+    const content = readFileSync(join(REPO_ROOT, path), 'utf8');
+    const target = join(fixture.dir, path);
+    mkdirSync(join(fixture.dir, path, '..'), { recursive: true });
+    writeFileSync(target, content, 'utf8');
+  }
+
+  const result = runAuditDocs(fixture.dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: src\/scripts\/repository-inventory-audit\.mts: required source audit file is missing or untracked/,
+  );
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: scripts\/repository-inventory-audit\.mjs: required source audit file is missing or untracked/,
+  );
+});

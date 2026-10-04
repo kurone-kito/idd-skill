@@ -345,8 +345,11 @@ async function checkRepositoryPolicy() {
 async function checkRepositoryInventoryAudit() {
   const source = 'src/scripts/repository-inventory-audit.mts';
   const emitted = 'scripts/repository-inventory-audit.mjs';
+  const trackedRepoFiles = new Set(
+    git(['ls-files', '--cached']).split(/\r?\n/).filter(Boolean),
+  );
   const missing = [source, emitted].filter(
-    (path) => !repoFiles.includes(path) || !existsSync(join(root, path)),
+    (path) => !trackedRepoFiles.has(path) || !existsSync(join(root, path)),
   );
   if (missing.length > 0) {
     errors.push(
