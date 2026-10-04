@@ -6,6 +6,7 @@ import {
 } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -14,6 +15,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -25,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildArtifacts,
+  normalizeWithBiome,
   type ProcessRunner,
   type RunResult,
   StageError,
@@ -33,8 +36,10 @@ import {
   type ArtifactSnapshot,
   compareArtifacts,
   expectedArtifactPaths,
+  type FileKind,
   type Finding,
   formatFindings,
+  listHeadEntries,
   parseCatFileBatch,
   readHeadSnapshot,
   removeTempDir,
@@ -268,6 +273,32 @@ test('compareArtifacts: dirt in bin/ and in .gitattributes is local-edit too, ed
   );
 });
 
+test('compareArtifacts: a different executable bit or a symlink is local dirt even when the bytes match', () => {
+  const kinds = (
+    committed: Record<string, FileKind>,
+    working: Record<string, FileKind>,
+  ): ArtifactSnapshot['kinds'] => ({
+    committed: new Map(Object.entries(committed)),
+    working: new Map(Object.entries(working)),
+  });
+  const same = compareArtifacts({
+    ...CLEAN,
+    kinds: kinds({ 'bin/b.mjs': 'executable' }, { 'bin/b.mjs': 'executable' }),
+  });
+  assert.deepEqual(same, []);
+  const bit = compareArtifacts({
+    ...CLEAN,
+    kinds: kinds({ 'bin/b.mjs': 'executable' }, { 'bin/b.mjs': 'file' }),
+  });
+  assert.deepEqual(kindsByPath(bit), ['bin/b.mjs=local-edit']);
+  assert.match(bit[0]?.detail ?? '', /is file but HEAD records executable/);
+  const link = compareArtifacts({
+    ...CLEAN,
+    kinds: kinds({ 'scripts/a.mjs': 'file' }, { 'scripts/a.mjs': 'symlink' }),
+  });
+  assert.deepEqual(kindsByPath(link), ['scripts/a.mjs=local-edit']);
+});
+
 test('compareArtifacts: the comparison is byte for byte (line endings and trailing spaces count)', () => {
   const differing = (fresh: string): Finding[] =>
     compareArtifacts({
@@ -422,6 +453,26 @@ test('readHeadSnapshot keeps a tracked path that contains a newline', () => {
   assert.deepEqual(
     [...readHeadSnapshot('/repo', run).keys()],
     ['scripts/foo\n.mjs'],
+  );
+});
+
+test('listHeadEntries records the executable bit and symlinks from the tree mode', () => {
+  const run: ProcessRunner = () =>
+    ok(
+      [
+        '100644 blob a1\tscripts/plain.mjs',
+        '100755 blob b2\tbin/shim.mjs',
+        '120000 blob c3\tscripts/link.mjs',
+        '',
+      ].join('\0'),
+    );
+  assert.deepEqual(
+    listHeadEntries('/repo', run).map((entry) => [entry.path, entry.kind]),
+    [
+      ['scripts/plain.mjs', 'file'],
+      ['bin/shim.mjs', 'executable'],
+      ['scripts/link.mjs', 'symlink'],
+    ],
   );
 });
 
@@ -1227,6 +1278,82 @@ test('real tools: an untracked or staged artifact whose name holds a backslash i
     verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
     untracked,
   );
+});
+
+test('real tools: a changed executable bit is reported where git tracks it and ignored when core.fileMode is off', {
+  skip:
+    SKIP ||
+    (process.platform === 'win32' ? 'no executable bit on win32' : false),
+}, () => {
+  const fx = fixture();
+  const shim = join(fx.root, 'bin', 'beta.mjs');
+  chmodSync(shim, 0o755);
+  commitAll(fx.root, 'record the bin shim as executable');
+  assert.deepEqual(
+    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    [],
+  );
+  chmodSync(shim, 0o644);
+  const lost = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  }).findings;
+  assert.deepEqual(kindsByPath(lost), ['bin/beta.mjs=local-edit']);
+  assert.match(lost[0]?.detail ?? '', /is file but HEAD records executable/);
+  chmodSync(shim, 0o755);
+  const gained = join(fx.root, 'scripts', 'alpha.mjs');
+  chmodSync(gained, 0o755);
+  assert.deepEqual(
+    kindsByPath(
+      verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    ),
+    ['scripts/alpha.mjs=local-edit'],
+  );
+  git(fx.root, 'config', 'core.fileMode', 'false');
+  chmodSync(shim, 0o644);
+  assert.deepEqual(
+    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    [],
+  );
+});
+
+test('real tools: a regular artifact replaced by a symlink with the same bytes is reported', {
+  skip:
+    SKIP ||
+    (process.platform === 'win32'
+      ? 'symlinks need privileges on win32'
+      : false),
+}, () => {
+  const fx = fixture();
+  const target = join(fx.root, 'scripts', 'alpha.mjs');
+  const copy = join(fx.root, 'alpha-copy.mjs');
+  writeFileSync(copy, readFileSync(target));
+  rmSync(target);
+  symlinkSync(copy, target);
+  const { findings } = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  });
+  assert.deepEqual(kindsByPath(findings), ['scripts/alpha.mjs=local-edit']);
+  assert.match(findings[0]?.detail ?? '', /is symlink but HEAD records file/);
+});
+
+// Pins the assumption the first review round doubted: the repository's own
+// biome.json (whose files.includes lists project-relative globs) still
+// normalizes files that are passed explicitly from OUTSIDE the project, which
+// is how the temporary emit reaches Biome. The standalone fixture config used
+// elsewhere ('**') cannot show this.
+test('real tools: the repository biome.json normalizes an explicit file outside the project', {
+  skip: SKIP,
+}, () => {
+  const outside = mkdtempSync(join(SCRATCH, 'outside the project '));
+  const file = join(outside, 'scripts', 'probe.mjs');
+  mkdirSync(join(outside, 'scripts'));
+  writeFileSync(file, 'const   probe =   "double";\nexport {probe};\n');
+  normalizeWithBiome([file], REPO_ROOT);
+  const normalized = readFileSync(file, 'utf8');
+  assert.match(normalized, /const probe = 'double';/);
+  assert.notEqual(normalized, 'const   probe =   "double";\nexport {probe};\n');
 });
 
 test('real tools: a TypeScript error is a tsc stage error and leaves the checkout untouched', {
