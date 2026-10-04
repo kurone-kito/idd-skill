@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -12,8 +12,10 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import {
+  installFixtureGh,
   removeStubDirectory,
   STUB_REMOVAL_POLL_COUNT,
   stubExecutable,
@@ -505,5 +507,278 @@ test('a stub that is not gh leaves the load-control state variables alone (#3702
     });
   } finally {
     rmSync(preset, { recursive: true, force: true });
+  }
+});
+
+// #3746: `installFixtureGh` serves the GitHub reads the collector suites make
+// and records everything else, instead of letting a blocked or real `gh`
+// answer (and the code under test swallow the failure).
+const gh = (...args: string[]): string =>
+  execFileSync('gh', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+const OBSERVED_QUERY =
+  'query($owner:String!,$repo:String!,$number:Int!,$after:String){ checkSuites(first:100, after:$after) }';
+const observedArgs = (after?: string, ...extra: string[]): string[] => [
+  'api',
+  'graphql',
+  ...extra,
+  '-f',
+  `query=${OBSERVED_QUERY}`,
+  '-f',
+  'owner=acme',
+  '-f',
+  'repo=widgets',
+  '-F',
+  'number=7',
+  ...(after ? ['-f', `after=${after}`] : []),
+];
+
+test('fixture gh serves the viewer read, signs out on request, and records every call', () => {
+  const fixture = installFixtureGh();
+  try {
+    assert.equal(gh('api', 'user', '--jq', '.login'), 'kurone-kito\n');
+    fixture.setViewer('someone-else');
+    assert.equal(gh('api', 'user', '--jq', '.login'), 'someone-else\n');
+    fixture.setViewer(null);
+    assert.throws(() => gh('api', 'user', '--jq', '.login'), /signed out/);
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+    assert.equal(fixture.calls().length, 3);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('fixture gh answers the check-suite read with consistent head, createdAt values and paging', () => {
+  const fixture = installFixtureGh({
+    checkSuites: {
+      headRefOid: 'a'.repeat(40),
+      commitOid: 'a'.repeat(40),
+      pages: [['2026-05-17T03:00:00Z'], ['2026-05-17T01:00:00Z']],
+    },
+  });
+  try {
+    const first = JSON.parse(gh(...observedArgs()));
+    const pr = first.data.repository.pullRequest;
+    assert.equal(pr.headRefOid, 'a'.repeat(40));
+    assert.equal(pr.commits.nodes[0].commit.oid, 'a'.repeat(40));
+    assert.deepEqual(pr.commits.nodes[0].commit.checkSuites.nodes, [
+      { createdAt: '2026-05-17T03:00:00Z' },
+    ]);
+    assert.deepEqual(pr.commits.nodes[0].commit.checkSuites.pageInfo, {
+      hasNextPage: true,
+      endCursor: 'page:1',
+    });
+    const second = JSON.parse(gh(...observedArgs('page:1')));
+    const suites =
+      second.data.repository.pullRequest.commits.nodes[0].commit.checkSuites;
+    assert.deepEqual(suites.nodes, [{ createdAt: '2026-05-17T01:00:00Z' }]);
+    assert.equal(suites.pageInfo.hasNextPage, false);
+    // A GHES server URL inserts `--hostname <host>`; the answer is unchanged.
+    assert.deepEqual(
+      JSON.parse(
+        gh(...observedArgs(undefined, '--hostname', 'ghe.example.com')),
+      ),
+      first,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+    fixture.setCheckSuites({ commitOid: 'b'.repeat(40) });
+    const moved = JSON.parse(gh(...observedArgs()));
+    assert.notEqual(
+      moved.data.repository.pullRequest.headRefOid,
+      moved.data.repository.pullRequest.commits.nodes[0].commit.oid,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('fixture gh records and rejects any shape it does not serve, including a query missing a required field', () => {
+  const fixture = installFixtureGh();
+  try {
+    assert.throws(() => gh('repo', 'view'), /unexpected invocation/);
+    assert.throws(
+      () => gh('api', 'graphql', '-f', 'query=query{viewer{login}}'),
+      /unexpected invocation/,
+    );
+    assert.throws(
+      () =>
+        gh(
+          'api',
+          'graphql',
+          '-f',
+          `query=${OBSERVED_QUERY}`,
+          '-f',
+          'owner=acme',
+        ),
+      /unexpected invocation/,
+    );
+    assert.deepEqual(
+      fixture.unexpectedCalls().map((call) => call[0]),
+      ['repo', 'api', 'api'],
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('fixture gh does not serve another GraphQL query that merely carries owner, repo and a numeric number, nor a non-numeric number', () => {
+  const fixture = installFixtureGh();
+  try {
+    const other = (
+      number: string,
+      query = 'query($owner:String!){ viewer { login } }',
+    ) => [
+      'api',
+      'graphql',
+      '-f',
+      `query=${query}`,
+      '-f',
+      'owner=acme',
+      '-f',
+      'repo=widgets',
+      '-F',
+      `number=${number}`,
+    ];
+    assert.throws(() => gh(...other('7')), /unexpected invocation/);
+    assert.throws(
+      () => gh(...other('seven', OBSERVED_QUERY)),
+      /unexpected invocation/,
+    );
+    assert.equal(fixture.unexpectedCalls().length, 2);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('fixture gh keeps the isolate-state variables a preload set, and restores PATH and tokens', () => {
+  const state = mkdtempSync(join(tmpdir(), 'idd-fixture-gh-state-'));
+  const savedPath = process.env.PATH;
+  const savedToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = 'inert-placeholder';
+  try {
+    withStateEnv(state, () => {
+      const fixture = installFixtureGh();
+      try {
+        for (const key of STATE_ENV_NAMES) {
+          assert.equal(
+            process.env[key],
+            state,
+            `${key} keeps the preload's root`,
+          );
+        }
+        assert.equal(
+          process.env.GH_TOKEN,
+          undefined,
+          'token variables are scrubbed',
+        );
+        assert.equal(gh('api', 'user', '--jq', '.login'), 'kurone-kito\n');
+      } finally {
+        fixture.restore();
+      }
+      for (const key of STATE_ENV_NAMES) {
+        assert.equal(process.env[key], state);
+      }
+    });
+    assert.equal(process.env.PATH, savedPath);
+    assert.equal(process.env.GH_TOKEN, 'inert-placeholder');
+  } finally {
+    if (savedToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = savedToken;
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test('a child process spawned while fixture gh is active inherits it', () => {
+  const fixture = installFixtureGh({ viewer: 'child-viewer' });
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        "process.stdout.write(require('node:child_process').execFileSync('gh', ['api', 'user', '--jq', '.login'], { encoding: 'utf8' }))",
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'child-viewer\n');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('a state-directory write is still reported as a leak while fixture gh is active (#3725)', () => {
+  const testUtils = pathToFileURL(
+    join(import.meta.dirname, 'test-utils.mts'),
+  ).href;
+  const preload = pathToFileURL(
+    join(import.meta.dirname, 'isolate-state.mts'),
+  ).href;
+  const script = `
+    import { mkdirSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { installFixtureGh } from ${JSON.stringify(testUtils)};
+    const fixture = installFixtureGh();
+    const dir = join(process.env.XDG_STATE_HOME ?? process.env.LOCALAPPDATA, 'idd-skill');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'leak.json'), '{}');
+    fixture.restore();
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--import', preload, '-e', script],
+    { encoding: 'utf8', env: { ...process.env, IDD_TEST_STATE_ROOT: '' } },
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /isolate-state: LEAK/);
+  assert.match(result.stderr, /leak\.json/);
+});
+
+test('useFixtureGh fails the test file when any gh call went unserved, and passes without one', () => {
+  const testUtils = pathToFileURL(
+    join(import.meta.dirname, 'test-utils.mts'),
+  ).href;
+  const root = mkdtempSync(join(tmpdir(), 'idd-use-fixture-gh-'));
+  const write = (name: string, body: string): string => {
+    const path = join(root, name);
+    writeFileSync(
+      path,
+      `import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { useFixtureGh } from ${JSON.stringify(testUtils)};
+useFixtureGh();
+test('body', () => {
+${body}
+});
+`,
+    );
+    return path;
+  };
+  try {
+    // `NODE_TEST_CONTEXT` makes a nested `node --test` report to its parent
+    // and exit 0 even when a test fails, so the child must not inherit it.
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const run = (file: string) =>
+      spawnSync(process.execPath, ['--test', file], { encoding: 'utf8', env });
+    const clean = run(
+      write(
+        'clean.test.mjs',
+        "  execFileSync('gh', ['api', 'user', '--jq', '.login']);",
+      ),
+    );
+    assert.equal(clean.status, 0, clean.stdout + clean.stderr);
+    const dirty = run(
+      write(
+        'dirty.test.mjs',
+        "  try { execFileSync('gh', ['repo', 'view'], { stdio: 'ignore' }); } catch {}",
+      ),
+    );
+    assert.notEqual(dirty.status, 0);
+    assert.match(dirty.stdout + dirty.stderr, /repo/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
