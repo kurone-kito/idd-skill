@@ -23,7 +23,8 @@
 // update-fixtures, and validate-schemas. The seventh,
 // minimize-superseded-markers.mts, is curl-mirrored standalone to
 // `idd-template/scripts/` (#1208) and cannot import any sibling file
-// (enforced by `standalone-mirror-imports.test.mts`), so it inlines its
+// (enforced by lint-source-boundaries' STANDALONE-MIRROR-IMPORTS rule), so
+// it inlines its
 // own duplicate of the assertEntrySignal() check below instead of
 // importing this module -- keep the two in sync by hand.
 //

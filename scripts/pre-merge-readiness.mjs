@@ -1398,8 +1398,9 @@ class ChangedFilesReadError extends Error {
 }
 /**
  * Structural view of `GhPaginatedResponseLimitError`. This helper cannot
- * import that class: `provider-port-migration-guard` forbids a migrated
- * helper from importing the gh-exec transport module (#2266).
+ * import that class: lint-source-boundaries' PROVIDER-PORT-MIGRATED rule
+ * forbids a migrated helper from importing the gh-exec transport module
+ * (#2266).
  */
 function paginatedResponseLimit(error) {
   if (

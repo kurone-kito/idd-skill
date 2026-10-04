@@ -21,9 +21,8 @@ import { parseArgs } from 'node:util';
 // #3240: same self-containment constraint as the duplicated constants
 // below -- cannot `import './node-runtime-guard.mts'` here, so this
 // inlines a standalone copy of that module's assertEntrySignal() check
-// instead (`standalone-mirror-imports.test.mts`'s "exact-mode
-// idd-template/scripts/ mirror sources import only Node built-ins" test
-// fails loudly if a relative import is added back). `import.meta.main` is
+// instead (lint-source-boundaries' STANDALONE-MIRROR-IMPORTS rule fails
+// loudly if a relative import is added back). `import.meta.main` is
 // `undefined` -- not `false` -- on a Node release that predates it
 // (v20.20.2/v22.17.1/v24.1.0 confirmed live), so on such a runtime this
 // file's own `if (import.meta.main)` entry block below would silently

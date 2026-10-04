@@ -7649,7 +7649,8 @@ export function runLocalWorktreeRecovery(
  * a different branch (Copilot review #4114224382). The live lookup is routed
  * through `gh-exec.mts`'s `readGithubRepoDefaultBranch` /
  * `resolveCurrentGithubRepository` (never a direct `gh` spawn;
- * `tests/gh-spawn-guard.test.mts` enforces this repository-wide).
+ * lint-source-boundaries' GH-SPAWN-DIRECT rule enforces this
+ * repository-wide).
  */
 export function resolveDevelopmentBranchProduction(
   args: Pick<LocalWorktreeRecoveryArgs, 'owner' | 'repo'>,
