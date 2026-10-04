@@ -105,6 +105,7 @@ scripts/provider-outage-park.mjs linguist-generated=true
 scripts/provider-port.mjs linguist-generated=true
 scripts/readline-prompt.mjs linguist-generated=true
 scripts/repository-instruction-audit.mjs linguist-generated=true
+scripts/repository-inventory-audit.mjs linguist-generated=true
 scripts/repository-policy-audit.mjs linguist-generated=true
 scripts/repository-schema-audit.mjs linguist-generated=true
 scripts/rerun-advisory-convergence.mjs linguist-generated=true

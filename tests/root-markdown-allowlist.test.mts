@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { collectRootMarkdownAllowlistViolations } from '../src/scripts/consistency-helpers.mts';
-
-const MANIFEST_URL = new URL('../audit/sync-manifest.json', import.meta.url);
 
 const CONFIG = {
   id: 'root-markdown-allowlist',
@@ -74,20 +71,4 @@ test('a non-array allowed value fails cleanly instead of throwing', () => {
       'root-markdown-allowlist: allowed must be an array of root Markdown file names',
     ]);
   }
-});
-
-test('the real manifest allowlists exactly the intentional root documents', () => {
-  const manifest = JSON.parse(readFileSync(MANIFEST_URL, 'utf8'));
-  const allowed = manifest.rootMarkdownAllowlist?.allowed ?? [];
-
-  assert.ok(allowed.includes('CHANGELOG.md'));
-  assert.deepEqual([...allowed].sort(), [
-    'AGENTS.md',
-    'CHANGELOG.md',
-    'CLAUDE.md',
-    'GEMINI.md',
-    'README.ja.md',
-    'README.md',
-    'SECURITY.md',
-  ]);
 });

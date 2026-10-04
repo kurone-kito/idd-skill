@@ -204,6 +204,10 @@ const ENGINES_RANGE_MIRRORS: EnginesRangeMirrorSpec[] = [
     mode: 'full-range',
   },
   {
+    file: '.github/workflows/idd-advisory-convergence-comment.yml',
+    mode: 'full-range',
+  },
+  {
     file: '.github/workflows/pnpm-boundary-node22-floor.yml',
     mode: 'low-bound-contains',
   },
@@ -391,6 +395,7 @@ async function main(): Promise<void> {
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
+  if (shouldRunSourceChecks) await checkRepositoryInventoryAudit();
   await checkRepositoryPolicy();
   if (shouldRunSourceChecks) {
     await checkRepositorySchemaAudit();
@@ -447,6 +452,51 @@ async function checkRepositoryPolicy(): Promise<void> {
       ...collectRepositoryPolicyViolations(root).map(
         (violation) =>
           `${violation.ruleId}: ${violation.path}: ${violation.message}`,
+      ),
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    errors.push(
+      `${source}: could not load generated artifact ${emitted}: ${detail}`,
+    );
+  }
+}
+
+async function checkRepositoryInventoryAudit(): Promise<void> {
+  const source = 'src/scripts/repository-inventory-audit.mts';
+  const emitted = 'scripts/repository-inventory-audit.mjs';
+  const trackedRepoFiles = new Set(
+    git(['ls-files', '--cached']).split(/\r?\n/).filter(Boolean),
+  );
+  const missing = [source, emitted].filter(
+    (path) => !trackedRepoFiles.has(path) || !existsSync(join(root, path)),
+  );
+  if (missing.length > 0) {
+    errors.push(
+      ...missing.map(
+        (path) =>
+          `repository-inventory-audit-required-file: ${path}: required source audit file is missing or untracked`,
+      ),
+    );
+    return;
+  }
+  if (
+    errors.some(
+      (error) =>
+        error.startsWith(`${source}:`) || error.startsWith(`${emitted}:`),
+    )
+  ) {
+    return;
+  }
+
+  try {
+    const { collectRepositoryInventoryViolations } = await import(
+      './repository-inventory-audit.mjs'
+    );
+    errors.push(
+      ...collectRepositoryInventoryViolations(root).map(
+        ({ ruleId, path, message }) =>
+          `repository-inventory-audit/${ruleId}: ${path}: ${message}`,
       ),
     );
   } catch (error) {
