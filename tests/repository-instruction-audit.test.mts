@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -12,9 +12,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { fixtureEnv } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(REPO_ROOT, 'scripts/repository-instruction-audit.mjs');
+const AUDIT_DOCS = join(REPO_ROOT, 'scripts/audit-docs.mjs');
 
 const specificity = [
   '## Specificity target',
@@ -354,6 +356,37 @@ function runAudit(root: string) {
   });
 }
 
+function writeAggregateFixture(
+  origin: 'canonical' | 'fork' | 'missing',
+): string {
+  const files = {
+    ...baseFiles,
+    'AGENTS.md': baseFiles['AGENTS.md'].replace('## Branch strategy\n', ''),
+    'package.json': JSON.stringify({ name: '@kurone-kito/idd-skill' }),
+  };
+  const root = writeFixture(files);
+  execFileSync('git', ['init', '--quiet'], { cwd: root, env: fixtureEnv() });
+  if (origin !== 'missing') {
+    const url =
+      origin === 'canonical'
+        ? 'git@github.com:kurone-kito/idd-skill.git'
+        : 'git@github.com:example/idd-skill-fork.git';
+    execFileSync('git', ['remote', 'add', 'origin', url], {
+      cwd: root,
+      env: fixtureEnv(),
+    });
+  }
+  return root;
+}
+
+function runAggregateAudit(root: string) {
+  return spawnSync(process.execPath, [AUDIT_DOCS, '--check'], {
+    cwd: root,
+    env: fixtureEnv(),
+    encoding: 'utf8',
+  });
+}
+
 function snapshot(root: string, relative = ''): [string, string][] {
   return readdirSync(join(root, relative), { withFileTypes: true })
     .flatMap((entry) => {
@@ -380,6 +413,95 @@ test('repository instruction audit CLI accepts a positive read-only scratch fixt
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit-docs runs source contracts for the canonical repository identity', () => {
+  const root = writeAggregateFixture('canonical');
+  try {
+    const result = runAggregateAudit(root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 1, output);
+    assert.match(
+      output,
+      /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
+    );
+    assert.doesNotMatch(output, /source-origin/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit-docs runs source contracts for a fork and reports its origin', () => {
+  const root = writeAggregateFixture('fork');
+  try {
+    const result = runAggregateAudit(root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 1, output);
+    assert.match(
+      output,
+      /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
+    );
+    assert.match(
+      output,
+      /notice: repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit-docs reports unavailable origin and still runs source contracts', () => {
+  const root = writeAggregateFixture('missing');
+  try {
+    const result = runAggregateAudit(root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 1, output);
+    assert.match(
+      output,
+      /repository-instruction-audit\.source-origin: package identity matched the source repository but origin URL is unavailable; source checks are still running/u,
+    );
+    assert.match(
+      output,
+      /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('repository instruction audit rejects malformed JSON object shapes', () => {
+  const cases = [
+    {
+      path: 'audit/sync-manifest.json',
+      contents: JSON.stringify({ syncPairs: {} }),
+      ruleId: 'approval-gate.suitability-pair',
+    },
+    {
+      path: 'audit/sync-manifest.json',
+      contents: JSON.stringify({ generatedBlocks: {} }),
+      ruleId: 'non-node.generated-import-surface',
+    },
+    {
+      path: '.github/idd/config.json',
+      contents: 'null',
+      ruleId: 'approval-gate.config',
+    },
+  ];
+
+  for (const testCase of cases) {
+    const files = { ...baseFiles, [testCase.path]: testCase.contents };
+    const root = writeFixture(files);
+    try {
+      const result = runAudit(root);
+      const output = `${result.stdout}\n${result.stderr}`;
+      assert.equal(result.status, 1, output);
+      assert.ok(output.includes(testCase.ruleId), output);
+      assert.ok(output.includes(testCase.path), output);
+      assert.doesNotMatch(output, /TypeError|Cannot read properties/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 

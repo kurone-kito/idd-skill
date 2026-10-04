@@ -99,6 +99,30 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseJsonObject(
+  text: string,
+  path: string,
+  ruleId: string,
+  report: (ruleId: string, path: string, message: string) => void,
+): Record<string, unknown> | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    report(ruleId, path, 'must contain valid JSON');
+    return null;
+  }
+  if (!isRecord(value)) {
+    report(ruleId, path, 'must contain a JSON object');
+    return null;
+  }
+  return value;
+}
+
 function onboardingPlaceholder(name: string): string {
   return `{{${name}}}`;
 }
@@ -519,14 +543,24 @@ function auditApprovalGate(
 
   const configPath = '.github/idd/config.json';
   const configText = readText(configPath);
-  let config: { skipIssueAuthorApprovalGate?: unknown; markerPrefix?: string } =
-    {};
-  try {
-    config = JSON.parse(configText) as typeof config;
-  } catch {
-    report('approval-gate.config', configPath, 'must contain valid JSON');
+  const config = parseJsonObject(
+    configText,
+    configPath,
+    'approval-gate.config',
+    report,
+  );
+  const skipIssueAuthorApprovalGate = config?.skipIssueAuthorApprovalGate;
+  if (
+    skipIssueAuthorApprovalGate !== undefined &&
+    typeof skipIssueAuthorApprovalGate !== 'boolean'
+  ) {
+    report(
+      'approval-gate.config',
+      configPath,
+      'skipIssueAuthorApprovalGate must be a boolean',
+    );
   }
-  if (config.skipIssueAuthorApprovalGate === true) {
+  if (skipIssueAuthorApprovalGate === true) {
     report(
       'approval-gate.config',
       configPath,
@@ -650,25 +684,35 @@ function auditSuitabilityPair(
   const targetPath = '.github/instructions/idd-suitability.instructions.md';
   const templatePath =
     'idd-template/.github/instructions/idd-suitability.instructions.md';
-  let manifest: {
-    syncPairs?: {
-      id?: string;
-      mode?: string;
-      source?: string;
-      target?: string;
-      replacements?: { from?: string; to?: string }[];
-    }[];
-  } = {};
-  try {
-    manifest = JSON.parse(readText(manifestPath)) as typeof manifest;
-  } catch {
+  const manifest = parseJsonObject(
+    readText(manifestPath),
+    manifestPath,
+    'approval-gate.suitability-pair',
+    report,
+  );
+  if (manifest === null) return;
+
+  const syncPairs = manifest.syncPairs;
+  if (!Array.isArray(syncPairs)) {
     report(
       'approval-gate.suitability-pair',
       manifestPath,
-      'must contain valid JSON',
+      'syncPairs must be an array',
     );
+    return;
   }
-  const pair = manifest.syncPairs?.find(
+  if (
+    syncPairs.some((entry) => !isRecord(entry) || typeof entry.id !== 'string')
+  ) {
+    report(
+      'approval-gate.suitability-pair',
+      manifestPath,
+      'syncPairs entries must be objects with string ids',
+    );
+    return;
+  }
+  const syncPairEntries = syncPairs as Record<string, unknown>[];
+  const pair = syncPairEntries.find(
     (entry) => entry.id === 'idd-suitability-instructions',
   );
   if (!pair) {
@@ -676,6 +720,33 @@ function auditSuitabilityPair(
       'approval-gate.suitability-pair',
       manifestPath,
       'is missing the idd-suitability-instructions sync pair',
+    );
+    return;
+  }
+  const replacements = pair.replacements;
+  if (replacements !== undefined && !Array.isArray(replacements)) {
+    report(
+      'approval-gate.suitability-pair',
+      manifestPath,
+      'idd-suitability-instructions replacements must be an array',
+    );
+    return;
+  }
+  const replacementEntries = Array.isArray(replacements)
+    ? (replacements as Record<string, unknown>[])
+    : [];
+  if (
+    replacementEntries.some(
+      (replacement) =>
+        !isRecord(replacement) ||
+        typeof replacement.from !== 'string' ||
+        typeof replacement.to !== 'string',
+    )
+  ) {
+    report(
+      'approval-gate.suitability-pair',
+      manifestPath,
+      'idd-suitability-instructions has a malformed replacement entry',
     );
     return;
   }
@@ -694,19 +765,9 @@ function auditSuitabilityPair(
     );
   }
   const source = readText(templatePath);
-  const expected = (pair.replacements ?? []).reduce((text, replacement) => {
-    if (
-      typeof replacement.from !== 'string' ||
-      typeof replacement.to !== 'string'
-    ) {
-      report(
-        'approval-gate.suitability-pair',
-        manifestPath,
-        'has a malformed replacement entry',
-      );
-      return text;
-    }
-    return text.split(replacement.from).join(replacement.to);
+  const expected = replacementEntries.reduce((text, replacement) => {
+    const entry = replacement as { from: string; to: string };
+    return text.split(entry.from).join(entry.to);
   }, source);
   const actual = stripGeneratedFromBanner(readText(targetPath));
   if (expected !== actual) {
@@ -723,29 +784,25 @@ function auditSuitabilityPair(
       'concreted output must not retain the project marker placeholder',
     );
   }
-  let config: { markerPrefix?: string } = {};
-  try {
-    config = JSON.parse(readText('.github/idd/config.json')) as typeof config;
-  } catch {
+  const configPath = '.github/idd/config.json';
+  const config = parseJsonObject(
+    readText(configPath),
+    configPath,
+    'approval-gate.suitability-pair',
+    report,
+  );
+  const markerPrefix = config?.markerPrefix;
+  if (typeof markerPrefix !== 'string' || markerPrefix.length === 0) {
     report(
       'approval-gate.suitability-pair',
-      '.github/idd/config.json',
-      'must contain valid JSON and markerPrefix',
-    );
-  }
-  if (!config.markerPrefix) {
-    report(
-      'approval-gate.suitability-pair',
-      '.github/idd/config.json',
+      configPath,
       'is missing markerPrefix',
     );
-  } else if (
-    !expected.includes(`${config.markerPrefix}-autopilot-suitability`)
-  ) {
+  } else if (!expected.includes(`${markerPrefix}-autopilot-suitability`)) {
     report(
       'approval-gate.suitability-pair',
       targetPath,
-      `concreted output must use the configured markerPrefix ${JSON.stringify(config.markerPrefix)}`,
+      `concreted output must use the configured markerPrefix ${JSON.stringify(markerPrefix)}`,
     );
   }
   has(
@@ -1703,19 +1760,36 @@ function auditManifestImportSurface(
     }
   }
   const manifestPath = 'audit/sync-manifest.json';
-  let manifest: {
-    generatedBlocks?: { id?: string; paths?: unknown; sourceGlobs?: unknown }[];
-  } = {};
-  try {
-    manifest = JSON.parse(readText(manifestPath)) as typeof manifest;
-  } catch {
+  const manifest = parseJsonObject(
+    readText(manifestPath),
+    manifestPath,
+    'non-node.generated-import-surface',
+    report,
+  );
+  if (manifest === null) return;
+  const generatedBlocks = manifest.generatedBlocks;
+  if (!Array.isArray(generatedBlocks)) {
     report(
       'non-node.generated-import-surface',
       manifestPath,
-      'must contain valid JSON',
+      'generatedBlocks must be an array',
     );
+    return;
   }
-  const block = manifest.generatedBlocks?.find(
+  if (
+    generatedBlocks.some(
+      (entry) => !isRecord(entry) || typeof entry.id !== 'string',
+    )
+  ) {
+    report(
+      'non-node.generated-import-surface',
+      manifestPath,
+      'generatedBlocks entries must be objects with string ids',
+    );
+    return;
+  }
+  const generatedBlockEntries = generatedBlocks as Record<string, unknown>[];
+  const block = generatedBlockEntries.find(
     (entry) => entry.id === 'idd-template-core-files',
   );
   if (!block) {
@@ -1726,8 +1800,30 @@ function auditManifestImportSurface(
     );
     return;
   }
-  const paths = Array.isArray(block.paths) ? block.paths : [];
-  const sourceGlobs = Array.isArray(block.sourceGlobs) ? block.sourceGlobs : [];
+  if (
+    !Array.isArray(block.paths) ||
+    !block.paths.every((path) => typeof path === 'string')
+  ) {
+    report(
+      'non-node.generated-import-surface',
+      manifestPath,
+      'idd-template-core-files paths must be an array of strings',
+    );
+    return;
+  }
+  if (
+    !Array.isArray(block.sourceGlobs) ||
+    !block.sourceGlobs.every((glob) => typeof glob === 'string')
+  ) {
+    report(
+      'non-node.generated-import-surface',
+      manifestPath,
+      'idd-template-core-files sourceGlobs must be an array of strings',
+    );
+    return;
+  }
+  const paths = block.paths as string[];
+  const sourceGlobs = block.sourceGlobs as string[];
   for (const path of [
     'idd-template/docs/onboarding/agent-entry-and-verification.md',
     'idd-template/docs/onboarding/placeholders.md',

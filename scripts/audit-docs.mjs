@@ -178,20 +178,25 @@ async function main() {
   const packageName = existsSync(packageJsonPath)
     ? JSON.parse(readFileSync(packageJsonPath, 'utf8')).name
     : undefined;
-  let isSourceRepository = packageName === '@kurone-kito/idd-skill';
-  if (isSourceRepository) {
+  const isSourcePackage = packageName === '@kurone-kito/idd-skill';
+  let sourceOriginNotice = null;
+  if (isSourcePackage) {
     try {
       const originUrl = execFileSync(
         'git',
         ['-C', root, 'remote', 'get-url', 'origin'],
         { encoding: 'utf8' },
       ).trim();
-      isSourceRepository = isSourceRepositoryOriginUrl(originUrl);
+      if (!isSourceRepositoryOriginUrl(originUrl)) {
+        sourceOriginNotice =
+          'repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks';
+        notices.push(sourceOriginNotice);
+      }
     } catch {
-      isSourceRepository = false;
+      errors.push(
+        'repository-instruction-audit.source-origin: package identity matched the source repository but origin URL is unavailable; source checks are still running',
+      );
     }
-  }
-  if (isSourceRepository) {
     errors.push(
       ...collectRepositoryInstructionViolations(root).map(
         ({ ruleId, path, message }) =>
@@ -238,6 +243,9 @@ async function main() {
   checkEnginesRangeMirrors();
   checkBinExecutableMode();
   if (errors.length > 0) {
+    if (sourceOriginNotice !== null) {
+      console.error(`notice: ${sourceOriginNotice}`);
+    }
     console.error('documentation audit failed:');
     for (const error of errors) {
       console.error(`- ${error}`);
