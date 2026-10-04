@@ -50,8 +50,9 @@ import { collectRepositoryInstructionViolations } from './repository-instruction
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
 export function isSourceRepositoryOriginUrl(originUrl) {
+  const normalizedOriginUrl = originUrl.trim().replace(/\/+$/u, '');
   return /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)kurone-kito\/idd-skill(?:\.git)?$/iu.test(
-    originUrl.trim(),
+    normalizedOriginUrl,
   );
 }
 const errors = [];
@@ -211,9 +212,6 @@ async function main() {
   if (isSourcePackage && originUrl === null) {
     sourceOriginNotice =
       'repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks';
-    errors.push(
-      'repository-instruction-audit/source-origin: package.json: source repository origin URL is unavailable, so repository identity inspection is incomplete',
-    );
   } else if (isSourcePackage && !hasCanonicalSourceOrigin) {
     sourceOriginNotice =
       'repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks';

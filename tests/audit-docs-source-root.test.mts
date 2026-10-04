@@ -7,9 +7,13 @@ test('source repository identity accepts HTTPS and SSH GitHub origins', () => {
   for (const originUrl of [
     'https://github.com/kurone-kito/idd-skill',
     'https://github.com/kurone-kito/idd-skill.git',
+    'https://github.com/kurone-kito/idd-skill/',
+    'https://github.com/kurone-kito/idd-skill.git/',
     'git@github.com:kurone-kito/idd-skill.git',
+    'git@github.com:kurone-kito/idd-skill.git/',
     'ssh://git@github.com/kurone-kito/idd-skill.git',
     'ssh://git@github.com:2222/kurone-kito/idd-skill.git',
+    'ssh://git@github.com:2222/kurone-kito/idd-skill.git/',
   ]) {
     assert.equal(isSourceRepositoryOriginUrl(originUrl), true, originUrl);
   }

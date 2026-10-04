@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -9,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { fixtureEnv } from './test-utils.mts';
@@ -381,6 +382,24 @@ function writeAggregateFixture(
   return root;
 }
 
+function copySourceArchiveFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), 'idd-audit-source-archive-'));
+  cpSync(REPO_ROOT, root, {
+    recursive: true,
+    filter: (source) => {
+      const path = relative(REPO_ROOT, source);
+      const pathParts = path.split(/[\\/]/u);
+      return (
+        path === '' ||
+        (!pathParts.includes('.git') && !pathParts.includes('node_modules'))
+      );
+    },
+  });
+  execFileSync('git', ['init', '--quiet'], { cwd: root, env: fixtureEnv() });
+  execFileSync('git', ['add', '-A'], { cwd: root, env: fixtureEnv() });
+  return root;
+}
+
 function runAggregateAudit(root: string) {
   return spawnSync(process.execPath, [AUDIT_DOCS, '--check'], {
     cwd: root,
@@ -467,15 +486,36 @@ test('audit-docs reports unavailable origin and still runs source contracts', ()
       output,
       /notice: repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks/u,
     );
-    assert.match(
-      output,
-      /repository-instruction-audit\/source-origin: package\.json: source repository origin URL is unavailable/u,
-    );
+    assert.doesNotMatch(output, /repository-instruction-audit\/source-origin/u);
     assert.doesNotMatch(output, /No such remote 'origin'/u);
     assert.match(
       output,
       /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit-docs passes complete source contracts when origin is unavailable', () => {
+  const root = copySourceArchiveFixture();
+  try {
+    assert.equal(
+      execFileSync('git', ['remote'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: fixtureEnv(),
+      }).trim(),
+      '',
+    );
+    const result = runAggregateAudit(root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 0, output);
+    assert.match(
+      output,
+      /notice: repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks/u,
+    );
+    assert.doesNotMatch(output, /repository-instruction-audit\/source-origin/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
