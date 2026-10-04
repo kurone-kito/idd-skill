@@ -70,7 +70,9 @@ import {
 } from './build-ts.mts';
 
 const ARTIFACT_ROOTS = ['scripts', 'bin'] as const;
-const ARTIFACT_PATH_PATTERN = /^(?:scripts|bin)\/.+\.mjs$/;
+// The `s` flag lets `.` match a newline: a tracked artifact whose name holds one
+// (git -z lists it verbatim) must still count as an artifact.
+const ARTIFACT_PATH_PATTERN = /^(?:scripts|bin)\/.+\.mjs$/s;
 const FIX_HINT =
   'Fix: run `pnpm run build`, review the diff, and commit the regenerated files; remove a stale artifact with `git rm` (the build never deletes one).';
 
@@ -231,12 +233,18 @@ export function compareArtifacts(snapshot: ArtifactSnapshot): Finding[] {
   return findings;
 }
 
+/** A path made safe for one report line: line breaks are shown escaped. */
+function displayPath(path: string): string {
+  return path.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
+}
+
 /** The report printed for a failing check. */
 export function formatFindings(findings: readonly Finding[]): string {
   return [
     'build:check: generated artifacts do not match a fresh build; nothing was rewritten.',
     ...findings.map(
-      (finding) => `  ${finding.path}: [${finding.kind}] ${finding.detail}`,
+      (finding) =>
+        `  ${displayPath(finding.path)}: [${finding.kind}] ${finding.detail}`,
     ),
     FIX_HINT,
   ].join('\n');
@@ -427,6 +435,7 @@ export function verifyBuildArtifacts(
   const temp = mkdtempSync(
     join(options.tmpRoot ?? tmpdir(), 'idd-build-check-'),
   );
+  let result: VerifyResult;
   try {
     runTsc(root, { ...tools, outDir: temp });
     const emittedPaths = listFiles(temp, '.mjs');
@@ -495,13 +504,40 @@ export function verifyBuildArtifacts(
         working,
       }),
     );
-    return { findings, warnings };
-  } finally {
-    const warning = removeTempDir(temp, options.remove);
-    if (warning !== undefined) {
-      warnings.push(warning);
-    }
+    result = { findings, warnings };
+  } catch (error) {
+    // The temp dir goes on every path; a cleanup warning must survive the
+    // failure it accompanies instead of vanishing with the thrown error.
+    throw withCleanupWarning(error, removeTempDir(temp, options.remove));
   }
+  const warning = removeTempDir(temp, options.remove);
+  if (warning !== undefined) {
+    warnings.push(warning);
+  }
+  return result;
+}
+
+/** `error` with the cleanup `warning` (if any) appended to what it reports. */
+function withCleanupWarning(
+  error: unknown,
+  warning: string | undefined,
+): unknown {
+  if (warning === undefined) {
+    return error;
+  }
+  if (error instanceof StageError) {
+    const output =
+      error.output === '' || error.output.endsWith('\n')
+        ? error.output
+        : `${error.output}\n`;
+    return new StageError(
+      error.stage,
+      error.message,
+      `${output}build:check: warning: ${warning}\n`,
+    );
+  }
+  process.stderr.write(`build:check: warning: ${warning}\n`);
+  return error;
 }
 
 function main(): void {
