@@ -541,6 +541,27 @@ test('audit-docs runs source contracts from canonical origin after package renam
   }
 });
 
+test('audit-docs runs source contracts after fork origin and package rename', () => {
+  const root = writeAggregateFixture('fork', '@example/renamed-package');
+  try {
+    mkdirSync(join(root, 'docs'), { recursive: true });
+    writeFileSync(join(root, 'docs/token-cost.md'), 'source repository marker');
+    const result = runAggregateAudit(root);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 1, output);
+    assert.match(
+      output,
+      /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
+    );
+    assert.match(
+      output,
+      /notice: repository-instruction-audit: source repository marker docs\/token-cost\.md is present but package identity and origin do not identify the source repository; running source checks/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('audit-docs rejects duplicate generated markers through the aggregate', () => {
   const root = writeAggregateFixture('canonical');
   try {

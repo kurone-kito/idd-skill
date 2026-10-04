@@ -194,8 +194,11 @@ async function main() {
     }
   }
   const isSourcePackage = packageName === '@kurone-kito/idd-skill';
+  const hasSourceRepositoryMarker = existsSync(
+    join(root, 'docs/token-cost.md'),
+  );
   let originUrl = null;
-  let sourceOriginNotice = null;
+  let sourceIdentityNotice = null;
   try {
     originUrl = execFileSync(
       'git',
@@ -208,19 +211,27 @@ async function main() {
   }
   const hasCanonicalSourceOrigin =
     originUrl !== null && isSourceRepositoryOriginUrl(originUrl);
-  const shouldRunSourceChecks = isSourcePackage || hasCanonicalSourceOrigin;
+  const shouldRunSourceChecks =
+    isSourcePackage || hasCanonicalSourceOrigin || hasSourceRepositoryMarker;
   if (isSourcePackage && originUrl === null) {
-    sourceOriginNotice =
+    sourceIdentityNotice =
       'repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks';
   } else if (isSourcePackage && !hasCanonicalSourceOrigin) {
-    sourceOriginNotice =
+    sourceIdentityNotice =
       'repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks';
   } else if (hasCanonicalSourceOrigin && !isSourcePackage) {
-    sourceOriginNotice =
+    sourceIdentityNotice =
       'repository-instruction-audit: canonical source origin matched but package identity differs; running source checks';
+  } else if (
+    hasSourceRepositoryMarker &&
+    !isSourcePackage &&
+    !hasCanonicalSourceOrigin
+  ) {
+    sourceIdentityNotice =
+      'repository-instruction-audit: source repository marker docs/token-cost.md is present but package identity and origin do not identify the source repository; running source checks';
   }
-  if (sourceOriginNotice) {
-    notices.push(sourceOriginNotice);
+  if (sourceIdentityNotice) {
+    notices.push(sourceIdentityNotice);
   }
   if (shouldRunSourceChecks) {
     errors.push(
@@ -269,8 +280,8 @@ async function main() {
   checkEnginesRangeMirrors();
   checkBinExecutableMode();
   if (errors.length > 0) {
-    if (sourceOriginNotice !== null) {
-      console.error(`notice: ${sourceOriginNotice}`);
+    if (sourceIdentityNotice !== null) {
+      console.error(`notice: ${sourceIdentityNotice}`);
     }
     console.error('documentation audit failed:');
     for (const error of errors) {
