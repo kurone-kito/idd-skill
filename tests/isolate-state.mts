@@ -3,7 +3,7 @@
  * `node --test --import ./tests/isolate-state.mts tests/*.test.mts`: the
  * runner process does not evaluate the preload; it forwards `--import` to one
  * child process per test file and each child loads it, so every file gets its
- * own throwaway per-user state root.
+ * own throwaway per-user state root and GitHub CLI attempt ledger.
  *
  * Why: this repository's own config enables `githubApi.loadControl` and
  * `githubApi.readCache`, and a helper reads that config through its working
@@ -17,7 +17,7 @@
  * directory and, when the process exits, fails it if anything was written
  * below an `idd-*` entry there.
  *
- * Contract:
+ * State-root contract:
  * - When `IDD_TEST_STATE_ROOT` is unset or empty, create a temporary
  *   directory with `state` and `cache` subdirectories, export the marker, set
  *   `XDG_STATE_HOME` and `LOCALAPPDATA` to `state` and `XDG_CACHE_HOME` to
@@ -40,17 +40,27 @@
  *   to `--import <path>`, so the module appears twice in `execArgv` and is
  *   evaluated once; both forms are rewritten.
  *
- * Known limits: running one file by hand with plain `node --test` bypasses it;
+ * GitHub CLI guard: create a separate per-file ledger and load the ESM
+ * `isolate-gh.mts` guard in this process. Add it with `NODE_OPTIONS --import`
+ * for child CLIs; its Worker wrapper passes a small CommonJS bridge directly
+ * to each Worker, including those with `execArgv: []`, and carries the ledger
+ * into an explicit Worker `env`. The guard checks the ledger before this
+ * module's state-root cleanup runs.
+ *
+ * Known limits: running one file by hand with plain `node --test` bypasses
+ * both guards (preventive; no observed incident yet; the observed probe leak
+ * that motivated the GitHub CLI guard is issue #3755, 2026-10-04);
  * the listener does not run when the process is killed by a signal (the
  * throwaway directory is then left behind) and misses a detached grandchild
  * that writes after the process exits; a `Worker` given its own `env` gets its
- * own throwaway root, and its leak report goes to stderr without changing the
- * main thread's exit code; on macOS the read-cache default under
- * `~/Library/Caches` ignores `XDG_CACHE_HOME`; its behavior on Windows is
- * unverified.
+ * own throwaway state root, and its state leak report goes to stderr without
+ * changing the main thread's exit code, while the GitHub CLI guard carries
+ * its ledger into that Worker; on macOS the read-cache default under
+ * `~/Library/Caches` ignores `XDG_CACHE_HOME`; the state-root behavior on
+ * Windows is unverified.
  *
- * This file imports only `node:` builtins: the `lint` workflow runs the suite
- * with no package install.
+ * This preload and its local GitHub guard modules import only `node:`
+ * builtins: the `lint` workflow runs the suite with no package install.
  */
 import {
   type Dirent,
@@ -130,7 +140,7 @@ function findLeakedFiles(root: string): string[] {
   return found.map((path) => relative(root, path).split(sep).join('/')).sort();
 }
 
-function installStateRoot(): void {
+function installStateRoot(): () => void {
   // `resolve`: a relative TMPDIR would otherwise leave a relative root, and a
   // test that changes its working directory would then hide a leak.
   const root = mkdtempSync(join(resolve(tmpdir()), 'idd-test-state-'));
@@ -145,7 +155,7 @@ function installStateRoot(): void {
   // Every path below comes from the captured `root`, never from the
   // environment at exit time: tests in this repository reassign these
   // variables.
-  process.on('exit', () => {
+  return () => {
     let leaked: string[] = [];
     try {
       leaked = findLeakedFiles(root);
@@ -169,8 +179,32 @@ function installStateRoot(): void {
     } catch {
       // The exit code above already carries the failure.
     }
-  });
+  };
 }
 
 absolutizeRelativeImports(process.execArgv);
-if (!process.env[ROOT_MARKER]) installStateRoot();
+const cleanStateRoot = process.env[ROOT_MARKER] ? null : installStateRoot();
+
+async function installGhGuard(): Promise<void> {
+  let guardRoot = process.env.IDD_TEST_GH_GUARD_ROOT;
+  if (!guardRoot) {
+    guardRoot = mkdtempSync(join(resolve(tmpdir()), 'idd-test-gh-guard-'));
+    process.env.IDD_TEST_GH_GUARD_ROOT = guardRoot;
+    process.env.IDD_TEST_GH_GUARD_LEDGER = join(guardRoot, 'attempts.jsonl');
+    process.env.IDD_TEST_GH_GUARD_OWNER_PID = String(process.pid);
+    process.env.IDD_TEST_GH_GUARD_ROOT_OWNER_PID = String(process.pid);
+  }
+  const guardImport = new URL('./isolate-gh.mts', import.meta.url).href;
+  process.env.IDD_TEST_GH_GUARD_IMPORT = guardImport;
+  const existingNodeOptions = process.env.NODE_OPTIONS ?? '';
+  if (!existingNodeOptions.includes(guardImport)) {
+    const importFlag = `--import=${guardImport}`;
+    process.env.NODE_OPTIONS = existingNodeOptions
+      ? `${existingNodeOptions} ${importFlag}`
+      : importFlag;
+  }
+  await import(guardImport);
+}
+
+await installGhGuard();
+if (cleanStateRoot) process.on('exit', cleanStateRoot);

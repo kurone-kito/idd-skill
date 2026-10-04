@@ -145,6 +145,28 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     throw error;
   }
 
+  const originalAllowedGhStubs = process.env.IDD_TEST_GH_GUARD_ALLOWED_STUBS;
+  if (name.toLowerCase().replace(/\.exe$/u, '') === 'gh') {
+    let allowed: string[] = [];
+    try {
+      const parsed = JSON.parse(originalAllowedGhStubs ?? '[]');
+      if (Array.isArray(parsed)) {
+        allowed = parsed.filter(
+          (entry): entry is string => typeof entry === 'string',
+        );
+      }
+    } catch {
+      // A malformed prior value is replaced by this fixture's exact path.
+    }
+    const fixturePath = join(
+      tempRoot,
+      process.platform === 'win32' ? `${name}.exe` : name,
+    );
+    process.env.IDD_TEST_GH_GUARD_ALLOWED_STUBS = JSON.stringify([
+      ...new Set([...allowed, fixturePath]),
+    ]);
+  }
+
   const originalPath = process.env.PATH;
   process.env.PATH = originalPath
     ? `${tempRoot}${delimiter}${originalPath}`
@@ -168,6 +190,11 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     }
     scrubbedTokens?.();
     redirectedState?.();
+    if (originalAllowedGhStubs === undefined) {
+      delete process.env.IDD_TEST_GH_GUARD_ALLOWED_STUBS;
+    } else {
+      process.env.IDD_TEST_GH_GUARD_ALLOWED_STUBS = originalAllowedGhStubs;
+    }
   };
   if (process.platform !== 'win32') {
     return () => {
