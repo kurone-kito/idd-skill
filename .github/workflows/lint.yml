@@ -8,7 +8,7 @@ name: Linting workflow
 #
 # This workflow dogfoods the toolless bare-node adopter path: it runs
 # with NO package-manager install, so every script and test it executes
-# must import only `node:` builtins. The same three commands also run
+# must import only `node:` builtins. The same four commands also run
 # via `pnpm run lint:minimum` in pnpm-boundary.yml — that overlap is
 # intentional redundancy proving both the installed and the bare-node
 # runtimes. The formatting and spelling tools (dprint, cspell,
@@ -42,6 +42,8 @@ jobs:
           persist-credentials: false
       - name: Run documentation audit
         run: node scripts/audit-docs.mjs --check
+      - name: Run bare-Node source contract audit
+        run: node scripts/lint-source-contracts.mjs
       # The test suite is typed `.mts` executed via Node's native type
       # stripping (unflagged since 22.18), and this lane also invokes
       # migrated helper CLIs directly (e.g. verify-workshop-integrity.mjs
