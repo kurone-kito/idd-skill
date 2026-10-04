@@ -724,7 +724,10 @@ const MERGED_IDD_PRS = [
 ];
 
 /** Rules serving the merged-PR list and each IDD PR's cleanup-evidence rows. */
-function backlogRules(evidenceRow: string): FixtureGhRule[] {
+function backlogRules(
+  evidenceRow: string,
+  evidenceAnswer: Partial<FixtureGhRule> = {},
+): FixtureGhRule[] {
   return [
     {
       args: [
@@ -749,6 +752,7 @@ function backlogRules(evidenceRow: string): FixtureGhRule[] {
         ],
         match: 'prefix',
         stdout: evidenceRow,
+        ...evidenceAnswer,
       }),
     ),
   ];
@@ -796,8 +800,10 @@ test('idd-doctor reports no cleanup backlog when a trusted applied evidence row 
       runDoctor({ root, requireGithub: false, cleanupBacklogWarnThreshold: 0 }),
   );
   assert.ok(
-    !report.warnings.some((warning) =>
-      warning.startsWith('post-merge cleanup backlog:'),
+    !report.warnings.some(
+      (warning) =>
+        warning.startsWith('post-merge cleanup backlog:') ||
+        warning.startsWith('post-merge cleanup evidence query failed'),
     ),
     report.warnings.join('\n'),
   );
@@ -812,4 +818,26 @@ test('idd-doctor reports no cleanup backlog when a trusted applied evidence row 
       warning.startsWith('post-merge cleanup backlog:'),
     ),
   );
+});
+
+test('idd-doctor reports a failed cleanup-evidence read as a warning without requireGithub and an error with it', (t) => {
+  const root = createDoctorFixtureRepo('absent.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const failingEvidence = backlogRules('', {
+    status: 1,
+    stderr: 'HTTP 502: Bad Gateway\n',
+  });
+  const message =
+    'post-merge cleanup evidence query failed for 2 merged PR(s) (examples: #901, #902). Backlog count below may be undercounted.';
+
+  const lenient = withDoctorRules(failingEvidence, () =>
+    runDoctor({ root, requireGithub: false, cleanupBacklogWarnThreshold: 0 }),
+  );
+  assert.ok(lenient.warnings.includes(message), lenient.warnings.join('\n'));
+  assert.ok(!lenient.errors.includes(message));
+
+  const strict = withDoctorRules(failingEvidence, () =>
+    runDoctor({ root, requireGithub: true, cleanupBacklogWarnThreshold: 0 }),
+  );
+  assert.ok(strict.errors.includes(message), strict.errors.join('\n'));
 });

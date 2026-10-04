@@ -748,6 +748,12 @@ test('fixture gh serves canned rules by exact argv, prefix and fragment, in orde
       () => gh('api', 'user', '--jq', '.login', '--paginate'),
       /unexpected invocation/,
     );
+    // `respond` appends, so an earlier rule still wins over a later one.
+    fixture.respond({
+      args: ['api', 'user', '--jq', '.login'],
+      stdout: 'late\n',
+    });
+    assert.equal(gh('api', 'user', '--jq', '.login'), 'from-rule\n');
     fixture.setResponses([]);
     assert.equal(gh('api', 'user', '--jq', '.login'), 'kurone-kito\n');
     fixture.respond({ args: ['issue', 'list'], match: 'prefix', stdout: '[]' });

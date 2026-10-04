@@ -147,8 +147,8 @@ after(() => {
 // This source repository's own config enables load control (#3702). The
 // hearing tests gather `gh` evidence, which would write host-local load-control
 // state; run them with it off. Load control has its own tests in
-// gh-exec-load-control.test.mts. Pinning it off is not network isolation: the
-// fixture `gh` installed below is (#3745).
+// gh-exec-load-control.test.mts. Pinning it off is not network isolation; the
+// fixture `gh` installed below provides that (#3745).
 let restoreLoadControl: (() => void) | undefined;
 before(() => {
   restoreLoadControl = pinLoadControlOff();
@@ -8105,6 +8105,7 @@ test('bin/idd-onboard.mjs --hear --propose lists every catalog item id, derives 
   // `--propose` gathers evidence through `gh` (the fixture `gh` here); run from
   // the fixture so it does not read this repository's own load-control config
   // (#3702).
+  const callsBefore = fixtureGh.calls().length;
   const { status, verdict } = runCliBin(
     ['--hear', '--propose', '--target', root],
     { cwd: root },
@@ -8128,6 +8129,14 @@ test('bin/idd-onboard.mjs --hear --propose lists every catalog item id, derives 
   assert.equal(stepZero.gitRemoteHost, 'github.com');
   assert.equal(stepZero.ghCli.available, true);
   assert.equal(stepZero.ghCli.hostAuthenticated, true);
+  // The fixture ignores `--hostname` when matching, so pin the raw argv: the
+  // login-state read must target the remote's host.
+  assert.ok(
+    fixtureGh
+      .calls()
+      .slice(callsBefore)
+      .some((call) => call.join(' ') === 'auth status --hostname github.com'),
+  );
   if (process.platform !== 'win32') {
     // A flag-shaped first argument never reaches the Windows preload (Node
     // handles `--version` itself), so only the POSIX stub serves this line.
