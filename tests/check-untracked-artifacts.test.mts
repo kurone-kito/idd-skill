@@ -15,6 +15,11 @@ const ENTRY = fileURLToPath(
   new URL('../src/scripts/check-untracked-artifacts.mts', import.meta.url),
 );
 
+// `node:os`'s `devNull` is `\\.\nul` on win32, which Git for Windows rejects as
+// a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value; the bare `NUL` is what it
+// accepts (same constant as tests/test-utils.mts, kurone-kito/idd-skill#2570).
+const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+
 // Fixture git processes must never read the developer's config or an ambient
 // GIT_DIR from a hook. The helper under test spawns `git` with this
 // process's env, so scrub it here; each test file runs in its own process.
@@ -32,8 +37,8 @@ for (const key of [
 ]) {
   delete process.env[key];
 }
-process.env.GIT_CONFIG_GLOBAL = devNull;
-process.env.GIT_CONFIG_SYSTEM = devNull;
+process.env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
+process.env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
 
 const SCRATCH = mkdtempSync(join(tmpdir(), 'idd untracked artifacts '));
 // The "not a repository" fixture must stay one even when the temp directory

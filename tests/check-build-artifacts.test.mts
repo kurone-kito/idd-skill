@@ -38,6 +38,7 @@ import {
   parseCatFileBatch,
   readHeadSnapshot,
   removeTempDir,
+  TEMP_REMOVE_OPTIONS,
   verifyBuildArtifacts,
 } from '../src/scripts/check-build-artifacts.mts';
 
@@ -135,6 +136,20 @@ test('compareArtifacts: a new source with no committed output, a missing output 
   ]);
 });
 
+test('compareArtifacts: an artifact only in the working tree (untracked or staged) with no source is flagged', () => {
+  const findings = compareArtifacts({
+    ...CLEAN,
+    working: map({
+      '.gitattributes': 'a\n',
+      'bin/b.mjs': 'b\n',
+      'scripts/a.mjs': 'a\n',
+      'scripts/orphan.mjs': 'x\n',
+    }),
+  });
+  assert.deepEqual(kindsByPath(findings), ['scripts/orphan.mjs=not-emitted']);
+  assert.match(findings[0]?.detail ?? '', /untracked or only staged/);
+});
+
 test('compareArtifacts: a stale .gitattributes block lists the missing and unexpected lines', () => {
   const findings = compareArtifacts({
     ...CLEAN,
@@ -175,6 +190,61 @@ test('compareArtifacts: local dirt is a finding even when the fresh emit matches
   });
   assert.deepEqual(kindsByPath(deleted), ['scripts/a.mjs=local-edit']);
   assert.match(deleted[0]?.detail ?? '', /nothing was restored/);
+});
+
+test('compareArtifacts: dirt in bin/ and in .gitattributes is local-edit too, edited or missing', () => {
+  const withWorking = (entries: Record<string, string>): ArtifactSnapshot => ({
+    ...CLEAN,
+    working: map(entries),
+  });
+  assert.deepEqual(
+    kindsByPath(
+      compareArtifacts(
+        withWorking({
+          '.gitattributes': 'a\n',
+          'bin/b.mjs': 'edited\n',
+          'scripts/a.mjs': 'a\n',
+        }),
+      ),
+    ),
+    ['bin/b.mjs=local-edit'],
+  );
+  assert.deepEqual(
+    kindsByPath(
+      compareArtifacts(
+        withWorking({
+          '.gitattributes': 'edited\n',
+          'bin/b.mjs': 'b\n',
+          'scripts/a.mjs': 'a\n',
+        }),
+      ),
+    ),
+    ['.gitattributes=local-edit'],
+  );
+  assert.deepEqual(
+    kindsByPath(
+      compareArtifacts(
+        withWorking({ 'bin/b.mjs': 'b\n', 'scripts/a.mjs': 'a\n' }),
+      ),
+    ),
+    ['.gitattributes=local-edit'],
+  );
+});
+
+test('compareArtifacts: the comparison is byte for byte (line endings and trailing spaces count)', () => {
+  const differing = (fresh: string): Finding[] =>
+    compareArtifacts({
+      ...CLEAN,
+      emitted: map({
+        '.gitattributes': 'a\n',
+        'bin/b.mjs': 'b\n',
+        'scripts/a.mjs': fresh,
+      }),
+      working: CLEAN.working,
+    });
+  assert.deepEqual(kindsByPath(differing('a\r\n')), ['scripts/a.mjs=drift']);
+  assert.deepEqual(kindsByPath(differing('a \n')), ['scripts/a.mjs=drift']);
+  assert.deepEqual(kindsByPath(differing('a')), ['scripts/a.mjs=drift']);
 });
 
 test('compareArtifacts: an output outside scripts/ and bin/ is flagged, not silently skipped', () => {
@@ -322,6 +392,20 @@ test('readHeadSnapshot surfaces an unborn HEAD as a git stage error', () => {
   );
 });
 
+test('readHeadSnapshot fails loudly when git cat-file fails', () => {
+  const run: ProcessRunner = (_command, args) =>
+    args[0] === 'ls-tree'
+      ? ok('100644 blob a1\tscripts/a.mjs\0')
+      : { ...ok(), status: 1, stderr: bytes('fatal: bad object\n') };
+  assert.throws(
+    () => readHeadSnapshot('/repo', run),
+    (error: unknown) =>
+      error instanceof StageError &&
+      error.stage === 'git' &&
+      /bad object/.test(error.output),
+  );
+});
+
 test('expectedArtifactPaths maps every src/**/*.mts to its generated .mjs', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd expected paths '));
   try {
@@ -353,7 +437,12 @@ test('expectedArtifactPaths maps every src/**/*.mts to its generated .mjs', () =
 const BANNER = '// idd-generated-from: src/scripts/a.mts\n';
 const FAKE_BIN = (name: string): string => `/fake/${name}.js`;
 
-function fakeToolchain(options: { committed: string; emitted: string }): {
+function fakeToolchain(options: {
+  /** The HEAD `.gitattributes`; `null` leaves it out of HEAD entirely. */
+  attributes?: string | null;
+  committed: string;
+  emitted: string;
+}): {
   calls: Call[];
   run: ProcessRunner;
 } {
@@ -369,24 +458,31 @@ function fakeToolchain(options: { committed: string; emitted: string }): {
     if (command === process.execPath) {
       return ok('Checked 1 file\n');
     }
+    const attributes =
+      options.attributes === undefined
+        ? 'scripts/a.mjs linguist-generated=true\n'
+        : options.attributes;
     if (args[0] === 'ls-tree') {
       return ok(
         [
           '100644 blob h1\tscripts/a.mjs',
-          '100644 blob h2\t.gitattributes',
+          ...(attributes === null ? [] : ['100644 blob h2\t.gitattributes']),
           '',
         ].join('\0'),
       );
     }
-    const attributes = 'scripts/a.mjs linguist-generated=true\n';
     return ok(
       Buffer.concat([
         blobHeader('h1', Buffer.byteLength(options.committed)),
         bytes(options.committed),
         bytes('\n'),
-        blobHeader('h2', Buffer.byteLength(attributes)),
-        bytes(attributes),
-        bytes('\n'),
+        ...(attributes === null
+          ? []
+          : [
+              blobHeader('h2', Buffer.byteLength(attributes)),
+              bytes(attributes),
+              bytes('\n'),
+            ]),
       ]),
     );
   };
@@ -477,6 +573,42 @@ test('verifyBuildArtifacts reports drift and local dirt without touching the che
   }, 'hand edit\n');
 });
 
+test('a HEAD without .gitattributes, or without the generated block, is a finding, not a pass', () => {
+  const text = `${BANNER}export {};\n`;
+  withFakeRoot((root, tmpRoot) => {
+    const { run } = fakeToolchain({
+      attributes: null,
+      committed: text,
+      emitted: text,
+    });
+    const { findings } = verifyBuildArtifacts({
+      resolveBin: FAKE_BIN,
+      root,
+      run,
+      tmpRoot,
+    });
+    assert.deepEqual(kindsByPath(findings), ['.gitattributes=not-committed']);
+  }, text);
+  withFakeRoot((root, tmpRoot) => {
+    const { run } = fakeToolchain({
+      attributes: '* text=auto eol=lf\n',
+      committed: text,
+      emitted: text,
+    });
+    const { findings } = verifyBuildArtifacts({
+      resolveBin: FAKE_BIN,
+      root,
+      run,
+      tmpRoot,
+    });
+    assert.deepEqual(kindsByPath(findings), ['.gitattributes=drift']);
+    assert.match(
+      findings[0]?.detail ?? '',
+      /no scripts\/\*\.mjs linguist-generated block/,
+    );
+  }, text);
+});
+
 test('a tool failure stops the verifier with a stage error and still removes the temp dir', () => {
   withFakeRoot((root, tmpRoot) => {
     const run: ProcessRunner = () => ({
@@ -521,6 +653,13 @@ test('removeTempDir is a bounded best effort: a failure is a warning, never a th
   }, `${BANNER}export {};\n`);
 });
 
+test('the default temp removal retries a bounded number of times', () => {
+  assert.ok(TEMP_REMOVE_OPTIONS.recursive && TEMP_REMOVE_OPTIONS.force);
+  assert.ok(TEMP_REMOVE_OPTIONS.maxRetries >= 1);
+  assert.ok(TEMP_REMOVE_OPTIONS.maxRetries <= 10);
+  assert.ok(TEMP_REMOVE_OPTIONS.retryDelay <= 1000);
+});
+
 test('build:check runs both checks from their .mts sources and never builds', () => {
   const { scripts } = JSON.parse(
     readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'),
@@ -555,6 +694,11 @@ const SKIP = toolsInstalled()
   ? false
   : 'typescript and @biomejs/biome are not installed (bare-node lane)';
 
+// `node:os`'s `devNull` is `\\.\nul` on win32, which Git for Windows rejects as
+// a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value; the bare `NUL` is what it
+// accepts (same constant as tests/test-utils.mts, kurone-kito/idd-skill#2570).
+const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+
 // Fixture git processes must never read the developer's config or an ambient
 // GIT_DIR from a hook. The verifier spawns `git` with this process's env, so
 // scrub it here; each test file runs in its own process.
@@ -572,8 +716,8 @@ for (const key of [
 ]) {
   delete process.env[key];
 }
-process.env.GIT_CONFIG_GLOBAL = devNull;
-process.env.GIT_CONFIG_SYSTEM = devNull;
+process.env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
+process.env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
 
 function git(root: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -618,10 +762,12 @@ const STANDALONE_TSCONFIG = JSON.stringify({
   },
   include: ['src/**/*.mts'],
 });
+// `maxSize` is raised because big.mjs below is deliberately over Biome's 1 MiB
+// default, above which it skips a file instead of normalizing it.
 // No `extends`, no `vcs`: the repository's own config would drag in the npm
 // package and its ignore-file handling, which a throwaway repo lacks.
 const STANDALONE_BIOME = JSON.stringify({
-  files: { includes: ['**'] },
+  files: { includes: ['**'], maxSize: 4 * 1024 * 1024 },
   formatter: { indentStyle: 'space', indentWidth: 2 },
   javascript: { formatter: { quoteStyle: 'single' } },
 });
@@ -644,10 +790,12 @@ function templateRoot(): string {
       '* text=auto eol=lf\n# Generated.\nscripts/placeholder.mjs linguist-generated=true\n',
     'biome.json': STANDALONE_BIOME,
     'src/bin/beta.mts': `${banner('bin/beta')}import { alpha } from '../scripts/alpha.mts';\nexport const beta: number = alpha + 1;\n`,
+    // The double-quoted literal is rewritten to single quotes by Biome, so a
+    // verifier that skipped normalization would see drift on this file.
+    'src/scripts/alpha.mts': `${banner('scripts/alpha')}export const alpha: number = 1;\nexport const quoted: string = "double";\n`,
+    'src/scripts/bannerless.mts': 'export const bannerless: number = 3;\n',
     // Bigger than spawnSync's 1 MiB default maxBuffer, so a runner without an
     // explicit ceiling would fail here but not on small fixtures.
-    'src/scripts/alpha.mts': `${banner('scripts/alpha')}export const alpha: number = 1;\n`,
-    'src/scripts/bannerless.mts': 'export const bannerless: number = 3;\n',
     'src/scripts/big.mts': `${banner('scripts/big')}// ${'x'.repeat(1_200_000)}\nexport const big: number = 2;\n`,
     'src/scripts/check-build-artifacts.mts': `${banner('scripts/check-build-artifacts')}export const verifier: number = 4;\n`,
     'tsconfig.build.json': readFileSync(
@@ -735,6 +883,13 @@ test('real tools: a clean fixture passes, leaves the checkout and index untouche
   assert.ok(existsSync(join(fx.root, 'scripts', 'big.mjs')));
   assert.ok(
     readFileSync(join(fx.root, 'scripts', 'big.mjs')).length > 1024 * 1024,
+  );
+  // Biome rewrote tsc's double-quoted literal, so the clean verdict below also
+  // proves the verifier normalizes its temporary emit the same way.
+  assert.ok(
+    readFileSync(join(fx.root, 'scripts', 'alpha.mjs'), 'utf8').includes(
+      "'double'",
+    ),
   );
   touchTracked(fx.root);
   const before = checkoutState(fx.root);
@@ -864,6 +1019,53 @@ test('real tools: local generated-file dirt is reported and left exactly as it w
   assert.equal(readFileSync(target, 'utf8'), 'export const hand = 1;\n');
 });
 
+test('real tools: dirt in bin/ and .gitattributes is reported, staged or not, and left as it was', {
+  skip: SKIP,
+}, () => {
+  const fx = fixture();
+  const beta = join(fx.root, 'bin', 'beta.mjs');
+  const attributes = join(fx.root, '.gitattributes');
+  writeFileSync(beta, 'export const hand = 1;\n');
+  writeFileSync(attributes, `${readFileSync(attributes, 'utf8')}# local\n`);
+  const unstaged = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  }).findings;
+  assert.deepEqual(kindsByPath(unstaged), [
+    '.gitattributes=local-edit',
+    'bin/beta.mjs=local-edit',
+  ]);
+  git(fx.root, 'add', '-A');
+  assert.deepEqual(
+    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    unstaged,
+  );
+  assert.equal(readFileSync(beta, 'utf8'), 'export const hand = 1;\n');
+});
+
+test('real tools: a source the build emits nothing for is reported as no-output', {
+  skip: SKIP,
+}, () => {
+  const fx = fixture();
+  writeFileSync(
+    join(fx.root, 'src', 'scripts', 'gamma.mts'),
+    `${banner('scripts/gamma')}export const gamma: number = 5;\n`,
+  );
+  const buildConfig = join(fx.root, 'tsconfig.build.json');
+  const text = readFileSync(buildConfig, 'utf8');
+  assert.ok(text.includes('"node_modules"'));
+  writeFileSync(
+    buildConfig,
+    text.replace('"node_modules"', '"src/scripts/gamma.mts", "node_modules"'),
+  );
+  commitAll(fx.root, 'a source the build config excludes');
+  const { findings } = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  });
+  assert.deepEqual(kindsByPath(findings), ['scripts/gamma.mjs=no-output']);
+});
+
 test('real tools: staging the regenerated files does not change the HEAD-relative verdict', {
   skip: SKIP,
 }, () => {
@@ -889,6 +1091,24 @@ test('real tools: staging the regenerated files does not change the HEAD-relativ
     verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
     unstaged,
   );
+});
+
+test('real tools: an artifact with no source gives the same verdict untracked and staged', {
+  skip: SKIP,
+}, () => {
+  const fx = fixture();
+  writeFileSync(join(fx.root, 'scripts', 'orphan.mjs'), 'export {};\n');
+  const untracked = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  }).findings;
+  assert.deepEqual(kindsByPath(untracked), ['scripts/orphan.mjs=not-emitted']);
+  git(fx.root, 'add', '-A');
+  const staged = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  }).findings;
+  assert.deepEqual(staged, untracked);
 });
 
 test('real tools: a TypeScript error is a tsc stage error and leaves the checkout untouched', {
@@ -933,7 +1153,7 @@ test('real tools: a gitignored temp dir inside the checkout still verifies under
   writeFileSync(
     join(fx.root, 'biome.json'),
     JSON.stringify({
-      files: { includes: ['**'] },
+      files: { includes: ['**'], maxSize: 4 * 1024 * 1024 },
       formatter: { indentStyle: 'space', indentWidth: 2 },
       javascript: { formatter: { quoteStyle: 'single' } },
       vcs: { clientKind: 'git', enabled: true, useIgnoreFile: true },
@@ -948,6 +1168,31 @@ test('real tools: a gitignored temp dir inside the checkout still verifies under
   });
   assert.deepEqual(findings, []);
   assert.deepEqual(readdirSync(insideTmp), []);
+});
+
+test('real tools: the CLI exits 1 with the tsc diagnostics on a TypeScript error', {
+  skip: SKIP,
+}, () => {
+  const fx = fixture();
+  writeFileSync(
+    join(fx.root, 'src', 'scripts', 'alpha.mts'),
+    `${banner('scripts/alpha')}export const alpha: number = 'not a number';\n`,
+  );
+  const env = {
+    ...process.env,
+    TEMP: fx.tmpRoot,
+    TMP: fx.tmpRoot,
+    TMPDIR: fx.tmpRoot,
+  };
+  const result = spawnSync(process.execPath, [ENTRY], {
+    cwd: fx.root,
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /build:check: tsc emit: exited/);
+  assert.match(result.stderr, /TS2322/);
+  assert.deepEqual(readdirSync(fx.tmpRoot), []);
 });
 
 test('real tools: the CLI exits 0 when clean and 1 on a corrupted committed verifier, which it never runs', {
