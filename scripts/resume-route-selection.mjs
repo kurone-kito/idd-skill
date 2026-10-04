@@ -663,7 +663,7 @@ function startsMarkdownBlock(line, paragraphOpen = false) {
     (listItem !== null &&
       (!paragraphOpen || isInterruptingListMarker(listItem.marker))) ||
     startsMarkdownLeafBlock(content, paragraphOpen) ||
-    isIndentedCodeBlock(line)
+    (!paragraphOpen && isIndentedCodeBlock(line))
   );
 }
 function startsMarkdownLeafBlock(content, paragraphOpen = false) {

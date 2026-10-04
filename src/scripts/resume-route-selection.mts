@@ -805,7 +805,7 @@ function startsMarkdownBlock(line: string, paragraphOpen = false): boolean {
     (listItem !== null &&
       (!paragraphOpen || isInterruptingListMarker(listItem.marker))) ||
     startsMarkdownLeafBlock(content, paragraphOpen) ||
-    isIndentedCodeBlock(line)
+    (!paragraphOpen && isIndentedCodeBlock(line))
   );
 }
 

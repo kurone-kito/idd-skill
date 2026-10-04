@@ -883,6 +883,36 @@ test('collector does not let an indented code block open a blockquote continuati
   assert.equal(input.prNumber, 3150);
 });
 
+test('collector keeps lazy continuation lines inside quoted list items', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: '> - example\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector keeps indented lazy continuation inside a quoted paragraph', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: '> quoted paragraph\n    continuation\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
 test('collector treats mixed tab and space indentation as indented code', () => {
   for (const codeLine of ['\t  > quoted code', '    \t> quoted code']) {
     const input = collectResumePrInput([
