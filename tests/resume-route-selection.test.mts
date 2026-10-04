@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
@@ -438,12 +439,27 @@ test('collector does not combine a malformed close with a later negated close', 
   assert.equal(input.prNumber, null);
 });
 
-test('collector recognizes the target later in a closing-keyword reference list', () => {
+test('collector requires a closing keyword before each target reference', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'unrelated PR',
+      body: 'Closes #9000, #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector recognizes repeated closing keywords for multiple targets', () => {
   const input = collectResumePrInput([
     {
       number: 3150,
       title: 'implementation PR',
-      body: 'Closes #9000, #3145',
+      body: 'Closes #9000, closes #3145',
       url: 'https://example.test/pr/3150',
     },
   ]);
@@ -528,6 +544,95 @@ test('collector ignores lazy continuation lines inside a blockquote but scans af
   assert.equal(input.prAmbiguous, false);
   assert.equal(input.prCount, 0);
   assert.equal(input.prNumber, null);
+});
+
+test('collector keeps non-one ordered markers inside lazy blockquote paragraphs', () => {
+  for (const body of [
+    '> Quoted prose\n10. Closes #3145',
+    '> Quoted prose\n10. not a list\nCloses #3145',
+  ]) {
+    const input = collectResumePrInput([
+      {
+        number: 3150,
+        title: 'quoted example PR',
+        body,
+        url: 'https://example.test/pr/3150',
+      },
+    ]);
+
+    assert.equal(input.prAmbiguous, false);
+    assert.equal(input.prCount, 0);
+    assert.equal(input.prNumber, null);
+  }
+});
+
+test('collector still resumes after an interrupting one ordered marker', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '> Quoted prose\n1. Real list item\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector handles large indented code samples without matching their text', () => {
+  const indentedCode = Array.from(
+    { length: 8_000 },
+    (_, index) => `    > sample line ${index}`,
+  ).join('\n');
+  const startedAt = performance.now();
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: `${indentedCode}\n\nCloses #9000`,
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+  assert.ok(
+    elapsedMs < 2_000,
+    `large indented sample took ${elapsedMs.toFixed(1)} ms (limit 2000 ms)`,
+  );
+});
+
+test('collector avoids rescanning long nested ordered lists without quotes', () => {
+  const nestedList = [
+    '- outer item',
+    '  - inner item',
+    ...Array.from(
+      { length: 8_000 },
+      (_, index) => `    ${index + 10}. nested item ${index}`,
+    ),
+  ].join('\n');
+  const startedAt = performance.now();
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: `${nestedList}\n\nCloses #9000`,
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+  assert.ok(
+    elapsedMs < 2_000,
+    `long nested list took ${elapsedMs.toFixed(1)} ms (limit 2000 ms)`,
+  );
 });
 
 test('collector resumes scanning after a blockquote paragraph is interrupted', () => {

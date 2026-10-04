@@ -24,10 +24,12 @@ import {
 } from './helper-cli-runner.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import {
+  indentationColumns,
+  isInterruptingListMarker,
   maskMarkdownForScan,
+  parseListItemMatch,
   stripEnclosingListContentIndent,
 } from './markdown-code.mts';
-import { escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
 import {
@@ -619,9 +621,8 @@ function findIssueRelatedOpenPrs({
     const bodyWithoutBlockQuotes = stripBlockQuotesAndLazyContinuations(
       pr.body,
     );
-    const currentRepoRef = `${escapeRegex(repository.owner)}/${escapeRegex(repository.name)}`;
     const d35ClosingKeyword = new RegExp(
-      `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+(?:(?:#\\d+|[\\w.-]+/[\\w.-]+#\\d+)(?:\\s*,\\s*(?:and\\s*)?|\\s+and\\s+))*?(?:#${targetIssueNumber}|${currentRepoRef}#${targetIssueNumber})\\b`,
+      `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+(?:#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
       'gi',
     );
     const maskedBody = maskMarkdownForScan(bodyWithoutBlockQuotes);
@@ -637,6 +638,7 @@ function findIssueRelatedOpenPrs({
 
 function stripBlockQuotesAndLazyContinuations(body: string): string {
   let quotedParagraphOpen = false;
+  const listIndentFastPath = { skipDeeplyIndentedProbe: false };
   const normalizedBody = body.replace(/\r\n/gu, '\n');
   let lineStart = 0;
   return normalizedBody
@@ -653,6 +655,7 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
         line,
         normalizedBody,
         currentLineStart,
+        listIndentFastPath,
       );
       if (quotedContent !== null) {
         quotedParagraphOpen = startsBlockQuoteParagraph(quotedContent);
@@ -673,11 +676,37 @@ function stripBlockQuoteAndListPrefixes(
   line: string,
   body?: string,
   lineStart?: number,
+  listIndentFastPath?: { skipDeeplyIndentedProbe: boolean },
 ): string | null {
+  // Most lines, including ordinary indented code, cannot become a
+  // blockquote or nested list after list-content indentation is removed.
+  // Avoid the helper's backward scan for those lines; doing it once per
+  // line made large PR bodies quadratic (issue #3763).
+  const mayContainBlockQuote = mayContainBlockQuoteAfterListMarkers(line);
+  const leadingIndent = line.match(/^[ \t]*/u)?.[0] ?? '';
+  const isDeeplyIndented = indentationColumns(leadingIndent) >= 4;
+  if (!isDeeplyIndented && line.trim() !== '' && listIndentFastPath) {
+    listIndentFastPath.skipDeeplyIndentedProbe = false;
+  }
+  const shouldProbeEnclosingList =
+    mayContainBlockQuote &&
+    !(isDeeplyIndented && listIndentFastPath?.skipDeeplyIndentedProbe);
   const listContent =
-    body === undefined || lineStart === undefined
+    body === undefined || lineStart === undefined || !shouldProbeEnclosingList
       ? null
       : stripEnclosingListContentIndent(body, lineStart);
+  if (
+    shouldProbeEnclosingList &&
+    listContent === null &&
+    isDeeplyIndented &&
+    listIndentFastPath
+  ) {
+    // An unindented list/block boundary clears this negative cache above.
+    // Until then, further deeply indented lines cannot acquire a new list
+    // container, so marker-shaped indented code needs only one backward
+    // probe rather than one scan per line (issue #3763).
+    listIndentFastPath.skipDeeplyIndentedProbe = true;
+  }
   const candidate = listContent ?? line;
   if (/^(?: {4,}|\t)\S/u.test(candidate)) {
     return null;
@@ -705,6 +734,25 @@ function stripBlockQuoteAndListPrefixes(
   return foundBlockQuote ? remaining : null;
 }
 
+function mayContainBlockQuoteAfterListMarkers(line: string): boolean {
+  let candidate = line.trimStart();
+  while (candidate) {
+    if (candidate.startsWith('>')) {
+      return true;
+    }
+    const listItem = parseListItemMatch(candidate);
+    if (listItem === null) {
+      return false;
+    }
+    candidate = listItem.content;
+    const taskCheckbox = candidate.match(/^\[[ xX]\][ \t]+/u);
+    if (taskCheckbox) {
+      candidate = candidate.slice(taskCheckbox[0].length);
+    }
+  }
+  return false;
+}
+
 function startsBlockQuoteParagraph(content: string): boolean {
   const nestedContent = stripBlockQuoteAndListPrefixes(content) ?? content;
   if (!nestedContent.trim()) {
@@ -715,9 +763,10 @@ function startsBlockQuoteParagraph(content: string): boolean {
 
 function startsMarkdownBlock(line: string): boolean {
   const content = line.trimStart();
+  const listItem = parseListItemMatch(content);
   return (
     content.startsWith('>') ||
-    /^(?:[-+*]|\d{1,9}[.)])[ \t]+/u.test(content) ||
+    (listItem !== null && isInterruptingListMarker(listItem.marker)) ||
     startsMarkdownLeafBlock(content) ||
     /^ {4,}\S/u.test(line)
   );
