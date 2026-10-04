@@ -423,6 +423,22 @@ test('an inherited git location variable cannot redirect the NUL scan to another
   assert.equal(status, 0, stderr);
 });
 
+test('an inherited git configuration override cannot make the NUL scan fail', () => {
+  const root = buildFixture();
+  const env = fixtureEnv();
+  // A config count with no matching key makes every git command abort.
+  env.GIT_CONFIG_COUNT = '1';
+  delete env.GIT_CONFIG_KEY_0;
+  delete env.GIT_CONFIG_VALUE_0;
+  const broken = spawnSync('git', ['-C', root, 'ls-files'], {
+    env,
+    encoding: 'utf8',
+  });
+  assert.notEqual(broken.status, 0, 'the override should break plain git');
+  const { status, stderr } = runCli(['--root', root], { env });
+  assert.equal(status, 0, stderr);
+});
+
 test('violations of several rules are reported in rule then path order, and counted', () => {
   const root = buildFixture((files) => {
     files.set(

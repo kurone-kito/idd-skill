@@ -477,18 +477,32 @@ export function checkProviderPortMigrated(root) {
   return { ruleId: PROVIDER_PORT_MIGRATED, inspected, violations };
 }
 /**
- * The child environment for `git ls-files`: the repository-location
- * variables a caller inside a git hook may have exported are removed, or
- * they would point the command at the host repository instead of `root`.
+ * The child environment for `git ls-files`: every inherited override that
+ * can redirect the command away from `root` or change how it reads the
+ * repository is removed -- the repository-location variables, the object and
+ * ref redirections, and the whole `GIT_CONFIG*` family -- so a hook,
+ * wrapper or parent process cannot make the NUL rule inspect another
+ * repository (the same set `idd-onboard.mts` removes for its own reads).
  */
 function gitEnvironment() {
   const env = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith('GIT_CONFIG')) {
+      delete env[name];
+    }
+  }
   for (const name of [
     'GIT_DIR',
     'GIT_INDEX_FILE',
     'GIT_WORK_TREE',
     'GIT_COMMON_DIR',
     'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_CEILING_DIRECTORIES',
+    'GIT_NAMESPACE',
+    'GIT_QUARANTINE_PATH',
+    'GIT_REPLACE_REF_BASE',
+    'GIT_NO_REPLACE_OBJECTS',
   ]) {
     delete env[name];
   }
