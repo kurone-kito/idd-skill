@@ -8,8 +8,8 @@
 # build:check, typecheck, and idd-doctor on top of this hook's checks at
 # push time (post-fix-validate adds the same cspell, mirror-drift,
 # code-span-wrap, and typecheck checks, but not build:check or
-# idd-doctor). build:check's `git diff` deadlocked here against the
-# in-progress commit's index.lock (see #1007).
+# idd-doctor). build:check stays out of this hook: its former `git diff`
+# deadlocked here against the in-progress commit's index.lock (see #1007).
 #
 # The IDD worktree guard runs first so a primary-worktree `issue/*` or
 # `roadmap-audit/*` commit fails fast before lint (see #3207).

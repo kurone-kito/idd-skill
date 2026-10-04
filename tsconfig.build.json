@@ -8,7 +8,8 @@
   //
   // `pnpm run build` runs this and then normalizes the emitted files with
   // Biome so the committed artifacts stay style-stable; `pnpm run
-  // build:check` additionally fails when the working tree drifts.
+  // build:check` runs the same emit into a temporary `--outDir` and fails
+  // when it differs from the files committed at HEAD, without writing.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,

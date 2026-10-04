@@ -101,11 +101,11 @@ process dying while the child command it spawned kept running).
 
 ## Build and verification
 
-| Command                | Purpose                                                                                                                                                                                                          |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                                                                                                                                                 |
-| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                                                                                                                                                    |
-| `pnpm run build:check` | `pnpm run build && git diff HEAD --exit-code -- scripts bin .gitattributes && node scripts/check-untracked-artifacts.mjs` — builds, then fails when the committed tree drifts or gains an untracked emitted file |
+| Command                | Purpose                                                                                                                                                                                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                                                                                                                                                                                                       |
+| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                                                                                                                                                                                                          |
+| `pnpm run build:check` | `node src/scripts/check-build-artifacts.mts && node src/scripts/check-untracked-artifacts.mts` — emits into a temporary directory and compares it with the generated files committed at HEAD, then fails on an untracked emitted file; the checkout is never rewritten |
 
 `tsconfig.build.json` sets `noEmitOnError: true`, so a `.mts` source with a
 type error emits nothing at all instead of letting tsc overwrite tracked
@@ -114,16 +114,35 @@ dies (`pnpm run build`'s Biome pass and `.gitattributes` sync never run
 after that throw) — a failed build stays side-effect-free on the tracked
 tree (observed 2026-07-31, #1707).
 
-`build:check` runs entirely through `node:child_process` rather than a
-shell pipeline, and its untracked-artifact check uses the `git ls-files
---others` plumbing command rather than `git status`: both choices avoid
-failure modes review found on #1707 — a shell-composed
-`test`/`$()` check is POSIX-only and breaks under npm/pnpm's default
-`cmd.exe` shell on Windows (including callers of the reusable
-pnpm-boundary workflow on a `windows-*` runner), and `git status
---porcelain` without an explicit `--untracked-files` override silently
-respects a local or CI `status.showUntrackedFiles=no` config, which
-would let an untracked emitted artifact pass unnoticed.
+`build:check` never rewrites the checkout. `check-build-artifacts.mts` runs
+the same tsc emit, Biome normalization, provenance banners and `.gitattributes`
+block derivation as `build`, but into a temporary directory, then compares the
+result with the generated files committed at HEAD. Drift, a missing or extra
+output, a new source with no committed artifact, a stale `.gitattributes`
+block, and a working-tree copy that differs from HEAD all fail with the path
+and a fix hint; nothing is copied back, so `pnpm run build` stays the only
+writer. The HEAD snapshot comes from `git ls-tree` and `git cat-file`, so the
+verdict is relative to committed HEAD whatever is staged (#1023), and no
+command in the verifier writes the git index. File modes are not compared.
+
+Both `build:check` steps run from their `.mts` sources through Node's native
+type stripping, never from the committed `scripts/*.mjs` copies. A generated
+checker must not be the sole judge of its own integrity (observed 2026-07-31,
+in issue `#1707` and its review on PR `#1732`): a stale or tampered committed
+`scripts/check-build-artifacts.mjs` could still carry the provenance banner and
+report itself clean. Here it is only one more artifact, byte-compared against
+the fresh emit before the `&&` lets anything else run. The verifier imports
+only `node:` builtins at top level and resolves `tsc` and Biome lazily, so its
+pure parts stay testable in the toolless bare-node lane.
+
+Neither step uses a shell pipeline, and the untracked-artifact step uses the
+`git ls-files --others` plumbing command rather than `git status`: both choices
+avoid failure modes review found on #1707 — a shell-composed `test`/`$()` check
+is POSIX-only and breaks under npm/pnpm's default `cmd.exe` shell on Windows
+(including callers of the reusable pnpm-boundary workflow on a `windows-*`
+runner), and `git status --porcelain` without an explicit `--untracked-files`
+override silently respects a local or CI `status.showUntrackedFiles=no` config,
+which would let an untracked emitted artifact pass unnoticed.
 
 `pnpm run lint:minimum` runs `typecheck` and `build:check`, so a forgotten
 rebuild or a hand-edited generated file fails the installed CI lane. The
