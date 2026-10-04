@@ -818,7 +818,12 @@ function adoptListContentIndentForLine(state, parsed) {
  * earlier, unrelated list (separated only by a single blank line) would
  * wrongly inherit that list's indent.
  */
-function findEnclosingListContentZone(text, openingLineStart, containerDepth) {
+function findEnclosingListContentZone(
+  text,
+  openingLineStart,
+  containerDepth,
+  allowOrderedListAtBlockStart = false,
+) {
   let openerLineStart = null;
   let openerContentIndent = null;
   let lineStart = findPreviousLineStart(text, openingLineStart);
@@ -833,7 +838,15 @@ function findEnclosingListContentZone(text, openingLineStart, containerDepth) {
       lineStart = findPreviousLineStart(text, lineStart);
       continue;
     }
-    const contentIndent = interruptingListContentIndent(parsed.content);
+    const contentIndent =
+      interruptingListContentIndent(parsed.content) ??
+      (allowOrderedListAtBlockStart
+        ? orderedListItemContentIndentAtBlockStart(
+            text,
+            lineStart,
+            containerDepth,
+          )
+        : null);
     if (contentIndent !== null) {
       openerLineStart = lineStart;
       openerContentIndent = contentIndent;
@@ -872,6 +885,65 @@ function findEnclosingListContentZone(text, openingLineStart, containerDepth) {
     cursor = line.next;
   }
   return { contentIndent: openerContentIndent, openerLineStart };
+}
+/**
+ * A non-`1` ordered marker opens a list at a block boundary but cannot
+ * interrupt a paragraph. Resolve that distinction only for consumers that
+ * explicitly need to recognize list content (the ordinary parser keeps its
+ * paragraph-interruption rule unchanged).
+ */
+function orderedListItemContentIndentAtBlockStart(
+  text,
+  lineStart,
+  containerDepth,
+) {
+  const line = lineBounds(text, lineStart);
+  const parsed = parseContainerLine(text.slice(lineStart, line.end));
+  const listItem = parseListItemMatch(parsed.content);
+  if (
+    parsed.containerDepth !== containerDepth ||
+    listItem === null ||
+    !/^\d{1,9}[.)]$/u.test(listItem.marker) ||
+    isInterruptingListMarker(listItem.marker)
+  ) {
+    return null;
+  }
+  let previousLineStart = findPreviousLineStart(text, lineStart);
+  while (previousLineStart !== null) {
+    const previousLine = lineBounds(text, previousLineStart);
+    const previous = parseContainerLine(
+      text.slice(previousLineStart, previousLine.end),
+    );
+    if (previous.containerDepth !== containerDepth) {
+      break;
+    }
+    if (previous.content.trim() === '') {
+      break;
+    }
+    if (isUnambiguousMarkdownBlockStart(previous.content)) {
+      break;
+    }
+    const previousListItem = parseListItemMatch(previous.content);
+    if (
+      previousListItem === null ||
+      !/^\d{1,9}[.)]$/u.test(previousListItem.marker)
+    ) {
+      return null;
+    }
+    if (isInterruptingListMarker(previousListItem.marker)) {
+      break;
+    }
+    previousLineStart = findPreviousLineStart(text, previousLineStart);
+  }
+  return parseListItemContainer(parsed.content);
+}
+function isUnambiguousMarkdownBlockStart(content) {
+  return (
+    /^ {0,3}#{1,6}(?:[ \t]+|$)/u.test(content) ||
+    /^ {0,3}(?:`{3,}|~{3,})/u.test(content) ||
+    MARKDOWN_THEMATIC_BREAK_PATTERN.test(content) ||
+    interruptingListContentIndent(content) !== null
+  );
 }
 function findMarkdownBlockBoundary(text, start, end) {
   const openingLineStart = text.lastIndexOf('\n', start - 1) + 1;
@@ -1163,6 +1235,27 @@ export function parseListItemContainer(content) {
   // ordinary prose instead of nested code.
   const contentPadding = spacingColumns > 4 ? 1 : spacingColumns;
   return markerEndColumns + contentPadding;
+}
+/**
+ * Strip an enclosing list item's content indentation from `text` at
+ * `lineStart`, or return `null` when the line is not inside an enclosing list
+ * item. This lets consumers distinguish a blockquote at the start of nested
+ * list content from a top-level indented code block.
+ */
+export function stripEnclosingListContentIndent(text, lineStart) {
+  const line = lineBounds(text, lineStart);
+  const rawLine = text.slice(lineStart, line.end);
+  const parsed = parseContainerLine(rawLine);
+  if (
+    parsed.containerDepth !== 0 ||
+    interruptingListContentIndent(parsed.content) !== null
+  ) {
+    return null;
+  }
+  const zone = findEnclosingListContentZone(text, lineStart, 0, true);
+  return zone === null
+    ? null
+    : stripLeadingIndentColumns(rawLine, zone.contentIndent);
 }
 function parseContainerLine(line) {
   let cursor = 0;

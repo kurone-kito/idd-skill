@@ -293,26 +293,35 @@ function createResumeCollectorPort({
   statusCheckRollup,
   branchRules = [],
   noRequiredChecksConfigured = true,
+  openChangeRequests = [
+    {
+      number: 3150,
+      title: 'test PR',
+      body: 'Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ],
+  baseRefName = 'main',
 }: {
   statusCheckRollup: unknown[];
   branchRules?: unknown[];
   noRequiredChecksConfigured?: boolean;
+  openChangeRequests?: {
+    number: number;
+    title: string;
+    body: string;
+    url: string;
+  }[];
+  baseRefName?: string;
 }) {
   return createFakeProviderAdapter({
     locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
     viewerLogin: 'tester',
-    openChangeRequests: [
-      {
-        number: 3150,
-        title: 'test PR',
-        body: 'Closes #3145',
-        url: 'https://example.test/pr/3150',
-      },
-    ],
+    openChangeRequests,
     changeRequestBranchAndChecks: {
       3150: {
         headSha: 'head-sha',
-        baseRefName: 'main',
+        baseRefName,
         statusCheckRollup,
       },
     },
@@ -326,6 +335,368 @@ function createResumeCollectorPort({
     },
   });
 }
+
+function collectResumePrInput(
+  openChangeRequests: {
+    number: number;
+    title: string;
+    body: string;
+    url: string;
+  }[],
+  baseRefName = 'main',
+) {
+  const port = createResumeCollectorPort({
+    statusCheckRollup: [],
+    openChangeRequests,
+    baseRefName,
+  });
+  return collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+  });
+}
+
+test('collector ignores incidental prose on a PR that closes a different issue', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: 'Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+    {
+      number: 3151,
+      title: 'unrelated PR',
+      body: 'Closes #9000\n\nFollow-up context mentions #3145.',
+      url: 'https://example.test/pr/3151',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector does not treat a non-closing Refs mention as the implementation PR', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'side-fix PR',
+      body: 'Refs #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector rejects closing keyword lookalikes that extend the issue number', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'unrelated PR',
+      body: 'Closes #3145abc',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector does not borrow an exact closer from inline code beside a malformed token', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'unrelated PR',
+      body: 'Closes #3145abc (example: `Closes #3145`)',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector does not combine a malformed close with a later negated close', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'unrelated PR',
+      body: 'Closes #3145abc; this does not close #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector recognizes the target later in a closing-keyword reference list', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: 'Closes #9000, #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector follows D3.5 keyword spacing instead of accepting a colon form', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'unrelated PR',
+      body: 'Closes: #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector preserves ambiguity when two open PRs both close the issue', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'first implementation PR',
+      body: 'Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+    {
+      number: 3151,
+      title: 'second implementation PR',
+      body: 'Fixes #3145',
+      url: 'https://example.test/pr/3151',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, true);
+  assert.equal(input.prCount, 2);
+  assert.equal(selectResumeRoute(input).reason, 'multiple-open-prs-for-issue');
+});
+
+test('collector ignores closing-keyword lookalikes in code, quotes, and negation', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'example-only PR',
+      body: [
+        'Inline example: `Closes #3145`',
+        '',
+        '```md',
+        'Closes #3145',
+        '```',
+        '> Closes #3145',
+        '- > Fixes #3145',
+        '- [ ] > Resolves #3145',
+        '  1. > Closes #3145',
+        'This does not close #3145.',
+      ].join('\n'),
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector ignores lazy continuation lines inside a blockquote but scans after a blank line', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '> Example from another PR:\nCloses #3145\n\nCloses #9000',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector resumes scanning after a blockquote paragraph is interrupted', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '> Example from another PR:\n# Real implementation\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector scans real prose after a quoted indented code block', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '>     quoted code\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector does not let an indented code block open a blockquote continuation', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '    > quoted code\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector ignores blockquotes indented at a nested list content boundary', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '- outer\n  - inner\n    > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector keeps blockquote-shaped indented code inside a nested list visible as code', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '- outer\n  - inner\n        > example\n\nCloses #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector ignores blockquotes indented under a non-one ordered list', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: '10. outer\n    > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector recognizes non-one ordered lists after a heading without treating paragraph lookalikes as lists', () => {
+  const listInput = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: '# Heading\n10. outer\n    > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+  const paragraphInput = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'visible prose PR',
+      body: 'Intro paragraph\n10. not a list\n    > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(listInput.prCount, 0);
+  assert.equal(listInput.prNumber, null);
+  assert.equal(paragraphInput.prCount, 1);
+  assert.equal(paragraphInput.prNumber, 3150);
+});
+
+test('collector ignores a blockquote under a later non-one ordered-list item', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: '10. first\n11. second\n    > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector recognizes the body keyword on a non-default development branch', () => {
+  const input = collectResumePrInput(
+    [
+      {
+        number: 3150,
+        title: 'development PR',
+        body: 'Resolves #3145',
+        url: 'https://example.test/pr/3150',
+      },
+    ],
+    'develop',
+  );
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector accepts qualified closing refs only for the current repository', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'local qualified implementation PR',
+      body: 'Closes fake-owner/fake-repo#3145',
+      url: 'https://example.test/pr/3150',
+    },
+    {
+      number: 3151,
+      title: 'foreign qualified PR',
+      body: 'Fixes other-owner/other-repo#3145',
+      url: 'https://example.test/pr/3151',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
 
 function checkRun(
   name: string,

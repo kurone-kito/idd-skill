@@ -13,6 +13,7 @@ import {
   selectLatestCheckEntry,
 } from './ci-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
+import { extractKeywordReferences } from './discover-roadmap-graph.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -22,6 +23,11 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
+import {
+  maskMarkdownForScan,
+  stripEnclosingListContentIndent,
+} from './markdown-code.mts';
+import { escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
 import {
@@ -34,6 +40,7 @@ import type {
   ProviderGovernanceReadOutcome,
   ProviderPort,
 } from './provider-port.mts';
+import { CLOSING_KEYWORD_ALTERNATION } from './supersession-detection.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
@@ -596,9 +603,167 @@ function findIssueRelatedOpenPrs({
   port: ProviderPort;
   issueNumber: number | null;
 }): ProviderChangeRequestSummary[] {
+  if (!Number.isInteger(issueNumber) || (issueNumber ?? 0) <= 0) {
+    return [];
+  }
+  const targetIssueNumber = Number(issueNumber);
   const candidates = port.listOpenChangeRequests();
-  const issueRefPattern = new RegExp(`(^|[^0-9])#${issueNumber}([^0-9]|$)`);
-  return candidates.filter((pr) => issueRefPattern.test(pr.body));
+  const repository = port.resolveRepositoryLocator();
+  return candidates.filter((pr) => {
+    // D3.5 defines a relationship through a plain-text closing keyword in
+    // the PR body. Exclude blockquotes, including unmarked lazy paragraph
+    // continuations, before the shared scanner masks code, rejects negation,
+    // and enforces same-repository refs. This prevents ordinary mentions
+    // such as the one reported in #3763 from making Resume treat an unrelated
+    // PR as a second implementation.
+    const bodyWithoutBlockQuotes = stripBlockQuotesAndLazyContinuations(
+      pr.body,
+    );
+    const currentRepoRef = `${escapeRegex(repository.owner)}/${escapeRegex(repository.name)}`;
+    const d35ClosingKeyword = new RegExp(
+      `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+(?:(?:#\\d+|[\\w.-]+/[\\w.-]+#\\d+)(?:\\s*,\\s*(?:and\\s*)?|\\s+and\\s+))*?(?:#${targetIssueNumber}|${currentRepoRef}#${targetIssueNumber})\\b`,
+      'gi',
+    );
+    const maskedBody = maskMarkdownForScan(bodyWithoutBlockQuotes);
+    return maskedBody.split(/\r?\n/u).some((line) =>
+      hasD35ClosingReference(line, d35ClosingKeyword, {
+        issueNumber: targetIssueNumber,
+        owner: repository.owner,
+        repo: repository.name,
+      }),
+    );
+  });
+}
+
+function stripBlockQuotesAndLazyContinuations(body: string): string {
+  let quotedParagraphOpen = false;
+  const normalizedBody = body.replace(/\r\n/gu, '\n');
+  let lineStart = 0;
+  return normalizedBody
+    .split('\n')
+    .map((line) => {
+      const currentLineStart = lineStart;
+      lineStart += line.length + 1;
+      if (line.trim() === '') {
+        quotedParagraphOpen = false;
+        return line;
+      }
+
+      const quotedContent = stripBlockQuoteAndListPrefixes(
+        line,
+        normalizedBody,
+        currentLineStart,
+      );
+      if (quotedContent !== null) {
+        quotedParagraphOpen = startsBlockQuoteParagraph(quotedContent);
+        return '';
+      }
+
+      if (quotedParagraphOpen && !startsMarkdownBlock(line)) {
+        return '';
+      }
+
+      quotedParagraphOpen = false;
+      return line;
+    })
+    .join('\n');
+}
+
+function stripBlockQuoteAndListPrefixes(
+  line: string,
+  body?: string,
+  lineStart?: number,
+): string | null {
+  const listContent =
+    body === undefined || lineStart === undefined
+      ? null
+      : stripEnclosingListContentIndent(body, lineStart);
+  const candidate = listContent ?? line;
+  if (/^(?: {4,}|\t)\S/u.test(candidate)) {
+    return null;
+  }
+  let remaining = candidate.trimStart();
+  let foundBlockQuote = false;
+  while (remaining) {
+    const markerPrefix = remaining.replace(/^ {0,3}/u, '');
+    if (markerPrefix.startsWith('>')) {
+      foundBlockQuote = true;
+      remaining = markerPrefix.slice(1).replace(/^[ \t]?/u, '');
+      continue;
+    }
+    const listMarker = markerPrefix.match(/^(?:[-+*]|\d{1,9}[.)])[ \t]+/u);
+    if (listMarker) {
+      remaining = markerPrefix.slice(listMarker[0].length);
+      const taskCheckbox = remaining.match(/^\[[ xX]\][ \t]+/u);
+      if (taskCheckbox) {
+        remaining = remaining.slice(taskCheckbox[0].length);
+      }
+      continue;
+    }
+    break;
+  }
+  return foundBlockQuote ? remaining : null;
+}
+
+function startsBlockQuoteParagraph(content: string): boolean {
+  const nestedContent = stripBlockQuoteAndListPrefixes(content) ?? content;
+  if (!nestedContent.trim()) {
+    return false;
+  }
+  return !startsMarkdownLeafBlock(nestedContent);
+}
+
+function startsMarkdownBlock(line: string): boolean {
+  const content = line.trimStart();
+  return (
+    content.startsWith('>') ||
+    /^(?:[-+*]|\d{1,9}[.)])[ \t]+/u.test(content) ||
+    startsMarkdownLeafBlock(content) ||
+    /^ {4,}\S/u.test(line)
+  );
+}
+
+function startsMarkdownLeafBlock(content: string): boolean {
+  return (
+    /^ {4,}\S/u.test(content) ||
+    /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
+    /^(?:`{3,}|~{3,})/u.test(content) ||
+    /^(?:-{3,}|_{3,}|\*{3,})[ \t]*$/u.test(content) ||
+    /^<(?:!--|\?|![A-Z]|\/?(?:address|article|aside|base|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu.test(
+      content,
+    )
+  );
+}
+
+function hasD35ClosingReference(
+  line: string,
+  closingReferencePattern: RegExp,
+  options: { issueNumber: number; owner: string; repo: string },
+): boolean {
+  for (const match of line.matchAll(closingReferencePattern)) {
+    const matchStart = match.index ?? 0;
+    const context = line
+      .slice(0, matchStart)
+      .trim()
+      .split(/\s+/u)
+      .slice(-6)
+      .join(' ')
+      .replace(/(?:[\w.-]+\/[\w.-]+)?#\d+/gu, ' ');
+    const candidate = `${context} ${match[0]}`.trim();
+    if (
+      extractKeywordReferences(candidate, {
+        owner: options.owner,
+        repo: options.repo,
+      }).some(
+        (reference) =>
+          reference.relationship === 'closing-keyword' &&
+          reference.target === options.issueNumber,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function countUnrepliedRegularComments(
