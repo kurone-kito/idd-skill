@@ -147,6 +147,128 @@ test('Discover mutator violation fails from the CLI with a rule ID and relative 
   }
 });
 
+test('missing Discover hooks and unauthorized readers/importers are reported', () => {
+  const fixture = makeFixture();
+  const markerPath = join(fixture.root, 'src/scripts/post-idd-marker.mts');
+  const markerSource = readFileSync(markerPath, 'utf8');
+  const unauthorizedPath = join(
+    fixture.root,
+    'src/scripts/contract-unauthorized-hint-reader.mts',
+  );
+  try {
+    assert.ok(markerSource.includes('invalidateDiscoverHints(['));
+    writeFileSync(
+      markerPath,
+      markerSource.replace('invalidateDiscoverHints([', 'invalidateHints(['),
+    );
+    writeFileSync(
+      unauthorizedPath,
+      [
+        "import { readDiscoverHint } from './discover-hint-cache.mts';",
+        'export function extraReader() {',
+        '  return readDiscoverHint("roadmaps");',
+        '}',
+        '',
+      ].join('\n'),
+    );
+
+    const result = runAudit(fixture.root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /DISCOVER-HINT-HOOK-COUNT src\/scripts\/post-idd-marker\.mts:/,
+    );
+    assert.match(result.stderr, /DISCOVER-HINT-READER-ALLOWLIST/);
+    assert.match(result.stderr, /DISCOVER-HINT-IMPORTER-ALLOWLIST/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('missing canonical helper flags fail from the source audit', () => {
+  const fixture = makeFixture();
+  const helperPath = join(fixture.root, 'scripts/advisory-wait-state.mjs');
+  try {
+    const source = readFileSync(helperPath, 'utf8');
+    const mutated = source.replaceAll('--claim-id', '--claim_id');
+    assert.notEqual(mutated, source);
+    writeFileSync(helperPath, mutated);
+
+    const result = runAudit(fixture.root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /CLI-FLAG-CANONICAL scripts\/advisory-wait-state\.mjs:/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('deprecated flag contracts require canonical pairing and stderr warnings', () => {
+  const fixture = makeFixture();
+  const unpairedPath = join(fixture.root, 'scripts/contract-deprecated.mjs');
+  const stdoutWarningPath = join(
+    fixture.root,
+    'scripts/contract-deprecation-output.mjs',
+  );
+  try {
+    writeFileSync(unpairedPath, "const flag = '--expected-claim-id';\n");
+    writeFileSync(
+      stdoutWarningPath,
+      [
+        "const oldFlag = '--expected-claim-id';",
+        "const newFlag = '--claim-id';",
+        'function warnDeprecatedFlag() {',
+        "  process.stdout.write('use the canonical flag\\n');",
+        '}',
+        "warnDeprecatedFlag('--expected-claim-id', '--claim-id');",
+        '',
+      ].join('\n'),
+    );
+
+    const result = runAudit(fixture.root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /CLI-FLAG-DEPRECATED-PAIR scripts\/contract-deprecated\.mjs:/,
+    );
+    assert.match(
+      result.stderr,
+      /CLI-FLAG-DEPRECATION-WARNING scripts\/contract-deprecated\.mjs:/,
+    );
+    assert.match(
+      result.stderr,
+      /CLI-FLAG-DEPRECATION-WARNING scripts\/contract-deprecation-output\.mjs:.*stderr/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('pre-merge readiness must retain its canonical and deprecated aliases', () => {
+  const fixture = makeFixture();
+  const helperPath = join(fixture.root, 'scripts/pre-merge-readiness.mjs');
+  try {
+    const source = readFileSync(helperPath, 'utf8');
+    const mutated = source.replaceAll(
+      '--expected-agent-id',
+      '--expected_agent_id',
+    );
+    assert.notEqual(mutated, source);
+    writeFileSync(helperPath, mutated);
+
+    const result = runAudit(fixture.root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /CLI-FLAG-PRE-MERGE-ALIASES scripts\/pre-merge-readiness\.mjs:/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('near-miss flag violation fails from the CLI with a rule ID and relative path', () => {
   const fixture = makeFixture();
   try {
