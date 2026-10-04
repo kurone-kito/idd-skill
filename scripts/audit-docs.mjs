@@ -45,7 +45,6 @@ import {
   collectMarkdownLinkAuditViolations,
   resolveDistributedFileSet,
 } from './markdown-link-audit.mjs';
-import { collectRepositoryPolicyViolations } from './repository-policy-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
@@ -146,14 +145,14 @@ const GENERATED_MODE_PLACEHOLDER_EXEMPTIONS = {
   'customization-doc': 'documents the placeholder-mapping table for adopters',
 };
 if (import.meta.main) {
-  main();
+  void main();
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this module
 // (e.g. to inspect its exports) does not parse process.argv, read
 // audit/sync-manifest.json, shell out to git, or call process.exit --
 // matching the `if (import.meta.main)` idiom already used elsewhere in
 // src/scripts/ and src/bin/ (#3190).
-function main() {
+async function main() {
   const args = new Set(process.argv.slice(2));
   if (!args.has('--check')) {
     console.error('usage: node scripts/audit-docs.mjs --check');
@@ -194,17 +193,10 @@ function main() {
     manifest.generatedBlocks ?? [],
   );
   checkLiteGateParity(manifest.liteGateParity);
-  if (existsSync(join(root, 'src/scripts/repository-policy-audit.mts'))) {
-    errors.push(
-      ...collectRepositoryPolicyViolations(root).map(
-        (violation) =>
-          `${violation.ruleId}: ${violation.path}: ${violation.message}`,
-      ),
-    );
-  }
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
+  await checkRepositoryPolicy();
   checkEnginesRangeMirrors();
   checkBinExecutableMode();
   if (errors.length > 0) {
@@ -226,6 +218,38 @@ function main() {
     console.log(`notice: ${notice}`);
   }
   console.log('documentation audit passed');
+}
+async function checkRepositoryPolicy() {
+  const source = 'src/scripts/repository-policy-audit.mts';
+  const emitted = 'scripts/repository-policy-audit.mjs';
+  if (
+    !repoFiles.includes(source) ||
+    !repoFiles.includes(emitted) ||
+    !existsSync(join(root, source)) ||
+    !existsSync(join(root, emitted)) ||
+    errors.some(
+      (error) =>
+        error.startsWith(`${source}:`) || error.startsWith(`${emitted}:`),
+    )
+  ) {
+    return;
+  }
+  try {
+    const { collectRepositoryPolicyViolations } = await import(
+      './repository-policy-audit.mjs'
+    );
+    errors.push(
+      ...collectRepositoryPolicyViolations(root).map(
+        (violation) =>
+          `${violation.ruleId}: ${violation.path}: ${violation.message}`,
+      ),
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    errors.push(
+      `${source}: could not load generated artifact ${emitted}: ${detail}`,
+    );
+  }
 }
 // Structural pairing guard for the TypeScript migration: every
 // `src/**/*.mts` source must have its generated `.mjs` artifact committed,

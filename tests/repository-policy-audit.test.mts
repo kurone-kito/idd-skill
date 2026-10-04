@@ -25,6 +25,7 @@ import { fixtureEnv } from './test-utils.mts';
 
 const REPOSITORY_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const AUDIT_DOCS_CLI = join(REPOSITORY_ROOT, 'scripts/audit-docs.mjs');
+const AUDIT_DOCS_SOURCE = join(REPOSITORY_ROOT, 'src/scripts/audit-docs.mts');
 const AUDIT_HELP_PROBE_PATHS = [
   'scripts/audit-pr-cleanup.mjs',
   'scripts/minimize-superseded-markers.mjs',
@@ -122,6 +123,64 @@ function copyBareNodeRuntime(
   return entry;
 }
 
+function copyAuditDocsRuntime(destination: string): string {
+  const copied = new Set<string>();
+  const queue = [AUDIT_DOCS_CLI, CLI_SOURCE];
+
+  while (queue.length > 0) {
+    const source = queue.pop();
+    assert.ok(source);
+    const relativePath = relative(REPOSITORY_ROOT, source);
+    assert.ok(
+      !relativePath.startsWith('..'),
+      `${source} must stay inside the repository`,
+    );
+    if (copied.has(source)) continue;
+    copied.add(source);
+    const target = join(destination, relativePath);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(source, target);
+
+    if (source.endsWith('.mjs')) {
+      const generatedSource = /^\/\/ idd-generated-from: (.+)$/m.exec(
+        readFileSync(source, 'utf8'),
+      )?.[1];
+      assert.ok(generatedSource, `${relativePath} must name its source`);
+      const sourcePath = join(REPOSITORY_ROOT, generatedSource);
+      assert.ok(existsSync(sourcePath), `${generatedSource} must exist`);
+      const sourceTarget = join(destination, generatedSource);
+      mkdirSync(dirname(sourceTarget), { recursive: true });
+      cpSync(sourcePath, sourceTarget);
+
+      const sourceText = readFileSync(source, 'utf8');
+      const imports = [
+        ...sourceText.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm),
+        ...sourceText.matchAll(
+          /^\s*import\b[\s\S]*?\bfrom\s+['"]([^'"]+)['"]/gm,
+        ),
+      ];
+      for (const match of imports) {
+        const specifier = match[1];
+        if (specifier.startsWith('node:')) continue;
+        assert.ok(
+          specifier.startsWith('.'),
+          `unexpected package import ${specifier} in ${source}`,
+        );
+        const dependency = resolve(dirname(source), specifier);
+        assert.ok(
+          dependency.endsWith('.mjs'),
+          `expected generated .mjs import: ${specifier}`,
+        );
+        queue.push(dependency);
+      }
+    }
+  }
+
+  assert.ok(existsSync(AUDIT_DOCS_SOURCE));
+  assert.equal(existsSync(join(destination, 'node_modules')), false);
+  return join(destination, relative(REPOSITORY_ROOT, AUDIT_DOCS_CLI));
+}
+
 function runCli(
   executable: string,
   fixtureRoot: string,
@@ -134,12 +193,15 @@ function runCli(
   });
 }
 
-function runAuditDocs(fixtureRoot: string): {
+function runAuditDocs(
+  executable: string,
+  fixtureRoot: string,
+): {
   status: number | null;
   stderr: string;
   stdout: string;
 } {
-  const result = spawnSync(process.execPath, [AUDIT_DOCS_CLI, '--check'], {
+  const result = spawnSync(process.execPath, [executable, '--check'], {
     cwd: fixtureRoot,
     encoding: 'utf8' as const,
     env: fixtureEnv(),
@@ -719,14 +781,7 @@ test('audit-docs reports policy violations when the audit source is present', (t
     JSON.stringify({ fileSets: [], liteGateParity: [liteParityEntry] }),
     'utf8',
   );
-  for (const path of [
-    'src/scripts/repository-policy-audit.mts',
-    'scripts/repository-policy-audit.mjs',
-  ]) {
-    const target = join(fixtureRoot, path);
-    mkdirSync(dirname(target), { recursive: true });
-    cpSync(join(REPOSITORY_ROOT, path), target);
-  }
+  const auditDocs = copyAuditDocsRuntime(fixtureRoot);
   materializeAuditHelperProbes(fixtureRoot);
   execFileSync('git', ['init', '--quiet', '--initial-branch=main'], {
     cwd: fixtureRoot,
@@ -734,17 +789,33 @@ test('audit-docs reports policy violations when the audit source is present', (t
   });
   execFileSync('git', ['add', '-A'], { cwd: fixtureRoot, env: fixtureEnv() });
 
-  const positive = runAuditDocs(fixtureRoot);
+  const positive = runAuditDocs(auditDocs, fixtureRoot);
   assert.equal(positive.status, 0, positive.stderr || positive.stdout);
 
   const mutation = makeRuleViolation('helper-runtime-docs', documents);
   writeFileSync(join(fixtureRoot, mutation.path), mutation.contents, 'utf8');
-  const negative = runAuditDocs(fixtureRoot);
+  const negative = runAuditDocs(auditDocs, fixtureRoot);
   assert.equal(negative.status, 1, negative.stderr || negative.stdout);
   assert.match(
     negative.stderr,
     /helper-runtime-docs: docs\/idd-helper-scripts\.md:/,
   );
+
+  const originalContents = documents.get(mutation.path);
+  assert.ok(originalContents, `${mutation.path} must be in the fixture`);
+  writeFileSync(join(fixtureRoot, mutation.path), originalContents);
+  execFileSync(
+    'git',
+    ['rm', '--quiet', '--force', 'scripts/repository-policy-audit.mjs'],
+    { cwd: fixtureRoot, env: fixtureEnv() },
+  );
+  const missingArtifact = runAuditDocs(auditDocs, fixtureRoot);
+  assert.equal(missingArtifact.status, 1, missingArtifact.stdout);
+  assert.match(
+    missingArtifact.stderr,
+    /src\/scripts\/repository-policy-audit\.mts: missing generated artifact scripts\/repository-policy-audit\.mjs/,
+  );
+  assert.doesNotMatch(missingArtifact.stderr, /ERR_MODULE_NOT_FOUND/);
 });
 
 test('incomplete document snapshots fail closed with the missing rule path', () => {
