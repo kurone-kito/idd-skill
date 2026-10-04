@@ -303,8 +303,14 @@ const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
  */
 const MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN =
   /^ {0,3}(?:={1,}|-{1,2})[ \t]*$/u;
-const MARKDOWN_HTML_BLOCK_START_PATTERN =
-  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
+/**
+ * CommonMark/GFM HTML block types 1-6 plus GitHub's `<search>` block
+ * behavior, shared with Resume's lazy-quote interruption check (review in
+ * PR #3764, issue #3763). Type-7 custom tags remain separately gated on
+ * paragraph state because they cannot interrupt an open paragraph.
+ */
+export const MARKDOWN_HTML_BLOCK_START_PATTERN =
+  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 /**
  * Prefix-only test for a line that opens a custom (CommonMark type 7) HTML
  * tag: up to three spaces, `<` or `</`, a tag name, an optional attribute
@@ -1236,13 +1242,7 @@ export function parseListItemContainer(content) {
   const contentPadding = spacingColumns > 4 ? 1 : spacingColumns;
   return markerEndColumns + contentPadding;
 }
-/**
- * Strip an enclosing list item's content indentation from `text` at
- * `lineStart`, or return `null` when the line is not inside an enclosing list
- * item. This lets consumers distinguish a blockquote at the start of nested
- * list content from a top-level indented code block.
- */
-export function stripEnclosingListContentIndent(text, lineStart) {
+export function stripEnclosingListContentIndent(text, lineStart, cache) {
   const line = lineBounds(text, lineStart);
   const rawLine = text.slice(lineStart, line.end);
   const parsed = parseContainerLine(rawLine);
@@ -1250,9 +1250,37 @@ export function stripEnclosingListContentIndent(text, lineStart) {
     parsed.containerDepth !== 0 ||
     interruptingListContentIndent(parsed.content) !== null
   ) {
+    if (cache) {
+      cache.nextLineStart = -1;
+    }
     return null;
   }
+  if (cache?.nextLineStart === lineStart) {
+    const relativeLine = stripLeadingIndentColumns(
+      rawLine,
+      cache.contentIndent,
+    );
+    // Reuse the previous successful zone only for a direct continuation.
+    // A list-shaped line may introduce a nearer nested zone, so let the full
+    // lookup resolve it before caching the next line.
+    if (
+      parsed.content.trim() !== '' &&
+      indentationColumns(parsed.content) >= cache.contentIndent &&
+      parseListItemMatch(relativeLine.trimStart()) === null
+    ) {
+      cache.nextLineStart = line.next;
+      return relativeLine;
+    }
+  }
   const zone = findEnclosingListContentZone(text, lineStart, 0, true);
+  if (cache) {
+    if (zone === null) {
+      cache.nextLineStart = -1;
+    } else {
+      cache.contentIndent = zone.contentIndent;
+      cache.nextLineStart = line.next;
+    }
+  }
   return zone === null
     ? null
     : stripLeadingIndentColumns(rawLine, zone.contentIndent);

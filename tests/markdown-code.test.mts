@@ -950,6 +950,17 @@ test('findHtmlBlockRanges masks a generic block-level tag through the next blank
   assert.equal(masked.includes('after'), true);
 });
 
+test('findHtmlBlockRanges recognizes the remaining block-level HTML tags', () => {
+  for (const opener of ['<frameset>', '<search>']) {
+    const body = `${opener}\ninside block\n\noutside block`;
+    const ranges = findHtmlBlockRanges(body);
+    const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+    assert.equal(ranges.length, 1, opener);
+    assert.equal(masked.includes('inside block'), false, opener);
+    assert.equal(masked.includes('outside block'), true, opener);
+  }
+});
+
 test('findHtmlBlockRanges does not open a custom-tag block mid-paragraph (cannot interrupt a paragraph)', () => {
   const body = ['some text', '<foo>', 'more text', ''].join('\n');
   assert.deepEqual(findHtmlBlockRanges(body), []);

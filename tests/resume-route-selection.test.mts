@@ -746,6 +746,46 @@ test('collector avoids rescanning shallow ordered quote runs', () => {
   );
 });
 
+test('collector avoids rescanning a successful nested quote list zone', () => {
+  const nestedQuotes = [
+    '- item',
+    ...Array.from({ length: 4_000 }, (_, index) => `    > quote${index}`),
+  ].join('\n');
+  const startedAt = performance.now();
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: nestedQuotes,
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+  assert.ok(
+    elapsedMs < 2_000,
+    `successful list-zone quote run took ${elapsedMs.toFixed(1)} ms (limit 2000 ms)`,
+  );
+});
+
+test('collector drops a cached outer list zone after a nested list marker', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: '- outer\n    > quoted\n  - inner\n      > Closes #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
 test('collector resumes scanning after a blockquote paragraph is interrupted', () => {
   const input = collectResumePrInput([
     {
@@ -778,6 +818,23 @@ test('collector resumes after spaced thematic breaks and custom HTML blocks', ()
     assert.equal(input.prAmbiguous, false);
     assert.equal(input.prCount, 1);
     assert.equal(input.prNumber, 3150);
+  }
+});
+
+test('collector resumes after interrupting HTML block openers', () => {
+  for (const opener of ['<![CDATA[', '<search>', '<frameset>']) {
+    const input = collectResumePrInput([
+      {
+        number: 3150,
+        title: 'implementation PR',
+        body: `> Quoted prose\n${opener}\nCloses #3145`,
+        url: 'https://example.test/pr/3150',
+      },
+    ]);
+
+    assert.equal(input.prAmbiguous, false, opener);
+    assert.equal(input.prCount, 1, opener);
+    assert.equal(input.prNumber, 3150, opener);
   }
 });
 
@@ -824,6 +881,23 @@ test('collector does not let an indented code block open a blockquote continuati
   assert.equal(input.prAmbiguous, false);
   assert.equal(input.prCount, 1);
   assert.equal(input.prNumber, 3150);
+});
+
+test('collector treats mixed tab and space indentation as indented code', () => {
+  for (const codeLine of ['\t  > quoted code', '    \t> quoted code']) {
+    const input = collectResumePrInput([
+      {
+        number: 3150,
+        title: 'implementation PR',
+        body: `${codeLine}\nCloses #3145`,
+        url: 'https://example.test/pr/3150',
+      },
+    ]);
+
+    assert.equal(input.prAmbiguous, false, codeLine);
+    assert.equal(input.prCount, 1, codeLine);
+    assert.equal(input.prNumber, 3150, codeLine);
+  }
 });
 
 test('collector ignores blockquotes indented at a nested list content boundary', () => {

@@ -22,6 +22,7 @@ import {
   indentationColumns,
   isInterruptingListMarker,
   MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN,
+  MARKDOWN_HTML_BLOCK_START_PATTERN,
   MARKDOWN_THEMATIC_BREAK_PATTERN,
   maskMarkdownForScan,
   parseListItemMatch,
@@ -512,6 +513,10 @@ function stripBlockQuotesAndLazyContinuations(body) {
   let paragraphOpen = false;
   const blockQuoteScanBarrier = '\u0000';
   const listIndentFastPath = { skipDeeplyIndentedProbe: false };
+  const listZoneCache = {
+    contentIndent: 0,
+    nextLineStart: -1,
+  };
   const normalizedBody = body.replace(/\r\n/gu, '\n');
   let lineStart = 0;
   return normalizedBody
@@ -530,6 +535,7 @@ function stripBlockQuotesAndLazyContinuations(body) {
         currentLineStart,
         listIndentFastPath,
         paragraphOpen,
+        listZoneCache,
       );
       if (quotedContent !== null) {
         quotedParagraphOpen = startsBlockQuoteParagraph(quotedContent);
@@ -553,6 +559,7 @@ function stripBlockQuoteAndListPrefixes(
   lineStart,
   listIndentFastPath,
   paragraphOpen = false,
+  listZoneCache,
 ) {
   // Most lines, including ordinary indented code, cannot become a
   // blockquote or nested list after list-content indentation is removed.
@@ -573,7 +580,7 @@ function stripBlockQuoteAndListPrefixes(
   const listContent =
     body === undefined || lineStart === undefined || !shouldProbeEnclosingList
       ? null
-      : stripEnclosingListContentIndent(body, lineStart);
+      : stripEnclosingListContentIndent(body, lineStart, listZoneCache);
   if (
     shouldProbeEnclosingList &&
     listContent === null &&
@@ -587,7 +594,7 @@ function stripBlockQuoteAndListPrefixes(
     listIndentFastPath.skipDeeplyIndentedProbe = true;
   }
   const candidate = listContent ?? line;
-  if (/^(?: {4,}|\t)\S/u.test(candidate)) {
+  if (isIndentedCodeBlock(candidate)) {
     return null;
   }
   let remaining = candidate.trimStart();
@@ -656,20 +663,25 @@ function startsMarkdownBlock(line, paragraphOpen = false) {
     (listItem !== null &&
       (!paragraphOpen || isInterruptingListMarker(listItem.marker))) ||
     startsMarkdownLeafBlock(content, paragraphOpen) ||
-    /^ {4,}\S/u.test(line)
+    isIndentedCodeBlock(line)
   );
 }
 function startsMarkdownLeafBlock(content, paragraphOpen = false) {
   return (
-    /^ {4,}\S/u.test(content) ||
+    isIndentedCodeBlock(content) ||
     /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
     /^(?:`{3,}|~{3,})/u.test(content) ||
     MARKDOWN_THEMATIC_BREAK_PATTERN.test(content) ||
-    /^<(?:!--|\?|![A-Z]|\/?(?:address|article|aside|base|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu.test(
-      content,
-    ) ||
+    MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
     (!paragraphOpen &&
       MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN.test(content))
+  );
+}
+function isIndentedCodeBlock(line) {
+  const leadingWhitespace = line.match(/^[ \t]*/u)?.[0] ?? '';
+  return (
+    leadingWhitespace.length < line.length &&
+    indentationColumns(leadingWhitespace) >= 4
   );
 }
 function hasD35ClosingReference(
