@@ -413,8 +413,8 @@ const FIXTURE_GH_DEFAULT_HEAD = 'f'.repeat(40);
  *
  * Two shapes are served. `gh api user --jq .login` answers the configured
  * viewer (exit 1 when signed out). The check-suite first-observed GraphQL read
- * (a `query=` containing `checkSuites(first:100`, with `owner=`, `repo=` and a
- * numeric `number=`; a `--hostname <value>` pair, which a GHES server URL
+ * (a `query=` containing `pullRequest(number:$number)`, `commits(last:1)` and
+ * `checkSuites(first:100`, with `owner=`, `repo=` and a numeric `number=`; a `--hostname <value>` pair, which a GHES server URL
  * inserts, is ignored) answers `headRefOid`, the queried commit's `oid` and the
  * configured `createdAt` pages, paging through `after=page:<n>` cursors. Any
  * other invocation is appended to the unexpected ledger and exits 1, so a file
@@ -482,7 +482,7 @@ if (args[0] === 'api' && args[1] === 'graphql') {
     }
     fields[value.slice(0, value.indexOf('='))] = value.slice(value.indexOf('=') + 1);
   }
-  if (typeof fields.query === 'string' && fields.query.includes('checkSuites(first:100') && fields.owner && fields.repo && /^[0-9]+$/.test(fields.number || '')) {
+  if (typeof fields.query === 'string' && ['pullRequest(number:$number)', 'commits(last:1)', 'checkSuites(first:100'].every((part) => fields.query.includes(part)) && fields.owner && fields.repo && /^[0-9]+$/.test(fields.number || '')) {
     const suites = config.checkSuites;
     const cursor = fields.after === undefined ? 0 : Number(String(fields.after).replace(/^page:/, ''));
     const pages = suites.pages.length > 0 ? suites.pages : [[]];

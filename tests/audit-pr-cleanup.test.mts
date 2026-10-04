@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 
 import type {
   CleanupArgs,
@@ -28,7 +28,11 @@ import {
   renderLiveStatusDigest,
   retireLiveStatusDigestBody,
 } from '../src/scripts/protocol-helpers.mts';
-import { stubExecutable, useFixtureGh } from './test-utils.mts';
+import {
+  pinLoadControlOff,
+  stubExecutable,
+  useFixtureGh,
+} from './test-utils.mts';
 
 // #3746: the audit reads the authenticated viewer once per process
 // (`currentViewerLogin()` caches it with no reset hook), so the fixture `gh`
@@ -37,6 +41,18 @@ import { stubExecutable, useFixtureGh } from './test-utils.mts';
 // observable: only the viewer source can make `fixture-viewer` trusted. This is
 // network isolation; the isolate-state preload (#3725) and load-control pinning
 // stay separate and keep working with the fixture active.
+// Load control is pinned off first, as in the sibling collector suites: the
+// repository's own config enables it, which would add an identity lookup (a
+// `gh auth` call the fixture would record as unexpected) to any gh-exec wrapper
+// a later test reaches. Load control has its own tests in
+// gh-exec-load-control.test.mts.
+let restoreLoadControl: (() => void) | undefined;
+before(() => {
+  restoreLoadControl = pinLoadControlOff();
+});
+after(() => {
+  restoreLoadControl?.();
+});
 useFixtureGh({ viewer: 'fixture-viewer' }, (fixture) => {
   const viewerReads = fixture
     .calls()

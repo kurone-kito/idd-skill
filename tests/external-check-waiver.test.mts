@@ -56,13 +56,13 @@ import {
 // no handler served. A test that needs another viewer or another check-suite
 // answer changes the fixture and restores it.
 let restoreLoadControl: (() => void) | undefined;
-const fixtureGh = useFixtureGh();
 before(() => {
   restoreLoadControl = pinLoadControlOff();
 });
 after(() => {
   restoreLoadControl?.();
 });
+const fixtureGh = useFixtureGh();
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 

@@ -33,13 +33,13 @@ import { pinLoadControlOff, useFixtureGh } from './test-utils.mts';
 // tests also inject their health builder, so provider-health semantics come
 // from a fixture, never from a live read.
 let restoreLoadControl: (() => void) | undefined;
-useFixtureGh();
 before(() => {
   restoreLoadControl = pinLoadControlOff();
 });
 after(() => {
   restoreLoadControl?.();
 });
+useFixtureGh();
 
 // ---------------------------------------------------------------------------
 // toSecondPrecisionIso -- Copilot review finding (PR #2421): the default

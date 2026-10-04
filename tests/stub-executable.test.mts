@@ -520,7 +520,7 @@ const gh = (...args: string[]): string =>
   });
 
 const OBSERVED_QUERY =
-  'query($owner:String!,$repo:String!,$number:Int!,$after:String){ checkSuites(first:100, after:$after) }';
+  'query($owner:String!,$repo:String!,$number:Int!,$after:String){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ headRefOid commits(last:1){ nodes{ commit{ oid checkSuites(first:100, after:$after){ nodes{ createdAt } } } } } } } }';
 const observedArgs = (after?: string, ...extra: string[]): string[] => [
   'api',
   'graphql',
@@ -643,11 +643,55 @@ test('fixture gh does not serve another GraphQL query that merely carries owner,
       `number=${number}`,
     ];
     assert.throws(() => gh(...other('7')), /unexpected invocation/);
+    // Each required fragment is needed on its own: a `checkSuites` marker
+    // with neither of the others, with `pullRequest(number:$number)` but no
+    // `commits(last:1)`, with `commits(last:1)` but no pull-request lookup, and
+    // the pull-request commit walk without `checkSuites` are all other queries.
+    assert.throws(
+      () =>
+        gh(
+          ...other(
+            '7',
+            'query($owner:String!){ node { checkSuites(first:100) } }',
+          ),
+        ),
+      /unexpected invocation/,
+    );
+    assert.throws(
+      () =>
+        gh(
+          ...other(
+            '7',
+            'query($owner:String!,$repo:String!,$number:Int!){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ checkSuites(first:100) } } }',
+          ),
+        ),
+      /unexpected invocation/,
+    );
+    assert.throws(
+      () =>
+        gh(
+          ...other(
+            '7',
+            'query($owner:String!,$repo:String!,$number:Int!){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ commits(last:1){ nodes{ commit{ oid } } } } } }',
+          ),
+        ),
+      /unexpected invocation/,
+    );
+    assert.throws(
+      () =>
+        gh(
+          ...other(
+            '7',
+            'query($owner:String!,$repo:String!,$number:Int!){ repository(owner:$owner,name:$repo){ ref(qualifiedName:"main"){ target { ... on Commit { commits(last:1){ nodes{ checkSuites(first:100) } } } } } } }',
+          ),
+        ),
+      /unexpected invocation/,
+    );
     assert.throws(
       () => gh(...other('seven', OBSERVED_QUERY)),
       /unexpected invocation/,
     );
-    assert.equal(fixture.unexpectedCalls().length, 2);
+    assert.equal(fixture.unexpectedCalls().length, 6);
   } finally {
     fixture.restore();
   }
