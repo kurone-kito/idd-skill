@@ -13,7 +13,6 @@ import {
   selectLatestCheckEntry,
 } from './ci-wait-state.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { extractKeywordReferences } from './discover-roadmap-graph.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -614,30 +613,35 @@ function findIssueRelatedOpenPrs({
   return candidates.filter((pr) => {
     // D3.5 defines a relationship through a plain-text closing keyword in
     // the PR body. Exclude blockquotes, including unmarked lazy paragraph
-    // continuations, before the shared scanner masks code, rejects negation,
-    // and enforces same-repository refs. This prevents ordinary mentions
-    // such as the one reported in #3763 from making Resume treat an unrelated
-    // PR as a second implementation.
+    // continuations, before masking code and matching each keyword directly
+    // to one same-repository reference. D3.5's matcher is intentionally
+    // negation-blind, like GitHub's closing-keyword parser; this prevents
+    // incidental mentions such as the one reported in #3763 from making
+    // Resume treat an unrelated PR as a second implementation.
     const bodyWithoutBlockQuotes = stripBlockQuotesAndLazyContinuations(
       pr.body,
     );
     const d35ClosingKeyword = new RegExp(
-      `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+(?:#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
+      `\\b(${CLOSING_KEYWORD_ALTERNATION})(\\s+)(#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
       'gi',
     );
     const maskedBody = maskMarkdownForScan(bodyWithoutBlockQuotes);
-    return maskedBody.split(/\r?\n/u).some((line) =>
-      hasD35ClosingReference(line, d35ClosingKeyword, {
+    return hasD35ClosingReference(
+      maskedBody,
+      bodyWithoutBlockQuotes,
+      d35ClosingKeyword,
+      {
         issueNumber: targetIssueNumber,
         owner: repository.owner,
         repo: repository.name,
-      }),
+      },
     );
   });
 }
 
 function stripBlockQuotesAndLazyContinuations(body: string): string {
   let quotedParagraphOpen = false;
+  const blockQuoteScanBarrier = '\u0000';
   const listIndentFastPath = { skipDeeplyIndentedProbe: false };
   const normalizedBody = body.replace(/\r\n/gu, '\n');
   let lineStart = 0;
@@ -659,11 +663,11 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
       );
       if (quotedContent !== null) {
         quotedParagraphOpen = startsBlockQuoteParagraph(quotedContent);
-        return '';
+        return blockQuoteScanBarrier;
       }
 
       if (quotedParagraphOpen && !startsMarkdownBlock(line)) {
-        return '';
+        return blockQuoteScanBarrier;
       }
 
       quotedParagraphOpen = false;
@@ -785,29 +789,31 @@ function startsMarkdownLeafBlock(content: string): boolean {
 }
 
 function hasD35ClosingReference(
-  line: string,
+  maskedBody: string,
+  sourceBody: string,
   closingReferencePattern: RegExp,
   options: { issueNumber: number; owner: string; repo: string },
 ): boolean {
-  for (const match of line.matchAll(closingReferencePattern)) {
+  for (const match of maskedBody.matchAll(closingReferencePattern)) {
+    const keyword = match[1];
+    const spacing = match[2];
+    const reference = match[3];
+    if (!keyword || !spacing || !reference) {
+      continue;
+    }
     const matchStart = match.index ?? 0;
-    const context = line
-      .slice(0, matchStart)
-      .trim()
-      .split(/\s+/u)
-      .slice(-6)
-      .join(' ')
-      .replace(/(?:[\w.-]+\/[\w.-]+)?#\d+/gu, ' ');
-    const candidate = `${context} ${match[0]}`.trim();
+    const sourceSpacing = sourceBody.slice(
+      matchStart + keyword.length,
+      matchStart + keyword.length + spacing.length,
+    );
+    if (!/^\s+$/u.test(sourceSpacing)) {
+      continue;
+    }
+    const expectedLocalReference = `#${options.issueNumber}`;
+    const expectedQualifiedReference = `${options.owner}/${options.repo}#${options.issueNumber}`;
     if (
-      extractKeywordReferences(candidate, {
-        owner: options.owner,
-        repo: options.repo,
-      }).some(
-        (reference) =>
-          reference.relationship === 'closing-keyword' &&
-          reference.target === options.issueNumber,
-      )
+      reference === expectedLocalReference ||
+      reference.toLowerCase() === expectedQualifiedReference.toLowerCase()
     ) {
       return true;
     }

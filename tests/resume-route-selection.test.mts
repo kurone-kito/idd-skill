@@ -424,7 +424,7 @@ test('collector does not borrow an exact closer from inline code beside a malfor
   assert.equal(input.prNumber, null);
 });
 
-test('collector does not combine a malformed close with a later negated close', () => {
+test('collector counts an exact negated close after a malformed closer', () => {
   const input = collectResumePrInput([
     {
       number: 3150,
@@ -435,8 +435,8 @@ test('collector does not combine a malformed close with a later negated close', 
   ]);
 
   assert.equal(input.prAmbiguous, false);
-  assert.equal(input.prCount, 0);
-  assert.equal(input.prNumber, null);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
 });
 
 test('collector requires a closing keyword before each target reference', () => {
@@ -505,7 +505,7 @@ test('collector preserves ambiguity when two open PRs both close the issue', () 
   assert.equal(selectResumeRoute(input).reason, 'multiple-open-prs-for-issue');
 });
 
-test('collector ignores closing-keyword lookalikes in code, quotes, and negation', () => {
+test('collector ignores closing-keyword lookalikes in code and quotes', () => {
   const input = collectResumePrInput([
     {
       number: 3150,
@@ -520,9 +520,65 @@ test('collector ignores closing-keyword lookalikes in code, quotes, and negation
         '- > Fixes #3145',
         '- [ ] > Resolves #3145',
         '  1. > Closes #3145',
-        'This does not close #3145.',
       ].join('\n'),
       url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+});
+
+test('collector follows D3.5 closing-keyword matching in negated prose', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'negated closing keyword PR',
+      body: 'This PR does not close #3145.',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector accepts D3.5 closing keywords followed by a line-wrapped reference', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'line-wrapped closer PR',
+      body: 'Closes\n#3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector does not bridge closing keywords across masked code or quotes', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'inline-code separator PR',
+      body: 'Closes `example`\n#3145',
+      url: 'https://example.test/pr/3150',
+    },
+    {
+      number: 3151,
+      title: 'fenced-code separator PR',
+      body: 'Closes\n```md\nexample\n```\n#3145',
+      url: 'https://example.test/pr/3151',
+    },
+    {
+      number: 3152,
+      title: 'blockquote separator PR',
+      body: 'Closes\n> quoted interruption\n#3145',
+      url: 'https://example.test/pr/3152',
     },
   ]);
 
