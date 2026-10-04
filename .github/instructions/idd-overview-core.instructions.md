@@ -46,7 +46,7 @@ note after the token: `review-watermark`/`review-baseline` use the
 phase-specific formats in `idd-review-snapshot.instructions.md`;
 `claimed-by`/`unclaimed-by` use the notes shown here. Hidden-only legacy
 `claimed-by`/`unclaimed-by` comments remain valid for parsing/migration,
-but never create new hidden-only claim comments.
+but never create new ones.
 
 - `{agent-id}` is a tool or agent identifier shared across concurrent
   sessions of the same agent type. For auditability, appending a unique
@@ -135,8 +135,8 @@ Ownership timing in this workflow uses the policy defaults
 - **Heartbeat**: after re-validating ownership, re-post the claim
   comment every 12 h while holding or when any phase is expected to
   exceed 12 h. The latest **valid** `claimed-by` comment for the same
-  `{claim-id}` resets the stale clock. Embed timestamps are ignored;
-  only the GitHub `created_at` of the comment itself counts.
+  `{claim-id}` resets the stale clock. Embedded timestamps are ignored;
+  only the comment's GitHub `created_at` counts.
 - **Heartbeat-overdue**: diagnostic only; see
   `idd-resume-stall.instructions.md` S3.
 
@@ -172,8 +172,7 @@ field. This **cwd-vs-claim check** applies only to mutations made
 from inside the implementation worktree contract (B2, B3, C5, D, E,
 and F2/F3 phases):
 
-Scope — the check runs **only** when **all** of the following are
-true:
+Scope — the check runs **only** when **all** of these hold:
 
 - The active claim's `branch:` field matches the `issue/*` pattern
   (excluding `roadmap-audit/*` coordination claims, which do not
@@ -217,7 +216,7 @@ restore the contaminated one — never `git reset --hard` +
 force-push a pushed/shared branch;
 [full procedure](../../docs/idd-design-rationale.md#wrong-branch-commit-recovery-cherry-pick-never-force-push).
 
-Out of scope and explicitly **not** blocked:
+Out of scope, explicitly **not** blocked:
 
 - B1 setup commands on the primary worktree's `main` (per the B1
   Anti-patterns rule, which requires keeping primary HEAD on `main`).
@@ -267,7 +266,7 @@ enabled and default approval actors to
 | Name | Commands |
 | --- | --- |
 | **fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
-| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |
+| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |
 | **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm typecheck` |
 | **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"` |
 | **issue-scope** | `roadmap-first` |
