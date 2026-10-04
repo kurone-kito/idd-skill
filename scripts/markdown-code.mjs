@@ -303,8 +303,14 @@ const MARKDOWN_INDENTED_CODE_PRECEDER_PATTERN =
  */
 const MARKDOWN_AMBIGUOUS_SETEXT_ONLY_PATTERN =
   /^ {0,3}(?:={1,}|-{1,2})[ \t]*$/u;
-const MARKDOWN_HTML_BLOCK_START_PATTERN =
-  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|ol|p|pre|script|section|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
+/**
+ * CommonMark/GFM HTML block types 1-6 plus GitHub's `<search>` block
+ * behavior, shared with Resume's lazy-quote interruption check (review in
+ * PR #3764, issue #3763). Type-7 custom tags remain separately gated on
+ * paragraph state because they cannot interrupt an open paragraph.
+ */
+export const MARKDOWN_HTML_BLOCK_START_PATTERN =
+  /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$))/iu;
 /**
  * Prefix-only test for a line that opens a custom (CommonMark type 7) HTML
  * tag: up to three spaces, `<` or `</`, a tag name, an optional attribute
@@ -350,7 +356,7 @@ export const MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN =
 // CommonMark §4.1: a thematic break is 3+ matching -, _, or * characters,
 // each optionally followed by spaces/tabs -- interior spacing is allowed
 // (e.g. `_ _ _`), unlike the tightly-packed run already covered above.
-const MARKDOWN_THEMATIC_BREAK_PATTERN =
+export const MARKDOWN_THEMATIC_BREAK_PATTERN =
   /^ {0,3}([-_*])(?:[ \t]*\1){2,}[ \t]*$/u;
 const HTML_RAW_TEXT_TAG_OPEN_PATTERN =
   /^ {0,3}<(script|pre|style|textarea)\b/iu;
@@ -818,7 +824,13 @@ function adoptListContentIndentForLine(state, parsed) {
  * earlier, unrelated list (separated only by a single blank line) would
  * wrongly inherit that list's indent.
  */
-function findEnclosingListContentZone(text, openingLineStart, containerDepth) {
+function findEnclosingListContentZone(
+  text,
+  openingLineStart,
+  containerDepth,
+  allowOrderedListAtBlockStart = false,
+  indentedCodeRanges,
+) {
   let openerLineStart = null;
   let openerContentIndent = null;
   let lineStart = findPreviousLineStart(text, openingLineStart);
@@ -833,7 +845,17 @@ function findEnclosingListContentZone(text, openingLineStart, containerDepth) {
       lineStart = findPreviousLineStart(text, lineStart);
       continue;
     }
-    const contentIndent = interruptingListContentIndent(parsed.content);
+    const contentIndent =
+      interruptingListContentIndent(parsed.content) ??
+      (allowOrderedListAtBlockStart
+        ? orderedListItemContentIndentAtBlockStart(
+            text,
+            lineStart,
+            containerDepth,
+            indentedCodeRanges ??
+              findIndentedCodeRanges(text, findFencedCodeRanges(text)),
+          )
+        : null);
     if (contentIndent !== null) {
       openerLineStart = lineStart;
       openerContentIndent = contentIndent;
@@ -872,6 +894,84 @@ function findEnclosingListContentZone(text, openingLineStart, containerDepth) {
     cursor = line.next;
   }
   return { contentIndent: openerContentIndent, openerLineStart };
+}
+/**
+ * A non-`1` ordered marker opens a list at a block boundary but cannot
+ * interrupt a paragraph. Resolve that distinction only for consumers that
+ * explicitly need to recognize list content (the ordinary parser keeps its
+ * paragraph-interruption rule unchanged).
+ */
+function orderedListItemContentIndentAtBlockStart(
+  text,
+  lineStart,
+  containerDepth,
+  indentedCodeRanges,
+) {
+  const line = lineBounds(text, lineStart);
+  const parsed = parseContainerLine(text.slice(lineStart, line.end));
+  const listItem = parseListItemMatch(parsed.content);
+  if (
+    parsed.containerDepth !== containerDepth ||
+    listItem === null ||
+    !/^\d{1,9}[.)]$/u.test(listItem.marker) ||
+    isInterruptingListMarker(listItem.marker)
+  ) {
+    return null;
+  }
+  let previousLineStart = findPreviousLineStart(text, lineStart);
+  while (previousLineStart !== null) {
+    const previousLine = lineBounds(text, previousLineStart);
+    const previous = parseContainerLine(
+      text.slice(previousLineStart, previousLine.end),
+    );
+    if (previous.containerDepth !== containerDepth) {
+      break;
+    }
+    if (previous.content.trim() === '') {
+      break;
+    }
+    if (
+      isPositionInMarkdownCodeRanges(previousLineStart, indentedCodeRanges) ||
+      isUnambiguousMarkdownBlockStart(previous.content)
+    ) {
+      break;
+    }
+    const previousListItem = parseListItemMatch(previous.content);
+    if (
+      previousListItem === null ||
+      !/^\d{1,9}[.)]$/u.test(previousListItem.marker)
+    ) {
+      return null;
+    }
+    if (isInterruptingListMarker(previousListItem.marker)) {
+      break;
+    }
+    previousLineStart = findPreviousLineStart(text, previousLineStart);
+  }
+  return parseListItemContainer(parsed.content);
+}
+function isPositionInMarkdownCodeRanges(position, ranges) {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = ranges[middle];
+    if (range === undefined || range.end <= position) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  const range = ranges[low];
+  return range !== undefined && range.start <= position;
+}
+function isUnambiguousMarkdownBlockStart(content) {
+  return (
+    /^ {0,3}#{1,6}(?:[ \t]+|$)/u.test(content) ||
+    /^ {0,3}(?:`{3,}|~{3,})/u.test(content) ||
+    MARKDOWN_THEMATIC_BREAK_PATTERN.test(content) ||
+    interruptingListContentIndent(content) !== null
+  );
 }
 function findMarkdownBlockBoundary(text, start, end) {
   const openingLineStart = text.lastIndexOf('\n', start - 1) + 1;
@@ -1163,6 +1263,61 @@ export function parseListItemContainer(content) {
   // ordinary prose instead of nested code.
   const contentPadding = spacingColumns > 4 ? 1 : spacingColumns;
   return markerEndColumns + contentPadding;
+}
+export function stripEnclosingListContentIndent(text, lineStart, cache) {
+  const indentedCodeRanges =
+    cache?.indentedCodeRanges ??
+    findIndentedCodeRanges(text, findFencedCodeRanges(text));
+  if (cache && cache.indentedCodeRanges === undefined) {
+    cache.indentedCodeRanges = indentedCodeRanges;
+  }
+  const line = lineBounds(text, lineStart);
+  const rawLine = text.slice(lineStart, line.end);
+  const parsed = parseContainerLine(rawLine);
+  if (
+    parsed.containerDepth !== 0 ||
+    interruptingListContentIndent(parsed.content) !== null
+  ) {
+    if (cache) {
+      cache.nextLineStart = -1;
+    }
+    return null;
+  }
+  if (cache?.nextLineStart === lineStart) {
+    const relativeLine = stripLeadingIndentColumns(
+      rawLine,
+      cache.contentIndent,
+    );
+    // Reuse the previous successful zone only for a direct continuation.
+    // A list-shaped line may introduce a nearer nested zone, so let the full
+    // lookup resolve it before caching the next line.
+    if (
+      parsed.content.trim() !== '' &&
+      indentationColumns(parsed.content) >= cache.contentIndent &&
+      parseListItemMatch(relativeLine.trimStart()) === null
+    ) {
+      cache.nextLineStart = line.next;
+      return relativeLine;
+    }
+  }
+  const zone = findEnclosingListContentZone(
+    text,
+    lineStart,
+    0,
+    true,
+    indentedCodeRanges,
+  );
+  if (cache) {
+    if (zone === null) {
+      cache.nextLineStart = -1;
+    } else {
+      cache.contentIndent = zone.contentIndent;
+      cache.nextLineStart = line.next;
+    }
+  }
+  return zone === null
+    ? null
+    : stripLeadingIndentColumns(rawLine, zone.contentIndent);
 }
 function parseContainerLine(line) {
   let cursor = 0;

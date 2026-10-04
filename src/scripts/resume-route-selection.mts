@@ -22,6 +22,17 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
+import {
+  type EnclosingListContentIndentCache,
+  indentationColumns,
+  isInterruptingListMarker,
+  MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN,
+  MARKDOWN_HTML_BLOCK_START_PATTERN,
+  MARKDOWN_THEMATIC_BREAK_PATTERN,
+  maskMarkdownForScan,
+  parseListItemMatch,
+  stripEnclosingListContentIndent,
+} from './markdown-code.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
 import {
@@ -34,6 +45,7 @@ import type {
   ProviderGovernanceReadOutcome,
   ProviderPort,
 } from './provider-port.mts';
+import { CLOSING_KEYWORD_ALTERNATION } from './supersession-detection.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
@@ -596,9 +608,266 @@ function findIssueRelatedOpenPrs({
   port: ProviderPort;
   issueNumber: number | null;
 }): ProviderChangeRequestSummary[] {
+  if (!Number.isInteger(issueNumber) || (issueNumber ?? 0) <= 0) {
+    return [];
+  }
+  const targetIssueNumber = Number(issueNumber);
   const candidates = port.listOpenChangeRequests();
-  const issueRefPattern = new RegExp(`(^|[^0-9])#${issueNumber}([^0-9]|$)`);
-  return candidates.filter((pr) => issueRefPattern.test(pr.body));
+  const repository = port.resolveRepositoryLocator();
+  return candidates.filter((pr) => {
+    // D3.5 defines a relationship through a plain-text closing keyword in
+    // the PR body. Exclude blockquotes, including unmarked lazy paragraph
+    // continuations, before masking code and matching each keyword directly
+    // to one same-repository reference. D3.5's matcher is intentionally
+    // negation-blind, like GitHub's closing-keyword parser; this prevents
+    // incidental mentions such as the one reported in #3763 from making
+    // Resume treat an unrelated PR as a second implementation.
+    const bodyWithoutBlockQuotes = stripBlockQuotesAndLazyContinuations(
+      pr.body,
+    );
+    const d35ClosingKeyword = new RegExp(
+      `\\b(${CLOSING_KEYWORD_ALTERNATION})(\\s+)(#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
+      'gi',
+    );
+    const maskedBody = maskMarkdownForScan(bodyWithoutBlockQuotes);
+    return hasD35ClosingReference(
+      maskedBody,
+      bodyWithoutBlockQuotes,
+      d35ClosingKeyword,
+      {
+        issueNumber: targetIssueNumber,
+        owner: repository.owner,
+        repo: repository.name,
+      },
+    );
+  });
+}
+
+function stripBlockQuotesAndLazyContinuations(body: string): string {
+  let quotedParagraphOpen = false;
+  let paragraphOpen = false;
+  const blockQuoteScanBarrier = '\u0000';
+  const listIndentFastPath = { skipDeeplyIndentedProbe: false };
+  const listZoneCache: EnclosingListContentIndentCache = {
+    contentIndent: 0,
+    nextLineStart: -1,
+  };
+  const normalizedBody = body.replace(/\r\n/gu, '\n');
+  let lineStart = 0;
+  return normalizedBody
+    .split('\n')
+    .map((line) => {
+      const currentLineStart = lineStart;
+      lineStart += line.length + 1;
+      if (line.trim() === '') {
+        quotedParagraphOpen = false;
+        paragraphOpen = false;
+        return line;
+      }
+
+      const quotedContent = stripBlockQuoteAndListPrefixes(
+        line,
+        normalizedBody,
+        currentLineStart,
+        listIndentFastPath,
+        paragraphOpen,
+        listZoneCache,
+      );
+      if (quotedContent !== null) {
+        quotedParagraphOpen = startsBlockQuoteParagraph(quotedContent);
+        paragraphOpen = false;
+        return blockQuoteScanBarrier;
+      }
+
+      if (quotedParagraphOpen) {
+        if (!startsMarkdownBlock(line, true)) {
+          return blockQuoteScanBarrier;
+        }
+        quotedParagraphOpen = false;
+      }
+
+      paragraphOpen = !startsMarkdownBlock(line, paragraphOpen);
+      return line;
+    })
+    .join('\n');
+}
+
+function stripBlockQuoteAndListPrefixes(
+  line: string,
+  body?: string,
+  lineStart?: number,
+  listIndentFastPath?: { skipDeeplyIndentedProbe: boolean },
+  paragraphOpen = false,
+  listZoneCache?: EnclosingListContentIndentCache,
+): string | null {
+  // Most lines, including ordinary indented code, cannot become a
+  // blockquote or nested list after list-content indentation is removed.
+  // Avoid the helper's backward scan for those lines; doing it once per
+  // line made large PR bodies quadratic (issue #3763).
+  const mayContainBlockQuote = mayContainBlockQuoteAfterListMarkers(line);
+  const leadingIndent = line.match(/^[ \t]*/u)?.[0] ?? '';
+  const isDeeplyIndented = indentationColumns(leadingIndent) >= 4;
+  const hasShallowListMarker =
+    !isDeeplyIndented && parseListItemMatch(line.trimStart()) !== null;
+  if (!isDeeplyIndented && line.trim() !== '' && listIndentFastPath) {
+    listIndentFastPath.skipDeeplyIndentedProbe = false;
+  }
+  const shouldProbeEnclosingList =
+    mayContainBlockQuote &&
+    !hasShallowListMarker &&
+    !(isDeeplyIndented && listIndentFastPath?.skipDeeplyIndentedProbe);
+  const listContent =
+    body === undefined || lineStart === undefined || !shouldProbeEnclosingList
+      ? null
+      : stripEnclosingListContentIndent(body, lineStart, listZoneCache);
+  if (
+    shouldProbeEnclosingList &&
+    listContent === null &&
+    isDeeplyIndented &&
+    listIndentFastPath
+  ) {
+    // An unindented list/block boundary clears this negative cache above.
+    // Until then, further deeply indented lines cannot acquire a new list
+    // container, so marker-shaped indented code needs only one backward
+    // probe rather than one scan per line (issue #3763).
+    listIndentFastPath.skipDeeplyIndentedProbe = true;
+  }
+  const candidate = listContent ?? line;
+  if (isIndentedCodeBlock(candidate)) {
+    return null;
+  }
+  let remaining = candidate.trimStart();
+  let foundBlockQuote = false;
+  let foundListMarker = false;
+  while (remaining) {
+    const markerPrefix = remaining.replace(/^ {0,3}/u, '');
+    if (markerPrefix.startsWith('>')) {
+      foundBlockQuote = true;
+      remaining = markerPrefix.slice(1).replace(/^[ \t]?/u, '');
+      continue;
+    }
+    const listMarker = markerPrefix.match(/^(?:[-+*]|\d{1,9}[.)])[ \t]+/u);
+    if (listMarker) {
+      const parsedListItem = parseListItemMatch(markerPrefix);
+      if (
+        paragraphOpen &&
+        !foundListMarker &&
+        parsedListItem !== null &&
+        !isInterruptingListMarker(parsedListItem.marker)
+      ) {
+        break;
+      }
+      foundListMarker = true;
+      remaining = markerPrefix.slice(listMarker[0].length);
+      const taskCheckbox = remaining.match(/^\[[ xX]\][ \t]+/u);
+      if (taskCheckbox) {
+        remaining = remaining.slice(taskCheckbox[0].length);
+      }
+      continue;
+    }
+    break;
+  }
+  return foundBlockQuote ? remaining : null;
+}
+
+function mayContainBlockQuoteAfterListMarkers(line: string): boolean {
+  let candidate = line.trimStart();
+  while (candidate) {
+    if (candidate.startsWith('>')) {
+      return true;
+    }
+    const listItem = parseListItemMatch(candidate);
+    if (listItem === null) {
+      return false;
+    }
+    candidate = listItem.content;
+    const taskCheckbox = candidate.match(/^\[[ xX]\][ \t]+/u);
+    if (taskCheckbox) {
+      candidate = candidate.slice(taskCheckbox[0].length);
+    }
+  }
+  return false;
+}
+
+function startsBlockQuoteParagraph(content: string): boolean {
+  const nestedContent = stripBlockQuoteAndListPrefixes(content) ?? content;
+  if (!nestedContent.trim()) {
+    return false;
+  }
+  return !startsMarkdownLeafBlock(nestedContent);
+}
+
+function startsMarkdownBlock(line: string, paragraphOpen = false): boolean {
+  // Indented code cannot interrupt an open paragraph. Keep the original
+  // indentation in this decision before examining tokens after trimStart().
+  if (paragraphOpen && isIndentedCodeBlock(line)) {
+    return false;
+  }
+  const content = line.trimStart();
+  const listItem = parseListItemMatch(content);
+  return (
+    content.startsWith('>') ||
+    (listItem !== null &&
+      (!paragraphOpen || isInterruptingListMarker(listItem.marker))) ||
+    startsMarkdownLeafBlock(content, paragraphOpen) ||
+    (!paragraphOpen && isIndentedCodeBlock(line))
+  );
+}
+
+function startsMarkdownLeafBlock(
+  content: string,
+  paragraphOpen = false,
+): boolean {
+  return (
+    isIndentedCodeBlock(content) ||
+    /^#{1,6}(?:[ \t]+|$)/u.test(content) ||
+    /^(?:`{3,}|~{3,})/u.test(content) ||
+    MARKDOWN_THEMATIC_BREAK_PATTERN.test(content) ||
+    MARKDOWN_HTML_BLOCK_START_PATTERN.test(content) ||
+    (!paragraphOpen &&
+      MARKDOWN_CUSTOM_HTML_BLOCK_START_LINE_PATTERN.test(content))
+  );
+}
+
+function isIndentedCodeBlock(line: string): boolean {
+  const leadingWhitespace = line.match(/^[ \t]*/u)?.[0] ?? '';
+  return (
+    leadingWhitespace.length < line.length &&
+    indentationColumns(leadingWhitespace) >= 4
+  );
+}
+
+function hasD35ClosingReference(
+  maskedBody: string,
+  sourceBody: string,
+  closingReferencePattern: RegExp,
+  options: { issueNumber: number; owner: string; repo: string },
+): boolean {
+  for (const match of maskedBody.matchAll(closingReferencePattern)) {
+    const keyword = match[1];
+    const spacing = match[2];
+    const reference = match[3];
+    if (!keyword || !spacing || !reference) {
+      continue;
+    }
+    const matchStart = match.index ?? 0;
+    const sourceSpacing = sourceBody.slice(
+      matchStart + keyword.length,
+      matchStart + keyword.length + spacing.length,
+    );
+    if (!/^\s+$/u.test(sourceSpacing)) {
+      continue;
+    }
+    const expectedLocalReference = `#${options.issueNumber}`;
+    const expectedQualifiedReference = `${options.owner}/${options.repo}#${options.issueNumber}`;
+    if (
+      reference === expectedLocalReference ||
+      reference.toLowerCase() === expectedQualifiedReference.toLowerCase()
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function countUnrepliedRegularComments(

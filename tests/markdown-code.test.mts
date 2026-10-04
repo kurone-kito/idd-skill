@@ -14,8 +14,25 @@ import {
   maskMarkdownCodeRegionsPreservingPositions,
   maskMarkdownForScan,
   mergeMarkdownCodeRanges,
+  stripEnclosingListContentIndent,
   stripMarkdownCodeRegions,
 } from '../src/scripts/markdown-code.mts';
+
+test('stripEnclosingListContentIndent recognizes lists after indented code blocks', () => {
+  const body = '    example\n10. outer\n    > Closes #3145';
+  const quoteStart = body.lastIndexOf('    >');
+  const listContent = stripEnclosingListContentIndent(body, quoteStart);
+
+  assert.equal(listContent, '> Closes #3145');
+});
+
+test('stripEnclosingListContentIndent does not treat lazy continuations as code boundaries', () => {
+  const body = 'paragraph\n    continuation\n10. outer\n    > Closes #3145';
+  const quoteStart = body.lastIndexOf('    >');
+  const listContent = stripEnclosingListContentIndent(body, quoteStart);
+
+  assert.equal(listContent, null);
+});
 
 test('stripMarkdownCodeRegions blanks fenced blocks but keeps line count', () => {
   const body = ['before', '~~~', 'inside #1', '~~~', 'after'].join('\n');
@@ -948,6 +965,17 @@ test('findHtmlBlockRanges masks a generic block-level tag through the next blank
   const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
   assert.equal(masked.includes('some text'), false);
   assert.equal(masked.includes('after'), true);
+});
+
+test('findHtmlBlockRanges recognizes the remaining block-level HTML tags', () => {
+  for (const opener of ['<frameset>', '<search>']) {
+    const body = `${opener}\ninside block\n\noutside block`;
+    const ranges = findHtmlBlockRanges(body);
+    const masked = maskMarkdownCodeRegionsPreservingPositions(body, ranges);
+    assert.equal(ranges.length, 1, opener);
+    assert.equal(masked.includes('inside block'), false, opener);
+    assert.equal(masked.includes('outside block'), true, opener);
+  }
 });
 
 test('findHtmlBlockRanges does not open a custom-tag block mid-paragraph (cannot interrupt a paragraph)', () => {
