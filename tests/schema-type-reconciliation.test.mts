@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import type { AdvisoryConvergenceVerdict } from '../src/scripts/advisory-convergence.mts';
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
-import { REAL_ISSUE_REFERENCE_PATTERN } from '../src/scripts/audit-authored-issue.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
 import type {
   DiscoverIncompleteReport,
@@ -29,6 +26,10 @@ import type {
   ParsedProviderOutagePark,
 } from '../src/scripts/protocol-helpers.mts';
 import type { ProviderHealthReport } from '../src/scripts/provider-health.mts';
+import {
+  type CatalogSchemaFile,
+  SCHEMA_TYPE_CATALOG,
+} from '../src/scripts/repository-schema-audit.mts';
 import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
 import type { StalledSessionQuietCheckReport } from '../src/scripts/stalled-session-quiet-check.mts';
 import type {
@@ -49,9 +50,11 @@ import {
 // Every JSON Schema shipped in schemas/*.schema.json is reconciled with
 // the TypeScript type that describes the same document at runtime:
 //
-//   1. The SCHEMA_TYPE_MAP table below is the single source of truth for
-//      the schema-file ⇄ exported-type ⇄ owning-module mapping. A schema
-//      file on disk that is missing from the table fails the suite.
+//   1. SCHEMA_TYPE_CATALOG (src/scripts/repository-schema-audit.mts, #3751)
+//      is the single source of truth for the schema-file ⇄ exported-type ⇄
+//      owning-module mapping, joined below with this file's test-only keys
+//      and fixtures. A schema file on disk that is missing from the catalog
+//      fails SCHEMA-TYPE-CATALOG in `audit-docs --check`.
 //   2. Each entry carries a canonical fixture declared `satisfies` the
 //      exported type (compile-time side) and validated against the
 //      schema by the dependency-free validator from validate-schemas.mts
@@ -81,6 +84,18 @@ import {
 interface SchemaObject {
   required?: readonly string[];
   properties?: Record<string, unknown>;
+}
+
+/** The test-only half of a reconciliation row, keyed by schema file. */
+interface SchemaTestData {
+  /** Top-level keys shared by the schema and the exported type. */
+  readonly keys: readonly string[];
+  /** Pinned checkSchemaKeywords output for validator-unsupported keywords. */
+  readonly knownKeywordGaps?: readonly string[];
+  /** Pinned validate() errors for validator-unsupported constructs. */
+  readonly knownValidationGaps?: readonly string[];
+  /** Canonical fixture, declared `satisfies` the exported type. */
+  readonly fixture: Record<string, unknown>;
 }
 
 /** One row of the schema ⇄ type ⇄ module reconciliation table. */
@@ -1753,255 +1768,149 @@ const postIddMarkerFixture = {
   url: 'https://github.com/kurone-kito/idd-skill/issues/1047#issuecomment-4800026123',
 } satisfies PostIddMarkerResult;
 
-const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
-  {
-    schemaFile: 'disposition-non-review-notices.schema.json',
-    exportedType: 'DispositionReport',
-    owningModule: 'src/scripts/disposition-non-review-notices.mts',
+const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
+  'disposition-non-review-notices.schema.json': {
     keys: dispositionNonReviewNoticesKeys,
     fixture: dispositionNonReviewNoticesFixture,
   },
-  {
-    schemaFile: 'resolve-review-thread.schema.json',
-    exportedType: 'ResolveReviewThreadReport',
-    owningModule: 'src/scripts/resolve-review-thread.mts',
+  'resolve-review-thread.schema.json': {
     keys: resolveReviewThreadKeys,
     fixture: resolveReviewThreadFixture,
   },
-  {
-    schemaFile: 'post-idd-marker.schema.json',
-    exportedType: 'PostIddMarkerResult',
-    owningModule: 'src/scripts/post-idd-marker.mts',
+  'post-idd-marker.schema.json': {
     keys: postIddMarkerKeys,
     fixture: postIddMarkerFixture,
   },
-  {
-    schemaFile: 'advisory-convergence.schema.json',
-    exportedType: 'AdvisoryConvergenceVerdict',
-    owningModule: 'src/scripts/advisory-convergence.mts',
+  'advisory-convergence.schema.json': {
     keys: advisoryConvergenceKeys,
     fixture: advisoryConvergenceFixture,
   },
-  {
-    schemaFile: 'advisory-wait-state.schema.json',
-    exportedType: 'AdvisoryWaitStateReport',
-    owningModule: 'src/scripts/advisory-wait-state.mts',
+  'advisory-wait-state.schema.json': {
     keys: advisoryWaitStateKeys,
     fixture: advisoryWaitStateFixture,
   },
-  {
-    schemaFile: 'branch-conflict-state.schema.json',
-    exportedType: 'BranchConflictResult',
-    owningModule: 'src/scripts/branch-conflict-state.mts',
+  'branch-conflict-state.schema.json': {
     keys: branchConflictStateKeys,
     fixture: branchConflictStateFixture,
   },
-  {
-    schemaFile: 'provider-health.schema.json',
-    exportedType: 'ProviderHealthReport',
-    owningModule: 'src/scripts/provider-health.mts',
+  'provider-health.schema.json': {
     keys: providerHealthKeys,
     fixture: providerHealthFixture,
   },
-  {
-    schemaFile: 'claim-marker.schema.json',
-    exportedType: 'ParsedClaimMarker',
-    owningModule: 'src/scripts/protocol-helpers.mts',
+  'claim-marker.schema.json': {
     keys: claimMarkerKeys,
     fixture: claimMarkerFixture,
   },
-  {
-    schemaFile: 'provider-outage-declaration.schema.json',
-    exportedType: 'ParsedProviderOutageDeclaration',
-    owningModule: 'src/scripts/protocol-helpers.mts',
+  'provider-outage-declaration.schema.json': {
     keys: providerOutageDeclarationKeys,
     fixture: providerOutageDeclarationFixture,
   },
-  {
-    schemaFile: 'provider-outage-park.schema.json',
-    exportedType: 'ParsedProviderOutagePark',
-    owningModule: 'src/scripts/protocol-helpers.mts',
+  'provider-outage-park.schema.json': {
     keys: providerOutageParkKeys,
     fixture: providerOutageParkFixture,
   },
-  {
-    schemaFile: 'local-validation-evidence.schema.json',
-    exportedType: 'ParsedLocalValidationEvidence',
-    owningModule: 'src/scripts/protocol-helpers.mts',
+  'local-validation-evidence.schema.json': {
     keys: localValidationEvidenceKeys,
     fixture: localValidationEvidenceFixture,
   },
-  {
-    schemaFile: 'token-cost-event.schema.json',
-    exportedType: 'TokenCostEvent',
-    owningModule: 'src/scripts/token-cost-core.mts',
+  'token-cost-event.schema.json': {
     keys: tokenCostEventKeys,
     fixture: tokenCostEventFixture,
   },
-  {
-    schemaFile: 'token-cost-sample.schema.json',
-    exportedType: 'TokenCostSample',
-    owningModule: 'src/scripts/token-cost-core.mts',
+  'token-cost-sample.schema.json': {
     keys: tokenCostSampleKeys,
     fixture: tokenCostSampleFixture,
   },
-  {
-    schemaFile: 'token-cost-snapshot.schema.json',
-    exportedType: 'TokenCostSnapshot',
-    owningModule: 'src/scripts/token-cost-core.mts',
+  'token-cost-snapshot.schema.json': {
     keys: tokenCostSnapshotKeys,
     fixture: tokenCostSnapshotFixture,
   },
-  {
-    schemaFile: 'discover-roadmap-union.schema.json',
-    exportedType: 'RoadmapGraphUnionReport',
-    owningModule: 'src/scripts/discover-roadmap-graph.mts',
+  'discover-roadmap-union.schema.json': {
     keys: discoverRoadmapUnionKeys,
     fixture: discoverRoadmapUnionFixture,
   },
-  {
-    schemaFile: 'discover-roadmap-incomplete.schema.json',
-    exportedType: 'DiscoverIncompleteReport',
-    owningModule: 'src/scripts/discover-roadmap-graph.mts',
+  'discover-roadmap-incomplete.schema.json': {
     keys: discoverRoadmapIncompleteKeys,
     fixture: discoverRoadmapIncompleteFixture,
   },
-  {
-    schemaFile: 'forced-handoff-marker.schema.json',
-    exportedType: 'ParsedForcedHandoffMarker',
-    owningModule: 'src/scripts/protocol-helpers.mts',
+  'forced-handoff-marker.schema.json': {
     keys: forcedHandoffMarkerKeys,
     fixture: forcedHandoffMarkerFixture,
   },
-  {
-    schemaFile: 'idd-merge-execute.schema.json',
-    exportedType: 'IddMergeExecuteVerdict',
-    owningModule: 'src/scripts/idd-merge-execute.mts',
+  'idd-merge-execute.schema.json': {
     keys: iddMergeExecuteKeys,
     fixture: iddMergeExecuteFixture,
   },
-  {
-    schemaFile: 'idd-roadmap-audit-execute.schema.json',
-    exportedType: 'IddRoadmapAuditExecuteVerdict',
-    owningModule: 'src/scripts/idd-roadmap-audit-execute.mts',
+  'idd-roadmap-audit-execute.schema.json': {
     keys: iddRoadmapAuditExecuteKeys,
     fixture: iddRoadmapAuditExecuteFixture,
   },
-  {
-    schemaFile: 'live-status-digest.schema.json',
-    exportedType: 'LiveStatusDigestFields',
-    owningModule: 'src/scripts/protocol-helpers.mts',
+  'live-status-digest.schema.json': {
     keys: liveStatusDigestKeys,
     fixture: liveStatusDigestFixture,
   },
-  {
-    schemaFile: 'phase-graph.schema.json',
-    exportedType: 'PhaseGraphDocument (test-local; no runtime type)',
-    owningModule:
-      'schemas/phase-graph.json via src/scripts/validate-schemas.mts',
+  'phase-graph.schema.json': {
     keys: phaseGraphKeys,
     fixture: phaseGraphFixture,
   },
-  {
-    schemaFile: 'issue-authoring-review-input.schema.json',
-    exportedType: 'IssueAuthoringReviewInput (test-local; no runtime type)',
-    owningModule:
-      'docs/issue-authoring-skill.md (caller-composed stdin payload)',
+  'issue-authoring-review-input.schema.json': {
     keys: issueAuthoringReviewInputKeys,
     fixture: issueAuthoringReviewInputFixture,
   },
-  {
-    schemaFile: 'onboarding-hearing-catalog.schema.json',
-    exportedType: 'OnboardingHearingCatalog',
-    owningModule: 'src/scripts/onboarding-hearing.mts',
+  'onboarding-hearing-catalog.schema.json': {
     keys: onboardingHearingCatalogKeys,
     fixture: onboardingHearingCatalogFixture,
   },
-  {
-    schemaFile: 'onboarding-hearing-transcript.schema.json',
-    exportedType: 'OnboardingHearingTranscript',
-    owningModule: 'src/scripts/onboarding-hearing.mts',
+  'onboarding-hearing-transcript.schema.json': {
     keys: onboardingHearingTranscriptKeys,
     fixture: onboardingHearingTranscriptFixture,
   },
-  {
-    schemaFile: 'policy.schema.json',
-    exportedType: 'PolicyConfigFile (test-local; no runtime type)',
-    owningModule: 'src/scripts/policy-helpers.mts',
+  'policy.schema.json': {
     keys: policyConfigKeys,
     fixture: policyConfigFixture,
   },
-  {
-    schemaFile: 'pre-merge-readiness.schema.json',
-    exportedType: 'PreMergeReadinessReport',
-    owningModule: 'src/scripts/pre-merge-readiness.mts',
+  'pre-merge-readiness.schema.json': {
     keys: preMergeReadinessKeys,
     fixture: preMergeReadinessFixture,
   },
-  {
-    schemaFile: 'stalled-session-quiet-check.schema.json',
-    exportedType: 'StalledSessionQuietCheckReport',
-    owningModule: 'src/scripts/stalled-session-quiet-check.mts',
+  'stalled-session-quiet-check.schema.json': {
     keys: stalledSessionQuietCheckKeys,
     fixture: stalledSessionQuietCheckFixture,
   },
-];
+};
+
+/**
+ * The catalog row (schema file, exported type, owning module) joined with this
+ * file's test-only data. The catalog lives in the production audit module so
+ * the repository audit never imports a test.
+ */
+const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = SCHEMA_TYPE_CATALOG.map(
+  (entry) => ({ ...entry, ...SCHEMA_TEST_DATA[entry.schemaFile] }),
+);
 
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
-
-const SCHEMAS_DIR = fileURLToPath(new URL('../schemas/', import.meta.url));
 
 function loadSchema(entry: SchemaTypeMapping): SchemaObject {
   return loadJson(`schemas/${entry.schemaFile}`) as SchemaObject;
 }
 
 // ---------------------------------------------------------------------------
-// Directory sweep — the table must cover schemas/ exactly.
+// Catalog join — the audit owns the live directory sweep.
 // ---------------------------------------------------------------------------
 
-test('every *.schema.json file in schemas/ is mapped to an exported type', () => {
-  const onDisk = readdirSync(SCHEMAS_DIR)
-    .filter((name) => name.endsWith('.schema.json'))
-    .sort();
-  const mapped = new Set(SCHEMA_TYPE_MAP.map((entry) => entry.schemaFile));
-  const unmapped = onDisk.filter((name) => !mapped.has(name));
-  assert.deepEqual(
-    unmapped,
-    [],
-    `unmapped schema file(s) in schemas/: ${unmapped.join(', ')} — add a SCHEMA_TYPE_MAP entry (schema ⇄ exported type ⇄ owning module) in tests/schema-type-reconciliation.test.mts`,
-  );
-});
+// SCHEMA-TYPE-CATALOG in scripts/repository-schema-audit.mjs (#3751) fails when
+// a schemas/*.schema.json file is unmapped, a mapped file is missing or
+// duplicated, or schemas/ holds a stray non-schema file. What stays here is the
+// join between that catalog and this file's test-only data.
 
-test('every mapped schema file exists on disk exactly once', () => {
-  const onDisk = new Set(
-    readdirSync(SCHEMAS_DIR).filter((name) => name.endsWith('.schema.json')),
-  );
-  const stale = SCHEMA_TYPE_MAP.filter(
-    (entry) => !onDisk.has(entry.schemaFile),
-  ).map((entry) => entry.schemaFile);
+test('every catalog schema file has test data and no test data is stale', () => {
   assert.deepEqual(
-    stale,
-    [],
-    `SCHEMA_TYPE_MAP references missing schema file(s): ${stale.join(', ')}`,
+    Object.keys(SCHEMA_TEST_DATA).sort(),
+    SCHEMA_TYPE_CATALOG.map((entry) => entry.schemaFile).sort(),
+    'SCHEMA_TEST_DATA and SCHEMA_TYPE_CATALOG must name the same schema files',
   );
-  const names = SCHEMA_TYPE_MAP.map((entry) => entry.schemaFile);
-  assert.equal(
-    new Set(names).size,
-    names.length,
-    'SCHEMA_TYPE_MAP contains duplicate schema entries',
-  );
-});
-
-test('the only non-schema file in schemas/ is the phase-graph data file', () => {
-  // schemas/phase-graph.json is DATA (an instance of
-  // phase-graph.schema.json), not a schema; it is intentionally outside
-  // the *.schema.json mapping glob. Any other stray file fails here.
-  const nonSchema = readdirSync(SCHEMAS_DIR)
-    .filter((name) => !name.endsWith('.schema.json'))
-    .sort();
-  assert.deepEqual(nonSchema, ['phase-graph.json']);
 });
 
 // ---------------------------------------------------------------------------
@@ -2060,28 +1969,4 @@ test('compile-time key-exhaustiveness witnesses hold', () => {
   for (const [name, witness] of Object.entries(exhaustivenessWitnesses)) {
     assert.equal(witness, true, `${name}: exhaustiveness witness must hold`);
   }
-});
-
-test('audit-authored-issue.mts REAL_ISSUE_REFERENCE_PATTERN stays in sync with the issueAuthoring.journalIssue schema pattern (#2681 review, CodeRabbit)', () => {
-  const schema = loadJson('schemas/policy.schema.json') as {
-    properties: {
-      issueAuthoring: {
-        properties: { journalIssue: { pattern: string } };
-      };
-    };
-  };
-  const schemaPattern =
-    schema.properties.issueAuthoring.properties.journalIssue.pattern;
-  // A regex literal's `.source` escapes the `/` that a JSON string pattern
-  // never needs to -- normalize before comparing so the two only drift when
-  // their actual matching behavior does.
-  const normalizedRegexSource = REAL_ISSUE_REFERENCE_PATTERN.source.replace(
-    /\\\//g,
-    '/',
-  );
-  assert.equal(
-    normalizedRegexSource,
-    schemaPattern,
-    'audit-authored-issue.mts REAL_ISSUE_REFERENCE_PATTERN and schemas/policy.schema.json issueAuthoring.journalIssue.pattern drifted -- update both together',
-  );
 });

@@ -119,7 +119,7 @@ inherit a non-stale claim. For legacy claim migration (comments without
 
 ## Thresholds
 
-Ownership timing in this workflow uses the policy defaults
+Ownership timing uses the policy defaults
 `claim-stale-age` and `claim-heartbeat-interval` listed in
 `docs/policy-constants.md`.
 
@@ -161,7 +161,7 @@ If you posted an activation nonce, confirm it still wins for this
 claim-id (`idd-claim.instructions.md`) -- a different winner means a lost
 claim-id.
 
-In addition to the `{claim-id}` check, verify that the mutation is
+Also, verify that the mutation is
 about to run from the worktree named in the active claim's `branch:`
 field. This **cwd-vs-claim check** applies only to mutations made
 from inside the implementation worktree contract (B2, B3, C5, D, E,
@@ -175,7 +175,7 @@ Scope — the check runs **only** when **all** of these hold:
 - The sibling worktree expected by the B1 naming convention is
   already present in `git worktree list` (the check does not fire
   during B1 setup before the worktree exists, or during F4 cleanup
-  after the worktree has been removed by intent).
+  after its intentional removal).
 
 When in scope, run:
 
