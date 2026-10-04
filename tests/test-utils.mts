@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import { after, before } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -101,6 +101,10 @@ const SYNC_DOCS_DEPS = [
  */
 export function stubExecutable(name: string, scriptBody: string): () => void {
   const tempRoot = mkdtempSync(join(tmpdir(), `idd-stub-${name}-`));
+  const activation: StubActivation = {
+    id: basename(tempRoot),
+    variable: `IDD_STUB_ACTIVE_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
+  };
   const preloadPath = join(tempRoot, 'preload.cjs');
   try {
     if (process.platform !== 'win32') {
@@ -131,7 +135,10 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
       } catch {
         copyFileSync(process.execPath, exePath);
       }
-      writeFileSync(preloadPath, buildStubPreloadSource(name, scriptBody));
+      writeFileSync(
+        preloadPath,
+        buildStubPreloadSource(name, scriptBody, activation),
+      );
     }
   } catch (error) {
     rmSync(tempRoot, { recursive: true, force: true });
@@ -169,12 +176,19 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     };
   }
   const originalNodeOptions = process.env.NODE_OPTIONS;
+  const previousActive = process.env[activation.variable];
   const requireFlag = `--require "${preloadPath.replaceAll('\\', '/')}"`;
   process.env.NODE_OPTIONS = originalNodeOptions
     ? `${originalNodeOptions} ${requireFlag}`
     : requireFlag;
+  process.env[activation.variable] = activation.id;
   return () => {
     restorePath();
+    if (previousActive === undefined) {
+      delete process.env[activation.variable];
+    } else {
+      process.env[activation.variable] = previousActive;
+    }
     if (originalNodeOptions === undefined) {
       delete process.env.NODE_OPTIONS;
     } else {
@@ -575,7 +589,25 @@ export function useFixtureGh(
 }
 
 /** Builds the Windows preload script `stubExecutable` writes into `tempRoot`. */
-function buildStubPreloadSource(name: string, scriptBody: string): string {
+/**
+ * `variable` holds the id of the stub that is currently active for a name;
+ * only the preload whose own `id` matches it runs. `NODE_OPTIONS` stacks one
+ * `--require` per installed stub, and every preload would otherwise run
+ * whenever the executable is `<name>.exe`, so the OUTER stub would answer a
+ * call meant for a nested one (a PATH-prepended POSIX stub shadows the other
+ * way round). Installing a stub makes its id the active one and restoring it
+ * hands the name back to the previous stub, so same-name stubs nest LIFO.
+ */
+interface StubActivation {
+  readonly id: string;
+  readonly variable: string;
+}
+
+function buildStubPreloadSource(
+  name: string,
+  scriptBody: string,
+  activation: StubActivation,
+): string {
   return [
     // Gate on the exe's own basename rather than a full-path compare: any
     // node process launched as `<name>.exe` is this stub by construction
@@ -585,7 +617,8 @@ function buildStubPreloadSource(name: string, scriptBody: string): string {
     // the same directory.
     `const expectedBasename = ${JSON.stringify(`${name}.exe`.toLowerCase())};`,
     "const nodePath = require('node:path');",
-    'if (nodePath.basename(process.execPath).toLowerCase() === expectedBasename) {',
+    `const activeId = process.env[${JSON.stringify(activation.variable)}];`,
+    `if (nodePath.basename(process.execPath).toLowerCase() === expectedBasename && activeId === ${JSON.stringify(activation.id)}) {`,
     // Node's own bootstrap resolves argv[1] against cwd before this
     // preload runs (treating it as a candidate main-module path even
     // though the process exits before ever loading one), so a plain

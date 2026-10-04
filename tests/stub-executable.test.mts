@@ -826,3 +826,77 @@ ${body}
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Copilot review on PR #3767: on Windows `NODE_OPTIONS` stacks one preload per
+// installed stub and every preload ran whenever the executable was `<name>.exe`,
+// so an OUTER same-name stub (the file-wide fixture gh) answered a call meant
+// for a nested one. Same-name stubs now nest LIFO on every platform.
+test('a nested same-name stub shadows the outer one, and the outer answers again once it is restored', () => {
+  const outer = stubExecutable('gh', "process.stdout.write('outer');\n");
+  try {
+    assert.equal(gh('x'), 'outer');
+    const inner = stubExecutable('gh', "process.stdout.write('inner');\n");
+    try {
+      assert.equal(gh('x'), 'inner');
+      const innermost = stubExecutable(
+        'gh',
+        "process.stdout.write('innermost');\n",
+      );
+      try {
+        assert.equal(gh('x'), 'innermost');
+      } finally {
+        innermost();
+      }
+      assert.equal(gh('x'), 'inner');
+    } finally {
+      inner();
+    }
+    assert.equal(gh('x'), 'outer');
+  } finally {
+    outer();
+  }
+});
+
+// The Windows route (`<name>.exe` plus a `NODE_OPTIONS` preload) is not reached
+// on POSIX, so run it there too: a child reports `win32` before the helper
+// reads the platform, and the stub `.exe` is a hard link of this node binary,
+// which is runnable on Linux and macOS as `gh.exe`.
+test('the Windows preload route nests same-name stubs LIFO (simulated on POSIX)', {
+  skip: process.platform === 'win32' ? 'the real route runs on win32' : false,
+}, () => {
+  const testUtils = pathToFileURL(
+    join(import.meta.dirname, 'test-utils.mts'),
+  ).href;
+  const script = `
+    import { execFileSync } from 'node:child_process';
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const { stubExecutable } = await import(${JSON.stringify(testUtils)});
+    const run = () => execFileSync('gh.exe', ['x'], { encoding: 'utf8' });
+    const seen = [];
+    const outer = stubExecutable('gh', "process.stdout.write('outer');");
+    seen.push(run());
+    const inner = stubExecutable('gh', "process.stdout.write('inner');");
+    seen.push(run());
+    inner();
+    seen.push(run());
+    outer();
+    process.stdout.write(JSON.stringify(seen));
+  `;
+  // `os.tmpdir()` reads TEMP/TMP once the child reports `win32`.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    TEMP: tmpdir(),
+    TMP: tmpdir(),
+  };
+  delete env.NODE_OPTIONS;
+  const result = spawnSync(
+    process.execPath,
+    ['--input-type=module', '-e', script],
+    {
+      encoding: 'utf8',
+      env,
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), ['outer', 'inner', 'outer']);
+});
