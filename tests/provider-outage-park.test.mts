@@ -21,14 +21,19 @@ import {
 } from '../src/scripts/provider-outage-park.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
-import { pinLoadControlOff } from './test-utils.mts';
+import { pinLoadControlOff, useFixtureGh } from './test-utils.mts';
 
 // This source repository's own config enables load control (#3702). These
-// tests build the parked-change report in-process and reach the real `gh` for
-// reads they do not inject, which would write host-local load-control state;
-// run them as before, with it off. Load control has its own tests in
-// gh-exec-load-control.test.mts.
+// tests build the parked-change report in-process; run them with load control
+// off, as before. Load control has its own tests in gh-exec-load-control.test.mts.
+//
+// That is a load-control concern, not network isolation (#3746): the fixture
+// `gh` below serves or records every GitHub read the file could reach, and the
+// `after` hook fails the file if any call was not expected. The parked-change
+// tests also inject their health builder, so provider-health semantics come
+// from a fixture, never from a live read.
 let restoreLoadControl: (() => void) | undefined;
+useFixtureGh();
 before(() => {
   restoreLoadControl = pinLoadControlOff();
 });
@@ -376,11 +381,12 @@ function fakeHealthReport(
   verdicts: Partial<
     Record<'advisory-review' | 'ci-actions', ProviderHealthVerdict>
   > = {},
+  reason = 'all-healthy',
 ) {
   const build = (service: 'advisory-review' | 'ci-actions') => ({
     service,
     verdict: verdicts[service] ?? 'healthy',
-    reason: 'all-healthy',
+    reason,
     distinctFailingPrCount: 0,
     distinctSuccessPrCount: 0,
     minCorroboratingPrs: 0,
@@ -394,6 +400,21 @@ function fakeHealthReport(
     },
   };
 }
+
+/**
+ * The health report a live `buildProviderHealthReport` returns when it cannot
+ * read its evidence: `unknown` / `evidence-unreadable`. Every
+ * `buildParkedChangeReport` test below injects it (#3746) rather than letting
+ * the builder read GitHub: the suite used to pass because a blocked `gh` made
+ * the live builder return exactly this, which a healthy report would not --
+ * `deriveParkedIssues` drops a `resumable` (healthy) entry. This is network
+ * isolation; `pinLoadControlOff` is a separate, load-control concern.
+ */
+const unreadableHealthBuilder = () =>
+  fakeHealthReport(
+    { 'advisory-review': 'unknown', 'ci-actions': 'unknown' },
+    'evidence-unreadable',
+  );
 
 /** Isolates a test from any host-set trusted-marker-actor env override,
  * so `config.trustedMarkerActors` below is the actual, deterministic
@@ -481,6 +502,7 @@ test('buildParkedChangeReport: a head-mismatched marker found via the real fetch
   let issueReadCalls = 0;
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'b'.repeat(40) } }, // head moved since parking
@@ -523,6 +545,7 @@ test('buildParkedChangeReport: two markers sharing one originating issue read th
   let issueReadCalls = 0;
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -550,6 +573,48 @@ test('buildParkedChangeReport: two markers sharing one originating issue read th
   assert.deepEqual(report.parkedIssues, [555]);
 });
 
+test('buildParkedChangeReport: the health builder decides whether a parked marker stays parked (healthy retires it, unknown keeps it)', () => {
+  const markerBody = renderProviderOutageParkComment({
+    actor: 'claude-1',
+    issueNumber: 555,
+    service: 'advisory-review',
+    headSha: 'a'.repeat(40),
+    claimId: 'claim-1',
+    parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['advisory-wait'],
+  });
+  const build = (
+    buildHealthReport: () => ReturnType<typeof fakeHealthReport>,
+  ) =>
+    withoutTrustedMarkerActorsEnv(() =>
+      buildParkedChangeReport('acme', 'widget', {
+        buildHealthReport,
+        config: { trustedMarkerActors: ['kurone-kito'] },
+        fetchOpenPullRequests: () => [
+          { number: 7, head: { sha: 'a'.repeat(40) } },
+        ],
+        fetchComments: (_owner, _repo, number: number) =>
+          number === 7
+            ? [
+                {
+                  body: markerBody,
+                  created_at: '2026-09-02T00:00:05Z',
+                  user: { login: 'kurone-kito' },
+                },
+              ]
+            : [],
+      }),
+    );
+  assert.deepEqual(build(unreadableHealthBuilder).parkedIssues, [555]);
+  assert.deepEqual(build(() => fakeHealthReport()).parkedIssues, []);
+  assert.deepEqual(
+    build(() =>
+      fakeHealthReport({ 'advisory-review': 'degraded' }, 'corroborated'),
+    ).parkedIssues,
+    [555],
+  );
+});
+
 // #3249: `idd-provider-outage-park` is one of the issue's own explicit
 // restrict-only exceptions -- ignoring an edited marker would LOWER the
 // parked count and could lift `providerOutage.maxParkedChanges`, so an
@@ -568,6 +633,7 @@ test('buildParkedChangeReport: an edited trusted park marker still counts (restr
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -610,6 +676,7 @@ test('buildParkedChangeReport: a REAL later claimed-by comment on the originatin
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } }, // head still matches
@@ -662,6 +729,7 @@ test('buildParkedChangeReport: an edited later claimed-by comment does not retir
   const resolveClaimEditStateCalls: boolean[] = [];
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -717,6 +785,7 @@ test('buildParkedChangeReport: a real claimed-by comment BEFORE the park comment
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -757,6 +826,7 @@ test('buildParkedChangeReport: a failed originating-issue comment read keeps the
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -788,6 +858,7 @@ test('buildParkedChangeReport: a failed originating-issue comment read keeps the
 test('buildParkedChangeReport: parkedIssuesComplete is false when the open-PR sample is truncated', () => {
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       sampleSize: 2,
       fetchOpenPullRequests: () => [
@@ -805,6 +876,7 @@ test('buildParkedChangeReport: parkedIssuesComplete is false when one per-PR com
   let call = 0;
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
+      buildHealthReport: unreadableHealthBuilder,
       config: { trustedMarkerActors: ['kurone-kito'] },
       sampleSize: 50,
       fetchOpenPullRequests: () => [

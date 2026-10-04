@@ -38,14 +38,25 @@ import {
   parseExternalCheckWaiverComment,
   renderExternalCheckWaiverComment,
 } from '../src/scripts/protocol-helpers.mts';
-import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
+import {
+  pinLoadControlOff,
+  stubExecutable,
+  useFixtureGh,
+} from './test-utils.mts';
 
 // This source repository's own config enables load control (#3702). Many
-// tests here drive `runExternalCheckWaiver` against injected data but still
-// reach the real `gh` for reads they do not inject, which would write
-// host-local load-control state; run them as before, with it off. Load control
-// has its own tests in gh-exec-load-control.test.mts.
+// tests here drive `runExternalCheckWaiver` against injected data; run them
+// with load control off, as before. Load control has its own tests in
+// gh-exec-load-control.test.mts.
+//
+// That is a load-control concern, not network isolation (#3746). The fixture
+// `gh` below serves the two reads these tests reach without injecting them
+// (the authenticated viewer, and the check-suite first-observed GraphQL read)
+// and records everything else, and the `after` hook fails the file on any call
+// no handler served. A test that needs another viewer or another check-suite
+// answer changes the fixture and restores it.
 let restoreLoadControl: (() => void) | undefined;
+const fixtureGh = useFixtureGh();
 before(() => {
   restoreLoadControl = pinLoadControlOff();
 });
@@ -4490,5 +4501,245 @@ process.exit(1);
       process.env.IDD_GH_CONFIG_B64 = previousConfig;
     }
     rmSync(join(logPath, '..'), { recursive: true, force: true });
+  }
+});
+
+// --- #3746: the authenticated-viewer read and the check-suite first-observed
+// read, end to end through runExternalCheckWaiver against the fixture `gh`.
+// Nothing below injects `actor` or `headObservedAt`, so the real resolution
+// code runs; the fixture's answers are what change the verdicts.
+
+const FIXTURE_HEAD = 'a'.repeat(40);
+
+function fixtureWaiverInputs() {
+  return {
+    authority: { known: true, permission: 'admin', roleName: 'admin' },
+    headCommittedAt: '2026-05-17T00:00:00Z',
+    isTTY: false,
+    // No linked issue: a claimless waiver on a PR that closes nothing is the
+    // path that needs no further claim evidence, so `canApply` below turns
+    // only on the fixture authority and the anchors under test.
+    issueCandidates: [],
+    now: new Date('2026-05-17T06:00:00Z'),
+    pr: {
+      number: 3330,
+      state: 'OPEN',
+      url: 'https://github.com/kurone-kito/idd-skill/pull/3330',
+      headRefName: 'issue/3330-fix-external-check-waiver-bind-none',
+      headRefOid: FIXTURE_HEAD,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'idd-advisory-convergence',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+        },
+      ],
+      closingIssuesReferences: [],
+    },
+  };
+}
+
+function fixtureWaiverArgs(...extra: string[]) {
+  return {
+    ...parseArgs([
+      '--pr',
+      '3330',
+      '--check',
+      'idd-advisory-convergence',
+      '--reason',
+      'released claim',
+      '--expires-in',
+      'PT8H',
+      '--claimless',
+      '--allow-closed-precondition',
+      ...extra,
+    ]),
+    repo: 'kurone-kito/idd-skill',
+  };
+}
+
+test('runExternalCheckWaiver takes the actor from the authenticated-user read, and a different viewer changes the marker (#3746)', async () => {
+  const viewerReadsDuring = async <T,>(
+    body: () => Promise<T>,
+  ): Promise<{ result: T; reads: number }> => {
+    const before = fixtureGh.calls().length;
+    const result = await body();
+    const reads = fixtureGh
+      .calls()
+      .slice(before)
+      .filter((call) => call[0] === 'api' && call[1] === 'user').length;
+    return { result, reads };
+  };
+  const run = (viewer: string | null) => {
+    fixtureGh.setViewer(viewer);
+    return runExternalCheckWaiver({
+      ...fixtureWaiverInputs(),
+      args: fixtureWaiverArgs(),
+      headObservedAt: '2026-05-17T00:00:00Z',
+      prComments: [],
+    });
+  };
+  try {
+    const first = await viewerReadsDuring(() => run('kurone-kito'));
+    assert.match(
+      first.result.report?.body ?? '',
+      /idd-external-check-waiver: kurone-kito none /,
+    );
+    assert.equal(first.reads, 1, 'one run reads the viewer through gh once');
+    const second = await viewerReadsDuring(() => run('maintainer-two'));
+    assert.match(
+      second.result.report?.body ?? '',
+      /idd-external-check-waiver: maintainer-two none /,
+    );
+    assert.equal(second.reads, 1);
+    await assert.rejects(run(null), /could not determine current GitHub user/);
+  } finally {
+    fixtureGh.setViewer('kurone-kito');
+  }
+});
+
+test('runExternalCheckWaiver --apply --actor throws when --actor is not the authenticated user, before posting (#3746)', async () => {
+  let postCalls = 0;
+  await assert.rejects(
+    runExternalCheckWaiver({
+      ...fixtureWaiverInputs(),
+      args: fixtureWaiverArgs('--actor', 'someone-else', '--apply', '--yes'),
+      headObservedAt: '2026-05-17T00:00:00Z',
+      postComment: () => {
+        postCalls += 1;
+        return { html_url: 'should-not-be-reached' };
+      },
+      prComments: [],
+    }),
+    /--actor someone-else does not match the authenticated user kurone-kito/,
+  );
+  assert.equal(postCalls, 0, 'must throw before ever posting');
+});
+
+test('runExternalCheckWaiver: the fixture actor authority decides canApply for a non-owner viewer, and the actor check is not bypassed (#3746)', async () => {
+  // The repository owner is always authorized, so the viewer here is a
+  // different login whose standing comes only from the injected authority.
+  fixtureGh.setViewer('maintainer-two');
+  const run = async (authority: {
+    known: boolean;
+    permission: string;
+    roleName: string;
+  }) =>
+    runExternalCheckWaiver({
+      ...fixtureWaiverInputs(),
+      args: fixtureWaiverArgs(),
+      authority,
+      headObservedAt: '2026-05-17T00:00:00Z',
+      prComments: [],
+    });
+  try {
+    const admin = await run({
+      known: true,
+      permission: 'admin',
+      roleName: 'admin',
+    });
+    const reader = await run({
+      known: true,
+      permission: 'read',
+      roleName: 'read',
+    });
+    const unknown = await run({ known: false, permission: '', roleName: '' });
+    assert.equal(admin.report?.canApply, true);
+    assert.match(
+      admin.report?.body ?? '',
+      /idd-external-check-waiver: maintainer-two none /,
+    );
+    assert.equal(reader.report?.canApply, false);
+    assert.equal(unknown.report?.canApply, false);
+    assert.notEqual(reader.report?.blockingReasons.length, 0);
+  } finally {
+    fixtureGh.setViewer('kurone-kito');
+  }
+});
+
+test('runExternalCheckWaiver anchors the deadline precondition on the earliest check-suite createdAt from the fixture GraphQL read (#3746)', async () => {
+  const suites = {
+    headRefOid: FIXTURE_HEAD,
+    commitOid: FIXTURE_HEAD,
+    pages: [
+      ['2026-05-17T03:00:00Z', '2026-05-17T02:00:00Z'],
+      ['2026-05-17T01:00:00Z'],
+    ],
+  };
+  fixtureGh.setCheckSuites(suites);
+  try {
+    const before = fixtureGh.calls().length;
+    const { report } = await runExternalCheckWaiver({
+      ...fixtureWaiverInputs(),
+      actor: 'kurone-kito',
+      args: fixtureWaiverArgs(),
+      prComments: [],
+    });
+    assert.equal(
+      report?.advisoryConvergenceWaiverPrecondition?.headObservedAt,
+      '2026-05-17T01:00:00Z',
+    );
+    const reads = fixtureGh
+      .calls()
+      .slice(before)
+      .filter((call) => call[1] === 'graphql');
+    assert.equal(reads.length, 2, 'one read per page');
+    for (const call of reads) {
+      assert.ok(call.includes('-F'), 'the number is passed as a typed field');
+      assert.ok(call.includes('number=3330'));
+      assert.ok(call.includes('owner=kurone-kito'));
+      assert.ok(call.includes('repo=idd-skill'));
+    }
+    assert.ok(
+      reads[1]?.includes('after=page:1'),
+      'the second read follows the cursor',
+    );
+  } finally {
+    fixtureGh.setCheckSuites({
+      headRefOid: 'f'.repeat(40),
+      commitOid: 'f'.repeat(40),
+      pages: [],
+    });
+  }
+});
+
+test('runExternalCheckWaiver leaves the observed anchor unknown when the HEAD moves or no suite exists, instead of treating a failed read as coverage (#3746)', async () => {
+  const anchorFor = async () => {
+    const { report } = await runExternalCheckWaiver({
+      ...fixtureWaiverInputs(),
+      actor: 'kurone-kito',
+      args: fixtureWaiverArgs(),
+      prComments: [],
+    });
+    return report?.advisoryConvergenceWaiverPrecondition?.headObservedAt;
+  };
+  try {
+    // Control: the same page with a consistent head gives the date, so the
+    // `none` below comes from the HEAD move and nothing else.
+    fixtureGh.setCheckSuites({
+      headRefOid: FIXTURE_HEAD,
+      commitOid: FIXTURE_HEAD,
+      pages: [['2026-05-17T01:00:00Z']],
+    });
+    assert.equal(await anchorFor(), '2026-05-17T01:00:00Z');
+    fixtureGh.setCheckSuites({
+      headRefOid: FIXTURE_HEAD,
+      commitOid: 'b'.repeat(40),
+      pages: [['2026-05-17T01:00:00Z']],
+    });
+    assert.equal(await anchorFor(), 'none');
+    fixtureGh.setCheckSuites({
+      headRefOid: FIXTURE_HEAD,
+      commitOid: FIXTURE_HEAD,
+      pages: [],
+    });
+    assert.equal(await anchorFor(), 'none');
+  } finally {
+    fixtureGh.setCheckSuites({
+      headRefOid: 'f'.repeat(40),
+      commitOid: 'f'.repeat(40),
+      pages: [],
+    });
   }
 });

@@ -28,7 +28,24 @@ import {
   renderLiveStatusDigest,
   retireLiveStatusDigestBody,
 } from '../src/scripts/protocol-helpers.mts';
-import { stubExecutable } from './test-utils.mts';
+import { stubExecutable, useFixtureGh } from './test-utils.mts';
+
+// #3746: the audit reads the authenticated viewer once per process
+// (`currentViewerLogin()` caches it with no reset hook), so the fixture `gh`
+// must be installed before the first test that reaches it. The viewer is a
+// login that is NOT in `withSandboxConfig`'s trusted actors, so the read is
+// observable: only the viewer source can make `fixture-viewer` trusted. This is
+// network isolation; the isolate-state preload (#3725) and load-control pinning
+// stay separate and keep working with the fixture active.
+useFixtureGh({ viewer: 'fixture-viewer' }, (fixture) => {
+  const viewerReads = fixture
+    .calls()
+    .filter((call) => call[0] === 'api' && call[1] === 'user');
+  assert.ok(
+    viewerReads.length <= 1,
+    `the viewer is read at most once per process, saw ${viewerReads.length}`,
+  );
+});
 
 // Importing the CLI module directly is only possible now that its top-level
 // statements are guarded behind `import.meta.main` (#1210, migrated from
@@ -1654,6 +1671,54 @@ test('evaluateOperationalComment does not swallow the same digest body from an u
     );
 
     assert.equal(handled, false);
+  });
+});
+
+test('evaluateOperationalComment treats the authenticated viewer as a trusted author (fixture viewer, #3746)', () => {
+  withSandboxConfig(undefined, () => {
+    const digestBody = retireLiveStatusDigestBody(
+      renderLiveStatusDigest({
+        phase: 'F4 cleanup',
+        claim: 'claim-test0001',
+        branch: 'issue/1-test',
+        lastChecked: '2026-05-12T00:00:00Z',
+        openBlockers: 'none',
+        nextAction: 'merge',
+        authoritativeBy: 'this comment',
+      }),
+    );
+    const commentBy = (login: string) => ({
+      id: `DIGEST-${login}`,
+      url: `https://pr#DIGEST-${login}`,
+      author: { login },
+      body: digestBody,
+      isMinimized: false,
+      viewerCanMinimize: true,
+    });
+    // The fixture viewer is not a configured actor: only the viewer read
+    // (`gh api user`, served by the fixture) makes its digest trusted.
+    const asViewer = createAuditReport();
+    assert.equal(
+      evaluateOperationalComment(
+        commentBy('fixture-viewer'),
+        mergedPr,
+        asViewer,
+        'kurone-kito',
+        'idd-skill',
+      ),
+      true,
+    );
+    assert.equal(asViewer.skipped.length, 1);
+    assert.equal(
+      evaluateOperationalComment(
+        commentBy('someone-else'),
+        mergedPr,
+        createAuditReport(),
+        'kurone-kito',
+        'idd-skill',
+      ),
+      false,
+    );
   });
 });
 
