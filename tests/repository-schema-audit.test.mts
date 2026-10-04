@@ -27,9 +27,9 @@ import {
   detectStep1bCompanionDrift,
   extractDocumentedPlaceholders,
   extractH2Section,
-  extractRegexLiteralSource,
   extractResumeDecisionRoutes,
   extractResumeRouteEnum,
+  findRegexLiteralDeclarations,
   maskLeadingComments,
   ONBOARDING_STEP1B_COMPANIONS,
   type PhaseResolver,
@@ -381,6 +381,8 @@ interface InspectionCase {
   edit: (files: TreeFiles) => void;
   /** The `<RULE-ID> <path>:` prefix of an expected stderr line. */
   expected: string;
+  /** What that line's message says, to tell failure causes apart. */
+  message?: RegExp;
 }
 
 const INSPECTION_CASES: InspectionCase[] = [
@@ -426,6 +428,23 @@ const INSPECTION_CASES: InspectionCase[] = [
     name: 'a policy schema without the journal pattern',
     edit: (files) => files.set('schemas/policy.schema.json', '{}'),
     expected: 'SCHEMA-JOURNAL-PATTERN-INSPECTION schemas/policy.schema.json:',
+  },
+  {
+    name: 'a source file that declares the reference pattern twice (a stale copy in a comment that opens after code)',
+    edit: (files) =>
+      files.set(
+        'src/scripts/audit-authored-issue.mts',
+        [
+          'const keep = 1; /*',
+          'const REAL_ISSUE_REFERENCE_PATTERN = /old/;',
+          '*/',
+          `export const REAL_ISSUE_REFERENCE_PATTERN = ${`/^[\\w.-]+\\/[\\w.-]+#[1-9][0-9]*$/`};`,
+          '',
+        ].join('\n'),
+      ),
+    expected:
+      'SCHEMA-JOURNAL-PATTERN-INSPECTION src/scripts/audit-authored-issue.mts:',
+    message: /found 2 declarations/,
   },
   {
     name: 'a source file without the reference pattern literal',
@@ -489,16 +508,19 @@ const INSPECTION_CASES: InspectionCase[] = [
   },
 ];
 
-for (const { name, edit, expected } of INSPECTION_CASES) {
+for (const { name, edit, expected, message } of INSPECTION_CASES) {
   test(`an incomplete inspection fails closed for ${name}`, () => {
     const files = cleanTree();
     edit(files);
     const { status, stderr } = runCli(['--root', writeTree(files)]);
     assert.equal(status, 1, stderr);
-    assert.ok(
-      stderr.split('\n').some((line) => line.startsWith(expected)),
-      stderr,
-    );
+    const line = stderr
+      .split('\n')
+      .find((candidate) => candidate.startsWith(expected));
+    assert.ok(line, stderr);
+    if (message) {
+      assert.match(line, message);
+    }
   });
 }
 
@@ -621,6 +643,12 @@ test('without --root the CLI audits the bundle root of its own location, whateve
 // assertions covered, plus the pure matchers they relied on.
 // ---------------------------------------------------------------------------
 
+/** The single declaration of `name`, or null when there are zero or several. */
+const regexLiteralOf = (source: string, name: string): string | null => {
+  const found = findRegexLiteralDeclarations(source, name);
+  return found.length === 1 ? (found[0] as string) : null;
+};
+
 const catalogOf = (...files: string[]) =>
   files.map((schemaFile) => ({ schemaFile }));
 
@@ -685,24 +713,21 @@ test('the shipped ledger is non-empty, unique, and every covered entry names a b
   );
 });
 
-test('extractRegexLiteralSource reads a regex literal with escaped slashes, classes and flags', () => {
+test('findRegexLiteralDeclarations reads a regex literal with escaped slashes, classes and flags', () => {
   const source = [
     'const OTHER = /x/;',
     'export const PATTERN = /^[\\w.-]+\\/[\\w.-]+#[1-9][0-9]*$/u;',
     'export const WITH_SLASH_CLASS: RegExp = /a[/]b\\/c/;',
   ].join('\n');
   assert.equal(
-    extractRegexLiteralSource(source, 'PATTERN'),
+    regexLiteralOf(source, 'PATTERN'),
     '^[\\w.-]+\\/[\\w.-]+#[1-9][0-9]*$',
   );
-  assert.equal(
-    extractRegexLiteralSource(source, 'WITH_SLASH_CLASS'),
-    'a[/]b\\/c',
-  );
-  assert.equal(extractRegexLiteralSource(source, 'MISSING'), null);
+  assert.equal(regexLiteralOf(source, 'WITH_SLASH_CLASS'), 'a[/]b\\/c');
+  assert.equal(regexLiteralOf(source, 'MISSING'), null);
 });
 
-test('extractRegexLiteralSource ignores a commented-out declaration before the live one', () => {
+test('findRegexLiteralDeclarations ignores a commented-out declaration before the live one', () => {
   const live = 'export const PATTERN = /live/;';
   for (const dead of [
     '// const PATTERN = /old/;',
@@ -711,21 +736,29 @@ test('extractRegexLiteralSource ignores a commented-out declaration before the l
     '/**\n * const PATTERN = /old/;\n */',
     '/*\nconst PATTERN = /old/;\n*/',
   ]) {
-    assert.equal(
-      extractRegexLiteralSource(`${dead}\n${live}\n`, 'PATTERN'),
-      'live',
-      dead,
-    );
+    assert.equal(regexLiteralOf(`${dead}\n${live}\n`, 'PATTERN'), 'live', dead);
   }
-  assert.equal(
-    extractRegexLiteralSource('// const PATTERN = /old/;\n', 'PATTERN'),
-    null,
-  );
+  assert.equal(regexLiteralOf('// const PATTERN = /old/;\n', 'PATTERN'), null);
   // A declaration that merely ends a longer name is not the constant.
   assert.equal(
-    extractRegexLiteralSource('export const MY_PATTERN = /x/;\n', 'PATTERN'),
+    regexLiteralOf('export const MY_PATTERN = /x/;\n', 'PATTERN'),
     null,
   );
+});
+
+test('a declaration inside a comment that opens after code makes the literal ambiguous, so it is not guessed', () => {
+  const source = [
+    'const keep = 1; /*',
+    'const PATTERN = /old/;',
+    '*/',
+    'export const PATTERN = /live/;',
+  ].join('\n');
+  assert.deepEqual(findRegexLiteralDeclarations(source, 'PATTERN'), [
+    'old',
+    'live',
+  ]);
+  assert.equal(regexLiteralOf(source, 'PATTERN'), null);
+  assert.deepEqual(findRegexLiteralDeclarations('export {};\n', 'PATTERN'), []);
 });
 
 test('maskLeadingComments blanks comments that start a line and keeps the line structure', () => {

@@ -847,20 +847,24 @@ export function maskLeadingComments(text: string): string {
 }
 
 /**
- * The source text of the regex literal assigned to the constant `name` (the
- * characters between the slashes), or null when no such live declaration
- * exists. Declarations inside comments that start a line are ignored.
- * Character classes and escaped characters may contain a slash.
+ * The source text of every regex literal the constant `name` is declared with
+ * (the characters between the slashes), skipping declarations inside comments
+ * that start a line. Character classes and escaped characters may contain a
+ * slash. A comment that opens after code is not recognized, so a stale
+ * declaration inside one is returned too: callers must treat more than one
+ * result as ambiguous instead of picking one.
  */
-export function extractRegexLiteralSource(
+export function findRegexLiteralDeclarations(
   sourceText: string,
   name: string,
-): string | null {
+): string[] {
   const declaration = new RegExp(
     `^[ \\t]*(?:export[ \\t]+)?const[ \\t]+${name}[ \\t]*(?::[^=\\n]+)?=\\s*/((?:\\\\.|\\[(?:\\\\.|[^\\]\\\\])*\\]|[^/\\\\\\n\\[])+)/[a-z]*\\s*;`,
-    'm',
+    'gm',
   );
-  return declaration.exec(maskLeadingComments(sourceText))?.[1] ?? null;
+  return [...maskLeadingComments(sourceText).matchAll(declaration)].map(
+    (match) => match[1] as string,
+  );
 }
 
 /**
@@ -914,16 +918,23 @@ export function checkSchemaJournalPattern(root: string): SchemaRuleResult {
   if (source === null || schema === undefined) {
     return { ruleId: SCHEMA_JOURNAL_PATTERN_RULE, inspected: 0, violations };
   }
-  const literal = extractRegexLiteralSource(
+  const declarations = findRegexLiteralDeclarations(
     source,
     'REAL_ISSUE_REFERENCE_PATTERN',
   );
-  if (literal === null) {
+  const literal =
+    declarations.length === 1 ? (declarations[0] as string) : null;
+  if (declarations.length !== 1) {
     violations.push(
       inspectionViolation(
         SCHEMA_JOURNAL_PATTERN_RULE,
         AUTHORED_ISSUE_SOURCE_PATH,
-        'cannot find the REAL_ISSUE_REFERENCE_PATTERN regex literal',
+        declarations.length === 0
+          ? 'cannot find the REAL_ISSUE_REFERENCE_PATTERN regex literal'
+          : `found ${declarations.length} declarations of ` +
+              'REAL_ISSUE_REFERENCE_PATTERN and cannot tell which is live; ' +
+              'remove the stale one (a comment that opens after code is not ' +
+              'recognized as a comment)',
       ),
     );
   }
