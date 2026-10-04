@@ -13,7 +13,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
+import { after, before } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { setGithubApiLoadControlForTests } from '../src/scripts/gh-exec.mts';
@@ -100,6 +101,10 @@ const SYNC_DOCS_DEPS = [
  */
 export function stubExecutable(name: string, scriptBody: string): () => void {
   const tempRoot = mkdtempSync(join(tmpdir(), `idd-stub-${name}-`));
+  const activation: StubActivation = {
+    id: basename(tempRoot),
+    variable: `IDD_STUB_ACTIVE_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
+  };
   const preloadPath = join(tempRoot, 'preload.cjs');
   try {
     if (process.platform !== 'win32') {
@@ -130,7 +135,10 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
       } catch {
         copyFileSync(process.execPath, exePath);
       }
-      writeFileSync(preloadPath, buildStubPreloadSource(name, scriptBody));
+      writeFileSync(
+        preloadPath,
+        buildStubPreloadSource(name, scriptBody, activation),
+      );
     }
   } catch (error) {
     rmSync(tempRoot, { recursive: true, force: true });
@@ -168,12 +176,19 @@ export function stubExecutable(name: string, scriptBody: string): () => void {
     };
   }
   const originalNodeOptions = process.env.NODE_OPTIONS;
+  const previousActive = process.env[activation.variable];
   const requireFlag = `--require "${preloadPath.replaceAll('\\', '/')}"`;
   process.env.NODE_OPTIONS = originalNodeOptions
     ? `${originalNodeOptions} ${requireFlag}`
     : requireFlag;
+  process.env[activation.variable] = activation.id;
   return () => {
     restorePath();
+    if (previousActive === undefined) {
+      delete process.env[activation.variable];
+    } else {
+      process.env[activation.variable] = previousActive;
+    }
     if (originalNodeOptions === undefined) {
       delete process.env.NODE_OPTIONS;
     } else {
@@ -364,8 +379,235 @@ function scrubGitHubTokenEnv(): () => void {
   };
 }
 
+/** What the fixture `gh` answers to the check-suite first-observed read. */
+export interface FixtureGhCheckSuites {
+  /** The PR head the read reports (`headRefOid`). */
+  headRefOid: string;
+  /** The queried commit's own oid; differs from `headRefOid` to model a HEAD move. */
+  commitOid: string;
+  /** One list of check-suite `createdAt` values per page; all but the last report another page. */
+  pages: string[][];
+}
+
+/** Starting state of {@link installFixtureGh}. */
+export interface FixtureGhOptions {
+  /** Answer to `gh api user --jq .login`; `null` models a signed-out viewer (exit 1). Default `kurone-kito`. */
+  viewer?: string | null;
+  /** Answer to the check-suite read. Default: a consistent head with no suites. */
+  checkSuites?: Partial<FixtureGhCheckSuites>;
+}
+
+/** The handle {@link installFixtureGh} returns. */
+export interface FixtureGh {
+  /** Every invocation, as its raw argv (served and unexpected). */
+  calls(): string[][];
+  /** Every invocation no handler served, as its raw argv. */
+  unexpectedCalls(): string[][];
+  /** Change the viewer the next call sees; `null` signs it out. */
+  setViewer(login: string | null): void;
+  /**
+   * Change the check-suite answer the next call sees. Only the given fields
+   * change: setting `headRefOid` alone leaves `commitOid` where it was, which
+   * models a HEAD move.
+   */
+  setCheckSuites(next: Partial<FixtureGhCheckSuites>): void;
+  /** Remove the stub and its files and restore `PATH` and the token variables. */
+  restore(): void;
+}
+
+const FIXTURE_GH_DEFAULT_HEAD = 'f'.repeat(40);
+
+/**
+ * Install a fixture `gh` for a whole test file, so every GitHub read the file
+ * reaches is a served, recorded answer rather than a swallowed failure from a
+ * blocked or real `gh` (issue #3746). It sits on `stubExecutable('gh')`, so
+ * the Windows `.exe` route, the token scrub and the per-stub load-control
+ * state directory all apply, and a test that installs its own `gh` stub on top
+ * of it simply shadows it until that stub is restored.
+ *
+ * Two shapes are served. `gh api user --jq .login` answers the configured
+ * viewer (exit 1 when signed out). The check-suite first-observed GraphQL read
+ * (a `query=` containing `pullRequest(number:$number)`, `commits(last:1)` and
+ * `checkSuites(first:100`, with `owner=`, `repo=` and a numeric `number=`; a `--hostname <value>` pair, which a GHES server URL
+ * inserts, is ignored) answers `headRefOid`, the queried commit's `oid` and the
+ * configured `createdAt` pages, paging through `after=page:<n>` cursors. Any
+ * other invocation is appended to the unexpected ledger and exits 1, so a file
+ * asserts `unexpectedCalls()` is empty in an `after` hook.
+ *
+ * Install it once per test file and run files in separate processes (the
+ * repository's runners do); two files sharing one process would shadow each
+ * other's stub.
+ *
+ * The stub reads its state from a file on every call (by absolute path: a test
+ * may `process.chdir`), so `setViewer`/`setCheckSuites` need no re-stubbing.
+ * `stubExecutable('gh')` redirects the load-control state variables to its own
+ * directory; when the isolate-state preload (#3725) had set them, they are put
+ * back so its state-write guard still sees any write the file makes.
+ */
+export function installFixtureGh(options: FixtureGhOptions = {}): FixtureGh {
+  const root = mkdtempSync(join(tmpdir(), 'idd-fixture-gh-'));
+  const configPath = join(root, 'config.json');
+  const callsPath = join(root, 'calls.jsonl');
+  const unexpectedPath = join(root, 'unexpected.jsonl');
+  let config = {
+    viewer: options.viewer === undefined ? 'kurone-kito' : options.viewer,
+    checkSuites: {
+      headRefOid: FIXTURE_GH_DEFAULT_HEAD,
+      commitOid: options.checkSuites?.headRefOid ?? FIXTURE_GH_DEFAULT_HEAD,
+      pages: [] as string[][],
+      ...options.checkSuites,
+    } as FixtureGhCheckSuites,
+  };
+  const writeConfig = (): void => {
+    writeFileSync(configPath, JSON.stringify(config));
+  };
+  writeConfig();
+  writeFileSync(callsPath, '');
+  writeFileSync(unexpectedPath, '');
+
+  const body = `const fs = require('node:fs');
+const raw = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(raw) + '\\n');
+const args = [];
+for (let index = 0; index < raw.length; index += 1) {
+  if (raw[index] === '--hostname') { index += 1; continue; }
+  args.push(raw[index]);
+}
+const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, 'utf8'));
+function unexpected(why) {
+  fs.appendFileSync(${JSON.stringify(unexpectedPath)}, JSON.stringify(raw) + '\\n');
+  process.stderr.write('fixture gh: unexpected invocation (' + why + '): ' + raw.join(' ').slice(0, 300) + '\\n');
+  process.exit(1);
+}
+if (args.length === 4 && args[0] === 'api' && args[1] === 'user' && args[2] === '--jq' && args[3] === '.login') {
+  if (config.viewer === null) {
+    process.stderr.write('fixture gh: signed out\\n');
+    process.exit(1);
+  }
+  process.stdout.write(config.viewer + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  const fields = {};
+  for (let index = 2; index < args.length; index += 2) {
+    const value = args[index + 1];
+    if ((args[index] !== '-f' && args[index] !== '-F') || typeof value !== 'string' || !value.includes('=')) {
+      unexpected('graphql flag shape');
+    }
+    fields[value.slice(0, value.indexOf('='))] = value.slice(value.indexOf('=') + 1);
+  }
+  if (typeof fields.query === 'string' && ['pullRequest(number:$number)', 'commits(last:1)', 'checkSuites(first:100'].every((part) => fields.query.includes(part)) && fields.owner && fields.repo && /^[0-9]+$/.test(fields.number || '')) {
+    const suites = config.checkSuites;
+    const cursor = fields.after === undefined ? 0 : Number(String(fields.after).replace(/^page:/, ''));
+    const pages = suites.pages.length > 0 ? suites.pages : [[]];
+    const last = cursor >= pages.length - 1;
+    process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: {
+      headRefOid: suites.headRefOid,
+      commits: { nodes: [{ commit: {
+        oid: suites.commitOid,
+        checkSuites: {
+          nodes: (pages[cursor] || []).map((createdAt) => ({ createdAt })),
+          pageInfo: { hasNextPage: !last, endCursor: last ? null : 'page:' + (cursor + 1) },
+        },
+      } }] },
+    } } } }));
+    process.exit(0);
+  }
+}
+unexpected('no handler');
+`;
+
+  const stateBefore = LOAD_CONTROL_STATE_ENV_NAMES.map(
+    (key) => [key, process.env[key]] as const,
+  );
+  const restoreStub = stubExecutable('gh', body);
+  for (const [key, value] of stateBefore) {
+    if (value !== undefined) process.env[key] = value;
+  }
+
+  const readLedger = (path: string): string[][] =>
+    readFileSync(path, 'utf8')
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as string[]);
+
+  return {
+    calls: () => readLedger(callsPath),
+    unexpectedCalls: () => readLedger(unexpectedPath),
+    setViewer: (login) => {
+      config = { ...config, viewer: login };
+      writeConfig();
+    },
+    setCheckSuites: (next) => {
+      config = { ...config, checkSuites: { ...config.checkSuites, ...next } };
+      writeConfig();
+    },
+    restore: () => {
+      restoreStub();
+      removeStubDirectory(root);
+    },
+  };
+}
+
+/**
+ * Register {@link installFixtureGh} for the calling test file: install it in a
+ * root `before`, and in a root `after` fail the file if any call went
+ * unserved (the argv is in the failure), then restore. Returns a handle whose
+ * methods delegate to the installed fixture, so a test file keeps one
+ * `const fixtureGh = useFixtureGh()` at module level. `afterEach` runs inside
+ * the `after`, before the restore, for extra file-level assertions.
+ */
+export function useFixtureGh(
+  options: FixtureGhOptions = {},
+  extraChecks?: (fixture: FixtureGh) => void,
+): FixtureGh {
+  let installed: FixtureGh | undefined;
+  const current = (): FixtureGh => {
+    if (!installed) {
+      throw new Error('useFixtureGh: used outside the file hooks');
+    }
+    return installed;
+  };
+  before(() => {
+    installed = installFixtureGh(options);
+  });
+  after(() => {
+    try {
+      assert.deepEqual(installed?.unexpectedCalls(), []);
+      if (installed) extraChecks?.(installed);
+    } finally {
+      installed?.restore();
+    }
+  });
+  return {
+    calls: () => current().calls(),
+    unexpectedCalls: () => current().unexpectedCalls(),
+    setViewer: (login) => current().setViewer(login),
+    setCheckSuites: (next) => current().setCheckSuites(next),
+    restore: () => current().restore(),
+  };
+}
+
 /** Builds the Windows preload script `stubExecutable` writes into `tempRoot`. */
-function buildStubPreloadSource(name: string, scriptBody: string): string {
+/**
+ * `variable` holds the id of the stub that is currently active for a name;
+ * only the preload whose own `id` matches it runs. `NODE_OPTIONS` stacks one
+ * `--require` per installed stub, and every preload would otherwise run
+ * whenever the executable is `<name>.exe`, so the OUTER stub would answer a
+ * call meant for a nested one (a PATH-prepended POSIX stub shadows the other
+ * way round). Installing a stub makes its id the active one and restoring it
+ * hands the name back to the previous stub, so same-name stubs nest LIFO.
+ */
+interface StubActivation {
+  readonly id: string;
+  readonly variable: string;
+}
+
+function buildStubPreloadSource(
+  name: string,
+  scriptBody: string,
+  activation: StubActivation,
+): string {
   return [
     // Gate on the exe's own basename rather than a full-path compare: any
     // node process launched as `<name>.exe` is this stub by construction
@@ -375,7 +617,8 @@ function buildStubPreloadSource(name: string, scriptBody: string): string {
     // the same directory.
     `const expectedBasename = ${JSON.stringify(`${name}.exe`.toLowerCase())};`,
     "const nodePath = require('node:path');",
-    'if (nodePath.basename(process.execPath).toLowerCase() === expectedBasename) {',
+    `const activeId = process.env[${JSON.stringify(activation.variable)}];`,
+    `if (nodePath.basename(process.execPath).toLowerCase() === expectedBasename && activeId === ${JSON.stringify(activation.id)}) {`,
     // Node's own bootstrap resolves argv[1] against cwd before this
     // preload runs (treating it as a candidate main-module path even
     // though the process exits before ever loading one), so a plain
