@@ -18,6 +18,8 @@ import {
   runDoctor,
 } from '../src/scripts/idd-doctor.mts';
 
+import { type FixtureGhRule, useFixtureGh } from './test-utils.mts';
+
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FIXTURE_ROOT = new URL(
   './fixtures/helper-runtime-config/',
@@ -77,6 +79,86 @@ const REQUIRED_CONFIG_BASE = {
   },
   trustedMarkerActors: ['fixture-actor'],
 };
+
+const DOCTOR_REPO = { owner: 'fixture-owner', name: 'fixture-repo' };
+const REPO_SLUG = `${DOCTOR_REPO.owner}/${DOCTOR_REPO.name}`;
+const REPO_API = `repos/${REPO_SLUG}`;
+
+// Network isolation (#3745): `runDoctor` has no `gh` seam and `requireGithub`
+// only changes how a failed read is classified, so every doctor run here used to
+// make real GitHub reads (plus the child `bin/idd-doctor.mjs` run). The fixture
+// `gh` answers every read a successful run makes. Load-control pinning
+// is a separate concern and is not needed here: the doctor shells out directly.
+const DOCTOR_REPO_VIEW = {
+  args: ['repo', 'view', '--json', 'owner,name'],
+  stdout: JSON.stringify({
+    owner: { login: DOCTOR_REPO.owner },
+    name: DOCTOR_REPO.name,
+  }),
+};
+const DOCTOR_RESPONSES: FixtureGhRule[] = [
+  DOCTOR_REPO_VIEW,
+  {
+    args: ['repo', 'view', '--json', 'owner,name,defaultBranchRef,url'],
+    stdout: JSON.stringify({
+      owner: { login: DOCTOR_REPO.owner },
+      name: DOCTOR_REPO.name,
+      defaultBranchRef: { name: 'main' },
+      url: `https://github.com/${REPO_SLUG}`,
+    }),
+  },
+  {
+    args: [
+      'issue',
+      'list',
+      '--state',
+      'open',
+      '--json',
+      'number,labels,body',
+      '--limit',
+      '1000',
+    ],
+    stdout: '[]',
+  },
+  // The merged-PR list carries a timestamp that changes on every call, so it is
+  // matched as a prefix that ends at `--search`.
+  {
+    args: ['pr', 'list', '--repo', REPO_SLUG, '--state', 'merged', '--search'],
+    match: 'prefix',
+    stdout: '[]',
+  },
+  // The governance reads `checkGithubReadiness` makes once the repo read
+  // succeeds: no Rulesets, and a classic protection with one required check and
+  // a required review.
+  {
+    args: [
+      'api',
+      `${REPO_API}/rules/branches/main`,
+      '--paginate',
+      '--jq',
+      '.[]',
+    ],
+    stdout: '',
+  },
+  {
+    args: ['api', `${REPO_API}/branches/main/protection`],
+    stdout: JSON.stringify({
+      required_status_checks: { strict: true, contexts: ['lint'] },
+      required_pull_request_reviews: { required_approving_review_count: 1 },
+    }),
+  },
+];
+const fixtureGh = useFixtureGh({ responses: DOCTOR_RESPONSES });
+
+/** Run `body` with `rules` consulted before the default doctor answers. */
+function withDoctorRules<T>(rules: FixtureGhRule[], body: () => T): T {
+  fixtureGh.setResponses([...rules, ...DOCTOR_RESPONSES]);
+  try {
+    return body();
+  } finally {
+    fixtureGh.setResponses(DOCTOR_RESPONSES);
+  }
+}
 
 test('idd-doctor accepts missing helperRuntime as instructions-only fallback fixture', (t) => {
   const root = createDoctorFixtureRepo('absent.json');
@@ -572,3 +654,190 @@ function writeFixtureFile(
   mkdirSync(dirname(absolutePath), { recursive: true });
   writeFileSync(absolutePath, contents);
 }
+
+// --- #3745: the doctor's GitHub reads, answered by the fixture ---------------
+
+test('idd-doctor with served GitHub reads reports the required-check and review-policy passes and no errors', (t) => {
+  const root = createDoctorFixtureRepo('absent.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.deepEqual(report.errors, []);
+  assert.ok(
+    report.passes.includes(
+      'required status checks configured on main (1, strict=true)',
+    ),
+    report.passes.join('\n'),
+  );
+  assert.ok(
+    report.passes.includes('required pull request review policy is configured'),
+  );
+  assert.ok(
+    !report.warnings.some((warning) =>
+      warning.startsWith('github checks skipped'),
+    ),
+    report.warnings.join('\n'),
+  );
+});
+
+test('idd-doctor: a failing repo read is a warning without requireGithub and an error with it', (t) => {
+  const root = createDoctorFixtureRepo('absent.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const failingRepoRead: FixtureGhRule[] = [
+    {
+      args: ['repo', 'view', '--json', 'owner,name,defaultBranchRef,url'],
+      status: 1,
+      stderr: 'fixture: repository not reachable\n',
+    },
+  ];
+  const message = 'github checks skipped: gh repo view unavailable';
+
+  const lenient = withDoctorRules(failingRepoRead, () =>
+    runDoctor({ root, requireGithub: false }),
+  );
+  assert.ok(lenient.warnings.includes(message), lenient.warnings.join('\n'));
+  assert.ok(!lenient.errors.includes(message));
+
+  const strict = withDoctorRules(failingRepoRead, () =>
+    runDoctor({ root, requireGithub: true }),
+  );
+  assert.ok(strict.errors.includes(message), strict.errors.join('\n'));
+});
+
+const MERGED_IDD_PRS = [
+  {
+    number: 901,
+    headRefName: 'issue/901-fixture-a',
+    mergedAt: '2999-01-01T00:00:00Z',
+  },
+  {
+    number: 902,
+    headRefName: 'issue/902-fixture-b',
+    mergedAt: '2999-01-01T00:00:00Z',
+  },
+  // A non-IDD merge never counts toward the backlog.
+  {
+    number: 903,
+    headRefName: 'dependabot/npm/fixture',
+    mergedAt: '2999-01-01T00:00:00Z',
+  },
+];
+
+/** Rules serving the merged-PR list and each IDD PR's cleanup-evidence rows. */
+function backlogRules(
+  evidenceRow: string,
+  evidenceAnswer: Partial<FixtureGhRule> = {},
+): FixtureGhRule[] {
+  return [
+    {
+      args: [
+        'pr',
+        'list',
+        '--repo',
+        REPO_SLUG,
+        '--state',
+        'merged',
+        '--search',
+      ],
+      match: 'prefix',
+      stdout: JSON.stringify(MERGED_IDD_PRS),
+    },
+    ...[901, 902].map(
+      (number): FixtureGhRule => ({
+        args: [
+          'api',
+          '--paginate',
+          `${REPO_API}/issues/${number}/comments`,
+          '--jq',
+        ],
+        match: 'prefix',
+        stdout: evidenceRow,
+        ...evidenceAnswer,
+      }),
+    ),
+  ];
+}
+
+// The backlog warns only when the count exceeds the threshold (default 2), so
+// a threshold of 0 makes any PR without converged cleanup evidence visible.
+test('idd-doctor warns about merged IDD-branch PRs that lack cleanup evidence, from fixture merged-PR data', (t) => {
+  const root = createDoctorFixtureRepo('absent.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const callsBefore = fixtureGh.calls().length;
+  const report = withDoctorRules(backlogRules(''), () =>
+    runDoctor({ root, requireGithub: false, cleanupBacklogWarnThreshold: 0 }),
+  );
+  // Evidence is read for each IDD-branch PR and never for the non-IDD one.
+  const reads = fixtureGh
+    .calls()
+    .slice(callsBefore)
+    .map((call) => call.join(' '));
+  for (const number of [901, 902]) {
+    assert.ok(
+      reads.some((read) => read.includes(`issues/${number}/comments`)),
+      reads.join('\n'),
+    );
+  }
+  assert.ok(
+    !reads.some((read) => read.includes('issues/903/comments')),
+    reads.join('\n'),
+  );
+  const backlog = report.warnings.find((warning) =>
+    warning.startsWith('post-merge cleanup backlog:'),
+  );
+  assert.ok(backlog, report.warnings.join('\n'));
+  assert.match(backlog, /2 merged PRs/);
+  assert.match(backlog, /#901/);
+  assert.doesNotMatch(backlog, /#903/);
+});
+
+test('idd-doctor reports no cleanup backlog when a trusted applied evidence row is served for each merged IDD PR', (t) => {
+  const root = createDoctorFixtureRepo('absent.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = withDoctorRules(
+    backlogRules('5001\tgithub-actions[bot]\tapplied\n'),
+    () =>
+      runDoctor({ root, requireGithub: false, cleanupBacklogWarnThreshold: 0 }),
+  );
+  assert.ok(
+    !report.warnings.some(
+      (warning) =>
+        warning.startsWith('post-merge cleanup backlog:') ||
+        warning.startsWith('post-merge cleanup evidence query failed'),
+    ),
+    report.warnings.join('\n'),
+  );
+  // An untrusted author's row does not suppress the warning.
+  const untrusted = withDoctorRules(
+    backlogRules('5001\tsomeone-else\tapplied\n'),
+    () =>
+      runDoctor({ root, requireGithub: false, cleanupBacklogWarnThreshold: 0 }),
+  );
+  assert.ok(
+    untrusted.warnings.some((warning) =>
+      warning.startsWith('post-merge cleanup backlog:'),
+    ),
+  );
+});
+
+test('idd-doctor reports a failed cleanup-evidence read as a warning without requireGithub and an error with it', (t) => {
+  const root = createDoctorFixtureRepo('absent.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const failingEvidence = backlogRules('', {
+    status: 1,
+    stderr: 'HTTP 502: Bad Gateway\n',
+  });
+  const message =
+    'post-merge cleanup evidence query failed for 2 merged PR(s) (examples: #901, #902). Backlog count below may be undercounted.';
+
+  const lenient = withDoctorRules(failingEvidence, () =>
+    runDoctor({ root, requireGithub: false, cleanupBacklogWarnThreshold: 0 }),
+  );
+  assert.ok(lenient.warnings.includes(message), lenient.warnings.join('\n'));
+  assert.ok(!lenient.errors.includes(message));
+
+  const strict = withDoctorRules(failingEvidence, () =>
+    runDoctor({ root, requireGithub: true, cleanupBacklogWarnThreshold: 0 }),
+  );
+  assert.ok(strict.errors.includes(message), strict.errors.join('\n'));
+});

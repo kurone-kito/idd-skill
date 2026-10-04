@@ -697,6 +697,79 @@ test('fixture gh does not serve another GraphQL query that merely carries owner,
   }
 });
 
+test('fixture gh serves canned rules by exact argv, prefix and fragment, in order, before the built-ins, and records the rest', () => {
+  const fixture = installFixtureGh({
+    responses: [
+      { args: ['api', 'user', '--jq', '.login'], stdout: 'from-rule\n' },
+      { args: ['repo', 'view'], match: 'prefix', stdout: '{"name":"widgets"}' },
+      { args: ['repo'], match: 'prefix', stdout: '{"name":"shadowed"}' },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['nodes(ids:'],
+        stdout: '{"data":{"nodes":[]}}',
+      },
+      { args: ['auth', 'status'], status: 1, stderr: 'not logged in\n' },
+    ],
+  });
+  try {
+    // A rule wins over the built-in viewer answer, and the first matching rule
+    // wins over a later one that would also match.
+    assert.equal(gh('api', 'user', '--jq', '.login'), 'from-rule\n');
+    assert.equal(gh('repo', 'view', 'acme/widgets'), '{"name":"widgets"}');
+    assert.equal(
+      gh('repo', 'view', 'acme/widgets', '--json', 'name'),
+      '{"name":"widgets"}',
+    );
+    // Status and stderr come from the rule; a `--hostname` pair is stripped.
+    assert.throws(
+      () => gh('auth', 'status', '--hostname', 'github.com'),
+      /not logged in/,
+    );
+    // A fragment narrows a prefix rule to the one query it is meant for.
+    assert.equal(
+      gh(
+        'api',
+        'graphql',
+        '-f',
+        'query=query($ids:[ID!]!){ nodes(ids:$ids){ id } }',
+        '-f',
+        'ids[]=1',
+      ),
+      '{"data":{"nodes":[]}}',
+    );
+    assert.throws(
+      () => gh('api', 'graphql', '-f', 'query=query{ viewer { login } }'),
+      /unexpected invocation/,
+    );
+    // An exact rule does not accept a longer argv, and the built-ins answer
+    // again once the rule is removed.
+    assert.throws(
+      () => gh('api', 'user', '--jq', '.login', '--paginate'),
+      /unexpected invocation/,
+    );
+    // `respond` appends, so an earlier rule still wins over a later one.
+    fixture.respond({
+      args: ['api', 'user', '--jq', '.login'],
+      stdout: 'late\n',
+    });
+    assert.equal(gh('api', 'user', '--jq', '.login'), 'from-rule\n');
+    fixture.setResponses([]);
+    assert.equal(gh('api', 'user', '--jq', '.login'), 'kurone-kito\n');
+    fixture.respond({ args: ['issue', 'list'], match: 'prefix', stdout: '[]' });
+    assert.equal(gh('issue', 'list', '--state', 'open'), '[]');
+    assert.deepEqual(
+      fixture.unexpectedCalls().map((call) => call.join(' ')),
+      [
+        'api graphql -f query=query{ viewer { login } }',
+        'api user --jq .login --paginate',
+      ],
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
 test('fixture gh keeps the isolate-state variables a preload set, and restores PATH and tokens', () => {
   const state = mkdtempSync(join(tmpdir(), 'idd-fixture-gh-state-'));
   const savedPath = process.env.PATH;

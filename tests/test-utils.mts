@@ -389,12 +389,31 @@ export interface FixtureGhCheckSuites {
   pages: string[][];
 }
 
+/**
+ * One canned answer of the fixture `gh`. A rule matches when its `args` equal
+ * the call's argv (`match: 'exact'`, the default) or are a prefix of it
+ * (`'prefix'`), and every `includes` fragment occurs in the raw argv (use it
+ * for a long GraphQL query). Rules are consulted in order, before the built-in
+ * shapes, so a rule can also override the viewer or the check-suite read.
+ */
+export interface FixtureGhRule {
+  args: string[];
+  match?: 'exact' | 'prefix';
+  includes?: string[];
+  stdout?: string;
+  stderr?: string;
+  /** Exit status; default 0. */
+  status?: number;
+}
+
 /** Starting state of {@link installFixtureGh}. */
 export interface FixtureGhOptions {
   /** Answer to `gh api user --jq .login`; `null` models a signed-out viewer (exit 1). Default `kurone-kito`. */
   viewer?: string | null;
   /** Answer to the check-suite read. Default: a consistent head with no suites. */
   checkSuites?: Partial<FixtureGhCheckSuites>;
+  /** Canned answers consulted before the built-in shapes. */
+  responses?: FixtureGhRule[];
 }
 
 /** The handle {@link installFixtureGh} returns. */
@@ -411,6 +430,10 @@ export interface FixtureGh {
    * models a HEAD move.
    */
   setCheckSuites(next: Partial<FixtureGhCheckSuites>): void;
+  /** Append a canned answer (consulted after the rules already present). */
+  respond(rule: FixtureGhRule): void;
+  /** Replace every canned answer. */
+  setResponses(rules: FixtureGhRule[]): void;
   /** Remove the stub and its files and restore `PATH` and the token variables. */
   restore(): void;
 }
@@ -425,13 +448,15 @@ const FIXTURE_GH_DEFAULT_HEAD = 'f'.repeat(40);
  * state directory all apply, and a test that installs its own `gh` stub on top
  * of it simply shadows it until that stub is restored.
  *
- * Two shapes are served. `gh api user --jq .login` answers the configured
+ * Canned `responses` ({@link FixtureGhRule}) are consulted first, in order,
+ * and can shadow either built-in shape below. Two shapes are built in. `gh api user --jq .login` answers the configured
  * viewer (exit 1 when signed out). The check-suite first-observed GraphQL read
  * (a `query=` containing `pullRequest(number:$number)`, `commits(last:1)` and
  * `checkSuites(first:100`, with `owner=`, `repo=` and a numeric `number=`; a `--hostname <value>` pair, which a GHES server URL
  * inserts, is ignored) answers `headRefOid`, the queried commit's `oid` and the
  * configured `createdAt` pages, paging through `after=page:<n>` cursors. Any
- * other invocation is appended to the unexpected ledger and exits 1, so a file
+ * other invocation that no rule matches is appended to the unexpected ledger
+ * and exits 1, so a file
  * asserts `unexpectedCalls()` is empty in an `after` hook.
  *
  * Install it once per test file and run files in separate processes (the
@@ -450,6 +475,7 @@ export function installFixtureGh(options: FixtureGhOptions = {}): FixtureGh {
   const callsPath = join(root, 'calls.jsonl');
   const unexpectedPath = join(root, 'unexpected.jsonl');
   let config = {
+    responses: [...(options.responses ?? [])] as FixtureGhRule[],
     viewer: options.viewer === undefined ? 'kurone-kito' : options.viewer,
     checkSuites: {
       headRefOid: FIXTURE_GH_DEFAULT_HEAD,
@@ -478,6 +504,17 @@ function unexpected(why) {
   fs.appendFileSync(${JSON.stringify(unexpectedPath)}, JSON.stringify(raw) + '\\n');
   process.stderr.write('fixture gh: unexpected invocation (' + why + '): ' + raw.join(' ').slice(0, 300) + '\\n');
   process.exit(1);
+}
+const rawText = raw.join('\\n');
+for (const rule of config.responses || []) {
+  const prefix = rule.args.length <= args.length && rule.args.every((value, index) => value === args[index]);
+  const matched = (rule.match === 'prefix' ? prefix : prefix && rule.args.length === args.length)
+    && (rule.includes || []).every((fragment) => rawText.includes(fragment));
+  if (matched) {
+    if (rule.stderr) process.stderr.write(rule.stderr);
+    if (rule.stdout !== undefined) process.stdout.write(rule.stdout);
+    process.exit(rule.status === undefined ? 0 : rule.status);
+  }
 }
 if (args.length === 4 && args[0] === 'api' && args[1] === 'user' && args[2] === '--jq' && args[3] === '.login') {
   if (config.viewer === null) {
@@ -542,6 +579,14 @@ unexpected('no handler');
       config = { ...config, checkSuites: { ...config.checkSuites, ...next } };
       writeConfig();
     },
+    respond: (rule) => {
+      config = { ...config, responses: [...config.responses, rule] };
+      writeConfig();
+    },
+    setResponses: (rules) => {
+      config = { ...config, responses: [...rules] };
+      writeConfig();
+    },
     restore: () => {
       restoreStub();
       removeStubDirectory(root);
@@ -584,6 +629,8 @@ export function useFixtureGh(
     unexpectedCalls: () => current().unexpectedCalls(),
     setViewer: (login) => current().setViewer(login),
     setCheckSuites: (next) => current().setCheckSuites(next),
+    respond: (rule) => current().respond(rule),
+    setResponses: (rules) => current().setResponses(rules),
     restore: () => current().restore(),
   };
 }

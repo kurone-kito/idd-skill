@@ -71,7 +71,11 @@ import {
 import { loadOnboardingHearingCatalog } from '../src/scripts/onboarding-hearing.mts';
 import type { PromptFn } from '../src/scripts/readline-prompt.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
-import { pinLoadControlOff } from './test-utils.mts';
+import {
+  type FixtureGhRule,
+  pinLoadControlOff,
+  useFixtureGh,
+} from './test-utils.mts';
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
 const PLACEHOLDERS_DOC = join(
@@ -141,9 +145,10 @@ after(() => {
 });
 
 // This source repository's own config enables load control (#3702). The
-// in-process hearing tests reach the real `gh` for the evidence they gather,
-// which would write host-local load-control state; run them as before, with it
-// off. Load control has its own tests in gh-exec-load-control.test.mts.
+// hearing tests gather `gh` evidence, which would write host-local load-control
+// state; run them with it off. Load control has its own tests in
+// gh-exec-load-control.test.mts. Pinning it off is not network isolation; the
+// fixture `gh` installed below provides that (#3745).
 let restoreLoadControl: (() => void) | undefined;
 before(() => {
   restoreLoadControl = pinLoadControlOff();
@@ -151,6 +156,36 @@ before(() => {
 after(() => {
   restoreLoadControl?.();
 });
+
+const GH_VERSION = 'gh version 2.99.0 (idd-onboard fixture)';
+const HEAR_REPO_VIEW_ARGS = [
+  'repo',
+  'view',
+  'trusted-user-a/hear-fixture',
+  '--json',
+  'defaultBranchRef',
+];
+/**
+ * The `gh` reads the hearing evidence makes, in-process and from the spawned
+ * `bin/idd-onboard.mjs`: the CLI version, the host login state (reached once
+ * `--version` succeeds) and the origin repository's default branch.
+ */
+const HEAR_GH_RESPONSES: FixtureGhRule[] = [
+  { args: ['--version'], stdout: `${GH_VERSION}\nfixture release notes\n` },
+  { args: ['auth', 'status'] },
+  { args: HEAR_REPO_VIEW_ARGS, stdout: '{"defaultBranchRef":{"name":"main"}}' },
+];
+const fixtureGh = useFixtureGh({ responses: HEAR_GH_RESPONSES });
+
+/** Run `body` with `rules` as the only canned `gh` answers. */
+function withHearGhResponses<T>(rules: FixtureGhRule[], body: () => T): T {
+  fixtureGh.setResponses(rules);
+  try {
+    return body();
+  } finally {
+    fixtureGh.setResponses(HEAR_GH_RESPONSES);
+  }
+}
 
 const ALL_OVERRIDES = {
   REPO_NAME: 'my-app',
@@ -2183,7 +2218,7 @@ const BIN_PATH = join(REPO_ROOT, 'bin', 'idd-onboard.mjs');
 
 function runCliBin(
   args: string[],
-  options: { cwd?: string } = {},
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): {
   status: number;
   verdict: Record<string, unknown>;
@@ -2202,6 +2237,7 @@ function runCliBin(
         // repository's own config, which enables load control (#3702).
         cwd: options.cwd,
         encoding: 'utf8',
+        env: options.env,
       },
     );
     return {
@@ -8038,6 +8074,15 @@ function writeHearFixture(root: string): void {
   writeFileSync(join(root, 'pnpm-lock.yaml'), '');
 }
 
+interface HearStepZeroEvidence {
+  ghCli: {
+    available: boolean;
+    version: string | null;
+    hostAuthenticated: boolean | null;
+  };
+  gitRemoteHost: string | null;
+}
+
 /** One valid, complete answers map: documented default per option-bearing item, a fixture value otherwise. */
 function buildValidHearAnswers(): Record<string, string> {
   const catalog = loadOnboardingHearingCatalog();
@@ -8057,8 +8102,10 @@ function buildValidHearAnswers(): Record<string, string> {
 test('bin/idd-onboard.mjs --hear --propose lists every catalog item id, derives PROJECT_MARKER_PREFIX and the install-deps candidate, and reports helper-runtime evidence', () => {
   const root = makeFixtureDir();
   writeHearFixture(root);
-  // `--propose` gathers evidence through the real `gh`; run from the fixture so
-  // it does not read this repository's own load-control config (#3702).
+  // `--propose` gathers evidence through `gh` (the fixture `gh` here); run from
+  // the fixture so it does not read this repository's own load-control config
+  // (#3702).
+  const callsBefore = fixtureGh.calls().length;
   const { status, verdict } = runCliBin(
     ['--hear', '--propose', '--target', root],
     { cwd: root },
@@ -8077,6 +8124,24 @@ test('bin/idd-onboard.mjs --hear --propose lists every catalog item id, derives 
   const byId = new Map(items.map((item) => [item.id, item]));
   assert.equal(byId.get('PROJECT_MARKER_PREFIX')?.derived, 'hear-fixture');
   assert.equal(byId.get('INSTALL_DEPS_COMMAND')?.derived, 'pnpm install');
+  assert.equal(byId.get('development-branch')?.derived, 'main');
+  const stepZero = verdict.stepZeroEvidence as HearStepZeroEvidence;
+  assert.equal(stepZero.gitRemoteHost, 'github.com');
+  assert.equal(stepZero.ghCli.available, true);
+  assert.equal(stepZero.ghCli.hostAuthenticated, true);
+  // The fixture ignores `--hostname` when matching, so pin the raw argv: the
+  // login-state read must target the remote's host.
+  assert.ok(
+    fixtureGh
+      .calls()
+      .slice(callsBefore)
+      .some((call) => call.join(' ') === 'auth status --hostname github.com'),
+  );
+  if (process.platform !== 'win32') {
+    // A flag-shaped first argument never reaches the Windows preload (Node
+    // handles `--version` itself), so only the POSIX stub serves this line.
+    assert.equal(stepZero.ghCli.version, GH_VERSION);
+  }
   assert.ok(verdict.helperRuntimeEvidence);
   assert.equal(
     (verdict.helperRuntimeEvidence as { detectedPackageManager: string })
@@ -8084,6 +8149,79 @@ test('bin/idd-onboard.mjs --hear --propose lists every catalog item id, derives 
     'pnpm',
   );
   assert.ok(verdict.stepZeroEvidence);
+});
+
+test('bin/idd-onboard.mjs --hear --propose reports a signed-out host from the served gh answer', () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  const { status, verdict } = withHearGhResponses(
+    [
+      HEAR_GH_RESPONSES[0] as FixtureGhRule,
+      { args: ['auth', 'status'], status: 1 },
+      HEAR_GH_RESPONSES[2] as FixtureGhRule,
+    ],
+    () => runCliBin(['--hear', '--propose', '--target', root], { cwd: root }),
+  );
+  assert.equal(status, 0);
+  const { ghCli } = verdict.stepZeroEvidence as HearStepZeroEvidence;
+  assert.equal(ghCli.available, true);
+  assert.equal(ghCli.hostAuthenticated, false);
+});
+
+// A failing `gh --version` (the fixture answers it with exit 1) is "unavailable",
+// and the login-state read is then skipped even though the host is known. A
+// flag-shaped first argument never reaches the Windows preload, so this runs
+// off win32 only.
+test('bin/idd-onboard.mjs --hear --propose reports gh as unavailable, and skips the login-state read, when gh --version fails', {
+  skip: process.platform === 'win32',
+}, () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  const { status, verdict } = withHearGhResponses(
+    [
+      { args: ['--version'], status: 1, stderr: 'gh: broken install\n' },
+      // Would report `true` if the evidence still asked after `--version` failed.
+      { args: ['auth', 'status'] },
+      HEAR_GH_RESPONSES[2] as FixtureGhRule,
+    ],
+    () => runCliBin(['--hear', '--propose', '--target', root], { cwd: root }),
+  );
+  assert.equal(status, 0);
+  const stepZero = verdict.stepZeroEvidence as HearStepZeroEvidence;
+  assert.equal(stepZero.gitRemoteHost, 'github.com');
+  assert.deepEqual(stepZero.ghCli, {
+    available: false,
+    version: null,
+    hostAuthenticated: null,
+  });
+});
+
+test('bin/idd-onboard.mjs --hear --propose reports gh as unavailable when no gh is on PATH', () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  // An empty directory as the only PATH entry makes the spawn fail with ENOENT,
+  // so this run never reaches the fixture `gh` (or a real one). It hides `git`
+  // too, so it covers the missing-binary spawn failure only; the login-state
+  // guard is covered by the test above.
+  const emptyBin = makeFixtureDir();
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.toUpperCase() !== 'PATH') {
+      env[key] = value;
+    }
+  }
+  env.PATH = emptyBin;
+  const { status, verdict } = runCliBin(
+    ['--hear', '--propose', '--target', root],
+    { cwd: root, env },
+  );
+  assert.equal(status, 0);
+  const { ghCli } = verdict.stepZeroEvidence as HearStepZeroEvidence;
+  assert.deepEqual(ghCli, {
+    available: false,
+    version: null,
+    hostAuthenticated: null,
+  });
 });
 
 test('bin/idd-onboard.mjs --hear --apply confirms a complete, valid answers map into a schema-valid transcript', () => {
@@ -8424,15 +8562,34 @@ test('deriveDevelopmentBranchCandidate returns the injected default-branch reade
     }),
     null,
   );
-  // No injected reader and no real `gh` evidence for this bogus path:
-  // falls back to the real readGithubDefaultBranch, which fails closed to
-  // null rather than throwing.
+  // No injected reader and no origin remote for this bogus path: falls back
+  // to the real readGithubDefaultBranch, which fails closed to null before
+  // it reaches `gh`, rather than throwing.
   assert.equal(
     deriveDevelopmentBranchCandidate(
       join(tmpdir(), 'idd-onboard-nonexistent-path'),
     ),
     null,
   );
+});
+
+test('deriveDevelopmentBranchCandidate reads the served default branch for the origin remote and fails closed when the read does not answer', () => {
+  const root = makeFixtureDir();
+  writeHearFixture(root);
+  assert.equal(deriveDevelopmentBranchCandidate(root), 'main');
+  // A failing read, an unparsable answer and an empty branch name are all
+  // "undetermined", never a guessed branch.
+  for (const answer of [
+    { status: 1, stderr: 'HTTP 404: Not Found\n' },
+    { stdout: 'not json' },
+    { stdout: '{"defaultBranchRef":{"name":""}}' },
+  ]) {
+    const candidate = withHearGhResponses(
+      [{ args: HEAR_REPO_VIEW_ARGS, ...answer }],
+      () => deriveDevelopmentBranchCandidate(root),
+    );
+    assert.equal(candidate, null, JSON.stringify(answer));
+  }
 });
 
 /** A git repo with a local `origin` remote whose only branch is `main`. */

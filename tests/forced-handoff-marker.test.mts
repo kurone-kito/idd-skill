@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 
 import type { CollaboratorPermissionCache } from '../src/scripts/collaborator-permission.mts';
 import { resolveTrustedCollaboratorMarkerLogins } from '../src/scripts/collaborator-permission.mts';
@@ -26,6 +26,14 @@ import {
   renderForcedHandoffComment,
   renderForcedHandoffConsentNote,
 } from '../src/scripts/protocol-helpers.mts';
+import { type FixtureGhRule, useFixtureGh } from './test-utils.mts';
+
+// #3745: `main` below reads GitHub (the issue comments, their edit state, the
+// viewer and the `--forced-by` actor's permission). Serve those reads from the
+// fixture `gh` so a run never depends on the operator's login, and so an API
+// failure fails a test instead of being swallowed. The file's `main` runs use
+// a sandbox cwd without a load-control config, so no `pinLoadControlOff` here.
+const fixtureGh = useFixtureGh({ viewer: 'kurone-kito' });
 
 const withUneditedClaimState = <T extends { lastEditedAt?: string | null }>(
   comments: T[],
@@ -740,7 +748,103 @@ test('forced handoff rejects conflicting alias keys', () => {
   assert.equal(parseForcedHandoffComment(body, '2026-05-12T11:00:05Z'), null);
 });
 
-test('nested forcedHandoff.mode key enables human-gated mode', () => {
+const HANDOFF_REPO = 'kurone-kito/idd-skill';
+const HANDOFF_COMMENTS_ARGS = [
+  'api',
+  '--jq',
+  '.[]',
+  '--paginate',
+  `repos/${HANDOFF_REPO}/issues/337/comments`,
+];
+const HANDOFF_PERMISSION_ARGS = [
+  'api',
+  `repos/${HANDOFF_REPO}/collaborators/kurone-kito/permission`,
+];
+const HANDOFF_CLAIM_BODY = [
+  '<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->',
+  '',
+  '_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._',
+].join('\n');
+
+interface FixtureComment {
+  id: number;
+  node_id: string;
+  created_at: string;
+  user: { login: string };
+  body: string;
+}
+
+const fixtureComment = (
+  id: number,
+  login: string,
+  body: string,
+): FixtureComment => ({
+  id,
+  node_id: `IC_fixture_${id}`,
+  created_at: '2026-05-12T09:00:00Z',
+  user: { login },
+  body,
+});
+
+/**
+ * The four reads a human-gated `main` run makes, as canned answers: the comment
+ * list (NDJSON via `--jq .[]`), the GraphQL edit-state read for those comments,
+ * and the `--forced-by` actor's permission. The viewer is the fixture's own.
+ */
+function handoffRules(
+  comments: FixtureComment[],
+  permission: Partial<FixtureGhRule> = {
+    stdout: '{"permission":"admin","role_name":"admin"}',
+  },
+): FixtureGhRule[] {
+  return [
+    {
+      args: HANDOFF_COMMENTS_ARGS,
+      stdout: comments.map((comment) => JSON.stringify(comment)).join('\n'),
+    },
+    {
+      args: ['api', 'graphql'],
+      match: 'prefix',
+      includes: ['lastEditedAt'],
+      stdout: JSON.stringify({
+        data: {
+          nodes: comments.map((comment) => ({
+            id: comment.node_id,
+            lastEditedAt: null,
+          })),
+        },
+      }),
+    },
+    { args: HANDOFF_PERMISSION_ARGS, ...permission },
+  ];
+}
+
+const HANDOFF_ARGS = [
+  '--issue',
+  '337',
+  '--new-agent-id',
+  'github-copilot-cli-new',
+  '--new-claim-id',
+  'claim-20260512T110000Z-337-new',
+  '--forced-by',
+  'kurone-kito',
+  '--reason',
+  'operator-approved-recovery',
+  '--timestamp',
+  '2026-05-12T11:00:00Z',
+  '--repo',
+  HANDOFF_REPO,
+];
+
+/**
+ * Runs `body` from a sandbox cwd whose config enables human-gated forced
+ * handoff, with the trust-widening environment variables cleared, and with
+ * `console.log` captured. Restores the cwd, the environment and `console.log`.
+ */
+function inHumanGatedSandbox<T>(
+  rules: FixtureGhRule[],
+  body: (output: () => string) => T,
+): T {
   const originalCwd = process.cwd();
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
@@ -748,42 +852,115 @@ test('nested forcedHandoff.mode key enables human-gated mode', () => {
     join(sandbox, '.github', 'idd', 'config.json'),
     JSON.stringify({ forcedHandoff: { mode: 'human-gated' } }),
   );
-
+  const envNames = [
+    'IDD_TRUSTED_MARKER_ACTORS',
+    'IDD_TRUST_COLLABORATOR_MARKERS',
+  ] as const;
+  const savedEnv = envNames.map((name) => process.env[name]);
+  for (const name of envNames) {
+    delete process.env[name];
+  }
+  const lines: string[] = [];
+  const log = mock.method(console, 'log', (message?: unknown) => {
+    lines.push(String(message));
+  });
+  fixtureGh.setResponses(rules);
   process.chdir(sandbox);
   try {
-    // With human-gated mode the tool passes the mode check and proceeds to
-    // make GitHub API calls. We only verify the mode is read correctly — i.e.,
-    // the mode-disabled error is NOT thrown. Other errors (API access, missing
-    // collaborators) are acceptable in a sandboxed test environment.
-    let modeError = false;
-    try {
-      main([
-        '--issue',
-        '337',
-        '--new-agent-id',
-        'github-copilot-cli-new',
-        '--new-claim-id',
-        'claim-20260512T110000Z-337-new',
-        '--forced-by',
-        'kurone-kito',
-        '--reason',
-        'operator-approved-recovery',
-        '--repo',
-        'kurone-kito/idd-skill',
-      ]);
-    } catch (err) {
-      const message = (err as Error).message;
-      if (/forced-handoff mode is not human-gated/.test(String(message))) {
-        modeError = true;
-      }
-    }
-    assert.ok(
-      !modeError,
-      'nested forcedHandoff.mode should not trigger mode-disabled error',
-    );
+    return body(() => lines.join('\n'));
   } finally {
     process.chdir(originalCwd);
+    log.mock.restore();
+    fixtureGh.setResponses([]);
+    envNames.forEach((name, index) => {
+      const saved = savedEnv[index];
+      if (saved === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = saved;
+      }
+    });
+    rmSync(sandbox, { recursive: true, force: true });
   }
+}
+
+test('nested forcedHandoff.mode key enables human-gated mode and renders the marker from served GitHub data', () => {
+  const comments = [
+    fixtureComment(1001, 'kurone-kito', HANDOFF_CLAIM_BODY),
+    fixtureComment(1002, 'someone-else', 'Is this still being worked on?'),
+  ];
+  const callsBefore = fixtureGh.calls().length;
+  inHumanGatedSandbox(handoffRules(comments), (output) => {
+    assert.equal(main(HANDOFF_ARGS), 0);
+    const rendered = output();
+    assert.match(rendered, /^<!-- forced-handoff: \{/);
+    // The rendered marker is the contract: the old claim comes from the served
+    // comments and every other field from the command line.
+    assert.deepEqual(
+      parseForcedHandoffComment(rendered, '2026-05-12T11:00:05Z'),
+      {
+        oldAgentId: 'github-copilot-cli-old',
+        oldClaimId: 'claim-20260512T090000Z-337-old',
+        newAgentId: 'github-copilot-cli-new',
+        newClaimId: 'claim-20260512T110000Z-337-new',
+        branch: 'issue/337-feat-protocol-add-auditable-forced',
+        forcedBy: 'kurone-kito',
+        reason: 'operator-approved-recovery',
+        timestamp: '2026-05-12T11:00:00Z',
+        contextScope: 'issue-only',
+        createdAt: '2026-05-12T11:00:05Z',
+      },
+    );
+  });
+  // Every read the run made was a served one, none fell through.
+  assert.deepEqual(fixtureGh.unexpectedCalls(), []);
+  const reads = fixtureGh
+    .calls()
+    .slice(callsBefore)
+    .map((call) => call.join(' '));
+  assert.ok(
+    reads.some((read) => read.includes(HANDOFF_PERMISSION_ARGS[1] as string)),
+    reads.join('\n'),
+  );
+});
+
+test('human-gated forced handoff refuses a --forced-by actor the served permission does not authorize', () => {
+  const claim = [fixtureComment(1001, 'kurone-kito', HANDOFF_CLAIM_BODY)];
+  const refusal =
+    /--forced-by actor kurone-kito is not authorized under owners-and-maintainers-only/;
+  for (const permission of [
+    { stdout: '{"permission":"read","role_name":"read"}' },
+    { stderr: 'gh: Not Found (HTTP 404)\n', status: 1 },
+  ]) {
+    inHumanGatedSandbox(handoffRules(claim, permission), (output) => {
+      assert.throws(
+        () => main(HANDOFF_ARGS),
+        refusal,
+        JSON.stringify(permission),
+      );
+      assert.equal(output(), '', 'no marker is rendered on a refusal');
+    });
+  }
+});
+
+test('human-gated forced handoff needs an active claim from a trusted author', () => {
+  const noClaim = /issue #337 has no active trusted claim/;
+  // No claim marker at all.
+  inHumanGatedSandbox(
+    handoffRules([fixtureComment(1001, 'kurone-kito', 'Working on it.')]),
+    (output) => {
+      assert.throws(() => main(HANDOFF_ARGS), noClaim);
+      assert.equal(output(), '');
+    },
+  );
+  // A claim marker an untrusted author posted does not count.
+  inHumanGatedSandbox(
+    handoffRules([fixtureComment(1001, 'someone-else', HANDOFF_CLAIM_BODY)]),
+    (output) => {
+      assert.throws(() => main(HANDOFF_ARGS), noClaim);
+      assert.equal(output(), '');
+    },
+  );
 });
 
 test('nested forcedHandoff.mode=disabled refuses output', () => {
