@@ -52,7 +52,7 @@
 import './node-runtime-guard.mjs';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import {
   assertSucceeded,
   GITATTRIBUTES_PATH,
@@ -294,10 +294,14 @@ function isAbsent(error) {
 /** Every file under `dir` ending in `suffix`, as `/`-separated relative paths. */
 function listFiles(dir, suffix) {
   try {
-    return readdirSync(dir, { recursive: true, encoding: 'utf8' })
-      .map((path) => path.replaceAll('\\', '/'))
-      .filter((path) => path.endsWith(suffix))
-      .sort();
+    return (
+      readdirSync(dir, { recursive: true, encoding: 'utf8' })
+        // Only a Windows `\` is a separator; on POSIX it is an ordinary name
+        // character that must survive (readdir already uses `/` there).
+        .map((path) => (sep === '\\' ? path.replaceAll('\\', '/') : path))
+        .filter((path) => path.endsWith(suffix))
+        .sort()
+    );
   } catch (error) {
     if (isAbsent(error)) {
       return [];

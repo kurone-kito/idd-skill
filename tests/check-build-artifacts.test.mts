@@ -167,6 +167,8 @@ test('compareArtifacts: an artifact whose name holds a newline is still an artif
       [name]: 'x\n',
     }),
   });
+  // Pins the committed-side path only; the on-disk half below carries the
+  // dot-all fix, because the committed side is never pattern-filtered here.
   assert.deepEqual(kindsByPath(committedOnly), [`${name}=not-emitted`]);
   const workingOnly = compareArtifacts({
     ...CLEAN,
@@ -1202,6 +1204,29 @@ test('real tools: a committed artifact with a newline in its name and no source 
   assert.deepEqual(kindsByPath(findings), [
     'scripts/odd\nname.mjs=not-emitted',
   ]);
+});
+
+test('real tools: an untracked or staged artifact whose name holds a backslash is reported the same', {
+  skip:
+    SKIP ||
+    (process.platform === 'win32'
+      ? 'a backslash is a path separator on win32'
+      : false),
+}, () => {
+  const fx = fixture();
+  writeFileSync(join(fx.root, 'scripts', 'back\\slash.mjs'), 'export {};\n');
+  const untracked = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  }).findings;
+  assert.deepEqual(kindsByPath(untracked), [
+    'scripts/back\\slash.mjs=not-emitted',
+  ]);
+  git(fx.root, 'add', '-A');
+  assert.deepEqual(
+    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    untracked,
+  );
 });
 
 test('real tools: a TypeScript error is a tsc stage error and leaves the checkout untouched', {
