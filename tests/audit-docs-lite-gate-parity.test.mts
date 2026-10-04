@@ -617,14 +617,36 @@ test('source repository audit rejects untracked inventory audit files', (t) => {
     env: fixtureEnv(),
   });
 
-  for (const path of [
+  const auditFiles = [
     'src/scripts/repository-inventory-audit.mts',
     'scripts/repository-inventory-audit.mjs',
-  ]) {
+  ];
+  for (const path of auditFiles) {
     const content = readFileSync(join(REPO_ROOT, path), 'utf8');
     const target = join(fixture.dir, path);
     mkdirSync(join(fixture.dir, path, '..'), { recursive: true });
     writeFileSync(target, content, 'utf8');
+  }
+  execFileSync(
+    'git',
+    ['rm', '--cached', '--ignore-unmatch', '--', ...auditFiles],
+    { cwd: fixture.dir, env: fixtureEnv() },
+  );
+  const indexedFiles = new Set(
+    execFileSync('git', ['ls-files', '--cached'], {
+      cwd: fixture.dir,
+      env: fixtureEnv(),
+      encoding: 'utf8',
+    })
+      .split(/\r?\n/)
+      .filter(Boolean),
+  );
+  for (const path of auditFiles) {
+    assert.equal(
+      indexedFiles.has(path),
+      false,
+      `${path} must stay outside the fixture Git index`,
+    );
   }
 
   const result = runAuditDocs(fixture.dir);
