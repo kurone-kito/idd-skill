@@ -1,0 +1,555 @@
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import {
+  containsNulByte,
+  DIRECT_GH_SPAWN_PATTERN,
+  findBareSpecifiers,
+  MIGRATED_HELPERS,
+} from '../src/scripts/lint-source-boundaries.mts';
+import { fixtureEnv } from './test-utils.mts';
+
+// #3748: the whole-tree source boundary rules run through the bare-node CLI
+// (`scripts/lint-source-boundaries.mjs`). These tests drive that CLI against
+// temporary `git init` fixture trees -- never the real checkout -- so the
+// detectors are proven by positive and negative fixtures, and the live
+// enforcement stays in lint.
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const CLI = join(REPO_ROOT, 'scripts', 'lint-source-boundaries.mjs');
+const CLI_SOURCE = join(
+  REPO_ROOT,
+  'src',
+  'scripts',
+  'lint-source-boundaries.mts',
+);
+
+const createdDirs: string[] = [];
+
+after(() => {
+  for (const dir of createdDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function scratchDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  createdDirs.push(dir);
+  return dir;
+}
+
+type FixtureFiles = Map<string, string | Buffer>;
+
+const MANIFEST = JSON.stringify({
+  syncPairs: [
+    {
+      id: 'mirror',
+      mode: 'exact',
+      source: 'scripts/mirror.mjs',
+      target: 'idd-template/scripts/mirror.mjs',
+    },
+    // Neither of these is an exact `idd-template/scripts/` mirror.
+    {
+      id: 'doc',
+      mode: 'exact',
+      source: 'docs/a.md',
+      target: 'idd-template/docs/a.md',
+    },
+    {
+      id: 'concreted',
+      mode: 'concreted',
+      source: 'scripts/other.mjs',
+      target: 'idd-template/scripts/other.mjs',
+    },
+  ],
+});
+
+/** A tree that satisfies every rule, keyed by repository-relative path. */
+function cleanFiles(): FixtureFiles {
+  const files: FixtureFiles = new Map<string, string | Buffer>([
+    [
+      'src/main.mts',
+      "import { readFileSync } from 'node:fs';\nimport { helper } from './scripts/helper.mts';\nexport const main = [readFileSync, helper];\n",
+    ],
+    ['src/scripts/helper.mts', 'export const helper = 1;\n'],
+    // The two documented spawn exemptions may spawn the gh executable.
+    [
+      'src/scripts/gh-exec.mts',
+      "import { execFileSync } from 'node:child_process';\nexport const run = () => execFileSync('gh', ['--version']);\n",
+    ],
+    [
+      'src/scripts/minimize-superseded-markers.mts',
+      "import { spawnSync } from 'node:child_process';\nexport const run = () => spawnSync('gh', []);\n",
+    ],
+    ['src/scripts/provider-port.mts', 'export const port = 1;\n'],
+    ['src/scripts/provider-adapter-github.mts', 'export const github = 1;\n'],
+    ['src/scripts/provider-adapter-fake.mts', 'export const fake = 1;\n'],
+    [
+      'scripts/mirror.mjs',
+      "import { readFileSync } from 'node:fs';\nexport const mirror = readFileSync;\n",
+    ],
+    ['audit/sync-manifest.json', MANIFEST],
+    ['bin/run.mjs', 'export const run = 1;\n'],
+    ['tests/unit.test.mts', 'export const unit = 1;\n'],
+  ]);
+  for (const name of MIGRATED_HELPERS) {
+    files.set(`src/scripts/${name}`, 'export const migrated = 1;\n');
+    files.set(
+      `scripts/${name.replace(/\.mts$/, '.mjs')}`,
+      'export const migrated = 1;\n',
+    );
+  }
+  return files;
+}
+
+/**
+ * Writes `files` under a fresh scratch directory and, unless `git` is false,
+ * turns it into a git repository with everything staged (the NUL rule reads
+ * the tracked file list, which the index provides without a commit).
+ */
+function buildFixture(
+  edit: (files: FixtureFiles) => void = () => undefined,
+  {
+    git = true,
+    afterTrack = () => undefined,
+  }: { git?: boolean; afterTrack?: (root: string) => void } = {},
+): string {
+  const root = scratchDir('idd-lint-boundaries-');
+  const files = cleanFiles();
+  edit(files);
+  for (const [path, content] of files) {
+    const absolute = join(root, path);
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, content);
+  }
+  if (git) {
+    execFileSync('git', ['init', '-q', root], {
+      env: fixtureEnv(),
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['-C', root, 'add', '-A'], {
+      env: fixtureEnv(),
+      stdio: 'ignore',
+    });
+  }
+  afterTrack(root);
+  return root;
+}
+
+function runCli(
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; script?: string } = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [options.script ?? CLI, ...args], {
+    cwd: options.cwd ?? tmpdir(),
+    env: options.env ?? fixtureEnv(),
+    encoding: 'utf8',
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+/** `<RULE-ID> <path>:` lines the CLI printed on stderr. */
+function reportedRules(stderr: string): string[] {
+  return stderr
+    .split('\n')
+    .map((line) => /^(\S+) (\S+): /.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => `${match[1]} ${match[2]}`);
+}
+
+test('a tree that satisfies every rule passes and reports what each rule inspected', () => {
+  const root = buildFixture();
+  const { status, stdout, stderr } = runCli(['--root', root]);
+  assert.equal(status, 0, stderr);
+  assert.equal(stderr, '');
+  const helpers = MIGRATED_HELPERS.length;
+  // Counted from `cleanFiles()`: 7 non-helper `src` files (6 of them under
+  // src/scripts, 2 of those exempt from the spawn rule), the enrolled helpers'
+  // sources and generated copies, one mirror, and the bin/tests files.
+  const inspected = new Map([
+    ['NODE-IMPORT-BOUNDARY', 7 + helpers],
+    ['STANDALONE-MIRROR-IMPORTS', 1],
+    ['GH-SPAWN-DIRECT', 6 + helpers - 2],
+    ['PROVIDER-PORT-MIGRATED', helpers * 2],
+    ['NO-NUL-BYTES', 7 + helpers + 1 + helpers + 1 + 1],
+  ]);
+  for (const [ruleId, count] of inspected) {
+    assert.ok(
+      stdout.includes(`lint-source-boundaries: ${ruleId} inspected ${count}\n`),
+      `${ruleId} should have inspected ${count}:\n${stdout}`,
+    );
+  }
+  assert.match(stdout, /all source boundaries passed/);
+});
+
+interface ViolationCase {
+  name: string;
+  edit: (files: FixtureFiles) => void;
+  /** `<RULE-ID> <path>` the CLI must report. */
+  expected: string;
+}
+
+const VIOLATION_CASES: ViolationCase[] = [
+  {
+    name: 'a bare third-party import under src',
+    edit: (files) =>
+      files.set(
+        'src/main.mts',
+        "import { parse } from 'yaml';\nexport const main = parse;\n",
+      ),
+    expected: 'NODE-IMPORT-BOUNDARY src/main.mts',
+  },
+  {
+    name: 'a dynamic bare import under src',
+    edit: (files) =>
+      files.set(
+        'src/scripts/helper.mts',
+        "export const load = () => import('left-pad');\n",
+      ),
+    expected: 'NODE-IMPORT-BOUNDARY src/scripts/helper.mts',
+  },
+  {
+    name: 'a relative import in a standalone mirror source',
+    edit: (files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        "import { helper } from './helper.mjs';\nexport const mirror = helper;\n",
+      ),
+    expected: 'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+  },
+  {
+    name: 'a direct gh spawn in a script',
+    edit: (files) =>
+      files.set(
+        'src/scripts/helper.mts',
+        "import { execFileSync } from 'node:child_process';\nexport const run = () => execFileSync('gh', []);\n",
+      ),
+    expected: 'GH-SPAWN-DIRECT src/scripts/helper.mts',
+  },
+  {
+    name: 'a namespace-qualified direct gh spawn in a script',
+    edit: (files) =>
+      files.set(
+        'src/scripts/helper.mts',
+        'import * as cp from \'node:child_process\';\nexport const run = () => cp.spawnSync("gh", []);\n',
+      ),
+    expected: 'GH-SPAWN-DIRECT src/scripts/helper.mts',
+  },
+  {
+    name: 'a bare ghText call in a migrated helper source',
+    edit: (files) =>
+      files.set(
+        'src/scripts/review-clause.mts',
+        "export const run = () => ghText(['api']);\n",
+      ),
+    expected: 'PROVIDER-PORT-MIGRATED src/scripts/review-clause.mts',
+  },
+  {
+    name: 'a gh-exec import in a migrated helper generated copy',
+    edit: (files) =>
+      files.set(
+        'scripts/review-clause.mjs',
+        "import { ghText } from './gh-exec.mjs';\nexport const run = ghText;\n",
+      ),
+    expected: 'PROVIDER-PORT-MIGRATED scripts/review-clause.mjs',
+  },
+  {
+    name: 'a literal NUL byte in a tracked test source',
+    edit: (files) =>
+      files.set('tests/dirty.mts', Buffer.from('export const bad = "a\0b";\n')),
+    expected: 'NO-NUL-BYTES tests/dirty.mts',
+  },
+];
+
+for (const { name, edit, expected } of VIOLATION_CASES) {
+  test(`the CLI fails with the rule ID and relative path for ${name}`, () => {
+    const root = buildFixture(edit);
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [expected], stderr);
+    assert.match(stderr, /lint-source-boundaries: 1 violation\(s\)/);
+  });
+}
+
+test('the gh-spawn exemptions stay narrow: only the two documented files may spawn gh', () => {
+  const root = buildFixture((files) => {
+    files.set(
+      'src/scripts/provider-adapter-github.mts',
+      "import { execFileSync } from 'node:child_process';\nexport const run = () => execFileSync('gh', []);\n",
+    );
+  });
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'GH-SPAWN-DIRECT src/scripts/provider-adapter-github.mts',
+  ]);
+});
+
+interface InspectionCase {
+  name: string;
+  edit: (files: FixtureFiles) => void;
+  git?: boolean;
+  /** Runs after the files are tracked, e.g. to delete one from disk. */
+  afterTrack?: (root: string) => void;
+  /** The `<RULE-ID> <path>:` prefix of the expected stderr line. */
+  expected: string;
+  /** What that line's message says, to tell failure causes apart. */
+  message?: RegExp;
+}
+
+const INSPECTION_CASES: InspectionCase[] = [
+  {
+    name: 'a missing sync manifest',
+    edit: (files) => files.delete('audit/sync-manifest.json'),
+    expected: 'STANDALONE-MIRROR-IMPORTS-INSPECTION audit/sync-manifest.json',
+  },
+  {
+    name: 'a manifest that is not JSON',
+    edit: (files) => files.set('audit/sync-manifest.json', '{ not json'),
+    expected: 'STANDALONE-MIRROR-IMPORTS-INSPECTION audit/sync-manifest.json',
+  },
+  {
+    name: 'a manifest with no exact script mirror (an empty derivation)',
+    edit: (files) =>
+      files.set('audit/sync-manifest.json', JSON.stringify({ syncPairs: [] })),
+    expected: 'STANDALONE-MIRROR-IMPORTS-INSPECTION audit/sync-manifest.json',
+  },
+  {
+    name: 'a mirror source that cannot be read',
+    edit: (files) => files.delete('scripts/mirror.mjs'),
+    expected: 'STANDALONE-MIRROR-IMPORTS-INSPECTION scripts/mirror.mjs',
+  },
+  {
+    name: 'a src directory with no .mts file (an empty inventory)',
+    edit: (files) => {
+      for (const path of [...files.keys()]) {
+        if (path.startsWith('src/')) {
+          files.delete(path);
+        }
+      }
+      files.set('src/README.md', 'nothing to scan\n');
+    },
+    expected: 'NODE-IMPORT-BOUNDARY-INSPECTION src',
+  },
+  {
+    name: 'an enrolled migrated helper whose generated copy is missing',
+    edit: (files) => files.delete('scripts/review-clause.mjs'),
+    expected: 'PROVIDER-PORT-MIGRATED-INSPECTION scripts/review-clause.mjs',
+  },
+  {
+    name: 'a missing provider adapter module',
+    edit: (files) => files.delete('src/scripts/provider-adapter-fake.mts'),
+    expected:
+      'PROVIDER-PORT-MIGRATED-INSPECTION src/scripts/provider-adapter-fake.mts',
+  },
+  {
+    name: 'a tree that is not a git repository',
+    edit: () => undefined,
+    git: false,
+    expected: 'NO-NUL-BYTES-INSPECTION src, scripts, bin, tests',
+    message: /cannot enumerate tracked sources/,
+  },
+  {
+    name: 'a repository with no tracked .mts/.mjs source (an empty inventory)',
+    edit: (files) => {
+      files.clear();
+      files.set('src/README.md', 'nothing to scan\n');
+    },
+    expected: 'NO-NUL-BYTES-INSPECTION src, scripts, bin, tests',
+    message: /no tracked \.mts\/\.mjs source to inspect/,
+  },
+  {
+    name: 'a tracked source that is missing from the working tree',
+    edit: () => undefined,
+    afterTrack: (root) => rmSync(join(root, 'bin', 'run.mjs')),
+    expected: 'NO-NUL-BYTES-INSPECTION bin/run.mjs',
+    message: /cannot read the file/,
+  },
+];
+
+for (const {
+  name,
+  edit,
+  git,
+  afterTrack,
+  expected,
+  message,
+} of INSPECTION_CASES) {
+  test(`an incomplete inspection fails closed for ${name}`, () => {
+    const root = buildFixture(edit, { git, afterTrack });
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    // The path column of an inspection line may hold a comma-separated list.
+    const line = stderr
+      .split('\n')
+      .find((candidate) => candidate.startsWith(`${expected}:`));
+    assert.ok(line, stderr);
+    if (message) {
+      assert.match(line, message);
+    }
+  });
+}
+
+test('an inherited git location variable cannot redirect the NUL scan to another repository', () => {
+  const root = buildFixture();
+  const other = buildFixture((files) => {
+    files.set('tests/dirty.mts', Buffer.from('export const bad = "a\0b";\n'));
+  });
+  const env = fixtureEnv();
+  env.GIT_DIR = join(other, '.git');
+  env.GIT_COMMON_DIR = join(other, '.git');
+  env.GIT_INDEX_FILE = join(other, '.git', 'index');
+  env.GIT_OBJECT_DIRECTORY = join(other, '.git', 'objects');
+  env.GIT_WORK_TREE = other;
+  const { status, stderr } = runCli(['--root', root], { env });
+  assert.equal(status, 0, stderr);
+});
+
+test('violations of several rules are reported in rule then path order, and counted', () => {
+  const root = buildFixture((files) => {
+    files.set(
+      'src/main.mts',
+      "import { parse } from 'yaml';\nexport const main = parse;\n",
+    );
+    files.set('tests/dirty.mts', Buffer.from('export const bad = "a\0b";\n'));
+    files.set(
+      'src/scripts/helper.mts',
+      "import { execFileSync } from 'node:child_process';\nexport const run = () => execFileSync('gh', []);\n",
+    );
+  });
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'GH-SPAWN-DIRECT src/scripts/helper.mts',
+    'NO-NUL-BYTES tests/dirty.mts',
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /lint-source-boundaries: 3 violation\(s\)/);
+});
+
+test('--help prints usage, and a usage error exits 2 without inspecting anything', () => {
+  const help = runCli(['--help']);
+  assert.equal(help.status, 0);
+  assert.match(
+    help.stdout,
+    /^Usage: node scripts\/lint-source-boundaries\.mjs/,
+  );
+
+  const unknown = runCli(['--no-such-flag']);
+  assert.equal(unknown.status, 2);
+  assert.match(unknown.stderr, /unknown argument: --no-such-flag/);
+
+  const missing = runCli(['--root']);
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /--root requires a directory path/);
+
+  // A flag is not a directory value for --root.
+  const flagValue = runCli(['--root', '--help']);
+  assert.equal(flagValue.status, 2);
+  assert.match(flagValue.stderr, /--root requires a directory path/);
+});
+
+test('the CLI runs with bare Node from a copy that has no node_modules or package marker', () => {
+  const bare = scratchDir('idd-lint-boundaries-bare-');
+  const scripts = join(bare, 'scripts');
+  mkdirSync(scripts);
+  const closure = [
+    'lint-source-boundaries.mjs',
+    'node-runtime-guard.mjs',
+    'bundle-root.mjs',
+  ];
+  for (const name of closure) {
+    copyFileSync(join(REPO_ROOT, 'scripts', name), join(scripts, name));
+    // The whole closure imports only `node:` builtins and its own siblings.
+    assert.deepEqual(
+      findBareSpecifiers(readFileSync(join(scripts, name), 'utf8')),
+      [],
+      name,
+    );
+  }
+  const env = fixtureEnv();
+  delete env.NODE_PATH;
+  const script = join(scripts, 'lint-source-boundaries.mjs');
+
+  const clean = runCli(['--root', buildFixture()], {
+    cwd: bare,
+    env,
+    script,
+  });
+  assert.equal(clean.status, 0, clean.stderr);
+
+  const malformed = runCli(
+    [
+      '--root',
+      buildFixture((files) =>
+        files.set(
+          'src/main.mts',
+          "import { parse } from 'yaml';\nexport const main = parse;\n",
+        ),
+      ),
+    ],
+    { cwd: bare, env, script },
+  );
+  assert.equal(malformed.status, 1, malformed.stderr);
+  assert.deepEqual(reportedRules(malformed.stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+});
+
+/** sha256 of every file under `dir`, keyed by relative path, `.git` included. */
+function snapshotTree(dir: string, prefix = ''): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  for (const entry of readdirSync(join(dir, prefix), { withFileTypes: true })) {
+    const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) {
+      Object.assign(snapshot, snapshotTree(dir, relative));
+    } else {
+      snapshot[relative] = createHash('sha256')
+        .update(readFileSync(join(dir, relative)))
+        .digest('hex');
+    }
+  }
+  return snapshot;
+}
+
+test('a run leaves every tracked byte and the git index unchanged, clean or not', () => {
+  for (const edit of [
+    () => undefined,
+    (files: FixtureFiles) =>
+      files.set('tests/dirty.mts', Buffer.from('export const bad = "a\0b";\n')),
+  ]) {
+    const root = buildFixture(edit);
+    const before = snapshotTree(root);
+    runCli(['--root', root]);
+    assert.deepEqual(snapshotTree(root), before);
+  }
+});
+
+test('the module and its generated copy satisfy their own rules', () => {
+  for (const path of [CLI_SOURCE, CLI]) {
+    const bytes = readFileSync(path);
+    assert.equal(containsNulByte(bytes), false, path);
+    const text = bytes.toString('utf8');
+    // No comment or message may spell the direct-spawn shape the rule scans for.
+    assert.equal(DIRECT_GH_SPAWN_PATTERN.test(text), false, path);
+    assert.deepEqual(findBareSpecifiers(text), [], path);
+  }
+});
