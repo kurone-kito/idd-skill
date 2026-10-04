@@ -1109,7 +1109,7 @@ function checkInstructionInvocations(
       out,
       violation.ruleId,
       violation.path,
-      `[${violation.form}] ${violation.message}`,
+      `[${violation.form}] ${violation.name}: ${violation.message}`,
     );
   }
 

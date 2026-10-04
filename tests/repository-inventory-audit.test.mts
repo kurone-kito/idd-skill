@@ -278,13 +278,16 @@ test('CLI audit checks documented helper invocations against a scratch corpus', 
     write(
       temp.root,
       '.github/instructions/main.instructions.md',
-      'Run node scripts/minimize-superseded-markers.mjs and node scripts/not-registered.mjs.\nShared libraries include scripts/protocol-helpers.mjs and scripts/policy-helpers.mjs.\n',
+      'Run node scripts/minimize-superseded-markers.mjs, node scripts/not-registered.mjs, and node scripts/also-not-registered.mjs.\nShared libraries include scripts/protocol-helpers.mjs and scripts/policy-helpers.mjs.\n',
     );
+    const result = runAudit(temp.root, 'instruction-invocations');
     assertFailure(
-      runAudit(temp.root, 'instruction-invocations'),
+      result,
       'unbacked-helper',
       '.github/instructions/main.instructions.md',
     );
+    assert.match(result.stderr, /scripts\/not-registered\.mjs/);
+    assert.match(result.stderr, /scripts\/also-not-registered\.mjs/);
   } finally {
     temp.cleanup();
   }
