@@ -150,6 +150,41 @@ test('compareArtifacts: an artifact only in the working tree (untracked or stage
   assert.match(findings[0]?.detail ?? '', /untracked or only staged/);
 });
 
+test('compareArtifacts: an artifact whose name holds a newline is still an artifact', () => {
+  const name = 'scripts/foo\n.mjs';
+  const committedOnly = compareArtifacts({
+    ...CLEAN,
+    committed: map({
+      '.gitattributes': 'a\n',
+      'bin/b.mjs': 'b\n',
+      'scripts/a.mjs': 'a\n',
+      [name]: 'x\n',
+    }),
+    working: map({
+      '.gitattributes': 'a\n',
+      'bin/b.mjs': 'b\n',
+      'scripts/a.mjs': 'a\n',
+      [name]: 'x\n',
+    }),
+  });
+  assert.deepEqual(kindsByPath(committedOnly), [`${name}=not-emitted`]);
+  const workingOnly = compareArtifacts({
+    ...CLEAN,
+    working: map({
+      '.gitattributes': 'a\n',
+      'bin/b.mjs': 'b\n',
+      'scripts/a.mjs': 'a\n',
+      [name]: 'x\n',
+    }),
+  });
+  assert.deepEqual(kindsByPath(workingOnly), [`${name}=not-emitted`]);
+  // The report keeps each finding on one line.
+  assert.match(
+    formatFindings(workingOnly),
+    /scripts\/foo\\n\.mjs: \[not-emitted\]/,
+  );
+});
+
 test('compareArtifacts: a stale .gitattributes block lists the missing and unexpected lines', () => {
   const findings = compareArtifacts({
     ...CLEAN,
@@ -375,6 +410,17 @@ test('readHeadSnapshot reads the object database through git with no shell and n
   ]);
   assert.deepEqual(calls[1]?.args, ['cat-file', '--batch']);
   assert.equal(calls[1]?.options.input?.toString('utf8'), 'a1\nb2\ne5\n');
+});
+
+test('readHeadSnapshot keeps a tracked path that contains a newline', () => {
+  const run: ProcessRunner = (_command, args) =>
+    args[0] === 'ls-tree'
+      ? ok('100644 blob a1\tscripts/foo\n.mjs\0')
+      : ok(Buffer.concat([blobHeader('a1', 2), bytes('X\n'), bytes('\n')]));
+  assert.deepEqual(
+    [...readHeadSnapshot('/repo', run).keys()],
+    ['scripts/foo\n.mjs'],
+  );
 });
 
 test('readHeadSnapshot surfaces an unborn HEAD as a git stage error', () => {
@@ -607,6 +653,34 @@ test('a HEAD without .gitattributes, or without the generated block, is a findin
       /no scripts\/\*\.mjs linguist-generated block/,
     );
   }, text);
+});
+
+test('a tool failure keeps the cleanup warning instead of dropping it with the error', () => {
+  withFakeRoot((root, tmpRoot) => {
+    const run: ProcessRunner = () => ({
+      ...ok('src/a.mts(1,1): error TS2322\n'),
+      status: 1,
+    });
+    assert.throws(
+      () =>
+        verifyBuildArtifacts({
+          remove: () => {
+            throw new Error('EBUSY: resource busy');
+          },
+          resolveBin: FAKE_BIN,
+          root,
+          run,
+          tmpRoot,
+        }),
+      (error: unknown) =>
+        error instanceof StageError &&
+        error.stage === 'tsc' &&
+        error.output.includes('TS2322') &&
+        /warning: could not remove the temporary directory .*EBUSY/.test(
+          error.output,
+        ),
+    );
+  }, 'x\n');
 });
 
 test('a tool failure stops the verifier with a stage error and still removes the temp dir', () => {
@@ -1109,6 +1183,25 @@ test('real tools: an artifact with no source gives the same verdict untracked an
     tmpRoot: fx.tmpRoot,
   }).findings;
   assert.deepEqual(staged, untracked);
+});
+
+test('real tools: a committed artifact with a newline in its name and no source fails', {
+  skip:
+    SKIP ||
+    (process.platform === 'win32'
+      ? 'win32 forbids a newline in a file name'
+      : false),
+}, () => {
+  const fx = fixture();
+  writeFileSync(join(fx.root, 'scripts', 'odd\nname.mjs'), 'export {};\n');
+  commitAll(fx.root, 'newline-named artifact');
+  const { findings } = verifyBuildArtifacts({
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  });
+  assert.deepEqual(kindsByPath(findings), [
+    'scripts/odd\nname.mjs=not-emitted',
+  ]);
 });
 
 test('real tools: a TypeScript error is a tsc stage error and leaves the checkout untouched', {
