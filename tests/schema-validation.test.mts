@@ -1493,76 +1493,11 @@ test('phase-graph invalid fixture fails validation', () => {
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');
 });
 
-test('phase-graph.json data validates against phase-graph schema', () => {
-  const { ok, errors } = validateFixture(
-    'schemas/phase-graph.schema.json',
-    'schemas/phase-graph.json',
-    true,
-  );
-  assert.ok(ok, errors.join('\n'));
-});
-
-test('live hearing catalog validates against onboarding-hearing-catalog schema', () => {
-  const { ok, errors } = validateFixture(
-    'schemas/onboarding-hearing-catalog.schema.json',
-    'idd-template/docs/onboarding/hearing-catalog.json',
-    true,
-  );
-  assert.ok(ok, errors.join('\n'));
-});
-
-test('.github/idd/config.json validates against policy schema', () => {
-  const { ok, errors } = validateFixture(
-    'schemas/policy.schema.json',
-    '.github/idd/config.json',
-    true,
-  );
-  assert.ok(ok, errors.join('\n'));
-});
-
-// ---------------------------------------------------------------------------
-// Auto-discovered schema/fixture coverage — no schema may be silently skipped
-// ---------------------------------------------------------------------------
-
-test('discoverSchemaCases covers every schemas/*.schema.json with a valid+invalid pair', () => {
-  const { cases, missing } = discoverSchemaCases(REPO_ROOT);
-  assert.deepEqual(
-    missing,
-    [],
-    `every schema needs valid+invalid fixtures; missing: ${JSON.stringify(missing)}`,
-  );
-  const schemaFiles = readdirSync(new URL('../schemas/', import.meta.url))
-    .filter((file) => file.endsWith('.schema.json'))
-    .sort();
-  // Every schema is covered by both a valid and an invalid case, so a newly
-  // added schema without fixtures can no longer slip past the CLI runner.
-  for (const file of schemaFiles) {
-    const forSchema = cases.filter((c) => c.schemaPath === `schemas/${file}`);
-    assert.ok(
-      forSchema.some((c) => c.expectValid),
-      `${file} is missing an expect-valid case`,
-    );
-    assert.ok(
-      forSchema.some((c) => !c.expectValid),
-      `${file} is missing an expect-invalid case`,
-    );
-  }
-});
-
-test('every auto-discovered schema case validates as expected', () => {
-  const { cases } = discoverSchemaCases(REPO_ROOT);
-  for (const { schemaPath, fixturePath, expectValid } of cases) {
-    const { ok, errors } = validateFixture(
-      schemaPath,
-      fixturePath,
-      expectValid,
-    );
-    assert.ok(
-      ok,
-      `${fixturePath} (${expectValid ? 'valid' : 'invalid'}): ${errors.join('; ')}`,
-    );
-  }
-});
+// The live instances (phase-graph.json data, the live hearing catalog and
+// .github/idd/config.json) and the coverage of every schemas/*.schema.json by a
+// valid+invalid fixture pair are enforced by `validate-schemas` (#3751; run by
+// `audit:schemas`), not here. The discovery and fixture-validation helpers keep
+// their detector cases below and in tests/validate-schemas-cli.test.mts.
 
 test('discoverSchemaCases reports a schema that has no fixtures', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-schema-discovery-'));

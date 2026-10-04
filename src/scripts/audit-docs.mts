@@ -392,6 +392,9 @@ async function main(): Promise<void> {
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
   await checkRepositoryPolicy();
+  if (shouldRunSourceChecks) {
+    await checkRepositorySchemaAudit();
+  }
   checkEnginesRangeMirrors();
   checkBinExecutableMode();
 
@@ -444,6 +447,46 @@ async function checkRepositoryPolicy(): Promise<void> {
       ...collectRepositoryPolicyViolations(root).map(
         (violation) =>
           `${violation.ruleId}: ${violation.path}: ${violation.message}`,
+      ),
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    errors.push(
+      `${source}: could not load generated artifact ${emitted}: ${detail}`,
+    );
+  }
+}
+
+/**
+ * Runs the schema and onboarding catalog agreements (#3751) for the source
+ * repository. Loaded through the generated artifact, like the policy audit
+ * above, so a missing artifact is reported by the generated-pair check rather
+ * than as a crash here.
+ */
+async function checkRepositorySchemaAudit(): Promise<void> {
+  const source = 'src/scripts/repository-schema-audit.mts';
+  const emitted = 'scripts/repository-schema-audit.mjs';
+  if (
+    !repoFiles.includes(source) ||
+    !repoFiles.includes(emitted) ||
+    !existsSync(join(root, source)) ||
+    !existsSync(join(root, emitted)) ||
+    errors.some(
+      (error) =>
+        error.startsWith(`${source}:`) || error.startsWith(`${emitted}:`),
+    )
+  ) {
+    return;
+  }
+
+  try {
+    const { collectRepositorySchemaViolations } = await import(
+      './repository-schema-audit.mjs'
+    );
+    errors.push(
+      ...collectRepositorySchemaViolations(root).map(
+        ({ ruleId, path, message }) =>
+          `repository-schema-audit/${ruleId}: ${path}: ${message}`,
       ),
     );
   } catch (error) {

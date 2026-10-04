@@ -8,7 +8,7 @@ name: Linting workflow
 #
 # This workflow dogfoods the toolless bare-node adopter path: it runs
 # with NO package-manager install, so every script and test it executes
-# must import only `node:` builtins. The same five commands also run
+# must import only `node:` builtins. The same six commands also run
 # via `pnpm run lint:minimum` in pnpm-boundary.yml — that overlap is
 # intentional redundancy proving both the installed and the bare-node
 # runtimes. The formatting and spelling tools (dprint, cspell,
@@ -50,6 +50,13 @@ jobs:
       # (#3748) cannot drop the bare-node lane's coverage of them.
       - name: Run source boundary lint
         run: node scripts/lint-source-boundaries.mjs
+      # Schema, fixture-pair and live-instance validation (the policy config,
+      # the phase graph data and the hearing catalog) runs here as a plain Node
+      # entry with no install, so moving it out of the test suite (#3751)
+      # cannot drop the bare-node lane's coverage of it. The schema and
+      # onboarding catalog agreements run inside the audit-docs step above.
+      - name: Run schema validation
+        run: node scripts/validate-schemas.mjs
       # The test suite is typed `.mts` executed via Node's native type
       # stripping (unflagged since 22.18), and this lane also invokes
       # migrated helper CLIs directly (e.g. verify-workshop-integrity.mjs

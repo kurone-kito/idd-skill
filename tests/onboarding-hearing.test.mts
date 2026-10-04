@@ -1,29 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import * as onboard from '../src/scripts/idd-onboard.mts';
 import { ONBOARDING_PLACEHOLDERS } from '../src/scripts/idd-onboard.mts';
 import {
   loadOnboardingHearingCatalog,
   loadOnboardingHearingItems,
-  ONBOARDING_HEARING_CATALOG_RELATIVE_PATH,
 } from '../src/scripts/onboarding-hearing.mts';
-import {
-  checkSchemaKeywords,
-  loadJson,
-  validateFixture,
-} from '../src/scripts/validate-schemas.mts';
-
-const PLACEHOLDERS_DOC = fileURLToPath(
-  new URL('../idd-template/docs/onboarding/placeholders.md', import.meta.url),
-);
-const POLICY_DOC = fileURLToPath(
-  new URL(
-    '../idd-template/docs/onboarding/policy-decisions.md',
-    import.meta.url,
-  ),
-);
+import { ONBOARDING_STEP1B_COMPANIONS } from '../src/scripts/repository-schema-audit.mts';
 
 const STEP0_IDS = [
   'gh-cli',
@@ -58,55 +41,14 @@ const DOCS_ONLY_IDS = new Set<string>([
   'bootstrap-execution-mode',
 ]);
 
-const STEP1B_COMPANION = {
-  'merge-policy': '### Merge policy',
-  'review-policy': '### PR review policy profile',
-  'thread-resolution-policy': '### Review-thread resolution policy',
-  'critique-loop-profile': '### Critique-loop profile',
-  'credential-scope': '### Credential scope',
-  'claim-timing': 'claim-stale-age',
-  'ci-wait-policy': '### CI wait policy',
-  'issue-author-approval-gate': '### Issue-author approval gate',
-  'maintainer-approval-actor-policy': '### `maintainer-approval-actors` policy',
-  'issue-authoring-companion': '### Issue-authoring companion',
-  'helper-runtime-profile': '### Helper runtime profile',
-  'idd-label-names': '### IDD label names',
-  'up-to-date-head-ruleset': 'up to date before merging',
-  'bootstrap-execution-mode': '### Bootstrap execution mode',
-  'development-branch': '### Development branch',
-} as const;
+// The live hearing-catalog schema, keyword and document agreements moved out of
+// this suite (#3751): `validate-schemas` validates both hearing schemas and the
+// live catalog, and `audit-docs --check` runs HEARING-PLACEHOLDER-DOC and
+// HEARING-STEP1B-COMPANION. What stays is the loader, order, config-map and
+// derivation-hook behavior.
 
-function extractH2Section(doc: string, heading: string): string {
-  const marker = `## ${heading}`;
-  const start = doc.indexOf(marker);
-  assert.ok(start >= 0, `missing heading ${heading}`);
-  const after = doc.slice(start + marker.length);
-  const next = after.search(/^## /mu);
-  return next === -1 ? after : after.slice(0, next);
-}
-
-test('hearing catalog schemas use only allowed keywords', () => {
-  assert.deepEqual(
-    checkSchemaKeywords(
-      loadJson('schemas/onboarding-hearing-catalog.schema.json'),
-    ),
-    [],
-  );
-  assert.deepEqual(
-    checkSchemaKeywords(
-      loadJson('schemas/onboarding-hearing-transcript.schema.json'),
-    ),
-    [],
-  );
-});
-
-test('live hearing catalog validates against its schema', () => {
-  const { ok, errors } = validateFixture(
-    'schemas/onboarding-hearing-catalog.schema.json',
-    ONBOARDING_HEARING_CATALOG_RELATIVE_PATH,
-    true,
-  );
-  assert.ok(ok, errors.join('\n'));
+test('the shared Step 1B companion table names exactly the Step 1B ids, in order', () => {
+  assert.deepEqual(Object.keys(ONBOARDING_STEP1B_COMPANIONS), [...STEP1B_IDS]);
 });
 
 test('loader returns the required identity set in order', () => {
@@ -135,38 +77,6 @@ test('placeholder items match ONBOARDING_PLACEHOLDERS names and order', () => {
     placeholders.map((item) => item.id),
     ONBOARDING_PLACEHOLDERS.map((entry) => entry.name),
   );
-});
-
-test('placeholder items match the Final placeholder meanings table', () => {
-  const doc = readFileSync(PLACEHOLDERS_DOC, 'utf8');
-  const documented = [
-    ...doc.matchAll(/^\| `\{\{([A-Z0-9_]+)\}\}`\s+\| (.+?)\s+\|/gmu),
-  ].map((row) => row[1]);
-  const placeholders = loadOnboardingHearingItems().filter(
-    (item) => item.kind === 'placeholder',
-  );
-  assert.deepEqual(
-    placeholders.map((item) => item.mapsToPlaceholder),
-    documented,
-  );
-});
-
-test('every Step 1B id has a matching companion heading', () => {
-  const doc = readFileSync(POLICY_DOC, 'utf8');
-  const corpus = [
-    extractH2Section(
-      doc,
-      'Decisions that require explicit operator confirmation',
-    ),
-    extractH2Section(doc, 'Related default policies to confirm'),
-  ].join('\n');
-  for (const id of STEP1B_IDS) {
-    const needle = STEP1B_COMPANION[id];
-    assert.ok(
-      corpus.includes(needle),
-      `Step 1B id ${id} has no companion heading ${needle}`,
-    );
-  }
 });
 
 test('mapsToConfig is present only for mappable Step 1B items', () => {

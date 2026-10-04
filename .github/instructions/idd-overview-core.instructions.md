@@ -124,7 +124,7 @@ inherit a non-stale claim. For legacy claim migration (comments without
 
 ## Thresholds
 
-Ownership timing in this workflow uses the policy defaults
+Ownership timing uses the policy defaults
 `claim-stale-age` and `claim-heartbeat-interval` listed in
 `docs/policy-constants.md`.
 
@@ -166,7 +166,7 @@ If you posted an activation nonce, confirm it still wins for this
 claim-id (`idd-claim.instructions.md`) -- a different winner means a lost
 claim-id.
 
-In addition to the `{claim-id}` check, verify that the mutation is
+Also, verify that the mutation is
 about to run from the worktree named in the active claim's `branch:`
 field. This **cwd-vs-claim check** applies only to mutations made
 from inside the implementation worktree contract (B2, B3, C5, D, E,
@@ -180,7 +180,7 @@ Scope — the check runs **only** when **all** of these hold:
 - The sibling worktree expected by the B1 naming convention is
   already present in `git worktree list` (the check does not fire
   during B1 setup before the worktree exists, or during F4 cleanup
-  after the worktree has been removed by intent).
+  after its intentional removal).
 
 When in scope, run:
 
@@ -266,7 +266,7 @@ enabled and default approval actors to
 | Name | Commands |
 | --- | --- |
 | **fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
-| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |
+| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |
 | **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm typecheck` |
 | **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"` |
 | **issue-scope** | `roadmap-first` |
