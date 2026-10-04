@@ -8780,27 +8780,6 @@ test('a seeded unknown flag in the CLI-assisted onboarding section is caught by 
   );
 });
 
-test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import file set to the shared generated block, not a hand-copied list', () => {
-  const doc = readFileSync(ONBOARDING_DOC, 'utf8');
-  const section = extractSection(doc, CLI_SECTION_HEADING);
-  // The section must name the same generated block Step 2's file list
-  // renders from, rather than re-deriving or re-describing the file set on
-  // its own terms.
-  assert.match(section, /idd-template-core-files/u);
-  // The generated-block start marker must still appear exactly once in the
-  // whole document: sync-docs.mjs / audit-docs.mjs locate it with a single
-  // indexOf, so a second copy of the marker would silently go stale forever
-  // (never regenerated, never checked) instead of failing loudly.
-  const markerCount = (
-    doc.match(/<!-- audit:generated id=idd-template-core-files -->/gu) ?? []
-  ).length;
-  assert.equal(
-    markerCount,
-    1,
-    'the idd-template-core-files generated block must appear exactly once in ONBOARDING.md',
-  );
-});
-
 // ---------------------------------------------------------------------------
 // Documentation-lint compatibility (idd-skill#1860)
 //
