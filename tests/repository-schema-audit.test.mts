@@ -24,6 +24,7 @@ import {
   detectPlaceholderDocDrift,
   detectResumeRouteDrift,
   detectSchemaCatalogDrift,
+  detectStep1bCatalogDrift,
   detectStep1bCompanionDrift,
   extractDocumentedPlaceholders,
   extractH2Section,
@@ -100,11 +101,17 @@ function cleanTree(): TreeFiles {
     'idd-template/docs/onboarding/hearing-catalog.json',
     JSON.stringify({
       items: [
-        { id: 'gh-cli', kind: 'check' },
+        { id: 'gh-cli', kind: 'check', step: '0' },
         ...PLACEHOLDER_NAMES.map((name) => ({
           id: name,
           kind: 'placeholder',
+          step: '1A',
           mapsToPlaceholder: name,
+        })),
+        ...Object.keys(ONBOARDING_STEP1B_COMPANIONS).map((id) => ({
+          id,
+          kind: 'policy',
+          step: '1B',
         })),
       ],
     }),
@@ -308,6 +315,40 @@ const VIOLATION_CASES: ViolationCase[] = [
     ],
   },
   {
+    name: 'a Step 1B hearing item that the companion table does not name',
+    edit: (files) => {
+      const path = 'idd-template/docs/onboarding/hearing-catalog.json';
+      const catalog = JSON.parse(files.get(path) as string) as {
+        items: unknown[];
+      };
+      catalog.items.push({
+        id: 'brand-new-policy',
+        kind: 'policy',
+        step: '1B',
+      });
+      files.set(path, JSON.stringify(catalog));
+    },
+    expected: [
+      'HEARING-STEP1B-COMPANION idd-template/docs/onboarding/hearing-catalog.json',
+    ],
+  },
+  {
+    name: 'a companion table id that the hearing catalog no longer has as a Step 1B item',
+    edit: (files) => {
+      const path = 'idd-template/docs/onboarding/hearing-catalog.json';
+      const catalog = JSON.parse(files.get(path) as string) as {
+        items: { id: string }[];
+      };
+      catalog.items = catalog.items.filter(
+        (item) => item.id !== 'merge-policy',
+      );
+      files.set(path, JSON.stringify(catalog));
+    },
+    expected: [
+      'HEARING-STEP1B-COMPANION idd-template/docs/onboarding/hearing-catalog.json',
+    ],
+  },
+  {
     name: 'phase ids that collide once normalized',
     edit: (files) =>
       files.set(
@@ -462,6 +503,31 @@ const INSPECTION_CASES: InspectionCase[] = [
       ),
     expected:
       'HEARING-PLACEHOLDER-DOC-INSPECTION idd-template/docs/onboarding/hearing-catalog.json:',
+  },
+  {
+    name: 'a hearing catalog with no Step 1B item',
+    edit: (files) =>
+      files.set(
+        'idd-template/docs/onboarding/hearing-catalog.json',
+        JSON.stringify({
+          items: PLACEHOLDER_NAMES.map((name) => ({
+            id: name,
+            kind: 'placeholder',
+            step: '1A',
+            mapsToPlaceholder: name,
+          })),
+        }),
+      ),
+    expected:
+      'HEARING-STEP1B-COMPANION-INSPECTION idd-template/docs/onboarding/hearing-catalog.json:',
+    message: /no Step 1B item to inspect/,
+  },
+  {
+    name: 'a hearing catalog that is missing (the Step 1B rule too)',
+    edit: (files) =>
+      files.delete('idd-template/docs/onboarding/hearing-catalog.json'),
+    expected:
+      'HEARING-STEP1B-COMPANION-INSPECTION idd-template/docs/onboarding/hearing-catalog.json:',
   },
   {
     name: 'a hearing catalog that is missing',
@@ -818,6 +884,24 @@ test('extractH2Section stops at the next level-two heading and is null for a mis
   assert.equal(extractH2Section(doc, 'One'), '\nfirst\n### Sub\nnested\n');
   assert.equal(extractH2Section(doc, 'Two'), '\nsecond\n');
   assert.equal(extractH2Section(doc, 'Three'), null);
+});
+
+test('detectStep1bCatalogDrift requires the catalog Step 1B ids and the companion table to name the same ids', () => {
+  const companions = { 'merge-policy': 'h1', 'claim-timing': 'h2' };
+  assert.deepEqual(
+    detectStep1bCatalogDrift(['claim-timing', 'merge-policy'], companions),
+    [],
+  );
+  const messages = detectStep1bCatalogDrift(
+    ['merge-policy', 'new-one'],
+    companions,
+  ).map((item) => item.message);
+  assert.equal(messages.length, 2, messages.join('|'));
+  assert.match(messages[0] ?? '', /Step 1B item new-one has no entry/);
+  assert.match(
+    messages[1] ?? '',
+    /names claim-timing, which is not a Step 1B item/,
+  );
 });
 
 test('detectStep1bCompanionDrift reports a missing section and a missing needle', () => {

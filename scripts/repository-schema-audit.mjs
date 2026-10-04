@@ -941,24 +941,90 @@ export function detectStep1bCompanionDrift(policyDoc, companions) {
   }
   return violations;
 }
-/** HEARING-STEP1B-COMPANION over the policy-decisions guide. */
+/**
+ * HEARING-STEP1B-COMPANION detector over the catalog: the Step 1B item ids the
+ * root's hearing catalog declares must be exactly the keys of the companion
+ * table, so a new Step 1B item cannot stay undocumented because nobody added
+ * it to the table, and the table cannot keep an id the catalog dropped.
+ */
+export function detectStep1bCatalogDrift(catalogIds, companions) {
+  const violations = [];
+  const known = new Set(Object.keys(companions));
+  const declared = new Set(catalogIds);
+  for (const id of catalogIds) {
+    if (!known.has(id)) {
+      violations.push(
+        violation(
+          HEARING_STEP1B_COMPANION_RULE,
+          HEARING_CATALOG_PATH,
+          `Step 1B item ${id} has no entry in ONBOARDING_STEP1B_COMPANIONS; ` +
+            'add its companion heading in src/scripts/repository-schema-audit.mts',
+        ),
+      );
+    }
+  }
+  for (const id of known) {
+    if (!declared.has(id)) {
+      violations.push(
+        violation(
+          HEARING_STEP1B_COMPANION_RULE,
+          HEARING_CATALOG_PATH,
+          `ONBOARDING_STEP1B_COMPANIONS names ${id}, which is not a Step 1B ` +
+            'item of the hearing catalog',
+        ),
+      );
+    }
+  }
+  return violations;
+}
+/** HEARING-STEP1B-COMPANION over the hearing catalog and the policy-decisions guide. */
 export function checkHearingStep1bCompanion(root) {
   const violations = [];
+  const catalog = readJson(
+    HEARING_STEP1B_COMPANION_RULE,
+    root,
+    HEARING_CATALOG_PATH,
+    violations,
+  );
   const doc = readText(
     HEARING_STEP1B_COMPANION_RULE,
     root,
     POLICY_DECISIONS_DOC_PATH,
     violations,
   );
-  if (doc === null) {
+  if (catalog === undefined || doc === null) {
     return { ruleId: HEARING_STEP1B_COMPANION_RULE, inspected: 0, violations };
   }
+  const items = Array.isArray(catalog?.items) ? catalog.items : null;
+  if (items === null) {
+    violations.push(
+      inspectionViolation(
+        HEARING_STEP1B_COMPANION_RULE,
+        HEARING_CATALOG_PATH,
+        'the catalog has no items array',
+      ),
+    );
+    return { ruleId: HEARING_STEP1B_COMPANION_RULE, inspected: 0, violations };
+  }
+  const catalogIds = items
+    .filter((item) => item?.step === '1B' && typeof item.id === 'string')
+    .map((item) => item.id);
+  if (catalogIds.length === 0) {
+    violations.push(
+      inspectionViolation(
+        HEARING_STEP1B_COMPANION_RULE,
+        HEARING_CATALOG_PATH,
+        'no Step 1B item to inspect; an empty inventory would pass vacuously',
+      ),
+    );
+  }
   violations.push(
+    ...detectStep1bCatalogDrift(catalogIds, ONBOARDING_STEP1B_COMPANIONS),
     ...detectStep1bCompanionDrift(doc, ONBOARDING_STEP1B_COMPANIONS),
   );
   return {
     ruleId: HEARING_STEP1B_COMPANION_RULE,
-    inspected: Object.keys(ONBOARDING_STEP1B_COMPANIONS).length,
+    inspected: catalogIds.length,
     violations,
   };
 }
