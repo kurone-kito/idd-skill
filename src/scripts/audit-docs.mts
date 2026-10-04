@@ -62,6 +62,7 @@ import {
   collectMarkdownLinkAuditViolations,
   resolveDistributedFileSet,
 } from './markdown-link-audit.mts';
+import { collectRepositoryInstructionViolations } from './repository-instruction-audit.mts';
 
 interface ReadmePair {
   id: string;
@@ -149,6 +150,13 @@ interface AuditManifest {
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
+
+export function isSourceRepositoryOriginUrl(originUrl: string): boolean {
+  const normalizedOriginUrl = originUrl.trim().replace(/\/+$/u, '');
+  return /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)kurone-kito\/idd-skill(?:\.git)?$/iu.test(
+    normalizedOriginUrl,
+  );
+}
 
 const errors: string[] = [];
 const notices: string[] = [];
@@ -275,6 +283,79 @@ async function main(): Promise<void> {
   repoFiles = listRepoFiles();
   changedFiles = listChangedFiles();
 
+  // This extra contract suite belongs to the source repository. audit-docs is
+  // also invoked against minimal temporary roots by its own manifest tests;
+  // those roots intentionally do not carry this repository's instruction
+  // corpus. The standalone detector CLI accepts explicit fixture roots.
+  const packageJsonPath = join(root, 'package.json');
+  let packageName: string | undefined;
+  if (existsSync(packageJsonPath)) {
+    try {
+      const packageJson: unknown = JSON.parse(
+        readFileSync(packageJsonPath, 'utf8'),
+      );
+      if (
+        typeof packageJson === 'object' &&
+        packageJson !== null &&
+        !Array.isArray(packageJson) &&
+        typeof (packageJson as { name?: unknown }).name === 'string'
+      ) {
+        packageName = (packageJson as { name: string }).name;
+      }
+    } catch {
+      // The package metadata checks below report malformed JSON with a
+      // structured diagnostic; still run the remaining documentation checks.
+    }
+  }
+  const isSourcePackage = packageName === '@kurone-kito/idd-skill';
+  const hasSourceRepositoryMarker = existsSync(
+    join(root, 'docs/token-cost.md'),
+  );
+  let originUrl: string | null = null;
+  let sourceIdentityNotice: string | null = null;
+  try {
+    originUrl = execFileSync(
+      'git',
+      ['-C', root, 'remote', 'get-url', 'origin'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    ).trim();
+  } catch {
+    // An unavailable origin is relevant only when package metadata already
+    // identifies this checkout as the source repository.
+  }
+  const hasCanonicalSourceOrigin =
+    originUrl !== null && isSourceRepositoryOriginUrl(originUrl);
+  const shouldRunSourceChecks =
+    isSourcePackage || hasCanonicalSourceOrigin || hasSourceRepositoryMarker;
+  if (isSourcePackage && originUrl === null) {
+    sourceIdentityNotice =
+      'repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks';
+  } else if (isSourcePackage && !hasCanonicalSourceOrigin) {
+    sourceIdentityNotice =
+      'repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks';
+  } else if (hasCanonicalSourceOrigin && !isSourcePackage) {
+    sourceIdentityNotice =
+      'repository-instruction-audit: canonical source origin matched but package identity differs; running source checks';
+  } else if (
+    hasSourceRepositoryMarker &&
+    !isSourcePackage &&
+    !hasCanonicalSourceOrigin
+  ) {
+    sourceIdentityNotice =
+      'repository-instruction-audit: source repository marker docs/token-cost.md is present but package identity and origin do not identify the source repository; running source checks';
+  }
+  if (sourceIdentityNotice) {
+    notices.push(sourceIdentityNotice);
+  }
+  if (shouldRunSourceChecks) {
+    errors.push(
+      ...collectRepositoryInstructionViolations(root).map(
+        ({ ruleId, path, message }) =>
+          `repository-instruction-audit/${ruleId}: ${path}: ${message}`,
+      ),
+    );
+  }
+
   checkReadmePairs(manifest.readmePairs ?? []);
   checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
   checkGeneratedBlocks(manifest.generatedBlocks ?? []);
@@ -315,6 +396,9 @@ async function main(): Promise<void> {
   checkBinExecutableMode();
 
   if (errors.length > 0) {
+    if (sourceIdentityNotice !== null) {
+      console.error(`notice: ${sourceIdentityNotice}`);
+    }
     console.error('documentation audit failed:');
     for (const error of errors) {
       console.error(`- ${error}`);
@@ -626,9 +710,16 @@ function checkGeneratedBlocks(blocks: GeneratedBlock[]) {
     const text = readText(block.file);
     const startMarker = `<!-- audit:generated id=${block.id} -->`;
     const endMarker = '<!-- /audit:generated -->';
+    const markerCount = text.split(startMarker).length - 1;
     const start = text.indexOf(startMarker);
     if (start === -1) {
       errors.push(`${block.id}: ${block.file} is missing ${startMarker}`);
+      continue;
+    }
+    if (markerCount !== 1) {
+      errors.push(
+        `${block.id}: ${block.file} must contain exactly one ${startMarker} (found ${markerCount})`,
+      );
       continue;
     }
     const innerStart = start + startMarker.length;
@@ -1122,14 +1213,23 @@ function checkEnginesRangeMirrors() {
   if (!repoFiles.includes('package.json')) {
     return;
   }
-  let packageJson: { engines?: { node?: unknown } };
+  let packageJson: unknown;
   try {
     packageJson = JSON.parse(readText('package.json'));
   } catch {
     errors.push('engines-range-mirrors: package.json could not be parsed');
     return;
   }
-  if (packageJson.engines?.node === undefined) {
+  if (
+    typeof packageJson !== 'object' ||
+    packageJson === null ||
+    Array.isArray(packageJson)
+  ) {
+    errors.push('engines-range-mirrors: package.json must be a JSON object');
+    return;
+  }
+  const packageObject = packageJson as { engines?: { node?: unknown } };
+  if (packageObject.engines?.node === undefined) {
     // No engines.node declared at all -- nothing for this repo to mirror.
     return;
   }
@@ -1138,7 +1238,7 @@ function checkEnginesRangeMirrors() {
   );
   errors.push(
     ...collectEnginesRangeMirrorViolations(
-      packageJson.engines.node,
+      packageObject.engines.node,
       presentMirrors,
       readText,
     ),

@@ -861,6 +861,11 @@ test('audit-docs reports policy violations when the audit source is present', (t
 
   const fixtureRoot = join(tempRoot, 'fixture');
   const documents = readPositiveFixture();
+  const fixturePackage = JSON.parse(documents.get('package.json') ?? '{}') as {
+    name?: string;
+  };
+  fixturePackage.name = 'repository-policy-audit-fixture';
+  documents.set('package.json', JSON.stringify(fixturePackage));
   materializeDocuments(fixtureRoot, documents);
   materializeLiteParityAnchors(fixtureRoot);
   materializeAuditOverviewPairs(fixtureRoot, documents);
