@@ -4,6 +4,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const moduleApi = require('node:module');
 const path = require('node:path');
+const { promisify } = require('node:util');
 const { threadId } = require('node:worker_threads');
 
 function isGh(value) {
@@ -72,40 +73,65 @@ function shellPayload(command, args, options) {
     .basename(String(command))
     .replace(/\.exe$/iu, '')
     .toLowerCase();
-  if (options?.shell) return String(command);
   if (
-    !['sh', 'bash', 'dash', 'zsh', 'cmd', 'powershell', 'pwsh'].includes(base)
+    ['sh', 'bash', 'dash', 'zsh', 'ksh', 'cmd', 'powershell', 'pwsh'].includes(
+      base,
+    )
   ) {
-    return null;
-  }
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = String(args[index]).toLowerCase();
-    if (['-c', '/c', '-command'].includes(argument)) {
-      return args
-        .slice(index + 1)
-        .map(String)
-        .join(' ');
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = String(args[index]).toLowerCase();
+      if (['-c', '/c', '-command'].includes(argument)) {
+        return args
+          .slice(index + 1)
+          .map(String)
+          .join(' ');
+      }
+      if (argument.startsWith('-command:')) {
+        return argument.slice(argument.indexOf(':') + 1);
+      }
     }
   }
-  return null;
+  return options?.shell ? [command, ...args].map(String).join(' ') : null;
 }
 
-function shellGhCommand(command) {
+function shellGhCommand(command, env) {
   const tokens =
     String(command).match(
       /"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||[;&|(){}\n]|[^\s;&|(){}\n]+/gu,
     ) ?? [];
   let commandPosition = true;
+  let wrapper = null;
+  let skipWrapperArgument = false;
   for (const token of tokens) {
     if (/^[;&|(){}\n]$/u.test(token) || token === '&&' || token === '||') {
       commandPosition = true;
+      wrapper = null;
+      skipWrapperArgument = false;
       continue;
     }
     if (!commandPosition) continue;
     const word = token.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2');
     if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(word)) continue;
+    if (wrapper === 'env' && skipWrapperArgument) {
+      skipWrapperArgument = false;
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('-')) {
+      skipWrapperArgument = ['-u', '--unset', '-C', '--chdir', '-S'].includes(
+        word,
+      );
+      continue;
+    }
+    if (['command', 'exec', 'env', 'nohup', 'sudo', 'time'].includes(word)) {
+      wrapper = word;
+      continue;
+    }
+    if (['if', 'then', 'else', 'elif', 'while', 'until', 'do'].includes(word)) {
+      continue;
+    }
     commandPosition = false;
-    if (isGh(word)) return word;
+    wrapper = null;
+    if (isGh(word) && !isRegisteredFixture(word, env)) return word;
   }
   return null;
 }
@@ -124,7 +150,7 @@ function safeArgs(args) {
     if (optionAndValue) {
       const [, option, optionValue] = optionAndValue;
       values.push(
-        `${option}=${/(?:gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(optionValue ?? '') ? '[redacted]' : '[value]'}`,
+        `${option}=${/(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(optionValue ?? '') ? '[redacted]' : '[value]'}`,
       );
       continue;
     }
@@ -137,7 +163,7 @@ function safeArgs(args) {
       values.push(argument);
       redactNext = true;
     } else if (
-      /(?:gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(
+      /(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(
         argument,
       )
     ) {
@@ -153,14 +179,18 @@ function blockIfGh(api, command, args, options) {
   let ghCommand = null;
   let direct = false;
   if (isGh(command)) {
-    ghCommand = String(command);
-    direct = true;
-    if (isRegisteredFixture(command, options?.env)) return;
+    if (isRegisteredFixture(command, options?.env)) {
+      const shell = shellPayload(command, args, options);
+      if (shell === null) return;
+      ghCommand = shellGhCommand(shell, options?.env);
+    } else {
+      ghCommand = String(command);
+      direct = true;
+    }
   } else {
     const shell = shellPayload(command, args, options);
     if (shell !== null) {
-      ghCommand = shellGhCommand(shell);
-      if (ghCommand && isRegisteredFixture(ghCommand, options?.env)) return;
+      ghCommand = shellGhCommand(shell, options?.env);
     }
   }
   if (!ghCommand) return;
@@ -254,42 +284,80 @@ function addGuardToOptions(options, addImport) {
           .replaceAll(`--import="${guardImport}"`, '')
           .trim()
       : (env.NODE_OPTIONS ?? '');
-    const requireFlag = `--require "${__filename.replaceAll('\\', '/')}"`;
-    env.NODE_OPTIONS = current.includes(__filename)
-      ? current
-      : current
-        ? `${current} ${requireFlag}`
-        : requireFlag;
+    const normalizedFilename = __filename.replaceAll('\\', '/');
+    const requireFlag = `--require "${normalizedFilename}"`;
+    env.NODE_OPTIONS =
+      current.includes(normalizedFilename) || current.includes(__filename)
+        ? current
+        : current
+          ? `${current} ${requireFlag}`
+          : requireFlag;
   }
   return { ...record, env };
 }
 
 function wrap(method, optionsIndex, inspect) {
   const original = childProcess[method];
-  childProcess[method] = function (...args) {
+  const wrapped = function (...args) {
     inspect(...args);
     const index = optionsIndex(args);
     if (index >= 0) {
-      const launchOptions = args[index];
+      const hasCallback =
+        ['exec', 'execFile'].includes(method) &&
+        typeof args[index] === 'function';
+      const launchOptions = hasCallback ? undefined : args[index];
       const directGhFixture =
         ['spawn', 'spawnSync', 'execFile', 'execFileSync'].includes(method) &&
         isGh(args[0]) &&
         isRegisteredFixture(args[0], launchOptions?.env);
-      args[index] = addGuardToOptions(args[index], !directGhFixture);
+      const guardedOptions = addGuardToOptions(
+        hasCallback ? undefined : args[index],
+        !directGhFixture,
+      );
+      if (hasCallback) args.splice(index, 0, guardedOptions);
+      else args[index] = guardedOptions;
     }
     return Reflect.apply(original, this, args);
   };
+  Object.setPrototypeOf(wrapped, original);
+  if (['exec', 'execFile'].includes(method)) {
+    Object.defineProperty(wrapped, promisify.custom, {
+      configurable: true,
+      value: function (...args) {
+        let child;
+        const result = new Promise((resolve, reject) => {
+          const callback = (error, stdout, stderr) => {
+            if (error) {
+              Object.assign(error, { stdout, stderr });
+              reject(error);
+            } else {
+              resolve({ stdout, stderr });
+            }
+          };
+          child = wrapped.apply(this, [...args, callback]);
+        });
+        result.child = child;
+        return result;
+      },
+    });
+  }
+  childProcess[method] = wrapped;
 }
 
-const optionsAfterArgs = (args) => (Array.isArray(args[1]) ? 2 : 1);
+const optionsFromArgs = (argsOrOptions, options) =>
+  Array.isArray(argsOrOptions) ||
+  argsOrOptions === null ||
+  argsOrOptions === undefined
+    ? options
+    : argsOrOptions;
+const optionsAfterArgs = (args) =>
+  Array.isArray(args[1]) ||
+  ((args[1] === null || args[1] === undefined) && args.length > 2)
+    ? 2
+    : 1;
 wrap('spawn', optionsAfterArgs, (command, argsOrOptions, options) => {
   const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
-  blockIfGh(
-    'spawn',
-    command,
-    args,
-    Array.isArray(argsOrOptions) ? options : argsOrOptions,
-  );
+  blockIfGh('spawn', command, args, optionsFromArgs(argsOrOptions, options));
 });
 wrap('spawnSync', optionsAfterArgs, (command, argsOrOptions, options) => {
   const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
@@ -297,7 +365,7 @@ wrap('spawnSync', optionsAfterArgs, (command, argsOrOptions, options) => {
     'spawnSync',
     command,
     args,
-    Array.isArray(argsOrOptions) ? options : argsOrOptions,
+    optionsFromArgs(argsOrOptions, options),
   );
 });
 wrap(
@@ -314,12 +382,7 @@ wrap(
 );
 wrap('execFile', optionsAfterArgs, (file, argsOrOptions, options) => {
   const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
-  blockIfGh(
-    'execFile',
-    file,
-    args,
-    Array.isArray(argsOrOptions) ? options : argsOrOptions,
-  );
+  blockIfGh('execFile', file, args, optionsFromArgs(argsOrOptions, options));
 });
 wrap('execFileSync', optionsAfterArgs, (file, argsOrOptions, options) => {
   const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
@@ -327,11 +390,11 @@ wrap('execFileSync', optionsAfterArgs, (file, argsOrOptions, options) => {
     'execFileSync',
     file,
     args,
-    Array.isArray(argsOrOptions) ? options : argsOrOptions,
+    optionsFromArgs(argsOrOptions, options),
   );
 });
 wrap('fork', optionsAfterArgs, (modulePath, argsOrOptions, options) => {
-  const forkOptions = Array.isArray(argsOrOptions) ? options : argsOrOptions;
+  const forkOptions = optionsFromArgs(argsOrOptions, options);
   blockIfGh(
     'fork',
     forkOptions?.execPath ?? process.execPath,

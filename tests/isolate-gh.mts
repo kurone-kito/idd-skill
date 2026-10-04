@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import workerThreads, { type WorkerOptions } from 'node:worker_threads';
 
 interface GhAttempt {
@@ -29,6 +30,8 @@ const guardImport = new URL('./isolate-gh.mts', import.meta.url).href;
 const workerBridgePath = fileURLToPath(
   new URL('./isolate-gh-worker.cjs', import.meta.url),
 );
+const normalizedWorkerBridgePath = workerBridgePath.replaceAll('\\', '/');
+const workerBridgeUrl = pathToFileURL(workerBridgePath).href;
 const state = { acknowledged: new Set<string>(), root: null as string | null };
 
 function ensureLedger(): { ledger: string; ownerPid: number } {
@@ -124,7 +127,7 @@ function isRegisteredFixture(
 }
 
 function containsCredential(value: string): boolean {
-  return /(?:gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|github_pat|\bBearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(
+  return /(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|github_pat|\bBearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(
     value,
   );
 }
@@ -165,28 +168,28 @@ function safeArguments(args: readonly unknown[]): string[] {
 function shellPayload(
   command: string,
   args: readonly unknown[],
+  options?: LaunchOptions,
 ): string | null {
   const base = executableBase(command);
   if (
-    !['sh', 'bash', 'dash', 'zsh', 'ksh', 'cmd', 'powershell', 'pwsh'].includes(
+    ['sh', 'bash', 'dash', 'zsh', 'ksh', 'cmd', 'powershell', 'pwsh'].includes(
       base,
     )
   ) {
-    return null;
-  }
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = String(args[index]);
-    if (['-c', '/c', '-command'].includes(argument.toLowerCase())) {
-      return args
-        .slice(index + 1)
-        .map(String)
-        .join(' ');
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = String(args[index]);
+      if (['-c', '/c', '-command'].includes(argument.toLowerCase())) {
+        return args
+          .slice(index + 1)
+          .map(String)
+          .join(' ');
+      }
+      if (argument.toLowerCase().startsWith('-command:')) {
+        return argument.slice(argument.indexOf(':') + 1);
+      }
     }
-    if (argument.toLowerCase().startsWith('-command:')) {
-      return argument.slice(argument.indexOf(':') + 1);
-    }
   }
-  return null;
+  return options?.shell ? [command, ...args].map(String).join(' ') : null;
 }
 
 /** Find gh only where a shell parser would treat a token as a command. */
@@ -250,23 +253,29 @@ function inspectInvocation(
   let unexpected = false;
   let executable = command;
   if (isGhExecutable(command)) {
-    unexpected = !isRegisteredFixture(command, env);
+    const registeredFixture = isRegisteredFixture(command, env);
+    if (registeredFixture && options?.shell) {
+      const shellCommand = shellPayload(command, args, options);
+      unexpected =
+        shellCommand !== null && shellContainsUnexpectedGh(shellCommand, env);
+      if (unexpected) executable = 'gh in shell command';
+    } else {
+      unexpected = !registeredFixture;
+    }
   } else {
-    const shellCommand = shellPayload(command, args);
+    const shellCommand = shellPayload(command, args, options);
     if (shellCommand !== null) {
       unexpected = shellContainsUnexpectedGh(shellCommand, env);
-      if (unexpected) executable = 'gh in shell command';
-    } else if (options?.shell) {
-      unexpected = shellContainsUnexpectedGh(command, env);
       if (unexpected) executable = 'gh in shell command';
     }
   }
   if (!unexpected) return;
 
   const { ledger } = ensureLedger();
-  const resolvedExecutable = isGhExecutable(command)
-    ? resolveGhPath(command, env)
-    : null;
+  const resolvedExecutable =
+    executable !== 'gh in shell command' && isGhExecutable(command)
+      ? resolveGhPath(command, env)
+      : null;
   const record: GhAttempt = {
     id: `gh-${process.pid}-${workerThreads.threadId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     at: new Date().toISOString(),
@@ -345,12 +354,14 @@ function optionsWithGuard(options: unknown, directGhFixture: boolean): unknown {
       .replaceAll(importFlag, '')
       .replaceAll(`--import="${guardImport}"`, '')
       .trim();
-    const requireFlag = `--require "${workerBridgePath.replaceAll('\\', '/')}"`;
-    env.NODE_OPTIONS = current.includes(workerBridgePath)
-      ? current
-      : current
-        ? `${current} ${requireFlag}`
-        : requireFlag;
+    const requireFlag = `--require "${normalizedWorkerBridgePath}"`;
+    env.NODE_OPTIONS =
+      current.includes(normalizedWorkerBridgePath) ||
+      current.includes(workerBridgePath)
+        ? current
+        : current
+          ? `${current} ${requireFlag}`
+          : requireFlag;
   } else {
     appendGuardImport(env);
   }
@@ -369,12 +380,22 @@ function wrap(
     inspect(...args);
     const index = optionsIndex(args);
     if (index >= 0) {
-      const options = args[index] as LaunchOptions | undefined;
+      const hasCallback =
+        ['exec', 'execFile'].includes(method) &&
+        typeof args[index] === 'function';
+      const options = hasCallback
+        ? undefined
+        : (args[index] as LaunchOptions | undefined);
       const directGhFixture =
         ['spawn', 'spawnSync', 'execFile', 'execFileSync'].includes(method) &&
         isGhExecutable(String(args[0])) &&
         isRegisteredFixture(String(args[0]), options?.env);
-      args[index] = optionsWithGuard(args[index], directGhFixture);
+      const guardedOptions = optionsWithGuard(
+        hasCallback ? undefined : args[index],
+        directGhFixture,
+      );
+      if (hasCallback) args.splice(index, 0, guardedOptions);
+      else args[index] = guardedOptions;
     }
     return Reflect.apply(
       original as (...args: unknown[]) => unknown,
@@ -383,11 +404,49 @@ function wrap(
     );
   };
   Object.setPrototypeOf(wrapped, original);
+  if (['exec', 'execFile'].includes(method)) {
+    Object.defineProperty(wrapped, promisify.custom, {
+      configurable: true,
+      value: function (this: unknown, ...args: unknown[]) {
+        let child: unknown;
+        const result = new Promise<{ stdout: unknown; stderr: unknown }>(
+          (resolve, reject) => {
+            const callback = (
+              error: NodeJS.ErrnoException | null,
+              stdout: unknown,
+              stderr: unknown,
+            ) => {
+              if (error) {
+                Object.assign(error, { stdout, stderr });
+                reject(error);
+              } else {
+                resolve({ stdout, stderr });
+              }
+            };
+            child = Reflect.apply(wrapped, this, [...args, callback]);
+          },
+        ) as Promise<{ stdout: unknown; stderr: unknown }> & {
+          child?: unknown;
+        };
+        result.child = child;
+        return result;
+      },
+    });
+  }
   childProcessApi[method] = wrapped;
 }
 
+const optionsFromArgs = (argsOrOptions: unknown, options: unknown): unknown =>
+  Array.isArray(argsOrOptions) ||
+  argsOrOptions === null ||
+  argsOrOptions === undefined
+    ? options
+    : argsOrOptions;
 const optionsAfterArgs = (args: unknown[]): number =>
-  Array.isArray(args[1]) ? 2 : 1;
+  Array.isArray(args[1]) ||
+  ((args[1] === null || args[1] === undefined) && args.length > 2)
+    ? 2
+    : 1;
 wrap(
   'spawn',
   (command, argsOrOptions, options) => {
@@ -396,7 +455,7 @@ wrap(
       'spawn',
       command,
       args,
-      Array.isArray(argsOrOptions) ? options : argsOrOptions,
+      optionsFromArgs(argsOrOptions, options),
     );
   },
   optionsAfterArgs,
@@ -409,7 +468,7 @@ wrap(
       'spawnSync',
       command,
       args,
-      Array.isArray(argsOrOptions) ? options : argsOrOptions,
+      optionsFromArgs(argsOrOptions, options),
     );
   },
   optionsAfterArgs,
@@ -434,7 +493,7 @@ wrap(
       'execFile',
       file,
       args,
-      Array.isArray(argsOrOptions) ? options : argsOrOptions,
+      optionsFromArgs(argsOrOptions, options),
     );
   },
   optionsAfterArgs,
@@ -447,7 +506,7 @@ wrap(
       'execFileSync',
       file,
       args,
-      Array.isArray(argsOrOptions) ? options : argsOrOptions,
+      optionsFromArgs(argsOrOptions, options),
     );
   },
   optionsAfterArgs,
@@ -455,7 +514,7 @@ wrap(
 wrap(
   'fork',
   (modulePath, argsOrOptions, options) => {
-    const forkOptions = Array.isArray(argsOrOptions) ? options : argsOrOptions;
+    const forkOptions = optionsFromArgs(argsOrOptions, options);
     inspectInvocation(
       'fork',
       (forkOptions as LaunchOptions | undefined)?.execPath ?? process.execPath,
@@ -469,30 +528,45 @@ wrap(
 const OriginalWorker = workerThreads.Worker;
 class GuardedWorker extends OriginalWorker {
   constructor(filename: string | URL, options: WorkerOptions = {}) {
-    if (options.env === workerThreads.SHARE_ENV) {
-      super(filename, options);
-      return;
-    }
-    const env = { ...(options.env ?? process.env) } as NodeJS.ProcessEnv;
-    for (const name of [
-      'IDD_TEST_GH_GUARD_ROOT',
-      'IDD_TEST_GH_GUARD_LEDGER',
-      'IDD_TEST_GH_GUARD_OWNER_PID',
-      'IDD_TEST_GH_GUARD_ROOT_OWNER_PID',
-      'IDD_TEST_GH_GUARD_IMPORT',
-      'IDD_TEST_GH_GUARD_ALLOWED_STUBS',
-    ]) {
-      if (env[name] === undefined && process.env[name] !== undefined) {
-        env[name] = process.env[name];
+    const env =
+      options.env === workerThreads.SHARE_ENV
+        ? workerThreads.SHARE_ENV
+        : ({ ...(options.env ?? process.env) } as NodeJS.ProcessEnv);
+    if (env !== workerThreads.SHARE_ENV) {
+      for (const name of [
+        'IDD_TEST_GH_GUARD_ROOT',
+        'IDD_TEST_GH_GUARD_LEDGER',
+        'IDD_TEST_GH_GUARD_OWNER_PID',
+        'IDD_TEST_GH_GUARD_ROOT_OWNER_PID',
+        'IDD_TEST_GH_GUARD_IMPORT',
+        'IDD_TEST_GH_GUARD_ALLOWED_STUBS',
+      ]) {
+        if (env[name] === undefined && process.env[name] !== undefined) {
+          env[name] = process.env[name];
+        }
       }
     }
-    const normalizedBridgePath = workerBridgePath.replaceAll('\\', '/');
-    const current = env.NODE_OPTIONS ?? '';
-    if (!current.replaceAll('\\', '/').includes(normalizedBridgePath)) {
-      const requireFlag = `--require "${normalizedBridgePath}"`;
-      env.NODE_OPTIONS = current ? `${current} ${requireFlag}` : requireFlag;
+    const execArgv = [...(options.execArgv ?? process.execArgv)];
+    const hasBridgePreload = execArgv.some(
+      (argument, index) =>
+        argument === `--import=${workerBridgeUrl}` ||
+        (argument === '--import' && execArgv[index + 1] === workerBridgeUrl) ||
+        argument === `--require=${workerBridgePath}` ||
+        (argument === '--require' && execArgv[index + 1] === workerBridgePath),
+    );
+    if (options.eval !== true && !hasBridgePreload) {
+      execArgv.push(`--import=${workerBridgeUrl}`);
     }
-    super(filename, { ...options, env });
+    const source =
+      options.eval === true
+        ? `;(() => {\n  const Module = require('node:module');\n  Module._load(${JSON.stringify(workerBridgePath)}, null, false);\n})();\n${String(filename)}`
+        : filename;
+    super(source, {
+      ...options,
+      eval: options.eval === true,
+      execArgv,
+      env,
+    });
   }
 }
 Object.setPrototypeOf(GuardedWorker, OriginalWorker);
