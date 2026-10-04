@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
+import { buildCommandCatalog } from '../src/scripts/helper-runtime-manifest.mts';
 import {
   type AuditFile,
   CHECK_FAMILIES,
@@ -80,12 +80,28 @@ function runAudit(root: string, family: string): CliResult {
   }
 }
 
-function catalogFor(root: string) {
-  return buildHelperRuntimeManifest({ targetRoot: root }).commandCatalog;
+interface FixtureCatalogEntry {
+  id: string;
+  scriptName: string;
+  binName: string;
+  entryPath: string;
 }
 
-function writeCatalogPackage(root: string): void {
-  const catalog = catalogFor(root);
+function catalogFor(): FixtureCatalogEntry[] {
+  return buildCommandCatalog().map(
+    ({ id, scriptName, binName, entryPath }) => ({
+      id,
+      scriptName,
+      binName,
+      entryPath,
+    }),
+  );
+}
+
+function writeCatalogPackage(
+  root: string,
+  catalog: FixtureCatalogEntry[] = catalogFor(),
+): void {
   const bin: Record<string, string> = Object.fromEntries(
     catalog.map((entry) => [entry.binName, `./bin/${entry.binName}.mjs`]),
   );
@@ -96,6 +112,17 @@ function writeCatalogPackage(root: string): void {
     root,
     'package.json',
     `${JSON.stringify({ name: 'fixture', bin }, null, 2)}\n`,
+  );
+  const commandEntries = catalog
+    .map(
+      ({ id, scriptName, binName, entryPath }) =>
+        `  {\n    id: '${id}',\n    scriptName: '${scriptName}',\n    binName: '${binName}',\n    entryPath: '${entryPath}',\n  },`,
+    )
+    .join('\n');
+  write(
+    root,
+    'src/scripts/helper-runtime-manifest.mts',
+    `const HELPER_COMMANDS: HelperCommand[] = [\n${commandEntries}\n];\nexport const PACKAGE_MANAGER_ONLY_HELPERS = [] as const;\n`,
   );
 }
 
@@ -197,10 +224,36 @@ test('CLI audit checks runtime bin registration from a scratch package map', () 
   }
 });
 
+test('CLI audit reads the runtime catalog from its explicit root', () => {
+  const temp = fixture();
+  try {
+    writeCatalogPackage(temp.root, [
+      {
+        id: 'fixture-command',
+        scriptName: 'idd:fixture-command',
+        binName: 'idd-fixture-command',
+        entryPath: 'scripts/fixture-command.mjs',
+      },
+    ]);
+    assertPass(runAudit(temp.root, 'runtime-registration'));
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test('CLI audit checks documented helper invocations against a scratch corpus', () => {
   const temp = fixture();
   try {
     writeCatalogPackage(temp.root);
+    const packageJson = JSON.parse(
+      readFileSync(join(temp.root, 'package.json'), 'utf8'),
+    );
+    packageJson.bin = {};
+    write(
+      temp.root,
+      'package.json',
+      `${JSON.stringify(packageJson, null, 2)}\n`,
+    );
     write(
       temp.root,
       'audit/sync-manifest.json',
@@ -278,6 +331,15 @@ test('CLI audit checks template workflow invocations against the scratch catalog
   const temp = fixture();
   try {
     writeCatalogPackage(temp.root);
+    const packageJson = JSON.parse(
+      readFileSync(join(temp.root, 'package.json'), 'utf8'),
+    );
+    packageJson.bin = {};
+    write(
+      temp.root,
+      'package.json',
+      `${JSON.stringify(packageJson, null, 2)}\n`,
+    );
     write(
       temp.root,
       'idd-template/.github/workflows/one.yml',
@@ -349,6 +411,16 @@ test('CLI audit checks help-flag coverage against scratch source fixtures', () =
       write(temp.root, `src/scripts/${helper}.mts`, 'export {};\n');
     }
     assertPass(runAudit(temp.root, 'help-flag-coverage'));
+
+    const excluded = EXCLUDED_HELPERS[0];
+    assert.ok(excluded);
+    rmSync(join(temp.root, 'src/scripts', `${excluded.helper}.mts`));
+    assertFailure(
+      runAudit(temp.root, 'help-flag-coverage'),
+      'help-flag-coverage',
+      `src/scripts/${excluded.helper}.mts`,
+    );
+    write(temp.root, `src/scripts/${excluded.helper}.mts`, 'export {};\n');
 
     write(
       temp.root,

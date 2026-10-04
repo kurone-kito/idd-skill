@@ -5,10 +5,7 @@
 import { type Dirent, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { globFiles } from './consistency-helpers.mts';
-import {
-  buildHelperRuntimeManifest,
-  PACKAGE_MANAGER_ONLY_HELPERS,
-} from './helper-runtime-manifest.mts';
+import { PACKAGE_MANAGER_ONLY_HELPERS } from './helper-runtime-manifest.mts';
 
 export interface AuditViolation {
   ruleId: string;
@@ -382,7 +379,11 @@ export function scanHelperInvocationFile(content: string): {
 
 export function collectHelperInvocationViolations(
   files: AuditFile[],
-  options: { commandCatalog: CatalogEntry[]; distributedFiles: Set<string> },
+  options: {
+    commandCatalog: CatalogEntry[];
+    distributedFiles: Set<string>;
+    packageManagerOnlyEntryPaths?: readonly string[];
+  },
 ): (AuditViolation & { form: string; name: string })[] {
   const entryPaths = new Set(
     options.commandCatalog.map((entry) => entry.entryPath),
@@ -394,7 +395,8 @@ export function collectHelperInvocationViolations(
     options.commandCatalog.map((entry) => entry.scriptName),
   );
   const packageManagerOnly = new Set<string>(
-    PACKAGE_MANAGER_ONLY_HELPERS.map((helper) => helper.installedEntryPath),
+    options.packageManagerOnlyEntryPaths ??
+      PACKAGE_MANAGER_ONLY_HELPERS.map((helper) => helper.installedEntryPath),
   );
   const violations: (AuditViolation & { form: string; name: string })[] = [];
   for (const file of files) {
@@ -850,23 +852,113 @@ function checkRepositoryInventory(root: string, out: AuditViolation[]): void {
   }
 }
 
-function checkRuntimeRegistration(
+function readStaticObjectBlocks(
+  source: string,
+  marker: string,
+  terminator: RegExp,
+): string[] | null {
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const afterMarker = source.slice(markerIndex + marker.length);
+  const endMatch = terminator.exec(afterMarker);
+  if (!endMatch || endMatch.index === undefined) return null;
+  const body = afterMarker.slice(0, endMatch.index);
+  const entryStarts = [...body.matchAll(/^ {2}\{$/gm)].length;
+  const blocks = [...body.matchAll(/^ {2}\{\n([\s\S]*?)^ {2}\},?$/gm)].map(
+    (match) => match[1],
+  );
+  return entryStarts === blocks.length ? blocks : null;
+}
+
+function readStaticStringField(block: string, field: string): string | null {
+  const match = block.match(new RegExp(`^    ${field}:\\s*'([^']*)',?$`, 'm'));
+  return match?.[1] ?? null;
+}
+
+interface RuntimeCatalog {
+  commandCatalog: CatalogEntry[];
+  packageManagerOnlyEntryPaths: string[];
+}
+
+function loadRuntimeCatalog(
   root: string,
   out: AuditViolation[],
-): CatalogEntry[] {
-  let catalog: CatalogEntry[] = [];
-  try {
-    catalog = buildHelperRuntimeManifest({ targetRoot: root }).commandCatalog;
-  } catch (error) {
+): RuntimeCatalog {
+  const path = 'src/scripts/helper-runtime-manifest.mts';
+  const source = readText(root, path, out, 'runtime-catalog');
+  if (source === null)
+    return { commandCatalog: [], packageManagerOnlyEntryPaths: [] };
+
+  const commandBlocks = readStaticObjectBlocks(
+    source,
+    'const HELPER_COMMANDS: HelperCommand[] = [',
+    /^\];/m,
+  );
+  if (commandBlocks === null || commandBlocks.length === 0) {
     add(
       out,
       'runtime-catalog',
-      'src/scripts/helper-runtime-manifest.mts',
-      'could not build command catalog: ' +
-        (error instanceof Error ? error.message : String(error)),
+      path,
+      'could not inspect non-empty HELPER_COMMANDS array',
     );
-    return catalog;
+    return { commandCatalog: [], packageManagerOnlyEntryPaths: [] };
   }
+
+  const commandCatalog: CatalogEntry[] = [];
+  for (const [index, block] of commandBlocks.entries()) {
+    const entryPath = readStaticStringField(block, 'entryPath');
+    const binName = readStaticStringField(block, 'binName');
+    const scriptName = readStaticStringField(block, 'scriptName');
+    if (!entryPath || !binName || !scriptName) {
+      add(
+        out,
+        'runtime-catalog',
+        path,
+        `HELPER_COMMANDS entry ${index + 1} is missing string entryPath, binName, or scriptName`,
+      );
+      continue;
+    }
+    commandCatalog.push({ entryPath, binName, scriptName });
+  }
+
+  const packageManagerBlocks = readStaticObjectBlocks(
+    source,
+    'export const PACKAGE_MANAGER_ONLY_HELPERS = [',
+    /^\] as const;/m,
+  );
+  if (packageManagerBlocks === null) {
+    add(
+      out,
+      'runtime-catalog',
+      path,
+      'could not inspect PACKAGE_MANAGER_ONLY_HELPERS array',
+    );
+    return { commandCatalog, packageManagerOnlyEntryPaths: [] };
+  }
+
+  const packageManagerOnlyEntryPaths: string[] = [];
+  for (const [index, block] of packageManagerBlocks.entries()) {
+    const entryPath = readStaticStringField(block, 'installedEntryPath');
+    if (!entryPath) {
+      add(
+        out,
+        'runtime-catalog',
+        path,
+        `PACKAGE_MANAGER_ONLY_HELPERS entry ${index + 1} is missing string installedEntryPath`,
+      );
+      continue;
+    }
+    packageManagerOnlyEntryPaths.push(entryPath);
+  }
+
+  return { commandCatalog, packageManagerOnlyEntryPaths };
+}
+
+function checkRuntimeRegistration(
+  root: string,
+  catalog: CatalogEntry[],
+  out: AuditViolation[],
+): void {
   const text = readText(root, 'package.json', out);
   let bin: Record<string, string> = {};
   try {
@@ -908,12 +1000,12 @@ function checkRuntimeRegistration(
         `allowlisted bin is no longer present: ${name}`,
       );
   }
-  return catalog;
 }
 
 function checkInstructionInvocations(
   root: string,
   catalog: CatalogEntry[],
+  packageManagerOnlyEntryPaths: string[],
   out: AuditViolation[],
 ): void {
   const directories = [
@@ -1011,6 +1103,7 @@ function checkInstructionInvocations(
   for (const violation of collectHelperInvocationViolations(files, {
     commandCatalog: catalog,
     distributedFiles: distributed,
+    packageManagerOnlyEntryPaths,
   })) {
     add(
       out,
@@ -1249,6 +1342,15 @@ function checkHelpFlagCoverage(root: string, out: AuditViolation[]): void {
       );
   }
   for (const { helper, reason } of EXCLUDED_HELPERS) {
+    if (!sources.has(helper)) {
+      add(
+        out,
+        'help-flag-coverage',
+        `src/scripts/${helper}.mts`,
+        'excluded helper source is missing',
+      );
+      continue;
+    }
     if (!reason.trim())
       add(
         out,
@@ -1377,10 +1479,20 @@ export function collectRepositoryInventoryViolations(
     selected.has('runtime-registration') ||
     selected.has('instruction-invocations') ||
     selected.has('template-workflows');
-  const catalog = needsCatalog ? checkRuntimeRegistration(root, out) : [];
+  const runtimeCatalog = needsCatalog
+    ? loadRuntimeCatalog(root, out)
+    : { commandCatalog: [], packageManagerOnlyEntryPaths: [] };
+  const catalog = runtimeCatalog.commandCatalog;
+  if (selected.has('runtime-registration'))
+    checkRuntimeRegistration(root, catalog, out);
   if (selected.has('repository-inventory')) checkRepositoryInventory(root, out);
   if (selected.has('instruction-invocations'))
-    checkInstructionInvocations(root, catalog, out);
+    checkInstructionInvocations(
+      root,
+      catalog,
+      runtimeCatalog.packageManagerOnlyEntryPaths,
+      out,
+    );
   if (selected.has('template-workflows'))
     checkTemplateWorkflows(root, catalog, out);
   if (selected.has('helper-cli-migration')) checkHelperCliMigration(root, out);

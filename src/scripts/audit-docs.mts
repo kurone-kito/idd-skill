@@ -358,7 +358,6 @@ async function main(): Promise<void> {
           `repository-instruction-audit/${ruleId}: ${path}: ${message}`,
       ),
     );
-    await checkRepositoryInventoryAudit();
   }
 
   checkReadmePairs(manifest.readmePairs ?? []);
@@ -396,6 +395,7 @@ async function main(): Promise<void> {
   checkConfigInstructionDrift();
   checkHelperFlagDrift();
   checkGeneratedSourcePairs();
+  if (shouldRunSourceChecks) await checkRepositoryInventoryAudit();
   await checkRepositoryPolicy();
   checkEnginesRangeMirrors();
   checkBinExecutableMode();
@@ -462,11 +462,19 @@ async function checkRepositoryPolicy(): Promise<void> {
 async function checkRepositoryInventoryAudit(): Promise<void> {
   const source = 'src/scripts/repository-inventory-audit.mts';
   const emitted = 'scripts/repository-inventory-audit.mjs';
+  const missing = [source, emitted].filter(
+    (path) => !repoFiles.includes(path) || !existsSync(join(root, path)),
+  );
+  if (missing.length > 0) {
+    errors.push(
+      ...missing.map(
+        (path) =>
+          `repository-inventory-audit-required-file: ${path}: required source audit file is missing or untracked`,
+      ),
+    );
+    return;
+  }
   if (
-    !repoFiles.includes(source) ||
-    !repoFiles.includes(emitted) ||
-    !existsSync(join(root, source)) ||
-    !existsSync(join(root, emitted)) ||
     errors.some(
       (error) =>
         error.startsWith(`${source}:`) || error.startsWith(`${emitted}:`),

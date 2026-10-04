@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -44,6 +50,14 @@ function fakeReader(
   files: Record<string, string>,
 ): (path: string) => string | null {
   return (path) => (Object.hasOwn(files, path) ? files[path] : null);
+}
+
+function readRepoFile(path: string): string | null {
+  try {
+    return readFileSync(join(REPO_ROOT, path), 'utf8').replace(/\r\n?/g, '\n');
+  } catch {
+    return null;
+  }
 }
 
 const INSTRUCTIONS_PREFIX = 'idd-template/.github/instructions/';
@@ -98,6 +112,45 @@ test('passes on a well-formed entry with both a lite and an omittedByDesign entr
     collectLiteGateParityViolations(entries, fakeReader(FILES)),
     [],
   );
+});
+
+test("deleting a real seed entry's lite fragment is detected", () => {
+  const manifest = JSON.parse(
+    readRepoFile('audit/sync-manifest.json') ?? '{}',
+  ) as {
+    liteGateParity: {
+      id: string;
+      lite?: { file: string; contains?: string };
+    }[];
+  };
+  const target = manifest.liteGateParity.find(
+    (entry) => entry.id === 'b1-primary-worktree-exemption',
+  );
+  assert.ok(target, 'expected the b1-primary-worktree-exemption seed entry');
+  const liteLocation = target?.lite as { file: string; contains: string };
+  assert.ok(liteLocation?.contains, 'expected a contains fragment to remove');
+
+  const realLiteText = readRepoFile(liteLocation.file);
+  assert.ok(realLiteText, `expected to read ${liteLocation.file}`);
+  assert.ok(
+    realLiteText.includes(liteLocation.contains),
+    'expected the fragment to be present before deletion',
+  );
+  const mutatedText = realLiteText.replace(liteLocation.contains, '');
+  const scratchFiles: Record<string, string> = {
+    [liteLocation.file]: mutatedText,
+  };
+  const readWithScratchOverride = (path: string): string | null =>
+    Object.hasOwn(scratchFiles, path) ? scratchFiles[path] : readRepoFile(path);
+
+  const matching = collectLiteGateParityViolations(
+    manifest.liteGateParity,
+    readWithScratchOverride,
+  ).filter((violation) =>
+    violation.startsWith('b1-primary-worktree-exemption:'),
+  );
+  assert.equal(matching.length, 1);
+  assert.match(matching[0], /contains fragment not found/);
 });
 
 test('absent or empty registry is a configuration error', () => {
@@ -520,4 +573,31 @@ test('an omitted registry fails when the canonical lite corpus is present', (t) 
   const result = runAuditDocs(fixture.dir);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /registry must be present and non-empty/);
+});
+
+test('source repository audit fails when both inventory audit files are absent', (t) => {
+  const fixture = initFixture();
+  t.after(fixture.cleanup);
+  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
+  writeFileSync(
+    join(fixture.dir, 'package.json'),
+    '{"name":"@kurone-kito/idd-skill"}\n',
+  );
+  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
+  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
+  execFileSync('git', ['add', '-A'], {
+    cwd: fixture.dir,
+    env: fixtureEnv(),
+  });
+
+  const result = runAuditDocs(fixture.dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: src\/scripts\/repository-inventory-audit\.mts: required source audit file is missing or untracked/,
+  );
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: scripts\/repository-inventory-audit\.mjs: required source audit file is missing or untracked/,
+  );
 });

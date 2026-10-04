@@ -4,10 +4,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { globFiles } from './consistency-helpers.mjs';
-import {
-  buildHelperRuntimeManifest,
-  PACKAGE_MANAGER_ONLY_HELPERS,
-} from './helper-runtime-manifest.mjs';
+import { PACKAGE_MANAGER_ONLY_HELPERS } from './helper-runtime-manifest.mjs';
 export const COVERED_HELPERS = [
   'actions-usage-report',
   'advisory-comment-debounce',
@@ -336,7 +333,8 @@ export function collectHelperInvocationViolations(files, options) {
     options.commandCatalog.map((entry) => entry.scriptName),
   );
   const packageManagerOnly = new Set(
-    PACKAGE_MANAGER_ONLY_HELPERS.map((helper) => helper.installedEntryPath),
+    options.packageManagerOnlyEntryPaths ??
+      PACKAGE_MANAGER_ONLY_HELPERS.map((helper) => helper.installedEntryPath),
   );
   const violations = [];
   for (const file of files) {
@@ -768,20 +766,89 @@ function checkRepositoryInventory(root, out) {
     }
   }
 }
-function checkRuntimeRegistration(root, out) {
-  let catalog = [];
-  try {
-    catalog = buildHelperRuntimeManifest({ targetRoot: root }).commandCatalog;
-  } catch (error) {
+function readStaticObjectBlocks(source, marker, terminator) {
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const afterMarker = source.slice(markerIndex + marker.length);
+  const endMatch = terminator.exec(afterMarker);
+  if (!endMatch || endMatch.index === undefined) return null;
+  const body = afterMarker.slice(0, endMatch.index);
+  const entryStarts = [...body.matchAll(/^ {2}\{$/gm)].length;
+  const blocks = [...body.matchAll(/^ {2}\{\n([\s\S]*?)^ {2}\},?$/gm)].map(
+    (match) => match[1],
+  );
+  return entryStarts === blocks.length ? blocks : null;
+}
+function readStaticStringField(block, field) {
+  const match = block.match(new RegExp(`^    ${field}:\\s*'([^']*)',?$`, 'm'));
+  return match?.[1] ?? null;
+}
+function loadRuntimeCatalog(root, out) {
+  const path = 'src/scripts/helper-runtime-manifest.mts';
+  const source = readText(root, path, out, 'runtime-catalog');
+  if (source === null)
+    return { commandCatalog: [], packageManagerOnlyEntryPaths: [] };
+  const commandBlocks = readStaticObjectBlocks(
+    source,
+    'const HELPER_COMMANDS: HelperCommand[] = [',
+    /^\];/m,
+  );
+  if (commandBlocks === null || commandBlocks.length === 0) {
     add(
       out,
       'runtime-catalog',
-      'src/scripts/helper-runtime-manifest.mts',
-      'could not build command catalog: ' +
-        (error instanceof Error ? error.message : String(error)),
+      path,
+      'could not inspect non-empty HELPER_COMMANDS array',
     );
-    return catalog;
+    return { commandCatalog: [], packageManagerOnlyEntryPaths: [] };
   }
+  const commandCatalog = [];
+  for (const [index, block] of commandBlocks.entries()) {
+    const entryPath = readStaticStringField(block, 'entryPath');
+    const binName = readStaticStringField(block, 'binName');
+    const scriptName = readStaticStringField(block, 'scriptName');
+    if (!entryPath || !binName || !scriptName) {
+      add(
+        out,
+        'runtime-catalog',
+        path,
+        `HELPER_COMMANDS entry ${index + 1} is missing string entryPath, binName, or scriptName`,
+      );
+      continue;
+    }
+    commandCatalog.push({ entryPath, binName, scriptName });
+  }
+  const packageManagerBlocks = readStaticObjectBlocks(
+    source,
+    'export const PACKAGE_MANAGER_ONLY_HELPERS = [',
+    /^\] as const;/m,
+  );
+  if (packageManagerBlocks === null) {
+    add(
+      out,
+      'runtime-catalog',
+      path,
+      'could not inspect PACKAGE_MANAGER_ONLY_HELPERS array',
+    );
+    return { commandCatalog, packageManagerOnlyEntryPaths: [] };
+  }
+  const packageManagerOnlyEntryPaths = [];
+  for (const [index, block] of packageManagerBlocks.entries()) {
+    const entryPath = readStaticStringField(block, 'installedEntryPath');
+    if (!entryPath) {
+      add(
+        out,
+        'runtime-catalog',
+        path,
+        `PACKAGE_MANAGER_ONLY_HELPERS entry ${index + 1} is missing string installedEntryPath`,
+      );
+      continue;
+    }
+    packageManagerOnlyEntryPaths.push(entryPath);
+  }
+  return { commandCatalog, packageManagerOnlyEntryPaths };
+}
+function checkRuntimeRegistration(root, catalog, out) {
   const text = readText(root, 'package.json', out);
   let bin = {};
   try {
@@ -822,9 +889,13 @@ function checkRuntimeRegistration(root, out) {
         `allowlisted bin is no longer present: ${name}`,
       );
   }
-  return catalog;
 }
-function checkInstructionInvocations(root, catalog, out) {
+function checkInstructionInvocations(
+  root,
+  catalog,
+  packageManagerOnlyEntryPaths,
+  out,
+) {
   const directories = [
     '.github/instructions',
     'docs',
@@ -920,6 +991,7 @@ function checkInstructionInvocations(root, catalog, out) {
   for (const violation of collectHelperInvocationViolations(files, {
     commandCatalog: catalog,
     distributedFiles: distributed,
+    packageManagerOnlyEntryPaths,
   })) {
     add(
       out,
@@ -1150,6 +1222,15 @@ function checkHelpFlagCoverage(root, out) {
       );
   }
   for (const { helper, reason } of EXCLUDED_HELPERS) {
+    if (!sources.has(helper)) {
+      add(
+        out,
+        'help-flag-coverage',
+        `src/scripts/${helper}.mts`,
+        'excluded helper source is missing',
+      );
+      continue;
+    }
     if (!reason.trim())
       add(
         out,
@@ -1270,10 +1351,20 @@ export function collectRepositoryInventoryViolations(
     selected.has('runtime-registration') ||
     selected.has('instruction-invocations') ||
     selected.has('template-workflows');
-  const catalog = needsCatalog ? checkRuntimeRegistration(root, out) : [];
+  const runtimeCatalog = needsCatalog
+    ? loadRuntimeCatalog(root, out)
+    : { commandCatalog: [], packageManagerOnlyEntryPaths: [] };
+  const catalog = runtimeCatalog.commandCatalog;
+  if (selected.has('runtime-registration'))
+    checkRuntimeRegistration(root, catalog, out);
   if (selected.has('repository-inventory')) checkRepositoryInventory(root, out);
   if (selected.has('instruction-invocations'))
-    checkInstructionInvocations(root, catalog, out);
+    checkInstructionInvocations(
+      root,
+      catalog,
+      runtimeCatalog.packageManagerOnlyEntryPaths,
+      out,
+    );
   if (selected.has('template-workflows'))
     checkTemplateWorkflows(root, catalog, out);
   if (selected.has('helper-cli-migration')) checkHelperCliMigration(root, out);
