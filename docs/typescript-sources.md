@@ -123,7 +123,10 @@ block, and a working-tree copy that differs from HEAD all fail with the path
 and a fix hint; nothing is copied back, so `pnpm run build` stays the only
 writer. The HEAD snapshot comes from `git ls-tree` and `git cat-file`, so the
 verdict is relative to committed HEAD whatever is staged (#1023), and no
-command in the verifier writes the git index. File modes are not compared.
+command in the verifier writes the git index. The fresh emit is compared by
+content only, but a working-tree copy must also keep HEAD's recorded kind (the
+executable bit where git tracks it, and symlink versus regular file), as the old
+`git diff HEAD` composition required.
 
 Both `build:check` steps run from their `.mts` sources through Node's native
 type stripping, never from the committed `scripts/*.mjs` copies. A generated

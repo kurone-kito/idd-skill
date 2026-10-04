@@ -42,15 +42,24 @@
 // Top-level imports are `node:` builtins plus build-ts.mts (itself
 // dependency-free at import time): tsc and Biome are resolved lazily inside
 // build-ts.mts's functions, so tests/check-build-artifacts.test.mts can import
-// this module in the toolless bare-node CI lane. Content only is compared, not
-// file modes, as before. The `* text=auto eol=lf` rule in .gitattributes keeps
-// working-tree artifacts LF on every platform, which the byte comparison
-// relies on.
+// this module in the toolless bare-node CI lane. The fresh emit is compared by
+// content only (tsc sets no executable bit), but a working-tree copy is also
+// checked against HEAD's recorded kind -- the executable bit where git tracks
+// it (`core.fileMode`) and symlink versus regular file -- as the old
+// `git diff HEAD` composition did. The `* text=auto eol=lf` rule in
+// .gitattributes keeps working-tree artifacts LF on every platform, which the
+// byte comparison relies on.
 // #3240: side-effect-only import, kept first so an unsupported Node (where
 // `import.meta.main` is `undefined`, not `false`) fails loudly before this
 // entry block runs. See node-runtime-guard.mts.
 import './node-runtime-guard.mjs';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import {
@@ -107,7 +116,7 @@ function attributeLineDifference(committed, fresh) {
  * path yields at most one finding, ordered by how fundamental the problem is.
  */
 export function compareArtifacts(snapshot) {
-  const { committed, emitted, expectedPaths, working } = snapshot;
+  const { committed, emitted, expectedPaths, kinds, working } = snapshot;
   const findings = [];
   const noOutput = new Set(expectedPaths.filter((path) => !emitted.has(path)));
   // A working-tree artifact with neither a source nor a HEAD copy (untracked
@@ -187,6 +196,15 @@ export function compareArtifacts(snapshot) {
         'local-edit',
         'the working-tree copy differs from HEAD (nothing was rewritten; restore it or run `pnpm run build` and commit)',
       );
+    } else if (
+      head !== undefined &&
+      copy !== undefined &&
+      kinds?.committed.get(path) !== kinds?.working.get(path)
+    ) {
+      add(
+        'local-edit',
+        `the working-tree copy is ${kinds?.working.get(path)} but HEAD records ${kinds?.committed.get(path)} (nothing was changed; restore it with chmod or git checkout)`,
+      );
     }
   }
   return findings;
@@ -236,12 +254,13 @@ export function parseCatFileBatch(output, expected) {
   }
   return blobs;
 }
+const kindOfGitMode = (mode) =>
+  mode === '120000' ? 'symlink' : mode === '100755' ? 'executable' : 'file';
 /**
- * The generated artifacts (and `.gitattributes`) as committed at HEAD. Uses
- * only `git ls-tree` and `git cat-file`, which read the object database and
- * never the index.
+ * The tracked artifacts (and `.gitattributes`) at HEAD, from `git ls-tree`,
+ * which reads the object database and never the index.
  */
-export function readHeadSnapshot(root, run = spawnRunner) {
+export function listHeadEntries(root, run = spawnRunner) {
   const listing = run(
     'git',
     [
@@ -262,16 +281,27 @@ export function readHeadSnapshot(root, run = spawnRunner) {
     if (tab < 0) {
       continue;
     }
-    const [, type, oid] = record.slice(0, tab).split(' ');
+    const [mode, type, oid] = record.slice(0, tab).split(' ');
     const path = record.slice(tab + 1);
     if (
       type === 'blob' &&
       oid !== undefined &&
       (path === GITATTRIBUTES_PATH || ARTIFACT_PATH_PATTERN.test(path))
     ) {
-      entries.push({ oid, path });
+      entries.push({ kind: kindOfGitMode(mode), oid, path });
     }
   }
+  return entries;
+}
+/**
+ * The generated artifacts (and `.gitattributes`) as committed at HEAD, one
+ * `git cat-file --batch` for every blob.
+ */
+export function readHeadSnapshot(
+  root,
+  run = spawnRunner,
+  entries = listHeadEntries(root, run),
+) {
   const snapshot = new Map();
   if (entries.length === 0) {
     return snapshot;
@@ -285,6 +315,34 @@ export function readHeadSnapshot(root, run = spawnRunner) {
     snapshot.set(entries[index]?.path ?? '', blob);
   });
   return snapshot;
+}
+/**
+ * Whether git tracks the executable bit here: `core.fileMode`, which git sets
+ * to false when it initializes a repository on Windows.
+ */
+function executableBitTracked(root, run) {
+  const result = run('git', ['config', '--bool', 'core.fileMode'], {
+    cwd: root,
+  });
+  if (result.status === 0) {
+    return result.stdout.toString('utf8').trim() !== 'false';
+  }
+  return process.platform !== 'win32';
+}
+/** The working-tree kind of `path`, or undefined when nothing is there. */
+function workingKind(path) {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      return 'symlink';
+    }
+    return (stat.mode & 0o111) !== 0 ? 'executable' : 'file';
+  } catch (error) {
+    if (isAbsent(error)) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 /** True for the errno codes that mean "there is no readable file at that path". */
 function isAbsent(error) {
@@ -382,7 +440,9 @@ export function verifyBuildArtifacts(options = {}) {
     for (const path of emittedPaths) {
       emitted.set(path, readFileSync(join(temp, path)));
     }
-    const committed = readHeadSnapshot(root, options.run);
+    const run = options.run ?? spawnRunner;
+    const headEntries = listHeadEntries(root, run);
+    const committed = readHeadSnapshot(root, run, headEntries);
     const findings = [];
     const committedAttributes = committed.get(GITATTRIBUTES_PATH);
     if (committedAttributes === undefined) {
@@ -428,11 +488,26 @@ export function verifyBuildArtifacts(options = {}) {
         working.set(path, copy);
       }
     }
+    // File kinds: the executable bit only where git tracks it, so a Windows
+    // checkout (core.fileMode=false) never reports a bit it cannot show.
+    const trackBit = executableBitTracked(root, run);
+    const normalize = (kind) =>
+      !trackBit && kind === 'executable' ? 'file' : kind;
+    const committedKinds = new Map();
+    const workingKinds = new Map();
+    for (const entry of headEntries) {
+      const kind = workingKind(join(root, entry.path));
+      if (kind !== undefined && committed.has(entry.path)) {
+        committedKinds.set(entry.path, normalize(entry.kind));
+        workingKinds.set(entry.path, normalize(kind));
+      }
+    }
     findings.push(
       ...compareArtifacts({
         committed,
         emitted,
         expectedPaths: expectedArtifactPaths(root),
+        kinds: { committed: committedKinds, working: workingKinds },
         working,
       }),
     );

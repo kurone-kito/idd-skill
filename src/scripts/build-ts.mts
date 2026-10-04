@@ -357,6 +357,13 @@ export function chunkByArgumentLength(
  * emit directory outside it. `--vcs-enabled=false` stops VCS ignore rules from
  * dropping an explicitly listed file (a temp dir under a gitignored `TMPDIR`
  * otherwise reports "No files were processed"). Returns Biome's output.
+ *
+ * Passing absolute paths outside `root` relies on the project's Biome include
+ * set accepting them: the shared base config includes `**`, so they are
+ * processed under the repository's rules. A configuration that excluded them
+ * would make Biome report them as ignored and exit non-zero, which surfaces
+ * here as a loud `biome` stage error, never a silent pass;
+ * tests/check-build-artifacts.test.mts pins the current behavior.
  */
 export function normalizeWithBiome(
   files: readonly string[],
