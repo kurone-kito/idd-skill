@@ -1,35 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { extractImportSpecifiers, readJson, readText } from './test-utils.mts';
+import {
+  extractImportSpecifiers,
+  findExactTemplateScriptMirrors,
+  findNonNodeSpecifiers,
+} from '../src/scripts/lint-source-boundaries.mts';
 
-/** A minimal view of an `audit/sync-manifest.json` `syncPairs[]` entry. */
-interface SyncPair {
-  id?: string;
-  mode?: string;
-  source?: string;
-  target?: string;
-}
-
-/**
- * Derives the exact-mode `idd-template/scripts/` mirror set from
- * `audit/sync-manifest.json` at test-run time instead of hardcoding a file
- * name, so any future addition to this mirror pattern is automatically
- * covered.
- */
-function findExactTemplateScriptMirrors(): { id: string; source: string }[] {
-  const manifest = readJson('audit/sync-manifest.json') as {
-    syncPairs?: SyncPair[];
-  };
-  return (manifest.syncPairs ?? []).flatMap((pair) =>
-    pair.mode === 'exact' &&
-    typeof pair.source === 'string' &&
-    typeof pair.target === 'string' &&
-    pair.target.startsWith('idd-template/scripts/')
-      ? [{ id: pair.id ?? pair.target, source: pair.source }]
-      : [],
-  );
-}
+// Detector regressions for the standalone-mirror contract: a source that is
+// mirrored `exact` into `idd-template/scripts/` must stay self-contained (Node
+// built-ins only) so the mirror runs standalone. The scan of the real
+// audit/sync-manifest.json is the STANDALONE-MIRROR-IMPORTS rule of
+// scripts/lint-source-boundaries.mjs (#3748); this file keeps the import
+// extraction and mirror derivation cases.
 
 test('extractImportSpecifiers finds import/export-from and dynamic import() specifiers, ignoring comments', () => {
   const sample = `
@@ -63,24 +46,51 @@ test('extractImportSpecifiers ignores an interpolated (non-static) template-lite
   assert.deepEqual(extractImportSpecifiers(sample), []);
 });
 
-test('audit/sync-manifest.json has at least one exact-mode idd-template/scripts/ mirror to guard', () => {
-  // Guards the derivation itself: if this set ever drops to zero, the test
-  // below would pass vacuously without checking anything.
-  assert.ok(findExactTemplateScriptMirrors().length > 0);
+test('findNonNodeSpecifiers flags relative and bare specifiers alike, unlike a node: builtin', () => {
+  const sample = `
+import { readFileSync } from 'node:fs';
+import { helper } from './helper.mjs';
+import { parse } from 'yaml';
+`;
+  assert.deepEqual(findNonNodeSpecifiers(sample), ['./helper.mjs', 'yaml']);
+  assert.deepEqual(findNonNodeSpecifiers("import fetch from 'node-fetch';\n"), [
+    'node-fetch',
+  ]);
 });
 
-test('exact-mode idd-template/scripts/ mirror sources import only Node built-ins', () => {
-  for (const { id, source } of findExactTemplateScriptMirrors()) {
-    const specifiers = extractImportSpecifiers(readText(source));
-    const nonNodeImports = specifiers.filter(
-      (specifier) => !specifier.startsWith('node:'),
-    );
-    assert.deepEqual(
-      nonNodeImports,
-      [],
-      `sync pair "${id}" (${source}) must stay self-contained (Node ` +
-        `built-ins only) so the idd-template/scripts/ mirror runs ` +
-        `standalone; found: ${nonNodeImports.join(', ')}`,
-    );
-  }
+test('findExactTemplateScriptMirrors derives only exact-mode idd-template/scripts/ pairs', () => {
+  const manifest = JSON.stringify({
+    syncPairs: [
+      {
+        id: 'script-mirror',
+        mode: 'exact',
+        source: 'scripts/a.mjs',
+        target: 'idd-template/scripts/a.mjs',
+      },
+      // The id falls back to the target when a pair has none.
+      {
+        mode: 'exact',
+        source: 'scripts/b.mjs',
+        target: 'idd-template/scripts/b.mjs',
+      },
+      {
+        id: 'concreted-script',
+        mode: 'concreted',
+        source: 'scripts/c.mjs',
+        target: 'idd-template/scripts/c.mjs',
+      },
+      {
+        id: 'exact-doc',
+        mode: 'exact',
+        source: 'docs/d.md',
+        target: 'idd-template/docs/d.md',
+      },
+      { id: 'no-target', mode: 'exact', source: 'scripts/e.mjs' },
+    ],
+  });
+  assert.deepEqual(findExactTemplateScriptMirrors(manifest), [
+    { id: 'script-mirror', source: 'scripts/a.mjs' },
+    { id: 'idd-template/scripts/b.mjs', source: 'scripts/b.mjs' },
+  ]);
+  assert.deepEqual(findExactTemplateScriptMirrors('{}'), []);
 });
