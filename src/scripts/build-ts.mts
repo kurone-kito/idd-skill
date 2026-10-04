@@ -44,12 +44,20 @@
 // elsewhere) ultimately runs the exact same resolved script through node,
 // so this reproduces their behavior identically instead of bypassing it.
 //
-// resolveBinScript() below must stay called from inside build(), never at
-// module top-level: tests/build-ts.test.mts imports this module for the
-// dependency-free rewriteGitattributesBlock() below, and lint.yml's
+// resolveBinScript() below must stay called from inside a function body
+// (runTsc, normalizeWithBiome), never at module top-level:
+// tests/build-ts.test.mts imports this module for the dependency-free
+// rewriteGitattributesBlock() below, and lint.yml's
 // toolless bare-node CI lane runs that test with NO package-manager
 // install at all (no node_modules), so merely importing this file must
 // not require `typescript`/`@biomejs/biome` to be resolvable.
+//
+// The tsc emit and the Biome normalization are exported (runTsc,
+// normalizeWithBiome) so src/scripts/check-build-artifacts.mts can run the
+// very same steps into a temporary directory and compare the result with
+// HEAD instead of rewriting the checkout. Both go through an injectable
+// ProcessRunner so tests can assert the exact invocation shape: always
+// `process.execPath` plus a resolved JS entry point, never a shell.
 
 // #3240: side-effect-only import, kept first so an unsupported Node (where
 // `import.meta.main` is `undefined`, not `false`) fails loudly before this
@@ -58,20 +66,24 @@
 // requirement above. See node-runtime-guard.mts.
 import './node-runtime-guard.mts';
 
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 
+/** Resolves an installed package's own `bin` entry to an absolute path. */
+export type BinResolver = (packageName: string, binName: string) => string;
+
 /**
  * Resolve an installed package's own `bin` entry to an absolute script
  * path, bypassing the node_modules/.bin platform shim entirely. See the
  * file header for why this replaces a plain `execFileSync('tsc' | 'biome', ...)`
- * call, and why every call to this function must stay inside build().
+ * call, and why every call to this function must stay inside a function
+ * body, never at module top-level.
  */
-function resolveBinScript(packageName: string, binName: string): string {
+export const resolveBinScript: BinResolver = (packageName, binName) => {
   const packageJsonPath = require.resolve(`${packageName}/package.json`);
   const { bin } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
     bin?: string | Record<string, string>;
@@ -83,6 +95,86 @@ function resolveBinScript(packageName: string, binName: string): string {
     );
   }
   return join(dirname(packageJsonPath), relativePath);
+};
+
+/** The outcome of one child process, with output kept as raw bytes. */
+export interface RunResult {
+  readonly error?: Error;
+  readonly signal: NodeJS.Signals | null;
+  readonly status: number | null;
+  readonly stderr: Buffer;
+  readonly stdout: Buffer;
+}
+
+/** Runs one child process synchronously; the seam tests replace. */
+export type ProcessRunner = (
+  command: string,
+  args: readonly string[],
+  options: { readonly cwd: string; readonly input?: Buffer },
+) => RunResult;
+
+// The committed artifacts alone are ~6 MB and `git cat-file --batch` returns
+// all of them on one stream, far above spawnSync's 1 MiB default
+// (ENOBUFS kills the child). Every call here reads only local tool output,
+// so a generous explicit ceiling is safe.
+const MAX_BUFFER_BYTES = 256 * 1024 * 1024;
+
+/** The real runner: no shell, so no PATHEXT lookup and no command-line cap. */
+export const spawnRunner: ProcessRunner = (command, args, options) => {
+  const result = spawnSync(command, [...args], {
+    cwd: options.cwd,
+    input: options.input,
+    maxBuffer: MAX_BUFFER_BYTES,
+  });
+  return {
+    error: result.error,
+    signal: result.signal,
+    status: result.status,
+    stderr: result.stderr ?? Buffer.alloc(0),
+    stdout: result.stdout ?? Buffer.alloc(0),
+  };
+};
+
+/** A failed build or verification step, with the tool output attached. */
+export class StageError extends Error {
+  readonly output: string;
+  readonly stage: string;
+
+  constructor(stage: string, message: string, output = '') {
+    super(message);
+    this.name = 'StageError';
+    this.output = output;
+    this.stage = stage;
+  }
+}
+
+/**
+ * Throw a StageError unless the child ran and exited 0 — the contract
+ * `execFileSync` used to provide (it threw on a spawn error, a signal, and a
+ * non-zero status). tsc writes its diagnostics to stdout, so both streams
+ * go into the error.
+ */
+export function assertSucceeded(
+  stage: string,
+  label: string,
+  result: RunResult,
+): void {
+  if (result.error) {
+    throw new StageError(
+      stage,
+      `${label}: failed to start: ${result.error.message}`,
+    );
+  }
+  if (result.signal !== null) {
+    throw new StageError(stage, `${label}: killed by ${result.signal}`);
+  }
+  if (result.status !== 0) {
+    throw new StageError(
+      stage,
+      `${label}: exited ${result.status}`,
+      `${result.stdout.toString('utf8')}${result.stderr.toString('utf8')}`,
+    );
+  }
 }
 
 const EMITTED_PREFIX = 'TSFILE: ';
@@ -98,7 +190,7 @@ const GENERATED_MARKER_SCAN_BYTES = 200;
 // idd-template/scripts/* entry and the bin/**/*.mjs directory glob in
 // .gitattributes are left untouched — the inventory-ordering completeness
 // guard is likewise scoped to scripts/*.mjs.
-const GITATTRIBUTES_PATH = '.gitattributes';
+export const GITATTRIBUTES_PATH = '.gitattributes';
 const SCRIPTS_DIR = 'scripts';
 const SCRIPT_ATTRIBUTE_PATTERN =
   /^scripts\/[^/]+\.mjs linguist-generated=true$/;
@@ -123,7 +215,7 @@ function scriptAttributeLine(name: string): string {
  * `collectGeneratedSourceBannerViolations` fixed for the same reason
  * (review finding on kurone-kito/idd-skill#3294's own PR #3333).
  */
-function generatedScriptNames(scriptsDir: string): string[] {
+export function generatedScriptNames(scriptsDir: string): string[] {
   return readdirSync(scriptsDir)
     .filter((name) => name.endsWith('.mjs'))
     .filter((name) => {
@@ -171,51 +263,162 @@ export function rewriteGitattributesBlock(
  * Rewrite .gitattributes on disk to match the generated scripts set, writing
  * only when the body changes so `pnpm run build` stays idempotent.
  */
-function syncGitattributes(): void {
-  const original = readFileSync(GITATTRIBUTES_PATH, 'utf8');
+function syncGitattributes(root: string): void {
+  const attributesPath = join(root, GITATTRIBUTES_PATH);
+  const original = readFileSync(attributesPath, 'utf8');
   const updated = rewriteGitattributesBlock(
     original,
-    generatedScriptNames(SCRIPTS_DIR),
+    generatedScriptNames(join(root, SCRIPTS_DIR)),
   );
   if (updated !== original) {
-    writeFileSync(GITATTRIBUTES_PATH, updated);
+    writeFileSync(attributesPath, updated);
   }
 }
 
-/** Emit the .mjs artifacts with tsc, then Biome-normalize only the emitted set. */
-function build(): void {
-  const tscOutput: string = execFileSync(
-    process.execPath,
-    [
-      resolveBinScript('typescript', 'tsc'),
-      '-p',
-      'tsconfig.build.json',
-      '--listEmittedFiles',
-    ],
-    { encoding: 'utf8' },
-  );
+/** Injectable collaborators; the defaults are the real runner and resolver. */
+export interface ToolOptions {
+  readonly resolveBin?: BinResolver;
+  readonly run?: ProcessRunner;
+}
 
-  const emittedFiles: string[] = tscOutput
+/**
+ * Emit the .mjs artifacts with tsc and return its `--listEmittedFiles`
+ * output. With `outDir` the emit is redirected there (`rootDir: src` keeps
+ * the `scripts/` and `bin/` layout beneath it) and nothing in `root` is
+ * written; without it tsc writes into the project's own `outDir` ("."), as
+ * `pnpm run build` does.
+ */
+export function runTsc(
+  root: string,
+  options: ToolOptions & { readonly outDir?: string } = {},
+): string {
+  const { outDir, resolveBin = resolveBinScript, run = spawnRunner } = options;
+  const args = [
+    resolveBin('typescript', 'tsc'),
+    '-p',
+    'tsconfig.build.json',
+    '--listEmittedFiles',
+  ];
+  if (outDir !== undefined) {
+    args.push('--outDir', outDir);
+  }
+  const result = run(process.execPath, args, { cwd: root });
+  assertSucceeded('tsc', 'tsc emit', result);
+  return result.stdout.toString('utf8');
+}
+
+/** The `.mjs` files named by tsc's `--listEmittedFiles` output. */
+export function parseEmittedFiles(tscOutput: string): string[] {
+  return tscOutput
     .split(/\r?\n/)
     .filter((line) => line.startsWith(EMITTED_PREFIX))
     .map((line) => line.slice(EMITTED_PREFIX.length).trim())
     .filter((file) => file.endsWith('.mjs'));
+}
 
-  if (emittedFiles.length > 0) {
-    execFileSync(
-      process.execPath,
-      [
-        resolveBinScript('@biomejs/biome', 'biome'),
-        'check',
-        '--write',
-        ...emittedFiles,
-      ],
-      { stdio: 'inherit' },
-    );
+// One Biome call carries at most this many characters of file arguments. A
+// native Windows process line is capped near 32 767 characters even without a
+// shell, and each argument may gain quotes, so this stays far below it while
+// the emitted-file list keeps growing.
+const BIOME_ARGV_CHARACTER_BUDGET = 8_000;
+
+/**
+ * Split `items` into consecutive chunks whose combined length, counting a
+ * separator and possible quotes per item, stays within `budget`. An item
+ * larger than the budget still gets a chunk of its own.
+ */
+export function chunkByArgumentLength(
+  items: readonly string[],
+  budget = BIOME_ARGV_CHARACTER_BUDGET,
+): string[][] {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let size = 0;
+  for (const item of items) {
+    const cost = item.length + 3;
+    if (current.length > 0 && size + cost > budget) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(item);
+    size += cost;
   }
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+/**
+ * Biome-normalize exactly `files` (never a directory): `build` must not touch
+ * a file tsc did not just produce. Biome runs with `root` as its working
+ * directory so the project's own configuration applies even to a temporary
+ * emit directory outside it. `--vcs-enabled=false` stops VCS ignore rules from
+ * dropping an explicitly listed file (a temp dir under a gitignored `TMPDIR`
+ * otherwise reports "No files were processed"). Returns Biome's output.
+ */
+export function normalizeWithBiome(
+  files: readonly string[],
+  root: string,
+  options: ToolOptions = {},
+): string {
+  const { resolveBin = resolveBinScript, run = spawnRunner } = options;
+  if (files.length === 0) {
+    return '';
+  }
+  const biome = resolveBin('@biomejs/biome', 'biome');
+  let output = '';
+  let failure: StageError | undefined;
+  // Every chunk runs even after one fails, as the single call this replaces
+  // normalized every file it could before reporting: stopping at the first
+  // failing chunk would leave the later artifacts as raw tsc output.
+  for (const chunk of chunkByArgumentLength(files)) {
+    const result = run(
+      process.execPath,
+      [biome, 'check', '--write', '--vcs-enabled=false', ...chunk],
+      { cwd: root },
+    );
+    output += `${result.stdout.toString('utf8')}${result.stderr.toString('utf8')}`;
+    if (result.error || result.signal !== null || result.status === 0) {
+      // A spawn error or signal would repeat for every chunk: throw at once.
+      assertSucceeded('biome', 'biome normalization', result);
+    } else {
+      failure ??= new StageError(
+        'biome',
+        `biome normalization: exited ${result.status}`,
+      );
+    }
+  }
+  if (failure) {
+    throw new StageError(failure.stage, failure.message, output);
+  }
+  return output;
+}
+
+/**
+ * Emit the .mjs artifacts with tsc into `root`, Biome-normalize only the
+ * emitted set, then sync the `.gitattributes` generated block. Returns
+ * Biome's output.
+ */
+export function buildArtifacts(
+  root: string,
+  options: ToolOptions = {},
+): string {
+  const emittedFiles = parseEmittedFiles(runTsc(root, options));
+  const output = normalizeWithBiome(emittedFiles, root, options);
+  syncGitattributes(root);
+  return output;
 }
 
 if (import.meta.main) {
-  build();
-  syncGitattributes();
+  try {
+    process.stdout.write(buildArtifacts(process.cwd()));
+  } catch (error) {
+    if (!(error instanceof StageError)) {
+      throw error;
+    }
+    process.stderr.write(`build: ${error.message}\n${error.output}`);
+    process.exitCode = 1;
+  }
 }
