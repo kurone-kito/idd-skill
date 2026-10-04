@@ -675,6 +675,26 @@ test('repository policy rules accept an independent positive document snapshot',
   );
 });
 
+test('load-control dogfood check ignores JSON property order', () => {
+  const documents = readPositiveFixture();
+  const path = '.github/idd/config.json';
+  const configContents = documents.get(path);
+  assert.ok(configContents);
+  const config = JSON.parse(configContents) as {
+    githubApi: { loadControl: { enabled: boolean; maxConcurrent: number } };
+  };
+  config.githubApi.loadControl = {
+    maxConcurrent: config.githubApi.loadControl.maxConcurrent,
+    enabled: config.githubApi.loadControl.enabled,
+  };
+  documents.set(path, JSON.stringify(config, null, 2));
+
+  assert.deepEqual(
+    collectRepositoryPolicyViolationsFromDocuments(documents),
+    [],
+  );
+});
+
 test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-repository-policy-audit-'));
   t.after(() => rmSync(tempRoot, { recursive: true, force: true }));

@@ -1049,8 +1049,11 @@ const RULES: readonly RuleDefinition[] = [
         fail(REPO_CONFIG, `policy config fails schema: ${errors.join('; ')}`);
       const actual = repo.githubApi?.loadControl;
       if (
-        JSON.stringify(actual) !==
-        JSON.stringify({ enabled: true, maxConcurrent: 4 })
+        typeof actual !== 'object' ||
+        actual === null ||
+        Array.isArray(actual) ||
+        (actual as Record<string, unknown>).enabled !== true ||
+        (actual as Record<string, unknown>).maxConcurrent !== 4
       )
         fail(
           REPO_CONFIG,
