@@ -427,6 +427,10 @@ test('audit-docs runs source contracts for the canonical repository identity', (
       /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
     );
     assert.doesNotMatch(output, /source-origin/u);
+    assert.doesNotMatch(
+      output,
+      /notice: repository-instruction-audit: package identity matched the source repository but origin/u,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -459,14 +463,51 @@ test('audit-docs reports unavailable origin and still runs source contracts', ()
     assert.equal(result.status, 1, output);
     assert.match(
       output,
-      /repository-instruction-audit\.source-origin: package identity matched the source repository but origin URL is unavailable; source checks are still running/u,
+      /notice: repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks/u,
     );
+    assert.doesNotMatch(output, /repository-instruction-audit\.source-origin/u);
+    assert.doesNotMatch(output, /No such remote 'origin'/u);
     assert.match(
       output,
       /repository-instruction-audit\/agent-entry\.canonical-sections: AGENTS\.md/u,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit-docs reports malformed package roots and continues the audit', () => {
+  const cases = [
+    {
+      contents: '{ invalid json',
+      diagnostic: /engines-range-mirrors: package\.json could not be parsed/u,
+    },
+    {
+      contents: 'null',
+      diagnostic: /engines-range-mirrors: package\.json must be a JSON object/u,
+    },
+    {
+      contents: '[]',
+      diagnostic: /engines-range-mirrors: package\.json must be a JSON object/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const root = writeAggregateFixture('canonical');
+    try {
+      writeFileSync(join(root, 'package.json'), testCase.contents);
+      const result = runAggregateAudit(root);
+      const output = `${result.stdout}\n${result.stderr}`;
+      assert.equal(result.status, 1, output);
+      assert.match(output, testCase.diagnostic);
+      assert.doesNotMatch(
+        output,
+        /SyntaxError|TypeError|Cannot read properties|at main \(/u,
+      );
+      assert.match(output, /documentation audit failed/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 

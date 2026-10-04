@@ -287,10 +287,25 @@ async function main(): Promise<void> {
   // those roots intentionally do not carry this repository's instruction
   // corpus. The standalone detector CLI accepts explicit fixture roots.
   const packageJsonPath = join(root, 'package.json');
-  const packageName = existsSync(packageJsonPath)
-    ? (JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { name?: string })
-        .name
-    : undefined;
+  let packageName: string | undefined;
+  if (existsSync(packageJsonPath)) {
+    try {
+      const packageJson: unknown = JSON.parse(
+        readFileSync(packageJsonPath, 'utf8'),
+      );
+      if (
+        typeof packageJson === 'object' &&
+        packageJson !== null &&
+        !Array.isArray(packageJson) &&
+        typeof (packageJson as { name?: unknown }).name === 'string'
+      ) {
+        packageName = (packageJson as { name: string }).name;
+      }
+    } catch {
+      // The package metadata checks below report malformed JSON with a
+      // structured diagnostic; still run the remaining documentation checks.
+    }
+  }
   const isSourcePackage = packageName === '@kurone-kito/idd-skill';
   let sourceOriginNotice: string | null = null;
   if (isSourcePackage) {
@@ -298,17 +313,18 @@ async function main(): Promise<void> {
       const originUrl = execFileSync(
         'git',
         ['-C', root, 'remote', 'get-url', 'origin'],
-        { encoding: 'utf8' },
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
       ).trim();
       if (!isSourceRepositoryOriginUrl(originUrl)) {
         sourceOriginNotice =
           'repository-instruction-audit: package identity matched the source repository but origin is non-canonical; running source checks';
-        notices.push(sourceOriginNotice);
       }
     } catch {
-      errors.push(
-        'repository-instruction-audit.source-origin: package identity matched the source repository but origin URL is unavailable; source checks are still running',
-      );
+      sourceOriginNotice =
+        'repository-instruction-audit: package identity matched the source repository but origin URL is unavailable; running source checks';
+    }
+    if (sourceOriginNotice) {
+      notices.push(sourceOriginNotice);
     }
     errors.push(
       ...collectRepositoryInstructionViolations(root).map(
@@ -1175,14 +1191,23 @@ function checkEnginesRangeMirrors() {
   if (!repoFiles.includes('package.json')) {
     return;
   }
-  let packageJson: { engines?: { node?: unknown } };
+  let packageJson: unknown;
   try {
     packageJson = JSON.parse(readText('package.json'));
   } catch {
     errors.push('engines-range-mirrors: package.json could not be parsed');
     return;
   }
-  if (packageJson.engines?.node === undefined) {
+  if (
+    typeof packageJson !== 'object' ||
+    packageJson === null ||
+    Array.isArray(packageJson)
+  ) {
+    errors.push('engines-range-mirrors: package.json must be a JSON object');
+    return;
+  }
+  const packageObject = packageJson as { engines?: { node?: unknown } };
+  if (packageObject.engines?.node === undefined) {
     // No engines.node declared at all -- nothing for this repo to mirror.
     return;
   }
@@ -1191,7 +1216,7 @@ function checkEnginesRangeMirrors() {
   );
   errors.push(
     ...collectEnginesRangeMirrorViolations(
-      packageJson.engines.node,
+      packageObject.engines.node,
       presentMirrors,
       readText,
     ),
