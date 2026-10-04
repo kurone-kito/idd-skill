@@ -656,6 +656,11 @@ function startsBlockQuoteParagraph(content) {
   return !startsMarkdownLeafBlock(nestedContent);
 }
 function startsMarkdownBlock(line, paragraphOpen = false) {
+  // Indented code cannot interrupt an open paragraph. Keep the original
+  // indentation in this decision before examining tokens after trimStart().
+  if (paragraphOpen && isIndentedCodeBlock(line)) {
+    return false;
+  }
   const content = line.trimStart();
   const listItem = parseListItemMatch(content);
   return (

@@ -798,6 +798,11 @@ function startsBlockQuoteParagraph(content: string): boolean {
 }
 
 function startsMarkdownBlock(line: string, paragraphOpen = false): boolean {
+  // Indented code cannot interrupt an open paragraph. Keep the original
+  // indentation in this decision before examining tokens after trimStart().
+  if (paragraphOpen && isIndentedCodeBlock(line)) {
+    return false;
+  }
   const content = line.trimStart();
   const listItem = parseListItemMatch(content);
   return (

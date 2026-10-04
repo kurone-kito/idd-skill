@@ -14,8 +14,25 @@ import {
   maskMarkdownCodeRegionsPreservingPositions,
   maskMarkdownForScan,
   mergeMarkdownCodeRanges,
+  stripEnclosingListContentIndent,
   stripMarkdownCodeRegions,
 } from '../src/scripts/markdown-code.mts';
+
+test('stripEnclosingListContentIndent recognizes lists after indented code blocks', () => {
+  const body = '    example\n10. outer\n    > Closes #3145';
+  const quoteStart = body.lastIndexOf('    >');
+  const listContent = stripEnclosingListContentIndent(body, quoteStart);
+
+  assert.equal(listContent, '> Closes #3145');
+});
+
+test('stripEnclosingListContentIndent does not treat lazy continuations as code boundaries', () => {
+  const body = 'paragraph\n    continuation\n10. outer\n    > Closes #3145';
+  const quoteStart = body.lastIndexOf('    >');
+  const listContent = stripEnclosingListContentIndent(body, quoteStart);
+
+  assert.equal(listContent, null);
+});
 
 test('stripMarkdownCodeRegions blanks fenced blocks but keeps line count', () => {
   const body = ['before', '~~~', 'inside #1', '~~~', 'after'].join('\n');

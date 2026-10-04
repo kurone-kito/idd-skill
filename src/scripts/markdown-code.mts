@@ -958,6 +958,7 @@ function findEnclosingListContentZone(
   openingLineStart: number,
   containerDepth: number,
   allowOrderedListAtBlockStart = false,
+  indentedCodeRanges?: MarkdownCodeRange[],
 ): ListContentZone | null {
   let openerLineStart: number | null = null;
   let openerContentIndent: number | null = null;
@@ -980,6 +981,8 @@ function findEnclosingListContentZone(
             text,
             lineStart,
             containerDepth,
+            indentedCodeRanges ??
+              findIndentedCodeRanges(text, findFencedCodeRanges(text)),
           )
         : null);
     if (contentIndent !== null) {
@@ -1032,6 +1035,7 @@ function orderedListItemContentIndentAtBlockStart(
   text: string,
   lineStart: number,
   containerDepth: number,
+  indentedCodeRanges: MarkdownCodeRange[],
 ): number | null {
   const line = lineBounds(text, lineStart);
   const parsed = parseContainerLine(text.slice(lineStart, line.end));
@@ -1057,7 +1061,10 @@ function orderedListItemContentIndentAtBlockStart(
     if (previous.content.trim() === '') {
       break;
     }
-    if (isUnambiguousMarkdownBlockStart(previous.content)) {
+    if (
+      isPositionInMarkdownCodeRanges(previousLineStart, indentedCodeRanges) ||
+      isUnambiguousMarkdownBlockStart(previous.content)
+    ) {
       break;
     }
 
@@ -1075,6 +1082,25 @@ function orderedListItemContentIndentAtBlockStart(
   }
 
   return parseListItemContainer(parsed.content);
+}
+
+function isPositionInMarkdownCodeRanges(
+  position: number,
+  ranges: MarkdownCodeRange[],
+): boolean {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = ranges[middle];
+    if (range === undefined || range.end <= position) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  const range = ranges[low];
+  return range !== undefined && range.start <= position;
 }
 
 function isUnambiguousMarkdownBlockStart(content: string): boolean {
@@ -1428,6 +1454,7 @@ export function parseListItemContainer(content: string): number | null {
 export type EnclosingListContentIndentCache = {
   contentIndent: number;
   nextLineStart: number;
+  indentedCodeRanges?: MarkdownCodeRange[];
 };
 
 export function stripEnclosingListContentIndent(
@@ -1435,6 +1462,12 @@ export function stripEnclosingListContentIndent(
   lineStart: number,
   cache?: EnclosingListContentIndentCache,
 ): string | null {
+  const indentedCodeRanges =
+    cache?.indentedCodeRanges ??
+    findIndentedCodeRanges(text, findFencedCodeRanges(text));
+  if (cache && cache.indentedCodeRanges === undefined) {
+    cache.indentedCodeRanges = indentedCodeRanges;
+  }
   const line = lineBounds(text, lineStart);
   const rawLine = text.slice(lineStart, line.end);
   const parsed = parseContainerLine(rawLine);
@@ -1464,7 +1497,13 @@ export function stripEnclosingListContentIndent(
       return relativeLine;
     }
   }
-  const zone = findEnclosingListContentZone(text, lineStart, 0, true);
+  const zone = findEnclosingListContentZone(
+    text,
+    lineStart,
+    0,
+    true,
+    indentedCodeRanges,
+  );
   if (cache) {
     if (zone === null) {
       cache.nextLineStart = -1;
