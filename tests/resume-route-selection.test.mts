@@ -1194,14 +1194,27 @@ const REVIEW_GUARDS: ClosingShape[] = [
 
 function assertClosingShapes(shapes: ClosingShape[]) {
   for (const { id, body, counted } of shapes) {
-    const input = collectResumePrInput([
-      {
-        number: 3150,
-        title: 'closing line shape',
-        body,
-        url: 'https://example.test/pr/3150',
-      },
-    ]);
+    // The table only exercises Markdown handling, so skip the local git
+    // commands the collector would otherwise run for every row.
+    const input = collectRoutingInput({
+      port: createResumeCollectorPort({
+        statusCheckRollup: [],
+        openChangeRequests: [
+          {
+            number: 3150,
+            title: 'closing line shape',
+            body,
+            url: 'https://example.test/pr/3150',
+          },
+        ],
+      }),
+      issueNumber: 3145,
+      loadTrustedConfig: () => null,
+      collectGitState: () => ({
+        hasUnpushedCommits: false,
+        worktreeDirty: false,
+      }),
+    });
     assert.equal(input.prAmbiguous, false, `${id}: ${JSON.stringify(body)}`);
     assert.equal(
       input.prCount,

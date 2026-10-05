@@ -320,6 +320,7 @@ export function collectRoutingInput({
   port,
   issueNumber,
   loadTrustedConfig = loadTrustedIddConfig,
+  collectGitState = collectLocalGitState,
 }: {
   port: ProviderPort;
   issueNumber: number | null;
@@ -329,6 +330,11 @@ export function collectRoutingInput({
     repo: string,
     ref: string,
   ) => IddConfig | null;
+  /** Read the local worktree state; tests inject a fixed state. */
+  collectGitState?: () => {
+    hasUnpushedCommits: boolean;
+    worktreeDirty: boolean;
+  };
 }) {
   const prs = findIssueRelatedOpenPrs({ port, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
@@ -338,7 +344,7 @@ export function collectRoutingInput({
   // 5xx/timeout REST failure before the identical error is re-thrown --
   // transport hygiene (widened resilience), not a distinct call shape.
   const viewerLogin = port.resolveViewerLogin().toLowerCase();
-  const gitState = collectLocalGitState();
+  const gitState = collectGitState();
 
   if (!issuePr) {
     return {
