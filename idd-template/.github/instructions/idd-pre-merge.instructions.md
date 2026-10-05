@@ -416,9 +416,8 @@ never clears by polling: follow its `detail`.
   Disposition-evidence ack-only override: when
   `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` (every
   blocking item is a `missingThreads` entry with
-  `ackOnlyPostDisposition: true`, `missingRegularComments` empty — full
-  condition in `idd-review-triage.instructions.md`'s "Disposition-evidence
-  parity (advisory-only)" paragraph), autopilot may deterministically
+  `ackOnlyPostDisposition: true`, `missingRegularComments` empty),
+  autopilot may deterministically
   override `return-to-e1` and proceed on the current HEAD SHA. Distinct
   from the `reviewCurrency` carve-out above (E1-snapshot staleness) and
   applied by the agent, not `pre-merge-readiness`'s own rollup. The

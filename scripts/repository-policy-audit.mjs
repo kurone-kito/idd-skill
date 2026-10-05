@@ -677,6 +677,50 @@ const RULES = [
     },
   },
   {
+    id: 'review-triage-in-place-edit-only-boundary',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    check({ text }) {
+      for (const path of [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE]) {
+        requirePhrases(path, collapsed(text(path)), [
+          '(`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a stricter subset — not an override path of its own.)',
+        ]);
+      }
+    },
+  },
+  {
+    id: 'review-triage-verify-confirm-boundary',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    check({ text }) {
+      for (const path of [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE]) {
+        requirePhrases(path, collapsed(text(path)), [
+          "A verify-then-confirm reply (analysis before the confirmation verb) isn't recognized, so #2125's override doesn't fire (recognized replies are unaffected).",
+        ]);
+      }
+    },
+  },
+  {
+    id: 'review-triage-repeating-advisory-hold',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    check({ text }) {
+      for (const path of [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE]) {
+        requirePhrases(path, collapsed(text(path)), [
+          "A repeating `missingThreads` entry that's a no-new-content advisory-bot reply needs a hold comment; stop instead of re-posting the disposition (#3324).",
+        ]);
+      }
+    },
+  },
+  {
+    id: 'f2-ack-only-override-condition',
+    paths: F2_FILES,
+    check({ text }) {
+      for (const path of F2_FILES) {
+        requirePhrases(path, collapsed(text(path)), [
+          'when `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` (every blocking item is a `missingThreads` entry with `ackOnlyPostDisposition: true`, `missingRegularComments` empty), autopilot may deterministically override `return-to-e1` and proceed on the current HEAD SHA.',
+        ]);
+      }
+    },
+  },
+  {
     id: 'path-a-verify-before-accept',
     paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
     check({ text }) {
