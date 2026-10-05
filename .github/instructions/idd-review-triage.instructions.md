@@ -11,9 +11,8 @@ file's Cold-start first.
 Before E-phase side effects, apply the [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 **Skip E8**: zero Accepted PATH A → branch-sync if Step 2 was not
-deferred (its `clean`/`behind-no-conflict` exit applies the
-**Zero-Accepted-PATH-A advisory re-review gate**). Missing evidence →
-E1; otherwise continue to E14/E15 in `idd-review-fix.instructions.md`.
+deferred. Missing evidence → E1; otherwise continue to E14/E15 in
+`idd-review-fix.instructions.md`.
 
 ## E4 — Classify and score ReviewItems_snapshot
 
@@ -75,10 +74,8 @@ Then apply path-specific scoring:
   follow-up-issues content (`idd-pr-submit.instructions.md` — mapped
   onto the template's "Follow-up issues" section when one exists), not
   a defect. Edit it at E4 under E12's "PR body sync" safeguards
-  (`idd-review-fix.instructions.md`: claim revalidation first, fetch
-  the full body, edit only this claim, post the full result back,
-  re-check `closingIssuesReferences`), even when E8's zero-Accepted-
-  PATH-A skip bypasses E9-E15 and E12 (`#3495`).
+  (`idd-review-fix.instructions.md`), even when E8's
+  zero-Accepted-PATH-A skip bypasses E9-E15 and E12 (`#3495`).
 
 ## E5 — Record Accept / Reject decisions
 
@@ -243,9 +240,7 @@ reviewer feedback:
   and resolves in one
   call, replying before resolving so a failed reply never leaves a
   silently-resolved thread; the manual REST + GraphQL
-  `resolveReviewThread` sequence is the fallback. Resolving means "agent
-  acted", not "reviewer agreed" — a disagreeing reviewer can reopen the
-  thread, which re-surfaces it in a future E1 pass.
+  `resolveReviewThread` sequence is the fallback.
 - **Exception to immediate resolution**: for a review-thread AMD, leave
   it unresolved (do **NOT** resolve) so F2's "Unresolved threads = 0"
   gate blocks merge until the maintainer responds, and post a separate
@@ -388,26 +383,22 @@ ack / error, as defined in E4):
   action needed". It also doesn't prove no review exists: disposition
   any separate _completed_ review of current HEAD under the
   completed-review rules above.
-- **Helper-first (optional).** When helper runtime is enabled, the
+- **Helper-first (optional).** With helper runtime, the
   `disposition-non-review-notices` helper (see
-  `docs/idd-helper-scripts.md`) detects these notices and emits (dry-run)
-  or posts (`--apply`) the canonical disposition below — marker-first, one
-  per notice, idempotently and fail-closed. The written rule here stays
-  authoritative; the manual `gh api` path is the fallback.
+  `docs/idd-helper-scripts.md`) posts the canonical disposition below with
+  `--apply`. The written rule here stays authoritative; the manual `gh api`
+  path is the fallback.
 - **Disposition it deterministically in the current pass — no
   re-request, no wait.** The notice itself is always `**Rejected**`
   (never `**Accepted**` — it carries no advisory result):
   `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is
   not a completed review (source: #issuecomment-{id})`. Use the bot's
   GitHub login for `{bot}` (e.g. `coderabbitai[bot]`) so the
-  carry-forward rule below can attribute per-bot. A separate _completed_
-  review of current HEAD, if present, is its own snapshot item —
-  disposition that one as `**Accepted**` under the completed-review
-  rules, not this notice. **Re-validate first**: a completed review can
-  race in after the E1 snapshot but before this rejection posts. If it
-  has, disposition that review instead and take a fresh E1 snapshot, so
-  the rejection's later timestamp doesn't filter the completed review
-  out of the next pass.
+  carry-forward rule below can attribute per-bot. **Re-validate first**:
+  a completed review can race in after the E1 snapshot but before this
+  rejection posts. If it has, disposition that review instead and take a
+  fresh E1 snapshot, so the rejection's later timestamp doesn't filter the
+  completed review out of the next pass.
 - **Paraphrase, never reproduce, a bot's trigger or command string in
   `{reason}`.** Advisory bots scan comment bodies for their own
   command-trigger strings even inside code spans, so quoting a bot's
@@ -450,10 +441,9 @@ When helper runtime is enabled, prefer the read-only verifier command:
 idd-review-disposition-verify --items '<json>'
 ```
 
-In the source repository, `node scripts/review-disposition-verify.mjs`
-is equivalent. E7 consumes helper fields `passed`, `items[].passed`,
-`items[].checks`, and `items[].issues`. This helper never posts replies
-or resolves threads: all E6 mutations remain manual and authoritative.
+`docs/idd-helper-scripts.md` covers `review-disposition-verify.mjs` and
+the fields E7 consumes. This helper never posts replies or resolves
+threads: all E6 mutations remain manual and authoritative.
 Discard helper output and apply the written checks below directly if
 execution fails, output is invalid, or it conflicts with observed
 review state.
