@@ -285,7 +285,7 @@ export const NEEDS_DECISION_ROUTE_PINS = [
       'A Tier 2 deferral keeps the required behavior in place and ends only the stop.',
       'the reply names the unavailable check and the follow-up records the claim as unverified',
       'only as the selected review-thread resolution profile allows.',
-      'At S1 and S2 the deferral is one more Reject inside the triage pass: finish the remaining E6 items, then E7 and E8, as after any other Reject.',
+      'At S1 and S2 the deferral is one more Reject inside the triage pass: finish the remaining E5 decisions and E6 replies, then E7 and E8, as after any other Reject.',
       'with the defer-source value `review-needs-decision`',
       '**Rejected** — deferred to follow-up issue #<n> (needs-decision; <check or choice that is open>): <reason>',
       'The fourth distinct follow-up filed from one pull request holds as it does today.',

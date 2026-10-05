@@ -390,8 +390,8 @@ every stop below exactly as it stands.
   reviewer, Triage, Write, Maintain or Admin, the actor-permission cap's
   set. E5 is also where a session unsure of a disposition would ask the
   operator on the spot. A critique-pass finding that is inconclusive
-  stays under the cap and is Rejected with a reasoned reply, so it never
-  held.
+  stays under the cap and is Rejected with a reasoned reply, so that
+  finding is never held.
 - **S2, E6 "Exception".**
   `.github/instructions/idd-review-triage.instructions.md`, E6: a
   CODEOWNER or required-reviewer source, and any inconclusive item, gets
@@ -483,12 +483,13 @@ section, also after a crash-resume. This bounds over-deferral by a weak
 model and the backlog F3 searches (preventive; no observed incident yet).
 
 **Resume.** At S1 and S2 the deferral is one more Reject inside the
-triage pass: finish the remaining E6 items, then E7 and E8, as after any
-other Reject. At S3 and S4, continue at E11 after the record: E11 only
-checks the branch and E12 pushes only what is unpushed, and an E10 or
-Tier stop can leave unpushed E9 commits. Deferred findings leave the E10
-same-findings comparison. After a Tier 3 deferral, all outstanding gaps
-go in one follow-up and further findings of the same domain reuse it.
+triage pass: finish the remaining E5 decisions and E6 replies, then E7
+and E8, as after any other Reject. At S3 and S4, continue at E11 after
+the record: E11 only checks the branch and E12 pushes only what is
+unpushed, and an E10 or Tier stop can leave unpushed E9 commits. Deferred
+findings leave the E10 same-findings comparison. After a Tier 3
+deferral, all outstanding gaps go in one follow-up and further findings
+of the same domain reuse it.
 
 **Recurrence.** First read this pull request's body follow-up section and
 its earlier replies for a follow-up naming the same finding: the same
