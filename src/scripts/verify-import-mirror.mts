@@ -1154,6 +1154,8 @@ function toTokenPattern(line: string): string[] | null {
  * suffix, and each middle piece is found leftmost at least one whole
  * character (code point, so never half of a surrogate pair) after the
  * previous one; leftmost placement leaves the most room for the suffix.
+ * Both inputs are assumed to be well-formed UTF-16 (decoded file text
+ * always is); an unpaired surrogate is not given a meaning here.
  */
 export function matchesTokenPattern(
   line: string,
@@ -1701,11 +1703,12 @@ function readOverlayBaseEntry(
  * switch needs exactly one base flag, and a base flag needs the switch.
  * Each message names the flag and the value it was given.
  */
-function checkOverlayOptions(options: {
-  reportRevertedOverlays: boolean;
-  upstreamBasePath: string | null | undefined;
-  upstreamBaseRef: string | null | undefined;
-}): void {
+function checkOverlayOptions(
+  options: Pick<
+    VerifyOptions,
+    'reportRevertedOverlays' | 'upstreamBasePath' | 'upstreamBaseRef'
+  >,
+): void {
   const basePath = options.upstreamBasePath ?? null;
   const baseRef = options.upstreamBaseRef ?? null;
   if (basePath !== null && baseRef !== null) {
@@ -1738,7 +1741,8 @@ function checkOverlayOptions(options: {
  * the way the new-version input is validated, with messages that name the
  * base flag and its value: a mistyped base would otherwise make every path
  * look absent from the previous version and report an empty, falsely
- * clean result.
+ * clean result. Precondition: {@link checkOverlayOptions} has already run,
+ * so exactly one base flag is set.
  */
 function validateOverlayBase(options: VerifyOptions): void {
   if (options.upstreamBasePath != null) {

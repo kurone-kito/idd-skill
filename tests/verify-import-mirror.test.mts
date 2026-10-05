@@ -1372,6 +1372,19 @@ test('adjacent tokens each take a whole character, never half of a surrogate pai
     matchesTokenPattern(`prefix ${smile}${smile} suffix`, pieces),
     true,
   );
+  // Three adjacent tokens need three whole characters.
+  const three = ['x', '', '', ' y'];
+  assert.equal(matchesTokenPattern(`x${smile}${smile} y`, three), false);
+  assert.equal(matchesTokenPattern(`x${smile}${smile}a y`, three), true);
+  // An astral literal inside a middle piece, and an astral value at the
+  // start or the end.
+  assert.equal(
+    matchesTokenPattern(`a 1 ${smile} 2 z`, ['a ', ` ${smile} `, ' z']),
+    true,
+  );
+  assert.equal(matchesTokenPattern(`${smile} end`, ['', ' end']), true);
+  assert.equal(matchesTokenPattern(' end', ['', ' end']), false);
+  assert.equal(matchesTokenPattern(`start ${smile}`, ['start ', '']), true);
   assert.deepEqual(
     revertedOverlays(
       [`prefix ${smile} suffix`, 'prefix ab suffix', 'prefix a suffix'],

@@ -904,6 +904,8 @@ function toTokenPattern(line) {
  * suffix, and each middle piece is found leftmost at least one whole
  * character (code point, so never half of a surrogate pair) after the
  * previous one; leftmost placement leaves the most room for the suffix.
+ * Both inputs are assumed to be well-formed UTF-16 (decoded file text
+ * always is); an unpaired surrogate is not given a meaning here.
  */
 export function matchesTokenPattern(line, pieces) {
   const first = pieces[0] ?? '';
@@ -1398,7 +1400,8 @@ function checkOverlayOptions(options) {
  * the way the new-version input is validated, with messages that name the
  * base flag and its value: a mistyped base would otherwise make every path
  * look absent from the previous version and report an empty, falsely
- * clean result.
+ * clean result. Precondition: {@link checkOverlayOptions} has already run,
+ * so exactly one base flag is set.
  */
 function validateOverlayBase(options) {
   if (options.upstreamBasePath != null) {
