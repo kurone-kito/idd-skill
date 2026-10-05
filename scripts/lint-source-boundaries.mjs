@@ -327,6 +327,9 @@ function scanComments(source) {
       );
     }
     function recordWhitespace(hasLineTerminator) {
+      if (hasLineTerminator && typescriptAssertionTypeDepth === 0) {
+        typescriptAssertionTypeContext = false;
+      }
       finishCurrentKeyword();
       if (
         pendingRestrictedStatement === null &&
@@ -626,6 +629,7 @@ function scanComments(source) {
       }
       const closesTypescriptAssertionType =
         ch === '>' &&
+        lastCodeChar !== '=' &&
         typescriptAssertionTypeContext &&
         typescriptAssertionTypeDepth > 0;
       if (closesTypescriptAssertionType) {

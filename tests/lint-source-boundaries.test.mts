@@ -782,6 +782,33 @@ for (const { name, source } of prefixNotRegexSources) {
   });
 }
 
+test('division after an arrow type in a TypeScript assertion leaves comments hidden', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      `const value = maybe as Array<(s: string) => boolean> / /* import('left-pad') */ 2;\n`,
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 0, stderr);
+});
+
+test('a multiline TypeScript assertion does not hide a later bare import', () => {
+  const source = [
+    'const n = value as number',
+    'if (n < limit) items.map((s) => /[/*]/.test(s));',
+    "import bare from 'yaml'; /* closes any misread regex comment */",
+    '',
+  ].join('\n');
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /yaml/);
+});
+
 const identifierKeywordPrefixes: {
   name: string;
   source: (specifier: string) => string;

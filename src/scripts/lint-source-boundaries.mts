@@ -399,6 +399,9 @@ function scanComments(source: string): {
     }
 
     function recordWhitespace(hasLineTerminator: boolean): void {
+      if (hasLineTerminator && typescriptAssertionTypeDepth === 0) {
+        typescriptAssertionTypeContext = false;
+      }
       finishCurrentKeyword();
       if (
         pendingRestrictedStatement === null &&
@@ -712,6 +715,7 @@ function scanComments(source: string): {
       }
       const closesTypescriptAssertionType =
         ch === '>' &&
+        lastCodeChar !== '=' &&
         typescriptAssertionTypeContext &&
         typescriptAssertionTypeDepth > 0;
       if (closesTypescriptAssertionType) {
