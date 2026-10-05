@@ -400,19 +400,19 @@ test('CLI audit checks helper wrapper migration using scratch sources', () => {
   }
 });
 
+function writeHelpFlagSources(root: string): void {
+  for (const helper of COVERED_HELPERS) {
+    write(root, `src/scripts/${helper}.mts`, 'const HELPER_FLAG_SPEC = {};\n');
+  }
+  for (const { helper } of EXCLUDED_HELPERS) {
+    write(root, `src/scripts/${helper}.mts`, 'export {};\n');
+  }
+}
+
 test('CLI audit checks help-flag coverage against scratch source fixtures', () => {
   const temp = fixture();
   try {
-    for (const helper of COVERED_HELPERS) {
-      write(
-        temp.root,
-        `src/scripts/${helper}.mts`,
-        'const HELPER_FLAG_SPEC = {};\n',
-      );
-    }
-    for (const { helper } of EXCLUDED_HELPERS) {
-      write(temp.root, `src/scripts/${helper}.mts`, 'export {};\n');
-    }
+    writeHelpFlagSources(temp.root);
     assertPass(runAudit(temp.root, 'help-flag-coverage'));
 
     const excluded = EXCLUDED_HELPERS[0];
