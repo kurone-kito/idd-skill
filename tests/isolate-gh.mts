@@ -167,8 +167,12 @@ function safeArguments(args: readonly unknown[]): string[] {
     const optionAndValue = /^(--?[A-Za-z0-9-]+)=(.*)$/u.exec(argument);
     if (optionAndValue) {
       const [, option, optionValue] = optionAndValue;
+      const sensitiveOption =
+        /^--?(?:token|password|secret|authorization|auth-token|access-token|client-secret)$/iu.test(
+          option ?? '',
+        );
       safe.push(
-        `${option}=${containsCredential(optionValue ?? '') ? '[redacted]' : '[value]'}`,
+        `${option}=${sensitiveOption || containsCredential(optionValue ?? '') ? '[redacted]' : '[value]'}`,
       );
       continue;
     }
@@ -220,9 +224,13 @@ function shellPayload(
       base,
     )
   ) {
+    const isPosixShell = ['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base);
     for (let index = 0; index < args.length; index += 1) {
-      const argument = String(args[index]);
-      if (['-c', '/c', '-command'].includes(argument.toLowerCase())) {
+      const argument = String(args[index]).toLowerCase();
+      if (
+        ['-c', '/c', '-command'].includes(argument) ||
+        (isPosixShell && /^-[a-z]*c$/u.test(argument))
+      ) {
         return args
           .slice(index + 1)
           .map(String)
@@ -1045,11 +1053,12 @@ function shellContainsUnexpectedGh(
   }
   const tokens =
     parsedSource.match(
-      /"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||[;&|(){}\n]|[^\s;&|(){}\n]+/gu,
+      /"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||(?:[0-9]+)?(?:<<<|<<-|>>|<<|<>|>&|<&|[<>])|[;&|(){}\n]|[^\s;&|(){}<>\n]+/gu,
     ) ?? [];
   let commandPosition = true;
   let wrapper: string | null = null;
   let skipWrapperArgument = false;
+  let skipRedirectionTarget = false;
   let envOption: 'unset' | 'split' | null = null;
   let effectiveEnv = { ...(env ?? process.env) };
   for (const token of tokens) {
@@ -1057,11 +1066,20 @@ function shellContainsUnexpectedGh(
       commandPosition = true;
       wrapper = null;
       skipWrapperArgument = false;
+      skipRedirectionTarget = false;
       envOption = null;
       effectiveEnv = { ...(env ?? process.env) };
       continue;
     }
     if (!commandPosition) continue;
+    if (skipRedirectionTarget) {
+      skipRedirectionTarget = false;
+      continue;
+    }
+    if (/^(?:[0-9]+)?(?:<<<|<<-|>>|<<|<>|>&|<&|[<>])$/u.test(token)) {
+      skipRedirectionTarget = true;
+      continue;
+    }
     const word = token.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2');
     if (wrapper === 'env' && envOption === 'unset') {
       const key =
@@ -1094,21 +1112,85 @@ function shellContainsUnexpectedGh(
       wrapper = null;
       continue;
     }
-    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(word);
-    if (assignment) {
-      if (wrapper === 'env') {
-        const key =
-          process.platform === 'win32'
-            ? (Object.keys(effectiveEnv).find(
-                (entry) => entry.toLowerCase() === assignment[1]?.toLowerCase(),
-              ) ?? assignment[1])
-            : assignment[1];
-        if (key) effectiveEnv[key] = assignment[2] ?? '';
-      }
+    if (skipWrapperArgument) {
+      skipWrapperArgument = false;
       continue;
     }
-    if (wrapper === 'env' && skipWrapperArgument) {
-      skipWrapperArgument = false;
+    if (wrapper === 'command-lookup') {
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (word === '!') continue;
+    if (wrapper === 'command' && (word === '-v' || word === '-V')) {
+      wrapper = 'command-lookup';
+      continue;
+    }
+    if (wrapper === 'command' || wrapper === 'exec') {
+      if (word === '--') continue;
+      if (word.startsWith('-')) {
+        skipWrapperArgument = wrapper === 'exec' && word === '-a';
+        continue;
+      }
+    }
+    if (wrapper === 'sudo') {
+      if (word === '--') continue;
+      if (word.startsWith('--') && word.includes('=')) continue;
+      if (word.startsWith('-')) {
+        skipWrapperArgument = [
+          '-C',
+          '-D',
+          '-g',
+          '-h',
+          '-p',
+          '-R',
+          '-r',
+          '-t',
+          '-T',
+          '-U',
+          '-u',
+          '--chdir',
+          '--close-from',
+          '--command-timeout',
+          '--group',
+          '--host',
+          '--other-user',
+          '--prompt',
+          '--role',
+          '--type',
+          '--user',
+        ].includes(word);
+        continue;
+      }
+    }
+    if (wrapper === 'time') {
+      if (word === '--') continue;
+      if (
+        word === '-f' ||
+        word === '-o' ||
+        word === '--format' ||
+        word === '--output'
+      ) {
+        skipWrapperArgument = true;
+        continue;
+      }
+      if (word.startsWith('--format=') || word.startsWith('--output=')) {
+        continue;
+      }
+      if (word.startsWith('-')) continue;
+    }
+    if (wrapper === 'nohup' && (word === '--' || word.startsWith('-'))) {
+      continue;
+    }
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(word);
+    if (assignment) {
+      const key =
+        process.platform === 'win32'
+          ? (Object.keys(effectiveEnv).find(
+              (entry) => entry.toLowerCase() === assignment[1]?.toLowerCase(),
+            ) ?? assignment[1])
+          : assignment[1];
+      if (key) effectiveEnv[key] = assignment[2] ?? '';
       continue;
     }
     if (
@@ -1532,16 +1614,30 @@ class GuardedWorker extends OriginalWorker {
         }
       }
     }
-    const execArgv = [...(options.execArgv ?? process.execArgv)];
-    const hasBridgePreload = execArgv.some(
-      (argument, index) =>
-        argument === `--import=${workerBridgeUrl}` ||
-        (argument === '--import' && execArgv[index + 1] === workerBridgeUrl) ||
-        argument === `--require=${workerBridgePath}` ||
-        (argument === '--require' && execArgv[index + 1] === workerBridgePath),
-    );
+    let workerExecArgv =
+      options.execArgv === undefined ? undefined : [...options.execArgv];
+    const execArgv = [...(workerExecArgv ?? process.execArgv)];
+    const hasBridgePreload =
+      execArgv.some(
+        (argument, index) =>
+          argument === `--import=${workerBridgeUrl}` ||
+          (argument === '--import' &&
+            execArgv[index + 1] === workerBridgeUrl) ||
+          argument === `--require=${workerBridgePath}` ||
+          (argument === '--require' &&
+            execArgv[index + 1] === workerBridgePath),
+      ) ||
+      (env !== workerThreads.SHARE_ENV &&
+        (env.NODE_OPTIONS ?? '').includes(normalizedWorkerBridgePath));
     if (options.eval !== true && !hasBridgePreload) {
-      execArgv.push(`--import=${workerBridgeUrl}`);
+      if (workerExecArgv === undefined && env !== workerThreads.SHARE_ENV) {
+        env.NODE_OPTIONS = env.NODE_OPTIONS
+          ? `${env.NODE_OPTIONS} --import=${workerBridgeUrl}`
+          : `--import=${workerBridgeUrl}`;
+      } else {
+        execArgv.push(`--import=${workerBridgeUrl}`);
+        workerExecArgv = execArgv;
+      }
     }
     const source =
       options.eval === true
@@ -1550,7 +1646,7 @@ class GuardedWorker extends OriginalWorker {
     super(source, {
       ...options,
       eval: options.eval === true,
-      execArgv,
+      ...(workerExecArgv === undefined ? {} : { execArgv: workerExecArgv }),
       env,
     });
   }

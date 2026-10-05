@@ -55,7 +55,10 @@ test('caught unexpected real gh attempts still fail their owning process', () =>
     mkdirSync(registeredFixtureBin, { recursive: true });
     mkdirSync(unregisteredBin, { recursive: true });
     mkdirSync(missingPathCwd, { recursive: true });
-    writeFileSync(registeredPathFixtureGh, '#!/bin/sh\nexit 0\n', 'utf8');
+    writeFileSync(registeredPathFixtureGh, '#!/bin/sh\nexit 0\n', {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
     writeFileSync(unregisteredGh, '#!/bin/sh\nexit 0\n', 'utf8');
     writeFileSync(missingPathGh, '#!/bin/sh\nexit 0\n', 'utf8');
   }
@@ -94,6 +97,12 @@ const calls = [
         ['spawnSync shell line continuation substitution', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify(continuedCommentCommand)}])],
         ['spawnSync unquoted here-document substitution', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'\nEOF")}])],
         ['spawnSync unterminated here-document substitution', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'")}])],
+        ['spawnSync shell bundled command flag', () => childProcess.spawnSync(shell, ['-lc', 'gh api repos/o/r'])],
+        ['spawnSync shell command wrapper options', () => childProcess.spawnSync(shell, [shellFlag, 'command -p gh api repos/o/r'])],
+        ['spawnSync shell sudo wrapper options', () => childProcess.spawnSync(shell, [shellFlag, 'sudo -u nobody gh api repos/o/r'])],
+        ['spawnSync shell negation operator', () => childProcess.spawnSync(shell, [shellFlag, '! gh api repos/o/r'])],
+        ['spawnSync shell output redirection before command', () => childProcess.spawnSync(shell, [shellFlag, '>redirect-target gh api repos/o/r'])],
+        ['spawnSync shell input redirection before command', () => childProcess.spawnSync(shell, [shellFlag, '<redirect-source gh api repos/o/r'])],
       ]),
   ...(process.platform === 'win32'
     ? [['spawnSync PowerShell substitution', () => childProcess.spawnSync('pwsh', ['-Command', 'Write-Output "$(gh api repos/o/r)"'])]]
@@ -104,6 +113,7 @@ const calls = [
   ['execFile null args placeholder', () => childProcess.execFile('printf ok && gh api repos/o/r', null, { shell: true })],
   ['execFileSync undefined args placeholder', () => childProcess.execFileSync('printf ok && gh api repos/o/r', undefined, { shell: true })],
   ['fork null args placeholder', () => childProcess.fork('unused-worker.cjs', null, { execPath: ${JSON.stringify(missingGhPath)} }).on('error', () => {})],
+  ['execFileSync equals token', () => childProcess.execFileSync(${JSON.stringify(missingGhPath)}, ['--token=secret-token-value'])],
 ];
 for (const [name, call] of calls) {
   try {
@@ -132,6 +142,12 @@ if (process.platform !== 'win32') {
   } catch {
     process.exitCode = 4;
   }
+  const pathAssignmentResult = childProcess.spawnSync(
+    shell,
+    [shellFlag, 'PATH=' + ${JSON.stringify(registeredFixtureBin)} + ' gh --version'],
+    { env: { ...process.env, PATH: ${JSON.stringify(unregisteredBin)} } },
+  );
+  if (pathAssignmentResult.status !== 0) process.exitCode = 4;
 } else {
   try {
     childProcess.spawnSync(process.env.ComSpec || 'cmd.exe', ['/c', 'echo $(gh api repos/o/r)']);
@@ -194,6 +210,12 @@ if (process.platform !== 'win32') {
             'spawnSync',
             'spawnSync',
             'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
           ]),
       ...(process.platform === 'win32' ? ['spawnSync'] : []),
       'spawnSync',
@@ -202,6 +224,7 @@ if (process.platform !== 'win32') {
       'execFile',
       'execFileSync',
       'fork',
+      'execFileSync',
     ];
     assert.deepEqual(
       readAttempts(ledgerPath).map((attempt) => attempt.api),
@@ -209,6 +232,11 @@ if (process.platform !== 'win32') {
     );
     const attempts = readAttempts(ledgerPath);
     assert.deepEqual(attempts[1]?.args, ['--token', '[redacted]']);
+    const equalsTokenAttempt = attempts.find(
+      (attempt) =>
+        Array.isArray(attempt.args) && attempt.args[0] === '--token=[redacted]',
+    );
+    assert.deepEqual(equalsTokenAttempt?.args, ['--token=[redacted]']);
     assert.deepEqual(attempts[2]?.args, ['[shell command omitted]']);
     if (process.platform !== 'win32') {
       assert.deepEqual(attempts[9]?.args, [
@@ -268,7 +296,10 @@ test('Worker guards honor nullish child-process argument placeholders', async ()
   if (process.platform !== 'win32') {
     mkdirSync(registeredBin, { recursive: true });
     mkdirSync(unregisteredBin, { recursive: true });
-    writeFileSync(registeredGh, '#!/bin/sh\nexit 0\n', 'utf8');
+    writeFileSync(registeredGh, '#!/bin/sh\nexit 0\n', {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
     writeFileSync(unregisteredGh, '#!/bin/sh\nexit 0\n', 'utf8');
   }
   const continuedCommentCommand = ['echo x\\', '# "$(gh api repos/o/r)"'].join(
@@ -294,6 +325,13 @@ const calls = [
     ['spawnSync shell line continuation substitution', () => childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify(continuedCommentCommand)}])],
     ['spawnSync unquoted here-document substitution', () => childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'\nEOF")}])],
     ['spawnSync unterminated here-document substitution', () => childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'")}])],
+    ['spawnSync shell bundled command flag', () => childProcess.spawnSync('/bin/sh', ['-lc', 'gh api repos/o/r'])],
+    ['spawnSync shell command wrapper options', () => childProcess.spawnSync('/bin/sh', ['-c', 'command -p gh api repos/o/r'])],
+    ['spawnSync shell sudo wrapper options', () => childProcess.spawnSync('/bin/sh', ['-c', 'sudo -u nobody gh api repos/o/r'])],
+    ['spawnSync shell negation operator', () => childProcess.spawnSync('/bin/sh', ['-c', '! gh api repos/o/r'])],
+    ['spawnSync shell output redirection before command', () => childProcess.spawnSync('/bin/sh', ['-c', '>redirect-target gh api repos/o/r'])],
+    ['spawnSync shell input redirection before command', () => childProcess.spawnSync('/bin/sh', ['-c', '<redirect-source gh api repos/o/r'])],
+    ['spawnSync shell PATH assignment override', () => childProcess.spawnSync('/bin/sh', ['-c', 'PATH=' + ${JSON.stringify(unregisteredBin)} + ' gh api repos/o/r'], { env: { ...process.env, PATH: ${JSON.stringify(registeredBin)} } })],
   ]),
   ...(process.platform === 'win32'
     ? [['spawnSync PowerShell substitution', () => childProcess.spawnSync('pwsh', ['-Command', 'Write-Output "$(gh api repos/o/r)"'])]]
@@ -382,6 +420,13 @@ parentPort.close();
               'spawnSync shell line continuation substitution',
               'spawnSync unquoted here-document substitution',
               'spawnSync unterminated here-document substitution',
+              'spawnSync shell bundled command flag',
+              'spawnSync shell command wrapper options',
+              'spawnSync shell sudo wrapper options',
+              'spawnSync shell negation operator',
+              'spawnSync shell output redirection before command',
+              'spawnSync shell input redirection before command',
+              'spawnSync shell PATH assignment override',
               'env split separator literal',
               'quoted here-document literal',
             ]),
@@ -413,6 +458,13 @@ parentPort.close();
         ...(process.platform === 'win32'
           ? []
           : [
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
               'spawnSync',
               'spawnSync',
               'spawnSync',
@@ -567,17 +619,26 @@ test('NODE_OPTIONS guards a Worker with empty execArgv and shares its ledger', a
   const workerSource = `
 const { parentPort, workerData } = require('node:worker_threads');
 const { spawnSync } = require('node:child_process');
+let attemptId;
 try {
   const result = spawnSync(workerData.ghPath, []);
   parentPort.postMessage({ returned: true, error: result.error?.code });
 } catch (error) {
-  parentPort.postMessage({
-    attemptId: error.iddGhGuardAttemptId,
-    filename: __filename,
-    dirname: __dirname,
-    argv: process.argv,
-  });
+  attemptId = error.iddGhGuardAttemptId;
 }
+let tokenAttemptId;
+try {
+  spawnSync(workerData.ghPath, ['--token=worker-secret-value']);
+} catch (error) {
+  tokenAttemptId = error.iddGhGuardAttemptId;
+}
+parentPort.postMessage({
+  attemptId,
+  tokenAttemptId,
+  filename: __filename,
+  dirname: __dirname,
+  argv: process.argv,
+});
 `;
   try {
     const worker = new Worker(workerSource, {
@@ -607,12 +668,77 @@ try {
 
     assert.equal(exitCode, 0);
     assert.match(String(message.attemptId), /^gh-/u);
+    assert.match(String(message.tokenAttemptId), /^gh-/u);
     assert.equal(message.filename, '[worker eval]');
     assert.equal(message.dirname, '.');
     assert.equal((message.argv as unknown[])[1], '[worker eval]');
-    const [attempt] = readAttempts(ledgerPath);
+    const attempts = readAttempts(ledgerPath);
+    const [attempt, tokenAttempt] = attempts;
+    assert.equal(attempts.length, 2);
     assert.equal(attempt?.api, 'spawnSync');
     assert.ok(Number(attempt?.threadId) > 0);
+    assert.deepEqual(tokenAttempt?.args, ['--token=[redacted]']);
+    assert.doesNotMatch(
+      readFileSync(ledgerPath, 'utf8'),
+      /worker-secret-value/u,
+    );
+  } finally {
+    rmSync(guardRoot, { recursive: true, force: true });
+  }
+});
+
+test('a guarded Worker adds the bridge to children when its env omits NODE_OPTIONS', async () => {
+  const guardRoot = mkdtempSync(
+    join(tmpdir(), 'idd-gh-guard-worker-child-test-'),
+  );
+  const ledgerPath = join(guardRoot, 'attempts.jsonl');
+  const missingGhPath = join(
+    guardRoot,
+    'missing',
+    process.platform === 'win32' ? 'gh.exe' : 'gh',
+  );
+  const workerSource = `
+const { parentPort, workerData } = require('node:worker_threads');
+const { spawnSync } = require('node:child_process');
+const childSource = 'require("node:child_process").spawnSync(' + JSON.stringify(workerData.ghPath) + ', []);';
+const result = spawnSync(process.execPath, ['-e', childSource], { encoding: 'utf8' });
+parentPort.postMessage({ status: result.status, stderr: result.stderr });
+`;
+  try {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (key.toLowerCase() === 'node_options') delete env[key];
+    }
+    env.IDD_TEST_GH_GUARD_LEDGER = ledgerPath;
+    env.IDD_TEST_GH_GUARD_SELF_CHECK = '0';
+    const worker = new Worker(workerSource, {
+      eval: true,
+      execArgv: [],
+      env,
+      workerData: { ghPath: missingGhPath },
+    });
+    const [message, exitCode] = await Promise.all([
+      new Promise<{ status: number | null; stderr: string }>(
+        (resolve, reject) => {
+          worker.once('message', resolve);
+          worker.once('error', reject);
+        },
+      ),
+      new Promise<number>((resolve, reject) => {
+        worker.once('error', reject);
+        worker.once('exit', resolve);
+      }),
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(message.status, 1, message.stderr);
+    assert.match(
+      message.stderr,
+      /blocked unexpected (?:worker gh|real gh) invocation/u,
+    );
+    const [attempt] = readAttempts(ledgerPath);
+    assert.equal(attempt?.api, 'spawnSync');
+    assert.equal(attempt?.threadId, 0);
   } finally {
     rmSync(guardRoot, { recursive: true, force: true });
   }

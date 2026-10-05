@@ -99,9 +99,13 @@ function shellPayload(command, args, options) {
       base,
     )
   ) {
+    const isPosixShell = ['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base);
     for (let index = 0; index < args.length; index += 1) {
       const argument = String(args[index]).toLowerCase();
-      if (['-c', '/c', '-command'].includes(argument)) {
+      if (
+        ['-c', '/c', '-command'].includes(argument) ||
+        (isPosixShell && /^-[a-z]*c$/u.test(argument))
+      ) {
         return args
           .slice(index + 1)
           .map(String)
@@ -831,11 +835,12 @@ function shellGhCommand(command, env, flavor = 'posix') {
   }
   const tokens =
     parsedSource.match(
-      /"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||[;&|(){}\n]|[^\s;&|(){}\n]+/gu,
+      /"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||(?:[0-9]+)?(?:<<<|<<-|>>|<<|<>|>&|<&|[<>])|[;&|(){}\n]|[^\s;&|(){}<>\n]+/gu,
     ) ?? [];
   let commandPosition = true;
   let wrapper = null;
   let skipWrapperArgument = false;
+  let skipRedirectionTarget = false;
   let envOption = null;
   let effectiveEnv = { ...(env ?? process.env) };
   for (const token of tokens) {
@@ -843,12 +848,21 @@ function shellGhCommand(command, env, flavor = 'posix') {
       commandPosition = true;
       wrapper = null;
       skipWrapperArgument = false;
+      skipRedirectionTarget = false;
       envOption = null;
       effectiveEnv = { ...(env ?? process.env) };
       continue;
     }
     if (!commandPosition) continue;
     const word = token.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2');
+    if (skipRedirectionTarget) {
+      skipRedirectionTarget = false;
+      continue;
+    }
+    if (/^(?:[0-9]+)?(?:<<<|<<-|>>|<<|<>|>&|<&|[<>])$/u.test(token)) {
+      skipRedirectionTarget = true;
+      continue;
+    }
     if (wrapper === 'env' && envOption === 'unset') {
       delete effectiveEnv[word];
       if (
@@ -872,15 +886,85 @@ function shellGhCommand(command, env, flavor = 'posix') {
       wrapper = null;
       continue;
     }
-    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(word);
-    if (assignment) {
-      if (wrapper === 'env' || commandPosition) {
-        effectiveEnv[assignment[1]] = assignment[2] ?? '';
-      }
+    if (skipWrapperArgument) {
+      skipWrapperArgument = false;
       continue;
     }
-    if (wrapper === 'env' && skipWrapperArgument) {
-      skipWrapperArgument = false;
+    if (wrapper === 'command-lookup') {
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (word === '!') continue;
+    if (wrapper === 'command' && (word === '-v' || word === '-V')) {
+      wrapper = 'command-lookup';
+      continue;
+    }
+    if (wrapper === 'command' || wrapper === 'exec') {
+      if (word === '--') continue;
+      if (word.startsWith('-')) {
+        skipWrapperArgument = wrapper === 'exec' && word === '-a';
+        continue;
+      }
+    }
+    if (wrapper === 'sudo') {
+      if (word === '--') continue;
+      if (word.startsWith('--') && word.includes('=')) continue;
+      if (word.startsWith('-')) {
+        skipWrapperArgument = [
+          '-C',
+          '-D',
+          '-g',
+          '-h',
+          '-p',
+          '-R',
+          '-r',
+          '-t',
+          '-T',
+          '-U',
+          '-u',
+          '--chdir',
+          '--close-from',
+          '--command-timeout',
+          '--group',
+          '--host',
+          '--other-user',
+          '--prompt',
+          '--role',
+          '--type',
+          '--user',
+        ].includes(word);
+        continue;
+      }
+    }
+    if (wrapper === 'time') {
+      if (word === '--') continue;
+      if (
+        word === '-f' ||
+        word === '-o' ||
+        word === '--format' ||
+        word === '--output'
+      ) {
+        skipWrapperArgument = true;
+        continue;
+      }
+      if (word.startsWith('--format=') || word.startsWith('--output=')) {
+        continue;
+      }
+      if (word.startsWith('-')) continue;
+    }
+    if (wrapper === 'nohup' && (word === '--' || word.startsWith('-'))) {
+      continue;
+    }
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(word);
+    if (assignment) {
+      const key =
+        process.platform === 'win32'
+          ? (Object.keys(effectiveEnv).find(
+              (entry) => entry.toLowerCase() === assignment[1].toLowerCase(),
+            ) ?? assignment[1])
+          : assignment[1];
+      effectiveEnv[key] = assignment[2] ?? '';
       continue;
     }
     if (
@@ -972,8 +1056,12 @@ function safeArgs(args) {
     const optionAndValue = /^(--?[A-Za-z0-9-]+)=(.*)$/u.exec(argument);
     if (optionAndValue) {
       const [, option, optionValue] = optionAndValue;
+      const sensitiveOption =
+        /^--?(?:token|password|secret|authorization|auth-token|access-token|client-secret)$/iu.test(
+          option ?? '',
+        );
       values.push(
-        `${option}=${/(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b[A-Za-z_][A-Za-z0-9_]*(?:token|password|secret|authorization|key)=\S+)/iu.test(optionValue ?? '') ? '[redacted]' : '[value]'}`,
+        `${option}=${sensitiveOption || /(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b[A-Za-z_][A-Za-z0-9_]*(?:token|password|secret|authorization|key)=\S+)/iu.test(optionValue ?? '') ? '[redacted]' : '[value]'}`,
       );
       continue;
     }
@@ -1027,6 +1115,7 @@ function blockIfGh(api, command, args, options) {
     if (isRegisteredFixture(command, options?.env)) {
       const shell = shellPayload(command, args, options);
       if (shell === null) return;
+      shellInvocation = true;
       ghCommand = shellGhCommand(
         shell,
         options?.env,
@@ -1060,6 +1149,7 @@ function blockIfGh(api, command, args, options) {
     if (!ghCommand && !wrappedExecutable) {
       const shell = shellPayload(command, args, options);
       if (shell !== null) {
+        shellInvocation = true;
         ghCommand = shellGhCommand(
           shell,
           options?.env,
@@ -1082,14 +1172,15 @@ function blockIfGh(api, command, args, options) {
       },
     );
   }
-  const resolved = unresolvedEnvChain
-    ? null
-    : direct
-      ? resolvedGh(command, env)
-      : resolvedGh(
-          wrappedExecutable ?? ghCommand,
-          unwrapEnvChain(command, args, env).env,
-        );
+  const resolved =
+    unresolvedEnvChain || shellInvocation
+      ? null
+      : direct
+        ? resolvedGh(command, env)
+        : resolvedGh(
+            wrappedExecutable ?? ghCommand,
+            unwrapEnvChain(command, args, env).env,
+          );
   const expected =
     resolved === null
       ? null
@@ -1142,8 +1233,7 @@ function blockIfGh(api, command, args, options) {
 function addGuardToOptions(options, addImport) {
   const hasOptions =
     options !== null && typeof options === 'object' && !Array.isArray(options);
-  if (!addImport && !hasOptions) options = {};
-  if (addImport && !hasOptions) return options;
+  if (!hasOptions) options = {};
   const record = hasOptions ? options : {};
   const env = { ...(record.env ?? process.env) };
   for (const name of [

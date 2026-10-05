@@ -42,10 +42,12 @@
  *
  * GitHub CLI guard: create a separate per-file ledger and load the ESM
  * `isolate-gh.mts` guard in this process. Add it with `NODE_OPTIONS --import`
- * for child CLIs; its Worker wrapper passes a small CommonJS bridge directly
- * to each Worker, including those with `execArgv: []`, and carries the ledger
- * into an explicit Worker `env`. The guard checks the ledger before this
- * module's state-root cleanup runs.
+ * for child CLIs; its Worker wrapper passes a small CommonJS bridge through
+ * explicit `execArgv` or inherited `NODE_OPTIONS`, including Workers with
+ * `execArgv: []`. The bridge adds itself to a nested child CLI's environment
+ * even when the Worker received an explicit `env` without `NODE_OPTIONS`,
+ * and carries the ledger into that Worker. The guard checks the ledger
+ * before this module's state-root cleanup runs.
  *
  * Known limits: running one file by hand with plain `node --test` bypasses
  * both guards (preventive; no observed incident yet; the observed probe leak
