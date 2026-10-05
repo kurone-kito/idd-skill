@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import {
   collectRepositoryPolicyViolationsFromDocuments,
   NEEDS_DECISION_ROUTE_PINS,
+  REVIEW_TRIAGE_DONOR_PINS,
   type RepositoryPolicyDocuments,
   repositoryPolicyRuleIds,
   repositoryPolicyRulePaths,
@@ -46,6 +47,12 @@ interface RuleViolationMutation {
   contents: string;
   diagnosticPath?: string;
 }
+
+const PINNED_CLAUSE_GROUPS = [
+  ...NEEDS_DECISION_ROUTE_PINS,
+  ...REVIEW_TRIAGE_DONOR_PINS,
+  ...WHOLE_CLASS_SWEEP_PINS,
+];
 
 function readPositiveFixture(): Map<string, string> {
   const parsed = JSON.parse(readFileSync(POSITIVE_FIXTURE, 'utf8')) as unknown;
@@ -692,31 +699,19 @@ function makeRuleViolation(
         "reuse D3.6's checklist",
       );
     default: {
-      // The needs-decision route rules are generated from one table; deleting
-      // the first pinned phrase from the first path is their targeted fixture
+      // The pinned-clause rules are generated from one table; deleting the
+      // first pinned phrase from the first path is their targeted fixture
       // (the per-phrase test below deletes every phrase from the real files).
-      const group = NEEDS_DECISION_ROUTE_PINS.find(
+      // The whole-class sweep pins a wrapped bullet, so the phrase is deleted
+      // whitespace-tolerantly.
+      const group = PINNED_CLAUSE_GROUPS.find(
         (candidate) => candidate.id === ruleId,
       );
       if (group !== undefined) {
-        return replaceFixtureTextEverywhere(
-          documents,
-          group.paths[0],
-          group.phrases[0],
-          '',
-        );
-      }
-      // The whole-class sweep rules pin a wrapped bullet, so the targeted
-      // fixture deletes the first pinned phrase whitespace-tolerantly from
-      // the first path's bullet.
-      const sweepGroup = WHOLE_CLASS_SWEEP_PINS.find(
-        (candidate) => candidate.id === ruleId,
-      );
-      if (sweepGroup !== undefined) {
-        const path = sweepGroup.paths[0];
+        const path = group.paths[0];
         const original = documents.get(path);
         assert.ok(original, `${path} must be covered by the positive fixture`);
-        const mutated = deletePhrase(original, sweepGroup.phrases[0]);
+        const mutated = deletePhrase(original, group.phrases[0]);
         assert.notEqual(mutated, null, `${path} must hold the pinned phrase`);
         return { path, contents: mutated as string };
       }
@@ -923,11 +918,8 @@ function deletePhrase(text: string, phrase: string): string | null {
   return pattern.test(text) ? text.replace(pattern, '') : null;
 }
 
-test('every pinned needs-decision route and whole-class sweep phrase is load-bearing in the real files', () => {
-  for (const group of [
-    ...NEEDS_DECISION_ROUTE_PINS,
-    ...WHOLE_CLASS_SWEEP_PINS,
-  ]) {
+test('every pinned needs-decision route, triage donor and whole-class sweep phrase is load-bearing in the real files', () => {
+  for (const group of PINNED_CLAUSE_GROUPS) {
     assert.ok(group.phrases.length > 0, `${group.id} pins phrases`);
     assert.equal(
       new Set(group.phrases).size,
