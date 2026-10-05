@@ -720,7 +720,7 @@
         "deferNeedsDecision": {
           "type": "string",
           "enum": ["on", "off"],
-          "description": "Whether the review loop may defer a finding that needs a person's judgment to a `needs-decision` follow-up issue when merging is safe. `off` restores the stop-for-a-person behavior. Never changes the CODEOWNER and required-reviewer `Awaiting maintainer decision` hold, `CHANGES_REQUESTED`, the F3 merge holds, or the lite profile's stops. Optional; defaults to \"on\"."
+          "description": "Whether the review loop may defer a finding that needs a person's judgment to a `needs-decision` follow-up issue when merging is safe. `off` restores the stop-for-a-person behavior. Among other holds, never changes the CODEOWNER and required-reviewer `Awaiting maintainer decision` hold, `CHANGES_REQUESTED`, the F3 merge holds, or the lite profile's stops. Optional; defaults to \"on\"."
         },
         "subagentWaitCeiling": {
           "type": "string",

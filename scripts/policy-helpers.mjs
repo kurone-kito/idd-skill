@@ -999,9 +999,11 @@ function parseEnum(value, accepted, fallback) {
  * operator's evident intent. Only a missing value (key absent or
  * `undefined`, including a non-object `critiqueLoop` block) resolves to
  * the default; exactly `'on'` / `'off'` resolve to themselves; any other
- * present value resolves to `'off'`. A config file that exists but cannot
- * be parsed never reaches this helper (the instruction text reads the
- * file and acts as `'off'`); `normalizePolicyConfig(null)` means `'on'`.
+ * present value resolves to `'off'`. This helper only sees parsed data, so
+ * a config file that exists but cannot be parsed is the instruction text's
+ * to handle (it will act as `'off'`; `loadPolicyConfig` rejects such a
+ * file, and a non-object top level too); `normalizePolicyConfig(null)`
+ * means `'on'`.
  */
 function parseDeferNeedsDecision(value) {
   if (value === undefined) {
