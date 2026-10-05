@@ -31,8 +31,8 @@ E5's "Verify before accept" rule):
 - **Fix the whole class, not just the flagged line.** When an Accepted
   finding names a pattern (a command, code span, hard-coded value, or
   link or anchor form), search every file this PR changes for it and fix
-  each instance of that defect in the same push; leave unchanged files
-  to the PR body's follow-up list. The E13 reply's explanation names the
+  each instance of that defect in the same push; list unchanged files in
+  the PR body's follow-ups. A swept item's E13 explanation names the
   pattern and the count of other instances fixed (`0` needs the pattern
   named).
 - **Verify any claim a fix adds.** Check any new precision (a name,

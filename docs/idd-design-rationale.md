@@ -961,8 +961,8 @@ Replay through the written rule:
    code span, so the finding names a pattern. Searching the pull
    request's changed files (50 at that head) for it finds one more
    instance, in `idd-merge.instructions.md`, so the same push fixes both
-   sites and the E13 reply's explanation says it swept `reset on pass)`
-   and fixed 1 other instance. Head 8's report of the second site never
+   sites and the E13 explanation says it swept `reset on pass)` and
+   fixed 1 other instance. Head 8's report of the second site never
    happens.
 2. `origin/main` at head 3. The finding is a hard-coded base branch
    where the configured one applies. A search for the literal in the
@@ -989,11 +989,16 @@ stays distinguishable from "not swept".
 
 A file the pull request does not change is never swept: widening the
 diff to every match multiplies the review surface of one push. Its
-instances go to the pull request body's follow-up list (a reviewer's
-finding there is rejected under E5's "Reject now but should do
-eventually" rule). The rule adds no checker, only a signal: E10 runs
-before the reply is written and never sees it, and an Accepted item
-with no E13 reply has nothing to carry the count. The audit pins the
+instances go to the pull request body's follow-up list (editing the
+body follows E12's PR body sync rule; a reviewer's finding there is
+rejected under E5's "Reject now but should do eventually" rule). "The
+files this pull request changes" is the set D3.6 already derives with
+`git diff --name-only origin/{development-branch}...HEAD`, and a source
+file and its generated mirror count as one instance. The count belongs
+to a swept item: an item already fixed by an earlier push cites that
+commit instead, and an Accepted item with no E13 reply (a critique-pass
+finding) has nothing to carry it. The rule adds no checker, only a
+signal: E10 runs before the reply is written and never sees it. The audit pins the
 four clauses (trigger, file set with the same push, limit, reply
 content) so that a later rewording cannot drop one silently.
 

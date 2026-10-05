@@ -399,14 +399,14 @@ export const WHOLE_CLASS_SWEEP_PINS = [
     id: 'review-fix-sweep-limit',
     paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
     regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
-    phrases: ["leave unchanged files to the PR body's follow-up list"],
+    phrases: ["list unchanged files in the PR body's follow-ups"],
   },
   {
     id: 'review-fix-sweep-reply',
     paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
     regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
     phrases: [
-      "The E13 reply's explanation names the pattern and the count of other instances fixed",
+      "A swept item's E13 explanation names the pattern and the count of other instances fixed",
       '(`0` needs the pattern named)',
     ],
   },
