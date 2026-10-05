@@ -321,8 +321,8 @@ cites the commit; everything else follows E5-E8 as normal.
 **Edge case 2 -- an E9 fix committed but not yet pushed.** GitHub
 cannot see this; a fix for a session-local E2 finding may never
 re-surface at E4 (E2's findings are not durable) -- an empty E3
-result alone is not proof there is nothing to recover, since F2 resets
-the worktree to the PR's remote HEAD before merge. Run this
+result alone is not proof there is nothing to recover, since F2 holds
+on a local HEAD ahead of the PR's remote HEAD. Run this
 unconditionally, in the **same surviving claimed worktree**:
 
 1. `PR_HEAD={head-SHA}` -- E1 Step 1's stored value; a re-fetch
@@ -330,7 +330,7 @@ unconditionally, in the **same surviving claimed worktree**:
 2. `git merge-base --is-ancestor "$PR_HEAD" HEAD` -- a failure
    (external rewrite, diverged worktree) stops for reconciliation;
    never fall through to edge case 1's rule instead, which
-   risks F2 discarding real local work.
+   leaves real local work unpushed.
 3. `git status --porcelain` must report clean -- a dirty worktree
    can't prove which uncommitted lines belong to which item. Treat it
    as unverified input (never trust or discard): stop for

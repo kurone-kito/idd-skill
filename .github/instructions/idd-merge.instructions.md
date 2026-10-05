@@ -179,16 +179,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      that landed between F2 and this final gate, for example a
      required `{development-branch}` sync. `closing-set` (readiness)
      evidences steps 6-7 here; D3.7 stays local. Before running them,
-     confirm the local worktree is checked out at `${PR_HEAD_SHA_F3}`
-     exactly (after fetch, the claim gate must confirm
-     `git branch --show-current` is `{branch-name}`; else hold).
-     Require empty `git status --porcelain` and
-     `git merge-base --is-ancestor HEAD "${PR_HEAD_SHA_F3}"`;
-     else hold. Run F2's
-     shadow-path check against `${PR_HEAD_SHA_F3}`; any output or failure
-     holds. Use `git switch {branch-name}` (not
-     detached), recheck; reset on pass) — D3.5/D3.7 read local state, not
-     the remote PR. Skip
+     apply F2's sequence to `${PR_HEAD_SHA_F3}`. Run F2's shadow-path
+     check against `${PR_HEAD_SHA_F3}`; any output or failure holds. Skip
      D3.5 steps 6-7 under the
      same non-default-`{development-branch}` exemption D3.5 itself
      carries. On a mismatch, fix it per D3.5/D3.7's own documented
