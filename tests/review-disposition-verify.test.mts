@@ -162,6 +162,22 @@ test('checkPathAItem: the needs-decision deferral reply is a valid Rejected repl
   assert.deepEqual(result.issues, []);
 });
 
+test('checkPathAItem: an urgency deferral reply with the step suffix is a valid Rejected reply on a resolved thread', () => {
+  const markerReply =
+    '**Rejected** — deferred to follow-up issue #5 (urgency low; severity high; step 1): reason';
+  assert.equal(classifyMarker(markerReply), 'rejected');
+  const result = checkPathAItem({
+    id: 'a3-step',
+    path: 'A',
+    type: 'review_thread',
+    decision: 'rejected',
+    markerReply,
+    threadResolved: true,
+  });
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.issues, []);
+});
+
 test('checkPathAItem: Rejected — reply present but thread unresolved → fail', () => {
   const result = checkPathAItem({
     id: 'a4',

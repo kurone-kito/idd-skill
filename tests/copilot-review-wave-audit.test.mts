@@ -325,6 +325,21 @@ test('classifyDispositionReply: counts the needs-decision deferral reply as a de
   assert.equal(classifyDispositionReply(reply), 'deferred');
 });
 
+test('classifyDispositionReply: counts an urgency deferral reply with the step suffix as a deferral', () => {
+  for (const clause of [
+    'urgency low; severity high; step 1',
+    'urgency medium; severity medium, Copilot high; step 2',
+  ]) {
+    assert.equal(
+      classifyDispositionReply(
+        `**Rejected** — deferred to follow-up issue #5 (${clause}): reason`,
+      ),
+      'deferred',
+      clause,
+    );
+  }
+});
+
 test('classifyDispositionReply: recognizes all five outcomes', () => {
   assert.equal(
     classifyDispositionReply(
