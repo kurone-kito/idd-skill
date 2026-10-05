@@ -1382,6 +1382,41 @@ test('adjacent tokens each take a whole character, never half of a surrogate pai
   );
 });
 
+test('runVerification applies the shared overlay option rules before any I/O', () => {
+  const base = {
+    targetRoot: '/no/such/target',
+    targetRef: 'HEAD',
+    targetBaseRef: 'HEAD^',
+    upstreamPath: '/no/such/upstream',
+    upstreamRef: null,
+    upstreamRemote: null,
+    pathPrefixes: [],
+    generatedDirs: [],
+  };
+  assert.throws(
+    () => runVerification({ ...base, reportRevertedOverlays: true }),
+    /--report-reverted-overlays requires exactly one of/,
+  );
+  assert.throws(
+    () =>
+      runVerification({
+        ...base,
+        reportRevertedOverlays: true,
+        upstreamBasePath: 'one-dir',
+        upstreamBaseRef: 'one-ref',
+      }),
+    /mutually exclusive.*"one-dir".*"one-ref"/,
+  );
+  assert.throws(
+    () => runVerification({ ...base, upstreamBasePath: 'one-dir' }),
+    /--upstream-base-path "one-dir" requires --report-reverted-overlays/,
+  );
+  assert.throws(
+    () => runVerification({ ...base, upstreamBaseRef: 'one-ref' }),
+    /--upstream-base-ref "one-ref" requires --report-reverted-overlays/,
+  );
+});
+
 test('a long line against a many-token pattern terminates without backtracking', () => {
   // A regular expression built from these pieces would backtrack
   // polynomially in the line length; the piece-wise matcher does not.

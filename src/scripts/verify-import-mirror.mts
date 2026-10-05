@@ -278,8 +278,8 @@ export interface VerifyOptions {
   generatedDirs: readonly string[];
   jsonKeyNormalizations?: readonly JsonKeyNormalization[];
   /** The previous upstream version, named like `upstreamPath` /
-   * `upstreamRef` name the new one; exactly one is required with
-   * `reportRevertedOverlays` (#3795) and neither is read without it. */
+   * `upstreamRef` name the new one (#3795): `reportRevertedOverlays` needs
+   * exactly one of them, and either one is an error without it. */
   upstreamBasePath?: string | null;
   upstreamBaseRef?: string | null;
   reportRevertedOverlays?: boolean;
@@ -1696,6 +1696,44 @@ function readOverlayBaseEntry(
 }
 
 /**
+ * The usage rules of the overlay flags, in one place for `parseArgs()`
+ * (before any I/O) and `runVerification()` (a programmatic caller): the
+ * switch needs exactly one base flag, and a base flag needs the switch.
+ * Each message names the flag and the value it was given.
+ */
+function checkOverlayOptions(options: {
+  reportRevertedOverlays: boolean;
+  upstreamBasePath: string | null | undefined;
+  upstreamBaseRef: string | null | undefined;
+}): void {
+  const basePath = options.upstreamBasePath ?? null;
+  const baseRef = options.upstreamBaseRef ?? null;
+  if (basePath !== null && baseRef !== null) {
+    throw new Error(
+      '--upstream-base-path and --upstream-base-ref are mutually ' +
+        `exclusive (got --upstream-base-path "${basePath}" and ` +
+        `--upstream-base-ref "${baseRef}")`,
+    );
+  }
+  if (!options.reportRevertedOverlays && basePath !== null) {
+    throw new Error(
+      `--upstream-base-path "${basePath}" requires --report-reverted-overlays`,
+    );
+  }
+  if (!options.reportRevertedOverlays && baseRef !== null) {
+    throw new Error(
+      `--upstream-base-ref "${baseRef}" requires --report-reverted-overlays`,
+    );
+  }
+  if (options.reportRevertedOverlays && basePath === null && baseRef === null) {
+    throw new Error(
+      '--report-reverted-overlays requires exactly one of ' +
+        '--upstream-base-path or --upstream-base-ref',
+    );
+  }
+}
+
+/**
  * Validates the previous-upstream input of `--report-reverted-overlays`
  * the way the new-version input is validated, with messages that name the
  * base flag and its value: a mistyped base would otherwise make every path
@@ -1703,15 +1741,7 @@ function readOverlayBaseEntry(
  * clean result.
  */
 function validateOverlayBase(options: VerifyOptions): void {
-  const hasPath = options.upstreamBasePath != null;
-  const hasRef = options.upstreamBaseRef != null;
-  if (hasPath === hasRef) {
-    throw new Error(
-      '--report-reverted-overlays requires exactly one of ' +
-        '--upstream-base-path or --upstream-base-ref',
-    );
-  }
-  if (hasPath) {
+  if (options.upstreamBasePath != null) {
     validateUpstreamPathRoot(
       options.upstreamBasePath as string,
       '--upstream-base-path',
@@ -1728,6 +1758,11 @@ function validateOverlayBase(options: VerifyOptions): void {
 
 export function runVerification(options: VerifyOptions): Report {
   const reportOverlays = options.reportRevertedOverlays === true;
+  checkOverlayOptions({
+    reportRevertedOverlays: reportOverlays,
+    upstreamBasePath: options.upstreamBasePath,
+    upstreamBaseRef: options.upstreamBaseRef,
+  });
   if (options.upstreamPath !== null) {
     validateUpstreamPathRoot(options.upstreamPath);
   } else {
@@ -1984,35 +2019,11 @@ function parseArgs(argv: string[]): VerifyImportMirrorArgs {
     if (upstreamRemote !== null && upstreamRef === null) {
       throw new Error('--upstream-remote requires --upstream-ref');
     }
-    if (upstreamBasePath !== null && upstreamBaseRef !== null) {
-      throw new Error(
-        '--upstream-base-path and --upstream-base-ref are mutually ' +
-          `exclusive (got --upstream-base-path "${upstreamBasePath}" and ` +
-          `--upstream-base-ref "${upstreamBaseRef}")`,
-      );
-    }
-    if (!reportRevertedOverlays && upstreamBasePath !== null) {
-      throw new Error(
-        `--upstream-base-path "${upstreamBasePath}" requires ` +
-          '--report-reverted-overlays',
-      );
-    }
-    if (!reportRevertedOverlays && upstreamBaseRef !== null) {
-      throw new Error(
-        `--upstream-base-ref "${upstreamBaseRef}" requires ` +
-          '--report-reverted-overlays',
-      );
-    }
-    if (
-      reportRevertedOverlays &&
-      upstreamBasePath === null &&
-      upstreamBaseRef === null
-    ) {
-      throw new Error(
-        '--report-reverted-overlays requires exactly one of ' +
-          '--upstream-base-path or --upstream-base-ref',
-      );
-    }
+    checkOverlayOptions({
+      reportRevertedOverlays,
+      upstreamBasePath,
+      upstreamBaseRef,
+    });
   }
   if (format !== 'json' && format !== 'table') {
     throw new Error(`--format must be one of json,table (got "${format}")`);
