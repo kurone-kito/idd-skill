@@ -1897,6 +1897,48 @@ test('CLI --report-reverted-overlays usage errors exit 2 with a message naming t
   }
 });
 
+test('CLI delivers a large JSON report whole when stdout writes complete late', (t) => {
+  // A report of over 128 KiB is enough: on a pipe Node writes
+  // asynchronously, so a process.exit() right after the report drops what
+  // is still queued. Deferring every stdout write by one event-loop turn
+  // makes that loss deterministic, whereas the pipe behaviour alone varies
+  // with the reader (the technique of the audit-docs test for #3787). The
+  // report stays under spawnSync's default maxBuffer of 1 MiB.
+  const overlayLines = Array.from(
+    { length: 4500 },
+    (_, index) =>
+      `adopter overlay line number ${String(index).padStart(5, '0')}`,
+  );
+  const fixture = buildOverlayFixture(overlayLines);
+  t.after(fixture.cleanup);
+  const preloadDir = mkdtempSync(join(tmpdir(), 'verify-overlay-preload-'));
+  t.after(() => rmSync(preloadDir, { recursive: true, force: true }));
+  const preload = join(preloadDir, 'defer-stdout-writes.cjs');
+  writeFileSync(
+    preload,
+    [
+      'const write = process.stdout._write.bind(process.stdout);',
+      'process.stdout._write = (chunk, encoding, callback) => {',
+      '  setImmediate(() => write(chunk, encoding, callback));',
+      '};',
+      '',
+    ].join('\n'),
+  );
+  const result = runCli(
+    overlayArgs(fixture, ['--format', 'json']),
+    fixture.targetRoot,
+    undefined,
+    ['--require', preload],
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.ok(
+    result.stdout.length > 150_000,
+    `got ${result.stdout.length} bytes`,
+  );
+  const report = JSON.parse(result.stdout) as OverlayReport;
+  assert.equal(report.revertedOverlays?.[0]?.lines.length, 4500);
+});
+
 test('CLI --help documents every declared flag and exits 0', () => {
   const result = runCli(['--help'], REPO_ROOT);
   assert.equal(result.status, 0);

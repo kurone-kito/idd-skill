@@ -1863,7 +1863,11 @@ if (import.meta.main) {
   } else {
     printTable(report);
   }
-  process.exit(computeExitCode(report.results));
+  // Not process.exit(): on a pipe Node writes asynchronously, and exiting
+  // right after a large report drops whatever is still queued (a 4 MiB
+  // report arrived as 64 to 128 KiB; the same class of defect as #3787).
+  // Setting the exit code lets the process end once stdout has drained.
+  process.exitCode = computeExitCode(report.results);
 }
 
 interface VerifyImportMirrorArgs {
