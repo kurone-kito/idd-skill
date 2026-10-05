@@ -401,6 +401,28 @@ import value from '__SPECIFIER__';
 `.replace('__SPECIFIER__', specifier),
   },
   {
+    name: 'a regex after a control-flow condition',
+    source: (specifier) =>
+      `if (ok) /[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after export default',
+    source: (specifier) =>
+      `export default /[/*]/;
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a dynamic import after division following a property named if',
+    source: (specifier) =>
+      `const result = obj.if(value) / import('__SPECIFIER__') / 2;
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
     name: 'a line comment ending at U+2028',
     source: (specifier) =>
       `// comment\u2028import value from '__SPECIFIER__';

@@ -75,6 +75,14 @@ const REGEX_PRECEDING_KEYWORDS = new Set([
   'await',
   'throw',
 ]);
+const CONTROL_FLOW_PAREN_KEYWORDS = new Set([
+  'if',
+  'while',
+  'for',
+  'with',
+  'switch',
+  'catch',
+]);
 /** ECMAScript line terminators, including the Unicode separators. */
 function isLineTerminator(ch) {
   return ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
@@ -93,16 +101,25 @@ function maskComment(output, start, end) {
 }
 /**
  * A `/` starts a regular-expression literal after expression-start tokens,
- * including the keywords that introduce an expression. This mirrors the
- * conservative heuristic used by the local explicit-any scanner while
- * treating `/` itself as an operator, so a division followed by a regex is
- * recognized too.
+ * including expression-introducing keywords, `export default`, and a
+ * control-flow header. This mirrors the conservative heuristic used by the
+ * local explicit-any scanner while treating `/` itself as an operator, so a
+ * division followed by a regex is recognized too.
  */
-function regexCanStartAfter(lastCodeChar, lastWord) {
+function regexCanStartAfter(
+  lastCodeChar,
+  lastWord,
+  previousWord,
+  controlFlowClosingParenthesis,
+) {
   if (lastCodeChar === '') {
     return true;
   }
-  if (REGEX_PRECEDING_KEYWORDS.has(lastWord)) {
+  if (
+    controlFlowClosingParenthesis ||
+    REGEX_PRECEDING_KEYWORDS.has(lastWord) ||
+    (lastWord === 'default' && previousWord === 'export')
+  ) {
     return true;
   }
   return !/[\w$)\]'"`]/.test(lastCodeChar);
@@ -147,23 +164,44 @@ function scanComments(source) {
     let braceDepth = 0;
     let lastCodeChar = '';
     let lastWord = '';
+    let previousWord = '';
+    let lastWordIsPropertyName = false;
+    let previousWordIsPropertyName = false;
     let wordBoundary = false;
+    let controlFlowClosingParenthesis = false;
+    const controlFlowParentheses = [];
     function recordCodeChar(ch) {
       if (/\s/.test(ch)) {
         wordBoundary = true;
         return;
       }
+      const previousCodeChar = lastCodeChar;
       lastCodeChar = ch;
       if (/[A-Za-z0-9_$]/.test(ch)) {
-        lastWord = wordBoundary ? ch : lastWord + ch;
+        if (wordBoundary || lastWord === '') {
+          previousWord = lastWord;
+          previousWordIsPropertyName = lastWordIsPropertyName;
+          lastWord = ch;
+          lastWordIsPropertyName = previousCodeChar === '.';
+        } else {
+          lastWord += ch;
+        }
       } else {
+        previousWord = '';
+        previousWordIsPropertyName = false;
         lastWord = '';
+        lastWordIsPropertyName = false;
       }
+      controlFlowClosingParenthesis = false;
       wordBoundary = false;
     }
     function recordLiteral(end) {
       lastCodeChar = end;
+      previousWord = '';
+      previousWordIsPropertyName = false;
       lastWord = '';
+      lastWordIsPropertyName = false;
+      controlFlowClosingParenthesis = false;
       wordBoundary = false;
     }
     while (index < source.length) {
@@ -203,7 +241,15 @@ function scanComments(source) {
         index = end;
         continue;
       }
-      if (ch === '/' && regexCanStartAfter(lastCodeChar, lastWord)) {
+      if (
+        ch === '/' &&
+        regexCanStartAfter(
+          lastCodeChar,
+          lastWord,
+          previousWord,
+          controlFlowClosingParenthesis,
+        )
+      ) {
         let end = index + 1;
         let inCharacterClass = false;
         let closed = false;
@@ -283,7 +329,21 @@ function scanComments(source) {
       if (interpolation && ch === '{') {
         braceDepth += 1;
       }
+      if (ch === '(') {
+        controlFlowParentheses.push(
+          !lastWordIsPropertyName &&
+            (CONTROL_FLOW_PAREN_KEYWORDS.has(lastWord) ||
+              (lastWord === 'await' &&
+                previousWord === 'for' &&
+                !previousWordIsPropertyName)),
+        );
+      }
+      const closesControlFlowParenthesis =
+        ch === ')' && controlFlowParentheses.pop() === true;
       recordCodeChar(ch);
+      if (closesControlFlowParenthesis) {
+        controlFlowClosingParenthesis = true;
+      }
       index += 1;
     }
     return interpolation
