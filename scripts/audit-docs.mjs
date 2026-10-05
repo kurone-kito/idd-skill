@@ -303,7 +303,13 @@ async function main() {
         console.error(`- ${line}`);
       }
     }
-    process.exit(1);
+    // Set the exit code and return instead of calling process.exit(): a
+    // parent that captures stderr gets a pipe, Node writes pipes
+    // asynchronously on POSIX, and process.exit() drops whatever of this
+    // report is still queued, so a loaded parent saw only a prefix and two
+    // CLI tests failed intermittently (observed 2026-10-05, #3787).
+    process.exitCode = 1;
+    return;
   }
   for (const notice of notices) {
     console.log(`notice: ${notice}`);
