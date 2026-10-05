@@ -715,7 +715,16 @@
         "deferByUrgency": {
           "type": "string",
           "enum": ["off", "low", "low-and-medium", "severity-tiered"],
-          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: ignores the adopt-now test and defers by the severity-and-urgency matrix, including High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
+          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: ignores the adopt-now test and defers by the severity-and-urgency matrix; at relax step 0 (the whole matrix while `deferRelaxAtRounds` below is unset or invalid) that includes High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
+        },
+        "deferRelaxAtRounds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Wave gradient for `deferByUrgency: \"severity-tiered\"`: one or two strictly ascending positive integers, the pull request's PR-wide, paginated `copilot-pull-request-reviewer[bot]` review counts (the same count `deferAfterRounds` uses) at which the rule relaxes. A pull request's relax step is the number of thresholds less than or equal to its review count, so `[4, 7]` gives step 1 at counts 4 to 6 and step 2 at 7 and above. Each step raises the highest urgency at which a tier may still defer, and from step 1 a High-tier finding of `high` urgency and a safety-class finding never defer; see `docs/idd-review-policy-profiles.md`. Has no effect unless `deferByUrgency` is `severity-tiered`. Optional; when the key is omitted the gradient is off, which is the default, and the helper treats an invalid value, such as more than two entries or entries that are not strictly ascending, the same way (the schema cannot express that length and order, so the helper enforces it)."
         },
         "deferNeedsDecision": {
           "type": "string",
