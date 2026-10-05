@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import {
   collectRepositoryPolicyViolationsFromDocuments,
   NEEDS_DECISION_ROUTE_PINS,
+  REVIEW_TRIAGE_DONOR_PINS,
   type RepositoryPolicyDocuments,
   repositoryPolicyRuleIds,
   repositoryPolicyRulePaths,
@@ -45,6 +46,11 @@ interface RuleViolationMutation {
   contents: string;
   diagnosticPath?: string;
 }
+
+const PINNED_CLAUSE_GROUPS = [
+  ...NEEDS_DECISION_ROUTE_PINS,
+  ...REVIEW_TRIAGE_DONOR_PINS,
+];
 
 function readPositiveFixture(): Map<string, string> {
   const parsed = JSON.parse(readFileSync(POSITIVE_FIXTURE, 'utf8')) as unknown;
@@ -691,10 +697,10 @@ function makeRuleViolation(
         "reuse D3.6's checklist",
       );
     default: {
-      // The needs-decision route rules are generated from one table; deleting
-      // the first pinned phrase from the first path is their targeted fixture
+      // The pinned-clause rules are generated from two tables; deleting the
+      // first pinned phrase from the first path is their targeted fixture
       // (the per-phrase test below deletes every phrase from the real files).
-      const group = NEEDS_DECISION_ROUTE_PINS.find(
+      const group = PINNED_CLAUSE_GROUPS.find(
         (candidate) => candidate.id === ruleId,
       );
       if (group !== undefined) {
@@ -908,8 +914,8 @@ function deletePhrase(text: string, phrase: string): string | null {
   return pattern.test(text) ? text.replace(pattern, '') : null;
 }
 
-test('every pinned needs-decision route phrase is load-bearing in the real files', () => {
-  for (const group of NEEDS_DECISION_ROUTE_PINS) {
+test('every pinned needs-decision route and triage donor phrase is load-bearing in the real files', () => {
+  for (const group of PINNED_CLAUSE_GROUPS) {
     assert.ok(group.phrases.length > 0, `${group.id} pins phrases`);
     assert.equal(
       new Set(group.phrases).size,
