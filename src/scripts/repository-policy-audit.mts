@@ -316,6 +316,75 @@ interface PinnedClauseGroup {
   id: string;
   paths: readonly string[];
   phrases: readonly string[];
+  /** Match the phrases only inside the bullet that starts with this text,
+   * up to the next blank line or top-level bullet, instead of anywhere in
+   * the file. */
+  regionStart?: string;
+  /** With `regionStart`: look for that bullet only inside the section whose
+   * heading line starts with this text (up to the next `## ` heading), so
+   * a copy of the bullet moved to another section does not satisfy a pin. */
+  regionSection?: string;
+  /** Whitespace-collapsed file text that must not appear anywhere. */
+  forbidden?: readonly string[];
+}
+
+/** The raw text of the bullet or paragraph that starts with `start`: up to
+ * the next blank line or top-level bullet, so an unrelated sentence that
+ * happens to repeat a pinned clause elsewhere in the file cannot satisfy
+ * the pin. */
+function extractPinnedRegion(
+  path: string,
+  fileText: string,
+  start: string,
+  section?: string,
+): string {
+  let text = fileText;
+  if (section !== undefined) {
+    const sectionStart = text.indexOf(`\n${section}`);
+    if (sectionStart === -1) fail(path, `missing pinned section: ${section}`);
+    const afterHeading = text.slice(sectionStart + 1);
+    const sectionEnd = afterHeading.indexOf('\n## ');
+    text = sectionEnd === -1 ? afterHeading : afterHeading.slice(0, sectionEnd);
+  }
+  const startIndex = text.indexOf(start);
+  if (startIndex === -1) fail(path, `missing pinned region: ${start}`);
+  const rest = text.slice(startIndex);
+  const end = rest.slice(start.length).search(/\n(?:\n|- )/);
+  return end === -1 ? rest : rest.slice(0, start.length + end);
+}
+
+function pinnedGroupRule(group: PinnedClauseGroup): RuleDefinition {
+  return {
+    id: group.id,
+    paths: group.paths,
+    check({ text }) {
+      for (const path of group.paths) {
+        const raw = text(path);
+        const scope = collapsed(
+          group.regionStart === undefined
+            ? raw
+            : extractPinnedRegion(
+                path,
+                raw,
+                group.regionStart,
+                group.regionSection,
+              ),
+        );
+        const missing = group.phrases.filter(
+          (phrase) => !scope.includes(phrase),
+        );
+        if (missing.length > 0) {
+          fail(path, `missing required clauses: ${missing.join(' | ')}`);
+        }
+        const collapsedText = collapsed(raw);
+        for (const phrase of group.forbidden ?? []) {
+          if (collapsedText.includes(phrase)) {
+            fail(path, `forbidden clause present: ${phrase}`);
+          }
+        }
+      }
+    },
+  };
 }
 
 const NEEDS_DECISION_ROUTE_LINK =
@@ -398,6 +467,57 @@ export const NEEDS_DECISION_ROUTE_PINS: readonly PinnedClauseGroup[] = [
   },
 ];
 
+const WHOLE_CLASS_SWEEP_BULLET_START =
+  '- **Fix the whole class, not just the flagged line.**';
+const WHOLE_CLASS_SWEEP_SECTION = '## E9 — Fix accepted issues';
+
+// The E9 whole-class sweep bullet (issue #3801, observed on
+// kurone-kito/setup.ubuntu#201): the sweep is only useful if a reader can
+// tell it ran, so the trigger, the file set, the limit and the reply content
+// are each pinned as their own rule. Phrases are matched on whitespace-
+// collapsed text inside the bullet only (E9 and E12 already say "single
+// push", so a pin elsewhere in the file would be satisfied by an unrelated
+// sentence), and the tests delete every phrase one at a time.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const WHOLE_CLASS_SWEEP_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'review-fix-sweep-trigger',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: [
+      'When an Accepted finding names a pattern (command, code span, hard-coded value, or link or anchor form)',
+    ],
+    forbidden: ['Sweep the current diff (and adjacent sections)'],
+  },
+  {
+    id: 'review-fix-sweep-file-set',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: [
+      'search every file the PR changes for it and fix each instance of that defect in the same push',
+    ],
+  },
+  {
+    id: 'review-fix-sweep-limit',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: ['Never sweep unchanged files; list them in PR body follow-ups'],
+  },
+  {
+    id: 'review-fix-sweep-reply',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: [
+      "A swept item's E13 explanation names the pattern and the count of others fixed",
+      '(`0` needs the pattern named)',
+    ],
+  },
+];
+
 // Issue #3794 freed review-triage bundle headroom by cutting passages that
 // restate a rule living elsewhere. These pins keep each surviving copy (or the
 // pointer that replaced the cut text) from being dropped later, so the cut
@@ -433,6 +553,7 @@ export const REVIEW_TRIAGE_DONOR_PINS: readonly PinnedClauseGroup[] = [
 const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
+  ...WHOLE_CLASS_SWEEP_PINS,
 ];
 
 const RULES: readonly RuleDefinition[] = [
@@ -1709,23 +1830,7 @@ const RULES: readonly RuleDefinition[] = [
         fail(PR_SUBMIT, 'round-specific PR-body prose returned');
     },
   },
-  ...PINNED_CLAUSE_GROUPS.map(
-    (group): RuleDefinition => ({
-      id: group.id,
-      paths: group.paths,
-      check({ text }) {
-        for (const path of group.paths) {
-          const collapsedText = collapsed(text(path));
-          const missing = group.phrases.filter(
-            (phrase) => !collapsedText.includes(phrase),
-          );
-          if (missing.length > 0) {
-            fail(path, `missing required clauses: ${missing.join(' | ')}`);
-          }
-        }
-      },
-    }),
-  ),
+  ...PINNED_CLAUSE_GROUPS.map(pinnedGroupRule),
 ];
 
 // audit:ignore-dead-export: fixture tests need each stable rule's input path.
