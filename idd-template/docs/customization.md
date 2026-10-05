@@ -1557,6 +1557,19 @@ supports these keys:
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
   `low` and `low-and-medium`.
+- `critiqueLoop.deferNeedsDecision` (default `on`; `on` or `off`). A
+  missing value resolves to `on`, exactly `on` and `off` resolve to
+  themselves, any other present value (including `null`) resolves to
+  `off` so a mistyped value never enables the route, and a config file
+  that exists but cannot be parsed acts as `off` (a missing file means
+  `on`). It controls whether the review loop may defer a finding that
+  needs a person's judgment to a `needs-decision` follow-up issue when
+  merging is safe; `off` restores the stop-for-a-person behavior. It
+  never changes the CODEOWNER and required-reviewer
+  `Awaiting maintainer decision` hold or any person holding Triage,
+  Write, Maintain or Admin standing, `CHANGES_REQUESTED`, the F3 merge
+  holds, the CI, E15, E11 and branch-sync holds, scope-fenced items,
+  PATH B, or the lite profile's stops.
 - `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`
