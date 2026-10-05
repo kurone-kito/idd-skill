@@ -294,7 +294,7 @@ normal handling applies.
 
 **Edge case 2 — an E9 fix committed but not pushed.** GitHub can't see
 this; an empty E3 alone isn't proof nothing needs recovery (F2
-resets the worktree before merge). Run unconditionally in the same
+holds on a local HEAD ahead of the PR). Run unconditionally in the same
 surviving claimed worktree:
 
 1. `PR_HEAD` = Step 1's stored `{head-SHA}` — never re-fetch (races an

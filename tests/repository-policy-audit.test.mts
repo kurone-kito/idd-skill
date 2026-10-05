@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import {
   collectRepositoryPolicyViolationsFromDocuments,
   NEEDS_DECISION_ROUTE_PINS,
+  PR_HEAD_FRESHNESS_PINS,
   REVIEW_TRIAGE_DONOR_PINS,
   type RepositoryPolicyDocuments,
   repositoryPolicyRuleIds,
@@ -52,6 +53,7 @@ const PINNED_CLAUSE_GROUPS = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
   ...WHOLE_CLASS_SWEEP_PINS,
+  ...PR_HEAD_FRESHNESS_PINS,
 ];
 
 function readPositiveFixture(): Map<string, string> {
@@ -505,6 +507,13 @@ function makeRuleViolation(
         'git ls-tree -r -z',
         'git ls-tree -z',
       );
+    case 'pr-head-freshness-order':
+      return replaceFixtureText(
+        documents,
+        'idd-template/.github/instructions/idd-pre-merge.instructions.md',
+        'run `git merge --ff-only "$PR_HEAD_SHA"`',
+        'run `git reset --hard "$PR_HEAD_SHA"`',
+      );
     case 'a45-outcome-fixtures': {
       const path = 'tests/fixtures/consistency/a45-outcomes.json';
       return {
@@ -905,6 +914,113 @@ test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) 
     );
   }
   assert.deepEqual(readdirSync(emptyPath), []);
+});
+
+const PRE_MERGE =
+  'idd-template/.github/instructions/idd-pre-merge.instructions.md';
+const MERGE = 'idd-template/.github/instructions/idd-merge.instructions.md';
+
+function freshnessViolations(
+  documents: RepositoryPolicyDocuments,
+  ruleId: string,
+) {
+  return collectRepositoryPolicyViolationsFromDocuments(documents).filter(
+    (violation) => violation.ruleId === ruleId,
+  );
+}
+
+function withFixtureText(
+  path: string,
+  change: (text: string) => string,
+): RepositoryPolicyDocuments {
+  const documents = readPositiveFixture();
+  const original = documents.get(path);
+  assert.ok(original, `${path} must be covered by the positive fixture`);
+  const changed = change(original);
+  assert.notEqual(changed, original, `the change must alter ${path}`);
+  return new Map(documents).set(path, changed);
+}
+
+test('the F2 local check passes on the positive fixture and rejects ancestry-only checking', () => {
+  assert.deepEqual(
+    freshnessViolations(readPositiveFixture(), 'pr-head-freshness-f2'),
+    [],
+  );
+  const ancestryOnly = withFixtureText(PRE_MERGE, (text) =>
+    text.replace(
+      '`git rev-parse HEAD` must equal `$PR_HEAD_SHA`',
+      '`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"` must hold',
+    ),
+  );
+  const violations = freshnessViolations(ancestryOnly, 'pr-head-freshness-f2');
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0].message,
+    /`git rev-parse HEAD` must equal `\$PR_HEAD_SHA`/,
+  );
+});
+
+test('the F2 local check keeps the shadow-path check before the fast-forward and never resets', () => {
+  assert.deepEqual(
+    freshnessViolations(readPositiveFixture(), 'pr-head-freshness-order'),
+    [],
+  );
+  const moved = withFixtureText(PRE_MERGE, (text) => {
+    const ffOnly =
+      'run `git merge --ff-only "$PR_HEAD_SHA"` and require equality again, else hold.';
+    const withoutFfOnly = text.replace(ffOnly, '');
+    return withoutFfOnly.replace(
+      'Under `set -o pipefail`, run',
+      `${ffOnly} Under \`set -o pipefail\`, run`,
+    );
+  });
+  assert.match(
+    freshnessViolations(moved, 'pr-head-freshness-order')[0]?.message ?? '',
+    /out of order or missing/,
+  );
+  for (const reset of [
+    'git reset --hard "$PR_HEAD_SHA"',
+    'then run `git reset` to discard local work',
+    'git reset --keep "$PR_HEAD_SHA"',
+    'then reset on pass)',
+  ]) {
+    const violations = freshnessViolations(
+      withFixtureText(PRE_MERGE, (text) => `${text}\n${reset}`),
+      'pr-head-freshness-order',
+    );
+    assert.match(violations[0]?.message ?? '', /never reset the worktree/);
+  }
+});
+
+test('F3 points at the F2 sequence and does not restate an ancestry check', () => {
+  assert.deepEqual(
+    freshnessViolations(readPositiveFixture(), 'pr-head-freshness-order'),
+    [],
+  );
+  const restated = withFixtureText(
+    MERGE,
+    (text) =>
+      `${text}\nRequire \`git merge-base --is-ancestor HEAD "\${PR_HEAD_SHA_F3}"\`.`,
+  );
+  assert.match(
+    freshnessViolations(restated, 'pr-head-freshness-order')[0]?.message ?? '',
+    /not restate an ancestry check/,
+  );
+  const resetting = withFixtureText(
+    MERGE,
+    (text) => `${text}\nThen run \`git reset\` to discard local work.`,
+  );
+  assert.match(
+    freshnessViolations(resetting, 'pr-head-freshness-order')[0]?.message ?? '',
+    /never reset the worktree/,
+  );
+  const withoutPointer = withFixtureText(MERGE, (text) =>
+    text.replace("apply F2's sequence to", 'check'),
+  );
+  assert.equal(
+    freshnessViolations(withoutPointer, 'pr-head-freshness-f3').length,
+    1,
+  );
 });
 
 /** Delete the first whitespace-tolerant occurrence of `phrase` from `text`. */
