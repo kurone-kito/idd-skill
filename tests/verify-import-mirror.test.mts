@@ -1364,6 +1364,24 @@ test('matchesTokenPattern handles adjacent tokens, edge tokens, and repeated lit
   assert.equal(matchesTokenPattern('same', ['same']), false);
 });
 
+test('adjacent tokens each take a whole character, never half of a surrogate pair', () => {
+  const smile = '\u{1F600}';
+  const pieces = ['prefix ', '', ' suffix'];
+  assert.equal(matchesTokenPattern(`prefix ${smile} suffix`, pieces), false);
+  assert.equal(
+    matchesTokenPattern(`prefix ${smile}${smile} suffix`, pieces),
+    true,
+  );
+  assert.deepEqual(
+    revertedOverlays(
+      [`prefix ${smile} suffix`, 'prefix ab suffix', 'prefix a suffix'],
+      ['prefix {{ONE}}{{TWO}} suffix'],
+      [],
+    ),
+    [`prefix ${smile} suffix`, 'prefix a suffix'],
+  );
+});
+
 test('a long line against a many-token pattern terminates without backtracking', () => {
   // A regular expression built from these pieces would backtrack
   // polynomially in the line length; the piece-wise matcher does not.

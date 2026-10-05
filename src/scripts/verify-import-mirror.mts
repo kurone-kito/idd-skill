@@ -1065,8 +1065,42 @@ const OVERLAY_TOKEN_RE = /\{\{[A-Z][A-Z0-9_]*\}\}/;
 const OVERLAY_TABLE_LINE_CUT = 160;
 const OVERLAY_TABLE_LINES_PER_PATH = 20;
 
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
+}
+
+function isLowSurrogate(unit: number): boolean {
+  return unit >= 0xdc00 && unit <= 0xdfff;
+}
+
+/** Index just after the character that starts at `index`: a surrogate pair
+ * is one character (two UTF-16 units), so a gap or a literal never splits
+ * one. Past the end it keeps counting, which callers treat as "no
+ * character left". */
+function nextCharacterIndex(text: string, index: number): number {
+  return isHighSurrogate(text.charCodeAt(index)) &&
+    isLowSurrogate(text.charCodeAt(index + 1))
+    ? index + 2
+    : index + 1;
+}
+
+/** Characters (code points) in `text`, counted without allocating. */
 function codePointLength(text: string): number {
-  return Array.from(text).length;
+  let count = 0;
+  for (let index = 0; index < text.length; count += 1) {
+    index = nextCharacterIndex(text, index);
+  }
+  return count;
+}
+
+/** `true` iff `text` has at least `minimum` characters. The UTF-16 length
+ * bounds the code-point count from both sides, so most lines never need
+ * the count. */
+function hasAtLeastCharacters(text: string, minimum: number): boolean {
+  if (text.length < minimum) {
+    return false;
+  }
+  return text.length >= 2 * minimum || codePointLength(text) >= minimum;
 }
 
 /**
@@ -1081,7 +1115,7 @@ export function normalizeOverlayLines(content: string): string[] {
   for (const raw of content.split(/\r?\n/)) {
     const line = raw.replace(/\s+/g, ' ').trim();
     if (
-      codePointLength(line) >= OVERLAY_MIN_LINE_LENGTH &&
+      hasAtLeastCharacters(line, OVERLAY_MIN_LINE_LENGTH) &&
       !isCanonicalBannerLine(line, GENERATED_BANNER_MARKER)
     ) {
       lines.push(line);
@@ -1113,12 +1147,13 @@ function toTokenPattern(line: string): string[] | null {
  * Whole-line match of `line` against the literal `pieces` of a token line,
  * each token standing for any NON-EMPTY text (spaces included, so a token
  * replaced by `npm run lint && npm test` still matches). Done piece by
- * piece instead of by building a regular expression from previous-version text:
- * literal characters such as `(`, `.` and `*` then match literally by
- * construction, and the leftmost search cannot backtrack catastrophically
- * on a long line. The first piece is a prefix, the last a suffix, and each
- * middle piece is found leftmost at least one character after the previous
- * one (leftmost placement leaves the most room for the suffix).
+ * piece instead of by building a regular expression from previous-version
+ * text: literal characters such as `(`, `.` and `*` then match literally
+ * by construction, and the leftmost search cannot backtrack
+ * catastrophically on a long line. The first piece is a prefix, the last a
+ * suffix, and each middle piece is found leftmost at least one whole
+ * character (code point, so never half of a surrogate pair) after the
+ * previous one; leftmost placement leaves the most room for the suffix.
  */
 export function matchesTokenPattern(
   line: string,
@@ -1132,13 +1167,18 @@ export function matchesTokenPattern(
   let position = first.length;
   for (let index = 1; index < pieces.length - 1; index += 1) {
     const piece = pieces[index] ?? '';
-    const found = line.indexOf(piece, position + 1);
+    // Each token takes at least one whole character, never half of a
+    // surrogate pair.
+    const found = line.indexOf(piece, nextCharacterIndex(line, position));
     if (found < 0) {
       return false;
     }
     position = found + piece.length;
   }
-  return line.length - last.length >= position + 1 && line.endsWith(last);
+  return (
+    line.length - last.length >= nextCharacterIndex(line, position) &&
+    line.endsWith(last)
+  );
 }
 
 /**
