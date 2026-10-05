@@ -427,13 +427,13 @@ never clears by polling: follow its `detail`.
 - **Closing-set and impact-checklist re-verification**:
   `closingSet`/`closing-set` evidences this section's re-run of
   D3.5 steps 6-7 only; re-derive D3.7 below locally.
-  D3.5/D3.7 read local state, not the remote PR, so first fetch the PR
-  head with
+  D3.5/D3.7 read local state: first fetch the PR head with
   `git fetch origin +refs/pull/{pr-number}/head:refs/remotes/origin/pull/{pr-number}/head`
   under the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
-  when workers share the clone. A failed fetch holds; a fetched SHA other
-  than `$PR_HEAD_SHA` means the PR moved: return to E1. The claim gate
-  must confirm `git branch --show-current` is `{branch-name}`; else hold.
+  when workers share the clone. A failed fetch holds; if
+  `git rev-parse refs/remotes/origin/pull/{pr-number}/head` is not
+  `$PR_HEAD_SHA`, the PR moved: return to E1. The claim gate must confirm
+  `git branch --show-current` is `{branch-name}`; else hold.
   Require empty `git status --porcelain`; else hold. Under
   `set -o pipefail`, run
   `git ls-tree -r -z --full-tree --name-only "$PR_HEAD_SHA" |
