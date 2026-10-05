@@ -594,6 +594,62 @@ const divisionWithCommentedImports: {
         specifier,
       ),
   },
+  {
+    name: 'division after a TypeScript non-null assertion',
+    source: (specifier) =>
+      `declare const maybe: number | undefined;\nmaybe! / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a class expression body',
+    source: (specifier) =>
+      `const value = class {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function expression body',
+    source: (specifier) =>
+      `const value = function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a private property named return',
+    source: (specifier) =>
+      `class Example { #return = 1; read() { return this.#return / /* import('__SPECIFIER__') */ 2; } }\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a Unicode identifier',
+    source: (specifier) =>
+      `const π = 1;\nπ / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an astral Unicode identifier',
+    source: (specifier) =>
+      `const 𐐀 = 1;\n𐐀 / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a Unicode-escaped identifier',
+    source: (specifier) =>
+      `const \\u{03c0} = 1;\n\\u{03c0} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
 ];
 
 for (const { name, source } of divisionWithCommentedImports) {
@@ -613,6 +669,37 @@ for (const { name, source } of divisionWithCommentedImports) {
     assert.equal(status, 0, stderr);
   });
 }
+
+test('a block comment preserves the break-label context before a regex statement', () => {
+  const source = [
+    'outer: {',
+    '  break/**/outer',
+    '  /[/*]/;',
+    '}',
+    "import bare from 'yaml'; /* closes any misread regex comment */",
+    '',
+  ].join('\n');
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /yaml/);
+
+  const mirrorRoot = buildFixture((files) =>
+    files.set(
+      'scripts/mirror.mjs',
+      source.replace("from 'yaml'", "from './helper.mjs'"),
+    ),
+  );
+  const mirrorResult = runCli(['--root', mirrorRoot]);
+  assert.equal(mirrorResult.status, 1, mirrorResult.stderr);
+  assert.deepEqual(reportedRules(mirrorResult.stderr), [
+    'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+  ]);
+  assert.match(mirrorResult.stderr, /\.\/helper\.mjs/);
+});
 
 test('an import-looking line inside template text remains visible to the detector', () => {
   const root = buildFixture((files) =>
