@@ -1149,6 +1149,41 @@ const REVIEW_GUARDS: ClosingShape[] = [
         `1.     > x\n        code\n\n      ${CLOSING_LINE}`,
         true,
       ],
+      [
+        'non-interrupting ordered marker under an item paragraph',
+        `- outer\n  10.     > sample\n\n      ${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'non-interrupting ordered marker under a quote paragraph',
+        `> quote\n> 10.        > x\n${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'paragraph text that starts like an ordered item, closer inside',
+        `- outer\n  10. > ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'paragraph text that starts like an ordered item, closer below',
+        `- outer\n  10. > sample\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'ordered marker after a quote paragraph, no quote marker of its own',
+        `> intro\n2.     > sample\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'ordered marker left of the item content starts a new list',
+        `- outer\n10. > sample\n${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'a second non-interrupting ordered marker stays text',
+        `- outer\n  10. a\n  11.     > sample\n\n      ${CLOSING_LINE}`,
+        false,
+      ],
     ] satisfies [string, string, boolean][]
   ).map(([note, body, counted], index) => ({
     id: `D${index + 1} ${note}`,
@@ -1190,7 +1225,7 @@ test('collector keeps the table of closing-line shapes complete and distinct', (
       PROSE_COUNTED.length,
       REVIEW_GUARDS.length,
     ],
-    [39, 89, 69, 27],
+    [39, 89, 69, 34],
   );
   assert.equal(new Set(all.map(({ body }) => body)).size, all.length);
 });

@@ -513,6 +513,10 @@ function findIssueRelatedOpenPrs({ port, issueNumber }) {
 function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;
   let paragraphOpen = false;
+  // Content column of the list item that the previous line opened with
+  // paragraph text, or `null`. A line inside that item continues the
+  // paragraph, so a non-`1` ordered marker on it cannot start a list.
+  let listItemParagraphColumn = null;
   // Content column of the list item whose marker had excess padding and so
   // starts with an indented code block, or `null` outside such a block.
   let listCodeContentColumn = null;
@@ -538,9 +542,14 @@ function stripBlockQuotesAndLazyContinuations(body) {
       if (line.trim() === '') {
         quotedParagraphOpen = false;
         paragraphOpen = false;
+        listItemParagraphColumn = null;
         followsListCode = false;
         return line;
       }
+      const itemParagraphContinues =
+        listItemParagraphColumn !== null &&
+        indentationColumns(line) >= listItemParagraphColumn;
+      listItemParagraphColumn = null;
       let probeForIndentedCode = false;
       if (listCodeContentColumn !== null) {
         // A blank line does not end the code block, so only a shallower
@@ -563,9 +572,10 @@ function stripBlockQuotesAndLazyContinuations(body) {
         normalizedBody,
         currentLineStart,
         listIndentFastPath,
-        paragraphOpen,
+        paragraphOpen || itemParagraphContinues,
         listZoneCache,
         probeForIndentedCode,
+        quotedParagraphOpen,
       );
       if (scan.kind === 'listCode') {
         listCodeContentColumn = scan.contentColumn;
@@ -594,10 +604,50 @@ function stripBlockQuotesAndLazyContinuations(body) {
         }
         quotedParagraphOpen = false;
       }
-      paragraphOpen = !startsMarkdownBlock(line, paragraphOpen);
-      return line;
+      // A non-`1` ordered marker cannot interrupt an open paragraph, so the
+      // line is paragraph text. Defuse the marker: the later code mask would
+      // otherwise open a nested list there and misplace the lines after it.
+      const isParagraphText =
+        (paragraphOpen || itemParagraphContinues) &&
+        isNonInterruptingListItem(line);
+      paragraphOpen =
+        isParagraphText || !startsMarkdownBlock(line, paragraphOpen);
+      listItemParagraphColumn = isParagraphText
+        ? null
+        : listItemParagraphContentColumn(line);
+      return isParagraphText ? defuseOrderedMarker(line) : line;
     })
     .join('\n');
+}
+function defuseOrderedMarker(line) {
+  return line.replace(/^([ \t]*\d{1,9})[.)]/u, '$1\u0001');
+}
+function isNonInterruptingListItem(line) {
+  const listItem = parseListItemMatch(line.trimStart());
+  return listItem !== null && !isInterruptingListMarker(listItem.marker);
+}
+function listItemParagraphContentColumn(line) {
+  let content = line.trimStart();
+  let column = indentationColumns(line);
+  let contentColumn = null;
+  for (
+    let listItem = parseListItemMatch(content);
+    listItem !== null;
+    listItem = parseListItemMatch(content)
+  ) {
+    const markerEnd = column + listItem.marker.length;
+    const padding = indentationColumns(listItem.spacing, markerEnd) - markerEnd;
+    // Five or more columns of padding start the item with code, not text.
+    contentColumn = markerEnd + (padding > 4 ? 1 : padding);
+    column = markerEnd + padding;
+    content = listItem.content.replace(TASK_CHECKBOX_PREFIX, '');
+  }
+  return contentColumn !== null &&
+    content.trim() !== '' &&
+    !content.startsWith('>') &&
+    !startsMarkdownLeafBlock(content)
+    ? contentColumn
+    : null;
 }
 function stripBlockQuoteAndListPrefixes(line) {
   const scan = scanBlockQuoteAndListPrefixes(line);
@@ -611,6 +661,7 @@ function scanBlockQuoteAndListPrefixes(
   paragraphOpen = false,
   listZoneCache,
   probeForIndentedCode = false,
+  quoteParagraphOpen = false,
 ) {
   // Most lines, including ordinary indented code, cannot become a
   // blockquote or nested list after list-content indentation is removed.
@@ -686,8 +737,10 @@ function scanBlockQuoteAndListPrefixes(
     const listMarker = markerPrefix.match(/^(?:[-+*]|\d{1,9}[.)])[ \t]+/u);
     if (listMarker) {
       const parsedListItem = parseListItemMatch(markerPrefix);
+      // A line without a quote marker is not inside a quote paragraph, so
+      // `quoteParagraphOpen` only counts after the line's own `>`.
       if (
-        paragraphOpen &&
+        (paragraphOpen || (foundBlockQuote && quoteParagraphOpen)) &&
         !foundListMarker &&
         parsedListItem !== null &&
         !isInterruptingListMarker(parsedListItem.marker)
