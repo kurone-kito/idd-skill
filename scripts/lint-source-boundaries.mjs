@@ -74,6 +74,10 @@ const REGEX_PRECEDING_KEYWORDS = new Set([
   'yield',
   'await',
   'throw',
+  'extends',
+  'break',
+  'continue',
+  'debugger',
 ]);
 const CONTROL_FLOW_PAREN_KEYWORDS = new Set([
   'if',
@@ -110,17 +114,26 @@ function regexCanStartAfter(
   lastCodeChar,
   lastWord,
   previousWord,
+  lastWordIsPropertyName,
+  previousWordIsPropertyName,
   controlFlowClosingParenthesis,
+  expressionEndingBrace,
 ) {
   if (lastCodeChar === '') {
     return true;
   }
   if (
     controlFlowClosingParenthesis ||
-    REGEX_PRECEDING_KEYWORDS.has(lastWord) ||
-    (lastWord === 'default' && previousWord === 'export')
+    (!lastWordIsPropertyName && REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
+    (!lastWordIsPropertyName &&
+      lastWord === 'default' &&
+      previousWord === 'export' &&
+      !previousWordIsPropertyName)
   ) {
     return true;
+  }
+  if (expressionEndingBrace) {
+    return false;
   }
   return !/[\w$)\]'"`]/.test(lastCodeChar);
 }
@@ -169,7 +182,10 @@ function scanComments(source) {
     let previousWordIsPropertyName = false;
     let wordBoundary = false;
     let controlFlowClosingParenthesis = false;
+    let expressionEndingBrace = false;
+    let arrowBodyPending = false;
     const controlFlowParentheses = [];
+    const expressionEndingBraces = [];
     function recordCodeChar(ch) {
       if (/\s/.test(ch)) {
         wordBoundary = true;
@@ -177,6 +193,8 @@ function scanComments(source) {
       }
       const previousCodeChar = lastCodeChar;
       lastCodeChar = ch;
+      const startsArrowBody = previousCodeChar === '=' && ch === '>';
+      expressionEndingBrace = false;
       if (/[A-Za-z0-9_$]/.test(ch)) {
         if (wordBoundary || lastWord === '') {
           previousWord = lastWord;
@@ -194,6 +212,7 @@ function scanComments(source) {
       }
       controlFlowClosingParenthesis = false;
       wordBoundary = false;
+      arrowBodyPending = startsArrowBody;
     }
     function recordLiteral(end) {
       lastCodeChar = end;
@@ -203,6 +222,8 @@ function scanComments(source) {
       lastWordIsPropertyName = false;
       controlFlowClosingParenthesis = false;
       wordBoundary = false;
+      expressionEndingBrace = false;
+      arrowBodyPending = false;
     }
     while (index < source.length) {
       const ch = source[index];
@@ -247,7 +268,10 @@ function scanComments(source) {
           lastCodeChar,
           lastWord,
           previousWord,
+          lastWordIsPropertyName,
+          previousWordIsPropertyName,
           controlFlowClosingParenthesis,
+          expressionEndingBrace,
         )
       ) {
         let end = index + 1;
@@ -338,9 +362,31 @@ function scanComments(source) {
                 !previousWordIsPropertyName)),
         );
       }
+      if (ch === '{') {
+        expressionEndingBraces.push(
+          arrowBodyPending ||
+            (!controlFlowClosingParenthesis &&
+              (lastCodeChar === '=' ||
+                lastCodeChar === '(' ||
+                lastCodeChar === '[' ||
+                lastCodeChar === ',' ||
+                lastCodeChar === ':' ||
+                (!lastWordIsPropertyName &&
+                  REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
+                (!lastWordIsPropertyName &&
+                  lastWord === 'default' &&
+                  previousWord === 'export' &&
+                  !previousWordIsPropertyName))),
+        );
+      }
+      const closesExpressionBrace =
+        ch === '}' && expressionEndingBraces.pop() === true;
       const closesControlFlowParenthesis =
         ch === ')' && controlFlowParentheses.pop() === true;
       recordCodeChar(ch);
+      if (closesExpressionBrace) {
+        expressionEndingBrace = true;
+      }
       if (closesControlFlowParenthesis) {
         controlFlowClosingParenthesis = true;
       }

@@ -409,9 +409,57 @@ const marker = '*/';
 `.replace('__SPECIFIER__', specifier),
   },
   {
+    name: 'a regex after a control-flow block',
+    source: (specifier) =>
+      `if (ok) {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
     name: 'a regex after export default',
     source: (specifier) =>
       `export default /[/*]/;
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after extends',
+    source: (specifier) =>
+      `class Example extends /[/*]/ {}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated break',
+    source: (specifier) =>
+      `while (true) {
+  break
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated continue',
+    source: (specifier) =>
+      `while (true) {
+  continue
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated debugger statement',
+    source: (specifier) =>
+      `debugger
+/[/*]/.test(value);
 import value from '__SPECIFIER__';
 const marker = '*/';
 `.replace('__SPECIFIER__', specifier),
@@ -459,6 +507,54 @@ for (const { name, source } of lexicalBoundarySources) {
       'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
     ]);
     assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+const divisionWithCommentedImports: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'division after a property named return',
+    source: (specifier) =>
+      `const value = obj.return / 1 /* import('__SPECIFIER__') */;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an object literal',
+    source: (specifier) =>
+      `const value = {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow function expression',
+    source: (specifier) =>
+      `const value = () => {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of divisionWithCommentedImports) {
+  test(`the node-import rule ignores commented imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('left-pad')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
+  });
+
+  test(`the standalone-mirror rule ignores commented imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
   });
 }
 
