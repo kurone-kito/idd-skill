@@ -771,6 +771,446 @@ test('collector avoids rescanning a successful nested quote list zone', () => {
   );
 });
 
+test('collector handles a long run of list-item code without matching its text', () => {
+  // The opener's padding makes the item start with indented code, so each
+  // 6-space line is code, not a quote (issue #3769).
+  const codeLines = Array.from(
+    { length: 8_000 },
+    (_, index) => `      > continuation ${index}`,
+  ).join('\n');
+  const startedAt = performance.now();
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: `-     > sample\n${codeLines}\n\nCloses #9000`,
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+  assert.ok(
+    elapsedMs < 2_000,
+    `list-item code run took ${elapsedMs.toFixed(1)} ms (limit 2000 ms)`,
+  );
+});
+
+test('collector avoids rescanning for every line that leaves list-item code', () => {
+  // A non-interrupting ordered opener sits in no enclosing item, so each
+  // exit line would otherwise walk back through every earlier pair.
+  const pairs = Array.from(
+    { length: 4_000 },
+    (_, index) => `  10.     > example ${index}\n    code ${index}`,
+  ).join('\n');
+  const startedAt = performance.now();
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'quoted example PR',
+      body: `${pairs}\n\nCloses #9000`,
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+  const elapsedMs = performance.now() - startedAt;
+
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 0);
+  assert.equal(input.prNumber, null);
+  assert.ok(
+    elapsedMs < 2_000,
+    `list-item code exit run took ${elapsedMs.toFixed(1)} ms (limit 2000 ms)`,
+  );
+});
+
+// Expected verdicts for the bodies below come from GitHub's own Markdown
+// renderer, queried on 2026-10-05 for every body with
+//   gh api markdown -f mode=gfm -f context=kurone-kito/idd-skill \
+//     -f text="$BODY"
+// A closing line counts when the rendered reference to #3145 is a link
+// outside every blockquote and code element. This test makes no network call
+// (issue #3769).
+const CLOSING_LINE = 'Closes #3145';
+const LIST_MARKERS = ['-', '*', '+', '1.', '1)', '10.'];
+
+interface ClosingShape {
+  id: string;
+  body: string;
+  counted: boolean;
+}
+
+function markerShapes(
+  family: string,
+  paddings: number[],
+  body: (marker: string, padding: string) => string,
+  counted: boolean,
+): ClosingShape[] {
+  return LIST_MARKERS.flatMap((marker) =>
+    paddings.map((padding) => ({
+      id: `${family} ${marker} padded by ${padding}`,
+      body: body(marker, ' '.repeat(padding)),
+      counted,
+    })),
+  );
+}
+
+function literalShapes(
+  family: string,
+  bodies: string[],
+  counted: boolean,
+): ClosingShape[] {
+  return bodies.map((body, index) => ({
+    id: `${family}#${index + 1}`,
+    body,
+    counted,
+  }));
+}
+
+const spaces = (count: number) => ' '.repeat(count);
+
+// Set A: GitHub counts the closing line, the collector used to miss it.
+const EXCESS_PADDING_COUNTED: ClosingShape[] = [
+  ...markerShapes(
+    'A1',
+    [5, 6, 8],
+    (marker, padding) => `${marker}${padding}> sample\n${CLOSING_LINE}`,
+    true,
+  ),
+  ...literalShapes(
+    'A2 tab',
+    [
+      `-\t    > sample\n${CLOSING_LINE}`,
+      `-\t  > sample\n${CLOSING_LINE}`,
+      `1.\t   > sample\n${CLOSING_LINE}`,
+      `   -\t > sample\n${CLOSING_LINE}`,
+      ` -\t   > sample\n${CLOSING_LINE}`,
+    ],
+    true,
+  ),
+  ...literalShapes(
+    'A3 closing line after the code',
+    [
+      ...[2, 3, 4, 5].map(
+        (indent) => `-     > sample\n${spaces(indent)}${CLOSING_LINE}`,
+      ),
+      `1.     > sample\n${spaces(6)}${CLOSING_LINE}`,
+      ...[6, 7].map(
+        (indent) => `- x\n  -     > sample\n${spaces(indent)}${CLOSING_LINE}`,
+      ),
+      `10.     > sample\n${spaces(7)}${CLOSING_LINE}`,
+      ...[3, 5].map(
+        (indent) => `   -     > sample\n${spaces(indent)}${CLOSING_LINE}`,
+      ),
+    ],
+    true,
+  ),
+  ...literalShapes(
+    'A4 nested item',
+    [`- outer\n  -     > sample\n${CLOSING_LINE}`],
+    true,
+  ),
+  ...literalShapes(
+    'A5 two markers',
+    [
+      `-     - > sample\n${CLOSING_LINE}`,
+      `- -     > sample\n${CLOSING_LINE}`,
+      `- -  \t> sample\n${CLOSING_LINE}`,
+    ],
+    true,
+  ),
+  ...literalShapes(
+    'A6 paragraph before',
+    [`intro\n-     > sample\n${CLOSING_LINE}`],
+    true,
+  ),
+  ...literalShapes('A7 CRLF', [`-     > sample\r\n${CLOSING_LINE}`], true),
+];
+
+// Set B: GitHub renders a quote or code, so the collector must keep ignoring.
+const QUOTE_OR_CODE_IGNORED: ClosingShape[] = [
+  ...markerShapes(
+    'B1',
+    [1, 2, 3, 4],
+    (marker, padding) => `${marker}${padding}> sample\n${CLOSING_LINE}`,
+    false,
+  ),
+  ...markerShapes(
+    'B2',
+    [1, 2, 3, 4, 5, 6, 8],
+    (marker, padding) => `${marker}${padding}> ${CLOSING_LINE}`,
+    false,
+  ),
+  ...literalShapes(
+    'B3',
+    ['-     [ ] > Resolves #3145', `-     > ${CLOSING_LINE}\nsecond line`],
+    false,
+  ),
+  ...literalShapes(
+    'B4 closing line still in the code',
+    [
+      ...[6, 8].map(
+        (indent) => `-     > sample\n${spaces(indent)}${CLOSING_LINE}`,
+      ),
+      ...[7, 8].map(
+        (indent) => `1.     > sample\n${spaces(indent)}${CLOSING_LINE}`,
+      ),
+      `- x\n  -     > sample\n${spaces(8)}${CLOSING_LINE}`,
+      `10.     > sample\n${spaces(8)}${CLOSING_LINE}`,
+      `   -     > sample\n${spaces(4)}${CLOSING_LINE}`,
+      ` 10.     > sample\n${spaces(4)}${CLOSING_LINE}`,
+      `-     > sample\n\n      ${CLOSING_LINE}`,
+    ],
+    false,
+  ),
+  ...literalShapes(
+    'B5 tab stops',
+    [
+      `-\t> sample\n${CLOSING_LINE}`,
+      `-\t > sample\n${CLOSING_LINE}`,
+      `1.\t > sample\n${CLOSING_LINE}`,
+      `- -\t> sample\n${CLOSING_LINE}`,
+      `- -\t  > sample\n${CLOSING_LINE}`,
+      `  -\t  > sample\n${CLOSING_LINE}`,
+      ` -\t  > sample\n${CLOSING_LINE}`,
+      `- outer\n  -\t  > sample\n${CLOSING_LINE}`,
+    ],
+    false,
+  ),
+  ...literalShapes(
+    'B6 ordinary quote',
+    [
+      `- > sample\n  ${CLOSING_LINE}`,
+      `- outer\n  - > sample\n${CLOSING_LINE}`,
+      `intro\n- > sample\n${CLOSING_LINE}`,
+      `> sample\n${CLOSING_LINE}`,
+    ],
+    false,
+  ),
+];
+
+// Set C: GitHub counts the closing line and the collector already did.
+const PROSE_COUNTED: ClosingShape[] = [
+  ...markerShapes(
+    'C1',
+    [1, 2, 3, 4, 5, 6, 8],
+    (marker, padding) => `${marker}${padding}> sample\n\n${CLOSING_LINE}`,
+    true,
+  ),
+  // Padding of five or more columns without a quote is deliberately absent:
+  // GitHub renders code there and the collector counts it, and neither
+  // verdict is required (issue #3769, out of scope).
+  ...markerShapes(
+    'C2',
+    [1, 2, 3, 4],
+    (marker, padding) => `${marker}${padding}${CLOSING_LINE}`,
+    true,
+  ),
+  ...literalShapes(
+    'C3',
+    [
+      `- outer\n  -     > sample\n\n${CLOSING_LINE}`,
+      `>     - > sample\n${CLOSING_LINE}`,
+      `-     > sample\n\n  ${CLOSING_LINE}`,
+    ],
+    true,
+  ),
+];
+
+// Set D: shapes found while reviewing the rule, each guarding one branch.
+const REVIEW_GUARDS: ClosingShape[] = [
+  ...(
+    [
+      [
+        'blank line, then a paragraph in the item',
+        `-     > sample\n\n    ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'blank line, then a paragraph one column further',
+        `-     > sample\n\n     ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'blank line inside the code',
+        `*     > x\n\n      code\n    ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'blank line inside the code, tab',
+        `-     > sample\n\n       code\n\t${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'fence inside the item',
+        `-     > sample\n    \`\`\`\n      ${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'fence inside an item that then ends',
+        `   -     > x\n      \`\`\`\n    ${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'fence inside an ordered item',
+        `1.     > x\n    \`\`\`\n       ${CLOSING_LINE}`,
+        false,
+      ],
+      ['list inside a real quote', `> -     > x\n      ${CLOSING_LINE}`, false],
+      [
+        'exit line stays in the outer item',
+        `- outer\n    -\t  > sample\n    ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'second marker, exit line in the item',
+        `-   1)        > sample\n      ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'quote item, then code item',
+        `- > real quote\n-     > code\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'two code items in a row',
+        `-     > sample\n-     > sample2\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'paragraph, then an interrupting ordered item',
+        `intro\n1.     > sample\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'tab-indented nested item',
+        `- outer\n\t-     > sample\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'third-level item',
+        `- a\n  - b\n    -     > sample\n    ${CLOSING_LINE}`,
+        true,
+      ],
+      ['tab after the quote marker', `-     >\tsample\n${CLOSING_LINE}`, true],
+      [
+        'CRLF code continuation',
+        `-     > sample\r\n      more\r\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'task checkbox after the padding',
+        `-     [ ] > sample\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'exit line inside a nested item the zone lookup cannot see',
+        `- outer\n   *     > sample\n     ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'list code inside a real quote, closing line outside it',
+        `> -     > x\n  ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'list code inside a real quote, code line, then the closing line',
+        `> -     > x\n      code\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'list code inside a nested real quote item',
+        `> - x\n>   -     > y\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'tab stops after a quote marker, four columns of padding',
+        `> -\t  > x\n${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'tab stops after a quote marker, five columns of padding',
+        `>  -\t > x\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'two tabs after a marker inside a quote',
+        `> -\t\t> x\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'code line, blank line, then a paragraph in the item',
+        `-     > x\n       code\n\n    ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'code line, blank line, then a paragraph in an ordered item',
+        `1.     > x\n        code\n\n      ${CLOSING_LINE}`,
+        true,
+      ],
+    ] satisfies [string, string, boolean][]
+  ).map(([note, body, counted], index) => ({
+    id: `D${index + 1} ${note}`,
+    body,
+    counted,
+  })),
+];
+
+function assertClosingShapes(shapes: ClosingShape[]) {
+  for (const { id, body, counted } of shapes) {
+    const input = collectResumePrInput([
+      {
+        number: 3150,
+        title: 'closing line shape',
+        body,
+        url: 'https://example.test/pr/3150',
+      },
+    ]);
+    assert.equal(input.prAmbiguous, false, `${id}: ${JSON.stringify(body)}`);
+    assert.equal(
+      input.prCount,
+      counted ? 1 : 0,
+      `${id}: ${JSON.stringify(body)}`,
+    );
+  }
+}
+
+test('collector keeps the table of closing-line shapes complete and distinct', () => {
+  const all = [
+    EXCESS_PADDING_COUNTED,
+    QUOTE_OR_CODE_IGNORED,
+    PROSE_COUNTED,
+    REVIEW_GUARDS,
+  ].flat();
+  assert.deepEqual(
+    [
+      EXCESS_PADDING_COUNTED.length,
+      QUOTE_OR_CODE_IGNORED.length,
+      PROSE_COUNTED.length,
+      REVIEW_GUARDS.length,
+    ],
+    [39, 89, 69, 27],
+  );
+  assert.equal(new Set(all.map(({ body }) => body)).size, all.length);
+});
+
+test('collector counts a closing line after list padding that makes code', () => {
+  assertClosingShapes(EXCESS_PADDING_COUNTED);
+});
+
+test('collector still ignores a quote or code that holds the closing line', () => {
+  assertClosingShapes(QUOTE_OR_CODE_IGNORED);
+});
+
+test('collector still counts a closing line that GitHub renders as prose', () => {
+  assertClosingShapes(PROSE_COUNTED);
+});
+
+test('collector follows the rule through the shapes found in review', () => {
+  assertClosingShapes(REVIEW_GUARDS);
+});
+
 test('collector drops a cached outer list zone after a nested list marker', () => {
   const input = collectResumePrInput([
     {
