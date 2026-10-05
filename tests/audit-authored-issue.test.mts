@@ -91,7 +91,7 @@ test('defer-source-marker rejects malformed values, prefixes, Refs lines, and bu
 
   for (const body of [
     withBody(
-      '<!-- idd-skill-authoring-defer-source: review-needs-decisoin -->',
+      '<!-- idd-skill-authoring-defer-source: review-needs-decision-extra -->',
       bucket,
       'Refs #123',
     ),
