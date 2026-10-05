@@ -502,11 +502,14 @@ test('fails when an omittedByDesign entry also carries a helperGate', () => {
   );
 });
 
-function runAuditDocs(cwd: string): { status: number; stderr: string } {
+function runAuditDocs(
+  cwd: string,
+  nodeArgs: readonly string[] = [],
+): { status: number; stdout: string; stderr: string } {
   try {
-    execFileSync(
+    const stdout = execFileSync(
       process.execPath,
-      [join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
+      [...nodeArgs, join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
       {
         cwd,
         env: fixtureEnv(),
@@ -514,11 +517,12 @@ function runAuditDocs(cwd: string): { status: number; stderr: string } {
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
-    return { status: 0, stderr: '' };
+    return { status: 0, stdout, stderr: '' };
   } catch (error) {
-    const e = error as { status?: unknown; stderr?: unknown };
+    const e = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
     return {
       status: typeof e.status === 'number' ? e.status : 1,
+      stdout: typeof e.stdout === 'string' ? e.stdout : '',
       stderr: typeof e.stderr === 'string' ? e.stderr : '',
     };
   }
@@ -532,6 +536,30 @@ function initFixture(): { dir: string; cleanup: () => void } {
     dir,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
+}
+
+/**
+ * A fixture that identifies itself as the source repository (package name and
+ * the `docs/token-cost.md` marker) and tracks no inventory audit files, so
+ * `audit-docs` runs its source checks and reports both files as missing.
+ */
+function initSourceFixtureWithoutInventoryAudit(): {
+  dir: string;
+  cleanup: () => void;
+} {
+  const fixture = initFixture();
+  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
+  writeFileSync(
+    join(fixture.dir, 'package.json'),
+    '{"name":"@kurone-kito/idd-skill"}\n',
+  );
+  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
+  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
+  execFileSync('git', ['add', '-A'], {
+    cwd: fixture.dir,
+    env: fixtureEnv(),
+  });
+  return fixture;
 }
 
 test('an omitted registry is optional when the lite corpus is absent', (t) => {
@@ -576,19 +604,8 @@ test('an omitted registry fails when the canonical lite corpus is present', (t) 
 });
 
 test('source repository audit fails when both inventory audit files are absent', (t) => {
-  const fixture = initFixture();
+  const fixture = initSourceFixtureWithoutInventoryAudit();
   t.after(fixture.cleanup);
-  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
-  writeFileSync(
-    join(fixture.dir, 'package.json'),
-    '{"name":"@kurone-kito/idd-skill"}\n',
-  );
-  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
-  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
-  execFileSync('git', ['add', '-A'], {
-    cwd: fixture.dir,
-    env: fixtureEnv(),
-  });
 
   const result = runAuditDocs(fixture.dir);
   assert.equal(result.status, 1);
@@ -603,19 +620,8 @@ test('source repository audit fails when both inventory audit files are absent',
 });
 
 test('source repository audit rejects untracked inventory audit files', (t) => {
-  const fixture = initFixture();
+  const fixture = initSourceFixtureWithoutInventoryAudit();
   t.after(fixture.cleanup);
-  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
-  writeFileSync(
-    join(fixture.dir, 'package.json'),
-    '{"name":"@kurone-kito/idd-skill"}\n',
-  );
-  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
-  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
-  execFileSync('git', ['add', '-A'], {
-    cwd: fixture.dir,
-    env: fixtureEnv(),
-  });
 
   const auditFiles = [
     'src/scripts/repository-inventory-audit.mts',
@@ -659,4 +665,44 @@ test('source repository audit rejects untracked inventory audit files', (t) => {
     result.stderr,
     /repository-inventory-audit-required-file: scripts\/repository-inventory-audit\.mjs: required source audit file is missing or untracked/,
   );
+});
+
+test('audit-docs delivers its whole failure report when stderr writes complete late', (t) => {
+  const fixture = initSourceFixtureWithoutInventoryAudit();
+  t.after(fixture.cleanup);
+  // On POSIX Node writes a piped stderr asynchronously, so a process.exit()
+  // right after the report drops whatever is still queued. Deferring every
+  // write by one event-loop turn reproduces that loss deterministically; a
+  // merely stalled reader does not, because the report (about 41 KB) fits in
+  // the 64 KB Linux pipe buffer.
+  const preloadDir = mkdtempSync(join(tmpdir(), 'audit-docs-preload-'));
+  t.after(() => rmSync(preloadDir, { recursive: true, force: true }));
+  const preload = join(preloadDir, 'defer-stderr-writes.cjs');
+  writeFileSync(
+    preload,
+    [
+      'const write = process.stderr._write.bind(process.stderr);',
+      'process.stderr._write = (chunk, encoding, callback) => {',
+      '  setImmediate(() => write(chunk, encoding, callback));',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const result = runAuditDocs(fixture.dir, ['--require', preload]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /documentation audit failed:/);
+  assert.match(result.stderr, /repository-instruction-audit\//);
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: src\/scripts\/repository-inventory-audit\.mts: required source audit file is missing or untracked/,
+  );
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: scripts\/repository-inventory-audit\.mjs: required source audit file is missing or untracked/,
+  );
+  // Setting the exit code without returning would still print the success line.
+  assert.equal(result.stdout.includes('documentation audit passed'), false);
 });

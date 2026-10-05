@@ -895,6 +895,29 @@ and triage proceed while CI or the expected advisory re-review is
 incomplete. The next full E1 entry records the deferred watermark after
 those signals resolve.
 
+### Review-fix escalation examples
+
+Issue kurone-kito/idd-skill#2223's clone-scoped lock continued to draw
+new P1 concurrency findings over several review rounds even after
+replacing mtime-based staleness with PID-liveness checks. PR
+kurone-kito/idd-skill#2389 removed automatic stale-lock takeover and
+replaced it with a timeout that reports the lock path and holder PID
+for manual recovery, matching Git's own `index.lock` collision
+behavior (observed 2026-09-01, kurone-kito/idd-skill#2389). That
+simplification was safe because the issue's acceptance criteria
+required acquire/release, not automatic stale-lock recovery.
+
+The CommonMark-targeting structural-evidence parser for issue
+kurone-kito/idd-skill#2767 was implemented in PR
+kurone-kito/idd-skill#2840. An adversarial automated reviewer
+surfaced distinct gaps between the parser's supported behavior and
+CommonMark rendering over 27 review rounds, each an in-scope
+correctness gap rather than a repeating symptom of one mechanism
+(observed 2026-09-10, kurone-kito/idd-skill#2840). The loop ended
+after the operator accepted three remaining findings as a documented
+limitation and filed kurone-kito/idd-skill#2865 as the scoped
+follow-up.
+
 ### Merge-main livelock under fast-moving `main`
 
 Under heavy concurrent-session load, `main` can advance before one

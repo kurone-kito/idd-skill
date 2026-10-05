@@ -101,11 +101,8 @@ finding something new in the _same area_, treat it as a signal that a
 shared root cause may be producing each new instance, and check
 whether one structural fix (e.g., auditing every caller of a helper
 against its contract, instead of patching one caller per round) would
-converge the loop faster than another incremental patch. Worked
-example: five review rounds each flag a different call site missing a
-validation check that a shared helper added — the fix that ends the
-loop is auditing every caller against the helper's contract once, not
-a sixth per-call-site patch. Once fixes materially address the
+converge the loop faster than another incremental patch. Once fixes
+materially address the
 finding's root cause and further comments are speculative or
 non-blocking hardening, treat them as PATH B (disposition-only,
 E4-E7) rather than opening another E9-E10 round.
@@ -125,18 +122,9 @@ actionable manual-recovery guidance, rather than a second redesign —
 any part of the mechanism's behavior, check the issue's acceptance
 criteria and any established external contract for whether that
 behavior was actually required; if so, stop for a maintainer decision
-instead of dropping it to converge review. Worked example:
-kurone-kito/idd-skill#2223's clone-scoped lock
-(kurone-kito/idd-skill#2389) kept drawing new P1 concurrency findings
-across several rounds even after replacing mtime-based staleness with
-PID-liveness-based staleness; convergence only happened once automatic
-stale-lock takeover was removed entirely, replaced with a timeout that
-reports the lock path and the recorded holder's PID for manual
-recovery — the same shape
-`git`'s own `index.lock` uses on collision. Removal was safe there
-specifically because the issue's acceptance criteria only ever
-required an acquire/release interface, never automatic stale-lock
-recovery.
+instead of dropping it to converge review. Worked example: issue
+kurone-kito/idd-skill#2223 (PR kurone-kito/idd-skill#2389); see
+[the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples).
 
 **Third escalation tier (heuristic, not a hard rule): open-ended
 correctness-domain findings against an external spec.** A different
@@ -159,16 +147,11 @@ finding the same way this workflow already disposes of any review
 item or resolves any hold (`idd-review-triage.instructions.md`,
 `idd-overview-appendix.instructions.md`), and file any follow-up
 through `idd-review-triage.instructions.md`'s E6 follow-up-issue rule,
-rather than continuing rounds indefinitely. Worked example:
-kurone-kito/idd-skill#2767 (PR kurone-kito/idd-skill#2840) implemented
-a CommonMark-compliant structural-evidence parser
-(`triage-structural-evidence.mts` / `markdown-code.mts`); an
-adversarial automated reviewer kept surfacing genuine, distinct
-CommonMark spec-compliance gaps across 27 review rounds, each an
-in-scope correctness gap rather than a repeating symptom of one
-mechanism -- the loop ended only once the operator accepted 3
-remaining findings as a documented known limitation and filed
-kurone-kito/idd-skill#2865 as the scoped follow-up.
+rather than continuing rounds indefinitely. Worked example: issue
+kurone-kito/idd-skill#2767 (PR
+kurone-kito/idd-skill#2840) ran 27 review rounds; the operator
+accepted three remaining findings as a documented limitation and filed
+follow-up kurone-kito/idd-skill#2865 (see [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples)).
 
 ## E11 — Resolve conflicts with {development-branch}
 

@@ -447,6 +447,34 @@ function makeRuleViolation(
         'High defers only at `very-low`',
         'High defers at every urgency',
       );
+    case 'review-triage-in-place-edit-only-boundary':
+      return replaceFixtureText(
+        documents,
+        'idd-template/.github/instructions/idd-review-triage.instructions.md',
+        '(`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a stricter subset — not an override path of its own.)',
+        '',
+      );
+    case 'review-triage-verify-confirm-boundary':
+      return replaceFixtureText(
+        documents,
+        'idd-template/.github/instructions/idd-review-triage.instructions.md',
+        "A verify-then-confirm reply (analysis before the confirmation verb) isn't recognized, so #2125's override doesn't fire (recognized replies are unaffected).",
+        '',
+      );
+    case 'review-triage-repeating-advisory-hold':
+      return replaceFixtureText(
+        documents,
+        'idd-template/.github/instructions/idd-review-triage.instructions.md',
+        "A repeating `missingThreads` entry that's a no-new-content advisory-bot reply needs a hold comment; stop instead of re-posting the disposition (#3324).",
+        '',
+      );
+    case 'f2-ack-only-override-condition':
+      return replaceFixtureText(
+        documents,
+        'idd-template/.github/instructions/idd-pre-merge.instructions.md',
+        'when `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` (every blocking item is a `missingThreads` entry with `ackOnlyPostDisposition: true`, `missingRegularComments` empty), autopilot may deterministically override `return-to-e1` and proceed on the current HEAD SHA.',
+        '',
+      );
     case 'post-marker-outcomes':
       return replaceFixtureText(
         documents,
