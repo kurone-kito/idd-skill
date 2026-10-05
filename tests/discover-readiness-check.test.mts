@@ -8,12 +8,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildRoadmapMarkerSearchQuery,
+  DEFER_SOURCE_VALUES,
   evaluateDiscoverReadiness,
   extractBlockedByIssueNumbers,
   extractBlockedByRoadmapMarkers,
+  extractDeferSourceRefsIssueNumbers,
   extractDependencyIssueNumbers,
-  extractReviewFixLoopCutoffRefsIssueNumbers,
-  hasReviewFixLoopCutoffDeferMarker,
+  hasDeferSourceMarker,
   isInaccessibleIssueLookupError,
   parseArgs,
   parseSwarmFloorArg,
@@ -204,33 +205,55 @@ test('extractDependencyIssueNumbers captures every same-line Depends on ref and 
   );
 });
 
-test('hasReviewFixLoopCutoffDeferMarker recognizes only the exact marker (#2877)', () => {
+test('hasDeferSourceMarker recognizes only defined defer-source values (#2877, #3778)', () => {
+  assert.deepEqual(DEFER_SOURCE_VALUES, [
+    'review-fix-loop-cutoff',
+    'review-needs-decision',
+  ]);
   assert.equal(
-    hasReviewFixLoopCutoffDeferMarker(
+    hasDeferSourceMarker(
       '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
     ),
     true,
   );
+  assert.equal(
+    hasDeferSourceMarker(
+      '<!-- idd-skill-authoring-defer-source: review-needs-decision -->',
+    ),
+    true,
+  );
   // Absent marker.
-  assert.equal(hasReviewFixLoopCutoffDeferMarker('Refs #100'), false);
+  assert.equal(hasDeferSourceMarker('Refs #100'), false);
   // A different (hypothetical) defer-source value does not match.
   assert.equal(
-    hasReviewFixLoopCutoffDeferMarker(
+    hasDeferSourceMarker(
       '<!-- idd-skill-authoring-defer-source: some-other-reason -->',
+    ),
+    false,
+  );
+  assert.equal(
+    hasDeferSourceMarker(
+      '<!-- idd-skill-authoring-defer-source: REVIEW-NEEDS-DECISION -->',
+    ),
+    false,
+  );
+  assert.equal(
+    hasDeferSourceMarker(
+      '<!-- idd-skill-authoring-defer-source: review-needs-decision extra -->',
     ),
     false,
   );
   // A configured marker prefix threads through the same as the roadmap
   // marker extractor.
   assert.equal(
-    hasReviewFixLoopCutoffDeferMarker(
+    hasDeferSourceMarker(
       '<!-- acme-authoring-defer-source: review-fix-loop-cutoff -->',
       'acme',
     ),
     true,
   );
   assert.equal(
-    hasReviewFixLoopCutoffDeferMarker(
+    hasDeferSourceMarker(
       '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
       'acme',
     ),
@@ -238,64 +261,64 @@ test('hasReviewFixLoopCutoffDeferMarker recognizes only the exact marker (#2877)
   );
 });
 
-test('extractReviewFixLoopCutoffRefsIssueNumbers captures a single Refs reference (#2877)', () => {
-  assert.deepEqual(extractReviewFixLoopCutoffRefsIssueNumbers('- Refs #55'), {
+test('extractDeferSourceRefsIssueNumbers captures a single Refs reference (#2877)', () => {
+  assert.deepEqual(extractDeferSourceRefsIssueNumbers('- Refs #55'), {
     numbers: [55],
     ambiguous: false,
   });
   // Mid-sentence prose is not a dependency declaration.
   assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers('this refs #5 in passing'),
+    extractDeferSourceRefsIssueNumbers('this refs #5 in passing'),
     { numbers: [], ambiguous: false },
   );
   // Inline-code and fenced examples stay masked, matching the other
   // extractors' #1121 boundary.
-  assert.deepEqual(extractReviewFixLoopCutoffRefsIssueNumbers('`Refs #77`'), {
+  assert.deepEqual(extractDeferSourceRefsIssueNumbers('`Refs #77`'), {
     numbers: [],
     ambiguous: false,
   });
 });
 
-test('extractReviewFixLoopCutoffRefsIssueNumbers ignores a Refs mention that does not start its own line (#2877 review fix, Codex P2)', () => {
+test('extractDeferSourceRefsIssueNumbers ignores a Refs mention that does not start its own line (#2877 review fix, Codex P2)', () => {
   // "See also Refs #900 ..." does not begin with the `Refs` keyword after
   // the shared line prefix, so it is ordinary prose, not a second
   // keyword-line declaration -- the sole genuine line (`Refs #100`) wins
   // unambiguously.
   assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers(
+    extractDeferSourceRefsIssueNumbers(
       'Refs #100\n\nSee also Refs #900 (non-blocking) for background.',
     ),
     { numbers: [100], ambiguous: false },
   );
 });
 
-test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when the sole Refs line names more than one issue (#2877 review fix round 3, Codex P2)', () => {
+test('extractDeferSourceRefsIssueNumbers reports ambiguous when the sole Refs line names more than one issue (#2877 review fix round 3, Codex P2)', () => {
   // One keyword line, but it names two issues via the generic
   // comma-separated ref-list grammar this shares with `Blocked by`. This
   // marker's origin is a single issue, not a list, and nothing here can
   // tell which of the two is the real origin -- so this fails closed the
   // same way two separate Refs lines does, rather than treating both
   // numbers as blockers.
-  assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers('Refs #410, #900'),
-    { numbers: [], ambiguous: true },
-  );
+  assert.deepEqual(extractDeferSourceRefsIssueNumbers('Refs #410, #900'), {
+    numbers: [],
+    ambiguous: true,
+  });
   // Same ambiguity via a wrapped continuation line (#2441) rather than a
   // same-line comma list.
-  assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers('Refs #410\n#900'),
-    { numbers: [], ambiguous: true },
-  );
+  assert.deepEqual(extractDeferSourceRefsIssueNumbers('Refs #410\n#900'), {
+    numbers: [],
+    ambiguous: true,
+  });
 });
 
-test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when a second reference hides in trailing prose (#2877 review fix round 4, Codex P2)', () => {
+test('extractDeferSourceRefsIssueNumbers reports ambiguous when a second reference hides in trailing prose (#2877 review fix round 4, Codex P2)', () => {
   // `consumeDependencyRefList` stops at the first non-ref-list token and
   // discards the rest -- correct for the generic `Blocked by` extractor,
   // where trailing prose is deliberately not a blocker, but this hides a
   // genuine second local reference from the ambiguity check above if left
   // unexamined.
   assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers(
+    extractDeferSourceRefsIssueNumbers(
       'Refs #900 (background; originating issue #410)',
     ),
     { numbers: [], ambiguous: true },
@@ -304,21 +327,21 @@ test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when a second
   // check -- `other/repo#20` names an issue in a different repository, not
   // a second local reference.
   assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers(
+    extractDeferSourceRefsIssueNumbers(
       'Refs #900 (see other/repo#20 for prior art)',
     ),
     { numbers: [900], ambiguous: false },
   );
 });
 
-test('extractReviewFixLoopCutoffRefsIssueNumbers reports ambiguous when more than one genuine Refs line exists (#2877 review fix round 2, Codex P2)', () => {
+test('extractDeferSourceRefsIssueNumbers reports ambiguous when more than one genuine Refs line exists (#2877 review fix round 2, Codex P2)', () => {
   // Both lines start with the `Refs` keyword, so nothing in the body text
   // distinguishes the true origin from an unrelated citation -- D3 requires
   // exactly one such line, so this fails closed rather than guessing by
   // body position (the earlier "take the first line" behavior was
   // order-fragile).
   assert.deepEqual(
-    extractReviewFixLoopCutoffRefsIssueNumbers(
+    extractDeferSourceRefsIssueNumbers(
       '## Background\n\nRefs #12, #13\n\nRefs #999 unrelated',
     ),
     { numbers: [], ambiguous: true },
@@ -813,6 +836,176 @@ test('a review-fix-loop-cutoff follow-up stays blocked while its Refs target is 
     summary.filteredOut[0].reasons.join(','),
     /blocked_by_deferred_refs_issue:#402/,
   );
+});
+
+test('a review-needs-decision follow-up waits for its origin and remains held after the origin closes (#3778)', async () => {
+  const issues = new Map<
+    number,
+    {
+      number: number;
+      title: string;
+      state: string;
+      body: string;
+      labels: { name: string }[];
+    }
+  >([
+    [
+      405,
+      {
+        number: 405,
+        title: 'needs-decision follow-up',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-needs-decision -->',
+          '',
+          'Refs #406',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+    [
+      406,
+      {
+        number: 406,
+        title: 'originating issue',
+        state: 'OPEN',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const blocked = await evaluateDiscoverReadiness([405], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+  assert.equal(blocked.ready.length, 0);
+  assert.match(
+    blocked.filteredOut[0].reasons.join(','),
+    /blocked_by_deferred_refs_issue:#406/,
+  );
+
+  const origin = issues.get(406);
+  const followUp = issues.get(405);
+  assert.ok(origin);
+  assert.ok(followUp);
+  issues.set(406, { ...origin, state: 'CLOSED' });
+  issues.set(405, {
+    ...followUp,
+    labels: [{ name: 'status:needs-decision' }],
+  });
+  const stillHeld = await evaluateDiscoverReadiness([405], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+  assert.equal(stillHeld.ready.length, 0);
+  assert.match(
+    stillHeld.filteredOut[0].reasons.join(','),
+    /label:status:needs-decision/,
+  );
+});
+
+test('a review-needs-decision follow-up stays held when its configured labels collide (#3778)', async () => {
+  const issues = new Map([
+    [
+      405,
+      {
+        number: 405,
+        title: 'needs-decision follow-up',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-needs-decision -->',
+          '',
+          'Refs #406',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+    [
+      406,
+      {
+        number: 406,
+        title: 'originating issue',
+        state: 'CLOSED',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const readiness = await evaluateDiscoverReadiness([405], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+    authoringLabelName: 'status:needs-decision',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+
+  assert.equal(readiness.ready.length, 0);
+  assert.match(
+    readiness.filteredOut[0].reasons.join(','),
+    /needs_decision_label_conflicts_with_authoring_label/,
+  );
+});
+
+test('a review-needs-decision marker fails closed for malformed or unresolved Refs and ignores unknown values (#3778)', async () => {
+  const marker =
+    '<!-- idd-skill-authoring-defer-source: review-needs-decision -->';
+  const issues = new Map([
+    [
+      407,
+      {
+        number: 407,
+        title: 'missing Refs',
+        state: 'OPEN',
+        body: marker,
+        labels: [],
+      },
+    ],
+    [
+      408,
+      {
+        number: 408,
+        title: 'ambiguous Refs',
+        state: 'OPEN',
+        body: `${marker}\nRefs #1\nRefs #2`,
+        labels: [],
+      },
+    ],
+    [
+      409,
+      {
+        number: 409,
+        title: 'unresolved Refs',
+        state: 'OPEN',
+        body: `${marker}\nRefs #999`,
+        labels: [],
+      },
+    ],
+    [
+      410,
+      {
+        number: 410,
+        title: 'unknown value',
+        state: 'OPEN',
+        body: '<!-- idd-skill-authoring-defer-source: future-value -->\nRefs #999',
+        labels: [],
+      },
+    ],
+  ]);
+  const summary = await evaluateDiscoverReadiness([407, 408, 409, 410], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+  assert.deepEqual(
+    summary.ready.map((issue) => issue.number),
+    [410],
+  );
+  const reasons = new Map(
+    summary.filteredOut.map((issue) => [issue.number, issue.reasons.join(',')]),
+  );
+  assert.match(reasons.get(407) ?? '', /missing_defer_source_refs_line/);
+  assert.match(reasons.get(408) ?? '', /ambiguous_defer_source_refs_lines/);
+  assert.match(reasons.get(409) ?? '', /unresolvable_defer_source_refs_issue/);
 });
 
 test('a review-fix-loop-cutoff follow-up becomes ready once its Refs target closes (#2877)', async () => {

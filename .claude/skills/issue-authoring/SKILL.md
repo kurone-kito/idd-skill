@@ -117,7 +117,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    matching value) — the same gate section's `--expect-bucket` flag
    requires the matching `authoring-bucket` marker for that publish,
    closing the gap where a non-ready body would otherwise never be
-   audited at all.
+   audited at all. For every `needs-decision` lint — initial publication,
+   held-body re-lint, and Stage 2 — pass
+   `--expect-bucket needs-decision` and both configured labels.
 8. Publish each `ready`, `needs-decision`, or `blocked-by-human` body
    directly under the authoring hold once the completed-draft review
    (step 6) and then the mechanical gate (step 7) have passed. The
@@ -132,6 +134,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      target repository does not already have it
    - treat label creation or application failure as a publishing blocker
    - apply the label before updating an existing issue
+   - for a `review-needs-decision` follow-up, see the narrow auto-release
+     exception in the contract for its extra label and release rules
    - acquire per-target ownership before editing an existing issue or
      roadmap; the shared label is a claim-suppression lock, not an owner
      token. Follow the append-only owner-marker and re-read protocol in
@@ -282,7 +286,7 @@ needs-decision, blocked-by-human, and out-of-scope.
      deterministic comment order; never rely on a single API page
    - after the release checklist passes and the user explicitly requests
      release — or, for a single target whose body carried the
-     review-fix-loop-cutoff marker at Stage 1 publication time (never a
+     defer-source marker at Stage 1 publication time (never a
      marker added later), the narrow auto-release exception in
      [Authoring hold and release](references/contract.md#authoring-hold-and-release)
      — preflight and verify or reuse a matching `mode=release` marker
@@ -319,8 +323,11 @@ needs-decision, blocked-by-human, and out-of-scope.
 9. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does, except the narrow
-   review-fix-loop-cutoff auto-release exception in
+   defer-source auto-release exception in
    [Authoring hold and release](references/contract.md#authoring-hold-and-release).
+   A released `review-needs-decision` follow-up remains out of Discover
+   while the label configured as `labels.needsDecisionLabelName` is
+   present (default: `status:needs-decision`).
 
 ## Reference Routing
 

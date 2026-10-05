@@ -5,7 +5,7 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 //
-// Mechanical provenance check for the review-fix-loop-cutoff auto-release
+// Mechanical provenance check for a defined defer-source auto-release
 // exception's precondition (kurone-kito/idd-skill#2877's contract.md
 // bullet, kurone-kito/idd-skill#2891): before honoring that exception, a
 // releasing session must recompute a target issue's current body-sha256

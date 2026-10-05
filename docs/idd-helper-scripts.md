@@ -891,7 +891,7 @@ in this preamble, since the fallback differs per helper.
   is trusted executable configuration and can transmit the issue draft
   the caller sends it (referenced in
   [kurone-kito/idd-skill#3599](https://github.com/kurone-kito/idd-skill/issues/3599))
-- `scripts/authoring-owner-provenance.mjs` for the review-fix-loop-cutoff
+- `scripts/authoring-owner-provenance.mjs` for the defer-source
   auto-release exception's provenance check
   (`skills/issue-authoring/references/contract.md`): computes the sha256
   of a live issue body's exact UTF-8 content and compares it against that
@@ -5378,7 +5378,8 @@ reflexively as any other CLI option.
 - `deferFollowUps` (#3624) is the deferred-follow-up merge-gate evidence:
   `{ checked, unverifiedReason, items: [{ number, heldByAuthoringLabel,
   origin, reconciled }] }`. A follow-up is an open issue carrying the
-  `review-fix-loop-cutoff` defer-source marker (outside any code region)
+  defined defer-source marker (`review-fix-loop-cutoff` or
+  `review-needs-decision`, outside any code region)
   whose sole, unambiguous `Refs` line names one of the PR's origin issues:
   the claimed issue plus every same-repository `closingIssuesReferences`
   entry. It is `reconciled` when the PR body, a conversation comment, a

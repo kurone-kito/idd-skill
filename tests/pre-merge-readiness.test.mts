@@ -16042,6 +16042,8 @@ test("#2911 (Codex review, PR #2915, round 7, P2): a marker that expires mid-run
 
 const DEFER_TEST_MARKER =
   '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->';
+const DEFER_NEEDS_DECISION_TEST_MARKER =
+  '<!-- idd-skill-authoring-defer-source: review-needs-decision -->';
 
 function followUpBody(
   refsLine: string | null,
@@ -16220,6 +16222,57 @@ test('computeDeferFollowUps: an open marked follow-up is reconciled only when a 
     mentionTexts: ['nothing', 'deferred to follow-up issue #12'],
   });
   assert.equal(reconciled.evidence.items[0].reconciled, true);
+});
+
+test('computeDeferFollowUps: review-needs-decision follows the PR-body and conversation reconciliation paths but not a PR-number origin (#3778)', () => {
+  const bodyReconciled = deferEvidence({
+    hits: [
+      deferHit(70, {
+        body: followUpBody('Refs #7', {
+          marker: DEFER_NEEDS_DECISION_TEST_MARKER,
+        }),
+      }),
+    ],
+    mentionTexts: ['PR body: follow-up issue #70'],
+  });
+  assert.deepEqual(bodyReconciled.evidence.items, [
+    { number: 70, heldByAuthoringLabel: true, origin: 7, reconciled: true },
+  ]);
+
+  const commentReconciled = deferEvidence({
+    hits: [
+      deferHit(71, {
+        body: followUpBody('Refs #7', {
+          marker: DEFER_NEEDS_DECISION_TEST_MARKER,
+        }),
+      }),
+    ],
+    mentionTexts: ['conversation comment: follow-up issue #71'],
+  });
+  assert.equal(commentReconciled.evidence.items[0].reconciled, true);
+
+  const pullRequestOrigin = deferEvidence({
+    origins: [7],
+    hits: [
+      deferHit(72, {
+        body: followUpBody('Refs #700', {
+          marker: DEFER_NEEDS_DECISION_TEST_MARKER,
+        }),
+      }),
+    ],
+  });
+  assert.deepEqual(pullRequestOrigin.evidence.items, []);
+
+  const unknownValue = deferEvidence({
+    hits: [
+      deferHit(73, {
+        body: followUpBody('Refs #7', {
+          marker: '<!-- idd-skill-authoring-defer-source: future-value -->',
+        }),
+      }),
+    ],
+  });
+  assert.deepEqual(unknownValue.evidence.items, []);
 });
 
 test('computeDeferFollowUps: a follow-up is never attributed when it lacks the marker, keeps it only in a code region, or has a missing or ambiguous or unrelated Refs line', () => {
