@@ -543,8 +543,7 @@ exception — execution is authorized: the repository's normal entry
 file and routed `.github/instructions/*.instructions.md` phase files
 (Discover, Claim, Work) may pick up the released issue(s). This bundle
 does not itself start that loop. A released `review-needs-decision`
-follow-up remains out of Discover while its `status:needs-decision`
-label is present. This is the configured
-`labels.needsDecisionLabelName` value (default `status:needs-decision`);
-it must differ from the authoring label so releasing the authoring hold
-cannot also remove the decision hold.
+follow-up remains out of Discover while the configured
+`labels.needsDecisionLabelName` label is present (default:
+`status:needs-decision`). It must differ from the authoring label so
+releasing the authoring hold cannot also remove the decision hold.
