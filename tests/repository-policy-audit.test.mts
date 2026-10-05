@@ -22,6 +22,7 @@ import {
   type RepositoryPolicyDocuments,
   repositoryPolicyRuleIds,
   repositoryPolicyRulePaths,
+  WAVE_GRADIENT_PINS,
   WHOLE_CLASS_SWEEP_PINS,
 } from '../src/scripts/repository-policy-audit.mts';
 import { fixtureEnv } from './test-utils.mts';
@@ -52,6 +53,7 @@ const PINNED_CLAUSE_GROUPS = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
   ...WHOLE_CLASS_SWEEP_PINS,
+  ...WAVE_GRADIENT_PINS,
 ];
 
 function readPositiveFixture(): Map<string, string> {
@@ -699,7 +701,7 @@ function makeRuleViolation(
         "reuse D3.6's checklist",
       );
     default: {
-      // The pinned-clause rules are generated from one table; deleting the
+      // The pinned-clause rules are generated from four tables; deleting the
       // first pinned phrase from the first path is their targeted fixture
       // (the per-phrase test below deletes every phrase from the real files).
       // The whole-class sweep pins a wrapped bullet, so the phrase is deleted
@@ -918,7 +920,7 @@ function deletePhrase(text: string, phrase: string): string | null {
   return pattern.test(text) ? text.replace(pattern, '') : null;
 }
 
-test('every pinned needs-decision route, triage donor and whole-class sweep phrase is load-bearing in the real files', () => {
+test('every pinned needs-decision route, triage donor, whole-class sweep and wave-gradient phrase is load-bearing in the real files', () => {
   for (const group of PINNED_CLAUSE_GROUPS) {
     assert.ok(group.phrases.length > 0, `${group.id} pins phrases`);
     assert.equal(
