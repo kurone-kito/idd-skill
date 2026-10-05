@@ -1367,6 +1367,20 @@
           "contains": "not evaluate the standard file's step 5 prose-recorded sub-cases"
         }
       }
+    },
+    {
+      "id": "claim-same-second-tie-break",
+      "phase": "A5",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-claim.instructions.md",
+        "heading": "Claim verification",
+        "contains": "Verify that the active claim now uses"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-claim-lite.instructions.md",
+        "heading": "Claim verification",
+        "pattern": "\\n3\\.\\s(?=(?:(?!\\n4\\.\\s)[\\s\\S])*?\\bVerify\\b)(?=(?:(?!\\n4\\.\\s)[\\s\\S])*?\\bcontested\\b)"
+      }
     }
   ]
 }
