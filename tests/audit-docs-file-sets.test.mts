@@ -62,7 +62,20 @@ function runAuditDocs(cwd: string): RunResult {
   }
 }
 
-function makeFixture(): { dir: string; cleanup: () => void } {
+interface FixtureOptions {
+  forbiddenPatterns?: {
+    id: string;
+    glob: string;
+    pattern: string;
+    message: string;
+  }[];
+  rootMarkdownAllowlist?: { id: string; allowed: string[] };
+}
+
+function makeFixture(options: FixtureOptions = {}): {
+  dir: string;
+  cleanup: () => void;
+} {
   const dir = mkdtempSync(join(tmpdir(), 'audit-docs-file-sets-'));
   execFileSync('git', ['init', '--quiet'], { cwd: dir, env: fixtureEnv() });
   mkdirSync(join(dir, 'audit'), { recursive: true });
@@ -82,6 +95,7 @@ function makeFixture(): { dir: string; cleanup: () => void } {
           requireSyncPairs: false,
         },
       ],
+      ...options,
     }),
     'utf8',
   );
@@ -89,6 +103,42 @@ function makeFixture(): { dir: string; cleanup: () => void } {
     dir,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
+}
+
+function runFixtureGit(cwd: string, args: string[], input?: string): string {
+  return execFileSync('git', args, {
+    cwd,
+    env: fixtureEnv(),
+    encoding: 'utf8',
+    ...(input === undefined ? {} : { input }),
+  });
+}
+
+function addFixtureFiles(cwd: string, ...files: string[]): void {
+  runFixtureGit(cwd, ['add', '--', ...files]);
+}
+
+function setUnmergedIndexPath(
+  cwd: string,
+  file: string,
+  contents: string,
+): void {
+  writeFileSync(join(cwd, file), contents, 'utf8');
+  const blob = runFixtureGit(
+    cwd,
+    ['hash-object', '-w', '--stdin'],
+    contents,
+  ).trim();
+  const indexInfo = [1, 2, 3]
+    .map((stage) => `100644 ${blob} ${stage}\t${file}\n`)
+    .join('');
+  runFixtureGit(cwd, ['update-index', '--index-info'], indexInfo);
+
+  const stages = runFixtureGit(cwd, ['ls-files', '--stage', '--', file])
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.slice(0, line.indexOf('\t')).split(' ').at(-1));
+  assert.deepEqual(stages, ['1', '2', '3']);
 }
 
 test('checkFileSets passes a recursive fileSet with no basename collision', (t) => {
@@ -145,6 +195,125 @@ test('checkFileSets fails closed when two target files share a basename', (t) =>
     result.stderr,
     /fixture-set: ambiguous basename a\.md matches multiple target files/,
   );
+});
+
+test('listRepoFiles visits an unresolved source path once', (t) => {
+  const { dir, cleanup } = makeFixture();
+  t.after(cleanup);
+
+  const source = 'skills/mirror-source/a.md';
+  addFixtureFiles(dir, 'audit/sync-manifest.json');
+  writeFileSync(join(dir, '.claude/mirror-target/a.md'), '# a mirror\n');
+  addFixtureFiles(dir, '.claude/mirror-target/a.md');
+  setUnmergedIndexPath(dir, source, '# a\n');
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.doesNotMatch(
+    `${result.stdout}\n${result.stderr}`,
+    /ambiguous basename/u,
+  );
+});
+
+test('listRepoFiles visits an unresolved target path once', (t) => {
+  const { dir, cleanup } = makeFixture();
+  t.after(cleanup);
+
+  const target = '.claude/mirror-target/a.md';
+  writeFileSync(join(dir, 'skills/mirror-source/a.md'), '# a\n');
+  addFixtureFiles(dir, 'audit/sync-manifest.json', 'skills/mirror-source/a.md');
+  setUnmergedIndexPath(dir, target, '# a mirror\n');
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.doesNotMatch(
+    `${result.stdout}\n${result.stderr}`,
+    /ambiguous basename/u,
+  );
+});
+
+test('listRepoFiles reports each finding once for an unresolved root Markdown path', (t) => {
+  const { dir, cleanup } = makeFixture({
+    forbiddenPatterns: [
+      {
+        id: 'fixture-forbidden',
+        glob: 'stray.md',
+        pattern: 'BLOCK_ME',
+        message: 'forbidden content',
+      },
+    ],
+    rootMarkdownAllowlist: { id: 'root-markdown-allowlist', allowed: [] },
+  });
+  t.after(cleanup);
+
+  addFixtureFiles(dir, 'audit/sync-manifest.json');
+  setUnmergedIndexPath(dir, 'stray.md', 'BLOCK_ME\n');
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.equal(
+    result.stderr.match(
+      /root-markdown-allowlist: stray\.md is not an allowed root-level Markdown file/gu,
+    )?.length,
+    1,
+  );
+  assert.equal(
+    result.stderr.match(/fixture-forbidden: stray\.md: forbidden content/gu)
+      ?.length,
+    1,
+  );
+});
+
+test('listRepoFiles preserves distinct same-basename paths around an unresolved path', (t) => {
+  const { dir, cleanup } = makeFixture();
+  t.after(cleanup);
+
+  const conflicted = 'skills/mirror-source/a.md';
+  const distinct = 'skills/mirror-source/nested/a.md';
+  writeFileSync(join(dir, distinct), '# nested a\n');
+  writeFileSync(join(dir, '.claude/mirror-target/a.md'), '# a mirror\n');
+  addFixtureFiles(
+    dir,
+    'audit/sync-manifest.json',
+    distinct,
+    '.claude/mirror-target/a.md',
+  );
+  setUnmergedIndexPath(dir, conflicted, '# a\n');
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.equal(
+    result.stderr.match(
+      /fixture-set: ambiguous basename a\.md matches multiple source files/gu,
+    )?.length,
+    1,
+  );
+  assert.match(
+    result.stderr,
+    /fixture-set: ambiguous basename a\.md matches multiple source files \(skills\/mirror-source\/a\.md, skills\/mirror-source\/nested\/a\.md\); basename matching cannot distinguish them/u,
+  );
+});
+
+test('listRepoFiles keeps code-unit order for root Markdown findings', (t) => {
+  const { dir, cleanup } = makeFixture({
+    rootMarkdownAllowlist: { id: 'root-markdown-allowlist', allowed: [] },
+  });
+  t.after(cleanup);
+
+  writeFileSync(join(dir, 'B.md'), '# B\n');
+  writeFileSync(join(dir, 'a.md'), '# a\n');
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  const upperIndex = result.stderr.indexOf(
+    'root-markdown-allowlist: B.md is not an allowed root-level Markdown file',
+  );
+  const lowerIndex = result.stderr.indexOf(
+    'root-markdown-allowlist: a.md is not an allowed root-level Markdown file',
+  );
+  assert.ok(upperIndex >= 0, result.stderr);
+  assert.ok(lowerIndex >= 0, result.stderr);
+  assert.ok(upperIndex < lowerIndex, result.stderr);
 });
 
 // #3190: audit-docs.mts used to run its whole CLI body -- including a
