@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +13,7 @@ import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { Worker } from 'node:worker_threads';
+import { SHARE_ENV, Worker, type WorkerOptions } from 'node:worker_threads';
 
 import { stubExecutable } from './test-utils.mts';
 
@@ -66,6 +67,7 @@ test('caught unexpected real gh attempts still fail their owning process', () =>
   const continuedCommentCommand = ['echo x\\', '# "$(gh api repos/o/r)"'].join(
     '\n',
   );
+  const parameterLengthCommand = `n=\${#x}; gh api repos/o/r`;
   const source = `
 const childProcess = require('node:child_process');
 const shell = process.platform === 'win32'
@@ -103,6 +105,7 @@ const calls = [
         ['spawnSync shell negation operator', () => childProcess.spawnSync(shell, [shellFlag, '! gh api repos/o/r'])],
         ['spawnSync shell output redirection before command', () => childProcess.spawnSync(shell, [shellFlag, '>redirect-target gh api repos/o/r'])],
         ['spawnSync shell input redirection before command', () => childProcess.spawnSync(shell, [shellFlag, '<redirect-source gh api repos/o/r'])],
+        ['spawnSync shell parameter length expansion', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify(parameterLengthCommand)}])],
       ]),
   ...(process.platform === 'win32'
     ? [['spawnSync PowerShell substitution', () => childProcess.spawnSync('pwsh', ['-Command', 'Write-Output "$(gh api repos/o/r)"'])]]
@@ -216,6 +219,7 @@ if (process.platform !== 'win32') {
             'spawnSync',
             'spawnSync',
             'spawnSync',
+            'spawnSync',
           ]),
       ...(process.platform === 'win32' ? ['spawnSync'] : []),
       'spawnSync',
@@ -275,6 +279,149 @@ if (process.platform !== 'win32') {
   }
 });
 
+test('guards resolve effective cwd and inspect executable launch wrappers', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('covers POSIX executable wrappers and relative PATH entries');
+    return;
+  }
+
+  const guardRoot = mkdtempSync(join(tmpdir(), 'idd-gh-guard-launch-test-'));
+  const ledgerPath = join(guardRoot, 'attempts.jsonl');
+  const childCwd = join(guardRoot, 'child-cwd');
+  const registeredBin = join(guardRoot, 'bin');
+  const unregisteredBin = join(guardRoot, 'unregistered-bin');
+  const markerPath = join(guardRoot, 'gh-dispatched');
+  const registeredGh = join(registeredBin, 'gh');
+  const unregisteredGh = join(unregisteredBin, 'gh');
+  const cwdGh = join(childCwd, 'bin', 'gh');
+  const fixtureGh = join(guardRoot, 'registered-gh', 'gh');
+  const script = `#!/bin/sh\nprintf invoked >> ${JSON.stringify(markerPath)}\n`;
+  mkdirSync(registeredBin, { recursive: true });
+  mkdirSync(unregisteredBin, { recursive: true });
+  mkdirSync(join(childCwd, 'bin'), { recursive: true });
+  mkdirSync(join(guardRoot, 'registered-gh'), { recursive: true });
+  writeFileSync(registeredGh, '#!/bin/sh\nexit 0\n', {
+    encoding: 'utf8',
+    mode: 0o755,
+  });
+  writeFileSync(fixtureGh, '#!/bin/sh\nexit 0\n', {
+    encoding: 'utf8',
+    mode: 0o755,
+  });
+  for (const executable of [unregisteredGh, cwdGh]) {
+    writeFileSync(executable, script, { encoding: 'utf8', mode: 0o755 });
+  }
+
+  const paths = {
+    childCwd,
+    fixtureCwd: guardRoot,
+    fixtureGh,
+    shellGhPath: unregisteredGh,
+  };
+  const checks = `
+const runChecks = (paths) => {
+  const childProcess = require('node:child_process');
+  const cases = [
+    ['relative child cwd', () => childProcess.spawnSync('gh', ['api'], { cwd: paths.childCwd, env: { ...process.env, PATH: 'bin' } })],
+    ['env chdir relative PATH', () => childProcess.spawnSync('/usr/bin/env', ['-C', paths.childCwd, 'PATH=bin', 'gh', 'api'])],
+    ['gh custom shell', () => childProcess.spawnSync('printf', ['ok'], { shell: paths.shellGhPath })],
+    ['nohup argv wrapper', () => childProcess.spawnSync('nohup', ['gh', 'api'])],
+    ['time argv wrapper', () => childProcess.spawnSync('time', ['gh', 'api'])],
+    ['xargs argv wrapper', () => childProcess.spawnSync('xargs', ['gh', 'api'])],
+    ['env split wrapper chain', () => childProcess.spawnSync('/usr/bin/env', ['-S', 'nohup gh api'])],
+    ['xargs shell wrapper', () => childProcess.spawnSync('/bin/sh', ['-c', 'printf x | xargs -n 1 gh api'])],
+    ['multiline quoted comment', () => childProcess.spawnSync('/bin/sh', ['-c', 'printf "%s" "line one\\n# $(gh api repos/o/r)\\nline three"'])],
+    ['registered relative fixture cwd', () => {
+      const result = childProcess.spawnSync('gh', ['--version'], {
+        cwd: paths.fixtureCwd,
+        env: { ...process.env, PATH: 'registered-gh' },
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error('registered relative fixture exited unsuccessfully');
+      }
+    }],
+  ];
+  return cases.map(([name, call]) => {
+    try {
+      call();
+      return { name, code: 'not-blocked' };
+    } catch (error) {
+      return { name, code: error.code };
+    }
+  });
+};
+`;
+  const workerSource = `
+const { parentPort, workerData } = require('node:worker_threads');
+${checks}
+parentPort.postMessage(runChecks(workerData));
+`;
+  const source = `
+const { Worker } = require('node:worker_threads');
+${checks}
+(async () => {
+  const paths = ${JSON.stringify(paths)};
+  const results = runChecks(paths);
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.toLowerCase() === 'node_options') delete env[key];
+  const worker = new Worker(${JSON.stringify(workerSource)}, {
+    eval: true,
+    execArgv: [],
+    env,
+    workerData: paths,
+  });
+  const nested = await new Promise((resolve, reject) => {
+    worker.once('message', resolve);
+    worker.once('error', reject);
+  });
+  process.stdout.write(JSON.stringify({ results, nested }));
+})();
+`;
+
+  try {
+    const child = spawnSync(process.execPath, ['-e', source], {
+      cwd: guardRoot,
+      encoding: 'utf8',
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => !['path', 'node_options'].includes(key.toLowerCase()),
+          ),
+        ),
+        PATH: unregisteredBin,
+        IDD_TEST_GH_GUARD_LEDGER: ledgerPath,
+        IDD_TEST_GH_GUARD_ALLOWED_STUBS: JSON.stringify([
+          registeredGh,
+          fixtureGh,
+        ]),
+        IDD_TEST_GH_GUARD_SELF_CHECK: '1',
+      },
+    });
+
+    assert.equal(child.status, 1, child.stderr);
+    assert.match(child.stderr, /owning test process must fail/u);
+    const { results, nested } = JSON.parse(child.stdout) as {
+      results: Array<{ name: string; code: string }>;
+      nested: Array<{ name: string; code: string }>;
+    };
+    for (const result of [...results, ...nested]) {
+      if (result.name === 'registered relative fixture cwd') {
+        assert.equal(result.code, 'not-blocked', result.name);
+      } else {
+        assert.equal(result.code, 'IDD_UNEXPECTED_REAL_GH', result.name);
+      }
+    }
+    const attempts = readAttempts(ledgerPath);
+    assert.equal(attempts.length, 18);
+    assert.ok(attempts.some((attempt) => Number(attempt.threadId) > 0));
+    assert.equal(existsSync(markerPath), false);
+    assert.doesNotMatch(readFileSync(ledgerPath, 'utf8'), /secret|token/u);
+  } finally {
+    rmSync(guardRoot, { recursive: true, force: true });
+  }
+});
+
 test('Worker guards honor nullish child-process argument placeholders', async () => {
   const guardRoot = mkdtempSync(join(tmpdir(), 'idd-gh-guard-nullish-worker-'));
   const ledgerPath = join(guardRoot, 'attempts.jsonl');
@@ -305,6 +452,7 @@ test('Worker guards honor nullish child-process argument placeholders', async ()
   const continuedCommentCommand = ['echo x\\', '# "$(gh api repos/o/r)"'].join(
     '\n',
   );
+  const parameterLengthCommand = `n=\${#x}; gh api repos/o/r`;
   const workerSource = `
 const { parentPort } = require('node:worker_threads');
 const childProcess = require('node:child_process');
@@ -332,6 +480,7 @@ const calls = [
     ['spawnSync shell output redirection before command', () => childProcess.spawnSync('/bin/sh', ['-c', '>redirect-target gh api repos/o/r'])],
     ['spawnSync shell input redirection before command', () => childProcess.spawnSync('/bin/sh', ['-c', '<redirect-source gh api repos/o/r'])],
     ['spawnSync shell PATH assignment override', () => childProcess.spawnSync('/bin/sh', ['-c', 'PATH=' + ${JSON.stringify(unregisteredBin)} + ' gh api repos/o/r'], { env: { ...process.env, PATH: ${JSON.stringify(registeredBin)} } })],
+    ['spawnSync shell parameter length expansion', () => childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify(parameterLengthCommand)}])],
   ]),
   ...(process.platform === 'win32'
     ? [['spawnSync PowerShell substitution', () => childProcess.spawnSync('pwsh', ['-Command', 'Write-Output "$(gh api repos/o/r)"'])]]
@@ -427,6 +576,7 @@ parentPort.close();
               'spawnSync shell output redirection before command',
               'spawnSync shell input redirection before command',
               'spawnSync shell PATH assignment override',
+              'spawnSync shell parameter length expansion',
               'env split separator literal',
               'quoted here-document literal',
             ]),
@@ -458,6 +608,7 @@ parentPort.close();
         ...(process.platform === 'win32'
           ? []
           : [
+              'spawnSync',
               'spawnSync',
               'spawnSync',
               'spawnSync',
@@ -744,6 +895,92 @@ parentPort.postMessage({ status: result.status, stderr: result.stderr });
   }
 });
 
+test('guarded Workers propagate the bridge into nested Workers with custom env', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('uses a POSIX gh fixture executable');
+    return;
+  }
+
+  const guardRoot = mkdtempSync(
+    join(tmpdir(), 'idd-gh-guard-nested-worker-test-'),
+  );
+  const ledgerPath = join(guardRoot, 'attempts.jsonl');
+  const markerPath = join(guardRoot, 'gh-was-run');
+  const ghPath = join(guardRoot, 'bin', 'gh');
+  mkdirSync(join(guardRoot, 'bin'), { recursive: true });
+  writeFileSync(ghPath, '#!/bin/sh\nprintf invoked > "$1"\n', {
+    encoding: 'utf8',
+    mode: 0o755,
+  });
+  const nestedWorkerSource = `
+const { parentPort, workerData } = require('node:worker_threads');
+const { spawnSync } = require('node:child_process');
+try {
+  spawnSync(workerData.ghPath, [workerData.markerPath]);
+  parentPort.postMessage({ blocked: false });
+} catch (error) {
+  parentPort.postMessage({
+    blocked: error.code === 'IDD_UNEXPECTED_REAL_GH',
+    attemptId: error.iddGhGuardAttemptId,
+  });
+}
+`;
+  const workerSource = `
+const { Worker, parentPort, workerData } = require('node:worker_threads');
+const env = { ...process.env };
+for (const key of Object.keys(env)) {
+  if (key.toLowerCase() === 'node_options') delete env[key];
+}
+const nested = new Worker(workerData.nestedWorkerSource, {
+  eval: true,
+  execArgv: [],
+  env,
+  workerData: workerData.nestedWorkerData,
+});
+nested.once('message', (message) => parentPort.postMessage(message));
+`;
+  try {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (key.toLowerCase() === 'node_options') delete env[key];
+    }
+    env.IDD_TEST_GH_GUARD_LEDGER = ledgerPath;
+    env.IDD_TEST_GH_GUARD_ALLOWED_STUBS = '[]';
+    env.IDD_TEST_GH_GUARD_SELF_CHECK = '0';
+    const worker = new Worker(workerSource, {
+      eval: true,
+      execArgv: [],
+      env,
+      workerData: {
+        nestedWorkerSource,
+        nestedWorkerData: { ghPath, markerPath },
+      },
+    });
+    const [message, exitCode] = await Promise.all([
+      new Promise<{ blocked: boolean; attemptId?: string }>(
+        (resolve, reject) => {
+          worker.once('message', resolve);
+          worker.once('error', reject);
+        },
+      ),
+      new Promise<number>((resolve, reject) => {
+        worker.once('error', reject);
+        worker.once('exit', resolve);
+      }),
+    ]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(message.blocked, true);
+    assert.match(String(message.attemptId), /^gh-/u);
+    assert.equal(existsSync(markerPath), false);
+    const [attempt] = readAttempts(ledgerPath);
+    assert.equal(attempt?.api, 'spawnSync');
+    assert.ok(Number(attempt?.threadId) > 0);
+  } finally {
+    rmSync(guardRoot, { recursive: true, force: true });
+  }
+});
+
 test('guarded Workers preserve eval-import and ESM-entry main semantics', async () => {
   const workerRoot = mkdtempSync(join(tmpdir(), 'idd-gh-guard-main-worker-'));
   const entryPath = join(workerRoot, 'entry.mjs');
@@ -805,6 +1042,61 @@ test('guarded Workers preserve eval-import and ESM-entry main semantics', async 
 
     assert.equal(fileExitCode, 0);
     assert.deepEqual(fileMessage, { isMain: true });
+  } finally {
+    rmSync(workerRoot, { recursive: true, force: true });
+  }
+});
+
+test('guarded eval Workers keep module sources as ESM', async () => {
+  const worker = new Worker(
+    [
+      "import { parentPort } from 'node:worker_threads';",
+      'parentPort.postMessage({ moduleWorker: true });',
+      'parentPort.close();',
+    ].join('\n'),
+    { eval: true, type: 'module', execArgv: [] } as WorkerOptions,
+  );
+  const [message, exitCode] = await Promise.all([
+    new Promise<{ moduleWorker: boolean }>((resolve, reject) => {
+      worker.once('message', resolve);
+      worker.once('error', reject);
+    }),
+    new Promise<number>((resolve, reject) => {
+      worker.once('error', reject);
+      worker.once('exit', resolve);
+    }),
+  ]);
+
+  assert.deepEqual(message, { moduleWorker: true });
+  assert.equal(exitCode, 0);
+});
+
+test('guarded Workers preserve implicit execArgv with SHARE_ENV', async () => {
+  const workerRoot = mkdtempSync(join(tmpdir(), 'idd-gh-guard-shared-env-'));
+  const entryPath = join(workerRoot, 'entry.cjs');
+  writeFileSync(
+    entryPath,
+    [
+      "const { parentPort } = require('node:worker_threads');",
+      'parentPort.postMessage({ workerStarted: true });',
+      'parentPort.close();',
+    ].join('\n'),
+    'utf8',
+  );
+  try {
+    const worker = new Worker(entryPath, { env: SHARE_ENV });
+    const [message, exitCode] = await Promise.all([
+      new Promise<{ workerStarted: boolean }>((resolve, reject) => {
+        worker.once('message', resolve);
+        worker.once('error', reject);
+      }),
+      new Promise<number>((resolve, reject) => {
+        worker.once('error', reject);
+        worker.once('exit', resolve);
+      }),
+    ]);
+    assert.deepEqual(message, { workerStarted: true });
+    assert.equal(exitCode, 0);
   } finally {
     rmSync(workerRoot, { recursive: true, force: true });
   }
