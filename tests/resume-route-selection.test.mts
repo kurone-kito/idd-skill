@@ -771,6 +771,28 @@ test('collector avoids rescanning a successful nested quote list zone', () => {
   );
 });
 
+function collectResumePrInputWithoutGit(body: string) {
+  return collectRoutingInput({
+    port: createResumeCollectorPort({
+      statusCheckRollup: [],
+      openChangeRequests: [
+        {
+          number: 3150,
+          title: 'quoted example PR',
+          body,
+          url: 'https://example.test/pr/3150',
+        },
+      ],
+    }),
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+    collectGitState: () => ({
+      hasUnpushedCommits: false,
+      worktreeDirty: false,
+    }),
+  });
+}
+
 test('collector handles a long run of list-item code without matching its text', () => {
   // The opener's padding makes the item start with indented code, so each
   // 6-space line is code, not a quote (issue #3769).
@@ -779,14 +801,9 @@ test('collector handles a long run of list-item code without matching its text',
     (_, index) => `      > continuation ${index}`,
   ).join('\n');
   const startedAt = performance.now();
-  const input = collectResumePrInput([
-    {
-      number: 3150,
-      title: 'quoted example PR',
-      body: `-     > sample\n${codeLines}\n\nCloses #9000`,
-      url: 'https://example.test/pr/3150',
-    },
-  ]);
+  const input = collectResumePrInputWithoutGit(
+    `-     > sample\n${codeLines}\n\nCloses #9000`,
+  );
   const elapsedMs = performance.now() - startedAt;
 
   assert.equal(input.prAmbiguous, false);
@@ -806,14 +823,7 @@ test('collector avoids rescanning for every line that leaves list-item code', ()
     (_, index) => `  10.     > example ${index}\n    code ${index}`,
   ).join('\n');
   const startedAt = performance.now();
-  const input = collectResumePrInput([
-    {
-      number: 3150,
-      title: 'quoted example PR',
-      body: `${pairs}\n\nCloses #9000`,
-      url: 'https://example.test/pr/3150',
-    },
-  ]);
+  const input = collectResumePrInputWithoutGit(`${pairs}\n\nCloses #9000`);
   const elapsedMs = performance.now() - startedAt;
 
   assert.equal(input.prAmbiguous, false);
