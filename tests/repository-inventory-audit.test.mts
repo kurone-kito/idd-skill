@@ -131,12 +131,46 @@ function assertPass(result: CliResult): void {
   assert.match(result.stdout, /repository inventory audit passed/);
 }
 
-function assertFailure(result: CliResult, ruleId: string, path: string): void {
+function ruleMessages(
+  result: CliResult,
+  ruleId: string,
+  path: string,
+): string[] {
+  const prefix = `repository-inventory-audit/${ruleId}: ${path}: `;
+  return result.stderr
+    .split(/\r?\n/)
+    .filter((line) => line.includes(prefix))
+    .map((line) => line.slice(line.indexOf(prefix) + prefix.length));
+}
+
+function assertFailure(
+  result: CliResult,
+  ruleId: string,
+  path: string,
+  message?: string,
+): void {
   assert.equal(result.status, 1, result.stderr);
   assert.ok(
     result.stderr.includes(`repository-inventory-audit/${ruleId}: ${path}:`),
     result.stderr,
   );
+  if (message !== undefined) {
+    assert.ok(
+      ruleMessages(result, ruleId, path).includes(message),
+      result.stderr,
+    );
+  }
+}
+
+function editPackageBin(
+  root: string,
+  edit: (bin: Record<string, string>) => void,
+): void {
+  const packageJson = JSON.parse(
+    readFileSync(join(root, 'package.json'), 'utf8'),
+  );
+  edit(packageJson.bin);
+  write(root, 'package.json', `${JSON.stringify(packageJson, null, 2)}\n`);
 }
 
 test('CLI audit passes a complete scratch inventory fixture', () => {
@@ -219,6 +253,78 @@ test('CLI audit checks runtime bin registration from a scratch package map', () 
       'runtime-bin-forward',
       'package.json',
     );
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('CLI audit rejects a package bin with no catalog entry or exception', () => {
+  const temp = fixture();
+  try {
+    writeCatalogPackage(temp.root);
+    assertPass(runAudit(temp.root, 'runtime-registration'));
+
+    editPackageBin(temp.root, (bin) => {
+      bin['idd-unregistered'] = './bin/idd-unregistered.mjs';
+    });
+    const result = runAudit(temp.root, 'runtime-registration');
+    assertFailure(result, 'runtime-bin-reverse', 'package.json');
+    assert.ok(
+      ruleMessages(result, 'runtime-bin-reverse', 'package.json').some(
+        (message) => message.endsWith(': idd-unregistered'),
+      ),
+      result.stderr,
+    );
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('CLI audit flags each allowlisted bin that is no longer present', () => {
+  const temp = fixture();
+  try {
+    // The two allowlisted bins that writeCatalogPackage adds to the package.
+    for (const name of ['idd-onboard', 'idd-merged-pr-feedback-sweep']) {
+      writeCatalogPackage(temp.root);
+      assertPass(runAudit(temp.root, 'runtime-registration'));
+
+      editPackageBin(temp.root, (bin) => {
+        delete bin[name];
+      });
+      const result = runAudit(temp.root, 'runtime-registration');
+      const path = 'src/scripts/repository-inventory-audit.mts';
+      assertFailure(result, 'runtime-bin-allowlist', path);
+      assert.deepEqual(
+        ruleMessages(result, 'runtime-bin-allowlist', path).map((message) =>
+          message.slice(message.lastIndexOf(': ') + 2),
+        ),
+        [name],
+        result.stderr,
+      );
+    }
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('CLI audit reports a package.json that is not a JSON object', () => {
+  const temp = fixture();
+  try {
+    for (const [content, message] of [
+      ['{ not json\n', 'invalid JSON'],
+      ['[]\n', 'expected a JSON object'],
+    ]) {
+      writeCatalogPackage(temp.root);
+      assertPass(runAudit(temp.root, 'runtime-registration'));
+
+      write(temp.root, 'package.json', content);
+      assertFailure(
+        runAudit(temp.root, 'runtime-registration'),
+        'runtime-bin-map',
+        'package.json',
+        message,
+      );
+    }
   } finally {
     temp.cleanup();
   }
@@ -434,6 +540,50 @@ test('CLI audit checks help-flag coverage against scratch source fixtures', () =
       runAudit(temp.root, 'help-flag-coverage'),
       'help-flag-coverage',
       'src/scripts/new-helper.mts',
+    );
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('CLI audit flags a covered helper that no longer declares a flag spec', () => {
+  const temp = fixture();
+  try {
+    writeHelpFlagSources(temp.root);
+    assertPass(runAudit(temp.root, 'help-flag-coverage'));
+
+    const covered = COVERED_HELPERS[0];
+    assert.ok(covered);
+    write(temp.root, `src/scripts/${covered}.mts`, 'export {};\n');
+    assertFailure(
+      runAudit(temp.root, 'help-flag-coverage'),
+      'help-flag-coverage',
+      `src/scripts/${covered}.mts`,
+      'covered helper no longer declares FLAG_SPEC',
+    );
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('CLI audit flags an excluded helper that now declares a flag spec', () => {
+  const temp = fixture();
+  try {
+    writeHelpFlagSources(temp.root);
+    assertPass(runAudit(temp.root, 'help-flag-coverage'));
+
+    const excluded = EXCLUDED_HELPERS[0];
+    assert.ok(excluded);
+    write(
+      temp.root,
+      `src/scripts/${excluded.helper}.mts`,
+      'const HELPER_FLAG_SPEC = {};\n',
+    );
+    assertFailure(
+      runAudit(temp.root, 'help-flag-coverage'),
+      'help-flag-coverage',
+      `src/scripts/${excluded.helper}.mts`,
+      'excluded helper now declares FLAG_SPEC',
     );
   } finally {
     temp.cleanup();
