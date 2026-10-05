@@ -1861,7 +1861,10 @@ The body carries `authoring-bucket: needs-decision`, and the configured
 needs-decision label is applied in the same capability-checked create
 call as the authoring label. If the configured label is absent, create
 it with `gh label create` before publication; a create or label-
-application failure stops publication. For every initial lint,
+application failure stops publication. The configured authoring and
+needs-decision label names must be distinct: the audit rejects a
+collision, and Discover fails closed if it encounters a marked
+follow-up under a colliding configuration. For every initial lint,
 held-body re-lint, and Stage 2 lint, pass
 `--expect-bucket needs-decision`, `--origin-issue <claimed-issue>`, and
 both configured labels. The expected origin must match the sole `Refs`

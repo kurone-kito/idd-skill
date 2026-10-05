@@ -427,6 +427,17 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     // closes. An issue without the marker is completely unaffected -- its
     // own `Refs` lines are never inspected here.
     if (hasDeferSourceMarker(issue.body, resolvedMarkerPrefix)) {
+      if (
+        hasDeferSourceMarker(
+          issue.body,
+          resolvedMarkerPrefix,
+          'review-needs-decision',
+        ) &&
+        authoringLabelName.trim().toLowerCase() ===
+          needsDecisionLabelName.trim().toLowerCase()
+      ) {
+        reasons.add('needs_decision_label_conflicts_with_authoring_label');
+      }
       const {
         numbers: deferSourceRefsNumbers,
         ambiguous: deferSourceRefsAmbiguous,
@@ -752,6 +763,7 @@ export function extractDependencyIssueNumbers(body, currentRepo) {
 export function hasDeferSourceMarker(
   body,
   markerPrefix = DEFAULT_MARKER_PREFIX,
+  expectedValue,
 ) {
   const pattern = new RegExp(
     `<!--\\s*${escapeRegex(markerPrefix)}-authoring-defer-source:\\s*([^\\s]+)\\s*-->`,
@@ -762,9 +774,13 @@ export function hasDeferSourceMarker(
   // marker as inline-code, fenced, or indented-code-block example prose
   // (documenting the mechanism itself, as `#2877` and its own follow-up
   // do) must not be misread as actually carrying a live marker.
-  return [...maskMarkdownForScan(body).matchAll(pattern)].some((match) =>
-    DEFER_SOURCE_VALUES.includes(match[1]),
-  );
+  return [...maskMarkdownForScan(body).matchAll(pattern)].some((match) => {
+    const value = match[1];
+    return (
+      DEFER_SOURCE_VALUES.includes(value) &&
+      (expectedValue === undefined || value === expectedValue)
+    );
+  });
 }
 /**
  * Collect the `#N` reference declared on the body's `Refs` keyword line --

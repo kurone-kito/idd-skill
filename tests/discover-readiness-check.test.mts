@@ -905,6 +905,48 @@ test('a review-needs-decision follow-up waits for its origin and remains held af
   );
 });
 
+test('a review-needs-decision follow-up stays held when its configured labels collide (#3778)', async () => {
+  const issues = new Map([
+    [
+      405,
+      {
+        number: 405,
+        title: 'needs-decision follow-up',
+        state: 'OPEN',
+        body: [
+          '<!-- idd-skill-authoring-defer-source: review-needs-decision -->',
+          '',
+          'Refs #406',
+        ].join('\n'),
+        labels: [],
+      },
+    ],
+    [
+      406,
+      {
+        number: 406,
+        title: 'originating issue',
+        state: 'CLOSED',
+        body: '',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const readiness = await evaluateDiscoverReadiness([405], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+    authoringLabelName: 'status:needs-decision',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+
+  assert.equal(readiness.ready.length, 0);
+  assert.match(
+    readiness.filteredOut[0].reasons.join(','),
+    /needs_decision_label_conflicts_with_authoring_label/,
+  );
+});
+
 test('a review-needs-decision marker fails closed for malformed or unresolved Refs and ignores unknown values (#3778)', async () => {
   const marker =
     '<!-- idd-skill-authoring-defer-source: review-needs-decision -->';

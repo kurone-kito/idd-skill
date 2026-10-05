@@ -2486,6 +2486,9 @@ only approval boundary.
   capability-checked create call as the authoring label. If that
   configured label is absent, create it with `gh label create` before
   publication; a create or label-application failure stops publication.
+  The configured authoring and needs-decision label names must be
+  distinct: the audit rejects a collision, and Discover fails closed if
+  it encounters a marked follow-up under a colliding configuration.
   During every initial lint, held-body re-lint, and Stage 2 lint, pass
   `--expect-bucket needs-decision`, `--origin-issue <claimed-issue>`,
   the configured authoring label, and the configured needs-decision

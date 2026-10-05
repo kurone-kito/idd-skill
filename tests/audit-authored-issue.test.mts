@@ -140,6 +140,7 @@ test('review-needs-decision requires the configured authoring label and exact ex
   const findingFor = (options: {
     labels?: string[];
     authoringLabelName?: string;
+    needsDecisionLabelName?: string;
     expectedOriginIssueNumber?: number;
   }) =>
     auditAuthoredIssue(body, {
@@ -183,6 +184,22 @@ test('review-needs-decision requires the configured authoring label and exact ex
       expectedOriginIssueNumber: 123,
     })?.result,
     'pass',
+  );
+  assert.equal(
+    findingFor({
+      labels: ['status:needs-decision'],
+      authoringLabelName: 'status:needs-decision',
+      expectedOriginIssueNumber: 123,
+    })?.result,
+    'fail',
+  );
+  assert.equal(
+    findingFor({
+      labels: ['status:needs-decision'],
+      authoringLabelName: 'STATUS:NEEDS-DECISION',
+      expectedOriginIssueNumber: 123,
+    })?.result,
+    'fail',
   );
 });
 

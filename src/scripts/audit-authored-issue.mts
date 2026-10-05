@@ -1032,6 +1032,7 @@ export function auditAuthoredIssue(
       authoringBucket,
       labels,
       authoringLabelName,
+      needsDecisionLabelName,
       options.expectedOriginIssueNumber,
     ),
     checkMarkerPrefixConsistency(
@@ -1752,6 +1753,7 @@ function checkDeferSourceMarker(
   authoringBucket: AuthoringBucketMarkerDetection,
   labels: readonly string[],
   authoringLabelName: string,
+  needsDecisionLabelName: string,
   expectedOriginIssueNumber: number | undefined,
 ): AuditFinding {
   const id = 'defer-source-marker';
@@ -1802,6 +1804,13 @@ function checkDeferSourceMarker(
     );
   }
   if (parsedValues[0] === 'review-needs-decision') {
+    if (authoringLabelName === needsDecisionLabelName.trim().toLowerCase()) {
+      return fail(
+        id,
+        name,
+        'the configured authoring and needs-decision labels must be distinct for the review-needs-decision defer-source marker',
+      );
+    }
     if (!labels.includes(authoringLabelName)) {
       return fail(
         id,
