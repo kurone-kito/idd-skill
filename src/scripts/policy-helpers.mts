@@ -28,6 +28,7 @@ interface CritiqueLoopPolicy {
   e10NoProgressHoldAfter: number;
   deferAfterRounds: number;
   deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
+  deferNeedsDecision: 'on' | 'off';
   subagentWaitCeiling: string;
   delegate?: CritiqueLoopDelegate;
 }
@@ -512,6 +513,7 @@ interface RawConfig {
     e10NoProgressHoldAfter?: unknown;
     deferAfterRounds?: unknown;
     deferByUrgency?: unknown;
+    deferNeedsDecision?: unknown;
     subagentWaitCeiling?: unknown;
     delegate?: { command?: unknown; mode?: unknown };
     telemetryHook?: { command?: unknown };
@@ -590,6 +592,7 @@ const DEFER_BY_URGENCY_MODES = new Set([
   'low-and-medium',
   'severity-tiered',
 ]);
+const DEFER_NEEDS_DECISION_MODES = new Set(['on', 'off']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -731,6 +734,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
   }) as Readonly<CritiqueLoopPolicy>,
   reviewEscalation: Object.freeze({
@@ -961,6 +965,9 @@ export function normalizePolicyConfig(config: unknown) {
       DEFER_BY_URGENCY_MODES,
       POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
     ) as CritiqueLoopPolicy['deferByUrgency'],
+    deferNeedsDecision: parseDeferNeedsDecision(
+      c?.critiqueLoop?.deferNeedsDecision,
+    ),
     subagentWaitCeiling: parsePositiveDuration(
       c?.critiqueLoop?.subagentWaitCeiling,
       POLICY_DEFAULTS.critiqueLoop.subagentWaitCeiling,
@@ -1449,6 +1456,29 @@ function parseEnum(
     return value;
   }
   return fallback;
+}
+
+/**
+ * `critiqueLoop.deferNeedsDecision` deliberately differs from `parseEnum`:
+ * `parseEnum` falls back to the default for any non-member, but this
+ * field's default (`'on'`) is the permissive value, so a mistyped value
+ * (`'OFF'`, `false`, `null`, ...) must never enable the route against the
+ * operator's evident intent. Only a missing value (key absent or
+ * `undefined`, including a non-object `critiqueLoop` block) resolves to
+ * the default; exactly `'on'` / `'off'` resolve to themselves; any other
+ * present value resolves to `'off'`. This helper only sees parsed data, so
+ * a config file that exists but cannot be parsed is the instruction text's
+ * to handle (it will act as `'off'`; `loadPolicyConfig` rejects such a
+ * file, and a non-object top level too); `normalizePolicyConfig(null)`
+ * means `'on'`.
+ */
+function parseDeferNeedsDecision(value: unknown): 'on' | 'off' {
+  if (value === undefined) {
+    return POLICY_DEFAULTS.critiqueLoop.deferNeedsDecision;
+  }
+  return typeof value === 'string' && DEFER_NEEDS_DECISION_MODES.has(value)
+    ? (value as 'on' | 'off')
+    : 'off';
 }
 
 function parseDuration(value: unknown, fallback: string): string {
