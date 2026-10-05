@@ -347,6 +347,41 @@ rewrites, pinned actions, and GHES-generated
 `.github/workflows/strip-untrusted-labels.yml` are intentional; selected
 mirror-path content or mode mismatches fail.
 
+### Re-import with an overlay report
+
+kurone-kito/setup.ubuntu#201 (2026-10-05): a forced re-import erased overlays
+and its mirror check passed. Order:
+
+1. Record the pre-import ref and the old upstream tag or commit in the policy
+   record; check out a clean worktree: the `--upstream-base-path` source.
+2. On a fresh branch run `idd-onboard --import --force` (Step 2; same
+   `--profile`; `--allow-root` if `--source` is outside the cwd) and one
+   `--hold <path>` per path you own or exclude (default
+   `.github/idd/config.json`, hand-merged workflows): exact manifest path, an
+   unknown path exits 2, repeat on `idd-onboard --verify`; lite is 11 paths at
+   v0.14.0. Hold also a same-named file of yours the old template lacked (the
+   import overwrites it whole, unlisted). `git rm` what only the old tag has
+   (compare `--import --dry-run --force --source <idd-skill-root>` plans, no
+   holds). Commit the mirror alone, before `--substitute`; verify as above.
+3. Repeat the verification with `--upstream-base-path <old idd-template>` and
+   `--report-reverted-overlays`: candidates are lines you added that the
+   import erased (held paths are not in the diff).
+4. Re-apply real overlays in overlay commits or record accepted gaps;
+   `--substitute`; rerun the report with `--target-ref HEAD`, same base (exit 1
+   is expected). Lines still listed are deliberate drops: record them.
+5. Open the PR with the three commits separate; name the upstream-identical
+   paths, so a finding on them goes upstream.
+6. Option: with a mirror-only commit per import, merge a vendor branch. Held
+   files stay old, substituted values conflict with raw tokens where upstream
+   edited a token line, and the missing deletion (`--import` never deletes) and
+   the need for `--force` carry over (on a pure mirror branch `--force` cannot
+   erase overlays).
+
+Report limits: the helper doc's `verify-import-mirror` bullet; diff a
+hand-edited `.github/idd/config.json` against the pre-import ref. Lite files
+are inert unless pointed at ("Recorded convention, not yet wired",
+`docs/idd-workflow.md`): without the lite tier, hold them out and record it.
+
 ### Recorded policies and selected companions
 
 - [ ] The operator's selected PR review policy profile is recorded, and
