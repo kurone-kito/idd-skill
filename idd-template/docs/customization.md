@@ -1562,14 +1562,17 @@ supports these keys:
   themselves, any other present value (including `null`) resolves to
   `off` so a mistyped value never enables the route, and a config file
   that exists but cannot be parsed acts as `off` (a missing file means
-  `on`). It controls whether the review loop may defer a finding that
-  needs a person's judgment to a `needs-decision` follow-up issue when
-  merging is safe; `off` restores the stop-for-a-person behavior. It
-  never changes the CODEOWNER and required-reviewer
-  `Awaiting maintainer decision` hold or any person holding Triage,
-  Write, Maintain or Admin standing, `CHANGES_REQUESTED`, the F3 merge
-  holds, the CI, E15, E11 and branch-sync holds, scope-fenced items,
-  PATH B, or the lite profile's stops.
+  `on`). This handling is preventive; no observed incident yet. The
+  field controls whether the review loop may defer a finding that needs
+  a person's judgment to a `needs-decision` follow-up issue (the label
+  is `labels.needsDecisionLabelName`, default `status:needs-decision`)
+  when merging is safe; `off` restores the stop-for-a-person behavior.
+  It never changes any of the following: the
+  `Awaiting maintainer decision` hold for a CODEOWNER, a required
+  reviewer, or any person holding Triage, Write, Maintain or Admin
+  standing; `CHANGES_REQUESTED`; the F3 merge holds; the CI, E15, E11
+  and branch-sync holds; scope-fenced items; PATH B; or the lite
+  profile's stops.
 - `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`
