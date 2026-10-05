@@ -105,6 +105,10 @@ function requirePhrases(path, text, phrases) {
     }
   }
 }
+/** The text with the sentence that states the reset prohibition removed. */
+function withoutProhibition(text) {
+  return text.replaceAll('never run `git reset`', '');
+}
 function collapsed(text) {
   return text.replace(/\s+/g, ' ');
 }
@@ -473,7 +477,7 @@ export const PR_HEAD_FRESHNESS_PINS = [
     phrases: [
       'git fetch origin +refs/pull/{pr-number}/head:refs/remotes/origin/pull/{pr-number}/head',
       'under the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock) when workers share the clone',
-      'A failed fetch holds; a fetched SHA other than `$PR_HEAD_SHA` means the PR moved: return to E1.',
+      'A failed fetch holds; if `git rev-parse refs/remotes/origin/pull/{pr-number}/head` is not `$PR_HEAD_SHA`, the PR moved: return to E1.',
       '`git branch --show-current` is `{branch-name}`; else hold. Require empty `git status --porcelain`; else hold.',
       '`git rev-parse HEAD` must equal `$PR_HEAD_SHA`',
       'behind it (`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`), re-validate the claim,',
@@ -484,7 +488,8 @@ export const PR_HEAD_FRESHNESS_PINS = [
   {
     id: 'pr-head-freshness-f3',
     paths: F3_FILES,
-    phrases: [`apply F2's sequence to \`\${PR_HEAD_SHA_F3}\``],
+    // Joined so neither a template escape nor a template placeholder appears.
+    phrases: [["apply F2's sequence to `$", '{PR_HEAD_SHA_F3}`'].join('')],
   },
 ];
 const PINNED_CLAUSE_GROUPS = [
@@ -780,6 +785,7 @@ const RULES = [
         // before ancestry because `is-ancestor` is non-strict.
         const steps = [
           'git fetch origin +refs/pull/',
+          '`git rev-parse refs/remotes/origin/pull/{pr-number}/head`',
           '`git branch --show-current`',
           '`git status --porcelain`',
           '`git ls-tree -r -z ',
@@ -794,7 +800,7 @@ const RULES = [
             fail(path, `F2 local check is out of order or missing: ${step}`);
           from = at + step.length;
         }
-        if (/\bgit reset\b(?!`)|reset on pass/.test(contents))
+        if (/\bgit reset\b|reset on pass/.test(withoutProhibition(contents)))
           fail(path, 'F2 local check must never reset the worktree');
       }
       for (const path of F3_FILES) {
@@ -804,7 +810,7 @@ const RULES = [
             path,
             'F3 must apply the F2 sequence, not restate an ancestry check',
           );
-        if (/\bgit reset\b(?!`)|reset on pass/.test(contents))
+        if (/\bgit reset\b|reset on pass/.test(withoutProhibition(contents)))
           fail(path, 'F3 local check must never reset the worktree');
       }
     },

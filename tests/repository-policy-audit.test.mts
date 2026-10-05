@@ -980,6 +980,8 @@ test('the F2 local check keeps the shadow-path check before the fast-forward and
   );
   for (const reset of [
     'git reset --hard "$PR_HEAD_SHA"',
+    'then run `git reset` to discard local work',
+    'git reset --keep "$PR_HEAD_SHA"',
     'then reset on pass)',
   ]) {
     const violations = freshnessViolations(
@@ -1003,6 +1005,14 @@ test('F3 points at the F2 sequence and does not restate an ancestry check', () =
   assert.match(
     freshnessViolations(restated, 'pr-head-freshness-order')[0]?.message ?? '',
     /not restate an ancestry check/,
+  );
+  const resetting = withFixtureText(
+    MERGE,
+    (text) => `${text}\nThen run \`git reset\` to discard local work.`,
+  );
+  assert.match(
+    freshnessViolations(resetting, 'pr-head-freshness-order')[0]?.message ?? '',
+    /never reset the worktree/,
   );
   const withoutPointer = withFixtureText(MERGE, (text) =>
     text.replace("apply F2's sequence to", 'check'),
