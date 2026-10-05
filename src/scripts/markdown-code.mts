@@ -1592,7 +1592,7 @@ function continuesListContainer(
   return content.trim() === '' || indentationColumns(content) >= contentIndent;
 }
 
-function stripLeadingIndentColumns(
+export function stripLeadingIndentColumns(
   text: string,
   targetColumns: number,
   initialColumns = 0,

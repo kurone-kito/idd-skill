@@ -27,6 +27,7 @@ import {
   maskMarkdownForScan,
   parseListItemMatch,
   stripEnclosingListContentIndent,
+  stripLeadingIndentColumns,
 } from './markdown-code.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mjs';
@@ -36,6 +37,8 @@ import {
 } from './provider-adapter-github.mjs';
 import { CLOSING_KEYWORD_ALTERNATION } from './supersession-detection.mjs';
 
+/** A GitHub task-list checkbox after a list marker, with its padding. */
+const TASK_CHECKBOX_PREFIX = /^\[[ xX]\][ \t]+/u;
 /**
  * The documented branch-state taxonomy: every value {@link classifyBranchState}
  * can return and that {@link selectResumeRoute} routes on. A caller-supplied
@@ -216,10 +219,20 @@ function runCli() {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   return 0;
 }
+/**
+ * Collect the routing input for one claimed issue.
+ *
+ * `loadTrustedConfig` resolves policy from a ref that the PR under evaluation
+ * cannot edit. `collectGitState` reads the local worktree state (whether it is
+ * dirty and whether it has unpushed commits); it defaults to the real `git`
+ * reader and exists so tests can inject a fixed state instead of starting git
+ * processes.
+ */
 export function collectRoutingInput({
   port,
   issueNumber,
   loadTrustedConfig = loadTrustedIddConfig,
+  collectGitState = collectLocalGitState,
 }) {
   const prs = findIssueRelatedOpenPrs({ port, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
@@ -229,7 +242,7 @@ export function collectRoutingInput({
   // 5xx/timeout REST failure before the identical error is re-thrown --
   // transport hygiene (widened resilience), not a distinct call shape.
   const viewerLogin = port.resolveViewerLogin().toLowerCase();
-  const gitState = collectLocalGitState();
+  const gitState = collectGitState();
   if (!issuePr) {
     return {
       prAmbiguous: prs.length > 1,
@@ -511,8 +524,24 @@ function findIssueRelatedOpenPrs({ port, issueNumber }) {
 function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;
   let paragraphOpen = false;
+  // Content column of the list item that the previous line opened with
+  // paragraph text, or `null`. A line inside that item continues the
+  // paragraph, so a non-`1` ordered marker on it cannot start a list.
+  let listItemParagraphColumn = null;
+  // Content column of the list item whose marker had excess padding and so
+  // starts with an indented code block, or `null` outside such a block.
+  let listCodeContentColumn = null;
+  // True when that item sits inside a quote: a line without `>` then leaves
+  // the quote as well, so it is not inside the item.
+  let listCodeInQuote = false;
+  // True from the first line that leaves such an item until a blank line, a
+  // quote or any non-code line, so indented code that follows it stays masked.
+  let followsListCode = false;
   const blockQuoteScanBarrier = '\u0000';
-  const listIndentFastPath = { skipDeeplyIndentedProbe: false };
+  const listIndentFastPath = {
+    skipDeeplyIndentedProbe: false,
+    skipExitProbe: false,
+  };
   const listZoneCache = {
     contentIndent: 0,
     nextLineStart: -1,
@@ -527,20 +556,69 @@ function stripBlockQuotesAndLazyContinuations(body) {
       if (line.trim() === '') {
         quotedParagraphOpen = false;
         paragraphOpen = false;
+        listItemParagraphColumn = null;
+        followsListCode = false;
         return line;
       }
-      const quotedContent = stripBlockQuoteAndListPrefixes(
-        line,
-        normalizedBody,
-        currentLineStart,
-        listIndentFastPath,
-        paragraphOpen,
-        listZoneCache,
-      );
-      if (quotedContent !== null) {
-        quotedParagraphOpen = startsBlockQuoteParagraph(quotedContent);
+      const itemParagraphContinues =
+        listItemParagraphColumn !== null &&
+        indentationColumns(line) >= listItemParagraphColumn;
+      listItemParagraphColumn = null;
+      let probeForIndentedCode = false;
+      let itemContentColumn;
+      if (listCodeContentColumn !== null) {
+        // A blank line does not end the code block, so only a shallower
+        // non-blank line does. Lines inside it skip the enclosing-list
+        // probe, which keeps long code blocks linear (issue #3763).
+        const lineColumns = indentationColumns(line);
+        if (lineColumns >= listCodeContentColumn + 4) {
+          // Keep the indentation: after a blank line the later code mask must
+          // still see these lines as part of the item.
+          return `${line.match(/^[ \t]*/u)?.[0] ?? ''}${blockQuoteScanBarrier}`;
+        }
+        // Still in the item but less than four columns past its content, the
+        // line is a paragraph there; code that follows is top-level code.
+        followsListCode = lineColumns < listCodeContentColumn;
+        probeForIndentedCode = followsListCode;
+        // A same-line inner item is invisible to the enclosing-list lookup,
+        // so strip its content column here when the line is still inside it.
+        itemContentColumn =
+          followsListCode || listCodeInQuote
+            ? undefined
+            : listCodeContentColumn;
+        listCodeContentColumn = null;
+      }
+      const scan = scanBlockQuoteAndListPrefixes(line, {
+        body: normalizedBody,
+        lineStart: currentLineStart,
+        probeFlags: listIndentFastPath,
+        paragraphOpen: paragraphOpen || itemParagraphContinues,
+        quoteParagraphOpen: quotedParagraphOpen,
+        zoneCache: listZoneCache,
+        probeForIndentedCode,
+        itemContentColumn,
+      });
+      if (scan.kind === 'listCode') {
+        listCodeContentColumn = scan.contentColumn;
+        listCodeInQuote = scan.inQuote;
+        followsListCode = false;
+        quotedParagraphOpen = false;
+        paragraphOpen = false;
+        // Keep the marker and its padding: the later code mask needs the list
+        // item to recognize a fence or paragraph that belongs to it.
+        return `${line.slice(0, line.length - scan.codeLength)}${blockQuoteScanBarrier}`;
+      }
+      if (scan.kind === 'quote') {
+        followsListCode = false;
+        quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
         paragraphOpen = false;
         return blockQuoteScanBarrier;
+      }
+      if (followsListCode) {
+        if (scan.indentedCode) {
+          return blockQuoteScanBarrier;
+        }
+        followsListCode = false;
       }
       if (quotedParagraphOpen) {
         if (!startsMarkdownBlock(line, true)) {
@@ -548,19 +626,66 @@ function stripBlockQuotesAndLazyContinuations(body) {
         }
         quotedParagraphOpen = false;
       }
-      paragraphOpen = !startsMarkdownBlock(line, paragraphOpen);
-      return line;
+      // A non-`1` ordered marker cannot interrupt an open paragraph, so the
+      // line is paragraph text. Defuse the marker: the later code mask would
+      // otherwise open a nested list there and misplace the lines after it.
+      const isParagraphText =
+        (paragraphOpen || itemParagraphContinues) &&
+        isNonInterruptingListItem(line);
+      paragraphOpen =
+        isParagraphText || !startsMarkdownBlock(line, paragraphOpen);
+      listItemParagraphColumn = isParagraphText
+        ? null
+        : listItemParagraphContentColumn(line);
+      return isParagraphText ? defuseOrderedMarker(line) : line;
     })
     .join('\n');
 }
-function stripBlockQuoteAndListPrefixes(
-  line,
-  body,
-  lineStart,
-  listIndentFastPath,
-  paragraphOpen = false,
-  listZoneCache,
-) {
+function defuseOrderedMarker(line) {
+  return line.replace(/^([ \t]*\d{1,9})[.)]/u, '$1\u0001');
+}
+function isNonInterruptingListItem(line) {
+  const listItem = parseListItemMatch(line.trimStart());
+  return listItem !== null && !isInterruptingListMarker(listItem.marker);
+}
+function listItemParagraphContentColumn(line) {
+  let content = line.trimStart();
+  let column = indentationColumns(line);
+  let contentColumn = null;
+  for (
+    let listItem = parseListItemMatch(content);
+    listItem !== null;
+    listItem = parseListItemMatch(content)
+  ) {
+    const markerEnd = column + listItem.marker.length;
+    const padding = indentationColumns(listItem.spacing, markerEnd) - markerEnd;
+    // Five or more columns of padding start the item with code, not text.
+    contentColumn = markerEnd + (padding > 4 ? 1 : padding);
+    column = markerEnd + padding;
+    content = listItem.content.replace(TASK_CHECKBOX_PREFIX, '');
+  }
+  return contentColumn !== null &&
+    content.trim() !== '' &&
+    !content.startsWith('>') &&
+    !startsMarkdownLeafBlock(content)
+    ? contentColumn
+    : null;
+}
+function stripBlockQuoteAndListPrefixes(line) {
+  const scan = scanBlockQuoteAndListPrefixes(line);
+  return scan.kind === 'quote' ? scan.content : null;
+}
+function scanBlockQuoteAndListPrefixes(line, options = {}) {
+  const {
+    body,
+    lineStart,
+    probeFlags: listIndentFastPath,
+    zoneCache: listZoneCache,
+    paragraphOpen = false,
+    quoteParagraphOpen = false,
+    probeForIndentedCode = false,
+    itemContentColumn,
+  } = options;
   // Most lines, including ordinary indented code, cannot become a
   // blockquote or nested list after list-content indentation is removed.
   // Avoid the helper's backward scan for those lines; doing it once per
@@ -570,17 +695,29 @@ function stripBlockQuoteAndListPrefixes(
   const isDeeplyIndented = indentationColumns(leadingIndent) >= 4;
   const hasShallowListMarker =
     !isDeeplyIndented && parseListItemMatch(line.trimStart()) !== null;
+  const previousSkipExitProbe = listIndentFastPath?.skipExitProbe ?? false;
   if (!isDeeplyIndented && line.trim() !== '' && listIndentFastPath) {
     listIndentFastPath.skipDeeplyIndentedProbe = false;
+    listIndentFastPath.skipExitProbe = false;
   }
+  // The first line to leave a list item's code block may still sit inside an
+  // enclosing item, where four columns of indentation are not yet code.
   const shouldProbeEnclosingList =
-    mayContainBlockQuote &&
-    !hasShallowListMarker &&
-    !(isDeeplyIndented && listIndentFastPath?.skipDeeplyIndentedProbe);
+    itemContentColumn === undefined &&
+    ((mayContainBlockQuote &&
+      !hasShallowListMarker &&
+      !(isDeeplyIndented && listIndentFastPath?.skipDeeplyIndentedProbe)) ||
+      (probeForIndentedCode &&
+        isDeeplyIndented &&
+        !listIndentFastPath?.skipExitProbe));
   const listContent =
-    body === undefined || lineStart === undefined || !shouldProbeEnclosingList
-      ? null
-      : stripEnclosingListContentIndent(body, lineStart, listZoneCache);
+    itemContentColumn !== undefined
+      ? stripLeadingIndentColumns(line, itemContentColumn)
+      : body === undefined ||
+          lineStart === undefined ||
+          !shouldProbeEnclosingList
+        ? null
+        : stripEnclosingListContentIndent(body, lineStart, listZoneCache);
   if (
     shouldProbeEnclosingList &&
     listContent === null &&
@@ -593,25 +730,45 @@ function stripBlockQuoteAndListPrefixes(
     // probe rather than one scan per line (issue #3763).
     listIndentFastPath.skipDeeplyIndentedProbe = true;
   }
+  if (
+    probeForIndentedCode &&
+    shouldProbeEnclosingList &&
+    listContent === null &&
+    listIndentFastPath
+  ) {
+    // Same idea for the line after a list item's code block: without an
+    // enclosing item on one such line, repeated openers need no more probes.
+    listIndentFastPath.skipExitProbe = true;
+  }
   const candidate = listContent ?? line;
   if (isIndentedCodeBlock(candidate)) {
-    return null;
+    return { kind: 'none', indentedCode: true };
   }
   let remaining = candidate.trimStart();
+  // Absolute column (tabs stop every four columns) of `remaining`, taken from
+  // the raw line: stripping an enclosing list's indent must not shift the
+  // tab stops that decide how wide a marker's padding is.
+  let column = indentationColumns(leadingIndent);
   let foundBlockQuote = false;
   let foundListMarker = false;
   while (remaining) {
     const markerPrefix = remaining.replace(/^ {0,3}/u, '');
+    column += remaining.length - markerPrefix.length;
     if (markerPrefix.startsWith('>')) {
       foundBlockQuote = true;
-      remaining = markerPrefix.slice(1).replace(/^[ \t]?/u, '');
+      const afterQuote = markerPrefix.slice(1);
+      const separator = afterQuote.match(/^[ \t]?/u)?.[0] ?? '';
+      column = indentationColumns(separator, column + 1);
+      remaining = afterQuote.slice(separator.length);
       continue;
     }
     const listMarker = markerPrefix.match(/^(?:[-+*]|\d{1,9}[.)])[ \t]+/u);
     if (listMarker) {
       const parsedListItem = parseListItemMatch(markerPrefix);
+      // A line without a quote marker is not inside a quote paragraph, so
+      // `quoteParagraphOpen` only counts after the line's own `>`.
       if (
-        paragraphOpen &&
+        (paragraphOpen || (foundBlockQuote && quoteParagraphOpen)) &&
         !foundListMarker &&
         parsedListItem !== null &&
         !isInterruptingListMarker(parsedListItem.marker)
@@ -619,16 +776,46 @@ function stripBlockQuoteAndListPrefixes(
         break;
       }
       foundListMarker = true;
+      const marker = listMarker[0].trimEnd();
+      const markerEndColumn = column + marker.length;
+      const contentStartColumn = indentationColumns(
+        listMarker[0].slice(marker.length),
+        markerEndColumn,
+      );
       remaining = markerPrefix.slice(listMarker[0].length);
-      const taskCheckbox = remaining.match(/^\[[ xX]\][ \t]+/u);
+      // Five or more columns of padding make the item start with one
+      // separating space plus an indented code block, so a `>` there is
+      // literal code rather than a quote (issue #3769).
+      if (
+        contentStartColumn - markerEndColumn > 4 &&
+        mayContainBlockQuoteAfterListMarkers(
+          remaining.replace(TASK_CHECKBOX_PREFIX, ''),
+        )
+      ) {
+        // An opener starts no enclosing item, so it keeps the exit cache.
+        if (listIndentFastPath) {
+          listIndentFastPath.skipExitProbe = previousSkipExitProbe;
+        }
+        return {
+          kind: 'listCode',
+          contentColumn: markerEndColumn + 1,
+          codeLength: remaining.length,
+          inQuote: foundBlockQuote,
+        };
+      }
+      column = contentStartColumn;
+      const taskCheckbox = remaining.match(TASK_CHECKBOX_PREFIX);
       if (taskCheckbox) {
+        column = indentationColumns(taskCheckbox[0].slice(3), column + 3);
         remaining = remaining.slice(taskCheckbox[0].length);
       }
       continue;
     }
     break;
   }
-  return foundBlockQuote ? remaining : null;
+  return foundBlockQuote
+    ? { kind: 'quote', content: remaining }
+    : { kind: 'none', indentedCode: false };
 }
 function mayContainBlockQuoteAfterListMarkers(line) {
   let candidate = line.trimStart();
@@ -641,7 +828,7 @@ function mayContainBlockQuoteAfterListMarkers(line) {
       return false;
     }
     candidate = listItem.content;
-    const taskCheckbox = candidate.match(/^\[[ xX]\][ \t]+/u);
+    const taskCheckbox = candidate.match(TASK_CHECKBOX_PREFIX);
     if (taskCheckbox) {
       candidate = candidate.slice(taskCheckbox[0].length);
     }
