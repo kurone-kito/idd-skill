@@ -846,6 +846,16 @@ function codePointLength(text) {
   }
   return count;
 }
+/** The first `limit` characters of `text` (code points, never half of a
+ * surrogate pair), found by walking only that far: an unbounded line is cut
+ * without allocating an array of all its characters. */
+function cutToCharacters(text, limit) {
+  let end = 0;
+  for (let count = 0; count < limit && end < text.length; count += 1) {
+    end = nextCharacterIndex(text, end);
+  }
+  return text.slice(0, end);
+}
 /** `true` iff `text` has at least `minimum` characters. The UTF-16 length
  * bounds the code-point count from both sides, so most lines never need
  * the count. */
@@ -1706,9 +1716,7 @@ function printOverlayTableSection(report) {
   for (const entry of entries) {
     console.log(`  ${entry.path}`);
     for (const line of entry.lines.slice(0, OVERLAY_TABLE_LINES_PER_PATH)) {
-      console.log(
-        `    ${Array.from(line).slice(0, OVERLAY_TABLE_LINE_CUT).join('')}`,
-      );
+      console.log(`    ${cutToCharacters(line, OVERLAY_TABLE_LINE_CUT)}`);
     }
     const rest = entry.lines.length - OVERLAY_TABLE_LINES_PER_PATH;
     if (rest > 0) {
