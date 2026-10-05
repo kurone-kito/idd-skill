@@ -319,6 +319,12 @@ test('parseOverviewBody: a "Findings: None" header with no Open section stays a 
 // classifyDispositionReply
 // ---------------------------------------------------------------------------
 
+test('classifyDispositionReply: counts the needs-decision deferral reply as a deferral', () => {
+  const reply =
+    '**Rejected** — deferred to follow-up issue #3790 (needs-decision; the check the claim needs has no route in E5): the claim could not be verified, so the follow-up records it as unverified';
+  assert.equal(classifyDispositionReply(reply), 'deferred');
+});
+
 test('classifyDispositionReply: recognizes all five outcomes', () => {
   assert.equal(
     classifyDispositionReply(

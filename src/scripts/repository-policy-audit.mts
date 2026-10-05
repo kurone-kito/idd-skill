@@ -63,6 +63,11 @@ const PR_SUBMIT =
   'idd-template/.github/instructions/idd-pr-submit.instructions.md';
 const REVIEW_FIX =
   'idd-template/.github/instructions/idd-review-fix.instructions.md';
+const LIVE_REVIEW_FIX = '.github/instructions/idd-review-fix.instructions.md';
+const LIVE_PR_SUBMIT = '.github/instructions/idd-pr-submit.instructions.md';
+const REVIEW_POLICY_PROFILES =
+  'idd-template/docs/idd-review-policy-profiles.md';
+const LIVE_REVIEW_POLICY_PROFILES = 'docs/idd-review-policy-profiles.md';
 const CI = 'idd-template/.github/instructions/idd-ci.instructions.md';
 const AUTONOMY = 'docs/idd-autonomy-contract.md';
 const TEMPLATE_AUTONOMY = 'idd-template/docs/idd-autonomy-contract.md';
@@ -306,6 +311,92 @@ function extractBoundedRegion(
   );
   return afterStart.slice(0, endIndex);
 }
+
+interface PinnedClauseGroup {
+  id: string;
+  paths: readonly string[];
+  phrases: readonly string[];
+}
+
+const NEEDS_DECISION_ROUTE_LINK =
+  '[needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral';
+
+// The needs-decision route (roadmap #3776, issue #3780) is a normative rule
+// kept in a doc section, with short pointers at the stop sites. Each phrase is
+// matched against whitespace-collapsed text, so line wrapping is free, and the
+// tests delete every phrase one at a time to prove each is load-bearing. The
+// pointer phrases keep their own distinct wording (or the old stop text they
+// follow) so deleting one pointer cannot be masked by another, and the old
+// stop sentences stay pinned verbatim so `"off"` restores today's behavior.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const NEEDS_DECISION_ROUTE_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'needs-decision-route-doc',
+    paths: [REVIEW_POLICY_PROFILES, LIVE_REVIEW_POLICY_PROFILES],
+    phrases: [
+      'consistent with the recorded profile decision. ## Needs-decision deferral This section is the full rule for the needs-decision route.',
+      'The route applies only while the resolved `critiqueLoop.deferNeedsDecision` is `"on"`, which is the default.',
+      'A value of `"off"`, or any other value that rule does not honor, restores every stop below exactly as it stands.',
+      "A verified-true finding that an acceptance criterion of the claimed issue is unmet, or that reports a regression this pull request introduced, is Accepted and fixed and is never deferred: conditions (a) and (b) of the E5 Defer rule's adopt-now test still apply.",
+      'Judge it assuming the finding is correct. Hold, as today (the existing hold comment and its resume condition, and the needs-decision claim release in `.github/instructions/idd-overview-appendix.instructions.md` when no session-side action remains), when merging the pull request as it stands would:',
+      "1. leave the development branch's CI red or the pull request unmergeable;",
+      '2. leave the defect the finding describes in claim, lock, merge-gate, security or secret-handling, or data-destroying code or behavior, of the loop or of the project;',
+      "3. ship an instruction or helper contradiction that would misguide the next session's agent; or",
+      '4. be impossible to reverse in a follow-up pull request.',
+      'Otherwise defer.',
+      'At S1 and S2, a verified-true finding with one reasonable resolution, or with alternatives equivalent in observable behavior, is Accepted and fixed, as today.',
+      "Defer only when two or more materially different resolutions exist that the claimed issue's acceptance criteria and the repository evidence do not rank, or when the claim cannot be verified because the check it needs has no route in E5's Verify-before-accept.",
+      "At S3 and S4 the stop itself is the trigger, because the loop cannot land the fix. There the stop test below alone decides and the S1 and S2 carve-out in this paragraph does not apply, since Tier 3's open-ended gaps are the acceptance criterion itself and may be deferred.",
+      'If any outstanding finding in a stop comes from another source, the stop holds as it does today.',
+      'At S3 and S4, continue at E11 after the record:',
+      'the thread stays unresolved and F2 holds it as that profile already does, so the stop stays in effect.',
+      'a needs-decision item is never bundled with round-count or urgency deferrals.',
+      'A Tier 2 deferral keeps the required behavior in place and ends only the stop.',
+      'the reply names the unavailable check and the follow-up records the claim as unverified',
+      'only as the selected review-thread resolution profile allows.',
+      'At S1 and S2 the deferral is one more Reject inside the triage pass: finish the remaining E5 decisions and E6 replies, then E7 and E8, as after any other Reject.',
+      'with the defer-source value `review-needs-decision`',
+      '**Rejected** — deferred to follow-up issue #<n> (needs-decision; <check or choice that is open>): <reason>',
+      'The fourth distinct follow-up filed from one pull request holds as it does today.',
+      'A pull request with no claimed issue holds as it does today',
+      'The route never applies to: a CODEOWNER or required-reviewer source (and any person holding Triage, Write, Maintain or Admin standing); `CHANGES_REQUESTED`; scope-fenced items; PATH B; the F3 merge holds; the CI, E15, E11 and branch-sync holds that wait for an operator.',
+      "The lite profile's stops are also unchanged:",
+    ],
+  },
+  {
+    id: 'needs-decision-route-triage',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      '(a critique-pass finding stays under the unchanged cap above). If E5 would hold for a person or ask the operator, the [needs-decision route] may defer the item instead; otherwise that hold stands.',
+      "**Exception**: if the source is a CODEOWNER or required reviewer, or the item is E5's inconclusive outcome, do not reject unilaterally. Reply using the format: `**Awaiting maintainer decision** — {your reasoning}` (name the unavailable check when inconclusive) and wait for the maintainer's response.",
+      "wait for the maintainer's response. For an inconclusive item from a source without standing, the [needs-decision route] may apply first; otherwise this hold stands.",
+      'authoring-defer-source: review-fix-loop-cutoff -->',
+      NEEDS_DECISION_ROUTE_LINK,
+    ],
+  },
+  {
+    id: 'needs-decision-route-review-fix',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    phrases: [
+      'If the same Accepted findings recur for `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes (default `3`) without progress, stop the auto-loop: post a hold comment summarizing the repeated findings and attempted fixes, and wait for a maintainer decision.',
+      'and wait for a maintainer decision. This hold stands unless the [needs-decision route] applies.',
+      'Do not use this stop condition to bypass serious issues: unresolved High/Medium findings remain blockers until fixed or explicitly redirected by a maintainer',
+      'redirected by a maintainer or deferred under the needs-decision route.',
+      "check the issue's acceptance criteria and any established external contract for whether that behavior was actually required; if so, stop for a maintainer decision instead of dropping it to converge review.",
+      'instead of dropping it to converge review. That stop stands unless the [needs-decision route] applies.',
+      'once several rounds each keep surfacing a genuinely new, in-scope spec-coverage gap rather than repeating one, list each outstanding gap with its evidence, and the round count, in a hold comment and stop for a maintainer decision.',
+      'comment and stop for a maintainer decision. That stop stands unless the [needs-decision route] applies.',
+      NEEDS_DECISION_ROUTE_LINK,
+    ],
+  },
+  {
+    id: 'needs-decision-route-pr-submit',
+    paths: [PR_SUBMIT, LIVE_PR_SUBMIT],
+    phrases: [
+      "carries a defined defer-source marker, continue at once to that skill's Stage 2 narrow auto-release exception",
+    ],
+  },
+];
 
 const RULES: readonly RuleDefinition[] = [
   {
@@ -1581,6 +1672,23 @@ const RULES: readonly RuleDefinition[] = [
         fail(PR_SUBMIT, 'round-specific PR-body prose returned');
     },
   },
+  ...NEEDS_DECISION_ROUTE_PINS.map(
+    (group): RuleDefinition => ({
+      id: group.id,
+      paths: group.paths,
+      check({ text }) {
+        for (const path of group.paths) {
+          const collapsedText = collapsed(text(path));
+          const missing = group.phrases.filter(
+            (phrase) => !collapsedText.includes(phrase),
+          );
+          if (missing.length > 0) {
+            fail(path, `missing required clauses: ${missing.join(' | ')}`);
+          }
+        }
+      },
+    }),
+  ),
 ];
 
 // audit:ignore-dead-export: fixture tests need each stable rule's input path.

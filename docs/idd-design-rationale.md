@@ -1101,6 +1101,9 @@ maintainer"). The default threshold (`15`) is an explicit starting
 point the repository owner expects to tune once real usage data
 exists, not a final calibration.
 
+This rule is superseded for needs-decision items by
+[the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
+
 `Reject (defer)` reuses the existing `**Rejected**`-prefixed reply
 format instead of introducing a new top-level disposition category:
 `isDispositionComment` already parses "starts with `**Rejected**`," and
@@ -1125,6 +1128,10 @@ marker-scoped rule: when a candidate's body carries the
 marker, its `Refs #<N>` reference is resolved the same way an ordinary
 `Blocked by #<N>` line is — excluded from Discover while `#<N>` stays
 open. An unmarked issue's `Refs` lines are completely unaffected.
+
+A follow-up filed under the second defer-source value,
+`review-needs-decision`, takes the same rule: see
+[the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
 
 #### Reconciling the deferred follow-up with its pull request (kurone-kito/idd-skill#3624)
 
@@ -1189,6 +1196,10 @@ Rejected alternatives:
 - **Enumerating through the origin issue's timeline.** It pages through
   every comment event of the origin issue, where the marker search is one
   call.
+
+The same reconciliation covers a follow-up filed under the second
+defer-source value, `review-needs-decision`: see
+[the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
 
 #### 2026-09-15 recalibration to 12, using a month of real data (kurone-kito/idd-skill#2999)
 
@@ -1476,6 +1487,8 @@ merges, other-bot fixes) — this trigger does not touch those.
   `low-and-medium`. This supersedes the 2026-09-10 Low-only ceiling
   **for this new trigger only**; `deferAfterRounds` itself stays
   unchanged and Low-only.
+  The High ceiling is superseded for needs-decision items by
+  [the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
 - Keep `deferAfterRounds` as an unchanged backstop; the new rule is an
   independent trigger applying from the first E4/E5 pass.
 - Apply to every PATH A actor, not only Copilot, with the agent's E4
@@ -1526,6 +1539,91 @@ reported three safety findings on that same commit, so E4/E5 must
 inspect every actionable PATH A finding even when an overview is
 empty. PR #3574 drew repeated Medium correctness findings during its
 review cycle.
+
+### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
+
+The review loop stops for a person at several points: the
+`Awaiting maintainer decision` hold for an inconclusive item and for a
+CODEOWNER or required-reviewer source (E5, E6), the E10 no-progress
+hold, and the Tier 2 and Tier 3 stops. Each stop lands where an
+autonomous session is least likely to have anyone to ask. Observed
+2026-10-05, second-hand: the maintainer reported that agents in recently
+imported adopter projects increasingly stop in the E phase to ask the
+operator about serious or hard-to-judge review findings (the adopter
+repositories are not named). Observed earlier in this repository:
+issue #2767 (PR #2840) ran 27 review rounds and ended only when the
+operator accepted three residual findings and filed issue #2865, as the
+Tier 3 example in "Review-fix escalation examples" records.
+
+Decision (maintainer ruling, 2026-10-05, roadmap #3776): when a finding
+needs a person's judgment and merging the pull request as it stands
+cannot do the damage listed in the stop test below, the session records
+the question as a `needs-decision` follow-up issue, answers the finding,
+resolves its thread as the selected profile allows, and keeps going. It
+applies at E5, E6 and the three review-fix stops, for advisory bots,
+critique-pass findings and people holding none of the actor-permission
+cap's standing. It is on by default, with
+`critiqueLoop.deferNeedsDecision` as the off switch. The rule itself is
+in the "Needs-decision deferral" section of
+`idd-review-policy-profiles.md`; the instructions carry only pointers
+that end in today's stop.
+
+The stop test, and why each item is in it. Judged assuming the finding
+is correct, the session still stops when merging as it stands would:
+
+1. leave the development branch's CI red or the pull request
+   unmergeable, because a deferral must not trade a known failure for a
+   backlog item, and nobody can be asked later in the same loop;
+2. leave the defect in claim, lock, merge-gate, security or
+   secret-handling, or data-destroying code or behavior, of the loop or
+   of the project, because those are the places where a wrong merge does
+   damage a revert may not repair, and where the protection that
+   issue #1933 gave a valid high-severity report matters most;
+3. ship an instruction or helper contradiction that would misguide the
+   next session's agent, because the damage repeats in every later
+   session rather than staying in one pull request; or
+4. be impossible to reverse in a follow-up pull request, because a
+   follow-up can only repair what a pull request can still change.
+
+What it overrides, for this narrow class only. First, the
+repository-owner-confirmed rule recorded with issue #2863 that Medium
+and High findings stay fully blocking; the urgency triggers of
+issues #3222 and #3589 had already relaxed it in narrow cases. Second,
+issue #1933's routing of an inconclusive claim to the
+`Awaiting maintainer decision` hold so that a valid high-severity report
+is never silently resolved. The route keeps what issue #1933 protected:
+the reply must name the unavailable check, and the follow-up must record
+the claim as unverified. An agent may now redirect a finding that only a
+maintainer could redirect before.
+
+Declined alternatives:
+
+- Resolving a CODEOWNER or required-reviewer thread unilaterally: it
+  removes the person the repository named, so that source, and any
+  person holding Triage, Write, Maintain or Admin standing, stays
+  outside the route.
+- Making the follow-up `Blocked by` the pull request instead of the
+  claimed issue: a pull request number unblocks the follow-up when the
+  pull request closes unmerged, while the claimed issue stays open in
+  that case.
+- Asking the operator in the session: that is the stop this route
+  replaces.
+- A new doc for the rule: registering it adds lines to the generated
+  blocks of two onboarding files, and the two onboarding bundles that
+  contain them had 3 B and 33 B of headroom, so the rule is a new
+  section of an existing doc.
+
+Moving a normative rule out of an instruction file into a doc is a
+deliberate choice forced by the byte budget: the review bundles sit near
+their ceiling, and each pointer is a way out of an existing stop, so a
+session that does not read the doc behaves as before. The route is a
+distinct rule, not a trigger of the E5 Defer rule, whose exclusions and
+unit tests stay as they are.
+
+Cap: the fourth distinct follow-up filed from one pull request holds as
+before. It bounds over-deferral by a weak model and the backlog that
+F3's deferred-follow-up search reads (preventive; no observed incident
+yet).
 
 ### review-ack worked example
 
