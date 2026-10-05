@@ -619,6 +619,22 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after an async function expression body',
+    source: (specifier) =>
+      `const value = async function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function expression at interpolation start',
+    source: (specifier) =>
+      `const value = ${backtick}\${function() {} / /* import('__SPECIFIER__') */ 2}${backtick};\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a private property named return',
     source: (specifier) =>
       `class Example { #return = 1; read() { return this.#return / /* import('__SPECIFIER__') */ 2; } }\n`.replace(
@@ -650,6 +666,14 @@ const divisionWithCommentedImports: {
         specifier,
       ),
   },
+  {
+    name: 'division after a regular-expression literal',
+    source: (specifier) =>
+      `const value = /x/ / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
 ];
 
 for (const { name, source } of divisionWithCommentedImports) {
@@ -667,6 +691,110 @@ for (const { name, source } of divisionWithCommentedImports) {
     );
     const { status, stderr } = runCli(['--root', root]);
     assert.equal(status, 0, stderr);
+  });
+}
+
+const prefixNotRegexSources: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a prefix negation after return',
+    source: (specifier) =>
+      `function read() { return !/[/*]/; }\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a prefix negation after a control-flow condition',
+    source: (specifier) =>
+      `if (condition) !/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a prefix negation after a statement block',
+    source: (specifier) =>
+      `{}\n!/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of prefixNotRegexSources) {
+  test(`the node-import rule preserves imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule preserves imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+const identifierKeywordPrefixes: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'classify',
+    source: (specifier) =>
+      `declare const input: string;\nconst value = classify(input);\nif (condition) {}\n/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'functionName',
+    source: (specifier) =>
+      `declare const input: string;\nconst value = functionName(input);\nif (condition) {}\n/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of identifierKeywordPrefixes) {
+  test(`the node-import rule sees imports after the ${name} identifier`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule sees imports after the ${name} identifier`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
   });
 }
 
@@ -700,6 +828,28 @@ test('a block comment preserves the break-label context before a regex statement
   ]);
   assert.match(mirrorResult.stderr, /\.\/helper\.mjs/);
 });
+
+for (const [name, specifier] of [
+  ['node-import rule', 'yaml'],
+  ['standalone-mirror rule', './helper.mjs'],
+] as const) {
+  test(`${name} recognizes a regex statement after a leading function declaration`, () => {
+    const source =
+      `function read() {}\n/[/*]/.test(value);\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      );
+    const root = buildFixture((files) =>
+      files.set(
+        name === 'node-import rule' ? 'src/main.mts' : 'scripts/mirror.mjs',
+        source,
+      ),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.ok(stderr.includes(specifier), stderr);
+  });
+}
 
 test('an import-looking line inside template text remains visible to the detector', () => {
   const root = buildFixture((files) =>

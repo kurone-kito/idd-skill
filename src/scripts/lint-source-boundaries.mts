@@ -241,7 +241,7 @@ function regexCanStartAfter(
   ) {
     return false;
   }
-  return !(lastCodeCharIsIdentifierPart || /[)\]'"`]/.test(lastCodeChar));
+  return !(lastCodeCharIsIdentifierPart || /[)\]'"`x]/.test(lastCodeChar));
 }
 
 /**
@@ -313,7 +313,30 @@ function scanComments(source: string): {
     const expressionEndingBraces: boolean[] = [];
     const objectLiteralBraces: boolean[] = [];
 
+    function wordContinuesAt(ch: string, sourceIndex: number): boolean {
+      return (
+        /[A-Za-z0-9_$]/.test(ch) ||
+        isIdentifierPartAt(source, sourceIndex) ||
+        (ch === '\\' && source.slice(sourceIndex, sourceIndex + 2) === '\\u')
+      );
+    }
+
+    function finishCurrentKeyword(): void {
+      if (lastWordIsPropertyName) {
+        return;
+      }
+      if (lastWord === 'class') {
+        pendingClassExpressionBody = currentWordStartsExpressionContext;
+      }
+      if (lastWord === 'function') {
+        pendingFunctionExpression = currentWordStartsExpressionContext;
+      }
+    }
+
     function expressionCanStartHere(): boolean {
+      if (lastCodeChar === '') {
+        return interpolation;
+      }
       return (
         '=([,!?:'.includes(lastCodeChar) ||
         lastCodeChar === '>' ||
@@ -333,6 +356,7 @@ function scanComments(source: string): {
     }
 
     function recordWhitespace(hasLineTerminator: boolean): void {
+      finishCurrentKeyword();
       if (
         pendingRestrictedStatement === null &&
         !lastWordIsPropertyName &&
@@ -348,6 +372,13 @@ function scanComments(source: string): {
         regexAfterRestrictedStatementLineBreak = true;
         pendingRestrictedStatement = null;
         restrictedStatementLabelConsumed = false;
+      }
+      if (
+        hasLineTerminator &&
+        !lastWordIsPropertyName &&
+        lastWord === 'async'
+      ) {
+        currentWordStartsExpressionContext = false;
       }
       wordBoundary = true;
       if (hasLineTerminator) {
@@ -383,14 +414,27 @@ function scanComments(source: string): {
         possiblePostfixUpdate;
       const startsPostfixNonNullAssertion =
         ch === '!' &&
-        (lastCodeCharIsIdentifierPart ||
-          /[)\]}'"`]/.test(lastCodeChar) ||
-          expressionEndingBrace ||
-          postfixUpdateOperator ||
-          postfixNonNullAssertion);
+        !regexCanStartAfter(
+          lastCodeChar,
+          lastCodeCharIsIdentifierPart,
+          lastWord,
+          previousWord,
+          lastWordIsPropertyName,
+          previousWordIsPropertyName,
+          controlFlowClosingParenthesis,
+          expressionEndingBrace,
+          postfixUpdateOperator,
+          postfixNonNullAssertion,
+          regexAfterRestrictedStatementLineBreak,
+        );
       const startsWord = wordBoundary || lastWord === '';
       if (startsWord) {
-        currentWordStartsExpressionContext = expressionCanStartHere();
+        const followsAsyncFunctionPrefix =
+          !lastWordIsPropertyName &&
+          lastWord === 'async' &&
+          currentWordStartsExpressionContext;
+        currentWordStartsExpressionContext =
+          followsAsyncFunctionPrefix || expressionCanStartHere();
       }
       lastCodeChar = ch;
       lastCodeCharIsIdentifierPart = isIdentifierPartAt(source, sourceIndex);
@@ -411,12 +455,6 @@ function scanComments(source: string): {
             previousCodeChar === '.' || previousCodeChar === '#';
         } else {
           lastWord += ch;
-        }
-        if (!lastWordIsPropertyName && lastWord === 'class') {
-          pendingClassExpressionBody = currentWordStartsExpressionContext;
-        }
-        if (!lastWordIsPropertyName && lastWord === 'function') {
-          pendingFunctionExpression = currentWordStartsExpressionContext;
         }
       } else {
         previousWord = '';
@@ -453,14 +491,15 @@ function scanComments(source: string): {
       const ch = source[index];
       const next = source[index + 1];
 
+      if (!/\s/.test(ch) && !wordContinuesAt(ch, index)) {
+        finishCurrentKeyword();
+      }
+
       if (interpolation && ch === '}') {
         if (braceDepth === 0) {
           return { index: index + 1 };
         }
         braceDepth -= 1;
-        recordCodeChar(ch, index);
-        index += 1;
-        continue;
       }
 
       if (ch === '/' && next === '/') {
