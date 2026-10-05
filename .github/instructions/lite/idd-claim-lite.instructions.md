@@ -160,34 +160,30 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 | `already-claimed` | **STOP** unless `winning_claim_id` matches your verified released id |
 <!-- dprint-ignore-end -->
 
-Written fallback (`instructions-only` profile only — per the Helper
-runtime contract above, any other profile stops-and-asks on a
-missing/failing/malformed helper instead of using this fallback):
-read issue comments chronologically. **Trusted marker actor** = the
-current session (after it posts and verifies its own marker), a
-configured trusted bot/App login for IDD automation, or a
-Write/Maintain/Admin collaborator only when repository policy
-explicitly allows collaborator-authored markers; ignore every other
-author for claim state. A `claimed-by` with a **new** `{claim-id}`
-becomes active only when there is no active claim and
+Written fallback (`instructions-only` profile only): read issue comments
+chronologically. **Trusted marker actor** = the current session (after
+it posts and verifies its own marker), a configured trusted bot/App
+login for IDD automation, or a Write/Maintain/Admin collaborator only
+when repository policy explicitly allows collaborator-authored markers;
+ignore every other author for claim state. A `claimed-by` with a **new**
+`{claim-id}` becomes active only when there is no active claim and
 `supersedes: none`, or its `supersedes:` matches the current active
 claim's `{claim-id}` **and** that claim is already stale at the new
 comment's `created_at`. A `claimed-by` whose `{claim-id}` matches the
 active claim but whose `{agent-id}` **or `branch:`** differs from the
 active claim is ignored as invalid — it is **not** a heartbeat
 (heartbeat branch invariant; claim-id is public, not a secret). An
-`unclaimed-by` releases only when both
-`{agent-id}` and `{claim-id}` match the active claim. **Stale** =
-latest valid `claimed-by`'s GitHub `created_at` is
-≥ 24 h ago (`claim-stale-age`, default `24 h`). No active claim →
-unclaimed, proceed fresh. Active claim already using a `{claim-id}`
-this session **itself already recorded and verified** (a token merely
-read from the current issue comments is never enough) → already
-claimed by this session, continue with it (no new claim; use heartbeat
-rules below). Any other active claim < 24 h old → **STOP**, even when
-its `{agent-id}` matches yours — same-agent restarts never silently
-inherit a non-stale claim. Any other active claim ≥ 24 h old → stale,
-proceed with takeover.
+`unclaimed-by` releases only when both `{agent-id}` and `{claim-id}`
+match the active claim. **Stale** = latest valid `claimed-by`'s GitHub
+`created_at` is ≥ 24 h ago (`claim-stale-age`, default `24 h`). No
+active claim → unclaimed, proceed fresh. Active claim already using a
+`{claim-id}` this session **itself already recorded and verified** (a
+token merely read from the current issue comments is never enough) →
+already claimed by this session, continue with it (no new claim; use
+heartbeat rules below). Any other active claim < 24 h old → **STOP**,
+even when its `{agent-id}` matches yours — same-agent restarts never
+silently inherit a non-stale claim. Any other active claim ≥ 24 h old →
+stale, proceed with takeover.
 
 **Legacy claims** (no `{claim-id}`): if the latest trusted legacy
 `claimed-by` is followed by a later trusted legacy `unclaimed-by` from
@@ -374,10 +370,11 @@ check steps 1–4. Step 5 applies to both paths:
    (including yours) sharing your event's `created_at` second.
 2. 2+ contenders → the lexicographically earliest `{claim-id}` wins
    (case-sensitive ASCII compare).
-3. The active claim now uses **your** `{claim-id}` after that
-   tie-break. A later trusted `claimed-by` with a different `{claim-id}`
-   never disputes this (#3268): Claim-state parsing rules 4/6 could never
-   have activated it, so it stays diagnostic only.
+3. Verify the active claim now uses **your** `{claim-id}` after that
+   tie-break; another winner means claim contested. A later trusted
+   `claimed-by` with a different `{claim-id}` never disputes this
+   check (#3268): Claim-state parsing rules 4/6 could never have
+   activated it, so it stays diagnostic only.
 4. If you posted an activation-nonce for this `{claim-id}`, recompute
    its winner and confirm it is yours (no marker posted → treat as
    passed).
