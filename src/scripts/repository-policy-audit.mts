@@ -550,10 +550,39 @@ export const REVIEW_TRIAGE_DONOR_PINS: readonly PinnedClauseGroup[] = [
   },
 ];
 
+// The F2 local check (issue #3802) must see the exact pull request head: it
+// fetches the head, requires equality, advances a clean branch that is strictly
+// behind by fast-forward only, and never resets. F3 points at that sequence.
+// Phrases are matched on whitespace-collapsed text and each is deleted from the
+// real files by the tests, so each must be unique to the new passage.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const PR_HEAD_FRESHNESS_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'pr-head-freshness-f2',
+    paths: F2_FILES,
+    phrases: [
+      'git fetch origin +refs/pull/{pr-number}/head:refs/remotes/origin/pull/{pr-number}/head',
+      'under the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock) when workers share the clone',
+      'A failed fetch holds; a fetched SHA other than `$PR_HEAD_SHA` means the PR moved: return to E1.',
+      '`git branch --show-current` is `{branch-name}`; else hold. Require empty `git status --porcelain`; else hold.',
+      '`git rev-parse HEAD` must equal `$PR_HEAD_SHA`',
+      'behind it (`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`), re-validate the claim,',
+      'run `git merge --ff-only "$PR_HEAD_SHA"` and require equality again, else hold.',
+      'Any other relation holds; never run `git reset`.',
+    ],
+  },
+  {
+    id: 'pr-head-freshness-f3',
+    paths: F3_FILES,
+    phrases: [`apply F2's sequence to \`\${PR_HEAD_SHA_F3}\``],
+  },
+];
+
 const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
   ...WHOLE_CLASS_SWEEP_PINS,
+  ...PR_HEAD_FRESHNESS_PINS,
 ];
 
 const RULES: readonly RuleDefinition[] = [
@@ -829,6 +858,46 @@ const RULES: readonly RuleDefinition[] = [
           fail(path, 'per-path loop returned');
         if (contents.includes(':(top)'))
           fail(path, 'top-level pathspec returned');
+      }
+    },
+  },
+  {
+    id: 'pr-head-freshness-order',
+    paths: [...F2_FILES, ...F3_FILES],
+    check({ text }) {
+      for (const path of F2_FILES) {
+        const contents = collapsed(text(path));
+        // The checks must run in this order: the shadow-path check has to
+        // precede the only command that moves HEAD, and equality is tested
+        // before ancestry because `is-ancestor` is non-strict.
+        const steps = [
+          'git fetch origin +refs/pull/',
+          '`git branch --show-current`',
+          '`git status --porcelain`',
+          '`git ls-tree -r -z ',
+          '`git rev-parse HEAD` must equal',
+          '`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`',
+          '`git merge --ff-only "$PR_HEAD_SHA"`',
+        ];
+        let from = 0;
+        for (const step of steps) {
+          const at = contents.indexOf(step, from);
+          if (at < 0)
+            fail(path, `F2 local check is out of order or missing: ${step}`);
+          from = at + step.length;
+        }
+        if (/\bgit reset\b(?!`)|reset on pass/.test(contents))
+          fail(path, 'F2 local check must never reset the worktree');
+      }
+      for (const path of F3_FILES) {
+        const contents = collapsed(text(path));
+        if (contents.includes('is-ancestor'))
+          fail(
+            path,
+            'F3 must apply the F2 sequence, not restate an ancestry check',
+          );
+        if (/\bgit reset\b(?!`)|reset on pass/.test(contents))
+          fail(path, 'F3 local check must never reset the worktree');
       }
     },
   },
