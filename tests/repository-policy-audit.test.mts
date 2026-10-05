@@ -18,9 +18,11 @@ import { fileURLToPath } from 'node:url';
 import {
   collectRepositoryPolicyViolationsFromDocuments,
   NEEDS_DECISION_ROUTE_PINS,
+  REVIEW_TRIAGE_DONOR_PINS,
   type RepositoryPolicyDocuments,
   repositoryPolicyRuleIds,
   repositoryPolicyRulePaths,
+  WHOLE_CLASS_SWEEP_PINS,
 } from '../src/scripts/repository-policy-audit.mts';
 import { fixtureEnv } from './test-utils.mts';
 
@@ -45,6 +47,12 @@ interface RuleViolationMutation {
   contents: string;
   diagnosticPath?: string;
 }
+
+const PINNED_CLAUSE_GROUPS = [
+  ...NEEDS_DECISION_ROUTE_PINS,
+  ...REVIEW_TRIAGE_DONOR_PINS,
+  ...WHOLE_CLASS_SWEEP_PINS,
+];
 
 function readPositiveFixture(): Map<string, string> {
   const parsed = JSON.parse(readFileSync(POSITIVE_FIXTURE, 'utf8')) as unknown;
@@ -691,19 +699,21 @@ function makeRuleViolation(
         "reuse D3.6's checklist",
       );
     default: {
-      // The needs-decision route rules are generated from one table; deleting
-      // the first pinned phrase from the first path is their targeted fixture
+      // The pinned-clause rules are generated from one table; deleting the
+      // first pinned phrase from the first path is their targeted fixture
       // (the per-phrase test below deletes every phrase from the real files).
-      const group = NEEDS_DECISION_ROUTE_PINS.find(
+      // The whole-class sweep pins a wrapped bullet, so the phrase is deleted
+      // whitespace-tolerantly.
+      const group = PINNED_CLAUSE_GROUPS.find(
         (candidate) => candidate.id === ruleId,
       );
       if (group !== undefined) {
-        return replaceFixtureTextEverywhere(
-          documents,
-          group.paths[0],
-          group.phrases[0],
-          '',
-        );
+        const path = group.paths[0];
+        const original = documents.get(path);
+        assert.ok(original, `${path} must be covered by the positive fixture`);
+        const mutated = deletePhrase(original, group.phrases[0]);
+        assert.notEqual(mutated, null, `${path} must hold the pinned phrase`);
+        return { path, contents: mutated as string };
       }
       assert.fail(`no targeted negative fixture for ${ruleId}`);
     }
@@ -908,8 +918,8 @@ function deletePhrase(text: string, phrase: string): string | null {
   return pattern.test(text) ? text.replace(pattern, '') : null;
 }
 
-test('every pinned needs-decision route phrase is load-bearing in the real files', () => {
-  for (const group of NEEDS_DECISION_ROUTE_PINS) {
+test('every pinned needs-decision route, triage donor and whole-class sweep phrase is load-bearing in the real files', () => {
+  for (const group of PINNED_CLAUSE_GROUPS) {
     assert.ok(group.phrases.length > 0, `${group.id} pins phrases`);
     assert.equal(
       new Set(group.phrases).size,
@@ -946,6 +956,114 @@ test('every pinned needs-decision route phrase is load-bearing in the real files
           `${group.id}: deleting ${JSON.stringify(phrase)} from ${path} must fail the audit and name that clause`,
         );
       }
+    }
+  }
+});
+
+test('the whole-class sweep pins are scoped to the E9 bullet and reject the old sentence', () => {
+  const reviewFixPaths = [
+    'idd-template/.github/instructions/idd-review-fix.instructions.md',
+    '.github/instructions/idd-review-fix.instructions.md',
+  ];
+  // A plain literal: the type-suppression ratchet scanner reads the text of
+  // an interpolated template literal as code, and this bullet has a word it
+  // counts.
+  const nextBullet = '- **Verify any claim a fix adds.**';
+  const ruleFailures = (documents: Map<string, string>, ruleId: string) =>
+    collectRepositoryPolicyViolationsFromDocuments(documents).filter(
+      (violation) => violation.ruleId === ruleId,
+    );
+  const group = (ruleId: string) => {
+    const found = WHOLE_CLASS_SWEEP_PINS.find((entry) => entry.id === ruleId);
+    assert.ok(found, `${ruleId} is a whole-class sweep rule`);
+    return found;
+  };
+  for (const path of reviewFixPaths) {
+    const real = readFileSync(join(REPOSITORY_ROOT, path), 'utf8');
+    // Both copies are read by every rule, so only `path` is edited.
+    const withEdit = (edited: string) =>
+      new Map(reviewFixPaths.map((p) => [p, p === path ? edited : real]));
+    const documents = withEdit(real);
+    for (const entry of WHOLE_CLASS_SWEEP_PINS) {
+      assert.deepEqual(ruleFailures(documents, entry.id), [], entry.id);
+    }
+
+    // A pinned clause repeated outside the bullet must not satisfy the pin.
+    const fileSet = group('review-fix-sweep-file-set').phrases[0];
+    const stripped = deletePhrase(real, fileSet);
+    assert.notEqual(stripped, null);
+    // Right after the bullet, past a blank line, so a region that ignored the
+    // blank line would still reach it.
+    const relocated = (stripped as string).replace(
+      nextBullet,
+      `\nStray paragraph: ${fileSet}\n\n${nextBullet}`,
+    );
+    assert.notEqual(relocated, stripped);
+    assert.ok(
+      ruleFailures(withEdit(relocated), 'review-fix-sweep-file-set').length > 0,
+      `${path}: a clause outside the E9 bullet must not satisfy the file-set pin`,
+    );
+
+    // The next bullet follows the sweep bullet with no blank line, so the
+    // region must also end at a top-level bullet.
+    const tight = (stripped as string).replace(
+      nextBullet,
+      `${nextBullet} ${fileSet}`,
+    );
+    assert.notEqual(tight, stripped);
+    assert.ok(
+      ruleFailures(withEdit(tight), 'review-fix-sweep-file-set').length > 0,
+      `${path}: a clause in the next bullet must not satisfy the file-set pin`,
+    );
+
+    // The old sentence must not come back, in either copy.
+    const oldSentence = 'Sweep the current diff (and adjacent sections)';
+    const reinserted = real.replace(
+      nextBullet,
+      `${oldSentence} and fix every instance of a systemic finding in one commit.\n\n${nextBullet}`,
+    );
+    assert.notEqual(reinserted, real);
+    const old = ruleFailures(withEdit(reinserted), 'review-fix-sweep-trigger');
+    assert.ok(
+      old.some(
+        (violation) =>
+          violation.path === path &&
+          violation.message.includes('forbidden clause present'),
+      ),
+      `${path}: the old sentence must fail the trigger rule`,
+    );
+
+    // The complete bullet moved out of E9 into the next section must fail
+    // too: the pins enforce the section, not only the text shape.
+    const bulletFrom = real.indexOf(
+      '- **Fix the whole class, not just the flagged line.**',
+    );
+    const bulletTo = real.indexOf(nextBullet);
+    assert.ok(bulletFrom > 0 && bulletTo > bulletFrom);
+    const movedBullet = real.slice(bulletFrom, bulletTo);
+    const e10Heading = '## E10 — Validate fixes with critique pass\n';
+    const moved = (real.slice(0, bulletFrom) + real.slice(bulletTo)).replace(
+      e10Heading,
+      `${e10Heading}\n${movedBullet}\n`,
+    );
+    assert.ok(moved.includes(movedBullet));
+    for (const entry of WHOLE_CLASS_SWEEP_PINS) {
+      assert.ok(
+        ruleFailures(withEdit(moved), entry.id).length > 0,
+        `${path}: ${entry.id} must fail when the bullet sits outside E9`,
+      );
+    }
+
+    // A missing bullet fails all four rules instead of passing vacuously.
+    const withoutBullet = real.replace(
+      '- **Fix the whole class, not just the flagged line.**',
+      '- **Fix the class.**',
+    );
+    for (const entry of WHOLE_CLASS_SWEEP_PINS) {
+      assert.ok(
+        ruleFailures(withEdit(withoutBullet), entry.id).length > 0,
+        `${path}: ${entry.id} must fail when the bullet is missing`,
+      );
     }
   }
 });

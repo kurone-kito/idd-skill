@@ -153,6 +153,126 @@ test("deleting a real seed entry's lite fragment is detected", () => {
   assert.match(matching[0], /contains fragment not found/);
 });
 
+// kurone-kito/idd-skill#3803: step 3 of the lite claim file's same-second
+// tie-break is registered with a `pattern`, so reverting it to a bare assertion
+// or dropping its lost-case clause fails the audit.
+const TIE_BREAK_ENTRY = 'claim-same-second-tie-break';
+const STEP_THREE = /\n3\.\s[\s\S]*?(?=\n4\.\s)/;
+const ASSERTION_STEP_THREE = [
+  '',
+  '3. The active claim now uses **your** `{claim-id}` after that',
+  '   tie-break. A later trusted `claimed-by` with a different `{claim-id}`',
+  '   never disputes this (#3268): Claim-state parsing rules 4/6 could never',
+  '   have activated it, so it stays diagnostic only.',
+].join('\n');
+
+/** Audit violations for the tie-break entry after rewriting the real lite file. */
+function tieBreakViolations(rewrite: (liteText: string) => string): string[] {
+  const manifest = JSON.parse(
+    readRepoFile('audit/sync-manifest.json') ?? '{}',
+  ) as {
+    liteGateParity: {
+      id: string;
+      lite?: { file: string; pattern?: string };
+    }[];
+  };
+  const target = manifest.liteGateParity.find(
+    (entry) => entry.id === TIE_BREAK_ENTRY,
+  );
+  const file = target?.lite?.file;
+  assert.ok(
+    file && target?.lite?.pattern,
+    `expected the ${TIE_BREAK_ENTRY} entry`,
+  );
+  const realText = readRepoFile(file);
+  assert.ok(realText, `expected to read ${file}`);
+  const mutatedText = rewrite(realText);
+  const readWithScratchOverride = (path: string): string | null =>
+    path === file ? mutatedText : readRepoFile(path);
+  return collectLiteGateParityViolations(
+    manifest.liteGateParity,
+    readWithScratchOverride,
+  ).filter((violation) => violation.startsWith(`${TIE_BREAK_ENTRY}:`));
+}
+
+/**
+ * Replace the whole step 3 span of the Claim verification section, not just
+ * its `3.` marker. An earlier numbered list in the same file also has a
+ * step 3, so the search starts at the section heading.
+ */
+function rewriteStepThree(
+  liteText: string,
+  rewrite: (step: string) => string,
+): string {
+  const sectionStart = liteText.indexOf('\n## Claim verification\n');
+  assert.ok(sectionStart >= 0, 'expected the Claim verification heading');
+  const head = liteText.slice(0, sectionStart);
+  const section = liteText.slice(sectionStart);
+  const step = STEP_THREE.exec(section)?.[0];
+  assert.ok(step, 'expected step 3 of the lite claim verification');
+  return head + section.replace(step, () => rewrite(step));
+}
+
+test('the claim tie-break step passes on the real lite file', () => {
+  assert.deepEqual(
+    tieBreakViolations((liteText) => liteText),
+    [],
+  );
+});
+
+test('the claim tie-break step fails when it is reverted to an assertion', () => {
+  const violations = tieBreakViolations((liteText) =>
+    rewriteStepThree(liteText, () => ASSERTION_STEP_THREE),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
+test('the claim tie-break step fails when it keeps Verify but drops the lost case', () => {
+  const violations = tieBreakViolations((liteText) =>
+    rewriteStepThree(liteText, (step) => {
+      const rewritten = step.replace(
+        /;\s+another winner means claim contested/,
+        '',
+      );
+      assert.ok(rewritten.includes('Verify'), 'expected Verify to remain');
+      assert.ok(!rewritten.includes('contested'), 'expected the clause gone');
+      return rewritten;
+    }),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
+test('the claim tie-break step fails when it keeps the lost case but not Verify', () => {
+  const violations = tieBreakViolations((liteText) =>
+    rewriteStepThree(liteText, () => {
+      const rewritten = ASSERTION_STEP_THREE.replace(
+        'tie-break. A later',
+        'tie-break; another winner means claim contested. A later',
+      );
+      assert.ok(rewritten.includes('contested'), 'expected the clause');
+      assert.ok(!rewritten.includes('Verify'), 'expected no Verify');
+      return rewritten;
+    }),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
+test('the claim tie-break pattern is scoped to step 3, not step 4', () => {
+  const violations = tieBreakViolations((liteText) => {
+    const reverted = rewriteStepThree(liteText, () => ASSERTION_STEP_THREE);
+    const afterStepThree = reverted.indexOf(ASSERTION_STEP_THREE);
+    assert.ok(afterStepThree >= 0, 'expected the reverted step 3');
+    const stepFour = reverted.indexOf('\n4. ', afterStepThree);
+    assert.ok(stepFour > afterStepThree, 'expected step 4 after step 3');
+    return `${reverted.slice(0, stepFour)}\n4. Verify that this is contested.${reverted.slice(stepFour + 3)}`;
+  });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
 test('absent or empty registry is a configuration error', () => {
   for (const entries of [null, undefined, []]) {
     const violations = collectLiteGateParityViolations(
