@@ -1252,6 +1252,86 @@ future inventory reviews do not need to re-infer their role from code.
   `.github/workflows/strip-untrusted-labels.yml`, and other adopter output, so
   it is not a pure-mirror target.
 
+  **Reverted overlay report (advisory).** A mirror-only commit can pass the
+  five rules above and still erase lines the adopter had added to a vendored
+  file. Observed 2026-10-05 on
+  [kurone-kito/setup.ubuntu#201](https://github.com/kurone-kito/setup.ubuntu/pull/201):
+  a re-import of a newer template over an older one silently reverted 26
+  overlay lines, the pull request's own validation summary reported no
+  blocking findings, and the review bots then reported the reverted text as
+  new defects. `--report-reverted-overlays` lists those lines. It needs
+  exactly one flag naming the **previous** upstream version the same two ways
+  `--upstream-path` and `--upstream-ref` name the new one:
+  `--upstream-base-path <dir>` (a directory) or `--upstream-base-ref <ref>` (a
+  ref in the target repository), and each base flag is a usage error (exit 2)
+  without the switch, as are both together. A base path that does not exist or
+  is not a directory, and a base ref that does not resolve, also exit 2 with a
+  message naming the flag and the value, so a mistyped base cannot produce an
+  empty report that reads as a clean one. The base path must be the
+  `idd-template` directory, not a checkout root: a checkout root shares paths
+  such as `docs/` with the adopter and is not detected.
+
+  ```sh
+  node <idd-skill>/scripts/verify-import-mirror.mjs \
+    --target-root <target-repo> --target-ref <mirror-only-commit> \
+    --target-base-ref <target-base-ref> \
+    --upstream-path <idd-skill>/idd-template \
+    --upstream-base-path <previous-idd-skill>/idd-template \
+    --report-reverted-overlays
+  ```
+
+  For every modified, non-JSON path that the previous upstream version also
+  has, the report lists each pre-import line that is absent from that previous
+  version (so the adopter added it) and also absent from the file after the
+  import. Lines are compared after splitting on line breaks, collapsing every
+  run of whitespace to one space and trimming; lines shorter than 8
+  characters and generated-banner lines are dropped. An upper-case name in
+  double braces is a template token: a previous-version line that contains
+  one, and keeps at least 8 characters of text outside its tokens, is a
+  whole-line wildcard in which each token matches any non-empty text, so a
+  line the adopter produced by substituting a token is not an overlay line.
+  The result is a top-level `revertedOverlays` array of `{ path, lines }`
+  entries (only for a path with at least one line), beside `overlayPathsCompared`
+  and `overlayPathsSkipped`, which add up to `scanned`; a base path holding
+  none of the compared paths therefore reads as `overlayPathsCompared` 0
+  rather than as a clean report. The table output adds a section headed
+  `reverted overlay candidates (advisory)` (each line cut at 160 characters, at
+  most 20 lines per path with a count of the rest) and a `paths compared N,
+  skipped M` line that is printed even when no line is reverted; the JSON
+  output carries every line, uncut and uncapped, and has none of these keys
+  without the switch. The mode never changes a path's status, the counts, or
+  the exit code, which stay 0 and 1 as above. It still needs the new-version
+  `--upstream-path` or `--upstream-ref`, and `--upstream-remote` qualifies
+  only `--upstream-ref`, never `--upstream-base-ref`.
+
+  Limits of the line comparison, each a reason to read the report as a lead
+  rather than a verdict:
+
+  - an overlay line identical to some previous-version line is not detected;
+  - a reverted line that also occurs elsewhere in the import file counts as
+    surviving;
+  - lines shorter than 8 characters are invisible;
+  - text newly imported that contradicts the adopter's policy is not covered;
+  - a token whose adopter value spans several lines is not matched by the
+    single-line wildcard, while a multi-word value on one line is;
+  - a paragraph the adopter or the upstream rewrapped without loss can be
+    reported;
+  - an adopter edit inside text that came from a token is hidden by the
+    wildcard;
+  - JSON files (which `--normalize-json-key` already covers) and added or
+    deleted paths are skipped, and so is a modified path that the previous
+    version lacks, for example an adopter's own same-named
+    `.markdownlint.yml` that an import overwrote whole;
+  - a binary file is decoded as text and can yield meaningless lines;
+  - `--upstream-base-ref` needs a tree with the template at its root, such
+    as an old mirror commit, so an adopter without one uses the path form.
+
+  The report is printed whole even when it is large: the helper sets its exit
+  code instead of calling `process.exit()` after printing, which on a pipe
+  had kept only the part already written (64 to 128 KiB of a 4 MiB report;
+  same defect class as
+  [kurone-kito/idd-skill#3787](https://github.com/kurone-kito/idd-skill/issues/3787)).
+
   For the `vendored-node` profile, compare helper and schema paths against
   the checkout root instead. The helper's source-root mapping uses the
   following repeatable prefixes when they are present in the target commit:
