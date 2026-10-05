@@ -534,6 +534,30 @@ function initFixture(): { dir: string; cleanup: () => void } {
   };
 }
 
+/**
+ * A fixture that identifies itself as the source repository (package name and
+ * the `docs/token-cost.md` marker) and tracks no inventory audit files, so
+ * `audit-docs` runs its source checks and reports both files as missing.
+ */
+function initSourceFixtureWithoutInventoryAudit(): {
+  dir: string;
+  cleanup: () => void;
+} {
+  const fixture = initFixture();
+  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
+  writeFileSync(
+    join(fixture.dir, 'package.json'),
+    '{"name":"@kurone-kito/idd-skill"}\n',
+  );
+  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
+  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
+  execFileSync('git', ['add', '-A'], {
+    cwd: fixture.dir,
+    env: fixtureEnv(),
+  });
+  return fixture;
+}
+
 test('an omitted registry is optional when the lite corpus is absent', (t) => {
   const fixture = initFixture();
   t.after(fixture.cleanup);
@@ -576,19 +600,8 @@ test('an omitted registry fails when the canonical lite corpus is present', (t) 
 });
 
 test('source repository audit fails when both inventory audit files are absent', (t) => {
-  const fixture = initFixture();
+  const fixture = initSourceFixtureWithoutInventoryAudit();
   t.after(fixture.cleanup);
-  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
-  writeFileSync(
-    join(fixture.dir, 'package.json'),
-    '{"name":"@kurone-kito/idd-skill"}\n',
-  );
-  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
-  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
-  execFileSync('git', ['add', '-A'], {
-    cwd: fixture.dir,
-    env: fixtureEnv(),
-  });
 
   const result = runAuditDocs(fixture.dir);
   assert.equal(result.status, 1);
@@ -603,19 +616,8 @@ test('source repository audit fails when both inventory audit files are absent',
 });
 
 test('source repository audit rejects untracked inventory audit files', (t) => {
-  const fixture = initFixture();
+  const fixture = initSourceFixtureWithoutInventoryAudit();
   t.after(fixture.cleanup);
-  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
-  writeFileSync(
-    join(fixture.dir, 'package.json'),
-    '{"name":"@kurone-kito/idd-skill"}\n',
-  );
-  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
-  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
-  execFileSync('git', ['add', '-A'], {
-    cwd: fixture.dir,
-    env: fixtureEnv(),
-  });
 
   const auditFiles = [
     'src/scripts/repository-inventory-audit.mts',
