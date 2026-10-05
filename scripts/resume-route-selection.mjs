@@ -531,6 +531,9 @@ function stripBlockQuotesAndLazyContinuations(body) {
   // Content column of the list item whose marker had excess padding and so
   // starts with an indented code block, or `null` outside such a block.
   let listCodeContentColumn = null;
+  // True when that item sits inside a quote: a line without `>` then leaves
+  // the quote as well, so it is not inside the item.
+  let listCodeInQuote = false;
   // True from the first line that leaves such an item until a blank line, a
   // quote or any non-code line, so indented code that follows it stays masked.
   let followsListCode = false;
@@ -579,7 +582,10 @@ function stripBlockQuotesAndLazyContinuations(body) {
         probeForIndentedCode = followsListCode;
         // A same-line inner item is invisible to the enclosing-list lookup,
         // so strip its content column here when the line is still inside it.
-        itemContentColumn = followsListCode ? undefined : listCodeContentColumn;
+        itemContentColumn =
+          followsListCode || listCodeInQuote
+            ? undefined
+            : listCodeContentColumn;
         listCodeContentColumn = null;
       }
       const scan = scanBlockQuoteAndListPrefixes(line, {
@@ -594,6 +600,7 @@ function stripBlockQuotesAndLazyContinuations(body) {
       });
       if (scan.kind === 'listCode') {
         listCodeContentColumn = scan.contentColumn;
+        listCodeInQuote = scan.inQuote;
         followsListCode = false;
         quotedParagraphOpen = false;
         paragraphOpen = false;
@@ -793,6 +800,7 @@ function scanBlockQuoteAndListPrefixes(line, options = {}) {
           kind: 'listCode',
           contentColumn: markerEndColumn + 1,
           codeLength: remaining.length,
+          inQuote: foundBlockQuote,
         };
       }
       column = contentStartColumn;

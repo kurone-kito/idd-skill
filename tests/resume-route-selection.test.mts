@@ -1205,6 +1205,11 @@ const REVIEW_GUARDS: ClosingShape[] = [
         false,
       ],
       [
+        'a line without a quote marker leaves an item that sits in a quote',
+        `>> *\t\t>\n     1. > x\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
         'a second non-interrupting ordered marker stays text',
         `- outer\n  10. a\n  11.     > sample\n\n      ${CLOSING_LINE}`,
         false,
@@ -1263,7 +1268,7 @@ test('collector keeps the table of closing-line shapes complete and distinct', (
       PROSE_COUNTED.length,
       REVIEW_GUARDS.length,
     ],
-    [39, 89, 69, 37],
+    [39, 89, 69, 38],
   );
   assert.equal(new Set(all.map(({ body }) => body)).size, all.length);
 });
