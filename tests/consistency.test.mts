@@ -910,6 +910,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       e10NoProgressHoldAfter: 3,
       deferAfterRounds: 12,
       deferByUrgency: 'off',
+      deferNeedsDecision: 'on',
       subagentWaitCeiling: 'PT20M',
     },
     reviewEscalation: {
@@ -1038,6 +1039,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         e10NoProgressHoldAfter: 2,
         deferAfterRounds: 20,
         deferByUrgency: 'low-and-medium',
+        deferNeedsDecision: 'off',
         subagentWaitCeiling: 'PT45M',
         telemetryHook: { command: 'notify-hook' },
       },
@@ -1125,6 +1127,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         e10NoProgressHoldAfter: 2,
         deferAfterRounds: 20,
         deferByUrgency: 'low-and-medium',
+        deferNeedsDecision: 'off',
         subagentWaitCeiling: 'PT45M',
       },
       reviewEscalation: {

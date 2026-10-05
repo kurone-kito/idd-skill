@@ -521,6 +521,61 @@ test('policy schema rejects a critiqueLoop.deferByUrgency value outside the enum
   );
 });
 
+test('policy schema accepts critiqueLoop.deferNeedsDecision on and off (#3777)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferNeedsDecision of ['on', 'off']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferNeedsDecision };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected deferNeedsDecision ${deferNeedsDecision} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects a critiqueLoop.deferNeedsDecision value outside the enum (#3777)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferNeedsDecision of ['ON', 'maybe', false]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferNeedsDecision };
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `expected deferNeedsDecision ${JSON.stringify(deferNeedsDecision)} to be rejected`,
+    );
+  }
+});
+
+test('policy schema defines critiqueLoop.deferNeedsDecision as a two-value string enum with its default in words (#3777)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      critiqueLoop: {
+        properties: {
+          deferNeedsDecision: {
+            type?: string;
+            enum?: unknown[];
+            description: string;
+          };
+        };
+      };
+    };
+  };
+  const property = schema.properties.critiqueLoop.properties.deferNeedsDecision;
+  assert.equal(property.type, 'string');
+  assert.deepEqual(property.enum, ['on', 'off']);
+  assert.ok(
+    property.description.includes('defaults to "on"'),
+    'expected the description to state the default in words',
+  );
+  // validate-schemas rejects the `default` keyword, so the default lives
+  // in the description only.
+  assert.equal('default' in property, false);
+});
+
 test('policy schema accepts the worktreeGuard opt-in object', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
