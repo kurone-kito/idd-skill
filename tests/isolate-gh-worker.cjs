@@ -16,18 +16,38 @@ function isGh(value) {
   );
 }
 
+function isEnv(value) {
+  return (
+    path
+      .basename(String(value).replace(/^['"]|['"]$/gu, ''))
+      .replace(/\.exe$/iu, '')
+      .toLowerCase() === 'env'
+  );
+}
+
+function defaultExecutableSearchPath() {
+  if (process.platform !== 'win32') return '/bin:/usr/bin';
+  const windowsRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  return [path.join(windowsRoot, 'System32'), windowsRoot].join(path.delimiter);
+}
+
 function resolvedGh(value, env) {
   const command = String(value).replace(/^['"]|['"]$/gu, '');
   if (command.includes('/') || command.includes('\\')) {
     return path.resolve(command);
   }
-  const pathValue = env?.PATH ?? env?.Path ?? process.env.PATH ?? '';
+  const pathValue =
+    env === undefined
+      ? (process.env.PATH ?? process.env.Path ?? '')
+      : (env.PATH ?? env.Path ?? defaultExecutableSearchPath());
   for (const directory of pathValue.split(path.delimiter)) {
-    if (!directory) continue;
     for (const extension of process.platform === 'win32'
       ? ['', '.exe']
       : ['']) {
-      const candidate = path.resolve(directory, `${command}${extension}`);
+      const candidate = path.resolve(
+        directory || '.',
+        `${command}${extension}`,
+      );
       try {
         if (fs.statSync(candidate).isFile()) return candidate;
       } catch {
@@ -35,7 +55,7 @@ function resolvedGh(value, env) {
       }
     }
   }
-  return path.resolve(command);
+  return null;
 }
 
 function fixturePaths() {
@@ -65,7 +85,8 @@ function normalizedPath(value) {
 }
 
 function isRegisteredFixture(value, env) {
-  return fixturePaths().has(normalizedPath(resolvedGh(value, env)));
+  const resolved = resolvedGh(value, env);
+  return resolved !== null && fixturePaths().has(normalizedPath(resolved));
 }
 
 function shellPayload(command, args, options) {
@@ -94,36 +115,818 @@ function shellPayload(command, args, options) {
   return options?.shell ? [command, ...args].map(String).join(' ') : null;
 }
 
-function shellGhCommand(command, env) {
+function readBacktickSubstitution(source, start) {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (source[index] === '`') {
+      return { body: source.slice(start + 1, index), end: index };
+    }
+  }
+  return null;
+}
+
+function readCommandSubstitution(source, start) {
+  let depth = 1;
+  let quote = null;
+  for (let index = start + 2; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === '"') {
+        quote = null;
+        continue;
+      }
+      if (source.startsWith('$(', index)) {
+        depth += 1;
+        index += 1;
+        continue;
+      }
+      if (character === '`') {
+        const nested = readBacktickSubstitution(source, index);
+        if (nested) index = nested.end;
+      }
+      continue;
+    }
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '`') {
+      const nested = readBacktickSubstitution(source, index);
+      if (nested) index = nested.end;
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (character === '(') {
+      depth += 1;
+      continue;
+    }
+    if (character === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return { body: source.slice(start + 2, index), end: index };
+      }
+    }
+  }
+  return null;
+}
+
+function shellSubstitutions(source) {
+  const substitutions = [];
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === '"') {
+        quote = null;
+        continue;
+      }
+      if (source.startsWith('$((', index)) {
+        index += 1;
+        continue;
+      }
+      if (source.startsWith('$(', index)) {
+        const nested = readCommandSubstitution(source, index);
+        if (nested) {
+          substitutions.push(nested.body);
+          index = nested.end;
+        }
+        continue;
+      }
+      if (character === '`') {
+        const nested = readBacktickSubstitution(source, index);
+        if (nested) {
+          substitutions.push(nested.body);
+          index = nested.end;
+        }
+      }
+      continue;
+    }
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (source.startsWith('$((', index)) {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      const nested = readCommandSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+      continue;
+    }
+    if (character === '`') {
+      const nested = readBacktickSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
+function hereDocumentSubstitutions(source) {
+  const substitutions = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith('$((', index)) {
+      index += 2;
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      const nested = readCommandSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+      continue;
+    }
+    if (character === '`') {
+      const nested = readBacktickSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
+function splitEnvString(source) {
+  const words = [];
+  let word = '';
+  let quote = null;
+  let escaped = false;
+  let started = false;
+  for (const character of source) {
+    if (escaped) {
+      word += character;
+      escaped = false;
+      started = true;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      started = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else word += character;
+      started = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      started = true;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      if (started) words.push(word);
+      word = '';
+      started = false;
+      continue;
+    }
+    word += character;
+    started = true;
+  }
+  if (escaped) word += '\\';
+  if (started) words.push(word);
+  return words;
+}
+
+function unwrapEnvCommand(command, args, baseEnv) {
+  if (
+    path
+      .basename(String(command).replace(/^['"]|['"]$/gu, ''))
+      .replace(/\.exe$/iu, '')
+      .toLowerCase() !== 'env'
+  ) {
+    return null;
+  }
+  const valueOptions = new Set(['-C', '--chdir', '--argv0']);
+  const effectiveEnv = { ...baseEnv };
+  const splitArguments = [...args];
+  let index = 0;
+  let optionsTerminated = false;
+  const setValue = (name, value) => {
+    const key =
+      process.platform === 'win32'
+        ? (Object.keys(effectiveEnv).find(
+            (entry) => entry.toLowerCase() === name.toLowerCase(),
+          ) ?? name)
+        : name;
+    if (value === undefined) delete effectiveEnv[key];
+    else effectiveEnv[key] = value;
+  };
+  const resetPathIfMissing = () => {
+    if (effectiveEnv.PATH === undefined && effectiveEnv.Path === undefined) {
+      setValue('PATH', defaultExecutableSearchPath());
+    }
+  };
+  while (index < splitArguments.length) {
+    const argument = String(splitArguments[index]);
+    if (argument === '--') {
+      index += 1;
+      optionsTerminated = true;
+      continue;
+    }
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(argument);
+    if (assignment) {
+      setValue(assignment[1], assignment[2] ?? '');
+      index += 1;
+      continue;
+    }
+    if (optionsTerminated) {
+      return {
+        command: argument,
+        args: splitArguments.slice(index + 1),
+        env: effectiveEnv,
+      };
+    }
+    if (argument === '-i' || argument === '--ignore-environment') {
+      for (const name of Object.keys(effectiveEnv)) delete effectiveEnv[name];
+      setValue('PATH', defaultExecutableSearchPath());
+      index += 1;
+      continue;
+    }
+    if (argument === '-u' || argument === '--unset') {
+      setValue(String(splitArguments[index + 1] ?? ''), undefined);
+      index += 2;
+      resetPathIfMissing();
+      continue;
+    }
+    if (argument.startsWith('--unset=')) {
+      setValue(argument.slice('--unset='.length), undefined);
+      index += 1;
+      resetPathIfMissing();
+      continue;
+    }
+    if (argument.startsWith('-u') && argument.length > 2) {
+      setValue(argument.slice(2), undefined);
+      index += 1;
+      resetPathIfMissing();
+      continue;
+    }
+    if (valueOptions.has(argument)) {
+      index += 2;
+      continue;
+    }
+    if (argument === '-S' || argument === '--split-string') {
+      splitArguments.splice(
+        index,
+        2,
+        ...splitEnvString(String(splitArguments[index + 1] ?? '')),
+      );
+      continue;
+    }
+    if (argument.startsWith('--split-string=')) {
+      splitArguments.splice(index, 1, ...splitEnvString(argument.slice(15)));
+      continue;
+    }
+    if (argument.startsWith('-')) {
+      index += 1;
+      continue;
+    }
+    return {
+      command: argument,
+      args: splitArguments.slice(index + 1),
+      env: effectiveEnv,
+    };
+  }
+  const target = splitArguments[index];
+  return target === undefined
+    ? null
+    : {
+        command: String(target),
+        args: splitArguments.slice(index + 1),
+        env: effectiveEnv,
+      };
+}
+
+function unwrapEnvChain(command, args, baseEnv) {
+  let currentCommand = command;
+  let currentArgs = args;
+  let currentEnv = { ...(baseEnv ?? process.env) };
+  let wrapped = false;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const unwrapped = unwrapEnvCommand(currentCommand, currentArgs, currentEnv);
+    if (!unwrapped) break;
+    currentCommand = unwrapped.command;
+    currentArgs = unwrapped.args;
+    currentEnv = unwrapped.env;
+    wrapped = true;
+  }
+  const exhausted =
+    wrapped &&
+    isEnv(currentCommand) &&
+    unwrapEnvCommand(currentCommand, currentArgs, currentEnv) !== null;
+  return {
+    command: currentCommand,
+    args: currentArgs,
+    env: currentEnv,
+    wrapped,
+    exhausted,
+  };
+}
+
+function shellFlavor(command) {
+  const base = path
+    .basename(String(command).replace(/^['"]|['"]$/gu, ''))
+    .replace(/\.exe$/iu, '')
+    .toLowerCase();
+  if (['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base)) return 'posix';
+  if (['powershell', 'pwsh'].includes(base)) return 'powershell';
+  return 'other';
+}
+
+function shellFlavorForLaunch(command, options) {
+  if (options?.shell) {
+    return typeof options.shell === 'string'
+      ? shellFlavor(options.shell)
+      : process.platform === 'win32'
+        ? 'other'
+        : 'posix';
+  }
+  return shellFlavor(command);
+}
+
+function stripShellLineContinuations(source) {
+  let result = '';
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '\\' && quote !== "'") {
+      const next = source[index + 1];
+      if (next === '\n') {
+        index += 1;
+        continue;
+      }
+      if (next === '\r' && source[index + 2] === '\n') {
+        index += 2;
+        continue;
+      }
+      result += character;
+      if (next !== undefined) {
+        result += next;
+        index += 1;
+      }
+      continue;
+    }
+    result += character;
+    if (quote === "'") {
+      if (character === "'") quote = null;
+    } else if (quote === '"') {
+      if (character === '"') quote = null;
+    } else if (character === "'") {
+      quote = "'";
+    } else if (character === '"') {
+      quote = '"';
+    }
+  }
+  return result;
+}
+
+function readHereDocument(source, start) {
+  if (!source.startsWith('<<', start) || source[start + 2] === '<') {
+    return null;
+  }
+  let index = start + 2;
+  const stripTabs = source[index] === '-';
+  if (stripTabs) index += 1;
+  while (source[index] === ' ' || source[index] === '\t') index += 1;
+  let delimiter = '';
+  let quote = null;
+  let quoted = false;
+  for (; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      else delimiter += character;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = null;
+      else if (character === '\\' && source[index + 1] !== undefined) {
+        delimiter += source[index + 1];
+        index += 1;
+      } else delimiter += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      quoted = true;
+      continue;
+    }
+    if (character === '\\' && source[index + 1] !== undefined) {
+      quoted = true;
+      delimiter += source[index + 1];
+      index += 1;
+      continue;
+    }
+    if (/[\s;|&()<>]/u.test(character ?? '')) break;
+    delimiter += character;
+  }
+  if (delimiter.length === 0 || quote !== null) return null;
+  return { document: { delimiter, stripTabs, quoted }, end: index };
+}
+
+function blankLine(source) {
+  return source.replace(/[^\r\n]/gu, ' ');
+}
+
+function stripShellCommentsAndQuotedHereDocuments(source) {
+  const output = [];
+  const unquotedHereDocuments = [];
+  let pending = [];
+  let unquotedDocumentLines = [];
+  const lines = source.match(/[^\n]*\n|[^\n]+$/gu) ?? [];
+  for (const lineWithEnding of lines) {
+    const line = lineWithEnding.replace(/\r?\n$/u, '');
+    const ending = lineWithEnding.slice(line.length);
+    if (pending.length > 0) {
+      const document = pending[0];
+      const comparable = document.stripTabs ? line.replace(/^\t+/u, '') : line;
+      const isDelimiter = comparable === document.delimiter;
+      if (!isDelimiter && !document.quoted) unquotedDocumentLines.push(line);
+      output.push(blankLine(line), ending);
+      if (isDelimiter) {
+        if (!document.quoted) {
+          unquotedHereDocuments.push(unquotedDocumentLines.join('\n'));
+        }
+        unquotedDocumentLines = [];
+        pending = pending.slice(1);
+      }
+      continue;
+    }
+
+    const characters = [...line];
+    let quote = null;
+    const found = [];
+    for (let index = 0; index < characters.length; index += 1) {
+      const character = characters[index];
+      if (quote === "'") {
+        if (character === "'") quote = null;
+        continue;
+      }
+      if (quote === '"') {
+        if (character === '\\') index += 1;
+        else if (character === '"') quote = null;
+        continue;
+      }
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === "'") {
+        quote = "'";
+        continue;
+      }
+      if (character === '"') {
+        quote = '"';
+        continue;
+      }
+      if (
+        character === '#' &&
+        (index === 0 || /[\s;&|(){}]/u.test(characters[index - 1] ?? ''))
+      ) {
+        for (let rest = index; rest < characters.length; rest += 1) {
+          characters[rest] = ' ';
+        }
+        break;
+      }
+      if (character === '<' && characters[index + 1] === '<') {
+        const parsed = readHereDocument(line, index);
+        if (parsed) {
+          found.push(parsed.document);
+          index = parsed.end - 1;
+        }
+      }
+    }
+    output.push(characters.join(''), ending);
+    if (ending.length > 0) pending = found;
+  }
+  const unterminatedDocument = pending[0];
+  if (unterminatedDocument && !unterminatedDocument.quoted) {
+    unquotedHereDocuments.push(unquotedDocumentLines.join('\n'));
+  }
+  return { source: output.join(''), unquotedHereDocuments };
+}
+
+function stripPowerShellComments(source) {
+  const characters = [...source];
+  let quote = null;
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (quote === "'") {
+      if (character === "'" && characters[index + 1] === "'") index += 1;
+      else if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '`') index += 1;
+      else if (character === '"') quote = null;
+      continue;
+    }
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '<' && characters[index + 1] === '#') {
+      let depth = 1;
+      characters[index] = ' ';
+      characters[index + 1] = ' ';
+      index += 2;
+      while (index < characters.length && depth > 0) {
+        if (characters[index] === '<' && characters[index + 1] === '#') {
+          depth += 1;
+          characters[index] = ' ';
+          characters[index + 1] = ' ';
+          index += 2;
+        } else if (characters[index] === '#' && characters[index + 1] === '>') {
+          depth -= 1;
+          characters[index] = ' ';
+          characters[index + 1] = ' ';
+          index += 2;
+        } else {
+          if (characters[index] !== '\n' && characters[index] !== '\r') {
+            characters[index] = ' ';
+          }
+          index += 1;
+        }
+      }
+      index -= 1;
+      continue;
+    }
+    if (character === '#') {
+      while (index < characters.length && characters[index] !== '\n') {
+        characters[index] = ' ';
+        index += 1;
+      }
+    }
+  }
+  return characters.join('');
+}
+
+function readPowerShellSubexpression(source, start) {
+  let depth = 1;
+  let quote = null;
+  for (let index = start + 2; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'" && source[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = null;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '(') depth += 1;
+    else if (character === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return { body: source.slice(start + 2, index), end: index };
+      }
+    }
+  }
+  return null;
+}
+
+function powerShellSubstitutions(source) {
+  const substitutions = [];
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'" && source[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') {
+        quote = null;
+        continue;
+      }
+    } else if (character === "'") {
+      quote = "'";
+      continue;
+    } else if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      const nested = readPowerShellSubexpression(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
+function shellGhCommand(command, env, flavor = 'posix') {
+  const posixSource =
+    flavor === 'posix'
+      ? stripShellCommentsAndQuotedHereDocuments(
+          stripShellLineContinuations(String(command)),
+        )
+      : null;
+  const parsedSource =
+    posixSource?.source ??
+    (flavor === 'powershell'
+      ? stripPowerShellComments(String(command))
+      : String(command).replace(/\$\([^)]*\)/gu, ' __literal_substitution__ '));
+  const substitutions =
+    flavor === 'posix'
+      ? [
+          ...shellSubstitutions(parsedSource),
+          ...(posixSource?.unquotedHereDocuments.flatMap(
+            hereDocumentSubstitutions,
+          ) ?? []),
+        ]
+      : flavor === 'powershell'
+        ? powerShellSubstitutions(parsedSource)
+        : [];
+  for (const substitution of substitutions) {
+    const nested = shellGhCommand(substitution, env, flavor);
+    if (nested) return nested;
+  }
   const tokens =
-    String(command).match(
+    parsedSource.match(
       /"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||[;&|(){}\n]|[^\s;&|(){}\n]+/gu,
     ) ?? [];
   let commandPosition = true;
   let wrapper = null;
   let skipWrapperArgument = false;
+  let envOption = null;
+  let effectiveEnv = { ...(env ?? process.env) };
   for (const token of tokens) {
     if (/^[;&|(){}\n]$/u.test(token) || token === '&&' || token === '||') {
       commandPosition = true;
       wrapper = null;
       skipWrapperArgument = false;
+      envOption = null;
+      effectiveEnv = { ...(env ?? process.env) };
       continue;
     }
     if (!commandPosition) continue;
     const word = token.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2');
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(word)) continue;
+    if (wrapper === 'env' && envOption === 'unset') {
+      delete effectiveEnv[word];
+      if (
+        word.toLowerCase() === 'path' &&
+        effectiveEnv.PATH === undefined &&
+        effectiveEnv.Path === undefined
+      ) {
+        effectiveEnv.PATH = defaultExecutableSearchPath();
+      }
+      envOption = null;
+      continue;
+    }
+    if (wrapper === 'env' && envOption === 'split') {
+      const split = splitEnvString(word);
+      if (split[0]) {
+        const nested = argvGhCommand(split[0], split.slice(1), effectiveEnv);
+        if (nested) return nested;
+      }
+      envOption = null;
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(word);
+    if (assignment) {
+      if (wrapper === 'env' || commandPosition) {
+        effectiveEnv[assignment[1]] = assignment[2] ?? '';
+      }
+      continue;
+    }
     if (wrapper === 'env' && skipWrapperArgument) {
       skipWrapperArgument = false;
       continue;
     }
-    if (wrapper === 'env' && word.startsWith('-')) {
-      skipWrapperArgument = ['-u', '--unset', '-C', '--chdir', '-S'].includes(
-        word,
-      );
+    if (
+      wrapper === 'env' &&
+      (word === '-i' || word === '--ignore-environment')
+    ) {
+      for (const key of Object.keys(effectiveEnv)) delete effectiveEnv[key];
+      effectiveEnv.PATH = defaultExecutableSearchPath();
       continue;
     }
-    if (['command', 'exec', 'env', 'nohup', 'sudo', 'time'].includes(word)) {
-      wrapper = word;
+    if (wrapper === 'env' && (word === '-u' || word === '--unset')) {
+      envOption = 'unset';
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('--unset=')) {
+      delete effectiveEnv[word.slice('--unset='.length)];
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('-u') && word.length > 2) {
+      delete effectiveEnv[word.slice(2)];
+      continue;
+    }
+    if (wrapper === 'env' && (word === '-S' || word === '--split-string')) {
+      envOption = 'split';
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('--split-string=')) {
+      const split = splitEnvString(word.slice('--split-string='.length));
+      if (split[0]) {
+        const nested = argvGhCommand(split[0], split.slice(1), effectiveEnv);
+        if (nested) return nested;
+      }
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('-')) {
+      skipWrapperArgument = ['-C', '--chdir', '--argv0'].includes(word);
+      continue;
+    }
+    const base = path
+      .basename(word.replace(/^['"]|['"]$/gu, ''))
+      .replace(/\.exe$/iu, '')
+      .toLowerCase();
+    if (['command', 'exec', 'env', 'nohup', 'sudo', 'time'].includes(base)) {
+      wrapper = base;
       continue;
     }
     if (['if', 'then', 'else', 'elif', 'while', 'until', 'do'].includes(word)) {
@@ -131,9 +934,22 @@ function shellGhCommand(command, env) {
     }
     commandPosition = false;
     wrapper = null;
-    if (isGh(word) && !isRegisteredFixture(word, env)) return word;
+    if (isGh(word) && !isRegisteredFixture(word, effectiveEnv)) return word;
   }
   return null;
+}
+
+function argvGhCommand(command, args, env) {
+  const unwrapped = unwrapEnvChain(command, args, env);
+  if (isGh(unwrapped.command)) {
+    return isRegisteredFixture(unwrapped.command, unwrapped.env)
+      ? null
+      : unwrapped.command;
+  }
+  const shell = shellPayload(unwrapped.command, unwrapped.args);
+  return shell === null
+    ? null
+    : shellGhCommand(shell, unwrapped.env, shellFlavor(unwrapped.command));
 }
 
 function safeArgs(args) {
@@ -146,11 +962,18 @@ function safeArgs(args) {
       redactNext = false;
       continue;
     }
+    const environmentAssignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(
+      argument,
+    );
+    if (environmentAssignment) {
+      values.push(`${environmentAssignment[1]}=[redacted]`);
+      continue;
+    }
     const optionAndValue = /^(--?[A-Za-z0-9-]+)=(.*)$/u.exec(argument);
     if (optionAndValue) {
       const [, option, optionValue] = optionAndValue;
       values.push(
-        `${option}=${/(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(optionValue ?? '') ? '[redacted]' : '[value]'}`,
+        `${option}=${/(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b[A-Za-z_][A-Za-z0-9_]*(?:token|password|secret|authorization|key)=\S+)/iu.test(optionValue ?? '') ? '[redacted]' : '[value]'}`,
       );
       continue;
     }
@@ -163,7 +986,7 @@ function safeArgs(args) {
       values.push(argument);
       redactNext = true;
     } else if (
-      /(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b(?:token|password|secret|authorization)=\S+)/iu.test(
+      /(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b[A-Za-z_][A-Za-z0-9_]*(?:token|password|secret|authorization|key)=\S+)/iu.test(
         argument,
       )
     ) {
@@ -175,22 +998,74 @@ function safeArgs(args) {
   return values;
 }
 
+function safeInvocationArgs(command, args) {
+  if (!isEnv(command)) return safeArgs(args);
+  const sanitized = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = String(args[index]);
+    if (argument === '-S' || argument === '--split-string') {
+      sanitized.push(argument, '[split string omitted]');
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith('--split-string=')) {
+      sanitized.push('--split-string=[split string omitted]');
+      continue;
+    }
+    sanitized.push(argument);
+  }
+  return safeArgs(sanitized);
+}
+
 function blockIfGh(api, command, args, options) {
   let ghCommand = null;
   let direct = false;
+  let wrappedExecutable = null;
+  let shellInvocation = false;
+  let unresolvedEnvChain = false;
   if (isGh(command)) {
     if (isRegisteredFixture(command, options?.env)) {
       const shell = shellPayload(command, args, options);
       if (shell === null) return;
-      ghCommand = shellGhCommand(shell, options?.env);
+      ghCommand = shellGhCommand(
+        shell,
+        options?.env,
+        shellFlavorForLaunch(command, options),
+      );
     } else {
       ghCommand = String(command);
       direct = true;
     }
   } else {
-    const shell = shellPayload(command, args, options);
-    if (shell !== null) {
-      ghCommand = shellGhCommand(shell, options?.env);
+    const unwrapped = unwrapEnvChain(command, args, options?.env);
+    if (unwrapped.exhausted) {
+      unresolvedEnvChain = true;
+      shellInvocation = true;
+      ghCommand = 'gh in unresolved env wrapper';
+    } else if (unwrapped.wrapped && isGh(unwrapped.command)) {
+      if (isRegisteredFixture(unwrapped.command, unwrapped.env)) return;
+      ghCommand = unwrapped.command;
+      wrappedExecutable = unwrapped.command;
+    } else if (unwrapped.wrapped) {
+      const wrappedShell = shellPayload(unwrapped.command, unwrapped.args);
+      if (wrappedShell !== null) {
+        shellInvocation = true;
+        ghCommand = shellGhCommand(
+          wrappedShell,
+          unwrapped.env,
+          shellFlavor(unwrapped.command),
+        );
+      }
+    }
+    if (!ghCommand && !wrappedExecutable) {
+      const shell = shellPayload(command, args, options);
+      if (shell !== null) {
+        ghCommand = shellGhCommand(
+          shell,
+          options?.env,
+          shellFlavorForLaunch(command, options),
+        );
+      }
     }
   }
   if (!ghCommand) return;
@@ -207,9 +1082,14 @@ function blockIfGh(api, command, args, options) {
       },
     );
   }
-  const resolved = direct
-    ? resolvedGh(command, env)
-    : resolvedGh(ghCommand, env);
+  const resolved = unresolvedEnvChain
+    ? null
+    : direct
+      ? resolvedGh(command, env)
+      : resolvedGh(
+          wrappedExecutable ?? ghCommand,
+          unwrapEnvChain(command, args, env).env,
+        );
   const expected =
     resolved === null
       ? null
@@ -221,12 +1101,21 @@ function blockIfGh(api, command, args, options) {
     id: `gh-${process.pid}-${threadId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     at: new Date().toISOString(),
     api,
-    executable: direct ? String(command) : 'gh in shell command',
+    executable: direct
+      ? String(command)
+      : unresolvedEnvChain
+        ? 'env wrapper with unresolved command'
+        : wrappedExecutable
+          ? 'env wrapper for gh'
+          : 'gh in shell command',
     resolvedExecutable: resolved,
     args:
-      !direct && shellPayload(command, args, options) !== null
+      !direct &&
+      (shellInvocation ||
+        (wrappedExecutable === null &&
+          shellPayload(command, args, options) !== null))
         ? ['[shell command omitted]']
-        : safeArgs(args),
+        : safeInvocationArgs(command, args),
     pid: process.pid,
     threadId,
   };

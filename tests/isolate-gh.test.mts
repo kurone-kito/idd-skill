@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
@@ -30,6 +36,33 @@ test('caught unexpected real gh attempts still fail their owning process', () =>
     'registered',
     process.platform === 'win32' ? 'gh.exe' : 'gh',
   );
+  const registeredFixtureBin = join(guardRoot, 'registered-bin');
+  const registeredPathFixtureGh = join(
+    registeredFixtureBin,
+    process.platform === 'win32' ? 'gh.exe' : 'gh',
+  );
+  const unregisteredBin = join(guardRoot, 'unregistered-bin');
+  const missingPathCwd = join(guardRoot, 'missing-path-cwd');
+  const missingPathGh = join(
+    missingPathCwd,
+    process.platform === 'win32' ? 'gh.exe' : 'gh',
+  );
+  const unregisteredGh = join(
+    unregisteredBin,
+    process.platform === 'win32' ? 'gh.exe' : 'gh',
+  );
+  if (process.platform !== 'win32') {
+    mkdirSync(registeredFixtureBin, { recursive: true });
+    mkdirSync(unregisteredBin, { recursive: true });
+    mkdirSync(missingPathCwd, { recursive: true });
+    writeFileSync(registeredPathFixtureGh, '#!/bin/sh\nexit 0\n', 'utf8');
+    writeFileSync(unregisteredGh, '#!/bin/sh\nexit 0\n', 'utf8');
+    writeFileSync(missingPathGh, '#!/bin/sh\nexit 0\n', 'utf8');
+  }
+  const backtickSubstitutionCommand = `printf "%s" "\`gh api repos/o/r\`"`;
+  const continuedCommentCommand = ['echo x\\', '# "$(gh api repos/o/r)"'].join(
+    '\n',
+  );
   const source = `
 const childProcess = require('node:child_process');
 const shell = process.platform === 'win32'
@@ -43,6 +76,28 @@ const calls = [
   ['spawnSync shell option', () => childProcess.spawnSync(shell, [shellFlag, 'gh api repos/o/r'], { shell: true })],
   ['spawnSync shell command', () => childProcess.spawnSync('printf', ['ok', '&&', 'gh api repos/o/r'], { shell: true })],
   ['spawnSync ksh', () => childProcess.spawnSync('ksh', ['-c', 'gh api repos/o/r'])],
+  ...(process.platform === 'win32'
+    ? []
+    : [
+        ['spawnSync quoted command substitution', () => childProcess.spawnSync(shell, [shellFlag, 'printf "%s" "$(gh api repos/o/r)"'])],
+        ['spawnSync quoted backtick substitution', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify(backtickSubstitutionCommand)}])],
+        ['spawnSync env wrapper', () => childProcess.spawnSync('/usr/bin/env', ['gh', 'api', 'repos/o/r'])],
+        ['spawnSync env PATH override', () => childProcess.spawnSync('/usr/bin/env', ['PATH=' + ${JSON.stringify(unregisteredBin)}, 'gh', 'api', 'repos/o/r'], { env: { ...process.env, PATH: ${JSON.stringify(registeredFixtureBin)} } })],
+        ['spawnSync shell env PATH override', () => childProcess.spawnSync(shell, [shellFlag, 'env PATH=' + ${JSON.stringify(unregisteredBin)} + ' gh api repos/o/r'])],
+        ['spawnSync env credential', () => childProcess.spawnSync('/usr/bin/env', ['GH_TOKEN=opaque-secret-value', 'gh', 'api', 'repos/o/r'])],
+        ['spawnSync env split gh', () => childProcess.spawnSync('/usr/bin/env', ['-S', 'FOO=harmless GH_TOKEN=opaque-secret-value gh --token split-secret-value api repos/o/r'])],
+        ['spawnSync env deep wrapper', () => childProcess.spawnSync('/usr/bin/env', [...Array(9).fill('env'), 'gh', 'api', 'repos/o/r'])],
+        ['spawnSync env default signal', () => childProcess.spawnSync('/usr/bin/env', ['--default-signal', 'gh', 'api', 'repos/o/r'])],
+        ['spawnSync env ignore signal', () => childProcess.spawnSync('/usr/bin/env', ['--ignore-signal', 'gh', 'api', 'repos/o/r'])],
+        ['spawnSync env assignment after terminator', () => childProcess.spawnSync('/usr/bin/env', ['--', 'PATH=' + ${JSON.stringify(unregisteredBin)}, 'gh', 'api', 'repos/o/r'])],
+        ['spawnSync gh with missing PATH', () => { process.chdir(${JSON.stringify(missingPathCwd)}); const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path')); return childProcess.spawnSync('gh', ['api', 'repos/o/r'], { env }); }],
+        ['spawnSync shell line continuation substitution', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify(continuedCommentCommand)}])],
+        ['spawnSync unquoted here-document substitution', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'\nEOF")}])],
+        ['spawnSync unterminated here-document substitution', () => childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'")}])],
+      ]),
+  ...(process.platform === 'win32'
+    ? [['spawnSync PowerShell substitution', () => childProcess.spawnSync('pwsh', ['-Command', 'Write-Output "$(gh api repos/o/r)"'])]]
+    : []),
   ['spawnSync registered fixture shell', () => childProcess.spawnSync(${JSON.stringify(registeredFixtureGh)}, ['--version', '&&', 'gh', 'api'], { shell: true })],
   ['spawnSync null args placeholder', () => childProcess.spawnSync('printf ok && gh api repos/o/r', null, { shell: true })],
   ['spawn undefined args placeholder', () => childProcess.spawn('printf ok && gh api repos/o/r', undefined, { shell: true })],
@@ -61,6 +116,34 @@ for (const [name, call] of calls) {
     }
   }
 }
+if (process.platform !== 'win32') {
+  try {
+    childProcess.spawnSync('/usr/bin/env', ['-S', 'printf ok; gh api repos/o/r']);
+  } catch (error) {
+    process.exitCode = 4;
+  }
+  try {
+    childProcess.spawnSync(shell, [shellFlag, 'echo ok # "$(gh api repos/o/r)"']);
+  } catch {
+    process.exitCode = 4;
+  }
+  try {
+    childProcess.spawnSync(shell, [shellFlag, ${JSON.stringify('cat <<\'EOF\'\n"$(gh api repos/o/r)"\nEOF')}]);
+  } catch {
+    process.exitCode = 4;
+  }
+} else {
+  try {
+    childProcess.spawnSync(process.env.ComSpec || 'cmd.exe', ['/c', 'echo $(gh api repos/o/r)']);
+  } catch {
+    process.exitCode = 4;
+  }
+  try {
+    childProcess.spawnSync('pwsh', ['-Command', '<# "$(gh api repos/o/r)" #> Write-Output ok']);
+  } catch {
+    process.exitCode = 4;
+  }
+}
 `;
   try {
     const result = spawnSync(process.execPath, ['-e', source], {
@@ -73,7 +156,12 @@ for (const [name, call] of calls) {
         ),
         [process.platform === 'win32' ? 'Path' : 'PATH']: guardRoot,
         IDD_TEST_GH_GUARD_LEDGER: ledgerPath,
-        IDD_TEST_GH_GUARD_ALLOWED_STUBS: JSON.stringify([registeredFixtureGh]),
+        IDD_TEST_GH_GUARD_ALLOWED_STUBS: JSON.stringify([
+          registeredFixtureGh,
+          ...(process.platform === 'win32'
+            ? []
+            : [registeredPathFixtureGh, missingPathGh]),
+        ]),
         IDD_TEST_GH_GUARD_SELF_CHECK: '1',
       },
     });
@@ -81,29 +169,78 @@ for (const [name, call] of calls) {
     assert.equal(result.error, undefined);
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /owning test process must fail/u);
+    const expectedApis = [
+      'spawnSync',
+      'execFileSync',
+      'spawnSync',
+      'spawnSync',
+      'spawnSync',
+      'spawnSync',
+      ...(process.platform === 'win32'
+        ? []
+        : [
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+            'spawnSync',
+          ]),
+      ...(process.platform === 'win32' ? ['spawnSync'] : []),
+      'spawnSync',
+      'spawnSync',
+      'spawn',
+      'execFile',
+      'execFileSync',
+      'fork',
+    ];
     assert.deepEqual(
       readAttempts(ledgerPath).map((attempt) => attempt.api),
-      [
-        'spawnSync',
-        'execFileSync',
-        'spawnSync',
-        'spawnSync',
-        'spawnSync',
-        'spawnSync',
-        'spawnSync',
-        'spawnSync',
-        'spawn',
-        'execFile',
-        'execFileSync',
-        'fork',
-      ],
+      expectedApis,
     );
     const attempts = readAttempts(ledgerPath);
     assert.deepEqual(attempts[1]?.args, ['--token', '[redacted]']);
     assert.deepEqual(attempts[2]?.args, ['[shell command omitted]']);
+    if (process.platform !== 'win32') {
+      assert.deepEqual(attempts[9]?.args, [
+        'PATH=[redacted]',
+        'gh',
+        'api',
+        'repos/o/r',
+      ]);
+      assert.deepEqual(attempts[11]?.args, [
+        'GH_TOKEN=[redacted]',
+        'gh',
+        'api',
+        'repos/o/r',
+      ]);
+      assert.equal(attempts[9]?.resolvedExecutable, unregisteredGh);
+      assert.deepEqual(attempts[12]?.args, ['-S', '[split string omitted]']);
+      assert.equal(
+        attempts[13]?.executable,
+        'env wrapper with unresolved command',
+      );
+      assert.deepEqual(attempts[16]?.args, [
+        '--',
+        'PATH=[redacted]',
+        'gh',
+        'api',
+        'repos/o/r',
+      ]);
+      assert.notEqual(attempts[17]?.resolvedExecutable, missingPathGh);
+    }
     assert.doesNotMatch(
       readFileSync(ledgerPath, 'utf8'),
-      /secret-token-value|private-payload-should-not-be-recorded/u,
+      /secret-token-value|private-payload-should-not-be-recorded|opaque-secret-value|split-secret-value/u,
     );
   } finally {
     rmSync(guardRoot, { recursive: true, force: true });
@@ -118,6 +255,25 @@ test('Worker guards honor nullish child-process argument placeholders', async ()
     'missing',
     process.platform === 'win32' ? 'gh.exe' : 'gh',
   );
+  const registeredBin = join(guardRoot, 'registered-bin');
+  const registeredGh = join(
+    registeredBin,
+    process.platform === 'win32' ? 'gh.exe' : 'gh',
+  );
+  const unregisteredBin = join(guardRoot, 'unregistered-bin');
+  const unregisteredGh = join(
+    unregisteredBin,
+    process.platform === 'win32' ? 'gh.exe' : 'gh',
+  );
+  if (process.platform !== 'win32') {
+    mkdirSync(registeredBin, { recursive: true });
+    mkdirSync(unregisteredBin, { recursive: true });
+    writeFileSync(registeredGh, '#!/bin/sh\nexit 0\n', 'utf8');
+    writeFileSync(unregisteredGh, '#!/bin/sh\nexit 0\n', 'utf8');
+  }
+  const continuedCommentCommand = ['echo x\\', '# "$(gh api repos/o/r)"'].join(
+    '\n',
+  );
   const workerSource = `
 const { parentPort } = require('node:worker_threads');
 const childProcess = require('node:child_process');
@@ -127,6 +283,21 @@ const calls = [
   ['execFile', () => childProcess.execFile('printf ok && gh api repos/o/r', null, { shell: true })],
   ['execFileSync', () => childProcess.execFileSync('printf ok && gh api repos/o/r', undefined, { shell: true })],
   ['fork', () => childProcess.fork('unused-worker.cjs', undefined, { execPath: ${JSON.stringify(missingGhPath)} }).on('error', () => {})],
+  ...(process.platform === 'win32' ? [] : [
+    ['spawnSync env PATH override', () => childProcess.spawnSync('/usr/bin/env', ['PATH=' + ${JSON.stringify(unregisteredBin)}, 'gh', 'api', 'repos/o/r'], { env: { ...process.env, PATH: ${JSON.stringify(registeredBin)} } })],
+    ['spawnSync env credential', () => childProcess.spawnSync('/usr/bin/env', ['GH_TOKEN=opaque-secret-value', 'gh', 'api', 'repos/o/r'])],
+    ['spawnSync env split gh', () => childProcess.spawnSync('/usr/bin/env', ['-S', 'FOO=harmless GH_TOKEN=opaque-secret-value gh --token split-secret-value api repos/o/r'])],
+    ['spawnSync env deep wrapper', () => childProcess.spawnSync('/usr/bin/env', [...Array(9).fill('env'), 'gh', 'api', 'repos/o/r'])],
+    ['spawnSync env default signal', () => childProcess.spawnSync('/usr/bin/env', ['--default-signal', 'gh', 'api', 'repos/o/r'])],
+    ['spawnSync env ignore signal', () => childProcess.spawnSync('/usr/bin/env', ['--ignore-signal', 'gh', 'api', 'repos/o/r'])],
+    ['spawnSync env assignment after terminator', () => childProcess.spawnSync('/usr/bin/env', ['--', 'PATH=' + ${JSON.stringify(unregisteredBin)}, 'gh', 'api', 'repos/o/r'])],
+    ['spawnSync shell line continuation substitution', () => childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify(continuedCommentCommand)}])],
+    ['spawnSync unquoted here-document substitution', () => childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'\nEOF")}])],
+    ['spawnSync unterminated here-document substitution', () => childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify("cat <<EOF\n'$(\ngh api repos/o/r\n)'")}])],
+  ]),
+  ...(process.platform === 'win32'
+    ? [['spawnSync PowerShell substitution', () => childProcess.spawnSync('pwsh', ['-Command', 'Write-Output "$(gh api repos/o/r)"'])]]
+    : []),
 ];
 const results = calls.map(([name, call]) => {
   try {
@@ -136,6 +307,27 @@ const results = calls.map(([name, call]) => {
     return { name, code: error.code };
   }
 });
+if (process.platform !== 'win32') {
+  try {
+    childProcess.spawnSync('/usr/bin/env', ['-S', 'printf ok; gh api repos/o/r']);
+    results.push({ name: 'env split separator literal', code: 'not-blocked' });
+  } catch (error) {
+    results.push({ name: 'env split separator literal', code: error.code });
+  }
+  try {
+    childProcess.spawnSync('/bin/sh', ['-c', ${JSON.stringify('cat <<\'EOF\'\n"$(gh api repos/o/r)"\nEOF')}]);
+    results.push({ name: 'quoted here-document literal', code: 'not-blocked' });
+  } catch (error) {
+    results.push({ name: 'quoted here-document literal', code: error.code });
+  }
+} else {
+  try {
+    childProcess.spawnSync('pwsh', ['-Command', '<# "$(gh api repos/o/r)" #> Write-Output ok']);
+    results.push({ name: 'PowerShell block comment literal', code: 'not-blocked' });
+  } catch (error) {
+    results.push({ name: 'PowerShell block comment literal', code: error.code });
+  }
+}
 parentPort.postMessage(results);
 parentPort.close();
 `;
@@ -145,7 +337,9 @@ parentPort.close();
   }
   workerEnv[process.platform === 'win32' ? 'Path' : 'PATH'] = guardRoot;
   workerEnv.IDD_TEST_GH_GUARD_LEDGER = ledgerPath;
-  workerEnv.IDD_TEST_GH_GUARD_ALLOWED_STUBS = '[]';
+  workerEnv.IDD_TEST_GH_GUARD_ALLOWED_STUBS = JSON.stringify(
+    process.platform === 'win32' ? [] : [registeredGh],
+  );
   const worker = new Worker(workerSource, {
     eval: true,
     env: workerEnv,
@@ -169,14 +363,102 @@ parentPort.close();
     assert.equal(exitCode, 0);
     assert.deepEqual(
       results,
-      ['spawnSync', 'spawn', 'execFile', 'execFileSync', 'fork'].map(
-        (name) => ({ name, code: 'IDD_UNEXPECTED_REAL_GH' }),
-      ),
+      [
+        'spawnSync',
+        'spawn',
+        'execFile',
+        'execFileSync',
+        'fork',
+        ...(process.platform === 'win32'
+          ? []
+          : [
+              'spawnSync env PATH override',
+              'spawnSync env credential',
+              'spawnSync env split gh',
+              'spawnSync env deep wrapper',
+              'spawnSync env default signal',
+              'spawnSync env ignore signal',
+              'spawnSync env assignment after terminator',
+              'spawnSync shell line continuation substitution',
+              'spawnSync unquoted here-document substitution',
+              'spawnSync unterminated here-document substitution',
+              'env split separator literal',
+              'quoted here-document literal',
+            ]),
+        ...(process.platform === 'win32'
+          ? [
+              'spawnSync PowerShell substitution',
+              'PowerShell block comment literal',
+            ]
+          : []),
+      ].map((name) => ({
+        name,
+        code:
+          name === 'env split separator literal' ||
+          name === 'quoted here-document literal' ||
+          name === 'PowerShell block comment literal'
+            ? 'not-blocked'
+            : 'IDD_UNEXPECTED_REAL_GH',
+      })),
     );
+    const attempts = readAttempts(ledgerPath);
     assert.deepEqual(
-      readAttempts(ledgerPath).map((attempt) => attempt.api),
-      ['spawnSync', 'spawn', 'execFile', 'execFileSync', 'fork'],
+      attempts.map((attempt) => attempt.api),
+      [
+        'spawnSync',
+        'spawn',
+        'execFile',
+        'execFileSync',
+        'fork',
+        ...(process.platform === 'win32'
+          ? []
+          : [
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+              'spawnSync',
+            ]),
+        ...(process.platform === 'win32' ? ['spawnSync'] : []),
+      ],
     );
+    assert.doesNotMatch(
+      readFileSync(ledgerPath, 'utf8'),
+      /opaque-secret-value|split-secret-value/u,
+    );
+    if (process.platform !== 'win32') {
+      const pathAttempt = attempts[5];
+      assert.equal(pathAttempt?.resolvedExecutable, unregisteredGh);
+      assert.deepEqual(pathAttempt?.args, [
+        'PATH=[redacted]',
+        'gh',
+        'api',
+        'repos/o/r',
+      ]);
+      assert.deepEqual(attempts[6]?.args, [
+        'GH_TOKEN=[redacted]',
+        'gh',
+        'api',
+        'repos/o/r',
+      ]);
+      assert.deepEqual(attempts[7]?.args, ['-S', '[split string omitted]']);
+      assert.equal(
+        attempts[8]?.executable,
+        'env wrapper with unresolved command',
+      );
+      assert.deepEqual(attempts[11]?.args, [
+        '--',
+        'PATH=[redacted]',
+        'gh',
+        'api',
+        'repos/o/r',
+      ]);
+    }
   } finally {
     rmSync(guardRoot, { recursive: true, force: true });
   }
@@ -463,6 +745,8 @@ test('the paginated gh-exec Worker records caught attempts in its owner ledger',
   const shellFlag = process.platform === 'win32' ? '/c' : '-c';
   const quotedFixtureGh = `"${registeredFixtureGh.replaceAll('"', '\\"')}"`;
   const mixedFixtureCommand = `${quotedFixtureGh} --version && gh api repos/o/r`;
+  const substitutionCommand = 'printf "%s" "$(gh api repos/o/r)"';
+  const backtickCommand = 'printf "%s" "`gh api repos/o/r`"';
   const source = `
 import { ghApiJson } from ${JSON.stringify(modulePath)};
 import { Worker } from 'node:worker_threads';
@@ -485,6 +769,26 @@ const worker = new Worker(\`
   } catch (error) {
     calls.push(Promise.resolve(error.code));
   }
+  if (process.platform !== 'win32') {
+    try {
+      spawnSync(workerData.shell, [workerData.shellFlag, workerData.substitutionCommand]);
+      calls.push(Promise.resolve('not-blocked'));
+    } catch (error) {
+      calls.push(Promise.resolve(error.code));
+    }
+    try {
+      spawnSync(workerData.shell, [workerData.shellFlag, workerData.backtickCommand]);
+      calls.push(Promise.resolve('not-blocked'));
+    } catch (error) {
+      calls.push(Promise.resolve(error.code));
+    }
+    try {
+      spawnSync('/usr/bin/env', ['gh', 'api', 'repos/o/r']);
+      calls.push(Promise.resolve('not-blocked'));
+    } catch (error) {
+      calls.push(Promise.resolve(error.code));
+    }
+  }
   try {
     spawnSync(workerData.registeredFixtureGh, ['--version', '&&', 'gh', 'api'], { shell: true });
     calls.push(Promise.resolve('not-blocked'));
@@ -500,6 +804,8 @@ const worker = new Worker(\`
     shell: ${JSON.stringify(shell)},
     shellFlag: ${JSON.stringify(shellFlag)},
     mixedFixtureCommand: ${JSON.stringify(mixedFixtureCommand)},
+    substitutionCommand: ${JSON.stringify(substitutionCommand)},
+    backtickCommand: ${JSON.stringify(backtickCommand)},
     registeredFixtureGh: ${JSON.stringify(registeredFixtureGh)},
   },
 });
@@ -545,6 +851,9 @@ await new Promise((resolve, reject) => {
       'exec',
       'execFile',
       'spawn',
+      ...(process.platform === 'win32'
+        ? []
+        : ['spawnSync', 'spawnSync', 'spawnSync']),
       'spawnSync',
       'spawnSync',
     ]);
