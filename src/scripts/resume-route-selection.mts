@@ -32,6 +32,7 @@ import {
   maskMarkdownForScan,
   parseListItemMatch,
   stripEnclosingListContentIndent,
+  stripLeadingIndentColumns,
 } from './markdown-code.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
@@ -704,6 +705,7 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
       listItemParagraphColumn = null;
 
       let probeForIndentedCode = false;
+      let itemContentColumn: number | undefined;
       if (listCodeContentColumn !== null) {
         // A blank line does not end the code block, so only a shallower
         // non-blank line does. Lines inside it skip the enclosing-list
@@ -718,6 +720,9 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
         // line is a paragraph there; code that follows is top-level code.
         followsListCode = lineColumns < listCodeContentColumn;
         probeForIndentedCode = followsListCode;
+        // A same-line inner item is invisible to the enclosing-list lookup,
+        // so strip its content column here when the line is still inside it.
+        itemContentColumn = followsListCode ? undefined : listCodeContentColumn;
         listCodeContentColumn = null;
       }
 
@@ -729,6 +734,7 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
         quoteParagraphOpen: quotedParagraphOpen,
         zoneCache: listZoneCache,
         probeForIndentedCode,
+        itemContentColumn,
       });
       if (scan.kind === 'listCode') {
         listCodeContentColumn = scan.contentColumn;
@@ -835,6 +841,8 @@ interface LinePrefixScanOptions {
   quoteParagraphOpen?: boolean;
   /** The first line after list-item code that left the item: probe once. */
   probeForIndentedCode?: boolean;
+  /** Content column of the list item that this line is still inside. */
+  itemContentColumn?: number;
 }
 
 function scanBlockQuoteAndListPrefixes(
@@ -849,6 +857,7 @@ function scanBlockQuoteAndListPrefixes(
     paragraphOpen = false,
     quoteParagraphOpen = false,
     probeForIndentedCode = false,
+    itemContentColumn,
   } = options;
   // Most lines, including ordinary indented code, cannot become a
   // blockquote or nested list after list-content indentation is removed.
@@ -867,16 +876,21 @@ function scanBlockQuoteAndListPrefixes(
   // The first line to leave a list item's code block may still sit inside an
   // enclosing item, where four columns of indentation are not yet code.
   const shouldProbeEnclosingList =
-    (mayContainBlockQuote &&
+    itemContentColumn === undefined &&
+    ((mayContainBlockQuote &&
       !hasShallowListMarker &&
       !(isDeeplyIndented && listIndentFastPath?.skipDeeplyIndentedProbe)) ||
-    (probeForIndentedCode &&
-      isDeeplyIndented &&
-      !listIndentFastPath?.skipExitProbe);
+      (probeForIndentedCode &&
+        isDeeplyIndented &&
+        !listIndentFastPath?.skipExitProbe));
   const listContent =
-    body === undefined || lineStart === undefined || !shouldProbeEnclosingList
-      ? null
-      : stripEnclosingListContentIndent(body, lineStart, listZoneCache);
+    itemContentColumn !== undefined
+      ? stripLeadingIndentColumns(line, itemContentColumn)
+      : body === undefined ||
+          lineStart === undefined ||
+          !shouldProbeEnclosingList
+        ? null
+        : stripEnclosingListContentIndent(body, lineStart, listZoneCache);
   if (
     shouldProbeEnclosingList &&
     listContent === null &&
