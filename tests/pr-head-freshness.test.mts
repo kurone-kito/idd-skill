@@ -36,6 +36,10 @@ const SPANS = [
     'fetch',
     /`(git fetch origin \+refs\/pull\/\{pr-number\}\/head:refs\/remotes\/origin\/pull\/\{pr-number\}\/head)`/g,
   ],
+  [
+    'fetched',
+    /`(git rev-parse refs\/remotes\/origin\/pull\/\{pr-number\}\/head)`/g,
+  ],
   ['branch', /`(git branch --show-current)`/g],
   ['status', /`(git status --porcelain)`/g],
   ['shadow', /`(git ls-tree -r -z [^`]*)`/g],
@@ -51,7 +55,7 @@ interface Sequence {
   offsets: number[];
 }
 
-/** Read the seven spans out of an instruction file, each after the previous. */
+/** Read the eight spans out of an instruction file, each after the previous. */
 function extractSequence(relativePath: string): Sequence {
   const text = normalizeWhitespace(readText(relativePath));
   const spans = {} as Record<SpanName, string>;
@@ -97,15 +101,16 @@ const PR_MOVED = 20;
 
 /**
  * The F2 sequence as the instruction orders it, built from the extracted
- * spans. The fetched-SHA comparison reads the fetched ref, which no span does,
- * so that line belongs to the harness.
+ * spans. Only the comparison of the fetched SHA with `$PR_HEAD_SHA`, which the
+ * instruction states in prose, belongs to the harness.
  */
 function buildScript(spans: Record<SpanName, string>): string {
   const fetch = spans.fetch.replaceAll('{pr-number}', PR_NUMBER);
+  const fetchedRef = spans.fetched.replaceAll('{pr-number}', PR_NUMBER);
   return [
     'set -o pipefail',
     `${fetch} || exit ${FETCH_FAILED}`,
-    `fetched=$(git rev-parse refs/remotes/origin/pull/${PR_NUMBER}/head) || exit ${FETCH_FAILED}`,
+    `fetched=$(${fetchedRef}) || exit ${FETCH_FAILED}`,
     `[ "$fetched" = "$PR_HEAD_SHA" ] || exit ${PR_MOVED}`,
     `[ "$(${spans.branch})" = "${BRANCH}" ] || exit ${WRONG_BRANCH}`,
     `[ -z "$(${spans.status})" ] || exit ${DIRTY}`,
@@ -289,7 +294,7 @@ function runSequence(
   };
 }
 
-test('the F2 local check keeps its seven spans in order in both copies (#3802)', {
+test('the F2 local check keeps its eight spans in order in both copies (#3802)', {
   skip: SKIP,
 }, () => {
   for (const file of F2_FILES) {
@@ -418,8 +423,8 @@ test('a dirty worktree and another branch each hold (#3802)', {
 test('the harness returns to E1 for a moved head and holds on a failed fetch (#3802)', {
   skip: SKIP,
 }, () => {
-  // No span reads the fetched ref, so these two cases exercise the harness and
-  // the clauses the policy audit pins, not an extractable span.
+  // The fetch span and the fetched-ref span are extracted from the instruction;
+  // the comparison between them is prose, which the policy audit pins.
   for (const file of F2_FILES) {
     const script = buildScript(extractSequence(file).spans);
     const moved = makeSandbox({ local: 'behind' });
