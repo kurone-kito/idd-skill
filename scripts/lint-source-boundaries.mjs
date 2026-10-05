@@ -87,6 +87,12 @@ const CONTROL_FLOW_PAREN_KEYWORDS = new Set([
   'switch',
   'catch',
 ]);
+const BLOCK_PRECEDING_KEYWORDS = new Set(['else', 'do']);
+const RESTRICTED_STATEMENT_KEYWORDS = new Set([
+  'break',
+  'continue',
+  'debugger',
+]);
 /** ECMAScript line terminators, including the Unicode separators. */
 function isLineTerminator(ch) {
   return ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
@@ -118,12 +124,15 @@ function regexCanStartAfter(
   previousWordIsPropertyName,
   controlFlowClosingParenthesis,
   expressionEndingBrace,
+  postfixUpdateOperator,
+  regexAfterRestrictedStatementLineBreak,
 ) {
   if (lastCodeChar === '') {
     return true;
   }
   if (
     controlFlowClosingParenthesis ||
+    regexAfterRestrictedStatementLineBreak ||
     (!lastWordIsPropertyName && REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
     (!lastWordIsPropertyName &&
       lastWord === 'default' &&
@@ -132,7 +141,7 @@ function regexCanStartAfter(
   ) {
     return true;
   }
-  if (expressionEndingBrace) {
+  if (expressionEndingBrace || postfixUpdateOperator) {
     return false;
   }
   return !/[\w$)\]'"`]/.test(lastCodeChar);
@@ -184,17 +193,59 @@ function scanComments(source) {
     let controlFlowClosingParenthesis = false;
     let expressionEndingBrace = false;
     let arrowBodyPending = false;
+    let postfixUpdateOperator = false;
+    let possiblePostfixUpdate = false;
+    let pendingRestrictedStatement = null;
+    let restrictedStatementLabelConsumed = false;
+    let regexAfterRestrictedStatementLineBreak = false;
     const controlFlowParentheses = [];
     const expressionEndingBraces = [];
+    const objectLiteralBraces = [];
     function recordCodeChar(ch) {
       if (/\s/.test(ch)) {
+        if (
+          pendingRestrictedStatement === null &&
+          !lastWordIsPropertyName &&
+          RESTRICTED_STATEMENT_KEYWORDS.has(lastWord)
+        ) {
+          pendingRestrictedStatement = lastWord;
+          restrictedStatementLabelConsumed = false;
+        }
+        if (isLineTerminator(ch) && pendingRestrictedStatement !== null) {
+          regexAfterRestrictedStatementLineBreak = true;
+          pendingRestrictedStatement = null;
+          restrictedStatementLabelConsumed = false;
+        }
         wordBoundary = true;
+        possiblePostfixUpdate = false;
         return;
       }
       const previousCodeChar = lastCodeChar;
+      if (pendingRestrictedStatement !== null) {
+        if (
+          (pendingRestrictedStatement === 'break' ||
+            pendingRestrictedStatement === 'continue') &&
+          wordBoundary &&
+          /[A-Za-z_$]/.test(ch) &&
+          !restrictedStatementLabelConsumed
+        ) {
+          restrictedStatementLabelConsumed = true;
+        } else if (ch === ';' || !/[A-Za-z0-9_$]/.test(ch)) {
+          pendingRestrictedStatement = null;
+          restrictedStatementLabelConsumed = false;
+        }
+      }
+      const startsPostfixUpdate =
+        (ch === '+' || ch === '-') &&
+        previousCodeChar === ch &&
+        possiblePostfixUpdate;
       lastCodeChar = ch;
       const startsArrowBody = previousCodeChar === '=' && ch === '>';
       expressionEndingBrace = false;
+      regexAfterRestrictedStatementLineBreak = false;
+      postfixUpdateOperator = startsPostfixUpdate;
+      possiblePostfixUpdate =
+        (ch === '+' || ch === '-') && /[\w$)\]}]/.test(previousCodeChar);
       if (/[A-Za-z0-9_$]/.test(ch)) {
         if (wordBoundary || lastWord === '') {
           previousWord = lastWord;
@@ -224,6 +275,11 @@ function scanComments(source) {
       wordBoundary = false;
       expressionEndingBrace = false;
       arrowBodyPending = false;
+      postfixUpdateOperator = false;
+      possiblePostfixUpdate = false;
+      pendingRestrictedStatement = null;
+      restrictedStatementLabelConsumed = false;
+      regexAfterRestrictedStatementLineBreak = false;
     }
     while (index < source.length) {
       const ch = source[index];
@@ -244,6 +300,7 @@ function scanComments(source) {
         }
         maskComment(output, index, end);
         wordBoundary = true;
+        possiblePostfixUpdate = false;
         index = end;
         continue;
       }
@@ -259,6 +316,7 @@ function scanComments(source) {
         const end = close + 2;
         maskComment(output, index, end);
         wordBoundary = true;
+        possiblePostfixUpdate = false;
         index = end;
         continue;
       }
@@ -272,6 +330,8 @@ function scanComments(source) {
           previousWordIsPropertyName,
           controlFlowClosingParenthesis,
           expressionEndingBrace,
+          postfixUpdateOperator,
+          regexAfterRestrictedStatementLineBreak,
         )
       ) {
         let end = index + 1;
@@ -363,24 +423,28 @@ function scanComments(source) {
         );
       }
       if (ch === '{') {
-        expressionEndingBraces.push(
-          arrowBodyPending ||
-            (!controlFlowClosingParenthesis &&
-              (lastCodeChar === '=' ||
-                lastCodeChar === '(' ||
-                lastCodeChar === '[' ||
-                lastCodeChar === ',' ||
-                lastCodeChar === ':' ||
-                (!lastWordIsPropertyName &&
-                  REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
-                (!lastWordIsPropertyName &&
-                  lastWord === 'default' &&
-                  previousWord === 'export' &&
-                  !previousWordIsPropertyName))),
-        );
+        const startsObjectLiteral =
+          !controlFlowClosingParenthesis &&
+          (lastCodeChar === '=' ||
+            lastCodeChar === '(' ||
+            lastCodeChar === '[' ||
+            lastCodeChar === ',' ||
+            (lastCodeChar === ':' && objectLiteralBraces.at(-1) === true) ||
+            (!lastWordIsPropertyName &&
+              !BLOCK_PRECEDING_KEYWORDS.has(lastWord) &&
+              REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
+            (!lastWordIsPropertyName &&
+              lastWord === 'default' &&
+              previousWord === 'export' &&
+              !previousWordIsPropertyName));
+        expressionEndingBraces.push(arrowBodyPending || startsObjectLiteral);
+        objectLiteralBraces.push(startsObjectLiteral);
       }
       const closesExpressionBrace =
         ch === '}' && expressionEndingBraces.pop() === true;
+      if (ch === '}') {
+        objectLiteralBraces.pop();
+      }
       const closesControlFlowParenthesis =
         ch === ')' && controlFlowParentheses.pop() === true;
       recordCodeChar(ch);

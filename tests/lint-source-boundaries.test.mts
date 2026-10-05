@@ -418,6 +418,24 @@ const marker = '*/';
 `.replace('__SPECIFIER__', specifier),
   },
   {
+    name: 'a regex after an else block',
+    source: (specifier) =>
+      `if (ok) {} else {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after a labeled block',
+    source: (specifier) =>
+      `label: {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
     name: 'a regex after export default',
     source: (specifier) =>
       `export default /[/*]/;
@@ -449,6 +467,28 @@ const marker = '*/';
     source: (specifier) =>
       `while (true) {
   continue
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated labeled break',
+    source: (specifier) =>
+      `outer: while (true) {
+  break outer
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated labeled continue',
+    source: (specifier) =>
+      `outer: while (true) {
+  continue outer
   /[/*]/.test(value);
 }
 import value from '__SPECIFIER__';
@@ -534,6 +574,22 @@ const divisionWithCommentedImports: {
     name: 'division after an arrow function expression',
     source: (specifier) =>
       `const value = () => {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a postfix increment',
+    source: (specifier) =>
+      `let value = 1;\nvalue++ / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a postfix decrement',
+    source: (specifier) =>
+      `let value = 1;\nvalue-- / /* import('__SPECIFIER__') */ 2;\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
