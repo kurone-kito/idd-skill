@@ -271,6 +271,8 @@ function scanComments(source) {
     let pendingClassExpressionBody = null;
     let pendingFunctionExpression = null;
     let pendingFunctionExpressionBody = false;
+    let typescriptAssertionTypeContext = false;
+    let typescriptAssertionTypeDepth = 0;
     let currentWordStartsExpressionContext = false;
     let pendingRestrictedStatement = null;
     let restrictedStatementLabelConsumed = false;
@@ -289,6 +291,10 @@ function scanComments(source) {
     function finishCurrentKeyword() {
       if (lastWordIsPropertyName) {
         return;
+      }
+      if (lastWord === 'as') {
+        typescriptAssertionTypeContext = true;
+        typescriptAssertionTypeDepth = 0;
       }
       if (lastWord === 'class') {
         pendingClassExpressionBody = currentWordStartsExpressionContext;
@@ -608,8 +614,31 @@ function scanComments(source) {
       ) {
         pendingFunctionExpressionBody = closesFunctionParameters;
       }
+      if (
+        typescriptAssertionTypeContext &&
+        typescriptAssertionTypeDepth === 0 &&
+        ';,)]}/'.includes(ch)
+      ) {
+        typescriptAssertionTypeContext = false;
+      }
+      if (ch === '<' && typescriptAssertionTypeContext) {
+        typescriptAssertionTypeDepth += 1;
+      }
+      const closesTypescriptAssertionType =
+        ch === '>' &&
+        typescriptAssertionTypeContext &&
+        typescriptAssertionTypeDepth > 0;
+      if (closesTypescriptAssertionType) {
+        typescriptAssertionTypeDepth -= 1;
+        if (typescriptAssertionTypeDepth === 0) {
+          typescriptAssertionTypeContext = false;
+        }
+      }
       if (ch === '{') {
+        const startsFunctionReturnType =
+          pendingFunctionExpressionBody && lastCodeChar === ':';
         const startsObjectLiteral =
+          !startsFunctionReturnType &&
           !controlFlowClosingParenthesis &&
           ((interpolation && lastCodeChar === '') ||
             lastCodeChar === '=' ||
@@ -625,7 +654,8 @@ function scanComments(source) {
               previousWord === 'export' &&
               !previousWordIsPropertyName));
         const startsClassExpressionBody = pendingClassExpressionBody === true;
-        const startsFunctionExpressionBody = pendingFunctionExpressionBody;
+        const startsFunctionExpressionBody =
+          pendingFunctionExpressionBody && !startsFunctionReturnType;
         expressionEndingBraces.push(
           arrowBodyPending ||
             startsObjectLiteral ||
@@ -634,7 +664,9 @@ function scanComments(source) {
         );
         objectLiteralBraces.push(startsObjectLiteral);
         pendingClassExpressionBody = null;
-        pendingFunctionExpressionBody = false;
+        if (!startsFunctionReturnType) {
+          pendingFunctionExpressionBody = false;
+        }
       }
       const closesExpressionBrace =
         ch === '}' && expressionEndingBraces.pop() === true;
@@ -644,6 +676,9 @@ function scanComments(source) {
       const closesControlFlowParenthesis =
         ch === ')' && controlFlowParentheses.pop() === true;
       recordCodeChar(ch, index);
+      if (closesTypescriptAssertionType && typescriptAssertionTypeDepth === 0) {
+        lastCodeCharIsIdentifierPart = true;
+      }
       if (closesExpressionBrace) {
         expressionEndingBrace = true;
       }

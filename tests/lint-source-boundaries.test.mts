@@ -619,6 +619,22 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a function expression with an object return type',
+    source: (specifier) =>
+      `const value = function (): { value: number } { return { value: 1 }; } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic type assertion',
+    source: (specifier) =>
+      `const value = maybe as Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after an async function expression body',
     source: (specifier) =>
       `const value = async function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
