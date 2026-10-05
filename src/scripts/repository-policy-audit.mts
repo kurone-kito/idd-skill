@@ -398,6 +398,43 @@ export const NEEDS_DECISION_ROUTE_PINS: readonly PinnedClauseGroup[] = [
   },
 ];
 
+// Issue #3794 freed review-triage bundle headroom by cutting passages that
+// restate a rule living elsewhere. These pins keep each surviving copy (or the
+// pointer that replaced the cut text) from being dropped later, so the cut
+// can never leave a rule with no home. Phrases are verbatim substrings of the
+// real files, matched on whitespace-collapsed text. A plain-text hyphen
+// compound inside a phrase (re-run, completed-review, zero-Accepted-PATH-A,
+// E9-E15) stays on one line in the real files; a rewrap that splits one fails
+// this audit loudly, which is the cue to re-pin the reflowed text.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const REVIEW_TRIAGE_DONOR_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'review-fix-triage-donor-survivors',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    phrases: [
+      're-run the claim revalidation gate immediately before this edit',
+      'then fetch the current full body, edit only that claim in the fetched copy, and post the full result back',
+      'confirm `closingIssuesReferences` still matches the deliberate set exactly',
+      'Resolution means "agent acted", not "reviewer agreed" — a disagreeing reviewer can reopen the thread',
+    ],
+  },
+  {
+    id: 'review-triage-donor-pointers',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      'Edit it at E4 under E12\'s "PR body sync" safeguards (`idd-review-fix.instructions.md`), even when E8\'s zero-Accepted-PATH-A skip bypasses E9-E15 and E12 (`#3495`).',
+      "doesn't prove no review exists: disposition any separate _completed_ review of current HEAD under the completed-review rules above.",
+      '`disposition-non-review-notices` helper (see `docs/idd-helper-scripts.md`) posts the canonical disposition below with `--apply`',
+      '`docs/idd-helper-scripts.md` covers `review-disposition-verify.mjs` and the fields E7 consumes',
+    ],
+  },
+];
+
+const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
+  ...NEEDS_DECISION_ROUTE_PINS,
+  ...REVIEW_TRIAGE_DONOR_PINS,
+];
+
 const RULES: readonly RuleDefinition[] = [
   {
     id: 'helper-runtime-docs',
@@ -1672,7 +1709,7 @@ const RULES: readonly RuleDefinition[] = [
         fail(PR_SUBMIT, 'round-specific PR-body prose returned');
     },
   },
-  ...NEEDS_DECISION_ROUTE_PINS.map(
+  ...PINNED_CLAUSE_GROUPS.map(
     (group): RuleDefinition => ({
       id: group.id,
       paths: group.paths,
