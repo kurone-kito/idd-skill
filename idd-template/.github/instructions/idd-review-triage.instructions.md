@@ -633,15 +633,10 @@ anything else re-opens the loop.
 this; the agent confirms no new finding, never weakening the
 disposition-evidence or unreplied-comment backstops.
 
-**Disposition-evidence parity (advisory-only)**: the same ack can also
-re-trip the `dispositionEvidence` backstop on an already-resolved
-thread (`route: return-to-e1`). `pre-merge-readiness` flags each such
-thread `ackOnlyPostDisposition: true`; when
-`dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` (every
-blocking item is one such thread), autopilot may deterministically
-override `return-to-e1` and proceed (see `idd-pre-merge.instructions.md`
-F2). Any non-ack blocking cause keeps it `false`, so the backstop holds
-otherwise. (`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a
+**Disposition-evidence parity:** F2 in
+`idd-pre-merge.instructions.md` defines
+`soleCauseAckOnlyPostDisposition` and the ack-only override.
+(`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a
 stricter subset — not an override path of its own.) A
 verify-then-confirm reply (analysis before the confirmation verb)
 isn't recognized, so #2125's override doesn't fire (recognized
