@@ -326,7 +326,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    defer-source auto-release exception in
    [Authoring hold and release](references/contract.md#authoring-hold-and-release).
    A released `review-needs-decision` follow-up remains out of Discover
-   while its `status:needs-decision` label is present.
+   while the label configured as `labels.needsDecisionLabelName` is
+   present (default: `status:needs-decision`).
 
 ## Reference Routing
 

@@ -27,12 +27,14 @@ test('defer-source-marker accepts both defined values and stays independent of -
     body: string,
     expectedAuthoringBucket?: 'needs-decision',
     labels: string[] = [],
+    expectedOriginIssueNumber?: number,
   ) =>
     auditAuthoredIssue(body, {
       shape: 'orphan',
       markerPrefix: 'idd-skill',
       labels,
       expectedAuthoringBucket,
+      expectedOriginIssueNumber,
     }).findings.find((finding) => finding.id === 'defer-source-marker');
 
   for (const value of DEFER_SOURCE_VALUES) {
@@ -49,13 +51,17 @@ test('defer-source-marker accepts both defined values and stays independent of -
       ? ['status:authoring', 'status:needs-decision']
       : [];
     assert.equal(
-      findingFor(body, needsDecision ? 'needs-decision' : undefined, labels)
-        ?.result,
+      findingFor(
+        body,
+        needsDecision ? 'needs-decision' : undefined,
+        labels,
+        needsDecision ? 123 : undefined,
+      )?.result,
       'pass',
       value,
     );
     if (needsDecision) {
-      assert.equal(findingFor(body, undefined, labels)?.result, 'pass');
+      assert.equal(findingFor(body, undefined, labels, 123)?.result, 'pass');
     }
   }
 
@@ -124,6 +130,62 @@ test('defer-source-marker rejects malformed values, prefixes, Refs lines, and bu
   }
 });
 
+test('review-needs-decision requires the configured authoring label and exact expected origin (#3778)', () => {
+  const body = [
+    orphanBody(),
+    '<!-- idd-skill-authoring-defer-source: review-needs-decision -->',
+    '<!-- idd-skill-authoring-bucket: needs-decision -->',
+    'Refs #123',
+  ].join('\n\n');
+  const findingFor = (options: {
+    labels?: string[];
+    authoringLabelName?: string;
+    expectedOriginIssueNumber?: number;
+  }) =>
+    auditAuthoredIssue(body, {
+      shape: 'orphan',
+      markerPrefix: 'idd-skill',
+      needsDecisionLabelName: 'status:needs-decision',
+      ...options,
+    }).findings.find((finding) => finding.id === 'defer-source-marker');
+
+  assert.equal(
+    findingFor({
+      labels: ['status:authoring', 'status:needs-decision'],
+      expectedOriginIssueNumber: 123,
+    })?.result,
+    'pass',
+  );
+  assert.equal(
+    findingFor({
+      labels: ['status:needs-decision'],
+      expectedOriginIssueNumber: 123,
+    })?.result,
+    'fail',
+  );
+  assert.equal(
+    findingFor({
+      labels: ['status:authoring', 'status:needs-decision'],
+    })?.result,
+    'fail',
+  );
+  assert.equal(
+    findingFor({
+      labels: ['status:authoring', 'status:needs-decision'],
+      expectedOriginIssueNumber: 124,
+    })?.result,
+    'fail',
+  );
+  assert.equal(
+    findingFor({
+      labels: ['workflow:authoring', 'status:needs-decision'],
+      authoringLabelName: 'workflow:authoring',
+      expectedOriginIssueNumber: 123,
+    })?.result,
+    'pass',
+  );
+});
+
 test('draft-patterns review-needs-decision example passes the compiled gate only with both hold and decision labels (#3778)', () => {
   const patterns = readFileSync(
     join(REPO_ROOT, 'skills/issue-authoring/references/draft-patterns.md'),
@@ -161,6 +223,8 @@ test('draft-patterns review-needs-decision example passes the compiled gate only
       'idd-skill',
       '--current-repo',
       'kurone-kito/idd-skill',
+      '--origin-issue',
+      '123',
       '--title',
       'Defer a review decision',
       '--body-file',
@@ -184,6 +248,17 @@ test('draft-patterns review-needs-decision example passes the compiled gate only
     assert.equal(
       withoutDecisionLabel.findings.find(
         (finding) => finding.id === 'authoring-bucket-needs-decision',
+      )?.result,
+      'fail',
+    );
+    const withoutAuthoringLabel = runCli([
+      ...baseArgs.slice(0, -4),
+      ...baseArgs.slice(-2),
+    ]);
+    assert.equal(withoutAuthoringLabel.passed, false);
+    assert.equal(
+      withoutAuthoringLabel.findings.find(
+        (finding) => finding.id === 'defer-source-marker',
       )?.result,
       'fail',
     );

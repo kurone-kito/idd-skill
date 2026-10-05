@@ -872,9 +872,10 @@ re-lint, and the Stage 2 release checklist — pass
 `--expect-bucket needs-decision` and both configured labels: authoring
 and needs-decision. The same applies to a `blocked-by-human` lint with
 its matching expected bucket and labels. The gate also validates every
-live defer-source comment against the shared defined-value set, requires
-one `Refs` origin, and requires the needs-decision bucket marker for
-`review-needs-decision`.
+live defer-source comment against the shared defined-value set and
+requires exactly one `Refs` origin. For `review-needs-decision`, pass
+`--origin-issue <number>` matching that `Refs` issue; the check also
+requires the configured authoring label and needs-decision bucket marker.
 
 It also emits a **failing** finding, `dependency-line-grammar`: a
 `Blocked by`/`Depends on` mention that the shared line-anchored grammar
@@ -1716,7 +1717,9 @@ authorizes IDD execution for the released issues. Do it only as part
 of that explicit release request, or the narrow auto-release exception
 below; nothing else removes the label or starts Discover, Claim, and
 Work on its own. A released `review-needs-decision` follow-up remains
-out of Discover while its `status:needs-decision` label is present.
+out of Discover while the label configured as
+`labels.needsDecisionLabelName` is present (default:
+`status:needs-decision`).
 
 ### Closing sweep (after Stage 2 closes, #2896 review, Codex)
 
@@ -1860,13 +1863,15 @@ call as the authoring label. If the configured label is absent, create
 it with `gh label create` before publication; a create or label-
 application failure stops publication. For every initial lint,
 held-body re-lint, and Stage 2 lint, pass
-`--expect-bucket needs-decision` and both configured labels. Immediately
-before Stage 2 removes a label, re-fetch and verify both live labels;
-remove only the authoring label, and only while the needs-decision label
+`--expect-bucket needs-decision`, `--origin-issue <claimed-issue>`, and
+both configured labels. The expected origin must match the sole `Refs`
+line. Before Stage 2 removes a label, re-fetch and verify both live
+labels; remove only the authoring label, and only while the
+needs-decision label
 is present. If it is missing or cannot be verified, leave the issue
-held. After authoring-label removal, `status:needs-decision` keeps the
-follow-up out of Discover until a person clears it; label removal alone
-does not authorize IDD execution.
+held. After authoring-label removal, the configured needs-decision label
+keeps the follow-up out of Discover until a person clears it; label
+removal alone does not authorize IDD execution.
 
 The required body shape and quoting rules are in
 `skills/issue-authoring/references/contract.md` under

@@ -242,9 +242,10 @@ export interface AuditOptions {
    */
   title?: string;
   /**
-   * Labels currently applied or proposed on the issue. Used only by the
-   * suitability=1 / authoring-bucket cross-field checks, since label state
-   * is not part of the body text.
+   * Labels currently applied or proposed on the issue. Used by the
+   * suitability=1 / authoring-bucket cross-field checks and by the
+   * review-needs-decision defer-source requirements, since label state is
+   * not part of the body text.
    */
   labels?: readonly string[];
   /** Defaults to `POLICY_DEFAULTS.labels.blockedByHumanLabelName`. */
@@ -311,12 +312,17 @@ export interface AuditOptions {
    */
   issueNumber?: number;
   /**
+   * The expected originating issue for a `review-needs-decision` defer
+   * source. The marker's sole `Refs` issue must equal this value.
+   */
+  expectedOriginIssueNumber?: number;
+  /**
    * The configured authoring label (`issueAuthoring.authoringLabelName`).
    * Defaults to `POLICY_DEFAULTS.issueAuthoring.authoringLabelName`
-   * (`status:authoring`). Used only by `authoring-owner-marker-trail` to
-   * decide whether the check applies at all — an issue that never carries
-   * this label is unaffected by the check, matching {@link labels}'
-   * case-insensitive comparison.
+   * (`status:authoring`). Used by `authoring-owner-marker-trail` to decide
+   * whether that check applies, and required by the
+   * `review-needs-decision` defer-source check alongside its configured
+   * needs-decision label.
    */
   authoringLabelName?: string;
   /**
@@ -681,6 +687,7 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--config': { type: 'string' },
   '--current-repo': { type: 'string' },
   '--issue': { type: 'string' },
+  '--origin-issue': { type: 'string' },
   '--label': { type: 'string', multiple: true },
   '--expect-bucket': { type: 'string' },
   '--comments-file': { type: 'string' },
@@ -975,6 +982,14 @@ export function auditAuthoredIssue(
   const labels = (options.labels ?? []).map((label) =>
     String(label).trim().toLowerCase(),
   );
+  const authoringLabelName = (
+    typeof options.authoringLabelName === 'string' &&
+    options.authoringLabelName.trim().length > 0
+      ? options.authoringLabelName
+      : POLICY_DEFAULTS.issueAuthoring.authoringLabelName
+  )
+    .trim()
+    .toLowerCase();
 
   // #3281 review (CodeRabbit): parseAutopilotSuitabilityMarker masks its
   // own input (maskMarkdownForScan), so passing the already-masked
@@ -1010,7 +1025,15 @@ export function auditAuthoredIssue(
       authoringBucket,
       options.expectedAuthoringBucket,
     ),
-    checkDeferSourceMarker(text, rawText, markerPrefix, authoringBucket),
+    checkDeferSourceMarker(
+      text,
+      rawText,
+      markerPrefix,
+      authoringBucket,
+      labels,
+      authoringLabelName,
+      options.expectedOriginIssueNumber,
+    ),
     checkMarkerPrefixConsistency(
       text,
       markerPrefix,
@@ -1727,6 +1750,9 @@ function checkDeferSourceMarker(
   rawText: string,
   markerPrefix: string,
   authoringBucket: AuthoringBucketMarkerDetection,
+  labels: readonly string[],
+  authoringLabelName: string,
+  expectedOriginIssueNumber: number | undefined,
 ): AuditFinding {
   const id = 'defer-source-marker';
   const name = 'defer-source marker shape, origin, and bucket';
@@ -1775,20 +1801,52 @@ function checkDeferSourceMarker(
       `a defer-source marker requires exactly one Refs line naming exactly one issue${refs.ambiguous ? '; the Refs lines are ambiguous' : `; found ${refs.numbers.length} issue references`}`,
     );
   }
-  if (
-    parsedValues.includes('review-needs-decision') &&
-    authoringBucket.value !== 'needs-decision'
-  ) {
-    return fail(
-      id,
-      name,
-      'the review-needs-decision defer-source marker requires the needs-decision authoring-bucket marker',
-    );
+  if (parsedValues[0] === 'review-needs-decision') {
+    if (!labels.includes(authoringLabelName)) {
+      return fail(
+        id,
+        name,
+        `the review-needs-decision defer-source marker requires the configured authoring label ${authoringLabelName}`,
+      );
+    }
+    if (expectedOriginIssueNumber === undefined) {
+      return fail(
+        id,
+        name,
+        'the review-needs-decision defer-source marker requires --origin-issue to identify its expected Refs origin',
+      );
+    }
+    if (
+      !Number.isSafeInteger(expectedOriginIssueNumber) ||
+      expectedOriginIssueNumber < 1
+    ) {
+      return fail(
+        id,
+        name,
+        'the expected origin issue number must be a positive safe integer',
+      );
+    }
+    if (refs.numbers[0] !== expectedOriginIssueNumber) {
+      return fail(
+        id,
+        name,
+        `the sole Refs origin is #${refs.numbers[0]}, but the expected originating issue is #${expectedOriginIssueNumber}`,
+      );
+    }
+    if (authoringBucket.value !== 'needs-decision') {
+      return fail(
+        id,
+        name,
+        'the review-needs-decision defer-source marker requires the needs-decision authoring-bucket marker',
+      );
+    }
   }
   return pass(
     id,
     name,
-    `defined defer-source marker and sole Refs origin #${refs.numbers[0]} are valid`,
+    parsedValues[0] === 'review-needs-decision'
+      ? `defined defer-source marker and sole Refs origin #${refs.numbers[0]} matches expected origin`
+      : `defined defer-source marker and sole Refs origin #${refs.numbers[0]} are valid`,
   );
 }
 
@@ -4285,6 +4343,7 @@ interface CliArgs {
   format: string;
   currentRepo?: string;
   issue?: string;
+  originIssue?: string;
   commentsFile?: string;
   journalCommentsFile?: string;
   cleanupEvidenceFile?: string;
@@ -4511,6 +4570,13 @@ function main(): HelperCliResult {
     fail_('--issue must be a positive integer');
   }
   if (
+    args.originIssue !== undefined &&
+    (!/^[1-9]\d*$/.test(args.originIssue) ||
+      !Number.isSafeInteger(Number(args.originIssue)))
+  ) {
+    fail_('--origin-issue must be a positive safe integer');
+  }
+  if (
     args.expectBucket !== undefined &&
     !isAuthoringBucketValue(args.expectBucket)
   ) {
@@ -4599,6 +4665,8 @@ function main(): HelperCliResult {
     currentRepo,
     issueNumber:
       args.issue !== undefined ? Number.parseInt(args.issue, 10) : undefined,
+    expectedOriginIssueNumber:
+      args.originIssue !== undefined ? Number(args.originIssue) : undefined,
     comments: args.commentsFile
       ? readCommentsFile(args.commentsFile)
       : undefined,
@@ -4764,6 +4832,7 @@ function parseArgs(argv: string[]): CliArgs {
     configPath: values.config as string | undefined,
     currentRepo: values['current-repo'] as string | undefined,
     issue: values.issue as string | undefined,
+    originIssue: values['origin-issue'] as string | undefined,
     labels: (values.label as string[] | undefined) ?? [],
     expectBucket: values['expect-bucket'] as string | undefined,
     commentsFile: values['comments-file'] as string | undefined,
@@ -4784,8 +4853,10 @@ contract.md): the autopilot-suitability marker, its cross-field
 status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
-agreement, and an advisory (warning-severity only) check that flags an
-issue/PR reference used near coordination language with no corresponding
+agreement, the defer-source-marker check for defined values, a sole
+Refs origin, and the review-needs-decision label/bucket/origin contract,
+and an advisory (warning-severity only) check that flags an issue/PR
+reference used near coordination language with no corresponding
 dependency marker, (when --comments-file is supplied) the
 authoring-owner-marker-trail check that verifies an authoring-labeled
 issue carries the owner-marker/publication-token trail, and (when
@@ -4824,9 +4895,9 @@ Options:
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1 /
                                     authoring-bucket cross-field checks, the
-                                    upstream-candidate marker/label pairing
-                                    check, and the authoring-label check for
-                                    authoring-owner-marker-trail)
+                                    upstream-candidate marker/label pairing,
+                                    authoring-owner-marker-trail, and the
+                                    review-needs-decision defer-source check)
   --expect-bucket <bucket>         needs-decision or blocked-by-human; set only when
                                     auditing a body about to be newly published into
                                     that bucket -- requires the matching
@@ -4845,6 +4916,9 @@ Options:
   --issue <number>                 this issue's number, for authoring-owner-marker-trail's
                                     target match (requires --current-repo or
                                     $GITHUB_REPOSITORY to be resolvable)
+  --origin-issue <number>          expected Refs origin for a
+                                    review-needs-decision defer-source marker;
+                                    required with that marker
   --comments-file <path>           JSON array of this issue's pre-fetched comments
                                     ({id?, body, author?, createdAt?, isMinimized?});
                                     enables authoring-owner-marker-trail and the

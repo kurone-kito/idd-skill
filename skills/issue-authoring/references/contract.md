@@ -1143,9 +1143,10 @@ roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
 agreement for the suitability and effort footers — so a weak model does
 not have to hold every rule in its head at once while drafting.
 It also checks every live defer-source comment against the shared
-defined-value set and requires its single `Refs` origin; the
-`review-needs-decision` value additionally requires the matching bucket
-marker.
+defined-value set and requires its single `Refs` origin. For
+`review-needs-decision`, pass `--origin-issue <number>` matching that
+`Refs` issue; the check also requires the configured authoring label and
+the matching needs-decision bucket marker.
 
 For every `needs-decision` body lint — initial Stage 1 publication,
 re-lint while held, and the Stage 2 release checklist — pass
@@ -2486,8 +2487,10 @@ only approval boundary.
   configured label is absent, create it with `gh label create` before
   publication; a create or label-application failure stops publication.
   During every initial lint, held-body re-lint, and Stage 2 lint, pass
-  `--expect-bucket needs-decision`, the configured authoring label, and
-  the configured needs-decision label. Immediately before Stage 2
+  `--expect-bucket needs-decision`, `--origin-issue <claimed-issue>`,
+  the configured authoring label, and the configured needs-decision
+  label. The expected origin must match the issue named by the sole
+  `Refs` line. Immediately before Stage 2
   removes a label, re-fetch and verify both live labels; remove only the
   authoring label, and only while the needs-decision label is still
   present. If it is missing or cannot be verified, leave the issue held.
@@ -2505,20 +2508,24 @@ for E10, Tier 2, or Tier 3, link to the comment that states the stop.
 List one recommended option and the cost of each option under `Options`.
 Add exactly one `Refs #<claimed-issue>` line and one
 `Blocked by #<claimed-issue>` line, both naming the claimed issue rather
-than a pull request. Discover resolves `Blocked by` through the issue
-endpoint, while F3 attributes the follow-up through its `Refs` origin;
-the matching `Blocked by` line is a drafting convention, not a checked
-relationship. End with autopilot-suitability `1` and the
-`authoring-bucket: needs-decision` marker.
+than a pull request. Pass `--origin-issue <claimed-issue>` to the audit;
+it requires the `Refs` number to match that expected origin. Discover
+resolves `Blocked by` through the issue endpoint, while F3 attributes
+the follow-up through its `Refs` origin; the matching `Blocked by` line
+is a drafting convention, not a checked relationship. End with
+autopilot-suitability `1` and the `authoring-bucket: needs-decision`
+marker.
 
 Do not put quoted review text in the body unless it is inside a fenced
 code block. A quoted line outside a fence must not begin with `Refs`,
 `Blocked by`, or `Depends on`, and a quoted HTML defer-source marker
 must stay inside a fence: Discover reads a marker inside a blockquote as
-live, and a quoted `Refs` line can make the origin ambiguous. The
-mechanical gate requires the marker, bucket, and sole `Refs` origin, but
-does not check these five headings for a bucket body; the completed-draft
-review checks the full body shape.
+live, and a quoted `Refs` line can make the origin ambiguous. These
+warnings are preventive; no observed incident yet. The mechanical gate
+requires the marker, matching expected `Refs` origin, configured
+authoring label, bucket, and sole `Refs` line, but does not check these
+five headings for a bucket body; the completed-draft review checks the
+full body shape.
 
 ## Publication boundary
 

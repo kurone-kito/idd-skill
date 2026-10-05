@@ -144,8 +144,11 @@ node scripts/audit-authored-issue.mjs --shape orphan \
 
 Pass `--expect-bucket needs-decision` and both labels in every Stage 1
 re-lint while the issue is held and the Stage 2 release-checklist lint.
-Use the target repository's configured label names in place of these
-defaults.
+For a body with the `review-needs-decision` marker, also pass
+`--origin-issue <claimed-issue>` matching its sole `Refs` line. The
+marker check requires the configured authoring label and rejects a
+missing or mismatched expected origin. Use the target repository's
+configured label names in place of these defaults.
 
 **Always pass `--marker-prefix`** with the prefix resolved under
 [contract.md's Target marker prefix](contract.md#target-marker-prefix):
@@ -267,7 +270,6 @@ wait for an explicit recovery action?
 - `src/api/operation.mts`
 
 <!-- idd-skill-authoring-defer-source: review-needs-decision -->
-<!-- idd-skill-authoring-bucket: needs-decision -->
 
 Refs #123
 Blocked by #123
@@ -275,15 +277,18 @@ Blocked by #123
 _Autopilot suitability: 1 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._
 
 <!-- idd-skill-autopilot-suitability: 1 -->
+<!-- idd-skill-authoring-bucket: needs-decision -->
 ```
 
 Keep review text paraphrased or inside a fenced code block. A quoted
 line outside a fence must not begin with `Refs`, `Blocked by`, or
 `Depends on`, and a quoted HTML marker stays inside a fence so Discover
-does not mistake it for a live marker. The mechanical gate requires the
-marker, sole `Refs` origin, needs-decision bucket marker, and both labels;
-the completed-draft review checks these five headings because
-`--expect-bucket` does not lint headings for a non-ready body.
+does not mistake it for a live marker. These warnings are preventive; no
+observed incident yet. The mechanical gate requires the marker, matching
+`--origin-issue`, sole `Refs` origin, needs-decision bucket marker, and
+both configured labels; the completed-draft review checks these five
+headings because `--expect-bucket` does not lint headings for a non-ready
+body.
 
 ## Example roadmap package
 
