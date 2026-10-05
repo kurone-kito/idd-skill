@@ -1905,7 +1905,7 @@ function listRepoFiles(): string[] {
     '--others',
     '--exclude-standard',
   ]);
-  return output.split(/\r?\n/).filter(Boolean).sort();
+  return [...new Set(output.split(/\r?\n/).filter(Boolean))].sort();
 }
 
 // glob matching against `repoFiles` (an in-memory list already fetched

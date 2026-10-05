@@ -1666,7 +1666,7 @@ function listRepoFiles() {
     '--others',
     '--exclude-standard',
   ]);
-  return output.split(/\r?\n/).filter(Boolean).sort();
+  return [...new Set(output.split(/\r?\n/).filter(Boolean))].sort();
 }
 // glob matching against `repoFiles` (an in-memory list already fetched
 // from `git ls-files --cached --others --exclude-standard`, see
