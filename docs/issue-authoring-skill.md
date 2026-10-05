@@ -852,8 +852,8 @@ that key off `authoring-bucket` never fire, since a non-ready body is
 otherwise never run through this gate at all (the exact gap #2636/#2637
 hit). Passing `--expect-bucket` also skips the ready-shape-only checks
 (the suitability footer and required headings) that a bucket body is
-never expected to carry, since it uses its own
-Background/Required action/Ready signal shape instead. It mechanically
+not mechanically required to carry; bucket-specific body structure is
+checked by the completed-draft review instead. It mechanically
 re-checks a subset of the structural rules this document states in
 prose — the autopilot-suitability marker's exactly-one/coherent-value
 rule, the one-directional check that a suitability score of `1` (or an
@@ -866,6 +866,15 @@ consistency across every authoring marker, the declared shape's
 required section headings, the roadmap-id/blocked-by dependency-marker
 rules, and visible/hidden line agreement for the suitability and effort
 footers.
+
+For every `needs-decision` lint — initial Stage 1 publication, held-body
+re-lint, and the Stage 2 release checklist — pass
+`--expect-bucket needs-decision` and both configured labels: authoring
+and needs-decision. The same applies to a `blocked-by-human` lint with
+its matching expected bucket and labels. The gate also validates every
+live defer-source comment against the shared defined-value set, requires
+one `Refs` origin, and requires the needs-decision bucket marker for
+`review-needs-decision`.
 
 It also emits a **failing** finding, `dependency-line-grammar`: a
 `Blocked by`/`Depends on` mention that the shared line-anchored grammar
@@ -1036,6 +1045,8 @@ exists in the target repository before first use. For the bundled
 GitHub CLI publication flow, create a missing label with
 `gh label create` before applying it. Failure to create or apply the
 label is a publishing blocker, not a warning.
+For a `review-needs-decision` follow-up, use the additional label and
+release rules in the narrow auto-release exception below.
 
 For existing issues, apply the authoring label before updating issue
 content. For new issues, require a capability-checked publication command
@@ -1527,7 +1538,7 @@ checklist passes — every child issue is referenced from its parent roadmap's
 body, and the `audit-authored-issue` linter (or its manual fallback) is green
 on every published body in the set — and the user explicitly requests
 release from the authoring hold (see the
-[Narrow auto-release exception](#narrow-auto-release-exception-review-fix-loop-cutoff)
+[Narrow auto-release exception](#narrow-auto-release-exception)
 below for the one marker-scoped exception to this precondition). Keep the
 set anchor held until every other
 target's label removal is verified, and remove the anchor label last. First
@@ -1620,8 +1631,7 @@ current owner, set, anchor, session, and marker body. If that guard is not
 found conclusively, leave all labels in place and stop. The guard suppresses
 Discover for the whole set during the provisional label-removal window; it
 does not close the set. When this release is proceeding under the narrow
-[review-fix-loop-cutoff auto-release
-exception](#narrow-auto-release-exception-review-fix-loop-cutoff) instead of
+[defer-source auto-release exception](#narrow-auto-release-exception) instead of
 an explicit human release request, also verify here -- immediately before
 the first label removal below, whether that removal is a non-anchor
 target's or the anchor's own -- that the marked target is the sole member
@@ -1705,7 +1715,8 @@ Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part
 of that explicit release request, or the narrow auto-release exception
 below; nothing else removes the label or starts Discover, Claim, and
-Work on its own.
+Work on its own. A released `review-needs-decision` follow-up remains
+out of Discover while its `status:needs-decision` label is present.
 
 ### Closing sweep (after Stage 2 closes, #2896 review, Codex)
 
@@ -1813,10 +1824,11 @@ helper runtime unavailable" -- naming the reason. This never blocks
 release either; it only ensures a fully-silent skip never happens even
 in the one failure mode the mechanical signal cannot itself cover.
 
-### Narrow auto-release exception (review-fix-loop-cutoff)
+### Narrow auto-release exception
 
-A follow-up issue whose body carried the exact marker
-`<!-- <marker-prefix>-authoring-defer-source: review-fix-loop-cutoff -->` at
+A single, non-roadmap follow-up issue whose body carried one exact
+defined defer-source marker
+`<!-- <marker-prefix>-authoring-defer-source: {defined-value} -->` at
 Stage 1 publication time — part of the initial `authoring-publication` body
 write, never added by a later edit — may complete the full release
 checklist and label-removal sequence above without the "user explicitly
@@ -1830,13 +1842,36 @@ target carrying the marker, never a roadmap anchor or a sibling target
 in the same authoring set that lacks it.
 
 This exists because `idd-review-triage.instructions.md`'s round-count
-or adopt-now-urgency defer trigger files this exact marker on a
+or adopt-now-urgency defer trigger writes `review-fix-loop-cutoff` on a
 follow-up issue during unattended autonomous execution, where no
 human is present to issue a release request. Left under the ordinary
 human-gated boundary above, that deferred work would sit under the
 authoring label indefinitely on a fully autonomous repository,
 silently defeating the point of deferring it at all (preventive; no
 observed incident yet).
+
+**Needs-decision publication and release (`review-needs-decision`).**
+Use this value only for a follow-up that must wait for a person's
+decision. Its exact defer-source marker is
+`<!-- <marker-prefix>-authoring-defer-source: review-needs-decision -->`.
+The body carries `authoring-bucket: needs-decision`, and the configured
+needs-decision label is applied in the same capability-checked create
+call as the authoring label. If the configured label is absent, create
+it with `gh label create` before publication; a create or label-
+application failure stops publication. For every initial lint,
+held-body re-lint, and Stage 2 lint, pass
+`--expect-bucket needs-decision` and both configured labels. Immediately
+before Stage 2 removes a label, re-fetch and verify both live labels;
+remove only the authoring label, and only while the needs-decision label
+is present. If it is missing or cannot be verified, leave the issue
+held. After authoring-label removal, `status:needs-decision` keeps the
+follow-up out of Discover until a person clears it; label removal alone
+does not authorize IDD execution.
+
+The required body shape and quoting rules are in
+`skills/issue-authoring/references/contract.md` under
+`Needs-decision follow-up body`. Its fenced example is in
+`skills/issue-authoring/references/draft-patterns.md`.
 
 **Provenance check (`#2877`).** Before honoring this exception, the
 releasing session must recompute the target's current body-sha256 from
@@ -2492,7 +2527,7 @@ Orchestrator fan-out variant. A delegated worker that receives only a
 relayed release claim must refuse it and require the party holding
 the actual request to act directly, even when that party is its own
 orchestrator. This rule does not extend to the
-[Narrow auto-release exception](#narrow-auto-release-exception-review-fix-loop-cutoff),
+[Narrow auto-release exception](#narrow-auto-release-exception),
 which by design runs with no user release request for any party to
 hold in the first place (observed 2026-09-17,
 kurone-kito/idd-skill#3102).

@@ -138,8 +138,14 @@ node scripts/audit-authored-issue.mjs --shape orphan \
   --marker-prefix <resolved-target-prefix> --title "Drafted issue title" \
   --body-file draft.md \
   --expect-bucket needs-decision \
+  --label status:authoring \
   --label status:needs-decision
 ```
+
+Pass `--expect-bucket needs-decision` and both labels in every Stage 1
+re-lint while the issue is held and the Stage 2 release-checklist lint.
+Use the target repository's configured label names in place of these
+defaults.
 
 **Always pass `--marker-prefix`** with the prefix resolved under
 [contract.md's Target marker prefix](contract.md#target-marker-prefix):
@@ -226,6 +232,58 @@ issues (`issue-scope: roadmap-first`, the default, via the orphan
 fallback, or `orphan-first`). If the repository sets
 `issue-scope: roadmap` (roadmap-only), prefer a one-item roadmap package
 instead of publishing a standalone orphan issue.
+
+## Review-needs-decision follow-up example
+
+This body waits for a person's decision on a review finding. Replace the
+example issue and review-comment references with the claimed issue and
+the source comment; when an E10, Tier 2, or Tier 3 finding triggered the
+deferral, link the comment that states the stop.
+
+```markdown
+## Background
+
+The review identified an unresolved choice about how this behavior
+should work. See the [source review comment](https://github.com/example/project/pull/42#discussion_r123).
+
+## Decision needed
+
+Should the caller receive a retryable error, or should the operation
+wait for an explicit recovery action?
+
+## Options
+
+- **Recommended: return a retryable error.** This keeps the API
+  responsive, with the cost that callers must handle a new error case.
+- **Wait for recovery.** This keeps the caller path simple, with the
+  cost that requests can remain open indefinitely.
+
+## Open questions
+
+- Which client behavior should the API promise for existing callers?
+
+## Candidate files
+
+- `src/api/operation.mts`
+
+<!-- idd-skill-authoring-defer-source: review-needs-decision -->
+<!-- idd-skill-authoring-bucket: needs-decision -->
+
+Refs #123
+Blocked by #123
+
+_Autopilot suitability: 1 / 5 -- higher is more autopilot-suitable; below the configured floor is human-oriented._
+
+<!-- idd-skill-autopilot-suitability: 1 -->
+```
+
+Keep review text paraphrased or inside a fenced code block. A quoted
+line outside a fence must not begin with `Refs`, `Blocked by`, or
+`Depends on`, and a quoted HTML marker stays inside a fence so Discover
+does not mistake it for a live marker. The mechanical gate requires the
+marker, sole `Refs` origin, needs-decision bucket marker, and both labels;
+the completed-draft review checks these five headings because
+`--expect-bucket` does not lint headings for a non-ready body.
 
 ## Example roadmap package
 

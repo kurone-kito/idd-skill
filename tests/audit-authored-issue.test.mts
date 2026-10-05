@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -10,7 +10,10 @@ import {
   auditAuthoredIssue,
   readCleanupEvidenceFile,
 } from '../src/scripts/audit-authored-issue.mts';
-import { extractBlockedByRoadmapMarkers } from '../src/scripts/discover-readiness-check.mts';
+import {
+  DEFER_SOURCE_VALUES,
+  extractBlockedByRoadmapMarkers,
+} from '../src/scripts/discover-readiness-check.mts';
 import {
   renderAuthoringOwnerMarker,
   renderAuthoringPublicationIntentMarker,
@@ -18,6 +21,176 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/audit-authored-issue.mjs');
+
+test('defer-source-marker accepts both defined values and stays independent of --expect-bucket (#3778)', () => {
+  const findingFor = (
+    body: string,
+    expectedAuthoringBucket?: 'needs-decision',
+    labels: string[] = [],
+  ) =>
+    auditAuthoredIssue(body, {
+      shape: 'orphan',
+      markerPrefix: 'idd-skill',
+      labels,
+      expectedAuthoringBucket,
+    }).findings.find((finding) => finding.id === 'defer-source-marker');
+
+  for (const value of DEFER_SOURCE_VALUES) {
+    const needsDecision = value === 'review-needs-decision';
+    const body = [
+      orphanBody(),
+      `<!-- idd-skill-authoring-defer-source: ${value} -->`,
+      'Refs #123',
+      ...(needsDecision
+        ? ['<!-- idd-skill-authoring-bucket: needs-decision -->']
+        : []),
+    ].join('\n\n');
+    const labels = needsDecision
+      ? ['status:authoring', 'status:needs-decision']
+      : [];
+    assert.equal(
+      findingFor(body, needsDecision ? 'needs-decision' : undefined, labels)
+        ?.result,
+      'pass',
+      value,
+    );
+    if (needsDecision) {
+      assert.equal(findingFor(body, undefined, labels)?.result, 'pass');
+    }
+  }
+
+  assert.equal(findingFor(orphanBody())?.result, 'pass');
+  assert.equal(
+    findingFor(
+      `~~~markdown\n<!-- idd-skill-authoring-defer-source: review-needs-decision -->\n~~~`,
+    )?.result,
+    'pass',
+  );
+  assert.equal(
+    findingFor(
+      '`<!-- idd-skill-authoring-defer-source: review-needs-decision -->`',
+    )?.result,
+    'pass',
+  );
+});
+
+test('defer-source-marker rejects malformed values, prefixes, Refs lines, and bucket mismatches under --expect-bucket (#3778)', () => {
+  const labels = ['status:authoring', 'status:needs-decision'];
+  const findingFor = (body: string) =>
+    auditAuthoredIssue(body, {
+      shape: 'orphan',
+      markerPrefix: 'idd-skill',
+      labels,
+      expectedAuthoringBucket: 'needs-decision',
+    }).findings.find((finding) => finding.id === 'defer-source-marker');
+  const marker =
+    '<!-- idd-skill-authoring-defer-source: review-needs-decision -->';
+  const bucket = '<!-- idd-skill-authoring-bucket: needs-decision -->';
+  const withBody = (...lines: string[]) =>
+    [orphanBody(), ...lines].join('\n\n');
+
+  for (const body of [
+    withBody(
+      '<!-- idd-skill-authoring-defer-source: review-needs-decisoin -->',
+      bucket,
+      'Refs #123',
+    ),
+    withBody(
+      '<!-- other-authoring-defer-source: review-needs-decision -->',
+      bucket,
+      'Refs #123',
+    ),
+    withBody(
+      '<!-- idd-skill-authoring-defer-source: review-needs-decision extra -->',
+      bucket,
+      'Refs #123',
+    ),
+    withBody(
+      marker,
+      '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+      bucket,
+      'Refs #123',
+    ),
+    withBody(marker, bucket, 'Refs #123', 'Refs #124'),
+    withBody(marker, bucket, 'Refs #123', '> Refs #124'),
+    withBody(
+      marker,
+      '<!-- idd-skill-authoring-bucket: blocked-by-human -->',
+      'Refs #123',
+    ),
+    withBody(marker, bucket),
+  ]) {
+    assert.equal(findingFor(body)?.result, 'fail', body);
+  }
+});
+
+test('draft-patterns review-needs-decision example passes the compiled gate only with both hold and decision labels (#3778)', () => {
+  const patterns = readFileSync(
+    join(REPO_ROOT, 'skills/issue-authoring/references/draft-patterns.md'),
+    'utf8',
+  );
+  const match =
+    /## Review-needs-decision follow-up example[\s\S]*?```markdown\n([\s\S]*?)```/u.exec(
+      patterns,
+    );
+  assert.ok(
+    match,
+    'the review-needs-decision example is a fenced Markdown body',
+  );
+  const body = match[1];
+  for (const heading of [
+    '## Background',
+    '## Decision needed',
+    '## Options',
+    '## Open questions',
+    '## Candidate files',
+  ]) {
+    assert.match(body, new RegExp(`^${heading}$`, 'm'));
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-defer-source-example-'));
+  try {
+    const bodyPath = join(tempRoot, 'issue.md');
+    writeFileSync(bodyPath, body);
+    const baseArgs = [
+      '--shape',
+      'orphan',
+      '--expect-bucket',
+      'needs-decision',
+      '--marker-prefix',
+      'idd-skill',
+      '--current-repo',
+      'kurone-kito/idd-skill',
+      '--title',
+      'Defer a review decision',
+      '--body-file',
+      bodyPath,
+      '--label',
+      'status:authoring',
+      '--label',
+      'status:needs-decision',
+    ];
+    const withBothLabels = runCli(baseArgs);
+    assert.equal(withBothLabels.passed, true);
+    assert.equal(
+      withBothLabels.findings.find(
+        (finding) => finding.id === 'defer-source-marker',
+      )?.result,
+      'pass',
+    );
+
+    const withoutDecisionLabel = runCli(baseArgs.slice(0, -2));
+    assert.equal(withoutDecisionLabel.passed, false);
+    assert.equal(
+      withoutDecisionLabel.findings.find(
+        (finding) => finding.id === 'authoring-bucket-needs-decision',
+      )?.result,
+      'fail',
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 /**
  * Run the built CLI and return its parsed JSON stdout. The CLI exits 1
@@ -28,6 +201,7 @@ const CLI_PATH = join(REPO_ROOT, 'scripts/audit-authored-issue.mjs');
  * recovered from there instead of being mistaken for a usage/crash error.
  */
 function runCli(args: string[]): {
+  passed: boolean;
   findings: { id: string; result: string; detail?: string }[];
 } {
   try {

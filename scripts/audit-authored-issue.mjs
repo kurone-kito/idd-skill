@@ -50,9 +50,12 @@ import {
   matchDependencyKeywordLine,
 } from './dependency-grammar.mjs';
 import {
+  DEFER_SOURCE_VALUES,
   extractBlockedByIssueNumbers,
   extractBlockedByRoadmapMarkers,
+  extractDeferSourceRefsIssueNumbers,
   extractDependencyIssueNumbers,
+  hasDeferSourceMarker,
 } from './discover-readiness-check.mjs';
 import {
   extractRoadmapMarkerId,
@@ -666,6 +669,7 @@ export function auditAuthoredIssue(body, options) {
       authoringBucket,
       options.expectedAuthoringBucket,
     ),
+    checkDeferSourceMarker(text, rawText, markerPrefix, authoringBucket),
     checkMarkerPrefixConsistency(
       text,
       markerPrefix,
@@ -1337,6 +1341,68 @@ function checkRoadmapTracksParse(text, shape, isBucketAudit, currentRepo) {
     id,
     name,
     'every ## Tracks checkbox line resolves to a child issue reference',
+  );
+}
+function checkDeferSourceMarker(text, rawText, markerPrefix, authoringBucket) {
+  const id = 'defer-source-marker';
+  const name = 'defer-source marker shape, origin, and bucket';
+  const comments = [...text.matchAll(/<!--[\s\S]*?-->/g)]
+    .map((match) => match[0].slice(4, -3))
+    .filter((comment) =>
+      comment.toLowerCase().includes('authoring-defer-source'),
+    );
+  if (comments.length === 0) {
+    return pass(id, name, 'not applicable: no defer-source marker is present');
+  }
+  if (comments.length !== 1) {
+    return fail(
+      id,
+      name,
+      'a defer-source marker requires exactly one live defer-source comment',
+    );
+  }
+  const values = DEFER_SOURCE_VALUES.map(escapeRegex).join('|');
+  const markerPattern = new RegExp(
+    `^\\s*${escapeRegex(markerPrefix)}-authoring-defer-source:\\s*(${values})\\s*$`,
+  );
+  const parsedValues = comments.map(
+    (comment) => markerPattern.exec(comment)?.[1],
+  );
+  if (parsedValues.some((value) => value === undefined)) {
+    return fail(
+      id,
+      name,
+      `every authoring-defer-source comment must use the ${markerPrefix} prefix, one exact defined value (${DEFER_SOURCE_VALUES.join(' or ')}), and no extra tokens`,
+    );
+  }
+  // These shared exports mask their own input. Keep passing the original
+  // body; masking an already-masked view can turn code-span replacement
+  // spaces into a new indented block and hide a live marker or Refs line.
+  if (!hasDeferSourceMarker(rawText, markerPrefix)) {
+    return fail(id, name, 'the defer-source marker value is not defined');
+  }
+  const refs = extractDeferSourceRefsIssueNumbers(rawText);
+  if (refs.ambiguous || refs.numbers.length !== 1) {
+    return fail(
+      id,
+      name,
+      `a defer-source marker requires exactly one Refs line naming exactly one issue${refs.ambiguous ? '; the Refs lines are ambiguous' : `; found ${refs.numbers.length} issue references`}`,
+    );
+  }
+  if (
+    parsedValues.includes('review-needs-decision') &&
+    authoringBucket.value !== 'needs-decision'
+  ) {
+    return fail(
+      id,
+      name,
+      'the review-needs-decision defer-source marker requires the needs-decision authoring-bucket marker',
+    );
+  }
+  return pass(
+    id,
+    name,
+    `defined defer-source marker and sole Refs origin #${refs.numbers[0]} are valid`,
   );
 }
 function checkDependencyMarkerRule(text, rawText, markerPrefix, shape) {

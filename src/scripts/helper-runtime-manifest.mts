@@ -267,7 +267,7 @@ const HELPER_COMMANDS: HelperCommand[] = [
     entryPath: 'scripts/authoring-owner-provenance.mjs',
     vendoredCommand: 'node scripts/authoring-owner-provenance.mjs',
     description:
-      "Compare a live issue body sha256 against that same issue's own trusted mode=acquire authoring-owner marker digest (review-fix-loop-cutoff provenance check).",
+      "Compare a live issue body sha256 against that same issue's own trusted mode=acquire authoring-owner marker digest (defer-source auto-release provenance check).",
   },
   {
     id: 'authoring-set-members',
