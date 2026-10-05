@@ -316,6 +316,15 @@ function runCli(): HelperCliResult {
   return 0;
 }
 
+/**
+ * Collect the routing input for one claimed issue.
+ *
+ * `loadTrustedConfig` resolves policy from a ref that the PR under evaluation
+ * cannot edit. `collectGitState` reads the local worktree state (whether it is
+ * dirty and whether it has unpushed commits); it defaults to the real `git`
+ * reader and exists so tests can inject a fixed state instead of starting git
+ * processes.
+ */
 export function collectRoutingInput({
   port,
   issueNumber,
@@ -712,16 +721,15 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
         listCodeContentColumn = null;
       }
 
-      const scan = scanBlockQuoteAndListPrefixes(
-        line,
-        normalizedBody,
-        currentLineStart,
-        listIndentFastPath,
-        paragraphOpen || itemParagraphContinues,
-        listZoneCache,
+      const scan = scanBlockQuoteAndListPrefixes(line, {
+        body: normalizedBody,
+        lineStart: currentLineStart,
+        probeFlags: listIndentFastPath,
+        paragraphOpen: paragraphOpen || itemParagraphContinues,
+        quoteParagraphOpen: quotedParagraphOpen,
+        zoneCache: listZoneCache,
         probeForIndentedCode,
-        quotedParagraphOpen,
-      );
+      });
       if (scan.kind === 'listCode') {
         listCodeContentColumn = scan.contentColumn;
         followsListCode = false;
@@ -815,16 +823,33 @@ function stripBlockQuoteAndListPrefixes(line: string): string | null {
   return scan.kind === 'quote' ? scan.content : null;
 }
 
+interface LinePrefixScanOptions {
+  /** The whole body and the line's offset in it, for the enclosing-list lookup. */
+  body?: string;
+  lineStart?: number;
+  probeFlags?: ListProbeFlags;
+  zoneCache?: EnclosingListContentIndentCache;
+  /** A paragraph is open where this line continues it. */
+  paragraphOpen?: boolean;
+  /** A quote paragraph is open; it only counts after the line's own `>`. */
+  quoteParagraphOpen?: boolean;
+  /** The first line after list-item code that left the item: probe once. */
+  probeForIndentedCode?: boolean;
+}
+
 function scanBlockQuoteAndListPrefixes(
   line: string,
-  body?: string,
-  lineStart?: number,
-  listIndentFastPath?: ListProbeFlags,
-  paragraphOpen = false,
-  listZoneCache?: EnclosingListContentIndentCache,
-  probeForIndentedCode = false,
-  quoteParagraphOpen = false,
+  options: LinePrefixScanOptions = {},
 ): ListPrefixScan {
+  const {
+    body,
+    lineStart,
+    probeFlags: listIndentFastPath,
+    zoneCache: listZoneCache,
+    paragraphOpen = false,
+    quoteParagraphOpen = false,
+    probeForIndentedCode = false,
+  } = options;
   // Most lines, including ordinary indented code, cannot become a
   // blockquote or nested list after list-content indentation is removed.
   // Avoid the helper's backward scan for those lines; doing it once per

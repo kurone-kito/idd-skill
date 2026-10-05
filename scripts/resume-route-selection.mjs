@@ -218,6 +218,15 @@ function runCli() {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   return 0;
 }
+/**
+ * Collect the routing input for one claimed issue.
+ *
+ * `loadTrustedConfig` resolves policy from a ref that the PR under evaluation
+ * cannot edit. `collectGitState` reads the local worktree state (whether it is
+ * dirty and whether it has unpushed commits); it defaults to the real `git`
+ * reader and exists so tests can inject a fixed state instead of starting git
+ * processes.
+ */
 export function collectRoutingInput({
   port,
   issueNumber,
@@ -568,16 +577,15 @@ function stripBlockQuotesAndLazyContinuations(body) {
         probeForIndentedCode = followsListCode;
         listCodeContentColumn = null;
       }
-      const scan = scanBlockQuoteAndListPrefixes(
-        line,
-        normalizedBody,
-        currentLineStart,
-        listIndentFastPath,
-        paragraphOpen || itemParagraphContinues,
-        listZoneCache,
+      const scan = scanBlockQuoteAndListPrefixes(line, {
+        body: normalizedBody,
+        lineStart: currentLineStart,
+        probeFlags: listIndentFastPath,
+        paragraphOpen: paragraphOpen || itemParagraphContinues,
+        quoteParagraphOpen: quotedParagraphOpen,
+        zoneCache: listZoneCache,
         probeForIndentedCode,
-        quotedParagraphOpen,
-      );
+      });
       if (scan.kind === 'listCode') {
         listCodeContentColumn = scan.contentColumn;
         followsListCode = false;
@@ -654,16 +662,16 @@ function stripBlockQuoteAndListPrefixes(line) {
   const scan = scanBlockQuoteAndListPrefixes(line);
   return scan.kind === 'quote' ? scan.content : null;
 }
-function scanBlockQuoteAndListPrefixes(
-  line,
-  body,
-  lineStart,
-  listIndentFastPath,
-  paragraphOpen = false,
-  listZoneCache,
-  probeForIndentedCode = false,
-  quoteParagraphOpen = false,
-) {
+function scanBlockQuoteAndListPrefixes(line, options = {}) {
+  const {
+    body,
+    lineStart,
+    probeFlags: listIndentFastPath,
+    zoneCache: listZoneCache,
+    paragraphOpen = false,
+    quoteParagraphOpen = false,
+    probeForIndentedCode = false,
+  } = options;
   // Most lines, including ordinary indented code, cannot become a
   // blockquote or nested list after list-content indentation is removed.
   // Avoid the helper's backward scan for those lines; doing it once per
