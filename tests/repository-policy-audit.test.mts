@@ -1041,6 +1041,27 @@ test('the whole-class sweep pins are scoped to the E9 bullet and reject the old 
       `${path}: the old sentence must fail the trigger rule`,
     );
 
+    // The complete bullet moved out of E9 into the next section must fail
+    // too: the pins enforce the section, not only the text shape.
+    const bulletFrom = real.indexOf(
+      '- **Fix the whole class, not just the flagged line.**',
+    );
+    const bulletTo = real.indexOf(nextBullet);
+    assert.ok(bulletFrom > 0 && bulletTo > bulletFrom);
+    const movedBullet = real.slice(bulletFrom, bulletTo);
+    const e10Heading = '## E10 — Validate fixes with critique pass\n';
+    const moved = (real.slice(0, bulletFrom) + real.slice(bulletTo)).replace(
+      e10Heading,
+      `${e10Heading}\n${movedBullet}\n`,
+    );
+    assert.ok(moved.includes(movedBullet));
+    for (const entry of WHOLE_CLASS_SWEEP_PINS) {
+      assert.ok(
+        ruleFailures(withEdit(moved), entry.id).length > 0,
+        `${path}: ${entry.id} must fail when the bullet sits outside E9`,
+      );
+    }
+
     // A missing bullet fails all four rules instead of passing vacuously.
     const withoutBullet = real.replace(
       '- **Fix the whole class, not just the flagged line.**',

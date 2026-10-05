@@ -34,11 +34,11 @@ These fix-side rules cut the advisory-review round count (complementing
 E5's "Verify before accept" rule):
 
 - **Fix the whole class, not just the flagged line.** When an Accepted
-  finding names a pattern (a command, code span, hard-coded value, or
-  link or anchor form), search every file this PR changes for it and fix
-  each instance of that defect in the same push; list unchanged files in
-  the PR body's follow-ups. A swept item's E13 explanation names the
-  pattern and the count of other instances fixed (`0` needs the pattern
+  finding names a pattern (command, code span, hard-coded value, or link
+  or anchor form), search every file the PR changes for it and fix each
+  instance of that defect in the same push. Never sweep unchanged files;
+  list them in PR body follow-ups. A swept item's E13 explanation names
+  the pattern and the count of others fixed (`0` needs the pattern
   named).
 - **Verify any claim a fix adds.** Check any new precision (a name,
   value, path, or described behavior) against the actual implementation

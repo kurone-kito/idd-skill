@@ -254,7 +254,15 @@ function extractBoundedRegion(content, start, end, path) {
  * the next blank line or top-level bullet, so an unrelated sentence that
  * happens to repeat a pinned clause elsewhere in the file cannot satisfy
  * the pin. */
-function extractPinnedRegion(path, text, start) {
+function extractPinnedRegion(path, fileText, start, section) {
+  let text = fileText;
+  if (section !== undefined) {
+    const sectionStart = text.indexOf(`\n${section}`);
+    if (sectionStart === -1) fail(path, `missing pinned section: ${section}`);
+    const afterHeading = text.slice(sectionStart + 1);
+    const sectionEnd = afterHeading.indexOf('\n## ');
+    text = sectionEnd === -1 ? afterHeading : afterHeading.slice(0, sectionEnd);
+  }
   const startIndex = text.indexOf(start);
   if (startIndex === -1) fail(path, `missing pinned region: ${start}`);
   const rest = text.slice(startIndex);
@@ -271,7 +279,12 @@ function pinnedGroupRule(group) {
         const scope = collapsed(
           group.regionStart === undefined
             ? raw
-            : extractPinnedRegion(path, raw, group.regionStart),
+            : extractPinnedRegion(
+                path,
+                raw,
+                group.regionStart,
+                group.regionSection,
+              ),
         );
         const missing = group.phrases.filter(
           (phrase) => !scope.includes(phrase),
@@ -369,6 +382,7 @@ export const NEEDS_DECISION_ROUTE_PINS = [
 ];
 const WHOLE_CLASS_SWEEP_BULLET_START =
   '- **Fix the whole class, not just the flagged line.**';
+const WHOLE_CLASS_SWEEP_SECTION = '## E9 — Fix accepted issues';
 // The E9 whole-class sweep bullet (issue #3801, observed on
 // kurone-kito/setup.ubuntu#201): the sweep is only useful if a reader can
 // tell it ran, so the trigger, the file set, the limit and the reply content
@@ -382,8 +396,9 @@ export const WHOLE_CLASS_SWEEP_PINS = [
     id: 'review-fix-sweep-trigger',
     paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
     regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
     phrases: [
-      'When an Accepted finding names a pattern (a command, code span, hard-coded value, or link or anchor form)',
+      'When an Accepted finding names a pattern (command, code span, hard-coded value, or link or anchor form)',
     ],
     forbidden: ['Sweep the current diff (and adjacent sections)'],
   },
@@ -391,22 +406,25 @@ export const WHOLE_CLASS_SWEEP_PINS = [
     id: 'review-fix-sweep-file-set',
     paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
     regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
     phrases: [
-      'search every file this PR changes for it and fix each instance of that defect in the same push',
+      'search every file the PR changes for it and fix each instance of that defect in the same push',
     ],
   },
   {
     id: 'review-fix-sweep-limit',
     paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
     regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
-    phrases: ["list unchanged files in the PR body's follow-ups"],
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: ['Never sweep unchanged files; list them in PR body follow-ups'],
   },
   {
     id: 'review-fix-sweep-reply',
     paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
     regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
     phrases: [
-      "A swept item's E13 explanation names the pattern and the count of other instances fixed",
+      "A swept item's E13 explanation names the pattern and the count of others fixed",
       '(`0` needs the pattern named)',
     ],
   },
