@@ -382,6 +382,64 @@ for (const [name, source] of markerImportSources) {
   });
 }
 
+const lexicalBoundarySources: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a regex after of with an escaped slash and quantifier',
+    source: (specifier) =>
+      String.raw`for (const m of /\/*x/g) {}
+import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after throw with a comment-like character-class member',
+    source: (specifier) =>
+      `throw /[/*]/;
+import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a line comment ending at U+2028',
+    source: (specifier) =>
+      `// comment\u2028import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a line comment ending at U+2029',
+    source: (specifier) =>
+      `// comment\u2029import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+];
+
+for (const { name, source } of lexicalBoundarySources) {
+  test(`the node-import rule sees imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule sees imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
 test('an import-looking line inside template text remains visible to the detector', () => {
   const root = buildFixture((files) =>
     files.set(

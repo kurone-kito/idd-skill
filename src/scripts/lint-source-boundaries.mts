@@ -129,7 +129,13 @@ const REGEX_PRECEDING_KEYWORDS = new Set([
   'else',
   'yield',
   'await',
+  'throw',
 ]);
+
+/** ECMAScript line terminators, including the Unicode separators. */
+function isLineTerminator(ch: string | undefined): boolean {
+  return ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
+}
 
 /**
  * Replaces one comment with whitespace without changing offsets or line
@@ -138,7 +144,7 @@ const REGEX_PRECEDING_KEYWORDS = new Set([
  */
 function maskComment(output: string[], start: number, end: number): void {
   for (let index = start; index < end; index += 1) {
-    if (output[index] !== '\n' && output[index] !== '\r') {
+    if (!isLineTerminator(output[index])) {
       output[index] = ' ';
     }
   }
@@ -206,18 +212,26 @@ function scanComments(source: string): {
     let braceDepth = 0;
     let lastCodeChar = '';
     let lastWord = '';
+    let wordBoundary = false;
 
     function recordCodeChar(ch: string): void {
       if (/\s/.test(ch)) {
+        wordBoundary = true;
         return;
       }
       lastCodeChar = ch;
-      lastWord = /[A-Za-z0-9_$]/.test(ch) ? lastWord + ch : '';
+      if (/[A-Za-z0-9_$]/.test(ch)) {
+        lastWord = wordBoundary ? ch : lastWord + ch;
+      } else {
+        lastWord = '';
+      }
+      wordBoundary = false;
     }
 
     function recordLiteral(end: string): void {
       lastCodeChar = end;
       lastWord = '';
+      wordBoundary = false;
     }
 
     while (index < source.length) {
@@ -236,14 +250,11 @@ function scanComments(source: string): {
 
       if (ch === '/' && next === '/') {
         let end = index + 2;
-        while (
-          end < source.length &&
-          source[end] !== '\n' &&
-          source[end] !== '\r'
-        ) {
+        while (end < source.length && !isLineTerminator(source[end])) {
           end += 1;
         }
         maskComment(output, index, end);
+        wordBoundary = true;
         index = end;
         continue;
       }
@@ -259,6 +270,7 @@ function scanComments(source: string): {
         }
         const end = close + 2;
         maskComment(output, index, end);
+        wordBoundary = true;
         index = end;
         continue;
       }
@@ -269,11 +281,11 @@ function scanComments(source: string): {
         let closed = false;
         while (end < source.length) {
           const regexChar = source[end];
-          if (regexChar === '\n' || regexChar === '\r') {
+          if (isLineTerminator(regexChar)) {
             break;
           }
           if (regexChar === '\\') {
-            if (source[end + 1] === '\n' || source[end + 1] === '\r') {
+            if (isLineTerminator(source[end + 1])) {
               break;
             }
             end += end + 1 < source.length ? 2 : 1;
@@ -312,7 +324,7 @@ function scanComments(source: string): {
             end += 1;
             break;
           }
-          if (stringChar === '\n' || stringChar === '\r') {
+          if (isLineTerminator(stringChar)) {
             break;
           }
           if (stringChar === '\\') {
