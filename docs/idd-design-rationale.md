@@ -926,6 +926,77 @@ after the operator accepted three remaining findings as a documented
 limitation and filed kurone-kito/idd-skill#2865 as the scoped
 follow-up.
 
+### Whole-class sweep: why the E13 reply names the pattern and the count
+
+E9's sweep rule ("fix the whole class, not just the flagged line") was
+soft in three ways: it left "systemic" undefined, it swept "the current
+diff (and adjacent sections)" rather than a defined file set, and
+nothing in the reply showed that a sweep ran, so a session that skipped
+it looked the same as one that did it. The old text also asked for "one
+commit"; the rule now asks for the same push, because the review cost
+is per push and commit atomicity is a separate repository rule. E10's
+round-count heuristic (Tier 1) is a complementary, round-level check
+for the same area and did not stop the cases below. The trigger is now a
+finding that names a searchable pattern, which narrows the old
+"systemic finding" wording on purpose: a class with no searchable form
+(a wrong ordering, a missing step) is not swept by this rule. The lite
+twin keeps the old wording; porting the rule there is a later issue.
+
+Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter
+re-import reviewed on 11 heads (kurone-kito/idd-skill#3801):
+
+- The same dangling clause, `reset on pass)`, sat at two sites of the
+  imported template, `idd-pre-merge.instructions.md` and
+  `idd-merge.instructions.md`. Copilot reported the first at head 2
+  (01:34Z); Codex reported the second at head 8 (09:15Z). Both files
+  were in the pull request's diff throughout.
+- A hard-coded base branch was reported site by site: B1 at head 3,
+  the lite D1 at head 4, the signed-merge wrapper at head 5, F4 at
+  head 8, and the lite D3 and D3.5 at head 9. Each report cost a push
+  and a fresh round of up to three review bots.
+
+Replay through the written rule:
+
+1. `reset on pass)` at head 2. Both reviewers quoted the fragment as a
+   code span, so the finding names a pattern. Searching the pull
+   request's changed files (50 at that head) for it finds one more
+   instance, in `idd-merge.instructions.md`, so the same push fixes both
+   sites and the E13 reply's explanation says it swept `reset on pass)`
+   and fixed 1 other instance. Head 8's report of the second site never
+   happens.
+2. `origin/main` at head 3. The finding is a hard-coded base branch
+   where the configured one applies. A search for the literal in the
+   changed files at that head (50 files) hits 18 lines in 7 files: 2 in
+   `idd-work`, 6 in the lite `idd-pr-submit`, 3 in the lite `idd-work`,
+   2 in the lite `idd-merge-handoff`, 1 in the lite `idd-review-fix`, 3
+   in `docs/idd-helper-scripts.md` and 1 in
+   `docs/idd-design-rationale.md`. The rule asks for each instance of
+   that defect, so every hit is judged against it: the rationale
+   example (`git diff origin/main...HEAD` in a review-cost story) is not
+   an instance and stays, the instances are fixed in the same push (the
+   head-3 fix swept 3 files), and the reply names `origin/main` with the
+   number of other instances fixed, which tells a reader that one
+   flagged line led to a sweep of the changed files.
+
+What a text search cannot find: of the six sites of the base-branch
+defect, three held the literal (B1, the lite D1 and the wrapper); the
+other three did not. They were a `<default-branch>` placeholder, a
+missing `--base`, and a gap in the closing-set logic. The sweep rule
+cannot reach them, which is why the reply states the pattern that was
+searched: a reader or the next review wave can re-run that search, and
+a count of `0` needs the pattern named, so "swept, nothing else found"
+stays distinguishable from "not swept".
+
+A file the pull request does not change is never swept: widening the
+diff to every match multiplies the review surface of one push. Its
+instances go to the pull request body's follow-up list (a reviewer's
+finding there is rejected under E5's "Reject now but should do
+eventually" rule). The rule adds no checker, only a signal: E10 runs
+before the reply is written and never sees it, and an Accepted item
+with no E13 reply has nothing to carry the count. The audit pins the
+four clauses (trigger, file set with the same push, limit, reply
+content) so that a later rewording cannot drop one silently.
+
 ### Merge-main livelock under fast-moving `main`
 
 Under heavy concurrent-session load, `main` can advance before one
