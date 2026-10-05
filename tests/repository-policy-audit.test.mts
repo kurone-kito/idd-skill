@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   collectRepositoryPolicyViolationsFromDocuments,
+  NEEDS_DECISION_ROUTE_PINS,
   type RepositoryPolicyDocuments,
   repositoryPolicyRuleIds,
   repositoryPolicyRulePaths,
@@ -689,8 +690,23 @@ function makeRuleViolation(
         "re-derive D3.6's checklist",
         "reuse D3.6's checklist",
       );
-    default:
+    default: {
+      // The needs-decision route rules are generated from one table; deleting
+      // the first pinned phrase from the first path is their targeted fixture
+      // (the per-phrase test below deletes every phrase from the real files).
+      const group = NEEDS_DECISION_ROUTE_PINS.find(
+        (candidate) => candidate.id === ruleId,
+      );
+      if (group !== undefined) {
+        return replaceFixtureTextEverywhere(
+          documents,
+          group.paths[0],
+          group.phrases[0],
+          '',
+        );
+      }
       assert.fail(`no targeted negative fixture for ${ruleId}`);
+    }
   }
 }
 
@@ -879,6 +895,97 @@ test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) 
     );
   }
   assert.deepEqual(readdirSync(emptyPath), []);
+});
+
+/** Delete the first whitespace-tolerant occurrence of `phrase` from `text`. */
+function deletePhrase(text: string, phrase: string): string | null {
+  const pattern = new RegExp(
+    phrase
+      .split(' ')
+      .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+'),
+  );
+  return pattern.test(text) ? text.replace(pattern, '') : null;
+}
+
+test('every pinned needs-decision route phrase is load-bearing in the real files', () => {
+  for (const group of NEEDS_DECISION_ROUTE_PINS) {
+    assert.ok(group.phrases.length > 0, `${group.id} pins phrases`);
+    assert.equal(
+      new Set(group.phrases).size,
+      group.phrases.length,
+      `${group.id} has a duplicate pinned phrase`,
+    );
+    const real = new Map<string, string>();
+    for (const path of group.paths) {
+      real.set(path, readFileSync(join(REPOSITORY_ROOT, path), 'utf8'));
+    }
+    const failing = (documents: Map<string, string>) =>
+      collectRepositoryPolicyViolationsFromDocuments(documents).filter(
+        (violation) => violation.ruleId === group.id,
+      );
+    assert.deepEqual(failing(real), [], `${group.id} must pass on real files`);
+    for (const path of group.paths) {
+      const original = real.get(path) as string;
+      for (const phrase of group.phrases) {
+        const mutated = deletePhrase(original, phrase);
+        assert.notEqual(
+          mutated,
+          null,
+          `${path} must contain the pinned phrase: ${phrase}`,
+        );
+        const scratch = new Map(real);
+        scratch.set(path, mutated as string);
+        // The rule reports every missing clause, so overlapping phrases
+        // cannot shadow each other: the deleted phrase itself is named.
+        assert.ok(
+          failing(scratch).some(
+            (violation) =>
+              violation.path === path && violation.message.includes(phrase),
+          ),
+          `${group.id}: deleting ${JSON.stringify(phrase)} from ${path} must fail the audit and name that clause`,
+        );
+      }
+    }
+  }
+});
+
+test('the needs-decision replay table keeps at least nineteen fully filled, numbered cases in both doc copies', () => {
+  for (const path of [
+    'idd-template/docs/idd-review-policy-profiles.md',
+    'docs/idd-review-policy-profiles.md',
+  ]) {
+    const text = readFileSync(join(REPOSITORY_ROOT, path), 'utf8');
+    const start = text.indexOf('**Replay table.**');
+    assert.notEqual(start, -1, `${path} must carry the replay table`);
+    const rows = text
+      .slice(start)
+      .split('\n')
+      .slice(1)
+      .filter((line) => line.startsWith('|'))
+      .map((line) =>
+        line
+          .split('|')
+          .slice(1, -1)
+          .map((cell) => cell.trim()),
+      );
+    const cases = rows.filter((cells) => /^\d+$/.test(cells[0]));
+    assert.ok(
+      cases.length >= 19,
+      `${path} replay table has ${cases.length} cases`,
+    );
+    assert.deepEqual(
+      cases.map((cells) => Number(cells[0])),
+      cases.map((_, index) => index + 1),
+      `${path} replay table numbering`,
+    );
+    for (const cells of cases) {
+      assert.equal(cells.length, 4, `${path} case ${cells[0]} columns`);
+      for (const cell of cells) {
+        assert.notEqual(cell, '', `${path} case ${cells[0]} has an empty cell`);
+      }
+    }
+  }
 });
 
 test('audit-docs reports policy violations when the audit source is present', (t) => {
