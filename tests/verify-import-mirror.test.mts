@@ -19,11 +19,14 @@ import {
   classifyDeletedFile,
   classifyFileContent,
   computeExitCode,
+  computeRevertedOverlayLines,
   hasGeneratedBannerMarker,
   isAbsenceErrorCode,
   isGeneratedBannerEligible,
   isProseExtension,
   isTolerated,
+  matchesTokenPattern,
+  normalizeOverlayLines,
   normalizeProseWhitespace,
   runVerification,
   stripGeneratedBannerLine,
@@ -1118,6 +1121,258 @@ test('classifyComparedFile reports a genuine mismatch when the path is absent fr
 });
 
 // ---------------------------------------------------------------------------
+// Reverted-overlay comparison (#3795) -- pure layer
+// ---------------------------------------------------------------------------
+
+function revertedOverlays(
+  base: string[],
+  previousUpstream: string[],
+  target: string[],
+): string[] {
+  return computeRevertedOverlayLines({
+    baseText: base.join('\n'),
+    previousUpstreamText: previousUpstream.join('\n'),
+    targetText: target.join('\n'),
+  });
+}
+
+test('normalizeOverlayLines collapses whitespace, splits on CRLF, and drops short and banner lines', () => {
+  assert.deepEqual(
+    normalizeOverlayLines(
+      [
+        '  spaced \t out   line  ',
+        'crlf line one\r',
+        '',
+        'short',
+        '// idd-generated-from: src/scripts/foo.mts',
+        '// note: idd-generated-from is only mentioned here',
+      ].join('\n'),
+    ),
+    [
+      'spaced out line',
+      'crlf line one',
+      '// note: idd-generated-from is only mentioned here',
+    ],
+  );
+});
+
+test('a line is invisible below 8 characters and visible at exactly 8', () => {
+  assert.deepEqual(revertedOverlays(['seven77', 'eight888'], [], []), [
+    'eight888',
+  ]);
+  // The length is counted after normalization, in characters.
+  assert.deepEqual(revertedOverlays(['  a  b  c  '], [], []), []);
+  assert.deepEqual(
+    revertedOverlays(['日本語日本語日本', '日本語日本語日'], [], []),
+    ['日本語日本語日本'],
+  );
+  // Characters are code points: seven astral characters are 14 UTF-16
+  // units but still below the bound.
+  assert.deepEqual(
+    revertedOverlays(['\u{1F600}'.repeat(7), '\u{1F600}'.repeat(8)], [], []),
+    ['\u{1F600}'.repeat(8)],
+  );
+});
+
+test('an overlay line absent from the previous upstream and from the import is reported; present after the import it is not', () => {
+  const overlay = 'adopter overlay: profile-selected command block';
+  assert.deepEqual(
+    revertedOverlays(
+      [overlay, 'shared upstream line'],
+      ['shared upstream line'],
+      ['shared upstream line'],
+    ),
+    [overlay],
+  );
+  assert.deepEqual(
+    revertedOverlays(
+      [overlay, 'shared upstream line'],
+      ['shared upstream line'],
+      ['shared upstream line', overlay],
+    ),
+    [],
+  );
+});
+
+test('a pre-import line equal to a previous-upstream line is not reported even when the import rewrote it', () => {
+  assert.deepEqual(
+    revertedOverlays(
+      ['git fetch origin main', 'adopter note about fetching'],
+      ['git fetch origin main'],
+      ['git fetch origin {development-branch}'],
+    ),
+    ['adopter note about fetching'],
+  );
+});
+
+test('a previous-upstream {{NAME}} line acts as a whole-line wildcard for its substituted value', () => {
+  const previous = ['use the {{PROJECT_MARKER_PREFIX}} marker for claims'];
+  assert.deepEqual(
+    revertedOverlays(['use the idd-skill marker for claims'], previous, []),
+    [],
+  );
+  // Shares only a prefix with the token line: a genuine overlay line.
+  assert.deepEqual(
+    revertedOverlays(
+      ['use the idd-skill marker, custom wording'],
+      previous,
+      [],
+    ),
+    ['use the idd-skill marker, custom wording'],
+  );
+  // Matches the token line but carries extra text on either side.
+  assert.deepEqual(
+    revertedOverlays(
+      [
+        'extra text use the idd-skill marker for claims',
+        'use the idd-skill marker for claims and more',
+      ],
+      previous,
+      [],
+    ),
+    [
+      'extra text use the idd-skill marker for claims',
+      'use the idd-skill marker for claims and more',
+    ],
+  );
+  // A token needs a non-empty value.
+  assert.deepEqual(
+    revertedOverlays(['use the  marker for claims'], previous, []),
+    ['use the marker for claims'],
+  );
+});
+
+test('a token replaced by a multi-word value still matches, which a non-space wildcard would not', () => {
+  assert.deepEqual(
+    revertedOverlays(
+      ['run npm run lint && npm test before every push'],
+      ['run {{FIX_VALIDATE_COMMANDS}} before every push'],
+      [],
+    ),
+    [],
+  );
+});
+
+test('a previous-upstream line that is only a token does not act as a wildcard', () => {
+  assert.deepEqual(
+    revertedOverlays(
+      ['- an adopter list item'],
+      ['- {{ITEM}}', '{{ONLY_TOKEN}}'],
+      [],
+    ),
+    ['- an adopter list item'],
+  );
+});
+
+test('the literal-text rule of the wildcard is 8 characters outside the tokens', () => {
+  // 7 literal characters around the token: not a wildcard.
+  assert.deepEqual(
+    revertedOverlays(['echo value no'], ['echo {{TOKEN}}no'], []),
+    ['echo value no'],
+  );
+  // 8 literal characters around the token: a wildcard.
+  assert.deepEqual(
+    revertedOverlays(['echo value now'], ['echo {{TOKEN}}now'], []),
+    [],
+  );
+});
+
+test('the literal-text rule of the wildcard counts code points', () => {
+  const smile = '\u{1F600}';
+  // Four astral characters are 8 UTF-16 units but only 4 characters: not a
+  // wildcard.
+  assert.deepEqual(
+    revertedOverlays(
+      [`value${smile.repeat(4)}`],
+      [`{{TOKEN}}${smile.repeat(4)}`],
+      [],
+    ),
+    [`value${smile.repeat(4)}`],
+  );
+  assert.deepEqual(
+    revertedOverlays(
+      [`value${smile.repeat(8)}`],
+      [`{{TOKEN}}${smile.repeat(8)}`],
+      [],
+    ),
+    [],
+  );
+});
+
+test('literal regex metacharacters in a token line match literally', () => {
+  const previous = ['call (a.b)* for {{TARGET}} [now] $^+?|'];
+  assert.deepEqual(
+    revertedOverlays(['call (a.b)* for the build [now] $^+?|'], previous, []),
+    [],
+  );
+  assert.deepEqual(
+    revertedOverlays(['call (aXb)* for the build [now] $^+?|'], previous, []),
+    ['call (aXb)* for the build [now] $^+?|'],
+  );
+});
+
+test('only {{NAME}} tokens with an upper-case name are wildcards', () => {
+  assert.deepEqual(
+    revertedOverlays(
+      ['value-one and value-two'],
+      ['{{lower}} and value-two'],
+      [],
+    ),
+    ['value-one and value-two'],
+  );
+  assert.deepEqual(
+    revertedOverlays(
+      ['value-one and value-two'],
+      ['{{ NAME }} and value-two'],
+      [],
+    ),
+    ['value-one and value-two'],
+  );
+});
+
+test('each distinct overlay line is reported once, in the pre-import file order', () => {
+  assert.deepEqual(
+    revertedOverlays(
+      ['second overlay line', 'first overlay line', 'second overlay line'],
+      [],
+      [],
+    ),
+    ['second overlay line', 'first overlay line'],
+  );
+});
+
+test('matchesTokenPattern handles adjacent tokens, edge tokens, and repeated literal pieces', () => {
+  // {{A}}{{B}}: the empty piece between the tokens still needs a character
+  // for each token, so the gap is at least two characters.
+  assert.equal(matchesTokenPattern('xx', ['', '', '']), true);
+  assert.equal(matchesTokenPattern('x', ['', '', '']), false);
+  // Token at the start and at the end.
+  assert.equal(matchesTokenPattern('1-suffix', ['', '-suffix']), true);
+  assert.equal(matchesTokenPattern('-suffix', ['', '-suffix']), false);
+  assert.equal(matchesTokenPattern('prefix-1', ['prefix-', '']), true);
+  assert.equal(matchesTokenPattern('prefix-', ['prefix-', '']), false);
+  // A literal that occurs more than once: leftmost placement of the middle
+  // piece must leave room for the anchored suffix.
+  assert.equal(matchesTokenPattern('a-x-a-x-b', ['a-', '-a-', '-b']), true);
+  assert.equal(matchesTokenPattern('a-x-a-a-b', ['a-', '-a-', '-b']), true);
+  // The second token has no text left for it: not a match.
+  assert.equal(matchesTokenPattern('a-x-a-b', ['a-', '-a-', '-b']), false);
+  // The suffix may not overlap the prefix.
+  assert.equal(matchesTokenPattern('ab', ['ab', 'ab']), false);
+  assert.equal(matchesTokenPattern('ab-ab', ['ab', 'ab']), true);
+  // No token: never a wildcard.
+  assert.equal(matchesTokenPattern('same', ['same']), false);
+});
+
+test('a long line against a many-token pattern terminates without backtracking', () => {
+  // A regular expression built from these pieces would backtrack
+  // polynomially in the line length; the piece-wise matcher does not.
+  const pieces = ['start ', ' mid ', ' mid ', ' mid ', ' mid ', ' end'];
+  const line = `start ${'x mid '.repeat(5000)}almost`;
+  assert.equal(matchesTokenPattern(line, pieces), false);
+});
+
+// ---------------------------------------------------------------------------
 // CLI integration: spawn the emitted scripts/verify-import-mirror.mjs
 // against a real temp git repo (target commit) and a plain --upstream-path
 // directory, matching this repo's own generated-artifact-testing
@@ -1148,8 +1403,9 @@ function runCli(
   args: string[],
   cwd: string,
   env?: NodeJS.ProcessEnv,
+  nodeArgs: string[] = [],
 ): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync('node', [CLI_ENTRY, ...args], {
+  const result = spawnSync('node', [...nodeArgs, CLI_ENTRY, ...args], {
     cwd,
     encoding: 'utf8',
     ...(env === undefined ? {} : { env }),
@@ -1161,6 +1417,486 @@ function runCli(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Reverted-overlay report (#3795) -- CLI
+// ---------------------------------------------------------------------------
+
+interface OverlayFixture {
+  targetRoot: string;
+  newUpstream: string;
+  previousUpstream: string;
+  baseSha: string;
+  importSha: string;
+  cleanup: () => void;
+}
+
+function gitOut(root: string, args: string[]): string {
+  return execFileSync('git', args, {
+    cwd: root,
+    env: fixtureEnv(),
+    encoding: 'utf8',
+  }).trim();
+}
+
+function writeTree(root: string, files: Record<string, string>): void {
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+  }
+}
+
+/**
+ * A target repository with a pre-import commit holding adopter overlay
+ * lines, the previous upstream version as a plain directory AND as an
+ * orphan branch `local-prev` (a ref that exists only locally), and an
+ * import commit that reverts the overlay lines and rewrites one upstream
+ * line. `docs/guide.md` is the only compared path: `config.json` is JSON,
+ * `added.md` is added, `removed.md` is deleted, and `adopter-own.md` is
+ * modified but absent from the previous upstream.
+ */
+function buildOverlayFixture(
+  overlayLines: string[],
+  secondPathOverlayLines: string[] = [],
+): OverlayFixture {
+  const targetRoot = mkdtempSync(join(tmpdir(), 'verify-overlay-target-'));
+  const newUpstream = mkdtempSync(join(tmpdir(), 'verify-overlay-new-'));
+  const previousUpstream = mkdtempSync(join(tmpdir(), 'verify-overlay-prev-'));
+  const lines = (...items: string[]): string => `${items.join('\n')}\n`;
+  const previousFiles = {
+    'docs/guide.md': lines(
+      'Upstream heading line one',
+      'git fetch origin main',
+    ),
+    'config.json': '{"a":1}\n',
+    'removed.md': lines('this file is removed upstream'),
+    // Also present in the previous version although the import ADDS it:
+    // an added path must be skipped without reading a pre-import file.
+    'added.md': lines('added by the new upstream'),
+    ...(secondPathOverlayLines.length > 0
+      ? { 'docs/second.md': lines('Second upstream heading line') }
+      : {}),
+  };
+  initTargetRepo(targetRoot);
+  writeTree(targetRoot, {
+    ...previousFiles,
+    'docs/guide.md': lines(
+      'Upstream heading line one',
+      'git fetch origin main',
+      'adopter kept line stays',
+      ...overlayLines,
+    ),
+    'adopter-own.md': lines('adopter file before the import'),
+  });
+  rmSync(join(targetRoot, 'added.md'));
+  if (secondPathOverlayLines.length > 0) {
+    writeTree(targetRoot, {
+      'docs/second.md': lines(
+        'Second upstream heading line',
+        ...secondPathOverlayLines,
+      ),
+    });
+  }
+  commitAll(targetRoot, 'chore: pre-import baseline');
+  const baseSha = gitOut(targetRoot, ['rev-parse', 'HEAD']);
+  const mainBranch = gitOut(targetRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  gitOut(targetRoot, ['switch', '--orphan', 'local-prev']);
+  writeTree(targetRoot, previousFiles);
+  commitAll(targetRoot, 'chore: previous upstream snapshot');
+  gitOut(targetRoot, ['switch', mainBranch]);
+  writeTree(previousUpstream, previousFiles);
+  const importedFiles = {
+    'docs/guide.md': lines(
+      'Upstream heading line one',
+      'git fetch origin {development-branch}',
+      'adopter kept line stays',
+    ),
+    'config.json': '{"a":2}\n',
+    'added.md': lines('added by the new upstream'),
+    ...(secondPathOverlayLines.length > 0
+      ? { 'docs/second.md': lines('Second upstream heading line') }
+      : {}),
+  };
+  writeTree(newUpstream, importedFiles);
+  writeTree(targetRoot, {
+    ...importedFiles,
+    'adopter-own.md': lines('adopter file after the import'),
+  });
+  rmSync(join(targetRoot, 'removed.md'));
+  commitAll(targetRoot, 'chore: import the new upstream');
+  return {
+    targetRoot,
+    newUpstream,
+    previousUpstream,
+    baseSha,
+    importSha: gitOut(targetRoot, ['rev-parse', 'HEAD']),
+    cleanup: () => {
+      for (const dir of [targetRoot, newUpstream, previousUpstream]) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
+function overlayArgs(
+  fixture: OverlayFixture,
+  extra: string[] = [],
+  form: 'path' | 'ref' = 'path',
+): string[] {
+  return [
+    '--target-root',
+    fixture.targetRoot,
+    '--target-base-ref',
+    fixture.baseSha,
+    '--target-ref',
+    fixture.importSha,
+    '--upstream-path',
+    fixture.newUpstream,
+    ...(form === 'path'
+      ? ['--upstream-base-path', fixture.previousUpstream]
+      : ['--upstream-base-ref', 'local-prev']),
+    '--report-reverted-overlays',
+    ...extra,
+  ];
+}
+
+interface OverlayReport {
+  scanned: number;
+  results: unknown[];
+  counts: Record<string, number>;
+  revertedOverlays?: { path: string; lines: string[] }[];
+  overlayPathsCompared?: number;
+  overlayPathsSkipped?: number;
+}
+
+for (const form of ['path', 'ref'] as const) {
+  test(`CLI --report-reverted-overlays (--upstream-base-${form}) lists exactly the reverted overlay line and leaves results, counts and exit code unchanged`, (t) => {
+    const fixture = buildOverlayFixture(['ADOPTER overlay: pinned link note']);
+    t.after(fixture.cleanup);
+    const withMode = runCli(
+      overlayArgs(fixture, ['--format', 'json'], form),
+      fixture.targetRoot,
+    );
+    const withoutMode = runCli(
+      [
+        '--target-root',
+        fixture.targetRoot,
+        '--target-base-ref',
+        fixture.baseSha,
+        '--target-ref',
+        fixture.importSha,
+        '--upstream-path',
+        fixture.newUpstream,
+        '--format',
+        'json',
+      ],
+      fixture.targetRoot,
+    );
+    assert.equal(withMode.status, 1, withMode.stderr);
+    assert.equal(withoutMode.status, withMode.status);
+    const report = JSON.parse(withMode.stdout) as OverlayReport;
+    const plain = JSON.parse(withoutMode.stdout) as OverlayReport;
+    assert.deepEqual(report.revertedOverlays, [
+      { path: 'docs/guide.md', lines: ['ADOPTER overlay: pinned link note'] },
+    ]);
+    assert.equal(report.overlayPathsCompared, 1);
+    assert.equal(report.overlayPathsSkipped, 4);
+    assert.equal(
+      (report.overlayPathsCompared ?? 0) + (report.overlayPathsSkipped ?? 0),
+      report.scanned,
+    );
+    assert.deepEqual(report.results, plain.results);
+    assert.deepEqual(report.counts, plain.counts);
+    assert.equal(report.scanned, plain.scanned);
+    // Without the switch none of the three keys exists.
+    for (const key of [
+      'revertedOverlays',
+      'overlayPathsCompared',
+      'overlayPathsSkipped',
+    ]) {
+      assert.equal(
+        key in plain,
+        false,
+        `${key} must be absent without the switch`,
+      );
+    }
+  });
+}
+
+test('CLI --report-reverted-overlays table: section heading, cut and cap, and the compared line', (t) => {
+  const manyLines = Array.from(
+    { length: 22 },
+    (_, index) =>
+      `adopter overlay line number ${String(index + 1).padStart(2, '0')}`,
+  );
+  const longLine = `long overlay ${'y'.repeat(200)}`;
+  const fixture = buildOverlayFixture([longLine, ...manyLines]);
+  t.after(fixture.cleanup);
+  const table = runCli(overlayArgs(fixture), fixture.targetRoot);
+  assert.equal(table.status, 1, table.stderr);
+  const out = table.stdout.split('\n');
+  assert.ok(out.includes('reverted overlay candidates (advisory)'));
+  assert.ok(out.includes('  docs/guide.md'));
+  // Cut at exactly 160 characters, no suffix.
+  assert.ok(out.includes(`    ${longLine.slice(0, 160)}`));
+  assert.equal(Math.max(...out.map((line) => line.length)), 4 + 160);
+  assert.equal(out.includes(`    ${longLine.slice(0, 161)}`), false);
+  // 23 reverted lines: 20 are listed, the other 3 are counted.
+  assert.ok(out.includes('    adopter overlay line number 19'));
+  assert.equal(out.includes('    adopter overlay line number 20'), false);
+  assert.ok(out.includes('    ... and 3 more'));
+  assert.ok(out.includes('paths compared 1, skipped 4'));
+  // The JSON report carries every line, uncut and uncapped.
+  const json = runCli(
+    overlayArgs(fixture, ['--format', 'json']),
+    fixture.targetRoot,
+  );
+  const report = JSON.parse(json.stdout) as OverlayReport;
+  assert.deepEqual(report.revertedOverlays, [
+    { path: 'docs/guide.md', lines: [longLine, ...manyLines] },
+  ]);
+  // Without the switch the table has neither section nor line.
+  const plain = runCli(
+    [
+      '--target-root',
+      fixture.targetRoot,
+      '--target-base-ref',
+      fixture.baseSha,
+      '--target-ref',
+      fixture.importSha,
+      '--upstream-path',
+      fixture.newUpstream,
+    ],
+    fixture.targetRoot,
+  );
+  assert.equal(plain.stdout.includes('reverted overlay candidates'), false);
+  assert.equal(plain.stdout.includes('paths compared'), false);
+});
+
+test('CLI --report-reverted-overlays prints the compared line when nothing is reverted, and a base path that holds none of the compared paths compares 0', (t) => {
+  const fixture = buildOverlayFixture([]);
+  t.after(fixture.cleanup);
+  const clean = runCli(overlayArgs(fixture), fixture.targetRoot);
+  assert.match(
+    clean.stdout,
+    /reverted overlay candidates \(advisory\)\n {2}none\n/,
+  );
+  assert.match(clean.stdout, /^paths compared 1, skipped 4$/m);
+
+  const emptyBase = mkdtempSync(join(tmpdir(), 'verify-overlay-empty-'));
+  t.after(() => rmSync(emptyBase, { recursive: true, force: true }));
+  const args = overlayArgs(fixture, ['--format', 'json']);
+  args[args.indexOf('--upstream-base-path') + 1] = emptyBase;
+  const empty = runCli(args, fixture.targetRoot);
+  const report = JSON.parse(empty.stdout) as OverlayReport;
+  assert.equal(report.overlayPathsCompared, 0);
+  assert.equal(report.overlayPathsSkipped, report.scanned);
+  assert.deepEqual(report.revertedOverlays, []);
+});
+
+test('CLI --report-reverted-overlays prints the compared line even when no path was scanned', (t) => {
+  const fixture = buildOverlayFixture(['ADOPTER overlay: unreachable']);
+  t.after(fixture.cleanup);
+  const none = runCli(
+    overlayArgs(fixture, ['--path-prefix', 'no-such-directory']),
+    fixture.targetRoot,
+  );
+  assert.equal(none.status, 0, none.stderr);
+  assert.match(none.stdout, /^0 files compared$/m);
+  assert.match(none.stdout, /^paths compared 0, skipped 0$/m);
+  const json = runCli(
+    overlayArgs(fixture, [
+      '--path-prefix',
+      'no-such-directory',
+      '--format',
+      'json',
+    ]),
+    fixture.targetRoot,
+  );
+  const report = JSON.parse(json.stdout) as OverlayReport;
+  assert.equal(report.scanned, 0);
+  assert.equal(report.overlayPathsCompared, 0);
+  assert.equal(report.overlayPathsSkipped, 0);
+});
+
+test('CLI --upstream-remote qualifies --upstream-ref only, never --upstream-base-ref', (t) => {
+  const fixture = buildOverlayFixture(['ADOPTER overlay: pinned link note']);
+  t.after(fixture.cleanup);
+  // The new upstream is a repository fetched as remote `up`; the previous
+  // upstream is the local-only branch `local-prev`, which `up/local-prev`
+  // would not resolve.
+  const upstreamRepo = mkdtempSync(join(tmpdir(), 'verify-overlay-remote-'));
+  t.after(() => rmSync(upstreamRepo, { recursive: true, force: true }));
+  initTargetRepo(upstreamRepo);
+  writeTree(upstreamRepo, {
+    'docs/guide.md':
+      'Upstream heading line one\ngit fetch origin {development-branch}\nadopter kept line stays\n',
+  });
+  commitAll(upstreamRepo, 'chore: new upstream');
+  const upstreamBranch = gitOut(upstreamRepo, [
+    'rev-parse',
+    '--abbrev-ref',
+    'HEAD',
+  ]);
+  gitOut(fixture.targetRoot, ['remote', 'add', 'up', upstreamRepo]);
+  gitOut(fixture.targetRoot, ['fetch', '--quiet', 'up']);
+  const result = runCli(
+    [
+      '--target-root',
+      fixture.targetRoot,
+      '--target-base-ref',
+      fixture.baseSha,
+      '--target-ref',
+      fixture.importSha,
+      '--upstream-ref',
+      upstreamBranch,
+      '--upstream-remote',
+      'up',
+      '--upstream-base-ref',
+      'local-prev',
+      '--report-reverted-overlays',
+      '--path-prefix',
+      'docs',
+      '--format',
+      'json',
+    ],
+    fixture.targetRoot,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout) as OverlayReport;
+  assert.deepEqual(report.revertedOverlays, [
+    { path: 'docs/guide.md', lines: ['ADOPTER overlay: pinned link note'] },
+  ]);
+});
+
+test('CLI --report-reverted-overlays table lists every path, omits the remainder line at 20 lines or fewer, and cuts at code points', (t) => {
+  const astralLine = `astral overlay ${'\u{1F600}'.repeat(200)}`;
+  const twentyLines = Array.from(
+    { length: 20 },
+    (_, index) => `second path overlay ${String(index + 1).padStart(2, '0')}`,
+  );
+  const fixture = buildOverlayFixture(
+    ['first path overlay line', astralLine],
+    twentyLines,
+  );
+  t.after(fixture.cleanup);
+  const result = runCli(overlayArgs(fixture), fixture.targetRoot);
+  assert.equal(result.status, 1, result.stderr);
+  const out = result.stdout.split('\n');
+  const guide = out.indexOf('  docs/guide.md');
+  const second = out.indexOf('  docs/second.md');
+  assert.ok(guide >= 0 && second > guide, 'both paths are listed, in order');
+  assert.ok(out.includes('    first path overlay line'));
+  // Cut at 160 code points: the 15 characters of the prefix plus 145
+  // astral characters.
+  const cutLine = Array.from(astralLine).slice(0, 160).join('');
+  assert.equal(Array.from(cutLine).length, 160);
+  assert.ok(out.includes(`    ${cutLine}`));
+  assert.ok(out.includes('    second path overlay 20'));
+  // 20 and 2 lines are at or below the cap: no remainder line anywhere.
+  assert.equal(
+    out.some((line) => line.includes('... and')),
+    false,
+  );
+  assert.ok(out.includes('paths compared 2, skipped 4'));
+});
+
+test('CLI --report-reverted-overlays refuses a symlinked ancestor of --upstream-base-path', {
+  skip: process.platform === 'win32',
+}, (t) => {
+  // Creating a symlink needs elevated privilege or Developer Mode on
+  // Windows, which CI cannot assume -- the same guard idiom as the
+  // --upstream-path symlink test above.
+  const fixture = buildOverlayFixture(['ADOPTER overlay: pinned link note']);
+  t.after(fixture.cleanup);
+  const outside = mkdtempSync(join(tmpdir(), 'verify-overlay-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeTree(outside, { 'guide.md': 'external content outside the base\n' });
+  rmSync(join(fixture.previousUpstream, 'docs'), {
+    recursive: true,
+    force: true,
+  });
+  symlinkSync(outside, join(fixture.previousUpstream, 'docs'));
+  const result = runCli(overlayArgs(fixture), fixture.targetRoot);
+  assert.equal(result.status, 2, result.stdout);
+  assert.match(
+    result.stderr,
+    /an ancestor directory under --upstream-base-path is a symlink/,
+  );
+});
+
+test('CLI --report-reverted-overlays usage errors exit 2 with a message naming the flag and value', (t) => {
+  const fixture = buildOverlayFixture(['ADOPTER overlay: pinned link note']);
+  t.after(fixture.cleanup);
+  const base = [
+    '--target-root',
+    fixture.targetRoot,
+    '--target-base-ref',
+    fixture.baseSha,
+    '--target-ref',
+    fixture.importSha,
+    '--upstream-path',
+    fixture.newUpstream,
+  ];
+  const aFile = join(fixture.targetRoot, 'config.json');
+  const missingDir = join(fixture.targetRoot, 'no-such-directory');
+  const escapeRegExp = (text: string): string =>
+    text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const cases: { args: string[]; message: RegExp }[] = [
+    {
+      args: ['--report-reverted-overlays'],
+      message:
+        /--report-reverted-overlays requires exactly one of --upstream-base-path or --upstream-base-ref/,
+    },
+    {
+      args: [
+        '--report-reverted-overlays',
+        '--upstream-base-path',
+        'one-dir',
+        '--upstream-base-ref',
+        'one-ref',
+      ],
+      message:
+        /--upstream-base-path and --upstream-base-ref are mutually exclusive.*"one-dir".*"one-ref"/,
+    },
+    {
+      args: ['--upstream-base-path', 'one-dir'],
+      message:
+        /--upstream-base-path "one-dir" requires --report-reverted-overlays/,
+    },
+    {
+      args: ['--upstream-base-ref', 'one-ref'],
+      message:
+        /--upstream-base-ref "one-ref" requires --report-reverted-overlays/,
+    },
+    {
+      args: ['--report-reverted-overlays', '--upstream-base-path', missingDir],
+      message: new RegExp(
+        `--upstream-base-path does not exist: ${escapeRegExp(missingDir)}`,
+      ),
+    },
+    {
+      args: ['--report-reverted-overlays', '--upstream-base-path', aFile],
+      message: new RegExp(
+        `--upstream-base-path is not a directory: ${escapeRegExp(aFile)}`,
+      ),
+    },
+    {
+      args: [
+        '--report-reverted-overlays',
+        '--upstream-base-ref',
+        'no-such-ref',
+      ],
+      message: /--upstream-base-ref does not resolve to a commit: no-such-ref/,
+    },
+  ];
+  for (const { args, message } of cases) {
+    const result = runCli([...base, ...args], fixture.targetRoot);
+    assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}`);
+    assert.match(result.stderr, message);
+    assert.equal(result.stdout, '', 'a usage error must print no report');
+  }
+});
+
 test('CLI --help documents every declared flag and exits 0', () => {
   const result = runCli(['--help'], REPO_ROOT);
   assert.equal(result.status, 0);
@@ -1171,6 +1907,9 @@ test('CLI --help documents every declared flag and exits 0', () => {
     '--upstream-path',
     '--upstream-ref',
     '--upstream-remote',
+    '--upstream-base-path',
+    '--upstream-base-ref',
+    '--report-reverted-overlays',
     '--path-prefix',
     '--generated-dir',
     '--normalize-json-key',
