@@ -199,9 +199,12 @@ scope-fenced item, an Accepted item mid-fix
   `very-low` (Accept forced does not win); Medium or unknown, not at
   `high`; Low at every scored urgency. When `deferRelaxAtRounds` is set,
   apply the [wave gradient] first: only with `severity-tiered`; unset or
-  invalid means off (step 0); the step counts Copilot reviews exactly as
-  `deferAfterRounds` does. Clause: `urgency <level>; severity <tier>[,
-  Copilot <label>]`, plus `; step <k>` above step 0.
+  invalid means off (step 0); the step is how many thresholds are at or
+  below the PR's Copilot review count, counted as `deferAfterRounds`
+  counts it; from step 1 the safety class (see the section) never defers,
+  an exception to "never override"; `deferAfterRounds` is unchanged.
+  Clause: `urgency <level>; severity <tier>[, Copilot <label>]`, plus
+  `; step <k>` above step 0.
 
 Bundle one E5 pass's deferred items into one follow-up issue (E6; do
 not append). Each keeps an AC bullet, exactly one

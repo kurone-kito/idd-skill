@@ -1372,7 +1372,7 @@ review cycle.
 `critiqueLoop.deferRelaxAtRounds` adds an optional wave gradient to
 `severity-tiered`. The matrix above is the same at every review wave, and
 the only round-dependent trigger, `deferAfterRounds`, is Low-only, so
-nothing in the rule relaxed as a pull request accumulated review waves.
+the matrix itself never relaxed as a pull request accumulated review waves.
 
 Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter re-import
 of the v0.14.0 template (figures at head `25e3d5e`): 32 commits, 11
@@ -1414,7 +1414,9 @@ Low-tier finding still defers at step 0 as it does today and an absent
 field changes nothing. The safety class cites items 1, 2 and 4 of the
 needs-decision stop test and leaves out item 3, the instruction or helper
 contradiction, because most findings in an instruction repository would
-match it and the gradient would never act. The consequence to know: from
+match it and the gradient would never act. The exclusions govern the
+`deferByUrgency` trigger only; `deferAfterRounds` is unchanged, as the
+scope limits of issue `#3796` say. The consequence to know: from
 step 1 on, a Medium-tier finding of `high` urgency that rests on adopt-now
 condition (a), (b) or (c) but is not safety class defers to the bundled
 follow-up.

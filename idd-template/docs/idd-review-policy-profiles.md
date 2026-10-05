@@ -568,9 +568,11 @@ shape.
 
 This section is the full rule for the optional wave gradient of
 `critiqueLoop.deferByUrgency: "severity-tiered"`. The matrix there is the
-same at every review wave, so a pull request that keeps drawing review
-waves never gets cheaper to finish. The gradient relaxes the matrix in at
-most two steps as the pull request's review count grows. The
+same at every review wave. Only the separate round-count trigger,
+`critiqueLoop.deferAfterRounds`, depends on the wave, and it covers
+Low-severity items only, so Medium and High findings get no relief
+however many waves a pull request draws. The gradient relaxes the matrix
+in at most two steps as the pull request's review count grows. The
 review-triage file carries only a short pointer, so a session that does
 not read this section, and any configuration that leaves the field unset
 or invalid, behaves as it did before the gradient existed. The decision
@@ -624,7 +626,9 @@ data-destroying item, and the irreversible-by-follow-up item. Item 3, the
 instruction or helper contradiction, is deliberately not part of this
 class, because most findings in an instruction repository would match it
 and the gradient would never act. The safety class applies whatever
-`critiqueLoop.deferNeedsDecision` is set to.
+`critiqueLoop.deferNeedsDecision` is set to. These rules govern the
+`deferByUrgency` trigger only; the separate trigger
+`critiqueLoop.deferAfterRounds` is unchanged.
 
 **Step 0 is unchanged.** The exclusion above starts at step 1, not at step
 0: at step 0 the rule is exactly the rule without the gradient, so a
