@@ -359,6 +359,209 @@ these files together with the recorded profile decision:
 - Repository settings: confirm whether branch protection requires
   conversation resolution, because that setting can make unresolved
   acknowledged threads block regardless of the selected profile.
+- The [needs-decision deferral](#needs-decision-deferral) section below:
+  its record step resolves a deferred thread only as the selected profile
+  allows, so keep that step consistent with the recorded profile decision.
+
+## Needs-decision deferral
+
+This section is the full rule for the needs-decision route. Where review
+triage and review-fix stop for a person today, a session may instead
+defer a finding that needs a person's judgment to a follow-up issue and
+keep the pull request moving, when merging the pull request as it stands
+is safe. The instruction files carry only a short pointer at each stop,
+and each pointer ends with the existing stop, so a session that does not
+read this section behaves as it did before the route existed. The
+decision record is in the
+[design rationale](idd-design-rationale.md#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
+
+**Switch.** The route applies only while the resolved
+`critiqueLoop.deferNeedsDecision` is `"on"`, which is the default. The
+[customization guide](customization.md) states the resolution rule. A
+value of `"off"`, or any other value that rule does not honor, restores
+every stop below exactly as it stands.
+
+**Stop sites.** The route can replace these stops, and no others:
+
+- **S1, E5 judgment.**
+  `.github/instructions/idd-review-triage.instructions.md`, E5: an
+  inconclusive item from an actor without standing is routed to the
+  `Awaiting maintainer decision` hold. Standing means CODEOWNER, required
+  reviewer, Triage, Write, Maintain or Admin, the actor-permission cap's
+  set. E5 is also where a session unsure of a disposition would ask the
+  operator on the spot. A critique-pass finding that is inconclusive
+  stays under the cap and is Rejected with a reasoned reply, so it never
+  held.
+- **S2, E6 "Exception".**
+  `.github/instructions/idd-review-triage.instructions.md`, E6: a
+  CODEOWNER or required-reviewer source, and any inconclusive item, gets
+  that hold.
+- **S3, E10 hold.**
+  `.github/instructions/idd-review-fix.instructions.md`, convergence
+  guardrails: the no-progress hold, and the sentence that unresolved High
+  or Medium findings remain blockers until fixed or explicitly
+  redirected by a maintainer.
+- **S4, Tier 2 and Tier 3.**
+  `.github/instructions/idd-review-fix.instructions.md`: each tier ends
+  in a stop for a person to decide.
+
+**When it applies.** The route is available only when the session would
+otherwise hold for a person or ask the operator at S1, S2, S3 or S4, and
+every outstanding finding in that stop comes from an advisory bot, a
+critique pass, or a person holding none of the standing above, or is an
+E5 inconclusive item from such a source. If any outstanding finding in a
+stop comes from another source, the stop holds as it does today.
+
+**What counts.** At S1 and S2, a verified-true finding with one
+reasonable resolution, or with alternatives equivalent in observable
+behavior, is Accepted and fixed, as today. Defer only when two or more
+materially different resolutions exist that the claimed issue's
+acceptance criteria and the repository evidence do not rank, or when the
+claim cannot be verified because the check it needs has no route in E5's
+Verify-before-accept. A verified-true finding that an acceptance
+criterion of the claimed issue is unmet, or that reports a regression
+this pull request introduced, is Accepted and fixed and is never
+deferred: conditions (a) and (b) of the E5 Defer rule's adopt-now test
+still apply. At S3 and S4 the stop itself is the trigger, because the
+loop cannot land the fix. There the stop test below alone decides and the
+S1 and S2 carve-out in this paragraph does not apply, since Tier 3's
+open-ended gaps are the acceptance criterion itself and may be deferred.
+
+**Stop test.** Judge it assuming the finding is correct. Hold, as today
+(the existing hold comment and its resume condition, and the
+needs-decision claim release in
+`.github/instructions/idd-overview-appendix.instructions.md` when no
+session-side action remains), when merging the pull request as
+it stands would:
+
+1. leave the development branch's CI red or the pull request unmergeable;
+2. leave the defect the finding describes in claim, lock, merge-gate,
+   security or secret-handling, or data-destroying code or behavior, of
+   the loop or of the project;
+3. ship an instruction or helper contradiction that would misguide the
+   next session's agent; or
+4. be impossible to reverse in a follow-up pull request.
+
+Otherwise defer.
+
+**The deferral.** File one follow-up per distinct decision. Items that
+share one question share one follow-up, and a needs-decision item is
+never bundled with round-count or urgency deferrals. File it through the
+`issue-authoring` skill with the defer-source value
+`review-needs-decision` (the marker is
+`<!-- {markerPrefix}-authoring-defer-source: review-needs-decision -->`),
+in the shape that skill's contract specifies. For Tier 2, Tier 3 and E10
+the decision asked is concrete: accept the residual as a known
+limitation, or schedule the work. A Tier 2 deferral keeps the required
+behavior in place and ends only the stop. When the finding could not be
+verified, the reply names the unavailable check and the follow-up records
+the claim as unverified, so a valid high-severity report is never
+silently resolved.
+
+**Records.** A finding on a review thread gets the reply below, with the
+reply stamp described under "Hybrid review-reply identity" above, and
+then the thread is resolved (reply first, as `resolve-review-thread`
+does) only as the selected review-thread resolution profile allows. Where
+the profile does not allow resolving, the thread stays unresolved and F2
+holds it as that profile already does, so the stop stays in effect. A
+regular comment gets the reply only, as E6 says. A finding with no
+thread, such as an E10 critique-pass finding, needs no reply. For every
+deferral the pull request body's follow-up section names the follow-up,
+edited under E12's PR-body safeguards, as the record a person
+merging will read; the F3 gate counts the follow-up when text on the pull
+request names it, such as the body or a non-operational comment. No
+helper checks that the body's follow-up section lists every deferral.
+
+```text
+**Rejected** — deferred to follow-up issue #<n> (needs-decision; <check or choice that is open>): <reason>
+```
+
+**Cap.** The fourth distinct follow-up filed from one pull request holds
+as it does today. A reply that reuses an existing follow-up does not
+count, and the count is read from the pull request body's follow-up
+section, also after a crash-resume. This bounds over-deferral by a weak
+model and the backlog F3 searches (preventive; no observed incident yet).
+
+**Resume.** At S1 and S2 the deferral is one more Reject inside the
+triage pass: finish the remaining E6 items, then E7 and E8, as after any
+other Reject. At S3 and S4, continue at E11 after the record: E11 only
+checks the branch and E12 pushes only what is unpushed, and an E10 or
+Tier stop can leave unpushed E9 commits. Deferred findings leave the E10
+same-findings comparison. After a Tier 3 deferral, all outstanding gaps
+go in one follow-up and further findings of the same domain reuse it.
+
+**Recurrence.** First read this pull request's body follow-up section and
+its earlier replies for a follow-up naming the same finding: the same
+file area and substantive claim, as the resolved-thread duplicate
+pre-check defines it, or the same source comment. Then, because search
+indexing can lag, search open issues whose body carries the
+`review-needs-decision` marker and a sole `Refs` line naming the claimed
+issue, and that cite the same finding. On a match, reuse it; a
+crash-resume does the same, and appends the new thread link to the
+follow-up as a comment. A follow-up that is already closed means the
+decision was made, so the finding is judged afresh. F3's follow-up search
+fails closed at its result cap, which a growing backlog could reach
+(preventive; no observed incident yet).
+
+**Claimless.** A pull request with no claimed issue holds as it does
+today, because the follow-up needs a `Refs` line and a `Blocked by` line
+naming one.
+
+**Precedence.** If the E5 Defer rule already defers an item, it goes to
+that bundled follow-up and the route does not apply to it. For
+needs-decision items only, this route wins over E4's "Accept forced",
+E5's rule that a High item reaches Accepted only through
+Verify-before-accept, that rule's exclusions for an item on the
+awaiting-maintainer-decision hold and for an Accepted item mid-fix, and
+its bundling sentence. E6's "Reject now but should do eventually" stays
+for every other rejection. The route is a distinct rule, not a trigger of
+the E5 Defer rule: that rule's other exclusions (PATH B, scope-fenced
+items, and a CODEOWNER or required-reviewer source) stay, as "Not
+covered" lists, and its two triggers are unchanged.
+
+**Counting.** To count needs-decision deferrals alone, match the
+`(needs-decision;` clause in replies or search for issues carrying the
+marker. In the idd-skill source repository, `copilot-review-wave-audit`
+counts the reply as an ordinary deferral.
+
+**Not covered.** The route never applies to: a CODEOWNER or
+required-reviewer source (and any person holding Triage, Write, Maintain
+or Admin standing); `CHANGES_REQUESTED`; scope-fenced items; PATH B; the
+F3 merge holds; the CI, E15, E11 and branch-sync holds that wait for an
+operator. The lite profile's stops are also unchanged: the lite
+review-fix file keeps its stop-and-ask bullet and its steps as they are,
+because the lite profile never classifies or decides.
+
+**After a person decides.** The follow-up follows the existing
+needs-decision lifecycle: it waits under the needs-decision label
+(`labels.needsDecisionLabelName`, default `status:needs-decision`) until
+a person decides, and the decision is recorded on it. The needs-decision
+issues kurone-kito/idd-skill#3708 and kurone-kito/idd-skill#3497 show its
+shape.
+
+**Replay table.** Each case below is walked through the text above.
+
+| #  | Case                                                                                 | Outcome                                                                                      | Sentence applied                                   |
+| -- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| 1  | A bot finding with two unranked resolutions                                          | Defers when the stop test clears                                                             | What counts, deferral condition                    |
+| 2  | A verified-true bot finding with one resolution                                      | Accepted and fixed                                                                           | What counts, opening sentence                      |
+| 3  | An inconclusive bot finding                                                          | Defers when the stop test clears; the reply names the unavailable check                      | What counts, unverifiable claim; The deferral      |
+| 4  | An inconclusive critique-pass finding                                                | Stays Rejected with a reasoned reply                                                         | Stop sites, S1                                     |
+| 5  | A CODEOWNER thread                                                                   | Keeps the hold                                                                               | When it applies; Not covered                       |
+| 6  | An inconclusive item from a Write-standing collaborator                              | Keeps the E6 hold, no deferral                                                               | When it applies; Not covered                       |
+| 7  | A thread from a person without standing, with two unranked resolutions               | Defers when the stop test clears: reply, then resolve only where the selected profile allows | What counts, deferral condition; Records           |
+| 8  | A `CHANGES_REQUESTED` review                                                         | Keeps its path                                                                               | Not covered                                        |
+| 9  | A Tier 2 stop whose stop test clears                                                 | Defers                                                                                       | Stop test; The deferral                            |
+| 10 | A Tier 3 stop whose stop test clears, including a gap that is itself a criterion     | Defers; holds if the merged branch would be red                                              | What counts, S3 and S4 sentence; Stop test, item 1 |
+| 11 | An E10 no-progress hold whose stop test clears                                       | Defers                                                                                       | Stop test                                          |
+| 12 | `"off"` and `"OFF"` for the switch                                                   | Every stop is restored                                                                       | Switch                                             |
+| 13 | An unverifiable High-severity security claim                                         | Holds                                                                                        | Stop test, item 2                                  |
+| 14 | A finding whose defect is an instruction contradiction that would misguide the agent | Holds                                                                                        | Stop test, item 3                                  |
+| 15 | A finding whose merge as it stands would be irreversible in a follow-up pull request | Holds                                                                                        | Stop test, item 4                                  |
+| 16 | At S1 or S2, a verified-true finding that an acceptance criterion is unmet           | Accepted and fixed, never deferred                                                           | What counts, conditions (a) and (b)                |
+| 17 | A stop whose outstanding findings include a CODEOWNER's                              | Holds                                                                                        | When it applies                                    |
+| 18 | The fourth distinct follow-up on one pull request                                    | Holds                                                                                        | Cap                                                |
+| 19 | A claimless pull request                                                             | Holds                                                                                        | Claimless                                          |
 
 ## Selection Checklist
 
