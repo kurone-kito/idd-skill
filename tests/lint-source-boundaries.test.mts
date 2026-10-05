@@ -289,6 +289,179 @@ for (const { name, edit, expected } of VIOLATION_CASES) {
   });
 }
 
+const backtick = String.fromCharCode(96);
+const hiddenImportShapes: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a glob in a line comment followed by a later block-comment end',
+    source: (specifier) =>
+      `// schemas/*.schema.json\nimport value from '${specifier}';\n/** end */\n`,
+  },
+  {
+    name: 'a line-comment marker in a quoted string',
+    source: (specifier) =>
+      `const value = 'x//y'; const load = () => import('${specifier}');\n`,
+  },
+  {
+    name: 'a block-comment marker in a quoted string',
+    source: (specifier) =>
+      `const value = 'schemas/*.json';\nimport value from '${specifier}';\n/** end */\n`,
+  },
+  {
+    name: 'a block-comment marker in template text',
+    source: (specifier) =>
+      `const value = ${backtick}schemas/*.json${backtick};\nimport value from '${specifier}';\n/** end */\n`,
+  },
+];
+
+for (const { name, source } of hiddenImportShapes) {
+  test(`the node-import rule sees an import after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule sees an import after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+const markerImportSources: [string, string][] = [
+  [
+    'a quoted string',
+    `const marker = "x//y /* ' ${backtick}"; const load = () => import('left-pad');\nimport value from 'yaml';\n`,
+  ],
+  [
+    'template text',
+    [
+      'const marker = ',
+      backtick,
+      'x //y /* \' " ' + '\\',
+      backtick,
+      ' text',
+      backtick,
+      "; const load = () => import('left-pad');\nimport value from 'yaml';\n",
+    ].join(''),
+  ],
+  [
+    'a regular-expression literal',
+    [
+      'const marker = /[',
+      backtick,
+      "\"']/; const escaped = /[\\/\\\\]/; const load = () => import('left-pad');\nimport value from 'yaml';\n",
+    ].join(''),
+  ],
+];
+
+for (const [name, source] of markerImportSources) {
+  test(`comment markers and delimiters in ${name} leave later imports visible`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', source));
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+    assert.match(stderr, /left-pad/);
+  });
+}
+
+test('an import-looking line inside template text remains visible to the detector', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      `const value = ${backtick}text\nimport bare from 'yaml';\n${backtick};\n`,
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /yaml/);
+});
+
+test('line and block comments still hide import-looking text', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      "/* import bare from 'yaml'; */\n// import bare from 'left-pad';\n",
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 0, stderr);
+});
+
+test('the URL separator in a string does not hide a same-line dynamic import', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      'const url = "https://example.test/path"; const load = () => import("left-pad");\n',
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /left-pad/);
+});
+
+const unterminatedSources: [string, string][] = [
+  ['a block comment', '/* never closes'],
+  ['a template literal', 'const value = `never closes'],
+  ['a template interpolation', `const value = \`open \${ { nested: true }`],
+];
+
+for (const [name, unfinished] of unterminatedSources) {
+  test(`an unterminated ${name} reports partial node-import findings`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `import value from 'yaml';\n${unfinished}`),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr).sort(), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+      'NODE-IMPORT-BOUNDARY-INSPECTION src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+    assert.match(stderr, /unterminated/);
+  });
+
+  test(`an unterminated ${name} reports partial standalone-mirror findings`, () => {
+    const root = buildFixture((files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        `import value from './helper.mjs';\n${unfinished}`,
+      ),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr).sort(), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+      'STANDALONE-MIRROR-IMPORTS-INSPECTION scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+    assert.match(stderr, /unterminated/);
+  });
+}
+
 test('the gh-spawn exemptions stay narrow: only the two documented files may spawn gh', () => {
   const root = buildFixture((files) => {
     files.set(

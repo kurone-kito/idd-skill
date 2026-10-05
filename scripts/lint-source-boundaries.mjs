@@ -32,8 +32,9 @@
 //   from tools that skip binary files (#3340).
 //
 // A `<RULE-ID>-INSPECTION` violation means a rule could not finish: an
-// unreadable input, a failed `git ls-files`, or an inventory that came back
-// empty (a rule that inspects nothing would otherwise pass vacuously).
+// unreadable input, a failed `git ls-files`, an empty inventory (a rule that
+// inspects nothing would otherwise pass vacuously), or malformed source that
+// leaves a block comment, template literal, or template interpolation open.
 //
 // Imports only `node:` builtins plus two sibling helpers that do the same,
 // makes no GitHub call, and never writes. The one subprocess is a local,
@@ -58,35 +59,234 @@ export const NO_NUL_BYTES = 'NO-NUL-BYTES';
 export function isRelativeSpecifier(specifier) {
   return specifier.startsWith('./') || specifier.startsWith('../');
 }
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return',
+  'typeof',
+  'case',
+  'in',
+  'of',
+  'delete',
+  'void',
+  'instanceof',
+  'new',
+  'do',
+  'else',
+  'yield',
+  'await',
+]);
 /**
- * Extracts the module specifier of every static `import` / `export … from`
- * declaration in `source` — including side-effect `import 'x'` and
- * `export * from 'x'` / `export { a } from 'x'` re-exports — plus every
- * dynamic `import('x')` call (with or without a second import-attributes
- * argument, e.g. `import('x', { with: { type: 'json' } })`, and whether the
- * specifier is quoted or written as a no-substitution template literal,
- * e.g. `` import(`x`) ``), while ignoring anything that appears only inside
- * a `//` or `/* … *\/`-style comment.
- *
- * The clause between the keyword and the specifier is restricted to the
- * characters an import/export clause can actually contain (identifiers,
- * commas, `*`, braces, whitespace). This is deliberately a *positive* class
- * rather than "anything but a quote or semicolon": a plain `export function
- * f(x) {` or `export const x = 'literal';` contains a `(` or `=` before any
- * quote, which this class excludes, so scanning stops there instead of
- * misreading an unrelated string literal deeper in the function body as an
- * import specifier.
- *
- * The dynamic-import pattern's template-literal branch excludes `$` from
- * the backtick-delimited content, which rejects `${…}` interpolation (an
- * expression, not a static specifier) while still matching every realistic
- * no-substitution specifier — no valid `node:` builtin, relative path, or
- * npm package name contains a literal `$`.
+ * Replaces one comment with whitespace without changing offsets or line
+ * boundaries. Keeping a separator prevents tokens on either side of a
+ * comment from being joined by the scanner's existing import patterns.
  */
-export function extractImportSpecifiers(source) {
-  const withoutComments = source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+function maskComment(output, start, end) {
+  for (let index = start; index < end; index += 1) {
+    if (output[index] !== '\n' && output[index] !== '\r') {
+      output[index] = ' ';
+    }
+  }
+}
+/**
+ * A `/` starts a regular-expression literal after expression-start tokens,
+ * including the keywords that introduce an expression. This mirrors the
+ * conservative heuristic used by the local explicit-any scanner while
+ * treating `/` itself as an operator, so a division followed by a regex is
+ * recognized too.
+ */
+function regexCanStartAfter(lastCodeChar, lastWord) {
+  if (lastCodeChar === '') {
+    return true;
+  }
+  if (REGEX_PRECEDING_KEYWORDS.has(lastWord)) {
+    return true;
+  }
+  return !/[\w$)\]'"`]/.test(lastCodeChar);
+}
+/**
+ * Masks comments only in code. Template text, strings, and regular
+ * expressions are copied verbatim because the import patterns need
+ * quoted specifiers and the current detector intentionally sees
+ * import-looking lines inside template text.
+ */
+function scanComments(source) {
+  const output = source.split('');
+  function scanTemplate(start) {
+    let index = start + 1;
+    while (index < source.length) {
+      const ch = source[index];
+      const next = source[index + 1];
+      if (ch === '\\') {
+        index += index + 1 < source.length ? 2 : 1;
+        continue;
+      }
+      if (ch === '`') {
+        return { index: index + 1 };
+      }
+      if (ch === '$' && next === '{') {
+        const interpolation = scanCode(index + 2, true);
+        if (interpolation.inspectionError) {
+          return interpolation;
+        }
+        index = interpolation.index;
+        continue;
+      }
+      index += 1;
+    }
+    return {
+      index,
+      inspectionError: 'unterminated template literal',
+    };
+  }
+  function scanCode(start, interpolation) {
+    let index = start;
+    let braceDepth = 0;
+    let lastCodeChar = '';
+    let lastWord = '';
+    function recordCodeChar(ch) {
+      if (/\s/.test(ch)) {
+        return;
+      }
+      lastCodeChar = ch;
+      lastWord = /[A-Za-z0-9_$]/.test(ch) ? lastWord + ch : '';
+    }
+    function recordLiteral(end) {
+      lastCodeChar = end;
+      lastWord = '';
+    }
+    while (index < source.length) {
+      const ch = source[index];
+      const next = source[index + 1];
+      if (interpolation && ch === '}') {
+        if (braceDepth === 0) {
+          return { index: index + 1 };
+        }
+        braceDepth -= 1;
+        recordCodeChar(ch);
+        index += 1;
+        continue;
+      }
+      if (ch === '/' && next === '/') {
+        let end = index + 2;
+        while (
+          end < source.length &&
+          source[end] !== '\n' &&
+          source[end] !== '\r'
+        ) {
+          end += 1;
+        }
+        maskComment(output, index, end);
+        index = end;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        const close = source.indexOf('*/', index + 2);
+        if (close < 0) {
+          maskComment(output, index, source.length);
+          return {
+            index: source.length,
+            inspectionError: 'unterminated block comment',
+          };
+        }
+        const end = close + 2;
+        maskComment(output, index, end);
+        index = end;
+        continue;
+      }
+      if (ch === '/' && regexCanStartAfter(lastCodeChar, lastWord)) {
+        let end = index + 1;
+        let inCharacterClass = false;
+        let closed = false;
+        while (end < source.length) {
+          const regexChar = source[end];
+          if (regexChar === '\n' || regexChar === '\r') {
+            break;
+          }
+          if (regexChar === '\\') {
+            if (source[end + 1] === '\n' || source[end + 1] === '\r') {
+              break;
+            }
+            end += end + 1 < source.length ? 2 : 1;
+            continue;
+          }
+          if (regexChar === '[' && !inCharacterClass) {
+            inCharacterClass = true;
+            end += 1;
+            continue;
+          }
+          if (regexChar === ']' && inCharacterClass) {
+            inCharacterClass = false;
+            end += 1;
+            continue;
+          }
+          if (regexChar === '/' && !inCharacterClass) {
+            end += 1;
+            while (/[A-Za-z]/.test(source[end] ?? '')) {
+              end += 1;
+            }
+            closed = true;
+            break;
+          }
+          end += 1;
+        }
+        index = end;
+        recordLiteral(closed ? 'x' : '/');
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        let end = index + 1;
+        while (end < source.length) {
+          const stringChar = source[end];
+          if (stringChar === ch) {
+            end += 1;
+            break;
+          }
+          if (stringChar === '\n' || stringChar === '\r') {
+            break;
+          }
+          if (stringChar === '\\') {
+            const escaped = source[end + 1];
+            if (escaped === '\r' && source[end + 2] === '\n') {
+              end += 3;
+            } else if (escaped !== undefined) {
+              end += 2;
+            } else {
+              end += 1;
+            }
+            continue;
+          }
+          end += 1;
+        }
+        index = end;
+        recordLiteral(ch);
+        continue;
+      }
+      if (ch === '`') {
+        const template = scanTemplate(index);
+        if (template.inspectionError) {
+          return template;
+        }
+        index = template.index;
+        recordLiteral('`');
+        continue;
+      }
+      if (interpolation && ch === '{') {
+        braceDepth += 1;
+      }
+      recordCodeChar(ch);
+      index += 1;
+    }
+    return interpolation
+      ? {
+          index,
+          inspectionError: 'unterminated template interpolation',
+        }
+      : { index };
+  }
+  const code = scanCode(0, false);
+  return { text: output.join(''), inspectionError: code.inspectionError };
+}
+function scanImportSpecifiers(source) {
+  const comments = scanComments(source);
   const clause = '[A-Za-z0-9_$,\\s*{}]*?';
   const patterns = [
     new RegExp(
@@ -100,13 +300,18 @@ export function extractImportSpecifiers(source) {
     // literal (backticks, no `$`) as well as a quoted string.
     /\bimport\s*\(\s*(?:['"]([^'"]+)['"]|`([^`$]*)`)\s*(?:,|\))/g,
   ];
-  return patterns.flatMap((pattern) =>
-    [...withoutComments.matchAll(pattern)]
+  const specifiers = patterns.flatMap((pattern) =>
+    [...comments.text.matchAll(pattern)]
       .map((match) => match[1] ?? match[2])
       .filter((specifier) => specifier !== undefined),
   );
+  return { specifiers, inspectionError: comments.inspectionError };
+}
+export function extractImportSpecifiers(source) {
+  return scanImportSpecifiers(source).specifiers;
 }
 /** Specifiers in `source` that are neither a `node:` builtin nor relative. */
+// audit:ignore-dead-export: preserve the public filter API while rule callers use the richer scan result for inspection diagnostics (#3775)
 export function findBareSpecifiers(source) {
   return extractImportSpecifiers(source).filter(
     (specifier) =>
@@ -114,6 +319,7 @@ export function findBareSpecifiers(source) {
   );
 }
 /** Specifiers in `source` that are not a `node:` builtin (relative ones too). */
+// audit:ignore-dead-export: preserve the public filter API while rule callers use the richer scan result for inspection diagnostics (#3775)
 export function findNonNodeSpecifiers(source) {
   return extractImportSpecifiers(source).filter(
     (specifier) => !specifier.startsWith('node:'),
@@ -306,7 +512,11 @@ export function checkNodeImportBoundary(root) {
     if (text === null) {
       continue;
     }
-    const bare = findBareSpecifiers(text);
+    const scanned = scanImportSpecifiers(text);
+    const bare = scanned.specifiers.filter(
+      (specifier) =>
+        !specifier.startsWith('node:') && !isRelativeSpecifier(specifier),
+    );
     if (bare.length > 0) {
       violations.push(
         violation(
@@ -316,6 +526,15 @@ export function checkNodeImportBoundary(root) {
             `adopters (package-manager / ephemeral-npx profiles, no ` +
             `node_modules) do not break; found bare specifier(s): ` +
             bare.join(', '),
+        ),
+      );
+    }
+    if (scanned.inspectionError) {
+      violations.push(
+        inspectionViolation(
+          NODE_IMPORT_BOUNDARY,
+          path,
+          scanned.inspectionError,
         ),
       );
     }
@@ -379,7 +598,10 @@ export function checkStandaloneMirrorImports(root) {
     if (text === null) {
       continue;
     }
-    const nonNode = findNonNodeSpecifiers(text);
+    const scanned = scanImportSpecifiers(text);
+    const nonNode = scanned.specifiers.filter(
+      (specifier) => !specifier.startsWith('node:'),
+    );
     if (nonNode.length > 0) {
       violations.push(
         violation(
@@ -388,6 +610,15 @@ export function checkStandaloneMirrorImports(root) {
           `sync pair "${id}" must stay self-contained (Node built-ins only) ` +
             `so the idd-template/scripts/ mirror runs standalone; found: ` +
             nonNode.join(', '),
+        ),
+      );
+    }
+    if (scanned.inspectionError) {
+      violations.push(
+        inspectionViolation(
+          STANDALONE_MIRROR_IMPORTS,
+          source,
+          scanned.inspectionError,
         ),
       );
     }
