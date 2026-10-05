@@ -635,6 +635,22 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after an object literal at interpolation start',
+    source: (specifier) =>
+      `const value = ${backtick}\${{} / /* import('__SPECIFIER__') */ 2}${backtick};\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function expression on a binary-operator right side',
+    source: (specifier) =>
+      `const value = condition && function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a private property named return',
     source: (specifier) =>
       `class Example { #return = 1; read() { return this.#return / /* import('__SPECIFIER__') */ 2; } }\n`.replace(
@@ -828,6 +844,29 @@ test('a block comment preserves the break-label context before a regex statement
   ]);
   assert.match(mirrorResult.stderr, /\.\/helper\.mjs/);
 });
+
+for (const [rule, filePath, specifier] of [
+  ['node-import rule', 'src/main.mts', 'yaml'],
+  ['standalone-mirror rule', 'scripts/mirror.mjs', './helper.mjs'],
+] as const) {
+  test(`${rule} preserves restricted-statement context after a Unicode break label`, () => {
+    const source = [
+      'π: {',
+      '  break π',
+      '  /[/*]/;',
+      '}',
+      `import bare from '${specifier}'; /* closes any misread regex comment */`,
+      '',
+    ].join('\n');
+    const root = buildFixture((files) => files.set(filePath, source));
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.match(
+      stderr,
+      rule === 'node-import rule' ? /yaml/ : /\.\/helper\.mjs/,
+    );
+  });
+}
 
 for (const [name, specifier] of [
   ['node-import rule', 'yaml'],

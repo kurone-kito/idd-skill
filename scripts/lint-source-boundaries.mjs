@@ -88,6 +88,7 @@ const CONTROL_FLOW_PAREN_KEYWORDS = new Set([
   'catch',
 ]);
 const UNICODE_IDENTIFIER_PART = /(?:[$\p{ID_Continue}]|\u200c|\u200d)/u;
+const UNICODE_IDENTIFIER_START = /(?:[$_\p{ID_Start}])/u;
 const BLOCK_PRECEDING_KEYWORDS = new Set(['else', 'do']);
 const RESTRICTED_STATEMENT_KEYWORDS = new Set([
   'break',
@@ -138,6 +139,39 @@ function isIdentifierPartAt(source, index) {
   return (
     codePoint !== undefined &&
     UNICODE_IDENTIFIER_PART.test(String.fromCodePoint(codePoint))
+  );
+}
+/** True when the code point at `index` can start an ECMAScript identifier. */
+function isIdentifierStartAt(source, index) {
+  if (source[index] === '\\') {
+    const unicodeEscape = source
+      .slice(index)
+      .match(/^\\u(?:\{([0-9a-f]{1,6})\}|([0-9a-f]{4}))/i);
+    if (unicodeEscape) {
+      const codePoint = Number.parseInt(
+        unicodeEscape[1] ?? unicodeEscape[2],
+        16,
+      );
+      if (codePoint <= 0x10ffff) {
+        return UNICODE_IDENTIFIER_START.test(String.fromCodePoint(codePoint));
+      }
+    }
+  }
+  let codePointStart = index;
+  const currentCodeUnit = source.charCodeAt(index);
+  const previousCodeUnit = source.charCodeAt(index - 1);
+  if (
+    currentCodeUnit >= 0xdc00 &&
+    currentCodeUnit <= 0xdfff &&
+    previousCodeUnit >= 0xd800 &&
+    previousCodeUnit <= 0xdbff
+  ) {
+    codePointStart -= 1;
+  }
+  const codePoint = source.codePointAt(codePointStart);
+  return (
+    codePoint !== undefined &&
+    UNICODE_IDENTIFIER_START.test(String.fromCodePoint(codePoint))
   );
 }
 /**
@@ -268,8 +302,7 @@ function scanComments(source) {
         return interpolation;
       }
       return (
-        '=([,!?:'.includes(lastCodeChar) ||
-        lastCodeChar === '>' ||
+        '=([,!?:+-*/%&|^<>~'.includes(lastCodeChar) ||
         (!lastWordIsPropertyName &&
           [
             'case',
@@ -281,6 +314,9 @@ function scanComments(source) {
             'void',
             'await',
             'yield',
+            'in',
+            'of',
+            'instanceof',
           ].includes(lastWord))
       );
     }
@@ -320,15 +356,24 @@ function scanComments(source) {
       const previousCodeChar = lastCodeChar;
       const previousCodeCharIsIdentifierPart = lastCodeCharIsIdentifierPart;
       if (pendingRestrictedStatement !== null) {
+        const isBreakOrContinue =
+          pendingRestrictedStatement === 'break' ||
+          pendingRestrictedStatement === 'continue';
+        const isRestrictedStatementLabelStart =
+          /[A-Za-z_$]/.test(ch) || isIdentifierStartAt(source, sourceIndex);
+        const isIdentifierPart =
+          /[A-Za-z0-9_$]/.test(ch) || isIdentifierPartAt(source, sourceIndex);
         if (
-          (pendingRestrictedStatement === 'break' ||
-            pendingRestrictedStatement === 'continue') &&
+          isBreakOrContinue &&
           wordBoundary &&
-          /[A-Za-z_$]/.test(ch) &&
+          isRestrictedStatementLabelStart &&
           !restrictedStatementLabelConsumed
         ) {
           restrictedStatementLabelConsumed = true;
-        } else if (ch === ';' || !/[A-Za-z0-9_$]/.test(ch)) {
+        } else if (
+          ch === ';' ||
+          !(isBreakOrContinue ? isIdentifierPart : /[A-Za-z0-9_$]/.test(ch))
+        ) {
           pendingRestrictedStatement = null;
           restrictedStatementLabelConsumed = false;
         }
@@ -566,7 +611,8 @@ function scanComments(source) {
       if (ch === '{') {
         const startsObjectLiteral =
           !controlFlowClosingParenthesis &&
-          (lastCodeChar === '=' ||
+          ((interpolation && lastCodeChar === '') ||
+            lastCodeChar === '=' ||
             lastCodeChar === '(' ||
             lastCodeChar === '[' ||
             lastCodeChar === ',' ||
