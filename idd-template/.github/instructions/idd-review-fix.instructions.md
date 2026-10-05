@@ -76,10 +76,11 @@ Convergence guardrails:
   `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes (default
   `3`) without progress, stop the auto-loop: post a hold comment
   summarizing the repeated findings and attempted fixes, and wait for a
-  maintainer decision.
+  maintainer decision. This hold stands unless the
+  [needs-decision route] applies.
 - Do not use this stop condition to bypass serious issues: unresolved
   High/Medium findings remain blockers until fixed or explicitly
-  redirected by a maintainer.
+  redirected by a maintainer or deferred under the needs-decision route.
 - If the critique pass reports zero issues, proceed to E11.
 
 **No confidence exception.** Fix scope or confidence never excuses
@@ -117,7 +118,8 @@ actionable manual-recovery guidance, rather than a second redesign —
 any part of the mechanism's behavior, check the issue's acceptance
 criteria and any established external contract for whether that
 behavior was actually required; if so, stop for a maintainer decision
-instead of dropping it to converge review. Worked example: issue
+instead of dropping it to converge review. That stop stands unless the
+[needs-decision route] applies. Worked example: issue
 kurone-kito/idd-skill#2223 (PR kurone-kito/idd-skill#2389); see
 [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples).
 
@@ -135,7 +137,8 @@ mechanism-simplification precondition, since there is no mechanism
 safe to remove: once several rounds each keep surfacing a genuinely
 new, in-scope spec-coverage gap rather than repeating one, list each
 outstanding gap with its evidence, and the round count, in a hold
-comment and stop for a maintainer decision. Once a maintainer decision
+comment and stop for a maintainer decision. That stop stands unless the
+[needs-decision route] applies. Once a maintainer decision
 accepts the residual gaps as a known limitation, record the decision
 and close out the
 finding the same way this workflow already disposes of any review
@@ -486,3 +489,5 @@ digest with `Phase: E15 hold`, the failing/missing checks in
 `Open blockers`, and the maintainer/rerun expectation in `Next action`.
 On CI success, do not edit the digest before returning to E1 — let the
 next E1/F pass refresh review currency first.
+
+[needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral

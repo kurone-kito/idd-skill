@@ -125,6 +125,10 @@ through the CODEOWNER/required-reviewer AMD hold (E6) instead of
 `Rejected`, using E6's marker (a critique-pass finding stays under
 the unchanged cap above).
 
+If E5 would hold for a person or ask the operator, the
+[needs-decision route] may defer the item instead; otherwise that hold
+stands.
+
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
 Before verification above, check whether a new PATH B item — a review
 thread or regular comment (E6 supports both sources) — matches an entry
@@ -229,7 +233,8 @@ reviewer feedback:
   Reply using the format:
   `**Awaiting maintainer decision** — {your reasoning}` (name the
   unavailable check when inconclusive) and wait for the maintainer's
-  response.
+  response. For an inconclusive item from a source without standing, the
+  [needs-decision route] may apply first; otherwise this hold stands.
 - After posting your reply, **immediately resolve the thread** — except
   for `**Awaiting maintainer decision**`. When helper runtime is enabled,
   the profile-selected resolve-review-thread command (`--pr <number>
@@ -648,3 +653,5 @@ isn't recognized, so #2125's override doesn't fire (recognized
 replies are unaffected). A repeating `missingThreads` entry that's a
 no-new-content advisory-bot reply needs a hold comment; stop instead
 of re-posting the disposition (#3324).
+
+[needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral
