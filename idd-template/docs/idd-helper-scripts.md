@@ -2377,8 +2377,9 @@ is a `packageManagerOnlyHelpers` entry in the runtime manifest, currently
 limited to `verify-import-mirror` under the `package-manager` profile; it is
 not a general `node_modules` invocation form and must not be used by
 `ephemeral-npx` or Yarn Plug'n'Play.
-`tests/helper-invocation-profile.test.mts` enforces both rules
-mechanically.
+`tests/helper-invocation-profile.test.mts` enforces the first two
+rules mechanically, and `tests/repository-inventory-audit.test.mts`
+enforces the third rule (`unpointed-source-form`).
 
 To switch profiles later, rerun the manifest with both
 `--profile <target-profile>` and `--from-profile <current-profile>`. The

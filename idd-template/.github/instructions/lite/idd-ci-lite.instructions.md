@@ -44,8 +44,8 @@ CI-polling instructions instead of this file.
 1. Resolve policy: `node scripts/ci-wait-policy.mjs` (append
    `--run-id <run-id>` — preferred, derives the rerun budget from
    `run_attempt` — or `--rerun-count <count>` as a manual fallback).
-   Resolve the package-manager / ephemeral-npx equivalent from
-   `docs/idd-helper-scripts.md`. This helper already resolves
+   Resolve each `node scripts/<h>.mjs` to its profile-selected form
+   via `docs/idd-helper-scripts.md`. This helper already resolves
    `ciWait.*` from `.github/idd/config.json` and emits the final
    `runningTimeout` / `generationTimeout` / `rerunPolicy` values
    directly — never read that config file yourself.

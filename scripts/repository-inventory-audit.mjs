@@ -517,6 +517,7 @@ export const CHECK_FAMILIES = [
   'helper-cli-migration',
   'help-flag-coverage',
   'manifest-ledgers',
+  'unpointed-source-form',
 ];
 function checkRepositoryInventory(root, out) {
   const packageText = readText(root, 'package.json', out);
@@ -1339,6 +1340,154 @@ function checkManifestLedgers(root, out) {
     );
   }
 }
+// Regex that finds `node scripts/<h>.mjs` allowing a line-wrap inside the
+// node invocation (the wrap occurs between `node` and `scripts/`).
+const UNPOINTED_INVOCATION_RE = /\bnode[ \t\r\n]+scripts\/([a-z0-9-]+\.mjs)\b/g;
+/**
+ * Strip HTML comments from prose text.  A `<!--` opener inside an inline
+ * code span (backtick pair) or inside a fenced code block does NOT start
+ * a comment — those cases are handled by the caller, which passes only
+ * prose runs with fenced blocks kept separate.
+ *
+ * Strategy: walk character-by-character, treating backtick pairs as
+ * opaque spans and `<!-- … -->` outside them as stripped ranges.
+ */
+function stripHtmlComments(text) {
+  let result = '';
+  let index = 0;
+  while (index < text.length) {
+    if (text[index] === '`') {
+      // Inline code span: find the matching closing backtick.
+      const close = text.indexOf('`', index + 1);
+      if (close === -1) {
+        result += text.slice(index);
+        break;
+      }
+      result += text.slice(index, close + 1);
+      index = close + 1;
+    } else if (text.startsWith('<!--', index)) {
+      const end = text.indexOf('-->', index + 4);
+      if (end === -1) {
+        // Unterminated comment — treat rest as stripped.
+        break;
+      }
+      index = end + 3;
+    } else {
+      result += text[index];
+      index += 1;
+    }
+  }
+  return result;
+}
+/**
+ * Split a Markdown file into blocks.  Fenced code blocks are kept intact
+ * (opener + body + closer as one block).  Everything else is split on
+ * one-or-more blank lines.
+ */
+function splitIntoBlocks(content) {
+  const blocks = [];
+  const lines = content.split(/\r?\n/);
+  let inFence = false;
+  let currentLines = [];
+  function flushProse() {
+    const text = currentLines.join('\n').trim();
+    if (text) blocks.push({ isFence: false, text });
+    currentLines = [];
+  }
+  for (const line of lines) {
+    const fenceMatch = /^\s*```/.test(line);
+    if (!inFence && fenceMatch) {
+      flushProse();
+      inFence = true;
+      currentLines.push(line);
+    } else if (inFence) {
+      currentLines.push(line);
+      if (fenceMatch && currentLines.length > 1) {
+        // closing fence
+        blocks.push({ isFence: true, text: currentLines.join('\n') });
+        currentLines = [];
+        inFence = false;
+      }
+    } else {
+      // prose
+      if (/^\s*$/.test(line)) {
+        flushProse();
+      } else {
+        currentLines.push(line);
+      }
+    }
+  }
+  flushProse();
+  return blocks;
+}
+/**
+ * Return true if the text contains the word `profile-selected` outside
+ * of HTML comments.  For prose blocks, we strip HTML comments first;
+ * for fenced blocks, `<!--` does not start a comment, so we check as-is.
+ */
+function hasPointer(block) {
+  const text = block.isFence ? block.text : stripHtmlComments(block.text);
+  return text.includes('profile-selected');
+}
+/**
+ * For a single instruction file, emit `unpointed-source-form` violations:
+ * any non-exempt bare `node scripts/<h>.mjs` invocation that lacks a
+ * `profile-selected` pointer before it in the file OR in the same
+ * paragraph/fenced block.
+ */
+export function checkUnpointedSourceFormFile(filePath, content, out) {
+  const blocks = splitIntoBlocks(content);
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+    const block = blocks[blockIndex];
+    if (block === undefined) continue;
+    // Collect all non-exempt invocations in this block.
+    for (const match of block.text.matchAll(UNPOINTED_INVOCATION_RE)) {
+      const script = `scripts/${match[1]}`;
+      // Skip exempt scripts.
+      if (
+        Object.hasOwn(DOGFOOD_ONLY_TOOLS, script) ||
+        Object.hasOwn(INTERNAL_ENTRY_REASONS, script)
+      )
+        continue;
+      // Check whether there is a pointer:
+      // 1. In any earlier block in the file.
+      const pointerBefore = blocks
+        .slice(0, blockIndex)
+        .some((b) => hasPointer(b));
+      if (pointerBefore) continue;
+      // 2. In the same block (later text counts when in same paragraph/fence).
+      if (hasPointer(block)) continue;
+      // No pointer found — violation.
+      add(
+        out,
+        'unpointed-source-form',
+        filePath,
+        `bare node invocation of ${script} has no preceding profile-selected pointer`,
+      );
+      // Report at most one violation per file to avoid duplicate noise.
+      return;
+    }
+  }
+}
+/**
+ * Check all instruction files (both source-repo and idd-template) for
+ * bare `node scripts/<h>.mjs` invocations that lack a `profile-selected`
+ * pointer.  Files under `docs/` are explicitly excluded.
+ */
+function checkUnpointedSourceForm(root, out) {
+  const directories = [
+    '.github/instructions',
+    'idd-template/.github/instructions',
+  ];
+  const paths = directories.flatMap((directory) =>
+    walk(root, directory, out).filter((path) => path.endsWith('.md')),
+  );
+  for (const path of paths) {
+    const content = readText(root, path, out);
+    if (content === null) continue;
+    checkUnpointedSourceFormFile(path, content, out);
+  }
+}
 export function collectRepositoryInventoryViolations(
   repositoryRoot,
   selectedChecks = CHECK_FAMILIES,
@@ -1370,6 +1519,8 @@ export function collectRepositoryInventoryViolations(
   if (selected.has('helper-cli-migration')) checkHelperCliMigration(root, out);
   if (selected.has('help-flag-coverage')) checkHelpFlagCoverage(root, out);
   if (selected.has('manifest-ledgers')) checkManifestLedgers(root, out);
+  if (selected.has('unpointed-source-form'))
+    checkUnpointedSourceForm(root, out);
   return sortViolations(out);
 }
 function parseArgs(args) {

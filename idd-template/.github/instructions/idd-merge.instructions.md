@@ -327,9 +327,10 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    **Mandatory apply decision tree** — follow this sequence; no path
    may exit without a recorded reason when cleanup candidates exist. In
-   the idd-skill source repository, run the helper in dry-run mode
-   first; in adopter repositories, skip to the GraphQL fallback below
-   unless the helper scripts were explicitly installed.
+   the idd-skill source repository, run the profile-selected helper form
+   from `docs/idd-helper-scripts.md` in dry-run mode first; in adopter
+   repositories, skip to the GraphQL fallback below unless the helper
+   scripts were explicitly installed.
 
    ```sh
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table

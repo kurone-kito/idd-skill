@@ -66,7 +66,7 @@ If stalled-session routing returns hold/inconclusive, stop.
   agent's correct action is to report the stalled-claim evidence back,
   never to author or post the `forced-handoff` marker itself. Where the
   repository vends a force-handoff helper, hand the operator a
-  concrete, runnable invocation resolved for its configured profile
+  concrete, runnable invocation of the profile-selected form
   from `docs/idd-helper-scripts.md` (for example
   `node scripts/force-handoff.mjs` under `vendored-node`, or
   `npm run idd:force-handoff` under `package-manager`); under

@@ -2233,3 +2233,39 @@ prints, trace every claimed field name to its literal
 site in the current source — never infer it from a type name, an
 interface field, or a local variable name that merely looks like it
 could be the same thing.
+
+### Require a profile-selected pointer before helper commands
+
+Observed 2026-09-12 and 2026-10-05 on kurone-kito/setup.ubuntu: pull
+request #162 patched two instruction files (the appendix and
+suitability) and three docs to add profile-selected forms, but the
+v0.14.0 re-import (#201) erased those patches (at the base commit the
+appendix had 3 and suitability 2 occurrences of `profile-selected`, at
+the import commit 0). Seven review threads then reported bare commands:
+the appendix provider-outage block (two threads, one per bot), the
+suitability close-execute block, three lite files (merge-handoff, resume,
+resume-stall), and one thread on the F4 and stall-recovery commands
+(`idd-merge`, `idd-resume-stall`). An adopter on `ephemeral-npx` had to
+fix this by hand twice (#154 tracked and fixed as #162, and #201).
+
+The `unpointed-source-form` audit rule requires any non-exempt bare
+`node scripts/<name>.mjs` invocation in instruction files to be
+preceded (in the same file, or within the same blank-line-delimited
+paragraph or fenced block) by a `profile-selected` pointer referencing
+`docs/idd-helper-scripts.md`.
+
+The check is scoped per file rather than per command because instruction
+files establish the helper resolution contract once near the top or
+before the first helper command; requiring the pointer on every command
+or block would add repetitive boilerplate across dozens of blocks
+without increasing clarity.
+
+Two deliberate non-goals:
+
+1. A strict per-paragraph rule (every block with a bare use must
+   contain `profile-selected`, counting fenced blocks as separate
+   blocks): this would catch more but failed 36 blocks in 18 template
+   files, creating excessive verbosity.
+2. Requiring `docs/idd-helper-scripts.md` on the exact same line as
+   `profile-selected`: this would fail 14 more template files where the
+   path is named within the same paragraph or surrounding list item.
