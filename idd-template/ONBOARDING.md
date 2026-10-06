@@ -60,15 +60,15 @@ a new repository.
 When you pull a newer upstream template into a repository that already adopted
 IDD, treat the upgrade as a **named-gap import**, not a blind resync:
 
-1. **Resolve placeholders first** so the new template carries your repository's
-   real values, not upstream defaults.
+1. **Substitute placeholders last**, after the mirror commit, not first.
 2. **Reconcile only the enumerated gaps** — the specific changes between your
    current version and the new template — **against your recorded local policy**
-   (the policy section from Step 3). Do not overwrite intentional local
+   (Step 3's policy section). Do not overwrite intentional local
    divergence with upstream defaults; a blind file-for-file resync silently
    reverts your customizations.
-3. Re-apply the Step 2 file import for the changed files, then re-run the
-   Step 6 verification checklist and `idd-doctor` after reconciling.
+3. Re-apply the Step 2 import for changed files, then re-run Step 6 and
+   `idd-doctor`; see
+   [overlay report](docs/onboarding/agent-entry-and-verification.md#re-import-with-an-overlay-report).
 
 **Anatomy of a helper re-import (`vendored-node` profile).** If you vendor
 the shared helper bundle, a new leaf helper is rarely a standalone file

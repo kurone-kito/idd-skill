@@ -163,6 +163,7 @@ const DEFER_BY_URGENCY_MODES = new Set([
   'low-and-medium',
   'severity-tiered',
 ]);
+const DEFER_NEEDS_DECISION_MODES = new Set(['on', 'off']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -303,6 +304,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
   }),
   reviewEscalation: Object.freeze({
@@ -512,6 +514,9 @@ export function normalizePolicyConfig(config) {
       c?.critiqueLoop?.deferByUrgency,
       DEFER_BY_URGENCY_MODES,
       POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
+    ),
+    deferNeedsDecision: parseDeferNeedsDecision(
+      c?.critiqueLoop?.deferNeedsDecision,
     ),
     subagentWaitCeiling: parsePositiveDuration(
       c?.critiqueLoop?.subagentWaitCeiling,
@@ -985,6 +990,28 @@ function parseEnum(value, accepted, fallback) {
     return value;
   }
   return fallback;
+}
+/**
+ * `critiqueLoop.deferNeedsDecision` deliberately differs from `parseEnum`:
+ * `parseEnum` falls back to the default for any non-member, but this
+ * field's default (`'on'`) is the permissive value, so a mistyped value
+ * (`'OFF'`, `false`, `null`, ...) must never enable the route against the
+ * operator's evident intent. Only a missing value (key absent or
+ * `undefined`, including a non-object `critiqueLoop` block) resolves to
+ * the default; exactly `'on'` / `'off'` resolve to themselves; any other
+ * present value resolves to `'off'`. This helper only sees parsed data, so
+ * a config file that exists but cannot be parsed is the instruction text's
+ * to handle (it will act as `'off'`; `loadPolicyConfig` rejects such a
+ * file, and a non-object top level too); `normalizePolicyConfig(null)`
+ * means `'on'`.
+ */
+function parseDeferNeedsDecision(value) {
+  if (value === undefined) {
+    return POLICY_DEFAULTS.critiqueLoop.deferNeedsDecision;
+  }
+  return typeof value === 'string' && DEFER_NEEDS_DECISION_MODES.has(value)
+    ? value
+    : 'off';
 }
 function parseDuration(value, fallback) {
   if (typeof value === 'string' && ISO_DURATION_RE.test(value)) {

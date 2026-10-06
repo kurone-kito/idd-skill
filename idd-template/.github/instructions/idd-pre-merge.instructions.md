@@ -416,9 +416,8 @@ never clears by polling: follow its `detail`.
   Disposition-evidence ack-only override: when
   `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` (every
   blocking item is a `missingThreads` entry with
-  `ackOnlyPostDisposition: true`, `missingRegularComments` empty — full
-  condition in `idd-review-triage.instructions.md`'s "Disposition-evidence
-  parity (advisory-only)" paragraph), autopilot may deterministically
+  `ackOnlyPostDisposition: true`, `missingRegularComments` empty),
+  autopilot may deterministically
   override `return-to-e1` and proceed on the current HEAD SHA. Distinct
   from the `reviewCurrency` carve-out above (E1-snapshot staleness) and
   applied by the agent, not `pre-merge-readiness`'s own rollup. The
@@ -428,18 +427,24 @@ never clears by polling: follow its `detail`.
 - **Closing-set and impact-checklist re-verification**:
   `closingSet`/`closing-set` evidences this section's re-run of
   D3.5 steps 6-7 only; re-derive D3.7 below locally.
-  After fetch, the claim gate must confirm
+  D3.5/D3.7 read local state: first fetch the PR head with
+  `git fetch origin +refs/pull/{pr-number}/head:refs/remotes/origin/pull/{pr-number}/head`
+  under the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
+  when workers share the clone. A failed fetch holds; if
+  `git rev-parse refs/remotes/origin/pull/{pr-number}/head` is not
+  `$PR_HEAD_SHA`, the PR moved: return to E1. The claim gate must confirm
   `git branch --show-current` is `{branch-name}`; else hold.
-  Require empty `git status --porcelain` and
-  `git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`; else hold. Under
+  Require empty `git status --porcelain`; else hold. Under
   `set -o pipefail`, run
   `git ls-tree -r -z --full-tree --name-only "$PR_HEAD_SHA" |
   (cd "$(git rev-parse --show-toplevel)" &&
   GIT_LITERAL_PATHSPECS=1 xargs -0 git ls-files -z -o --exclude-standard --)`
-  and again with `-o -i`; any output or failure holds. Use
-  `git switch {branch-name}` (not
-  detached), recheck; reset on pass)
-  — D3.5/D3.7 read local state, not the remote PR. Then re-run
+  and again with `-o -i`; any output or failure holds. Then
+  `git rev-parse HEAD` must equal `$PR_HEAD_SHA`; if HEAD is instead
+  behind it (`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`),
+  re-validate the claim, run `git merge --ff-only "$PR_HEAD_SHA"` and
+  require equality again, else hold. Any other relation holds; never run
+  `git reset`. Then re-run
   `idd-pr-submit.instructions.md`'s D3.5 steps
   6-7 (the `closingIssuesReferences` set comparison and the
   commit-message closing-keyword scan) and D3.7 (the

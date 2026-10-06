@@ -5,11 +5,12 @@ Lite profile for weak/local models. Same semantics as
 
 ## Helper runtime contract
 
-1. **When helper runtime is enabled** (`package-manager`, `ephemeral-npx`
-   — see `docs/idd-helper-scripts.md` — or vendored-node): run the
-   commands below. If a helper is **missing, fails, returns
-   invalid JSON, or disagrees with live GitHub state** → **stop and
-   ask**. Do **not** fall through to the written tables.
+1. **When helper runtime is enabled** (`package-manager`, `ephemeral-npx`,
+   or vendored-node): resolve each `node scripts/<h>.mjs` to its
+   profile-selected form via `docs/idd-helper-scripts.md`, then run the
+   commands below. If a helper is **missing, fails, returns invalid
+   JSON, or disagrees with live GitHub state** → **stop and ask**. Do
+   **not** fall through to the written tables.
 2. **When the repository is `instructions-only`** (no helper runtime
    shipped): skip the helper commands and use the written tables only.
 
@@ -191,6 +192,4 @@ If claim lost: STOP. Do not post further operational markers.
 
 ## Stop-and-ask
 
-Stop and ask when a helper is missing/failing, claim/forced-handoff
-is ambiguous, the worktree is dirty, or multiple PRs match.
 Do **not** run autonomous merge (F3+) on the lite tier.

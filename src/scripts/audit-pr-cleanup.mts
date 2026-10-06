@@ -50,7 +50,11 @@ import {
   unionTrustedMarkerActorSources,
   unsafeTextReason,
 } from './protocol-helpers.mts';
-import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
+import {
+  fetchLastEditedAtByNodeId,
+  fetchReviewThreadCommentUserContentEdits,
+} from './provider-adapter-github.mts';
+import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mts';
 
 /** Author reference embedded in GraphQL payloads. */
 interface GqlAuthorPayload {
@@ -1005,6 +1009,38 @@ function makeIddDispositionAuthorPredicate(
     );
 }
 
+/**
+ * #3791: F4's bounded `userContentEdits` pass. Selects only configured
+ * advisory-bot thread comments edited after the thread's latest
+ * unedited IDD disposition, fetches that history in one batch, and
+ * attaches it before both disposition checks. An edited or unknown
+ * disposition anchors nothing. `port` is injectable for tests; the
+ * default uses {@link fetchReviewThreadCommentUserContentEdits}. A
+ * thrown fetch returns `threads` unchanged (fail closed to `updatedAt`).
+ */
+export function enrichAuditReviewThreads(
+  threads: ReviewThreadNode[],
+  options: {
+    dispositionAuthorLogins: readonly string[];
+    advisoryBotLogins: readonly string[] | null | undefined;
+    port?: {
+      getReviewThreadCommentUserContentEdits: (
+        nodeIds: string[],
+      ) => ReturnType<typeof fetchReviewThreadCommentUserContentEdits>;
+    };
+  },
+): ReviewThreadNode[] {
+  const port = options.port ?? {
+    getReviewThreadCommentUserContentEdits: (nodeIds: string[]) =>
+      fetchReviewThreadCommentUserContentEdits(ghText, nodeIds),
+  };
+  return enrichThreadsWithBotEditHistories(port, threads, {
+    dispositionAuthorLogins: options.dispositionAuthorLogins,
+    advisoryBotLogins: options.advisoryBotLogins,
+    requireUneditedDisposition: true,
+  });
+}
+
 async function buildReport(
   owner: string,
   repo: string,
@@ -1014,17 +1050,28 @@ async function buildReport(
   const pr = fetchPullRequest(owner, repo, prNumber, options);
   const comments = fetchIssueComments(owner, repo, prNumber, options);
   const reviews = fetchReviews(owner, repo, prNumber, options);
-  const threads = fetchReviewThreads(owner, repo, prNumber, options);
-
   const configuredTrust = configuredTrustedMarkerActorSources();
   const iddAgentLogins = normalizeTrustedMarkerLogins([
     currentViewerLogin(),
     ...configuredTrust.actors,
   ]);
+  const advisoryBotLogins = configuredAdvisoryBotLogins();
+  // #3791: the same bounded second pass F2/F3 already run (#3269). A
+  // cosmetic advisory-bot edit, such as PR #3786 thread
+  // PRRT_kwDOSWpaqs6pAh1L, must not look newer than the unedited IDD
+  // disposition. A failed fetch leaves the threads unenriched, so
+  // dating stays on updatedAt.
+  const threads = enrichAuditReviewThreads(
+    fetchReviewThreads(owner, repo, prNumber, options),
+    {
+      dispositionAuthorLogins: iddAgentLogins,
+      advisoryBotLogins,
+    },
+  );
   const threadIndex = indexThreadsByReview(threads, {
     isDispositionAuthor: makeIddDispositionAuthorPredicate(iddAgentLogins),
     iddAgentLogins,
-    advisoryBotLogins: configuredAdvisoryBotLogins(),
+    advisoryBotLogins,
     prAuthorLogin: pr.author?.login,
   });
   const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
@@ -1424,6 +1471,10 @@ export function evaluateReviewComment(
       isDispositionAuthor: makeIddDispositionAuthorPredicate(
         report.trustedMarkerActors,
       ),
+      // #3791: indexThreadsByReview already forwards these logins. Without
+      // them an attached userContentEdits history is ignored and the
+      // comment stays dated by updatedAt.
+      advisoryBotLogins: configuredAdvisoryBotLogins(),
     }) &&
     !classifyThreadAckOnlyPostDisposition(thread, {
       iddAgentLogins: report.trustedMarkerActors,

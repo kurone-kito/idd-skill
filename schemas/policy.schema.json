@@ -717,6 +717,11 @@
           "enum": ["off", "low", "low-and-medium", "severity-tiered"],
           "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: ignores the adopt-now test and defers by the severity-and-urgency matrix, including High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
         },
+        "deferNeedsDecision": {
+          "type": "string",
+          "enum": ["on", "off"],
+          "description": "Whether the review loop may defer a finding that needs a person's judgment to a `needs-decision` follow-up issue when merging is safe. `off` restores the stop-for-a-person behavior. Among other holds, never changes the CODEOWNER and required-reviewer `Awaiting maintainer decision` hold, `CHANGES_REQUESTED`, the F3 merge holds, or the lite profile's stops. Optional; defaults to \"on\"."
+        },
         "subagentWaitCeiling": {
           "type": "string",
           "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",

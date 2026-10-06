@@ -178,6 +178,17 @@
 // difference -- content otherwise tolerable but mode also differs --
 // which is reported with a `detail` string naming the class it would
 // otherwise have matched, rather than inventing an eighth status).
+//
+// Reverted-overlay report (#3795, advisory): a pure mirror can still erase
+// lines the adopter had added to a vendored file (observed on
+// kurone-kito/setup.ubuntu#201, where the review bots then reported the
+// reverted text as new defects). `--report-reverted-overlays`, with exactly
+// one of `--upstream-base-path` / `--upstream-base-ref` naming the PREVIOUS
+// upstream version, adds the lines of each modified, non-JSON path that the
+// adopter added before the import (absent from the previous upstream) and
+// that the import commit also lost. It never changes a status, a count, or
+// the exit code, and it reads the three versions only as text lines (see
+// computeRevertedOverlayLines for the comparison and its limits).
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -235,10 +246,20 @@ export interface FileResult {
   detail?: string;
 }
 
+export interface RevertedOverlayEntry {
+  path: string;
+  lines: string[];
+}
+
 export interface Report {
   scanned: number;
   results: FileResult[];
   counts: Partial<Record<CompareStatus, number>>;
+  /** Present only under `--report-reverted-overlays` (#3795); advisory --
+   * never part of `results`, `counts`, or the exit code. */
+  revertedOverlays?: RevertedOverlayEntry[];
+  overlayPathsCompared?: number;
+  overlayPathsSkipped?: number;
 }
 
 export interface JsonKeyNormalization {
@@ -256,6 +277,12 @@ export interface VerifyOptions {
   pathPrefixes: readonly string[];
   generatedDirs: readonly string[];
   jsonKeyNormalizations?: readonly JsonKeyNormalization[];
+  /** The previous upstream version, named like `upstreamPath` /
+   * `upstreamRef` name the new one (#3795): `reportRevertedOverlays` needs
+   * exactly one of them, and either one is an error without it. */
+  upstreamBasePath?: string | null;
+  upstreamBaseRef?: string | null;
+  reportRevertedOverlays?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,6 +1039,204 @@ export function computeExitCode(
 }
 
 // ---------------------------------------------------------------------------
+// Reverted-overlay comparison (#3795) -- advisory only: nothing below ever
+// changes a path's status, the counts, or the exit code. A re-import commit
+// can pass the five rules above and still erase lines the adopter had added
+// to a vendored file (observed on kurone-kito/setup.ubuntu#201); this pure
+// layer finds those lines from three versions of one file.
+// ---------------------------------------------------------------------------
+
+/** Lines shorter than this many characters (after whitespace
+ * normalization) are invisible to the overlay comparison. The same bound
+ * is the minimum literal text a wildcard line (one holding a template
+ * token) must keep outside its tokens, so a line that is only a token
+ * cannot match every list item. */
+const OVERLAY_MIN_LINE_LENGTH = 8;
+
+/** Same token shape as the placeholder check the JSON-key restoration
+ * already uses; matched generically so this helper never imports
+ * `idd-onboard.mts`. */
+const OVERLAY_TOKEN_RE = /\{\{[A-Z][A-Z0-9_]*\}\}/;
+
+/** The table cuts each overlay line at this many characters and lists at
+ * most this many lines per path; `--format json` carries every line. These
+ * stay above the `import.meta.main` trigger below: a `const` declared
+ * after it is still in the temporal dead zone when the trigger prints. */
+const OVERLAY_TABLE_LINE_CUT = 160;
+const OVERLAY_TABLE_LINES_PER_PATH = 20;
+
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
+}
+
+function isLowSurrogate(unit: number): boolean {
+  return unit >= 0xdc00 && unit <= 0xdfff;
+}
+
+/** Index just after the character that starts at `index`: a surrogate pair
+ * is one character (two UTF-16 units), so a gap or a literal never splits
+ * one. Past the end it keeps counting, which callers treat as "no
+ * character left". */
+function nextCharacterIndex(text: string, index: number): number {
+  return isHighSurrogate(text.charCodeAt(index)) &&
+    isLowSurrogate(text.charCodeAt(index + 1))
+    ? index + 2
+    : index + 1;
+}
+
+/** Characters (code points) in `text`, counted without allocating. */
+function codePointLength(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; count += 1) {
+    index = nextCharacterIndex(text, index);
+  }
+  return count;
+}
+
+/** The first `limit` characters of `text` (code points, never half of a
+ * surrogate pair), found by walking only that far: an unbounded line is cut
+ * without allocating an array of all its characters. */
+function cutToCharacters(text: string, limit: number): string {
+  let end = 0;
+  for (let count = 0; count < limit && end < text.length; count += 1) {
+    end = nextCharacterIndex(text, end);
+  }
+  return text.slice(0, end);
+}
+
+/** `true` iff `text` has at least `minimum` characters. The UTF-16 length
+ * bounds the code-point count from both sides, so most lines never need
+ * the count. */
+function hasAtLeastCharacters(text: string, minimum: number): boolean {
+  if (text.length < minimum) {
+    return false;
+  }
+  return text.length >= 2 * minimum || codePointLength(text) >= minimum;
+}
+
+/**
+ * Splits `content` on `\r?\n`, collapses every run of whitespace to one
+ * space, trims, and drops lines shorter than {@link OVERLAY_MIN_LINE_LENGTH}
+ * characters and generated-banner lines (`stripGeneratedBannerLine`
+ * substitutes a sentinel, so a banner is filtered rather than stripped
+ * here). Order and duplicates are preserved.
+ */
+export function normalizeOverlayLines(content: string): string[] {
+  const lines: string[] = [];
+  for (const raw of content.split(/\r?\n/)) {
+    const line = raw.replace(/\s+/g, ' ').trim();
+    if (
+      hasAtLeastCharacters(line, OVERLAY_MIN_LINE_LENGTH) &&
+      !isCanonicalBannerLine(line, GENERATED_BANNER_MARKER)
+    ) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
+/**
+ * Splits a normalized previous-upstream line at its template tokens (an
+ * upper-case `NAME` matching `[A-Z][A-Z0-9_]*`, wrapped in double braces).
+ * Returns the literal pieces around the tokens, or `null` when the line
+ * has no token or keeps fewer than {@link OVERLAY_MIN_LINE_LENGTH}
+ * characters of literal text outside them.
+ */
+function toTokenPattern(line: string): string[] | null {
+  const pieces = line.split(OVERLAY_TOKEN_RE);
+  if (pieces.length < 2) {
+    return null;
+  }
+  const literalLength = pieces.reduce(
+    (sum, piece) => sum + codePointLength(piece),
+    0,
+  );
+  return literalLength >= OVERLAY_MIN_LINE_LENGTH ? pieces : null;
+}
+
+/**
+ * Whole-line match of `line` against the literal `pieces` of a token line,
+ * each token standing for any NON-EMPTY text (spaces included, so a token
+ * replaced by `npm run lint && npm test` still matches). Done piece by
+ * piece instead of by building a regular expression from previous-version
+ * text: literal characters such as `(`, `.` and `*` then match literally
+ * by construction, and the leftmost search cannot backtrack
+ * catastrophically on a long line. The first piece is a prefix, the last a
+ * suffix, and each middle piece is found leftmost at least one whole
+ * character (code point, so never half of a surrogate pair) after the
+ * previous one; leftmost placement leaves the most room for the suffix.
+ * Both inputs are assumed to be well-formed UTF-16 (decoded file text
+ * always is); an unpaired surrogate is not given a meaning here.
+ */
+export function matchesTokenPattern(
+  line: string,
+  pieces: readonly string[],
+): boolean {
+  const first = pieces[0] ?? '';
+  const last = pieces[pieces.length - 1] ?? '';
+  if (pieces.length < 2 || !line.startsWith(first)) {
+    return false;
+  }
+  let position = first.length;
+  for (let index = 1; index < pieces.length - 1; index += 1) {
+    const piece = pieces[index] ?? '';
+    // Each token takes at least one whole character, never half of a
+    // surrogate pair.
+    const found = line.indexOf(piece, nextCharacterIndex(line, position));
+    if (found < 0) {
+      return false;
+    }
+    position = found + piece.length;
+  }
+  return (
+    line.length - last.length >= nextCharacterIndex(line, position) &&
+    line.endsWith(last)
+  );
+}
+
+/**
+ * The reverted overlay lines of one file: normalized lines of the
+ * pre-import file (`baseText`) that the adopter added -- absent from the
+ * previous upstream version of that file and not matching one of its
+ * template-token lines -- and that are also absent from the file after
+ * the import commit (`targetText`). Each distinct line appears once, in
+ * the pre-import file's order.
+ */
+export function computeRevertedOverlayLines(params: {
+  baseText: string;
+  previousUpstreamText: string;
+  targetText: string;
+}): string[] {
+  const previousLines = new Set(
+    normalizeOverlayLines(params.previousUpstreamText),
+  );
+  const targetLines = new Set(normalizeOverlayLines(params.targetText));
+  const tokenPatterns: string[][] = [];
+  for (const line of previousLines) {
+    const pieces = toTokenPattern(line);
+    if (pieces !== null) {
+      tokenPatterns.push(pieces);
+    }
+  }
+  const reverted: string[] = [];
+  const seen = new Set<string>();
+  for (const line of normalizeOverlayLines(params.baseText)) {
+    if (seen.has(line)) {
+      continue;
+    }
+    seen.add(line);
+    if (
+      !previousLines.has(line) &&
+      !targetLines.has(line) &&
+      !tokenPatterns.some((pieces) => matchesTokenPattern(line, pieces))
+    ) {
+      reverted.push(line);
+    }
+  }
+  return reverted;
+}
+
+// ---------------------------------------------------------------------------
 // Git plumbing -- impure I/O, exercised by the CLI smoke test rather than
 // unit-tested in isolation (matches this repo's convention of unit-testing
 // the pure classification layer and smoke-testing the wiring against a real
@@ -1322,10 +1547,11 @@ function hasSymlinkAncestor(root: string, relativePath: string): boolean {
 function readUpstreamEntryFromPath(
   upstreamPath: string,
   path: string,
+  flag = '--upstream-path',
 ): TreeEntry | null {
   if (hasSymlinkAncestor(upstreamPath, path)) {
     throw new Error(
-      `${path}: an ancestor directory under --upstream-path is a symlink -- ` +
+      `${path}: an ancestor directory under ${flag} is a symlink -- ` +
         'refusing to follow it (it could resolve outside the intended upstream checkout)',
     );
   }
@@ -1414,15 +1640,18 @@ function buildFileResult(
  * of a pure mirror caused by nothing more than an operator typo (Copilot
  * review, PR #3225).
  */
-function validateUpstreamPathRoot(upstreamPath: string): void {
+function validateUpstreamPathRoot(
+  upstreamPath: string,
+  flag = '--upstream-path',
+): void {
   let stats: ReturnType<typeof statSync>;
   try {
     stats = statSync(upstreamPath);
   } catch {
-    throw new Error(`--upstream-path does not exist: ${upstreamPath}`);
+    throw new Error(`${flag} does not exist: ${upstreamPath}`);
   }
   if (!stats.isDirectory()) {
-    throw new Error(`--upstream-path is not a directory: ${upstreamPath}`);
+    throw new Error(`${flag} is not a directory: ${upstreamPath}`);
   }
 }
 
@@ -1440,6 +1669,7 @@ function validateUpstreamRef(
   targetRoot: string,
   remote: string | null,
   ref: string,
+  flag = '--upstream-ref',
 ): void {
   const resolvedRef = resolveUpstreamRef(remote, ref);
   const result = runGit(targetRoot, [
@@ -1449,13 +1679,105 @@ function validateUpstreamRef(
     `${resolvedRef}^{commit}`,
   ]);
   if (result.status !== 0) {
+    throw new Error(`${flag} does not resolve to a commit: ${resolvedRef}`);
+  }
+}
+
+/**
+ * Reads one path from the previous upstream version named by
+ * `--upstream-base-path` (a directory) or `--upstream-base-ref` (a ref in
+ * the target repository; never qualified by `--upstream-remote`, which
+ * qualifies only `--upstream-ref`). `null` means the previous version
+ * lacks the path.
+ */
+function readOverlayBaseEntry(
+  options: VerifyOptions,
+  path: string,
+): TreeEntry | null {
+  if (options.upstreamBasePath != null) {
+    return readUpstreamEntryFromPath(
+      options.upstreamBasePath,
+      path,
+      '--upstream-base-path',
+    );
+  }
+  return readTargetEntry(
+    options.targetRoot,
+    options.upstreamBaseRef as string,
+    path,
+  );
+}
+
+/**
+ * The usage rules of the overlay flags, in one place for `parseArgs()`
+ * (before any I/O) and `runVerification()` (a programmatic caller): the
+ * switch needs exactly one base flag, and a base flag needs the switch.
+ * Each message names the flag and the value it was given.
+ */
+function checkOverlayOptions(
+  options: Pick<
+    VerifyOptions,
+    'reportRevertedOverlays' | 'upstreamBasePath' | 'upstreamBaseRef'
+  >,
+): void {
+  const basePath = options.upstreamBasePath ?? null;
+  const baseRef = options.upstreamBaseRef ?? null;
+  if (basePath !== null && baseRef !== null) {
     throw new Error(
-      `--upstream-ref does not resolve to a commit: ${resolvedRef}`,
+      '--upstream-base-path and --upstream-base-ref are mutually ' +
+        `exclusive (got --upstream-base-path "${basePath}" and ` +
+        `--upstream-base-ref "${baseRef}")`,
+    );
+  }
+  if (!options.reportRevertedOverlays && basePath !== null) {
+    throw new Error(
+      `--upstream-base-path "${basePath}" requires --report-reverted-overlays`,
+    );
+  }
+  if (!options.reportRevertedOverlays && baseRef !== null) {
+    throw new Error(
+      `--upstream-base-ref "${baseRef}" requires --report-reverted-overlays`,
+    );
+  }
+  if (options.reportRevertedOverlays && basePath === null && baseRef === null) {
+    throw new Error(
+      '--report-reverted-overlays requires exactly one of ' +
+        '--upstream-base-path or --upstream-base-ref',
+    );
+  }
+}
+
+/**
+ * Validates the previous-upstream input of `--report-reverted-overlays`
+ * the way the new-version input is validated, with messages that name the
+ * base flag and its value: a mistyped base would otherwise make every path
+ * look absent from the previous version and report an empty, falsely
+ * clean result. Precondition: {@link checkOverlayOptions} has already run,
+ * so exactly one base flag is set.
+ */
+function validateOverlayBase(options: VerifyOptions): void {
+  if (options.upstreamBasePath != null) {
+    validateUpstreamPathRoot(
+      options.upstreamBasePath as string,
+      '--upstream-base-path',
+    );
+  } else {
+    validateUpstreamRef(
+      options.targetRoot,
+      null,
+      options.upstreamBaseRef as string,
+      '--upstream-base-ref',
     );
   }
 }
 
 export function runVerification(options: VerifyOptions): Report {
+  const reportOverlays = options.reportRevertedOverlays === true;
+  checkOverlayOptions({
+    reportRevertedOverlays: reportOverlays,
+    upstreamBasePath: options.upstreamBasePath,
+    upstreamBaseRef: options.upstreamBaseRef,
+  });
   if (options.upstreamPath !== null) {
     validateUpstreamPathRoot(options.upstreamPath);
   } else {
@@ -1467,6 +1789,9 @@ export function runVerification(options: VerifyOptions): Report {
       options.upstreamRef as string,
     );
   }
+  if (reportOverlays) {
+    validateOverlayBase(options);
+  }
   const diffEntries = listChangedPaths(
     options.targetRoot,
     options.targetBaseRef,
@@ -1474,6 +1799,8 @@ export function runVerification(options: VerifyOptions): Report {
     options.pathPrefixes,
   );
   const results: FileResult[] = [];
+  const revertedOverlays: RevertedOverlayEntry[] = [];
+  let overlayPathsCompared = 0;
   for (const entry of diffEntries) {
     const upstreamEntry = readUpstreamEntry(options, entry.path);
     if (entry.changeType === 'D') {
@@ -1501,6 +1828,34 @@ export function runVerification(options: VerifyOptions): Report {
     const targetBaseEntry = hasJsonKeyNormalization
       ? readTargetEntry(options.targetRoot, options.targetBaseRef, entry.path)
       : null;
+    if (
+      reportOverlays &&
+      entry.changeType === 'M' &&
+      !entry.path.toLowerCase().endsWith('.json')
+    ) {
+      const previousEntry = readOverlayBaseEntry(options, entry.path);
+      if (previousEntry !== null) {
+        const preImportEntry = readTargetEntry(
+          options.targetRoot,
+          options.targetBaseRef,
+          entry.path,
+        );
+        if (preImportEntry === null) {
+          throw new Error(
+            `internal: ${entry.path} reported as M but is absent from ${options.targetBaseRef}`,
+          );
+        }
+        overlayPathsCompared += 1;
+        const lines = computeRevertedOverlayLines({
+          baseText: preImportEntry.content.toString('utf8'),
+          previousUpstreamText: previousEntry.content.toString('utf8'),
+          targetText: targetEntry.content.toString('utf8'),
+        });
+        if (lines.length > 0) {
+          revertedOverlays.push({ path: entry.path, lines });
+        }
+      }
+    }
     const classification = classifyComparedFile({
       path: entry.path,
       upstreamContent: upstreamEntry?.content ?? null,
@@ -1517,7 +1872,13 @@ export function runVerification(options: VerifyOptions): Report {
   for (const result of results) {
     counts[result.status] = (counts[result.status] ?? 0) + 1;
   }
-  return { scanned: results.length, results, counts };
+  const report: Report = { scanned: results.length, results, counts };
+  if (reportOverlays) {
+    report.overlayPathsCompared = overlayPathsCompared;
+    report.overlayPathsSkipped = results.length - overlayPathsCompared;
+    report.revertedOverlays = revertedOverlays;
+  }
+  return report;
 }
 
 // ---------------------------------------------------------------------------
@@ -1541,6 +1902,9 @@ const VERIFY_IMPORT_MIRROR_FLAG_SPEC = {
   '--upstream-path': { type: 'string' },
   '--upstream-ref': { type: 'string' },
   '--upstream-remote': { type: 'string' },
+  '--upstream-base-path': { type: 'string' },
+  '--upstream-base-ref': { type: 'string' },
+  '--report-reverted-overlays': { type: 'boolean' },
   '--path-prefix': { type: 'string', multiple: true },
   '--generated-dir': { type: 'string', multiple: true },
   '--normalize-json-key': { type: 'string', multiple: true },
@@ -1574,6 +1938,10 @@ if (import.meta.main) {
       pathPrefixes: args.pathPrefixes,
       generatedDirs: args.generatedDirs,
       jsonKeyNormalizations: args.jsonKeyNormalizations,
+      upstreamBasePath:
+        args.upstreamBasePath === null ? null : resolve(args.upstreamBasePath),
+      upstreamBaseRef: args.upstreamBaseRef,
+      reportRevertedOverlays: args.reportRevertedOverlays,
     });
   } catch (error) {
     console.error(`error: ${(error as Error).message}`);
@@ -1585,7 +1953,11 @@ if (import.meta.main) {
   } else {
     printTable(report);
   }
-  process.exit(computeExitCode(report.results));
+  // Not process.exit(): on a pipe Node writes asynchronously, and exiting
+  // right after a large report drops whatever is still queued (a 4 MiB
+  // report arrived as 64 to 128 KiB; the same class of defect as #3787).
+  // Setting the exit code lets the process end once stdout has drained.
+  process.exitCode = computeExitCode(report.results);
 }
 
 interface VerifyImportMirrorArgs {
@@ -1598,6 +1970,9 @@ interface VerifyImportMirrorArgs {
   pathPrefixes: string[];
   generatedDirs: string[];
   jsonKeyNormalizations: JsonKeyNormalization[];
+  upstreamBasePath: string | null;
+  upstreamBaseRef: string | null;
+  reportRevertedOverlays: boolean;
   format: 'json' | 'table';
   help: boolean;
 }
@@ -1636,6 +2011,11 @@ function parseArgs(argv: string[]): VerifyImportMirrorArgs {
   const jsonKeyNormalizations = (
     (values['normalize-json-key'] as string[] | undefined) ?? []
   ).map(parseJsonKeyNormalization);
+  const upstreamBasePath =
+    (values['upstream-base-path'] as string | undefined) ?? null;
+  const upstreamBaseRef =
+    (values['upstream-base-ref'] as string | undefined) ?? null;
+  const reportRevertedOverlays = values['report-reverted-overlays'] === true;
   const format = (values.format as string | undefined) ?? 'table';
 
   // help-only invocations (e.g. `--help` alone) must not trip the
@@ -1654,6 +2034,11 @@ function parseArgs(argv: string[]): VerifyImportMirrorArgs {
     if (upstreamRemote !== null && upstreamRef === null) {
       throw new Error('--upstream-remote requires --upstream-ref');
     }
+    checkOverlayOptions({
+      reportRevertedOverlays,
+      upstreamBasePath,
+      upstreamBaseRef,
+    });
   }
   if (format !== 'json' && format !== 'table') {
     throw new Error(`--format must be one of json,table (got "${format}")`);
@@ -1669,6 +2054,9 @@ function parseArgs(argv: string[]): VerifyImportMirrorArgs {
     pathPrefixes,
     generatedDirs,
     jsonKeyNormalizations,
+    upstreamBasePath,
+    upstreamBaseRef,
+    reportRevertedOverlays,
     format,
     help,
   };
@@ -1677,16 +2065,47 @@ function parseArgs(argv: string[]): VerifyImportMirrorArgs {
 function printTable(report: Report): void {
   if (report.scanned === 0) {
     console.log('0 files compared');
+  } else {
+    console.log(`compared: ${report.scanned}`);
+    for (const result of report.results) {
+      const marker = isTolerated(result.status) ? 'ok' : 'FAIL';
+      const detail = result.detail ? ` -- ${result.detail}` : '';
+      console.log(
+        `  [${marker}] ${result.status} ${result.changeType} ${result.path}${detail}`,
+      );
+    }
+  }
+  printOverlayTableSection(report);
+}
+
+/** The `--report-reverted-overlays` section: absent without the switch,
+ * and present even when no line is reverted or when nothing was scanned,
+ * so an empty report can be told from a clean one by its compared count. */
+function printOverlayTableSection(report: Report): void {
+  if (
+    report.overlayPathsCompared === undefined ||
+    report.overlayPathsSkipped === undefined
+  ) {
     return;
   }
-  console.log(`compared: ${report.scanned}`);
-  for (const result of report.results) {
-    const marker = isTolerated(result.status) ? 'ok' : 'FAIL';
-    const detail = result.detail ? ` -- ${result.detail}` : '';
-    console.log(
-      `  [${marker}] ${result.status} ${result.changeType} ${result.path}${detail}`,
-    );
+  console.log('reverted overlay candidates (advisory)');
+  const entries = report.revertedOverlays ?? [];
+  if (entries.length === 0) {
+    console.log('  none');
   }
+  for (const entry of entries) {
+    console.log(`  ${entry.path}`);
+    for (const line of entry.lines.slice(0, OVERLAY_TABLE_LINES_PER_PATH)) {
+      console.log(`    ${cutToCharacters(line, OVERLAY_TABLE_LINE_CUT)}`);
+    }
+    const rest = entry.lines.length - OVERLAY_TABLE_LINES_PER_PATH;
+    if (rest > 0) {
+      console.log(`    ... and ${rest} more`);
+    }
+  }
+  console.log(
+    `paths compared ${report.overlayPathsCompared}, skipped ${report.overlayPathsSkipped}`,
+  );
 }
 
 function printUsage(): void {
@@ -1704,6 +2123,19 @@ Upstream source (exactly one required):
   --upstream-remote <name>   remote name to qualify --upstream-ref with
                              (resolves to "<name>/<ref>"); requires
                              --upstream-ref
+
+Reverted-overlay report (advisory; never changes a status, a count, or
+the exit code):
+  --report-reverted-overlays list the pre-import lines the adopter added
+                             (absent from the previous upstream version)
+                             that this commit also lost; requires exactly
+                             one of the two flags below
+  --upstream-base-path <dir> the previous upstream version as a directory
+                             (the idd-template directory, not a checkout
+                             root)
+  --upstream-base-ref <ref>  the previous upstream version as a ref in the
+                             target repository, with the template at its
+                             root (never qualified by --upstream-remote)
 
 Target commit:
   --target-root <dir>        target git repository (default: cwd)

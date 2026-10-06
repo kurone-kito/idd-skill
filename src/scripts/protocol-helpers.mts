@@ -126,22 +126,23 @@ interface ThreadCommentLike {
   updatedAt?: string | null;
   pullRequestReview?: { id?: string | null } | null;
   /** #3269: GraphQL `PullRequestReviewComment.lastEditedAt` -- see
-   * `classifyCommentEditState`'s three-state contract. Populated only by
-   * the two merge-gate collectors' own thread normalizers
-   * (`pre-merge-readiness.mts`, `advisory-convergence.mts`); every other
-   * consumer's thread comment leaves this `undefined` ('unknown' edit
-   * state), which keeps `effectiveThreadCommentActivityAt`'s pre-#3269
-   * `updatedAt` dating unchanged there. */
+   * `classifyCommentEditState`'s three-state contract. Populated by the
+   * two merge-gate collectors' thread normalizers
+   * (`pre-merge-readiness.mts`, `advisory-convergence.mts`) and by F4
+   * `audit-pr-cleanup.mts` (#3791). Every other consumer's thread
+   * comment leaves this `undefined` ('unknown' edit state), which keeps
+   * `effectiveThreadCommentActivityAt`'s pre-#3269 `updatedAt` dating
+   * unchanged there. */
   lastEditedAt?: string | null;
   last_edited_at?: string | null;
   /** #3269: this comment's bounded `userContentEdits` revision history,
-   * populated ONLY by the two merge-gate collectors, and only for
-   * advisory-bot thread comments whose `lastEditedAt` postdates their
-   * thread's latest IDD disposition -- see
+   * populated by the two merge-gate collectors and by F4
+   * `audit-pr-cleanup.mts` (#3791), and only for advisory-bot thread
+   * comments whose `lastEditedAt` postdates their thread's latest IDD
+   * disposition -- see
    * `selectAdvisoryThreadCommentIdsEditedAfterDisposition` and
    * `attachReviewThreadCommentEditHistories`. Every other thread comment
-   * (including an edited one at any other consumer) leaves this
-   * `undefined`, which keeps `updatedAt` dating for it. */
+   * leaves this `undefined`, which keeps `updatedAt` dating for it. */
   userContentEdits?: {
     totalCount: number;
     edits: {
@@ -665,8 +666,9 @@ export interface DispositionEvidenceSummary {
   // edited comment (GraphQL `userContentEdits`, #3269 corrects an earlier,
   // broader claim that it does not): `hasFreshDisposition`'s own dating (via
   // `effectiveThreadCommentActivityAt`) now verifies a bounded set of such
-  // edits directly, in the two merge-gate collectors that fetch that
-  // history, so a thread whose sole blocker is a VERIFIED cosmetic edit
+  // edits directly. The two merge-gate collectors and F4
+  // audit-pr-cleanup (#3791) fetch that history, so a thread whose
+  // sole blocker is a VERIFIED cosmetic edit
   // clears through `missingThreadCount`/`route` itself rather than needing
   // this advisory override at all.
   soleCauseInPlaceEditOnly: boolean;
@@ -3714,9 +3716,10 @@ export function hasFreshDisposition(
     // #3269: forwarded to `effectiveThreadCommentActivityAt`'s own
     // verified-cosmetic-edit dating -- see that function's doc comment.
     // Omitted (the default) by every caller outside the F2/F3
-    // disposition-evidence path, which never verifies an edited comment
-    // as cosmetic regardless of any attached `userContentEdits`,
-    // unchanged pre-#3269 `updatedAt` dating.
+    // disposition-evidence path and F4 `audit-pr-cleanup.mts` (#3791).
+    // Those callers never verify an edited comment as cosmetic
+    // regardless of any attached `userContentEdits`, unchanged
+    // pre-#3269 `updatedAt` dating.
     advisoryBotLogins?: unknown[] | null;
   } = {},
 ): boolean {
@@ -3820,6 +3823,12 @@ export function hasFreshDisposition(
  * `hasFreshDisposition` will report it missing regardless of how any
  * individual comment is dated.
  *
+ * `requireUneditedDisposition` (F4 `audit-pr-cleanup.mts`, #3791) keeps
+ * only anchors whose `classifyCommentEditState` is `'unedited'`. An
+ * edited or unknown disposition then contributes no candidates. The
+ * default leaves this historical anchor unchanged, so the F2 and F3
+ * collectors keep their current candidate set.
+ *
  * `isDispositionAuthor` defaults to `hasFreshDisposition`'s own default
  * (reject known bots, accept any human). A caller SHOULD pass the SAME
  * predicate it will later pass to `hasFreshDisposition`/
@@ -3832,6 +3841,7 @@ export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
   options: {
     isDispositionAuthor?: (login: string) => boolean;
     advisoryBotLogins?: unknown[] | null;
+    requireUneditedDisposition?: boolean;
   } = {},
 ): string[] {
   const dispositionAuthorPredicate =
@@ -3857,7 +3867,16 @@ export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
           const authorLogin = String(comment.author?.login ?? '')
             .trim()
             .toLowerCase();
-          return dispositionAuthorPredicate(authorLogin);
+          if (!dispositionAuthorPredicate(authorLogin)) {
+            return false;
+          }
+          // #3791: F4 must not spend a history fetch on a disposition
+          // `hasFreshDisposition` would itself reject. Default off so
+          // the F2/F3 collectors keep today's anchor.
+          return (
+            options.requireUneditedDisposition !== true ||
+            classifyCommentEditState(comment) === 'unedited'
+          );
         })
         // Dating the disposition comment itself never needs cosmetic-edit
         // verification -- it is IDD-agent/human-authored, never a
@@ -8020,9 +8039,10 @@ function isIddOriginatedThreadReply(
 // #3269 corrects a related but narrower premise, that GitHub's API
 // exposes no revision diff for an edited comment at all. It does
 // (GraphQL `userContentEdits`), and `hasFreshDisposition`'s own dating
-// (via `effectiveThreadCommentActivityAt`) now uses it, bounded to the
-// two merge-gate collectors that fetch it; `inPlaceEditOnly` here keeps
-// its own, separate, revision-content-blind heuristic unchanged.
+// (via `effectiveThreadCommentActivityAt`) now uses it. The two
+// merge-gate collectors and F4 audit-pr-cleanup (#3791) fetch that
+// history. `inPlaceEditOnly` here keeps its own, separate,
+// revision-content-blind heuristic unchanged.
 export function classifyThreadAckOnlyPostDisposition(
   thread: ThreadLike,
   options: {
@@ -14714,11 +14734,11 @@ function resolveThreadCommentRevisionDatingOutcome(
  *
  * `advisoryBotLogins` defaults to an empty set, so a caller that omits it
  * (every caller outside the two merge-gate collectors' own
- * disposition-evidence path) never verifies an edited comment as
- * cosmetic, regardless of what `userContentEdits` data happens to be
- * attached -- fail-closed defense in depth, matching the issue's own
- * negative test for "an allowlisted append on a comment by an author who
- * is not an advisory bot".
+ * disposition-evidence path and F4 `audit-pr-cleanup.mts`, #3791) never
+ * verifies an edited comment as cosmetic, regardless of what
+ * `userContentEdits` data happens to be attached -- fail-closed defense
+ * in depth, matching the issue's own negative test for "an allowlisted
+ * append on a comment by an author who is not an advisory bot".
  */
 function effectiveThreadCommentActivityAt(
   comment: ThreadCommentLike | null | undefined,

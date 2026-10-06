@@ -28,8 +28,8 @@ import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
-  extractReviewFixLoopCutoffRefsIssueNumbers,
-  hasReviewFixLoopCutoffDeferMarker,
+  extractDeferSourceRefsIssueNumbers,
+  hasDeferSourceMarker,
 } from './discover-readiness-check.mjs';
 import {
   normalizeAuthorityEvidence,
@@ -1592,10 +1592,10 @@ export function computeDeferFollowUps({
       continue;
     }
     const body = typeof hit.body === 'string' ? hit.body : '';
-    if (!hasReviewFixLoopCutoffDeferMarker(body, markerPrefix)) {
+    if (!hasDeferSourceMarker(body, markerPrefix)) {
       continue;
     }
-    const refs = extractReviewFixLoopCutoffRefsIssueNumbers(body);
+    const refs = extractDeferSourceRefsIssueNumbers(body);
     if (refs.ambiguous || refs.numbers.length !== 1) {
       continue;
     }

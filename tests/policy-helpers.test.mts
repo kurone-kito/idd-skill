@@ -286,6 +286,49 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
   );
 });
 
+test('critiqueLoop.deferNeedsDecision defaults to on and only exact on/off pass through (#3777)', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.deferNeedsDecision, 'on');
+  // A missing field (absent key, undefined value, absent or non-object
+  // critiqueLoop block, absent config) resolves to the default.
+  for (const config of [
+    null,
+    {},
+    { critiqueLoop: {} },
+    { critiqueLoop: { deferNeedsDecision: undefined } },
+    { critiqueLoop: 'off' },
+    { critiqueLoop: ['off'] },
+    { critiqueLoop: null },
+    { critiqueLoop: 42 },
+    { critiqueLoop: true },
+  ]) {
+    assert.equal(
+      normalizePolicyConfig(config).critiqueLoop.deferNeedsDecision,
+      'on',
+      `expected ${JSON.stringify(config)} to resolve to on`,
+    );
+  }
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferNeedsDecision: 'on' } })
+      .critiqueLoop.deferNeedsDecision,
+    'on',
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferNeedsDecision: 'off' } })
+      .critiqueLoop.deferNeedsDecision,
+    'off',
+  );
+  // Any other present value resolves to off, never to the permissive
+  // default, so a mistyped value cannot enable the route.
+  for (const value of ['ON', ' on', 'OFF', 'false', false, null, '', 42]) {
+    assert.equal(
+      normalizePolicyConfig({ critiqueLoop: { deferNeedsDecision: value } })
+        .critiqueLoop.deferNeedsDecision,
+      'off',
+      `expected ${JSON.stringify(value)} to resolve to off`,
+    );
+  }
+});
+
 test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () => {
   const base = {
     mode: 'severity-tiered' as const,

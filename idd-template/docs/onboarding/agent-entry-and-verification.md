@@ -289,14 +289,11 @@ supplied the mirror-only import; the helper reads the current files under
 `--upstream-path`, so a later working tree can produce false mismatches or
 falsely pass matching local edits.
 
-During a re-import, `idd-onboard --import` may restore three validate-command
-rows in `.github/idd/config.json`. Keep the file in scope and repeat
-`--normalize-json-key` for only `commands.fix-validate`,
-`commands.pre-push-validate`, and `commands.post-fix-validate`; each is
-normalized only when the target preserves its base and upstream still has the
-placeholder; other config fields stay checked. Never omit it. This preservation
-behavior is tracked by
-[kurone-kito/idd-skill#2222](https://github.com/kurone-kito/idd-skill/issues/2222).
+`idd-onboard --import` may restore three validate-command rows of
+`.github/idd/config.json`: keep the file in scope and repeat
+`--normalize-json-key` for only those three keys, as in the
+`verify-import-mirror` bullet of `docs/idd-helper-scripts.md` ("Helper contract
+classes").
 
 The helper is not an `idd-*` bin. Invoke it directly from a source checkout
 with one `--path-prefix` per touched imported root or root-level file. The
@@ -322,47 +319,14 @@ node <idd-skill>/scripts/verify-import-mirror.mjs \
   --path-prefix .markdownlint-cli2.yaml
 ```
 
-On native Windows, omit `.githooks` unless the command runs under WSL: the
-nested path is read from the filesystem, so mode equivalence requires Linux,
-macOS, or WSL. Ensure
-`git -C <idd-skill> config --get core.fileMode` is not `false` and
-`git -C <idd-skill> ls-tree <upstream-commit>` with
-`-- idd-template/.githooks/pre-commit` reports `100755` before comparing
-modes. If modes differ, use a mode-preserving checkout or omit `.githooks`. See
-[kurone-kito/idd-skill#3216](https://github.com/kurone-kito/idd-skill/issues/3216).
+On native Windows omit `.githooks` unless the command runs under WSL; the
+`docs/idd-helper-scripts.md` bullet gives the mode check and its
+`core.fileMode` precondition.
 
-For a `package-manager` adopter using a `node_modules` linker (npm, pnpm,
-or Yarn configured for `node_modules`) without the source checkout, run the
-same helper from the installed package. It is intentionally not an `idd-*`
-bin:
-
-```sh
-node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
-  --target-root <target-repo> --target-ref <mirror-only-commit> \
-  --target-base-ref <target-base-ref> \
-  --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
-  --path-prefix .github/instructions --path-prefix .github/workflows \
-  --path-prefix .github/idd/config.json \
-  --normalize-json-key .github/idd/config.json:commands.fix-validate \
-  --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
-  --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
-  --path-prefix docs --path-prefix profiles \
-  --path-prefix .githooks \
-  --path-prefix .cspell.config.yml --path-prefix .markdownlint.yml \
-  --path-prefix .markdownlint-cli2.yaml
-```
-
-This direct path is a package-manager-only runtime-manifest exception in
-`packageManagerOnlyHelpers`, not a `commandCatalog` entry or managed script.
-It requires a `node_modules` linker and is unavailable under Yarn Plug'n'Play;
-that profile-mismatch failure is tracked in
-[issue #1674](https://github.com/kurone-kito/idd-skill/issues/1674). Pin the
-installed package to the exact upstream revision that supplied the mirror-only
-import, using an immutable archive, tarball, or equivalent
-`helperRuntime.packageSpec`; never resolve it from mutable `main`. If that
-revision cannot be established, use the source-checkout recipe instead.
-Use a source checkout for PnP and `ephemeral-npx` adopters; `vendored-node`
-also omits this source-repository helper from its adopter command catalog.
+A `package-manager` adopter with a `node_modules` linker and no source
+checkout uses `node_modules/@kurone-kito/idd-skill` in place of `<idd-skill>`,
+pinned to the import revision, never mutable `main`; PnP, `ephemeral-npx` and
+`vendored-node` use a source checkout (that bullet gives the rest).
 
 When the target uses the `vendored-node` profile, run a separate check for
 helper and schema paths against the checkout root, using only the prefixes
@@ -382,6 +346,42 @@ Keep `--target-ref` on the mirror-only commit. After substitution, run
 rewrites, pinned actions, and GHES-generated
 `.github/workflows/strip-untrusted-labels.yml` are intentional; selected
 mirror-path content or mode mismatches fail.
+
+### Re-import with an overlay report
+
+kurone-kito/setup.ubuntu#201 (2026-10-05): a forced re-import erased overlays
+and its mirror check passed. Order:
+
+1. Record pre-import ref and old upstream tag/commit in policy record; check
+   out a clean worktree: the `--upstream-base-path` source.
+2. On a fresh branch run `idd-onboard --import --force` (Step 2; same
+   `--profile`; `--allow-root` if `--source` is outside cwd) and one
+   `--hold <path>` per path you own or exclude (default
+   `.github/idd/config.json`, hand-merged workflows): exact manifest path, an
+   unknown path exits 2, repeat on `idd-onboard --verify`; hold each excluded
+   lite path (11 at v0.14.0). Hold also a same-named file of yours the old
+   template lacked (the import overwrites it whole, unlisted). For paths only
+   the old tag has (compare `plan[].targetPath` of old/new dry-runs via
+   `--import --dry-run --force --source <root>`, no holds), check diff
+   against pre-import ref before `git rm` so overlays are kept. Commit mirror
+   alone, before `--substitute`; verify as above.
+3. Re-verify with `--upstream-base-path <old idd-template>` and
+   `--report-reverted-overlays`: lines you added that import erased (held
+   paths are not in diff).
+4. Re-apply real overlays in overlay commits or accept gaps; `--substitute`;
+   rerun report with `--target-ref HEAD`, same base (exit 1 is expected).
+   Lines still listed are deliberate drops: record them.
+5. Open PR with commits separate; name upstream-identical paths so findings on
+   them go upstream.
+6. Option: with mirror-only commit per import, merge vendor branch. Held files
+   stay old, substituted values conflict with raw tokens on edited token lines,
+   and missing deletion (`--import` never deletes) plus need for `--force`
+   carry over (on a pure mirror branch `--force` cannot erase overlays).
+
+Report limits: helper doc's `verify-import-mirror` bullet; deleted, held,
+JSON paths are skipped, so diff them and `.github/idd/config.json` against
+pre-import ref. Lite files are inert unless pointed at ("Recorded convention,
+not yet wired", `docs/idd-workflow.md`): without lite tier, hold them out.
 
 ### Recorded policies and selected companions
 

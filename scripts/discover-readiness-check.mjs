@@ -37,7 +37,7 @@ import {
 } from './supersession-detection.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-// Leading-anchor source for `extractReviewFixLoopCutoffRefsIssueNumbers`'s
+// Leading-anchor source for `extractDeferSourceRefsIssueNumbers`'s
 // `Refs` line parser (below). #3284 moved the `Blocked by`/`Depends on`
 // grammar this const used to also serve into the shared
 // `dependency-grammar.mts` module -- `Refs` is one of the keywords the
@@ -60,12 +60,14 @@ const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
 // Declared here, above the `import.meta.main` CLI block, for the same
 // top-level-await TDZ reason as `DEPENDENCY_LINE_PREFIX` above: the block
 // awaits `evaluateDiscoverReadiness`, whose own synchronous body can call
-// `hasReviewFixLoopCutoffDeferMarker` (#2877) before that promise settles.
-/** The one currently-defined `{markerPrefix}-authoring-defer-source` value
- * `hasReviewFixLoopCutoffDeferMarker` recognizes. */
-const REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE = 'review-fix-loop-cutoff';
+// `hasDeferSourceMarker` before that promise settles.
+/** Values that opt a follow-up into the narrow defer-source lifecycle. */
+export const DEFER_SOURCE_VALUES = Object.freeze([
+  'review-fix-loop-cutoff',
+  'review-needs-decision',
+]);
 // Declared here (same TDZ reason as the two constants above) for
-// `extractReviewFixLoopCutoffRefsIssueNumbers`'s trailing-reference check
+// `extractDeferSourceRefsIssueNumbers`'s trailing-reference check
 // (#2877 review fix round 4, Codex P2): matches a bare local `#N` NOT
 // immediately preceded by a word character, `/`, or `-` -- so
 // `other/repo#20` (a cross-repo mention) and a hyphen-joined token do not
@@ -417,18 +419,29 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`blocked_by_open_issue:#${blockedNumber}`);
       }
     }
-    // #2877: a follow-up issue carrying the review-fix-loop-cutoff defer
+    // #2877/#3778: a follow-up issue carrying a defined defer-source
     // marker names its originating issue via a `Refs #NNN` line, which is
     // otherwise non-blocking. Narrow exception: resolve that reference the
     // same way an ordinary `Blocked by #NNN` is resolved above, so the
     // follow-up cannot start before the work it was deferred from actually
     // closes. An issue without the marker is completely unaffected -- its
     // own `Refs` lines are never inspected here.
-    if (hasReviewFixLoopCutoffDeferMarker(issue.body, resolvedMarkerPrefix)) {
+    if (hasDeferSourceMarker(issue.body, resolvedMarkerPrefix)) {
+      if (
+        hasDeferSourceMarker(
+          issue.body,
+          resolvedMarkerPrefix,
+          'review-needs-decision',
+        ) &&
+        authoringLabelName.trim().toLowerCase() ===
+          needsDecisionLabelName.trim().toLowerCase()
+      ) {
+        reasons.add('needs_decision_label_conflicts_with_authoring_label');
+      }
       const {
         numbers: deferSourceRefsNumbers,
         ambiguous: deferSourceRefsAmbiguous,
-      } = extractReviewFixLoopCutoffRefsIssueNumbers(issue.body);
+      } = extractDeferSourceRefsIssueNumbers(issue.body);
       // Review fix (#2877): a marked issue with no extracted `Refs` target
       // at all is a malformed marker -- missing the D3-required
       // originating-issue line -- and must fail closed (blocked) rather
@@ -728,12 +741,12 @@ export function extractDependencyIssueNumbers(body, currentRepo) {
   ]);
 }
 /**
- * Whether `body` carries the exact
- * `<!-- {markerPrefix}-authoring-defer-source: review-fix-loop-cutoff -->`
- * marker (#2877). `idd-review-triage.instructions.md`'s round-count or
- * adopt-now-urgency defer trigger writes this marker, once, at Stage 1
- * publication time, on a follow-up issue that bundles deferred review
- * findings from either trigger; that issue's
+ * Whether `body` carries a defined
+ * `{markerPrefix}-authoring-defer-source` marker (#2877, #3778).
+ * `idd-review-triage.instructions.md`'s round-count or adopt-now-urgency
+ * trigger writes `review-fix-loop-cutoff`; the needs-decision follow-up
+ * flow writes `review-needs-decision`. Both are written once, at Stage 1
+ * publication time. The issue's
  * body also carries a `Refs #<originating-issue>` line back to the PR/issue
  * the deferral came from (the D3 follow-up-issue rule), which this file
  * otherwise never parses as a dependency -- `Refs` is deliberately
@@ -747,20 +760,27 @@ export function extractDependencyIssueNumbers(body, currentRepo) {
  * (added after publication) can only make a candidate *more* blocked,
  * never less, so a false positive here fails safe.
  */
-export function hasReviewFixLoopCutoffDeferMarker(
+export function hasDeferSourceMarker(
   body,
   markerPrefix = DEFAULT_MARKER_PREFIX,
+  expectedValue,
 ) {
   const pattern = new RegExp(
-    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-defer-source:\\s*${escapeRegex(REVIEW_FIX_LOOP_CUTOFF_DEFER_SOURCE)}\\s*-->`,
-    'i',
+    `<!--\\s*${escapeRegex(markerPrefix)}-authoring-defer-source:\\s*([^\\s]+)\\s*-->`,
+    'gi',
   );
   // Mask code regions first, matching the #1121 boundary every other
   // extractor in this file already applies: an issue that quotes this
   // marker as inline-code, fenced, or indented-code-block example prose
   // (documenting the mechanism itself, as `#2877` and its own follow-up
   // do) must not be misread as actually carrying a live marker.
-  return pattern.test(maskMarkdownForScan(body));
+  return [...maskMarkdownForScan(body).matchAll(pattern)].some((match) => {
+    const value = match[1];
+    return (
+      DEFER_SOURCE_VALUES.includes(value) &&
+      (expectedValue === undefined || value === expectedValue)
+    );
+  });
 }
 /**
  * Collect the `#N` reference declared on the body's `Refs` keyword line --
@@ -797,10 +817,10 @@ export function hasReviewFixLoopCutoffDeferMarker(
  * start its own line (ordinary prose citing an issue mid-sentence, like
  * `See also Refs #900 (non-blocking) for background.`) is not a keyword
  * line at all and never counts toward any of this. See
- * {@link hasReviewFixLoopCutoffDeferMarker} for how the caller decides
+ * {@link hasDeferSourceMarker} for how the caller decides
  * whether any of this is blocking in the first place.
  */
-export function extractReviewFixLoopCutoffRefsIssueNumbers(body) {
+export function extractDeferSourceRefsIssueNumbers(body) {
   const stripped = maskMarkdownForScan(body);
   const linePattern = new RegExp(
     `${DEPENDENCY_LINE_PREFIX}Refs:?[ \\t]+(#\\d+.*)$`,

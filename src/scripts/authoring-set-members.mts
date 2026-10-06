@@ -7,7 +7,7 @@
 //
 // Read-only enumeration of issues whose trusted authoring-owner markers
 // carry one exact `set` value (kurone-kito/idd-skill#3468). The
-// review-fix-loop-cutoff sole-member precondition calls this instead of
+// defer-source auto-release sole-member precondition calls this instead of
 // asking a session to paginate every issue comment by hand. A search
 // response with `incomplete_results`, a duplicate hit that hides a
 // distinct issue, an unfinished index-lag window, or any other

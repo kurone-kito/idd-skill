@@ -875,9 +875,10 @@ function readRestCommentPage(
 
 /** Bounds the single unpaginated `last:N` page {@link
  * fetchReviewThreadCommentUserContentEdits} reads per comment -- the two
- * merge-gate collectors that call it already scope `nodeIds` to a small,
- * bounded set (advisory-bot thread comments edited after their thread's
- * disposition), and a comment whose real edit history exceeds this page
+ * merge-gate collectors and F4 `audit-pr-cleanup.mts` (#3791) that call
+ * it already scope `nodeIds` to a small, bounded set (advisory-bot
+ * thread comments edited after their thread's disposition), and a
+ * comment whose real edit history exceeds this page
  * is reported with `totalCount > edits.length`, which the caller treats
  * as an incomplete/unverifiable history (fails closed to `updatedAt`
  * dating, `protocol-helpers.mts`'s

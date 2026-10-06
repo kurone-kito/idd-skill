@@ -143,6 +143,25 @@ test('checkPathAItem: Rejected — proper reply + resolved thread → pass', () 
   assert.equal(result.checks.threadResolutionCorrect, true);
 });
 
+test('checkPathAItem: the needs-decision deferral reply is a valid Rejected reply on a resolved thread', () => {
+  const markerReply =
+    '**Rejected** — deferred to follow-up issue #3790 (needs-decision; the check the claim needs has no route in E5): the claim could not be verified, so the follow-up records it as unverified';
+  assert.equal(classifyMarker(markerReply), 'rejected');
+  const result = checkPathAItem({
+    id: 'a3-nd',
+    path: 'A',
+    type: 'review_thread',
+    decision: 'rejected',
+    markerReply,
+    threadResolved: true,
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.checks.markerPresent, true);
+  assert.equal(result.checks.markerMatchesDecision, true);
+  assert.equal(result.checks.threadResolutionCorrect, true);
+  assert.deepEqual(result.issues, []);
+});
+
 test('checkPathAItem: Rejected — reply present but thread unresolved → fail', () => {
   const result = checkPathAItem({
     id: 'a4',
