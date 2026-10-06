@@ -1516,11 +1516,11 @@ another one. Example: PR `#3147`'s Low-labelled wording findings were
 Accepted with "the review correctly identified wording issues in the
 F4 cleanup guidance; the pending in-scope documentation fix ...".
 `critiqueLoop.deferAfterRounds` (repo value `5`) does not cover this
-case: it only fires after the round threshold and only for Low items,
-and since its counter was fixed to count Copilot reviews (PR `#3168`,
-merged 2026-09-21) no merged PR has reached 5 Copilot reviews, so it
-has never fired — most review waves happen in rounds 1-4, before that
-cutoff can act.
+case: it only fires after the round threshold and only for Low items.
+Its counter was fixed to count Copilot reviews (PR `#3168`, merged
+2026-09-21). As of this 2026-09-24 observation, no merged PR had
+reached 5 Copilot reviews, so it had never fired — most review waves
+happened in rounds 1-4, before that cutoff could act.
 
 Copilot's severity label has no published definition, no
 configuration, and no API field: labels were introduced 2026-05-12
@@ -1565,6 +1565,11 @@ merges, other-bot fixes) — this trigger does not touch those.
   unchanged and Low-only.
   The High ceiling is superseded for needs-decision items by
   [the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
+- This repository sets `critiqueLoop.deferRelaxAtRounds` to `[4, 7]`,
+  because over merged pull requests #3561 to #3781 the median
+  PR-wide Copilot review count was 2, while 30 reached a 4th review
+  and 14 reached a 7th, so the first threshold leaves a typical pull
+  request unchanged and the second acts only on the long tail.
 - Keep `deferAfterRounds` as an unchanged backstop; the new rule is an
   independent trigger applying from the first E4/E5 pass.
 - Apply to every PATH A actor, not only Copilot, with the agent's E4

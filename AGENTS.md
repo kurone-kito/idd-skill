@@ -232,13 +232,28 @@ layered on top of the distributed IDD defaults:
   dogfooding policy (applies only to `kurone-kito/idd-skill`).
   `low` and `low-and-medium` still never defer High.
   `severity-tiered` scores urgency `very-low` < `low` < `medium` <
-  `high` and defers High only at `very-low` (issue `#3589`). The
-  earlier opt-in was `low-and-medium` (issue `#3222`): a 60-PR
+  `high` and, below the first threshold, defers High only at
+  `very-low` (issue `#3589`). The gradient acts only when
+  `deferByUrgency` is `severity-tiered`. This repository opts in
+  with `critiqueLoop.deferRelaxAtRounds: [4, 7]`. Over the 100
+  merged pull requests numbered #3561 to #3781 (merged 2026-09-27
+  to 2026-10-05), the median PR-wide Copilot review count was 2,
+  and 30 reached a 4th review, 25 a 5th, 14 a 7th and 10 a 9th, so
+  the first threshold leaves a typical pull request unchanged and
+  the second acts only on the long tail. A follow-up filed by the
+  gradient carries the existing `review-fix-loop-cutoff` marker.
+  The motivating observation is
+  [kurone-kito/setup.ubuntu#201](https://github.com/kurone-kito/setup.ubuntu/issues/201).
+  The earlier opt-in was `low-and-medium` (issue `#3222`): a 60-PR
   baseline (`#3089`-`#3210`) found all 11 Low-only reviews and 25
-  Medium-highest reviews followed by another Copilot review wave,
-  and `critiqueLoop.deferAfterRounds` (this repository's own local
-  `5`) never fired because most review waves happen well before
-  that round threshold. See
+  Medium-highest reviews followed by another Copilot review wave.
+  As of the 2026-09-24 observation,
+  `critiqueLoop.deferAfterRounds` (this repository's own local
+  `5`) had never fired because most review waves happened well
+  before that round threshold. A later count over the same #3561
+  to #3781 range found that 25 of 100 pull requests reached a 5th
+  Copilot review, and none of the 7 deferral replies in that range
+  carries a `round <r>/5` clause. See
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
 - **GitHub API load control**: This source repository also records
