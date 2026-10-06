@@ -360,9 +360,10 @@ and its mirror check passed. Order:
    `.github/idd/config.json`, hand-merged workflows): exact manifest path, an
    unknown path exits 2, repeat on `idd-onboard --verify`; hold each excluded
    lite path (11 at v0.14.0). Hold also a same-named file of yours the old
-   template lacked (the import overwrites it whole, unlisted). `git rm` what
-   only the old tag has (compare `plan[].targetPath` of old and new dry-runs
-   via `--import --dry-run --force --source <root>`, no holds). Commit mirror
+   template lacked (the import overwrites it whole, unlisted). For paths only
+   the old tag has (compare `plan[].targetPath` of old/new dry-runs via
+   `--import --dry-run --force --source <root>`, no holds), check diff
+   against pre-import ref before `git rm` so overlays are kept. Commit mirror
    alone, before `--substitute`; verify as above.
 3. Re-verify with `--upstream-base-path <old idd-template>` and
    `--report-reverted-overlays`: lines you added that import erased (held
@@ -372,16 +373,15 @@ and its mirror check passed. Order:
    Lines still listed are deliberate drops: record them.
 5. Open PR with commits separate; name upstream-identical paths so findings on
    them go upstream.
-6. Option: with a mirror-only commit per import, merge a vendor branch. Held
-   files stay old, substituted values conflict with raw tokens where upstream
-   edited a token line, and the missing deletion (`--import` never deletes) and
-   the need for `--force` carry over (on a pure mirror branch `--force` cannot
-   erase overlays).
+6. Option: with mirror-only commit per import, merge vendor branch. Held files
+   stay old, substituted values conflict with raw tokens on edited token lines,
+   and missing deletion (`--import` never deletes) plus need for `--force`
+   carry over (on a pure mirror branch `--force` cannot erase overlays).
 
-Report limits: the helper doc's `verify-import-mirror` bullet; diff a
-hand-edited `.github/idd/config.json` against the pre-import ref. Lite files
-are inert unless pointed at ("Recorded convention, not yet wired",
-`docs/idd-workflow.md`): without the lite tier, hold them out and record it.
+Report limits: helper doc's `verify-import-mirror` bullet; deleted, held,
+JSON paths are skipped, so diff them and `.github/idd/config.json` against
+pre-import ref. Lite files are inert unless pointed at ("Recorded convention,
+not yet wired", `docs/idd-workflow.md`): without lite tier, hold them out.
 
 ### Recorded policies and selected companions
 
