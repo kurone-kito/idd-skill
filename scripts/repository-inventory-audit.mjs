@@ -1347,85 +1347,110 @@ const UNPOINTED_INVOCATION_RE =
 /**
  * Mask HTML comments outside of code blocks and inline code spans.
  * Replaces comment characters with spaces, preserving newlines so that
- * line numbers remain identical.
+ * line numbers remain identical. Handles multiline inline code spans
+ * across lines so that `<!--` inside backticks never enters comment mode.
  */
 function maskHtmlComments(content) {
-  const lines = content.split(/\r?\n/);
-  const outLines = [];
+  const result = [];
+  const len = content.length;
+  let i = 0;
   let inFence = false;
   let fenceChar = '';
   let fenceLen = 0;
-  let inHtmlComment = false;
-  for (const line of lines) {
-    if (inFence) {
-      outLines.push(line);
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-      const closeMarker = close?.[1];
-      if (
-        closeMarker !== undefined &&
-        (closeMarker[0] ?? '') === fenceChar &&
-        closeMarker.length >= fenceLen
-      ) {
-        inFence = false;
-      }
-      continue;
-    }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    const openMarker = open?.[1];
-    const openInfo = open?.[2] ?? '';
-    if (
-      !inHtmlComment &&
-      openMarker !== undefined &&
-      (!openMarker.startsWith('`') || !openInfo.includes('`'))
-    ) {
-      inFence = true;
-      fenceChar = openMarker[0] ?? '';
-      fenceLen = openMarker.length;
-      outLines.push(line);
-      continue;
-    }
-    const chars = line.split('');
-    let i = 0;
-    while (i < chars.length) {
-      if (inHtmlComment) {
-        if (line.startsWith('-->', i)) {
-          chars[i] = ' ';
-          chars[i + 1] = ' ';
-          chars[i + 2] = ' ';
-          i += 3;
-          inHtmlComment = false;
-        } else {
-          chars[i] = ' ';
-          i += 1;
-        }
-      } else {
-        if (line.startsWith('<!--', i)) {
-          inHtmlComment = true;
-          chars[i] = ' ';
-          chars[i + 1] = ' ';
-          chars[i + 2] = ' ';
-          chars[i + 3] = ' ';
-          i += 4;
-        } else if (chars[i] === '`') {
-          let tickCount = 1;
-          while (i + tickCount < chars.length && chars[i + tickCount] === '`') {
-            tickCount += 1;
-          }
-          const opener = '`'.repeat(tickCount);
-          const closeIndex = line.indexOf(opener, i + tickCount);
-          if (closeIndex !== -1) {
-            i = closeIndex + tickCount;
-          } else {
-            i += tickCount;
-          }
-        } else {
-          i += 1;
-        }
-      }
-    }
-    outLines.push(chars.join(''));
+  function isLineStart(idx) {
+    return idx === 0 || content[idx - 1] === '\n';
   }
-  return outLines.join('\n');
+  while (i < len) {
+    if (isLineStart(i)) {
+      let lineEnd = content.indexOf('\n', i);
+      if (lineEnd === -1) lineEnd = len;
+      const line = content.slice(i, lineEnd);
+      if (inFence) {
+        const close = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
+        const closeMarker = close?.[1];
+        if (
+          closeMarker !== undefined &&
+          (closeMarker[0] ?? '') === fenceChar &&
+          closeMarker.length >= fenceLen
+        ) {
+          for (let k = i; k < lineEnd; k += 1) {
+            result.push(content[k] ?? '');
+          }
+          if (lineEnd < len) {
+            result.push(content[lineEnd] ?? '');
+            i = lineEnd + 1;
+          } else {
+            i = lineEnd;
+          }
+          inFence = false;
+          fenceChar = '';
+          fenceLen = 0;
+          continue;
+        }
+        for (let k = i; k < lineEnd; k += 1) {
+          result.push(content[k] ?? '');
+        }
+        if (lineEnd < len) {
+          result.push(content[lineEnd] ?? '');
+          i = lineEnd + 1;
+        } else {
+          i = lineEnd;
+        }
+        continue;
+      }
+      const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      const openMarker = open?.[1];
+      const openInfo = open?.[2] ?? '';
+      if (
+        openMarker !== undefined &&
+        (!openMarker.startsWith('`') || !openInfo.includes('`'))
+      ) {
+        inFence = true;
+        fenceChar = openMarker[0] ?? '';
+        fenceLen = openMarker.length;
+        for (let k = i; k < lineEnd; k += 1) {
+          result.push(content[k] ?? '');
+        }
+        if (lineEnd < len) {
+          result.push(content[lineEnd] ?? '');
+          i = lineEnd + 1;
+        } else {
+          i = lineEnd;
+        }
+        continue;
+      }
+    }
+    if (content.startsWith('<!--', i)) {
+      const endIdx = content.indexOf('-->', i + 4);
+      const closeEnd = endIdx === -1 ? len : endIdx + 3;
+      for (let k = i; k < closeEnd; k += 1) {
+        const ch = content[k] ?? '';
+        result.push(ch === '\n' || ch === '\r' ? ch : ' ');
+      }
+      i = closeEnd;
+    } else if (content[i] === '`') {
+      let tickCount = 1;
+      while (i + tickCount < len && content[i + tickCount] === '`') {
+        tickCount += 1;
+      }
+      const opener = '`'.repeat(tickCount);
+      for (let k = 0; k < tickCount; k += 1) {
+        result.push('`');
+      }
+      i += tickCount;
+      const closeIdx = content.indexOf(opener, i);
+      if (closeIdx !== -1) {
+        for (let k = i; k < closeIdx + tickCount; k += 1) {
+          result.push(content[k] ?? '');
+        }
+        i = closeIdx + tickCount;
+      }
+    } else {
+      result.push(content[i] ?? '');
+      i += 1;
+    }
+  }
+  return result.join('');
 }
 /**
  * Split a Markdown file into blocks. Fenced code blocks (CommonMark-compliant)

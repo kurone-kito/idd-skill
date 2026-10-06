@@ -855,6 +855,16 @@ test('unpointed-source-form unit test checks bare invocations and pointer positi
     violations,
   );
   assert.equal(violations.length, 0);
+
+  // 18. Multiline inline code span containing `<!--` does not enter HTML comment
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Example `inline\n<!--\ncode` with literal comment opener.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 5\b/);
 });
 
 test('CLI inventory audit unpointed-source-form checks instruction scopes and ignores docs', () => {
