@@ -15,8 +15,11 @@
 // cancellation annotations for runs 36730573670, 36752800229, and
 // 36955823310; the workflow comment preserves their timer ambiguity.
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const WORKFLOWS_DIR = 'workflows';
 
@@ -55,15 +58,246 @@ const KNOWN_SAFE_CANCEL_IN_PROGRESS_VALUES = new Set([
 const REVIEWED_PRE_FLOOR_ACTIONS = new Set([
   'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
 ]);
-const REVIEWED_PRE_FLOOR_RUN_COMMANDS = new Set([
-  'node scripts/audit-docs.mjs --check',
-  // Bare-node audits that already precede the floor assertion on main.
-  // pull_request CI tests the merge with main, which runs these steps
-  // (issues #3748 and #3751).
-  'node scripts/lint-source-contracts.mjs',
-  'node scripts/lint-source-boundaries.mjs',
-  'node scripts/validate-schemas.mjs',
-]);
+// Command text is not an immutable input: these scripts are repository
+// code, and audit-docs.mjs runs other helpers before the floor. Each
+// digest is sha256 over the sorted closure (the entry script, its static
+// relative imports, dynamic import('./…') literals, and, when the entry
+// probes helpers, every documented scripts/*.mjs plus that graph).
+// pull_request CI checks out the merge with main, which carries main's
+// bytes of these files; this branch does not edit them and is behind
+// main, so both the branch-tree digest and main's digest are reviewed.
+// A third digest, including a one-byte edit, is not.
+const REVIEWED_PRE_FLOOR_RUNS: readonly {
+  command: string;
+  digests: readonly string[];
+}[] = [
+  {
+    command: 'node scripts/audit-docs.mjs --check',
+    digests: [
+      '8da091bc5c9aa25ed977013f3d78d85ae1a50ab9e5919debd8f19d50b84fab1b',
+      'ad4b8b704d8bb2185c0838877351f2fedfb9f7b4a5092ee826c9ae6ce5973716',
+    ],
+  },
+  {
+    // Bare-node audits that already precede the floor assertion on main.
+    // pull_request CI tests the merge with main, which runs these steps
+    // (issues #3748 and #3751). They are absent from this branch's tree.
+    command: 'node scripts/lint-source-contracts.mjs',
+    digests: [
+      '60f567d2ff88a072780130e813dacb67a8f1efb34d242b0979feeeeef569eb37',
+    ],
+  },
+  {
+    command: 'node scripts/lint-source-boundaries.mjs',
+    digests: [
+      'de1b710b0e268c1148897cbbe89bef0d9bda398e3c26b007db7d90cdbcbe0162',
+    ],
+  },
+  {
+    command: 'node scripts/validate-schemas.mjs',
+    digests: [
+      'cee3a8a41e7266ff41afb094d54db3b0840629b0e29ff5787d15e40f829b1fb4',
+      '22ad5211438a38482bb2818b1b870022687902f52927041fa5666871638505bf',
+    ],
+  },
+];
+const REVIEWED_PRE_FLOOR_RUN_COMMANDS = new Set(
+  REVIEWED_PRE_FLOOR_RUNS.map((entry) => entry.command),
+);
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const NODE_SCRIPT_COMMAND = /^node (scripts\/[\w./-]+\.mjs)(?: |$)/;
+const PROBES_HELPERS =
+  /execFileSync\(\s*['"]node['"]\s*,\s*\[\s*helperPath\s*,\s*['"]--help['"]\s*\]/;
+const DOC_ROOTS = ['docs', 'idd-template', '.github/instructions'];
+
+function toPosix(path: string): string {
+  return path.replaceAll('\\', '/');
+}
+
+function entryScript(command: string): string | undefined {
+  const match = NODE_SCRIPT_COMMAND.exec(command);
+  if (!match || match[1].includes('..')) {
+    return undefined;
+  }
+  return match[1];
+}
+
+function resolveSpecifier(fromRelative: string, specifier: string): string[] {
+  const base = toPosix(join(dirname(fromRelative), specifier));
+  if (/\.(?:mjs|cjs|js|json)$/.test(base)) {
+    return [base];
+  }
+  return [`${base}.mjs`, `${base}.js`];
+}
+
+function staysInsideRepo(root: string, relativePath: string): boolean {
+  const fromRoot = relative(root, join(root, relativePath));
+  return (
+    fromRoot !== '' &&
+    fromRoot !== '..' &&
+    !fromRoot.startsWith(`..${sep}`) &&
+    !fromRoot.startsWith('/')
+  );
+}
+
+function markdownFiles(root: string, dir: string): string[] {
+  const absolute = join(root, dir);
+  if (!existsSync(absolute)) {
+    return [];
+  }
+  return readdirSync(absolute, { recursive: true, encoding: 'utf8' })
+    .filter((entry) => entry.endsWith('.md'))
+    .map((entry) => toPosix(join(dir, entry)));
+}
+
+function documentedHelpers(
+  root: string,
+  readFile: (absolutePath: string) => Buffer,
+): string[] {
+  const helpers = new Set<string>();
+  const pattern = /\bnode\s+(scripts\/[\w./-]+\.mjs)\b/g;
+  for (const dir of DOC_ROOTS) {
+    for (const relativePath of markdownFiles(root, dir)) {
+      const text = readFile(join(root, relativePath)).toString('utf8');
+      for (const match of text.matchAll(pattern)) {
+        if (!match[1].includes('..')) {
+          helpers.add(match[1]);
+        }
+      }
+    }
+  }
+  return [...helpers].sort();
+}
+
+type ClosureDigest = { digest: string; count: number } | { error: string };
+
+function preFloorClosureDigest(
+  root: string,
+  command: string,
+  readFile: (absolutePath: string) => Buffer = readFileSync,
+): ClosureDigest | undefined {
+  const entry = entryScript(command);
+  if (entry === undefined || !existsSync(join(root, entry))) {
+    return undefined;
+  }
+  const files = new Set<string>([entry]);
+  const pending = [entry];
+  const relativeModule =
+    /^\s*(?:import\s+(?:[^'";]*?\s+from\s+)?|export\s+[^'";]*?\s+from\s+)['"](\.[^'"]+)['"]/gm;
+  const dynamicImport = /\bawait\s+import\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+  while (pending.length > 0) {
+    const relativePath = pending.pop();
+    if (relativePath === undefined) {
+      break;
+    }
+    const text = readFile(join(root, relativePath)).toString('utf8');
+    const specifiers = [
+      ...text.matchAll(relativeModule),
+      ...text.matchAll(dynamicImport),
+    ].map((match) => match[1]);
+    if (relativePath === entry && PROBES_HELPERS.test(text)) {
+      specifiers.push(...documentedHelpers(root, readFile));
+    }
+    for (const specifier of specifiers) {
+      if (specifier.includes('..') && !specifier.startsWith('.')) {
+        return {
+          error: `unverifiable specifier ${specifier} from ${relativePath}`,
+        };
+      }
+      const options = specifier.startsWith('.')
+        ? resolveSpecifier(relativePath, specifier)
+        : [specifier];
+      const resolved = options.find(
+        (candidate) =>
+          staysInsideRepo(root, candidate) && existsSync(join(root, candidate)),
+      );
+      if (resolved === undefined) {
+        if (!specifier.startsWith('.') && !existsSync(join(root, specifier))) {
+          continue;
+        }
+        return {
+          error: `unresolved ${specifier} from ${relativePath}`,
+        };
+      }
+      if (!files.has(resolved)) {
+        files.add(resolved);
+        pending.push(resolved);
+      }
+    }
+  }
+  const ordered = [...files].sort();
+  const hash = createHash('sha256');
+  for (const relativePath of ordered) {
+    hash.update(relativePath);
+    hash.update('\0');
+    hash.update(readFile(join(root, relativePath)));
+    hash.update('\0');
+  }
+  return { digest: hash.digest('hex'), count: ordered.length };
+}
+
+function inlinePreFloorRunCommands(jobBody: string): string[] {
+  const stepsBlock = findStepsThroughFloorCheck(jobBody);
+  if (stepsBlock === undefined) {
+    return [];
+  }
+  const lines = stepsBlock.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const floorStep = lines.findIndex(
+    (line, index) =>
+      !scalarContent[index] && line === '      - name: Assert Node.js floor',
+  );
+  if (floorStep === -1) {
+    return [];
+  }
+  const runKey = /^(?:run|'run'|"run")\s*:\s*(.*?)\s*$/;
+  const commands: string[] = [];
+  for (const [index, line] of lines.entries()) {
+    if (index >= floorStep || scalarContent[index]) {
+      continue;
+    }
+    const uncommented = stripYamlComment(line);
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    let entry: string | undefined;
+    if (indent === 6 && /^ {6}-\s*/.test(uncommented)) {
+      entry = uncommented.replace(/^ {6}-\s*/, '');
+    } else if (indent >= 7) {
+      entry = uncommented.slice(indent);
+    }
+    if (entry === undefined) {
+      continue;
+    }
+    const runMatch = entry.match(runKey);
+    if (runMatch && (indent === 6 || indent === 8)) {
+      commands.push(runMatch[1].trim());
+    }
+  }
+  return commands;
+}
+
+function unpinnedPreFloorCommand(
+  jobBody: string,
+  root: string,
+  readFile: (absolutePath: string) => Buffer = readFileSync,
+): string | undefined {
+  for (const command of inlinePreFloorRunCommands(jobBody)) {
+    const reviewed = REVIEWED_PRE_FLOOR_RUNS.find(
+      (item) => item.command === command,
+    );
+    if (reviewed === undefined) {
+      continue;
+    }
+    const result = preFloorClosureDigest(root, command, readFile);
+    if (
+      result === undefined ||
+      !('digest' in result) ||
+      !reviewed.digests.includes(result.digest)
+    ) {
+      return command;
+    }
+  }
+  return undefined;
+}
 
 /** Whether `text`'s top-level `concurrency:` block sets
  * `cancel-in-progress` to a value known to evaluate `true` for this
@@ -1338,6 +1572,11 @@ test('lint.yml logs Node.js version before asserting the Node floor', () => {
   assertNodeVersionLogBeforeFloor(
     extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
   );
+  assert.equal(
+    unpinnedPreFloorCommand(lintJob, REPO_ROOT),
+    undefined,
+    'lint.yml: a reviewed pre-floor run must execute the pinned closure',
+  );
 });
 
 test('a conditionally skipped lint job cannot satisfy the Node log guard', () => {
@@ -2014,6 +2253,20 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
     ...reviewedFloorStep.split('\n'),
   ].join('\n');
   assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(reviewedCheckout));
+  const flipped = (absolutePath: string): Buffer => {
+    const bytes = readFileSync(absolutePath);
+    if (absolutePath.endsWith(`${sep}scripts${sep}audit-docs.mjs`)) {
+      const copy = Buffer.from(bytes);
+      copy[copy.length - 1] ^= 0x01;
+      return copy;
+    }
+    return bytes;
+  };
+  assert.equal(
+    unpinnedPreFloorCommand(reviewedCheckout, REPO_ROOT, flipped),
+    'node scripts/audit-docs.mjs --check',
+    'a one-byte change to a pre-floor script must leave the reviewed closure',
+  );
 
   const floorStep = syntheticFloorStep(['node --version']).replace(
     '        run: |',
