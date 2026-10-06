@@ -2077,11 +2077,13 @@ test('unreviewed actions and run steps before the Node floor assertion are rejec
       ...actionStep.lines,
       ...syntheticFloorStep(['node --version']).split('\n'),
     ].join('\n');
+    const rejection =
+      'rejection' in actionStep && actionStep.rejection instanceof RegExp
+        ? actionStep.rejection
+        : /actions and run steps before the Node floor check must use reviewed entries/;
     assert.throws(
       () => assertLintJobEnforcesNodeFloor(jobBody),
-      'rejection' in actionStep
-        ? actionStep.rejection
-        : /actions and run steps before the Node floor check must use reviewed entries/,
+      rejection,
       `accepted unreviewed ${actionStep.type} steps: ${actionStep.lines.join(' | ')}`,
     );
   }
