@@ -55,9 +55,16 @@ const KNOWN_SAFE_CANCEL_IN_PROGRESS_VALUES = new Set([
 // Checkout is the only action before the Node floor assertion. Keep its
 // immutable ref explicit: an earlier JavaScript/composite action can change
 // GITHUB_PATH for every later step, so an unreviewed action can replace node.
-const REVIEWED_PRE_FLOOR_ACTIONS = new Set([
-  'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
-]);
+// A matching ref can still check out other files. repository, ref, token,
+// ssh-key, path, and github-server-url do that before the floor check, so
+// the with mapping may contain only the two inputs lint.yml already uses.
+const REVIEWED_CHECKOUT_USES =
+  'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1';
+const REVIEWED_PRE_FLOOR_ACTIONS = new Set([REVIEWED_CHECKOUT_USES]);
+const REVIEWED_CHECKOUT_INPUTS: Readonly<Record<string, string>> = {
+  'fetch-depth': '0',
+  'persist-credentials': 'false',
+};
 // Command text is not an immutable input: these scripts are repository
 // code, and audit-docs.mjs runs other helpers before the floor. Each
 // digest is sha256 over the sorted closure (the entry script, its static
@@ -959,6 +966,96 @@ function hasPlainScalarContinuation(
   return false;
 }
 
+function reviewedCheckoutInputsUnreviewed(
+  lines: string[],
+  scalarContent: boolean[],
+  floorStep: number,
+): boolean {
+  const stepStarts: number[] = [];
+  for (let index = 0; index < floorStep; index += 1) {
+    if (!scalarContent[index] && /^ {6}- /.test(lines[index])) {
+      stepStarts.push(index);
+    }
+  }
+  for (let stepIndex = 0; stepIndex < stepStarts.length; stepIndex += 1) {
+    const start = stepStarts[stepIndex];
+    const end =
+      stepIndex + 1 < stepStarts.length ? stepStarts[stepIndex + 1] : floorStep;
+    if (checkoutStepInputsUnreviewed(lines, scalarContent, start, end)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function checkoutStepInputsUnreviewed(
+  lines: string[],
+  scalarContent: boolean[],
+  start: number,
+  end: number,
+): boolean {
+  let usesReviewedCheckout = false;
+  const withLines: number[] = [];
+  for (let index = start; index < end; index += 1) {
+    if (scalarContent[index]) {
+      continue;
+    }
+    const trimmed = stripYamlComment(lines[index]).trim();
+    const uses = /^(?:-\s*)?(?:uses|'uses'|"uses")\s*:\s*(.*)$/.exec(trimmed);
+    if (uses?.[1].trim() === REVIEWED_CHECKOUT_USES) {
+      usesReviewedCheckout = true;
+    }
+    if (/^(?:-\s*)?(?:with|'with'|"with")\s*:/.test(trimmed)) {
+      withLines.push(index);
+    }
+  }
+  if (!usesReviewedCheckout) {
+    return false;
+  }
+  return withLines.some((withAt) =>
+    checkoutWithBlockUnreviewed(lines, scalarContent, withAt, end),
+  );
+}
+
+function checkoutWithBlockUnreviewed(
+  lines: string[],
+  scalarContent: boolean[],
+  withAt: number,
+  end: number,
+): boolean {
+  const body = stripYamlComment(lines[withAt])
+    .trim()
+    .replace(/^(?:-\s*)?/, '');
+  if (!body.startsWith('with')) {
+    return true;
+  }
+  const inline = body.replace(/^with\s*:\s*/, '');
+  if (inline !== '') {
+    return true;
+  }
+  for (let index = withAt + 1; index < end; index += 1) {
+    if (scalarContent[index]) {
+      return true;
+    }
+    const uncommented = stripYamlComment(lines[index]);
+    if (uncommented.trim() === '') {
+      continue;
+    }
+    const indent = lines[index].match(/^ */)?.[0].length ?? 0;
+    if (indent <= 8) {
+      return false;
+    }
+    if (indent !== 10) {
+      return true;
+    }
+    const match = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(uncommented.trim());
+    if (!match || REVIEWED_CHECKOUT_INPUTS[match[1]] !== match[2].trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Rejects unreviewed actions and run commands before the floor assertion.
  * Earlier steps can write GITHUB_PATH for later steps. */
 function hasUnreviewedPreFloorExecution(jobBody: string): boolean {
@@ -1045,7 +1142,7 @@ function hasUnreviewedPreFloorExecution(jobBody: string): boolean {
     }
   }
 
-  return false;
+  return reviewedCheckoutInputsUnreviewed(lines, scalarContent, floorStep);
 }
 
 /** Extracts one named step's body from the job's `steps` mapping, stopping
@@ -2253,6 +2350,32 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
     ...reviewedFloorStep.split('\n'),
   ].join('\n');
   assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(reviewedCheckout));
+  const reviewedCheckoutWithInputs = reviewedCheckout.replace(
+    '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n',
+    [
+      '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      '        with:',
+      '          fetch-depth: 0',
+      '          persist-credentials: false',
+      '',
+    ].join('\n'),
+  );
+  assert.doesNotThrow(() =>
+    assertLintJobEnforcesNodeFloor(reviewedCheckoutWithInputs),
+  );
+  const reviewedCheckoutWithBeforeUses = reviewedCheckout.replace(
+    '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n',
+    [
+      '      - with:',
+      '          fetch-depth: 0',
+      '          persist-credentials: false',
+      '        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      '',
+    ].join('\n'),
+  );
+  assert.doesNotThrow(() =>
+    assertLintJobEnforcesNodeFloor(reviewedCheckoutWithBeforeUses),
+  );
   const flipped = (absolutePath: string): Buffer => {
     const bytes = readFileSync(absolutePath);
     if (absolutePath.endsWith(`${sep}scripts${sep}audit-docs.mjs`)) {
@@ -2281,6 +2404,38 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
 test('unreviewed actions and run steps before the Node floor assertion are rejected', () => {
   const actionSteps = [
     { lines: ['      - uses: actions/example@deadbeef'], type: 'action' },
+    {
+      lines: [
+        '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+        '        with:',
+        '          repository: attacker/repo',
+        '          ref: deadbeef',
+      ],
+      type: 'action',
+    },
+    {
+      lines: [
+        '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+        '        with: { repository: attacker/repo }',
+      ],
+      type: 'action',
+    },
+    {
+      lines: [
+        '      - with:',
+        '          ref: deadbeef',
+        '        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      ],
+      type: 'action',
+    },
+    {
+      lines: [
+        '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+        "        'with':",
+        '          fetch-depth: 0',
+      ],
+      type: 'action',
+    },
     { lines: ['      -   uses: actions/example@deadbeef'], type: 'action' },
     { lines: ['      - "uses": actions/example@deadbeef'], type: 'action' },
     { lines: ['      - { uses: actions/example@deadbeef }'], type: 'action' },
