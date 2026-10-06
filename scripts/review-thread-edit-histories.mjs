@@ -40,6 +40,7 @@ export function enrichThreadsWithBotEditHistories(port, threads, options) {
       advisoryBotLogins: options.advisoryBotLogins
         ? [...options.advisoryBotLogins]
         : null,
+      requireUneditedDisposition: options.requireUneditedDisposition,
     },
   );
   if (candidateIds.length === 0) return threads;

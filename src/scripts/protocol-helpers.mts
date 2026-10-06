@@ -3823,6 +3823,12 @@ export function hasFreshDisposition(
  * `hasFreshDisposition` will report it missing regardless of how any
  * individual comment is dated.
  *
+ * `requireUneditedDisposition` (F4 `audit-pr-cleanup.mts`, #3791) keeps
+ * only anchors whose `classifyCommentEditState` is `'unedited'`. An
+ * edited or unknown disposition then contributes no candidates. The
+ * default leaves this historical anchor unchanged, so the F2 and F3
+ * collectors keep their current candidate set.
+ *
  * `isDispositionAuthor` defaults to `hasFreshDisposition`'s own default
  * (reject known bots, accept any human). A caller SHOULD pass the SAME
  * predicate it will later pass to `hasFreshDisposition`/
@@ -3835,6 +3841,7 @@ export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
   options: {
     isDispositionAuthor?: (login: string) => boolean;
     advisoryBotLogins?: unknown[] | null;
+    requireUneditedDisposition?: boolean;
   } = {},
 ): string[] {
   const dispositionAuthorPredicate =
@@ -3860,7 +3867,16 @@ export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
           const authorLogin = String(comment.author?.login ?? '')
             .trim()
             .toLowerCase();
-          return dispositionAuthorPredicate(authorLogin);
+          if (!dispositionAuthorPredicate(authorLogin)) {
+            return false;
+          }
+          // #3791: F4 must not spend a history fetch on a disposition
+          // `hasFreshDisposition` would itself reject. Default off so
+          // the F2/F3 collectors keep today's anchor.
+          return (
+            options.requireUneditedDisposition !== true ||
+            classifyCommentEditState(comment) === 'unedited'
+          );
         })
         // Dating the disposition comment itself never needs cosmetic-edit
         // verification -- it is IDD-agent/human-authored, never a

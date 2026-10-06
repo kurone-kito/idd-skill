@@ -1809,6 +1809,40 @@ test('enrichAuditReviewThreads fetches only advisory-bot comments edited after t
         nodes: [bot('PRRC_orphan', EDIT_AT_3786)],
       },
     },
+    {
+      // An edited disposition is not an anchor, even when the bot
+      // comment's lastEditedAt is later than that edit.
+      id: 'THREAD_edited_disposition',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          bot('PRRC_edited_anchor', '2026-10-05T12:03:10Z'),
+          {
+            ...disposition,
+            id: 'IC_edited',
+            lastEditedAt: '2026-10-05T12:02:40Z',
+            updatedAt: '2026-10-05T12:02:40Z',
+          },
+        ],
+      },
+    },
+    {
+      // A missing lastEditedAt is unknown, not unedited.
+      id: 'THREAD_unknown_disposition',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          bot('PRRC_unknown_anchor', '2026-10-05T12:03:10Z'),
+          {
+            ...disposition,
+            id: 'IC_unknown',
+            lastEditedAt: undefined,
+          },
+        ],
+      },
+    },
   ];
   const enriched = enrichAuditReviewThreads(threads, {
     dispositionAuthorLogins: ['idd-bot'],

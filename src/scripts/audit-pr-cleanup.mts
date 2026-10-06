@@ -1011,9 +1011,10 @@ function makeIddDispositionAuthorPredicate(
 
 /**
  * #3791: F4's bounded `userContentEdits` pass. Selects only configured
- * advisory-bot thread comments edited after the thread's latest IDD
- * disposition, fetches that history in one batch, and attaches it
- * before both disposition checks. `port` is injectable for tests; the
+ * advisory-bot thread comments edited after the thread's latest
+ * unedited IDD disposition, fetches that history in one batch, and
+ * attaches it before both disposition checks. An edited or unknown
+ * disposition anchors nothing. `port` is injectable for tests; the
  * default uses {@link fetchReviewThreadCommentUserContentEdits}. A
  * thrown fetch returns `threads` unchanged (fail closed to `updatedAt`).
  */
@@ -1036,6 +1037,7 @@ export function enrichAuditReviewThreads(
   return enrichThreadsWithBotEditHistories(port, threads, {
     dispositionAuthorLogins: options.dispositionAuthorLogins,
     advisoryBotLogins: options.advisoryBotLogins,
+    requireUneditedDisposition: true,
   });
 }
 

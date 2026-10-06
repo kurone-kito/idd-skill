@@ -51,6 +51,7 @@ export function enrichThreadsWithBotEditHistories<T extends ThreadInput>(
   options: {
     dispositionAuthorLogins: readonly unknown[];
     advisoryBotLogins: readonly unknown[] | null | undefined;
+    requireUneditedDisposition?: boolean;
   },
 ): T[] {
   const dispositionAuthors = new Set(
@@ -63,6 +64,7 @@ export function enrichThreadsWithBotEditHistories<T extends ThreadInput>(
       advisoryBotLogins: options.advisoryBotLogins
         ? [...options.advisoryBotLogins]
         : null,
+      requireUneditedDisposition: options.requireUneditedDisposition,
     },
   );
   if (candidateIds.length === 0) return threads;
