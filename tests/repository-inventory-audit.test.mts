@@ -17,6 +17,7 @@ import {
   type AuditFile,
   CHECK_FAMILIES,
   COVERED_HELPERS,
+  checkUnpointedSourceFormFile,
   collectHelperInvocationViolations,
   EXCLUDED_HELPERS,
   scanTemplateWorkflowRegistrations,
@@ -368,7 +369,7 @@ test('CLI audit checks documented helper invocations against a scratch corpus', 
     write(
       temp.root,
       '.github/instructions/main.instructions.md',
-      'Run node scripts/minimize-superseded-markers.mjs.\nShared libraries include scripts/protocol-helpers.mjs and scripts/policy-helpers.mjs.\n',
+      'Use the profile-selected form from docs/idd-helper-scripts.md.\nRun node scripts/minimize-superseded-markers.mjs.\nShared libraries include scripts/protocol-helpers.mjs and scripts/policy-helpers.mjs.\n',
     );
     write(
       temp.root,
@@ -414,7 +415,7 @@ test('CLI reports malformed manifest inventory entries without throwing', () => 
     write(
       temp.root,
       '.github/instructions/main.instructions.md',
-      'Run node scripts/minimize-superseded-markers.mjs.\nShared libraries include scripts/protocol-helpers.mjs and scripts/policy-helpers.mjs.\n',
+      'Use the profile-selected form from docs/idd-helper-scripts.md.\nRun node scripts/minimize-superseded-markers.mjs.\nShared libraries include scripts/protocol-helpers.mjs and scripts/policy-helpers.mjs.\n',
     );
     write(
       temp.root,
@@ -688,4 +689,340 @@ test('CLI fails closed when a selected inventory directory cannot be inspected',
   } finally {
     temp.cleanup();
   }
+});
+
+test('unpointed-source-form unit test checks bare invocations and pointer positioning', () => {
+  const violations: { ruleId: string; path: string; message: string }[] = [];
+
+  // 1. Bare use with no pointer is a violation
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.ruleId, 'unpointed-source-form');
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 2. Pointer earlier in the file passes
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Use the profile-selected form from docs/idd-helper-scripts.md.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 3. Pointer later in the same fenced block passes
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '```sh\nnode scripts/minimize-superseded-markers.mjs\n# profile-selected form\n```',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 4. Pointer later in the same paragraph passes
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node scripts/minimize-superseded-markers.mjs using its profile-selected form.',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 5. Pointer later in a different block is a violation
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node scripts/minimize-superseded-markers.mjs.\n\nUse profile-selected helpers later.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 6. profile-selected inside an HTML comment does not count
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '<!-- profile-selected -->\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 3\b/);
+
+  // 7. <!-- opener inside an inline code span does not hide the text after it
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Check `<!-- review-watermark:` markers. Use profile-selected form.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 8. <!-- opener inside a fenced block does not hide text after it
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '```sh\n# <!--\n```\n\nUse profile-selected form.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 9. Use of a source-only tool listed in exemption ledgers is not a violation
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node scripts/sync-docs.mjs --apply.',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 10. An invocation wrapped across two lines is detected
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node\nscripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 11. Prefix `./scripts/` is detected
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node ./scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 12. Prefix `<idd-skill>/scripts/` is detected
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node <idd-skill>/scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 13. Case-insensitive pointer matching passes
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Use the Profile-Selected form from docs/idd-helper-scripts.md.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 14. Offending source line is accurately reported on later lines
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '# Heading\n\nSome paragraph text.\n\nMore intro text.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 7\b/);
+
+  // 15. Multiline HTML comment spanning blank lines does not leak pointer
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '<!--\ncomment\n\nprofile-selected\n-->\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 7\b/);
+
+  // 16. Tilde fence recognizes pointer inside the same fence
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '~~~sh\nnode scripts/minimize-superseded-markers.mjs\n# profile-selected form\n~~~',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 17. Commented-out bare invocation inside HTML comment is ignored
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '<!--\nRun node scripts/minimize-superseded-markers.mjs.\n-->',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 18. Multiline inline code span containing `<!--` does not enter HTML comment
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Example `inline\n<!--\ncode` with literal comment opener.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 5\b/);
+});
+
+test('CLI inventory audit unpointed-source-form checks instruction scopes and ignores docs', () => {
+  const temp = fixture();
+  try {
+    // Instruction file without pointer fails
+    write(
+      temp.root,
+      '.github/instructions/main.instructions.md',
+      'Run node scripts/minimize-superseded-markers.mjs.\n',
+    );
+    write(
+      temp.root,
+      'idd-template/.github/instructions/template.md',
+      '# Template\n',
+    );
+    assertFailure(
+      runAudit(temp.root, 'unpointed-source-form'),
+      'unpointed-source-form',
+      '.github/instructions/main.instructions.md',
+    );
+
+    // File under lite/ is checked
+    write(
+      temp.root,
+      '.github/instructions/main.instructions.md',
+      'Use profile-selected form.\n\nRun node scripts/minimize-superseded-markers.mjs.\n',
+    );
+    write(
+      temp.root,
+      '.github/instructions/lite/test-lite.instructions.md',
+      'Run node scripts/minimize-superseded-markers.mjs.\n',
+    );
+    assertFailure(
+      runAudit(temp.root, 'unpointed-source-form'),
+      'unpointed-source-form',
+      '.github/instructions/lite/test-lite.instructions.md',
+    );
+
+    // Bare use under docs/ is NOT flagged
+    write(
+      temp.root,
+      '.github/instructions/lite/test-lite.instructions.md',
+      'Use profile-selected form.\n\nRun node scripts/minimize-superseded-markers.mjs.\n',
+    );
+    write(
+      temp.root,
+      'docs/guide.md',
+      'Run node scripts/minimize-superseded-markers.mjs.\n',
+    );
+    write(
+      temp.root,
+      'idd-template/docs/guide.md',
+      'Run node scripts/minimize-superseded-markers.mjs.\n',
+    );
+    assertPass(runAudit(temp.root, 'unpointed-source-form'));
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('ten instruction files carry verified profile-selected pointers with docs paths', () => {
+  const TEN_FILES = [
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+    'idd-template/.github/instructions/idd-overview-appendix.instructions.md',
+    'idd-template/.github/instructions/idd-resume.instructions.md',
+    'idd-template/.github/instructions/idd-resume-stall.instructions.md',
+    'idd-template/.github/instructions/idd-suitability.instructions.md',
+    'idd-template/.github/instructions/idd-review-snapshot.instructions.md',
+    'idd-template/.github/instructions/lite/idd-ci-lite.instructions.md',
+    'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
+    'idd-template/.github/instructions/lite/idd-resume-lite.instructions.md',
+    'idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md',
+  ];
+  const LITE_FILES = new Set([
+    'idd-template/.github/instructions/lite/idd-ci-lite.instructions.md',
+    'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
+    'idd-template/.github/instructions/lite/idd-resume-lite.instructions.md',
+    'idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md',
+  ]);
+
+  const SECTION_SUFFICIENT_FILES = new Map<string, string>([
+    [
+      'idd-template/.github/instructions/idd-review-snapshot.instructions.md',
+      '## E1 — Fetch review items into ReviewItems_snapshot',
+    ],
+  ]);
+
+  function validateFilePointer(path: string, content: string): boolean {
+    const blocks = content.split(/\n\s*\n/);
+    const pointerBlock = blocks.find((b) => b.includes('profile-selected'));
+    if (!pointerBlock) return false;
+
+    if (LITE_FILES.has(path)) {
+      const instructsToResolve =
+        /resolve\s+each\s+`node scripts\/<h>\.mjs`\s+to\s+its\s+profile-selected\s+form/i.test(
+          pointerBlock,
+        );
+      if (!instructsToResolve) return false;
+    }
+
+    if (pointerBlock.includes('docs/idd-helper-scripts.md')) {
+      return true;
+    }
+
+    const allowedSection = SECTION_SUFFICIENT_FILES.get(path);
+    if (allowedSection) {
+      const sectionStart = content.indexOf(allowedSection);
+      if (sectionStart !== -1) {
+        const nextSectionMatch = content
+          .slice(sectionStart + allowedSection.length)
+          .search(/\n## /);
+        const sectionContent =
+          nextSectionMatch === -1
+            ? content.slice(sectionStart)
+            : content.slice(
+                sectionStart,
+                sectionStart + allowedSection.length + nextSectionMatch,
+              );
+        if (
+          sectionContent.includes('profile-selected') &&
+          sectionContent.includes('docs/idd-helper-scripts.md')
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  for (const relPath of TEN_FILES) {
+    const fullPath = join(REPO_ROOT, relPath);
+    const content = readFileSync(fullPath, 'utf8');
+    assert.ok(
+      validateFilePointer(relPath, content),
+      `Pointer validation failed on real file ${relPath}`,
+    );
+
+    const genPath = join(REPO_ROOT, relPath.replace('idd-template/', ''));
+    const genContent = readFileSync(genPath, 'utf8');
+    assert.ok(
+      validateFilePointer(relPath, genContent),
+      `Pointer validation failed on generated file ${genPath}`,
+    );
+  }
+
+  const dummyParenthetical =
+    'Run node scripts/foo.mjs (profile-selected form).';
+  assert.equal(
+    validateFilePointer('dummy.md', dummyParenthetical),
+    false,
+    'Parenthetical without path should not pass',
+  );
+
+  const dummyNextToCommand = 'Run profile-selected node scripts/foo.mjs here.';
+  assert.equal(
+    validateFilePointer('dummy.md', dummyNextToCommand),
+    false,
+    'profile-selected next to command without path should not pass',
+  );
 });

@@ -133,7 +133,8 @@ Omitting `--now` falls back to the helper's local-clock default
 (`docs/stalled-session-quiet-check.md`), which does not satisfy the
 "server timestamps only" mandate above — always pass it explicitly.
 
-Use `node scripts/stalled-session-quiet-check.mjs ...` as the vendored
+Use the profile-selected `node scripts/stalled-session-quiet-check.mjs ...`
+form from `docs/idd-helper-scripts.md` as the vendored
 equivalent when the packaged binary is unavailable. Consume the helper's
 stable fields `quiet_window_met`, `quiet_window_ms`, `window_start`,
 `now`, `latest_activity`, `latest_activity_type`, `reason`, and
