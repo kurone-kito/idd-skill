@@ -46,6 +46,7 @@
   "critiqueLoop": {
     "deferAfterRounds": 5,
     "deferByUrgency": "severity-tiered",
+    "deferRelaxAtRounds": [4, 7],
     "telemetryHook": {
       "command": "idd-critique-telemetry"
     }
