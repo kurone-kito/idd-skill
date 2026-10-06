@@ -567,12 +567,13 @@ shape.
 ## Wave-gradient urgency defer
 
 This section is the full rule for the optional wave gradient of
-`critiqueLoop.deferByUrgency: "severity-tiered"`. The matrix there is the
-same at every review wave. Only the separate round-count trigger,
-`critiqueLoop.deferAfterRounds`, depends on the wave, and it covers
-Low-severity items only, so Medium and High findings get no relief
-however many waves a pull request draws. The gradient relaxes the matrix
-in at most two steps as the pull request's review count grows. The
+`critiqueLoop.deferByUrgency: "severity-tiered"`. Before the gradient, the
+matrix there was the same at every review wave. Only the separate
+round-count trigger, `critiqueLoop.deferAfterRounds`, depended on the
+wave, and it covered Low-severity items only, so Medium and High findings
+got no relief however many waves a pull request drew. The gradient
+relaxes the matrix in at most two steps as the pull request's review
+count grows. The
 review-triage file carries only a short pointer, so a session that does
 not read this section, and any configuration that leaves the field unset
 or invalid, behaves as it did before the gradient existed. The decision

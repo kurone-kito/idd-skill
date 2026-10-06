@@ -1370,9 +1370,10 @@ review cycle.
 #### Wave-gradient urgency defer (kurone-kito/idd-skill#3796)
 
 `critiqueLoop.deferRelaxAtRounds` adds an optional wave gradient to
-`severity-tiered`. The matrix above is the same at every review wave, and
-the only round-dependent trigger, `deferAfterRounds`, is Low-only, so
-the matrix itself never relaxed as a pull request accumulated review waves.
+`severity-tiered`. Before the gradient, the matrix above was the same at
+every review wave, and the only round-dependent trigger,
+`deferAfterRounds`, was Low-only, so the matrix itself never relaxed as a
+pull request accumulated review waves.
 
 Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter re-import
 of the v0.14.0 template (figures at head `25e3d5e`): 32 commits, 11
