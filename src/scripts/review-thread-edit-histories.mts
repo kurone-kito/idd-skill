@@ -29,8 +29,9 @@ type ThreadInput = Parameters<
  * pass that lets a cosmetic in-place edit of an advisory-bot thread comment
  * (e.g. CodeRabbit rewriting its own root comment when it replies to a
  * disposition) be dated by content activity instead of `updatedAt`. The
- * merge-gate collector and the snapshot collector both call this, so the two
- * report the same `dispositionEvidence` for the same pull request.
+ * merge-gate collector, the snapshot collector, and F4
+ * `audit-pr-cleanup.mts` (#3791) all call this, so those checks report
+ * the same disposition result for the same pull request.
  *
  * It selects only advisory-bot comments edited after their thread's latest
  * disposition (`selectAdvisoryThreadCommentIdsEditedAfterDisposition`), makes
@@ -50,6 +51,7 @@ export function enrichThreadsWithBotEditHistories<T extends ThreadInput>(
   options: {
     dispositionAuthorLogins: readonly unknown[];
     advisoryBotLogins: readonly unknown[] | null | undefined;
+    requireUneditedDisposition?: boolean;
   },
 ): T[] {
   const dispositionAuthors = new Set(
@@ -62,6 +64,7 @@ export function enrichThreadsWithBotEditHistories<T extends ThreadInput>(
       advisoryBotLogins: options.advisoryBotLogins
         ? [...options.advisoryBotLogins]
         : null,
+      requireUneditedDisposition: options.requireUneditedDisposition,
     },
   );
   if (candidateIds.length === 0) return threads;
