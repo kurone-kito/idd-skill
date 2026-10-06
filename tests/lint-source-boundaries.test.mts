@@ -588,6 +588,22 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after an arrow function type assertion',
+    source: (specifier) =>
+      `const value = maybe as () => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a multiline comment on an arrow function type',
+    source: (specifier) =>
+      `const value = maybe as () => { a: number } / /*\nimport('__SPECIFIER__')\n*/ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a postfix increment',
     source: (specifier) =>
       `let value = 1;\nvalue++ / /* import('__SPECIFIER__') */ 2;\n`.replace(

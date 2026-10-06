@@ -264,6 +264,10 @@ function scanComments(source) {
     let wordBoundary = false;
     let controlFlowClosingParenthesis = false;
     let expressionEndingBrace = false;
+    let arrowBodyPending = false;
+    let assertionParenDepth = 0;
+    let typeArrowParamsPending = false;
+    let arrowTypeBodyPending = false;
     let postfixUpdateOperator = false;
     let postfixNonNullAssertion = false;
     let possiblePostfixUpdate = false;
@@ -297,6 +301,7 @@ function scanComments(source) {
       if (lastWord === 'as' || lastWord === 'satisfies') {
         typescriptAssertionTypeContext = true;
         typescriptAssertionTypeDepth = 0;
+        assertionParenDepth = 0;
       }
       if (lastWord === 'class') {
         pendingClassExpressionBody = currentWordStartsExpressionContext;
@@ -331,6 +336,10 @@ function scanComments(source) {
     function recordWhitespace(hasLineTerminator) {
       if (hasLineTerminator && typescriptAssertionTypeDepth === 0) {
         typescriptAssertionTypeContext = false;
+        assertionParenDepth = 0;
+      }
+      if (hasLineTerminator) {
+        typeArrowParamsPending = false;
       }
       finishCurrentKeyword();
       if (
@@ -419,6 +428,7 @@ function scanComments(source) {
       }
       lastCodeChar = ch;
       lastCodeCharIsIdentifierPart = isIdentifierPartAt(source, sourceIndex);
+      const startsArrowBody = previousCodeChar === '=' && ch === '>';
       expressionEndingBrace = false;
       regexAfterRestrictedStatementLineBreak = false;
       postfixUpdateOperator = startsPostfixUpdate;
@@ -445,6 +455,11 @@ function scanComments(source) {
       }
       controlFlowClosingParenthesis = false;
       wordBoundary = false;
+      if (startsArrowBody && typeArrowParamsPending) {
+        arrowTypeBodyPending = true;
+        typeArrowParamsPending = false;
+      }
+      arrowBodyPending = startsArrowBody;
     }
     function recordLiteral(end) {
       lastCodeChar = end;
@@ -456,6 +471,9 @@ function scanComments(source) {
       controlFlowClosingParenthesis = false;
       wordBoundary = false;
       expressionEndingBrace = false;
+      arrowBodyPending = false;
+      typeArrowParamsPending = false;
+      arrowTypeBodyPending = false;
       postfixUpdateOperator = false;
       postfixNonNullAssertion = false;
       possiblePostfixUpdate = false;
@@ -539,6 +557,17 @@ function scanComments(source) {
     while (index < source.length) {
       const ch = source[index];
       const next = source[index + 1];
+      if (!/\s/.test(ch) && typeArrowParamsPending) {
+        const arrowToken =
+          (ch === '=' && next === '>') ||
+          (ch === '>' && source[index - 1] === '=');
+        if (!arrowToken) {
+          typeArrowParamsPending = false;
+        }
+      }
+      if (!/\s/.test(ch) && arrowTypeBodyPending && ch !== '{') {
+        arrowTypeBodyPending = false;
+      }
       if (!/\s/.test(ch) && !wordContinuesAt(ch, index)) {
         finishCurrentKeyword();
       }
@@ -702,12 +731,20 @@ function scanComments(source) {
         functionReturnTypeAngleDepth = 0;
         functionReturnTypeBraceDepth = 0;
       }
+      if (ch === '(' && typescriptAssertionTypeContext) {
+        assertionParenDepth += 1;
+      }
+      if (ch === ')' && assertionParenDepth > 0) {
+        assertionParenDepth -= 1;
+        typeArrowParamsPending = true;
+      }
       if (
         typescriptAssertionTypeContext &&
         typescriptAssertionTypeDepth === 0 &&
         ';,)]}/'.includes(ch)
       ) {
         typescriptAssertionTypeContext = false;
+        assertionParenDepth = 0;
       }
       if (ch === '<') {
         if (typescriptAssertionTypeContext) {
@@ -743,9 +780,16 @@ function scanComments(source) {
         typescriptAssertionTypeDepth -= 1;
         if (typescriptAssertionTypeDepth === 0) {
           typescriptAssertionTypeContext = false;
+          assertionParenDepth = 0;
         }
       }
       if (ch === '{') {
+        // A value-position arrow block (`() => {}`) is not an expression,
+        // so `/` after it is a regex. `as () => { a: number } / 2` is
+        // division: that parameter list opened inside the assertion.
+        const arrowBraceEndsExpression =
+          arrowBodyPending && arrowTypeBodyPending;
+        arrowTypeBodyPending = false;
         const returnTypeContinues =
           scanningFunctionReturnType &&
           (functionReturnTypeAngleDepth > 0 ||
@@ -779,12 +823,9 @@ function scanComments(source) {
         const startsClassExpressionBody = pendingClassExpressionBody === true;
         const startsFunctionExpressionBody =
           pendingFunctionExpressionBody && !startsFunctionReturnType;
-        // An arrow block body is not an expression. `() => {}` cannot be
-        // the left operand of `/`, and a line break makes the next `/` a
-        // regex. Class and function expressions stay expression-ending,
-        // because `class {} / 2` and `function () {} / 2` are division.
         expressionEndingBraces.push(
-          startsObjectLiteral ||
+          arrowBraceEndsExpression ||
+            startsObjectLiteral ||
             startsClassExpressionBody ||
             startsFunctionExpressionBody,
         );
