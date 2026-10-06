@@ -1449,15 +1449,17 @@ defers, and count 7 is the first at which the High-tier finding of
 
 ##### Converged extra step (kurone-kito/idd-skill#3797)
 
-The count step does nothing at the first or second review. Observed on
-kurone-kito/setup.ubuntu#201 at head `4af1831`: Copilot's overview
-reported no findings and no inline comments, a Codex thread was open
-beside it, and the fix was another push. That head was Copilot's 10th
-review, so under `[4, 7]` the count step was already 2 and convergence
-would have added nothing. The case that matters is a low review count.
-The opposite head, `2cb41a0`, had no findings but carried 5 suppressed
-comments that were never acknowledged, so `converged` stays false and
-the extra step does not apply.
+The count step does nothing at the first or second review. Observed
+2026-10-05 on kurone-kito/setup.ubuntu#201, in the same reading as the
+wave-gradient section above (figures at head `25e3d5e`). At head
+`4af1831`, Copilot's overview reported no findings and no inline
+comments, a Codex thread was open beside it, and the fix was another
+push. That head was Copilot's 10th review, so under `[4, 7]` the count
+step was already 2 and convergence would have added nothing. The case
+that matters is a low review count. The opposite head in that reading,
+`2cb41a0`, had no findings but carried 5 suppressed comments that were
+never acknowledged, so `converged` stays false and the extra step does
+not apply.
 
 Maintainer decision (Groom hearing, 2026-10-05): treat a converged
 advisory gate as one extra relax step, capped at 2. The declined
