@@ -584,11 +584,17 @@ function scanComments(source: string): {
     // `items[count < limit] > /regex/` and
     // `check(count < limit, total > /regex/)` must not hide a later import.
     // A comma inside `Record<string, number>`, `[string, number]`, or
-    // `{ a: number, b: number }` is still part of the type.
+    // `{ a: number, b: number }` is still part of the type. Balanced
+    // parentheses cover a function type such as `identity<() => void>`;
+    // the `>` in `=>` does not close that list. A top-level union or
+    // comma, as in `identity<string | number>` or `identity<A, B>`,
+    // stays a non-type token so a comparison is not reclassified.
     function closesTypeArgumentsOnLine(from: number): boolean {
       let depth = 0;
       let bracketDepth = 0;
       let braceDepth = 0;
+      let parenDepth = 0;
+      let functionType = false;
       for (let cursor = from; cursor < source.length; cursor += 1) {
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
@@ -599,6 +605,10 @@ function scanComments(source: string): {
           continue;
         }
         if (typeChar === '>') {
+          // `=>` is the arrow in a function type, not a closer.
+          if (functionType && cursor > from && source[cursor - 1] === '=') {
+            continue;
+          }
           depth -= 1;
           if (depth === 0) {
             return true;
@@ -627,13 +637,57 @@ function scanComments(source: string): {
           braceDepth -= 1;
           continue;
         }
+        if (depth > 0 && typeChar === '(') {
+          parenDepth += 1;
+          functionType = true;
+          continue;
+        }
+        if (depth > 0 && typeChar === ')') {
+          if (parenDepth === 0) {
+            return false;
+          }
+          parenDepth -= 1;
+          continue;
+        }
         if (depth > 0 && typeChar === ',') {
-          if (depth > 1 || bracketDepth > 0 || braceDepth > 0) {
+          if (
+            depth > 1 ||
+            bracketDepth > 0 ||
+            braceDepth > 0 ||
+            parenDepth > 0
+          ) {
             continue;
           }
           return false;
         }
-        // Parentheses and expression operators stop the scan.
+        // `|` and `&` are part of a function type's return type
+        // (`(x: string) => string | number`) and of a parenthesized
+        // parameter. At the top level they still end the scan.
+        if (
+          depth > 0 &&
+          functionType &&
+          (typeChar === '|' || typeChar === '&')
+        ) {
+          continue;
+        }
+        // Optional and default parameter marks stay inside the
+        // parameter list: `(x?: string)` and `(x = 1)`.
+        if (
+          depth > 0 &&
+          parenDepth > 0 &&
+          (typeChar === '=' || typeChar === '?')
+        ) {
+          continue;
+        }
+        if (
+          depth > 0 &&
+          functionType &&
+          typeChar === '=' &&
+          source[cursor + 1] === '>'
+        ) {
+          continue;
+        }
+        // Any other expression operator stops the scan.
         if (depth > 0 && /[A-Za-z0-9_$\s.:]/.test(typeChar)) {
           continue;
         }

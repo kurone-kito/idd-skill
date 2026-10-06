@@ -748,6 +748,46 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of a function type',
+    source: (specifier) =>
+      `const value = identity<() => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parameterized function type',
+    source: (specifier) =>
+      `const value = identity<(x: string, y: number) => boolean> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a nested function type',
+    source: (specifier) =>
+      `const value = identity<() => () => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic function type',
+    source: (specifier) =>
+      `const value = identity<Promise<() => void>> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a function type with a union return',
+    source: (specifier) =>
+      `const value = identity<(x: string) => string | number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a satisfies type',
     source: (specifier) =>
       `const value = input satisfies Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -948,6 +988,30 @@ for (const { name, source } of prefixNotRegexSources) {
       'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
     ]);
     assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+const ambiguousTypeArguments = [
+  {
+    name: 'a top-level union',
+    source:
+      "const value = identity<string | number> / /* import('left-pad') */ 2;\n",
+  },
+  {
+    name: 'a top-level comma',
+    source: "const value = identity<A, B> / /* import('left-pad') */ 2;\n",
+  },
+];
+
+for (const { name, source } of ambiguousTypeArguments) {
+  test(`a commented import stays visible after ${name} in a type-argument position`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', source));
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /left-pad/);
   });
 }
 
