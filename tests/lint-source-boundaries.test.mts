@@ -651,6 +651,30 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation with a nested comma',
+    source: (specifier) =>
+      `const value = identity<Record<string, number>> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a tuple',
+    source: (specifier) =>
+      `const value = identity<[string, number]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an object type',
+    source: (specifier) =>
+      `const value = identity<{ a: number, b: number }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a satisfies type',
     source: (specifier) =>
       `const value = input satisfies Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
