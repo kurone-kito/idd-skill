@@ -418,6 +418,15 @@ const marker = '*/';
 `.replace('__SPECIFIER__', specifier),
   },
   {
+    name: 'a regex after an arrow function block',
+    source: (specifier) =>
+      `const f = () => {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
     name: 'a regex after an else block',
     source: (specifier) =>
       `if (ok) {} else {}
@@ -571,9 +580,9 @@ const divisionWithCommentedImports: {
       ),
   },
   {
-    name: 'division after an arrow function expression',
+    name: 'division inside an arrow function expression body',
     source: (specifier) =>
-      `const value = () => {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+      `const value = () => ({}) / /* import('__SPECIFIER__') */ 2;\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),

@@ -331,7 +331,6 @@ function scanComments(source: string): {
     let wordBoundary = false;
     let controlFlowClosingParenthesis = false;
     let expressionEndingBrace = false;
-    let arrowBodyPending = false;
     let postfixUpdateOperator = false;
     let postfixNonNullAssertion = false;
     let possiblePostfixUpdate = false;
@@ -496,7 +495,6 @@ function scanComments(source: string): {
       }
       lastCodeChar = ch;
       lastCodeCharIsIdentifierPart = isIdentifierPartAt(source, sourceIndex);
-      const startsArrowBody = previousCodeChar === '=' && ch === '>';
       expressionEndingBrace = false;
       regexAfterRestrictedStatementLineBreak = false;
       postfixUpdateOperator = startsPostfixUpdate;
@@ -523,7 +521,6 @@ function scanComments(source: string): {
       }
       controlFlowClosingParenthesis = false;
       wordBoundary = false;
-      arrowBodyPending = startsArrowBody;
     }
 
     function recordLiteral(end: string): void {
@@ -536,7 +533,6 @@ function scanComments(source: string): {
       controlFlowClosingParenthesis = false;
       wordBoundary = false;
       expressionEndingBrace = false;
-      arrowBodyPending = false;
       postfixUpdateOperator = false;
       postfixNonNullAssertion = false;
       possiblePostfixUpdate = false;
@@ -871,9 +867,12 @@ function scanComments(source: string): {
         const startsClassExpressionBody = pendingClassExpressionBody === true;
         const startsFunctionExpressionBody =
           pendingFunctionExpressionBody && !startsFunctionReturnType;
+        // An arrow block body is not an expression. `() => {}` cannot be
+        // the left operand of `/`, and a line break makes the next `/` a
+        // regex. Class and function expressions stay expression-ending,
+        // because `class {} / 2` and `function () {} / 2` are division.
         expressionEndingBraces.push(
-          arrowBodyPending ||
-            startsObjectLiteral ||
+          startsObjectLiteral ||
             startsClassExpressionBody ||
             startsFunctionExpressionBody,
         );
