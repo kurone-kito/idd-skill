@@ -49,6 +49,16 @@ const KNOWN_SAFE_CANCEL_IN_PROGRESS_VALUES = new Set([
   "${{ startsWith(github.ref, 'refs/pull/') }}",
 ]);
 
+// Checkout is the only action before the Node floor assertion. Keep its
+// immutable ref explicit: an earlier JavaScript/composite action can change
+// GITHUB_PATH for every later step, so an unreviewed action can replace node.
+const REVIEWED_PRE_FLOOR_ACTIONS = new Set([
+  'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+]);
+const REVIEWED_PRE_FLOOR_RUN_COMMANDS = new Set([
+  'node scripts/audit-docs.mjs --check',
+]);
+
 /** Whether `text`'s top-level `concurrency:` block sets
  * `cancel-in-progress` to a value known to evaluate `true` for this
  * repository's own pull_request-triggered runs -- not merely whether a
@@ -449,7 +459,8 @@ function hasEnvironmentMergeKey(
 ): boolean {
   let environmentIndent: number | undefined;
   let flowMapDepth = 0;
-  const mergeKey = /(?:^|[{,])\s*(?:<<|'<<'|"<<")\s*:/;
+  const mergeKey =
+    /(?:^|[{,])\s*(?:(?:&[^\s,{}[\]]+|![^\s,{}[\]]+)\s+)*(?:<<|'<<'|"<<")\s*:/;
 
   for (const [index, line] of lines.entries()) {
     if (scalarContent[index]) {
@@ -575,7 +586,8 @@ function hasUnverifiableEnvironmentKey(
 function hasYamlMergeKeyAtIndent(text: string, indent: number): boolean {
   const lines = text.split('\n');
   const scalarContent = yamlBlockScalarContentFlags(lines);
-  const mergeKey = /^(?:<<|'<<'|"<<")\s*:/;
+  const mergeKey =
+    /^(?:(?:&[^\s,{}[\]]+|![^\s,{}[\]]+)\s+)*(?:<<|'<<'|"<<")\s*:/;
   return lines.some(
     (line, index) =>
       !scalarContent[index] &&
@@ -659,12 +671,14 @@ function hasStepLevelYamlMergeKey(jobBody: string): boolean {
   }
   const lines = stepsBlock.split('\n');
   const scalarContent = yamlBlockScalarContentFlags(lines);
+  const mergeKey =
+    /(?:^|[{,])\s*(?:(?:&[^\s,{}[\]]+|![^\s,{}[\]]+)\s+)*(?:<<|'<<'|"<<")\s*:/;
   return lines.some((line, index) => {
     if (scalarContent[index]) {
       return false;
     }
     const uncommented = stripYamlComment(line);
-    if (/^ {8}(?:<<|'<<'|"<<")\s*:/.test(uncommented)) {
+    if (/^ {8}/.test(uncommented) && mergeKey.test(uncommented.slice(8))) {
       return true;
     }
     if (!/^ {6}-\s/.test(uncommented)) {
@@ -673,9 +687,118 @@ function hasStepLevelYamlMergeKey(jobBody: string): boolean {
     const sequenceItem = uncommented.slice(8);
     return (
       /^\*[A-Za-z0-9_.-]+(?:\s|$)/.test(sequenceItem) ||
-      /(?:^|[{,])\s*(?:<<|'<<'|"<<")\s*:/.test(sequenceItem)
+      mergeKey.test(sequenceItem)
     );
   });
+}
+
+/** A more-indented plain scalar line can fold into a preceding `run:` value. */
+function hasPlainScalarContinuation(
+  lines: string[],
+  scalarContent: boolean[],
+  lineIndex: number,
+  keyIndent: number,
+): boolean {
+  for (let index = lineIndex + 1; index < lines.length; index += 1) {
+    if (scalarContent[index]) {
+      continue;
+    }
+    if (stripYamlComment(lines[index]).trim() === '') {
+      continue;
+    }
+    const indent = lines[index].match(/^ */)?.[0].length ?? 0;
+    return indent > keyIndent;
+  }
+  return false;
+}
+
+/** Rejects unreviewed actions and run commands before the floor assertion.
+ * Earlier steps can write GITHUB_PATH for later steps. */
+function hasUnreviewedPreFloorExecution(jobBody: string): boolean {
+  const stepsBlock = findStepsThroughFloorCheck(jobBody);
+  if (stepsBlock === undefined) {
+    return false;
+  }
+  const lines = stepsBlock.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const floorStep = lines.findIndex(
+    (line, index) =>
+      !scalarContent[index] && line === '      - name: Assert Node.js floor',
+  );
+  if (floorStep === -1) {
+    return false;
+  }
+  const actionKey = /^(?:uses|'uses'|"uses")\s*:\s*(.*?)\s*$/;
+  const runKey = /^(?:run|'run'|"run")\s*:\s*(.*?)\s*$/;
+  const shellKey = /^(?:shell|'shell'|"shell")\s*:/;
+
+  for (const [index, line] of lines.entries()) {
+    if (index >= floorStep) {
+      break;
+    }
+    if (scalarContent[index]) {
+      continue;
+    }
+    const uncommented = stripYamlComment(line);
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    let entry: string | undefined;
+    if (indent === 6 && /^ {6}-\s*/.test(uncommented)) {
+      entry = uncommented.replace(/^ {6}-\s*/, '');
+    } else if (indent >= 7) {
+      entry = uncommented.slice(indent);
+    }
+    if (entry === undefined) {
+      continue;
+    }
+
+    if (shellKey.test(entry)) {
+      return true;
+    }
+
+    // Flow mappings, aliases, decorated/escaped keys, and noncanonical
+    // property indentation are outside this line-based guard's syntax.
+    if (indent === 6 && /^\s*\{/.test(entry)) {
+      return true;
+    }
+    const match = entry.match(actionKey);
+    if (
+      match &&
+      (!(indent === 6 || indent === 8) ||
+        !REVIEWED_PRE_FLOOR_ACTIONS.has(match[1].trim()))
+    ) {
+      return true;
+    }
+    const runMatch = entry.match(runKey);
+    if (
+      runMatch &&
+      (!(indent === 6 || indent === 8) ||
+        !REVIEWED_PRE_FLOOR_RUN_COMMANDS.has(runMatch[1].trim()))
+    ) {
+      return true;
+    }
+    if (
+      runMatch &&
+      hasPlainScalarContinuation(
+        lines,
+        scalarContent,
+        index,
+        indent === 6 ? 8 : indent,
+      )
+    ) {
+      return true;
+    }
+    if (
+      (indent === 6 && /^\s*(?:\?|\*|&|!)/.test(entry)) ||
+      (indent >= 7 && /^\s*(?:\?|\*|&|!)/.test(entry)) ||
+      (indent === 6 &&
+        /^\s*(?:"[^"]*\\[^"]*"|'[^']*\\[^']*')\s*:/.test(entry)) ||
+      (indent >= 7 && /^\s*(?:"[^"]*\\[^"]*"|'[^']*\\[^']*')\s*:/.test(entry))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /** Extracts one named step's body from the job's `steps` mapping, stopping
@@ -856,6 +979,11 @@ function assertLintJobEnforcesNodeFloor(jobBody: string): void {
     hasStepLevelYamlMergeKey(jobBody),
     false,
     'lint.yml: lint job steps must not use YAML merge keys that can inherit step controls',
+  );
+  assert.equal(
+    hasUnreviewedPreFloorExecution(jobBody),
+    false,
+    'lint.yml: actions and run steps before the Node floor check must use reviewed entries',
   );
   assert.doesNotMatch(
     jobBody,
@@ -1767,6 +1895,16 @@ test('YAML merge keys in env mappings are rejected at every lint scope', () => {
     () => assertLintJobEnforcesNodeFloor('    env: { <<: *shared-env }'),
     rejection,
   );
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor('    env:\n      &shared <<: *shared-env'),
+    rejection,
+  );
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor('    env: { &shared <<: *shared-env }'),
+    rejection,
+  );
 
   const stepBody = syntheticFloorStep(['node --version']).replace(
     '        run: |',
@@ -1808,6 +1946,17 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
     /lint job steps must not use YAML merge keys that can inherit step controls/,
   );
 
+  const decoratedSequenceItemMerge = [
+    '    steps:',
+    '      - &shared <<: *step-controls',
+    '        name: Assert Node.js floor',
+    '        run: node --version',
+  ].join('\n');
+  assert.throws(
+    () => assertLintJobEnforcesNodeFloor(decoratedSequenceItemMerge),
+    /lint job steps must not use YAML merge keys that can inherit step controls/,
+  );
+
   const wholeStepAlias = [
     '    steps:',
     '      - &base-step',
@@ -1831,7 +1980,21 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
     '      # - *commented-step',
     ...syntheticFloorStep(['node --version']).split('\n'),
   ].join('\n');
-  assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(commentAndScalar));
+  assert.equal(
+    hasStepLevelYamlMergeKey(commentAndScalar),
+    false,
+    'comments and block scalars cannot trigger the step merge-key guard',
+  );
+
+  const reviewedFloorStep = syntheticFloorStep(['node --version']);
+  const reviewedCheckout = [
+    '    steps:',
+    '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+    '      - name: Run documentation audit',
+    '        run: node scripts/audit-docs.mjs --check',
+    ...reviewedFloorStep.split('\n'),
+  ].join('\n');
+  assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(reviewedCheckout));
 
   const floorStep = syntheticFloorStep(['node --version']).replace(
     '        run: |',
@@ -1841,6 +2004,65 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
     () => assertNodeVersionLogBeforeFloor(floorStep),
     /Assert Node\.js floor step must not use YAML merge keys that can inherit step controls/,
   );
+});
+
+test('unreviewed actions and run steps before the Node floor assertion are rejected', () => {
+  const actionSteps = [
+    { lines: ['      - uses: actions/example@deadbeef'], type: 'action' },
+    { lines: ['      -   uses: actions/example@deadbeef'], type: 'action' },
+    { lines: ['      - "uses": actions/example@deadbeef'], type: 'action' },
+    { lines: ['      - { uses: actions/example@deadbeef }'], type: 'action' },
+    {
+      lines: ['      - &action uses: actions/example@deadbeef'],
+      type: 'action',
+    },
+    {
+      lines: [
+        '      - name: &action+key uses',
+        '        run: node scripts/audit-docs.mjs --check',
+        '      - name: Install through an alias key',
+        '        *action+key: actions/example@deadbeef',
+      ],
+      type: 'action',
+    },
+    { lines: ['      - run: node ./unreviewed-script.mjs'], type: 'run' },
+    {
+      lines: ['      - run: |', '          echo unreviewed command'],
+      type: 'run',
+    },
+    {
+      lines: [
+        '      - run: node scripts/audit-docs.mjs --check',
+        '          ; echo /tmp/fake-bin >> "$GITHUB_PATH"',
+      ],
+      type: 'run',
+    },
+    {
+      lines: [
+        '      - name: Run documentation audit',
+        '        run: node scripts/audit-docs.mjs --check',
+        '        shell: bash -c "{0}; echo /tmp/fake-bin >> $GITHUB_PATH"',
+      ],
+      type: 'run',
+    },
+    {
+      lines: ['      -', '         uses: actions/example@deadbeef'],
+      type: 'action',
+    },
+  ];
+
+  for (const actionStep of actionSteps) {
+    const jobBody = [
+      '    steps:',
+      ...actionStep.lines,
+      ...syntheticFloorStep(['node --version']).split('\n'),
+    ].join('\n');
+    assert.throws(
+      () => assertLintJobEnforcesNodeFloor(jobBody),
+      /actions and run steps before the Node floor check must use reviewed entries/,
+      `accepted unreviewed ${actionStep.type} steps: ${actionStep.lines.join(' | ')}`,
+    );
+  }
 });
 
 test('later lint steps may set their own environment and shell', () => {
