@@ -805,7 +805,10 @@ function scanComments(source: string): {
         if (typescriptAssertionTypeContext) {
           typescriptAssertionTypeDepth += 1;
         } else if (
-          lastCodeCharIsIdentifierPart &&
+          // `identity<T>` is flush against the name. A space, as in
+          // `count < limit in items > /regex/`, keeps the operators.
+          index > 0 &&
+          isIdentifierPartAt(source, index - 1) &&
           closesTypeArgumentsOnLine(index)
         ) {
           typescriptAssertionTypeContext = true;

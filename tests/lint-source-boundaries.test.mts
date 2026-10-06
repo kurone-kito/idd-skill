@@ -842,6 +842,14 @@ const prefixNotRegexSources: {
         specifier,
       ),
   },
+  {
+    name: 'a spaced comparison through the in operator',
+    source: (specifier) =>
+      `const value = count < limit in items > /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
 ];
 
 for (const { name, source } of prefixNotRegexSources) {
