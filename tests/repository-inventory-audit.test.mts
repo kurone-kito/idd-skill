@@ -703,6 +703,7 @@ test('unpointed-source-form unit test checks bare invocations and pointer positi
   );
   assert.equal(violations.length, 1);
   assert.equal(violations[0]?.ruleId, 'unpointed-source-form');
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
 
   // 2. Pointer earlier in the file passes
   violations.length = 0;
@@ -739,6 +740,7 @@ test('unpointed-source-form unit test checks bare invocations and pointer positi
     violations,
   );
   assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
 
   // 6. profile-selected inside an HTML comment does not count
   violations.length = 0;
@@ -748,6 +750,7 @@ test('unpointed-source-form unit test checks bare invocations and pointer positi
     violations,
   );
   assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 3\b/);
 
   // 7. <!-- opener inside an inline code span does not hide the text after it
   violations.length = 0;
@@ -784,6 +787,46 @@ test('unpointed-source-form unit test checks bare invocations and pointer positi
     violations,
   );
   assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 11. Prefix `./scripts/` is detected
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node ./scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 12. Prefix `<idd-skill>/scripts/` is detected
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Run node <idd-skill>/scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 1\b/);
+
+  // 13. Case-insensitive pointer matching passes
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    'Use the Profile-Selected form from docs/idd-helper-scripts.md.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 14. Offending source line is accurately reported on later lines
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '# Heading\n\nSome paragraph text.\n\nMore intro text.\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 7\b/);
 });
 
 test('CLI inventory audit unpointed-source-form checks instruction scopes and ignores docs', () => {

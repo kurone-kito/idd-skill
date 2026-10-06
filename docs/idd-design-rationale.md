@@ -2251,8 +2251,11 @@ fix this by hand twice (#154 tracked and fixed as #162, and #201).
 The `unpointed-source-form` audit rule requires any non-exempt bare
 `node scripts/<name>.mjs` invocation in instruction files to be
 preceded (in the same file, or within the same blank-line-delimited
-paragraph or fenced block) by a `profile-selected` pointer referencing
-`docs/idd-helper-scripts.md`.
+paragraph or fenced block) by the `profile-selected` token (matched
+case-insensitively). In addition, a dedicated regression test
+verifies that each of the ten instruction files pairs its
+`profile-selected` pointer with a reference to
+`docs/idd-helper-scripts.md` in the same paragraph or list item.
 
 The check is scoped per file rather than per command because instruction
 files establish the helper resolution contract once near the top or

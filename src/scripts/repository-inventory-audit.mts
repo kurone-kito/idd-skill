@@ -1468,9 +1468,10 @@ function checkManifestLedgers(root: string, out: AuditViolation[]): void {
   }
 }
 
-// Regex that finds `node scripts/<h>.mjs` allowing a line-wrap inside the
-// node invocation (the wrap occurs between `node` and `scripts/`).
-const UNPOINTED_INVOCATION_RE = /\bnode[ \t\r\n]+scripts\/([a-z0-9-]+\.mjs)\b/g;
+// Regex that finds `node (./|<idd-skill>/)?scripts/<h>.mjs` allowing a line-wrap inside the
+// node invocation (the wrap occurs between `node` and `scripts/` or its prefix).
+const UNPOINTED_INVOCATION_RE =
+  /\bnode[ \t\r\n]+((?:\.\/|<idd-skill>\/)?scripts\/([a-z0-9-]+\.mjs))\b/g;
 
 /**
  * Strip HTML comments from prose text.  A `<!--` opener inside an inline
@@ -1516,6 +1517,7 @@ function stripHtmlComments(text: string): string {
 interface MdBlock {
   isFence: boolean;
   text: string; // raw text of the block
+  startLine: number; // 1-indexed start line in original content
 }
 
 /**
@@ -1528,24 +1530,40 @@ function splitIntoBlocks(content: string): MdBlock[] {
   const lines = content.split(/\r?\n/);
   let inFence = false;
   let currentLines: string[] = [];
+  let blockStartLine = 1;
 
   function flushProse(): void {
     const text = currentLines.join('\n').trim();
-    if (text) blocks.push({ isFence: false, text });
+    if (text) {
+      const leadingEmpty = currentLines.findIndex((l) => !/^\s*$/.test(l));
+      blocks.push({
+        isFence: false,
+        text,
+        startLine: blockStartLine + (leadingEmpty >= 0 ? leadingEmpty : 0),
+      });
+    }
     currentLines = [];
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    const lineNumber = i + 1;
     const fenceMatch = /^\s*```/.test(line);
     if (!inFence && fenceMatch) {
       flushProse();
       inFence = true;
+      blockStartLine = lineNumber;
       currentLines.push(line);
     } else if (inFence) {
       currentLines.push(line);
       if (fenceMatch && currentLines.length > 1) {
         // closing fence
-        blocks.push({ isFence: true, text: currentLines.join('\n') });
+        blocks.push({
+          isFence: true,
+          text: currentLines.join('\n'),
+          startLine: blockStartLine,
+        });
         currentLines = [];
         inFence = false;
       }
@@ -1553,7 +1571,11 @@ function splitIntoBlocks(content: string): MdBlock[] {
       // prose
       if (/^\s*$/.test(line)) {
         flushProse();
+        blockStartLine = lineNumber + 1;
       } else {
+        if (currentLines.length === 0) {
+          blockStartLine = lineNumber;
+        }
         currentLines.push(line);
       }
     }
@@ -1563,13 +1585,13 @@ function splitIntoBlocks(content: string): MdBlock[] {
 }
 
 /**
- * Return true if the text contains the word `profile-selected` outside
- * of HTML comments.  For prose blocks, we strip HTML comments first;
+ * Return true if the text contains the word `profile-selected` (case-insensitively)
+ * outside of HTML comments.  For prose blocks, we strip HTML comments first;
  * for fenced blocks, `<!--` does not start a comment, so we check as-is.
  */
 function hasPointer(block: MdBlock): boolean {
   const text = block.isFence ? block.text : stripHtmlComments(block.text);
-  return text.includes('profile-selected');
+  return /profile-selected/i.test(text);
 }
 
 /**
@@ -1591,7 +1613,8 @@ export function checkUnpointedSourceFormFile(
 
     // Collect all non-exempt invocations in this block.
     for (const match of block.text.matchAll(UNPOINTED_INVOCATION_RE)) {
-      const script = `scripts/${match[1]}`;
+      const scriptName = match[2];
+      const script = `scripts/${scriptName}`;
       // Skip exempt scripts.
       if (
         Object.hasOwn(DOGFOOD_ONLY_TOOLS, script) ||
@@ -1609,12 +1632,17 @@ export function checkUnpointedSourceFormFile(
       // 2. In the same block (later text counts when in same paragraph/fence).
       if (hasPointer(block)) continue;
 
+      // Calculate 1-indexed source line of the invocation.
+      const matchIndex = match.index ?? 0;
+      const lineOffset = block.text.slice(0, matchIndex).split('\n').length - 1;
+      const line = block.startLine + lineOffset;
+
       // No pointer found — violation.
       add(
         out,
         'unpointed-source-form',
         filePath,
-        `bare node invocation of ${script} has no preceding profile-selected pointer`,
+        `bare node invocation of ${script} at line ${line} has no preceding profile-selected pointer`,
       );
       // Report at most one violation per file to avoid duplicate noise.
       return;
