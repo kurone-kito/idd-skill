@@ -604,6 +604,54 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after an arrow type with a parameter list',
+    source: (specifier) =>
+      `const value = maybe as (x: string, y: number) => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type with a type argument',
+    source: (specifier) =>
+      `const value = maybe as <T>(x: T) => { a: T } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type with a comment before the arrow',
+    source: (specifier) =>
+      `const value = maybe as () /* note */ => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a nested arrow function type',
+    source: (specifier) =>
+      `const value = maybe as () => () => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type broken before the arrow',
+    source: (specifier) =>
+      `const value = maybe as ()\n  => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type with a comment before the brace',
+    source: (specifier) =>
+      `const value = maybe as () => /* note */ { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a postfix increment',
     source: (specifier) =>
       `let value = 1;\nvalue++ / /* import('__SPECIFIER__') */ 2;\n`.replace(

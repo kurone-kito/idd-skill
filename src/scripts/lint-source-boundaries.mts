@@ -333,8 +333,10 @@ function scanComments(source: string): {
     let expressionEndingBrace = false;
     let arrowBodyPending = false;
     let assertionParenDepth = 0;
+    let assertionAngleMayContinue = false;
     let typeArrowParamsPending = false;
     let arrowTypeBodyPending = false;
+    let arrowTypeHoldNewline = false;
     let postfixUpdateOperator = false;
     let postfixNonNullAssertion = false;
     let possiblePostfixUpdate = false;
@@ -372,6 +374,7 @@ function scanComments(source: string): {
         typescriptAssertionTypeContext = true;
         typescriptAssertionTypeDepth = 0;
         assertionParenDepth = 0;
+        assertionAngleMayContinue = false;
       }
       if (lastWord === 'class') {
         pendingClassExpressionBody = currentWordStartsExpressionContext;
@@ -406,12 +409,15 @@ function scanComments(source: string): {
     }
 
     function recordWhitespace(hasLineTerminator: boolean): void {
-      if (hasLineTerminator && typescriptAssertionTypeDepth === 0) {
+      if (
+        hasLineTerminator &&
+        typescriptAssertionTypeDepth === 0 &&
+        assertionParenDepth === 0
+      ) {
         typescriptAssertionTypeContext = false;
-        assertionParenDepth = 0;
       }
-      if (hasLineTerminator) {
-        typeArrowParamsPending = false;
+      if (hasLineTerminator && arrowTypeBodyPending) {
+        arrowTypeHoldNewline = true;
       }
       finishCurrentKeyword();
       if (
@@ -551,6 +557,8 @@ function scanComments(source: string): {
       arrowBodyPending = false;
       typeArrowParamsPending = false;
       arrowTypeBodyPending = false;
+      arrowTypeHoldNewline = false;
+      assertionAngleMayContinue = false;
       postfixUpdateOperator = false;
       postfixNonNullAssertion = false;
       possiblePostfixUpdate = false;
@@ -638,7 +646,14 @@ function scanComments(source: string): {
       const ch = source[index];
       const next = source[index + 1];
 
-      if (!/\s/.test(ch) && typeArrowParamsPending) {
+      const startsComment = ch === '/' && (next === '/' || next === '*');
+      if (!/\s/.test(ch) && !startsComment && assertionAngleMayContinue) {
+        if (ch !== '(') {
+          typescriptAssertionTypeContext = false;
+        }
+        assertionAngleMayContinue = false;
+      }
+      if (!/\s/.test(ch) && !startsComment && typeArrowParamsPending) {
         const arrowToken =
           (ch === '=' && next === '>') ||
           (ch === '>' && source[index - 1] === '=');
@@ -646,8 +661,21 @@ function scanComments(source: string): {
           typeArrowParamsPending = false;
         }
       }
-      if (!/\s/.test(ch) && arrowTypeBodyPending && ch !== '{') {
-        arrowTypeBodyPending = false;
+      if (
+        !/\s/.test(ch) &&
+        !startsComment &&
+        arrowTypeBodyPending &&
+        ch !== '{'
+      ) {
+        const continuesAfterNewline = '({[<|&'.includes(ch);
+        if (arrowTypeHoldNewline && !continuesAfterNewline) {
+          arrowTypeBodyPending = false;
+        } else if (!arrowTypeHoldNewline && (ch === '/' || ch === ';')) {
+          arrowTypeBodyPending = false;
+        }
+      }
+      if (!/\s/.test(ch) && !startsComment) {
+        arrowTypeHoldNewline = false;
       }
 
       if (!/\s/.test(ch) && !wordContinuesAt(ch, index)) {
@@ -830,10 +858,10 @@ function scanComments(source: string): {
       if (
         typescriptAssertionTypeContext &&
         typescriptAssertionTypeDepth === 0 &&
+        assertionParenDepth === 0 &&
         ';,)]}/'.includes(ch)
       ) {
         typescriptAssertionTypeContext = false;
-        assertionParenDepth = 0;
       }
       if (ch === '<') {
         if (typescriptAssertionTypeContext) {
@@ -867,9 +895,8 @@ function scanComments(source: string): {
         typescriptAssertionTypeDepth > 0;
       if (closesTypescriptAssertionType) {
         typescriptAssertionTypeDepth -= 1;
-        if (typescriptAssertionTypeDepth === 0) {
-          typescriptAssertionTypeContext = false;
-          assertionParenDepth = 0;
+        if (typescriptAssertionTypeDepth === 0 && assertionParenDepth === 0) {
+          assertionAngleMayContinue = true;
         }
       }
       if (ch === '{') {
@@ -877,7 +904,7 @@ function scanComments(source: string): {
         // so `/` after it is a regex. `as () => { a: number } / 2` is
         // division: that parameter list opened inside the assertion.
         const arrowBraceEndsExpression =
-          arrowBodyPending && arrowTypeBodyPending;
+          arrowBodyPending && arrowTypeBodyPending && assertionParenDepth === 0;
         arrowTypeBodyPending = false;
         const returnTypeContinues =
           scanningFunctionReturnType &&
