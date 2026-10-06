@@ -352,25 +352,26 @@ mirror-path content or mode mismatches fail.
 kurone-kito/setup.ubuntu#201 (2026-10-05): a forced re-import erased overlays
 and its mirror check passed. Order:
 
-1. Record the pre-import ref and the old upstream tag or commit in the policy
-   record; check out a clean worktree: the `--upstream-base-path` source.
+1. Record pre-import ref and old upstream tag/commit in policy record; check
+   out a clean worktree: the `--upstream-base-path` source.
 2. On a fresh branch run `idd-onboard --import --force` (Step 2; same
-   `--profile`; `--allow-root` if `--source` is outside the cwd) and one
+   `--profile`; `--allow-root` if `--source` is outside cwd) and one
    `--hold <path>` per path you own or exclude (default
    `.github/idd/config.json`, hand-merged workflows): exact manifest path, an
-   unknown path exits 2, repeat on `idd-onboard --verify`; lite is 11 paths at
-   v0.14.0. Hold also a same-named file of yours the old template lacked (the
-   import overwrites it whole, unlisted). `git rm` what only the old tag has
-   (compare `--import --dry-run --force --source <idd-skill-root>` plans, no
-   holds). Commit the mirror alone, before `--substitute`; verify as above.
-3. Repeat the verification with `--upstream-base-path <old idd-template>` and
-   `--report-reverted-overlays`: candidates are lines you added that the
-   import erased (held paths are not in the diff).
-4. Re-apply real overlays in overlay commits or record accepted gaps;
-   `--substitute`; rerun the report with `--target-ref HEAD`, same base (exit 1
-   is expected). Lines still listed are deliberate drops: record them.
-5. Open the PR with the three commits separate; name the upstream-identical
-   paths, so a finding on them goes upstream.
+   unknown path exits 2, repeat on `idd-onboard --verify`; hold each excluded
+   lite path (11 at v0.14.0). Hold also a same-named file of yours the old
+   template lacked (the import overwrites it whole, unlisted). `git rm` what
+   only the old tag has (compare `plan[].targetPath` of old and new dry-runs
+   via `--import --dry-run --force --source <root>`, no holds). Commit mirror
+   alone, before `--substitute`; verify as above.
+3. Re-verify with `--upstream-base-path <old idd-template>` and
+   `--report-reverted-overlays`: lines you added that import erased (held
+   paths are not in diff).
+4. Re-apply real overlays in overlay commits or accept gaps; `--substitute`;
+   rerun report with `--target-ref HEAD`, same base (exit 1 is expected).
+   Lines still listed are deliberate drops: record them.
+5. Open PR with commits separate; name upstream-identical paths so findings on
+   them go upstream.
 6. Option: with a mirror-only commit per import, merge a vendor branch. Held
    files stay old, substituted values conflict with raw tokens where upstream
    edited a token line, and the missing deletion (`--import` never deletes) and
