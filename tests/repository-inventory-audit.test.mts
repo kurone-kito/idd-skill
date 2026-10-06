@@ -827,6 +827,34 @@ test('unpointed-source-form unit test checks bare invocations and pointer positi
   );
   assert.equal(violations.length, 1);
   assert.match(violations[0]?.message ?? '', /\bat line 7\b/);
+
+  // 15. Multiline HTML comment spanning blank lines does not leak pointer
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '<!--\ncomment\n\nprofile-selected\n-->\n\nRun node scripts/minimize-superseded-markers.mjs.',
+    violations,
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0]?.message ?? '', /\bat line 7\b/);
+
+  // 16. Tilde fence recognizes pointer inside the same fence
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '~~~sh\nnode scripts/minimize-superseded-markers.mjs\n# profile-selected form\n~~~',
+    violations,
+  );
+  assert.equal(violations.length, 0);
+
+  // 17. Commented-out bare invocation inside HTML comment is ignored
+  violations.length = 0;
+  checkUnpointedSourceFormFile(
+    'test.md',
+    '<!--\nRun node scripts/minimize-superseded-markers.mjs.\n-->',
+    violations,
+  );
+  assert.equal(violations.length, 0);
 });
 
 test('CLI inventory audit unpointed-source-form checks instruction scopes and ignores docs', () => {

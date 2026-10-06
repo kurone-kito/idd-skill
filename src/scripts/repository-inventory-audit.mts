@@ -1474,40 +1474,91 @@ const UNPOINTED_INVOCATION_RE =
   /\bnode[ \t\r\n]+((?:\.\/|<idd-skill>\/)?scripts\/([a-z0-9-]+\.mjs))\b/g;
 
 /**
- * Strip HTML comments from prose text.  A `<!--` opener inside an inline
- * code span (backtick pair) or inside a fenced code block does NOT start
- * a comment — those cases are handled by the caller, which passes only
- * prose runs with fenced blocks kept separate.
- *
- * Strategy: walk character-by-character, treating backtick pairs as
- * opaque spans and `<!-- … -->` outside them as stripped ranges.
+ * Mask HTML comments outside of code blocks and inline code spans.
+ * Replaces comment characters with spaces, preserving newlines so that
+ * line numbers remain identical.
  */
-function stripHtmlComments(text: string): string {
-  let result = '';
-  let index = 0;
-  while (index < text.length) {
-    if (text[index] === '`') {
-      // Inline code span: find the matching closing backtick.
-      const close = text.indexOf('`', index + 1);
-      if (close === -1) {
-        result += text.slice(index);
-        break;
+function maskHtmlComments(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const outLines: string[] = [];
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  let inHtmlComment = false;
+
+  for (const line of lines) {
+    if (inFence) {
+      outLines.push(line);
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const closeMarker = close?.[1];
+      if (
+        closeMarker !== undefined &&
+        (closeMarker[0] ?? '') === fenceChar &&
+        closeMarker.length >= fenceLen
+      ) {
+        inFence = false;
       }
-      result += text.slice(index, close + 1);
-      index = close + 1;
-    } else if (text.startsWith('<!--', index)) {
-      const end = text.indexOf('-->', index + 4);
-      if (end === -1) {
-        // Unterminated comment — treat rest as stripped.
-        break;
-      }
-      index = end + 3;
-    } else {
-      result += text[index];
-      index += 1;
+      continue;
     }
+
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const openMarker = open?.[1];
+    const openInfo = open?.[2] ?? '';
+    if (
+      !inHtmlComment &&
+      openMarker !== undefined &&
+      (!openMarker.startsWith('`') || !openInfo.includes('`'))
+    ) {
+      inFence = true;
+      fenceChar = openMarker[0] ?? '';
+      fenceLen = openMarker.length;
+      outLines.push(line);
+      continue;
+    }
+
+    const chars = line.split('');
+    let i = 0;
+    while (i < chars.length) {
+      if (inHtmlComment) {
+        if (line.startsWith('-->', i)) {
+          chars[i] = ' ';
+          chars[i + 1] = ' ';
+          chars[i + 2] = ' ';
+          i += 3;
+          inHtmlComment = false;
+        } else {
+          chars[i] = ' ';
+          i += 1;
+        }
+      } else {
+        if (line.startsWith('<!--', i)) {
+          inHtmlComment = true;
+          chars[i] = ' ';
+          chars[i + 1] = ' ';
+          chars[i + 2] = ' ';
+          chars[i + 3] = ' ';
+          i += 4;
+        } else if (chars[i] === '`') {
+          let tickCount = 1;
+          while (i + tickCount < chars.length && chars[i + tickCount] === '`') {
+            tickCount += 1;
+          }
+          const opener = '`'.repeat(tickCount);
+          const closeIndex = line.indexOf(opener, i + tickCount);
+          if (closeIndex !== -1) {
+            i = closeIndex + tickCount;
+          } else {
+            i += tickCount;
+          }
+        } else {
+          i += 1;
+        }
+      }
+    }
+    outLines.push(chars.join(''));
   }
-  return result;
+
+  return outLines.join('\n');
 }
 
 /**
@@ -1521,14 +1572,15 @@ interface MdBlock {
 }
 
 /**
- * Split a Markdown file into blocks.  Fenced code blocks are kept intact
- * (opener + body + closer as one block).  Everything else is split on
- * one-or-more blank lines.
+ * Split a Markdown file into blocks. Fenced code blocks (CommonMark-compliant)
+ * are kept intact. Everything else is split on one-or-more blank lines.
  */
 function splitIntoBlocks(content: string): MdBlock[] {
   const blocks: MdBlock[] = [];
   const lines = content.split(/\r?\n/);
   let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
   let currentLines: string[] = [];
   let blockStartLine = 1;
 
@@ -1549,15 +1601,31 @@ function splitIntoBlocks(content: string): MdBlock[] {
     const line = lines[i];
     if (line === undefined) continue;
     const lineNumber = i + 1;
-    const fenceMatch = /^\s*```/.test(line);
-    if (!inFence && fenceMatch) {
+
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const openMarker = open?.[1];
+    const openInfo = open?.[2] ?? '';
+
+    if (
+      !inFence &&
+      openMarker !== undefined &&
+      (!openMarker.startsWith('`') || !openInfo.includes('`'))
+    ) {
       flushProse();
       inFence = true;
+      fenceChar = openMarker[0] ?? '';
+      fenceLen = openMarker.length;
       blockStartLine = lineNumber;
       currentLines.push(line);
     } else if (inFence) {
       currentLines.push(line);
-      if (fenceMatch && currentLines.length > 1) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const closeMarker = close?.[1];
+      if (
+        closeMarker !== undefined &&
+        (closeMarker[0] ?? '') === fenceChar &&
+        closeMarker.length >= fenceLen
+      ) {
         // closing fence
         blocks.push({
           isFence: true,
@@ -1585,13 +1653,10 @@ function splitIntoBlocks(content: string): MdBlock[] {
 }
 
 /**
- * Return true if the text contains the word `profile-selected` (case-insensitively)
- * outside of HTML comments.  For prose blocks, we strip HTML comments first;
- * for fenced blocks, `<!--` does not start a comment, so we check as-is.
+ * Return true if the text contains the word `profile-selected` (case-insensitively).
  */
 function hasPointer(block: MdBlock): boolean {
-  const text = block.isFence ? block.text : stripHtmlComments(block.text);
-  return /profile-selected/i.test(text);
+  return /profile-selected/i.test(block.text);
 }
 
 /**
@@ -1605,7 +1670,8 @@ export function checkUnpointedSourceFormFile(
   content: string,
   out: AuditViolation[],
 ): void {
-  const blocks = splitIntoBlocks(content);
+  const masked = maskHtmlComments(content);
+  const blocks = splitIntoBlocks(masked);
 
   for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
     const block = blocks[blockIndex];
