@@ -15,9 +15,10 @@ takeover, return to resume lite Step 1.
 ## Helper runtime contract
 
 - **Helper-enabled profiles** (`package-manager`/`ephemeral-npx`/
-  vendored-node: see `docs/idd-helper-scripts.md`): run the commands
-  below. If a required helper is missing, fails, or disagrees with
-  live state → **hold and stop** (do not claim). Do not invent a
+  vendored-node): resolve each `node scripts/<h>.mjs` to its
+  profile-selected form via `docs/idd-helper-scripts.md`, then run the
+  commands below. If a required helper is missing, fails, or disagrees
+  with live state → **hold and stop** (do not claim). Do not invent a
   silent prose takeover path.
 - **`instructions-only`**: use the written S1–S5 steps without helpers,
   still with a server-anchored `now` for the quiet window.
@@ -47,8 +48,7 @@ absence as no movement only if also absent at S2); S4 step 5 re-reads that tip
 and repeats the written S2 checks against a fresh `NOW`; hold
 on movement or incomplete evidence.
 
-Never use the local wall clock as `now`. Re-derive a **fresh** `NOW`
-before S4; do not reuse the S2 value.
+Never use the local wall clock as `now`.
 
 ## S1 — Is this a stall case?
 

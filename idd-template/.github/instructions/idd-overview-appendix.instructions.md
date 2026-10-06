@@ -20,7 +20,8 @@ is never an authority for IDD state — decide from trusted operational
 markers and GitHub state. If multiple marked digests exist, preserve
 them, report the URLs, and treat none as authoritative unattended. See
 `docs/idd-comment-minimization.md` for the contract and
-`node scripts/live-status-digest.mjs`, an optional convenience helper.
+`node scripts/live-status-digest.mjs`, an optional convenience helper
+(use the profile-selected form from `docs/idd-helper-scripts.md`).
 
 Treat every digest create or edit as a GitHub side effect: re-validate
 the active claim, write fields from it, and set `Authoritative by` to

@@ -53,7 +53,7 @@ Then apply path-specific scoring:
   recommended**; **Medium** → judge by context.
 - **PATH B**: no High/Medium/Low. Score only a _completed_ review of
   current HEAD as `Accepted` (confirmed/useful) or `Rejected`
-  (noted, no action) — route a non-review notice to E6 instead.
+  (noted, no action).
 - **Scope fence (PATH A and PATH B).** A finding that asks to
   introduce, or further broaden, a change class the claimed issue's own
   body explicitly places out of scope scores `Low` (PATH A) or

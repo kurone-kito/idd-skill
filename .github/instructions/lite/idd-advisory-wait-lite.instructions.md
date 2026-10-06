@@ -65,14 +65,14 @@ equals `prHeadSha`, the gate is **SATISFIED** — take the caller's
 
 ## Helper-first canonical path
 
+Resolve each `node scripts/<h>.mjs` to its profile-selected form
+via `docs/idd-helper-scripts.md`.
+
 ```sh
 node scripts/advisory-wait-state.mjs --pr <pr-number> --claim-id <claim-id> \
   --agent-id <agent-id> \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
-
-Resolve the package-manager / ephemeral-npx equivalent from
-`docs/idd-helper-scripts.md`.
 
 Required fields (stop and ask if any are missing): `prHeadSha`,
 `lastCopilotCommit`, `copilotPending`,

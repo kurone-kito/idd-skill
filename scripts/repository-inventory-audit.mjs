@@ -517,6 +517,7 @@ export const CHECK_FAMILIES = [
   'helper-cli-migration',
   'help-flag-coverage',
   'manifest-ledgers',
+  'unpointed-source-form',
 ];
 function checkRepositoryInventory(root, out) {
   const packageText = readText(root, 'package.json', out);
@@ -1339,6 +1340,265 @@ function checkManifestLedgers(root, out) {
     );
   }
 }
+// Regex that finds `node (./|<idd-skill>/)?scripts/<h>.mjs` allowing a line-wrap inside the
+// node invocation (the wrap occurs between `node` and `scripts/` or its prefix).
+const UNPOINTED_INVOCATION_RE =
+  /\bnode[ \t\r\n]+((?:\.\/|<idd-skill>\/)?scripts\/([a-z0-9-]+\.mjs))\b/g;
+/**
+ * Mask HTML comments outside of code blocks and inline code spans.
+ * Replaces comment characters with spaces, preserving newlines so that
+ * line numbers remain identical. Handles multiline inline code spans
+ * across lines so that `<!--` inside backticks never enters comment mode.
+ */
+function maskHtmlComments(content) {
+  const result = [];
+  const len = content.length;
+  let i = 0;
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  function isLineStart(idx) {
+    return idx === 0 || content[idx - 1] === '\n';
+  }
+  while (i < len) {
+    if (isLineStart(i)) {
+      let lineEnd = content.indexOf('\n', i);
+      if (lineEnd === -1) lineEnd = len;
+      const line = content.slice(i, lineEnd);
+      if (inFence) {
+        const close = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
+        const closeMarker = close?.[1];
+        if (
+          closeMarker !== undefined &&
+          (closeMarker[0] ?? '') === fenceChar &&
+          closeMarker.length >= fenceLen
+        ) {
+          for (let k = i; k < lineEnd; k += 1) {
+            result.push(content[k] ?? '');
+          }
+          if (lineEnd < len) {
+            result.push(content[lineEnd] ?? '');
+            i = lineEnd + 1;
+          } else {
+            i = lineEnd;
+          }
+          inFence = false;
+          fenceChar = '';
+          fenceLen = 0;
+          continue;
+        }
+        for (let k = i; k < lineEnd; k += 1) {
+          result.push(content[k] ?? '');
+        }
+        if (lineEnd < len) {
+          result.push(content[lineEnd] ?? '');
+          i = lineEnd + 1;
+        } else {
+          i = lineEnd;
+        }
+        continue;
+      }
+      const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      const openMarker = open?.[1];
+      const openInfo = open?.[2] ?? '';
+      if (
+        openMarker !== undefined &&
+        (!openMarker.startsWith('`') || !openInfo.includes('`'))
+      ) {
+        inFence = true;
+        fenceChar = openMarker[0] ?? '';
+        fenceLen = openMarker.length;
+        for (let k = i; k < lineEnd; k += 1) {
+          result.push(content[k] ?? '');
+        }
+        if (lineEnd < len) {
+          result.push(content[lineEnd] ?? '');
+          i = lineEnd + 1;
+        } else {
+          i = lineEnd;
+        }
+        continue;
+      }
+    }
+    if (content.startsWith('<!--', i)) {
+      const endIdx = content.indexOf('-->', i + 4);
+      const closeEnd = endIdx === -1 ? len : endIdx + 3;
+      for (let k = i; k < closeEnd; k += 1) {
+        const ch = content[k] ?? '';
+        result.push(ch === '\n' || ch === '\r' ? ch : ' ');
+      }
+      i = closeEnd;
+    } else if (content[i] === '`') {
+      let tickCount = 1;
+      while (i + tickCount < len && content[i + tickCount] === '`') {
+        tickCount += 1;
+      }
+      const opener = '`'.repeat(tickCount);
+      for (let k = 0; k < tickCount; k += 1) {
+        result.push('`');
+      }
+      i += tickCount;
+      const closeIdx = content.indexOf(opener, i);
+      if (closeIdx !== -1) {
+        for (let k = i; k < closeIdx + tickCount; k += 1) {
+          result.push(content[k] ?? '');
+        }
+        i = closeIdx + tickCount;
+      }
+    } else {
+      result.push(content[i] ?? '');
+      i += 1;
+    }
+  }
+  return result.join('');
+}
+/**
+ * Split a Markdown file into blocks. Fenced code blocks (CommonMark-compliant)
+ * are kept intact. Everything else is split on one-or-more blank lines.
+ */
+function splitIntoBlocks(content) {
+  const blocks = [];
+  const lines = content.split(/\r?\n/);
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  let currentLines = [];
+  let blockStartLine = 1;
+  function flushProse() {
+    const text = currentLines.join('\n').trim();
+    if (text) {
+      const leadingEmpty = currentLines.findIndex((l) => !/^\s*$/.test(l));
+      blocks.push({
+        isFence: false,
+        text,
+        startLine: blockStartLine + (leadingEmpty >= 0 ? leadingEmpty : 0),
+      });
+    }
+    currentLines = [];
+  }
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    const lineNumber = i + 1;
+    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const openMarker = open?.[1];
+    const openInfo = open?.[2] ?? '';
+    if (
+      !inFence &&
+      openMarker !== undefined &&
+      (!openMarker.startsWith('`') || !openInfo.includes('`'))
+    ) {
+      flushProse();
+      inFence = true;
+      fenceChar = openMarker[0] ?? '';
+      fenceLen = openMarker.length;
+      blockStartLine = lineNumber;
+      currentLines.push(line);
+    } else if (inFence) {
+      currentLines.push(line);
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const closeMarker = close?.[1];
+      if (
+        closeMarker !== undefined &&
+        (closeMarker[0] ?? '') === fenceChar &&
+        closeMarker.length >= fenceLen
+      ) {
+        // closing fence
+        blocks.push({
+          isFence: true,
+          text: currentLines.join('\n'),
+          startLine: blockStartLine,
+        });
+        currentLines = [];
+        inFence = false;
+      }
+    } else {
+      // prose
+      if (/^\s*$/.test(line)) {
+        flushProse();
+        blockStartLine = lineNumber + 1;
+      } else {
+        if (currentLines.length === 0) {
+          blockStartLine = lineNumber;
+        }
+        currentLines.push(line);
+      }
+    }
+  }
+  flushProse();
+  return blocks;
+}
+/**
+ * Return true if the text contains the word `profile-selected` (case-insensitively).
+ */
+function hasPointer(block) {
+  return /profile-selected/i.test(block.text);
+}
+/**
+ * For a single instruction file, emit `unpointed-source-form` violations:
+ * any non-exempt bare `node scripts/<h>.mjs` invocation that lacks a
+ * `profile-selected` pointer before it in the file OR in the same
+ * paragraph/fenced block.
+ */
+export function checkUnpointedSourceFormFile(filePath, content, out) {
+  const masked = maskHtmlComments(content);
+  const blocks = splitIntoBlocks(masked);
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+    const block = blocks[blockIndex];
+    if (block === undefined) continue;
+    // Collect all non-exempt invocations in this block.
+    for (const match of block.text.matchAll(UNPOINTED_INVOCATION_RE)) {
+      const scriptName = match[2];
+      const script = `scripts/${scriptName}`;
+      // Skip exempt scripts.
+      if (
+        Object.hasOwn(DOGFOOD_ONLY_TOOLS, script) ||
+        Object.hasOwn(INTERNAL_ENTRY_REASONS, script)
+      )
+        continue;
+      // Check whether there is a pointer:
+      // 1. In any earlier block in the file.
+      const pointerBefore = blocks
+        .slice(0, blockIndex)
+        .some((b) => hasPointer(b));
+      if (pointerBefore) continue;
+      // 2. In the same block (later text counts when in same paragraph/fence).
+      if (hasPointer(block)) continue;
+      // Calculate 1-indexed source line of the invocation.
+      const matchIndex = match.index ?? 0;
+      const lineOffset = block.text.slice(0, matchIndex).split('\n').length - 1;
+      const line = block.startLine + lineOffset;
+      // No pointer found — violation.
+      add(
+        out,
+        'unpointed-source-form',
+        filePath,
+        `bare node invocation of ${script} at line ${line} has no preceding profile-selected pointer`,
+      );
+      // Report at most one violation per file to avoid duplicate noise.
+      return;
+    }
+  }
+}
+/**
+ * Check all instruction files (both source-repo and idd-template) for
+ * bare `node scripts/<h>.mjs` invocations that lack a `profile-selected`
+ * pointer.  Files under `docs/` are explicitly excluded.
+ */
+function checkUnpointedSourceForm(root, out) {
+  const directories = [
+    '.github/instructions',
+    'idd-template/.github/instructions',
+  ];
+  const paths = directories.flatMap((directory) =>
+    walk(root, directory, out).filter((path) => path.endsWith('.md')),
+  );
+  for (const path of paths) {
+    const content = readText(root, path, out);
+    if (content === null) continue;
+    checkUnpointedSourceFormFile(path, content, out);
+  }
+}
 export function collectRepositoryInventoryViolations(
   repositoryRoot,
   selectedChecks = CHECK_FAMILIES,
@@ -1370,6 +1630,8 @@ export function collectRepositoryInventoryViolations(
   if (selected.has('helper-cli-migration')) checkHelperCliMigration(root, out);
   if (selected.has('help-flag-coverage')) checkHelpFlagCoverage(root, out);
   if (selected.has('manifest-ledgers')) checkManifestLedgers(root, out);
+  if (selected.has('unpointed-source-form'))
+    checkUnpointedSourceForm(root, out);
   return sortViolations(out);
 }
 function parseArgs(args) {

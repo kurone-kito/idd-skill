@@ -1824,6 +1824,74 @@ When GitHub auto-delete is disabled, the profile-selected
 and verifies the result through the permitted helper command surface
 (PR `#3741` Codex review comment `#4174479403`).
 
+### F2 and F3 require the exact pull request head before the local checks (kurone-kito/idd-skill#3802)
+
+Before D3.5 and D3.7, F2 read the local worktree and accepted
+`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`. That test passes a
+checkout that is merely behind the pull request head, so D3.5 and D3.7
+could validate an older tree and miss a closing keyword or an impact
+checklist change made since. F3 said the worktree is checked out at the
+head "exactly" and then used the same ancestry test. Both passages said
+"after fetch" without fetching, and ended in a parenthesis that never
+opened (`reset on pass`) after a `git switch` clause that could never
+act once the branch check had passed.
+
+Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter
+re-import reviewed on 11 heads: two bots reported the ancestry test at
+the first head, the pre-merge fragment at the second, and the F3 copy at
+the eighth. The adopter's reviewed patch is prior art for the sequence
+below.
+
+Provenance. The reset arrived with commit `cdf1126fb` (2026-09-10,
+kurone-kito/idd-skill#2749), which wrote `git fetch` plus
+`git checkout`/`git reset --hard`. Its ancestry guard came nine days
+later (`dc7628e7b`, `6be6d9f28` and `b0f5fdc77`, 2026-09-19,
+kurone-kito/idd-skill#3125): fetch, then stop and hold if the worktree is
+dirty or not an ancestor, then `git reset --hard` to the head only when
+the checks still hold, because a clean HEAD ahead of the pull request
+would otherwise lose unpushed commits. Two edits lost the target of that
+reset (`dd06e0d22` dropped the fetch command and the reset target, and
+`094c2aaae` introduced the literal `reset on pass`), so the intent, to
+advance a clean branch to the head, was never stated again.
+
+Decision (author design from that prior art and the original intent,
+maintainer ruling 2026-10-05 only that verified small template defects
+are fixed upstream): F2 states one sequence and F3 points at it.
+
+1. Fetch the pull request head into a remote-tracking ref with an
+   explicit refspec, behind the clone-scoped lock when workers share the
+   clone. A failed fetch holds, and a stale remote-tracking ref never
+   stands in for it. A fetched SHA that differs from `$PR_HEAD_SHA` means
+   the pull request moved while the advisory wait ran, so the session
+   returns to E1.
+2. Keep the branch check and the empty-status check.
+3. Run the shadow-path check before any command that moves HEAD, because
+   `git merge --ff-only` overwrites an ignored file that the target tree
+   tracks while `git status --porcelain` is empty.
+4. Require `git rev-parse HEAD` to equal `$PR_HEAD_SHA`. A strictly
+   behind HEAD advances by `git merge --ff-only` after the claim is
+   re-validated, since this is a git-state mutation, and must then equal
+   the head. Any other relation (ahead or diverged) holds.
+5. The check never runs `git reset`, so a HEAD ahead of the pull request
+   is held with its unpushed commits instead of being discarded.
+
+Equality is tested before ancestry because `is-ancestor` is non-strict:
+a HEAD equal to the head satisfies it too. The `git switch` clause is
+dropped, since after the branch check it could never act.
+
+| # | Case                         | Outcome                          | Sentence applied                    |
+| - | ---------------------------- | -------------------------------- | ----------------------------------- |
+| 1 | HEAD equals the fetched head | Proceeds, worktree untouched     | step 4, equality                    |
+| 2 | Clean and strictly behind    | Advances by ff-only, then equals | step 4, ff-only after re-validation |
+| 3 | HEAD ahead of the head       | Holds, commits kept              | step 4, any other relation          |
+| 4 | Head moved after the fetch   | Returns to E1                    | step 1, fetched SHA comparison      |
+
+Known limit this entry does not remove (preventive; no observed
+incident yet): an ignored file `tmp` that
+shadows a tracked path `tmp/f.txt` passes both shadow-path pipelines, so
+`git merge --ff-only` can still replace it while `git status --porcelain`
+is empty.
+
 ## Instruction delivery
 
 ### Skill-based on-demand delivery of phase instructions: no-go (2026-07-16)
@@ -1988,3 +2056,42 @@ prints, trace every claimed field name to its literal
 site in the current source — never infer it from a type name, an
 interface field, or a local variable name that merely looks like it
 could be the same thing.
+
+### Require a profile-selected pointer before helper commands
+
+Observed 2026-09-12 and 2026-10-05 on kurone-kito/setup.ubuntu: pull
+request #162 patched two instruction files (the appendix and
+suitability) and three docs to add profile-selected forms, but the
+v0.14.0 re-import (#201) erased those patches (at the base commit the
+appendix had 3 and suitability 2 occurrences of `profile-selected`, at
+the import commit 0). Seven review threads then reported bare commands:
+the appendix provider-outage block (two threads, one per bot), the
+suitability close-execute block, three lite files (merge-handoff, resume,
+resume-stall), and one thread on the F4 and stall-recovery commands
+(`idd-merge`, `idd-resume-stall`). An adopter on `ephemeral-npx` had to
+fix this by hand twice (#154 tracked and fixed as #162, and #201).
+
+The `unpointed-source-form` audit rule requires any non-exempt bare
+`node scripts/<name>.mjs` invocation in instruction files to be
+preceded (in the same file, or within the same blank-line-delimited
+paragraph or fenced block) by the `profile-selected` token (matched
+case-insensitively). In addition, a dedicated regression test
+verifies that each of the ten instruction files pairs its
+`profile-selected` pointer with a reference to
+`docs/idd-helper-scripts.md` in the same paragraph or list item.
+
+The check is scoped per file rather than per command because instruction
+files establish the helper resolution contract once near the top or
+before the first helper command; requiring the pointer on every command
+or block would add repetitive boilerplate across dozens of blocks
+without increasing clarity.
+
+Two deliberate non-goals:
+
+1. A strict per-paragraph rule (every block with a bare use must
+   contain `profile-selected`, counting fenced blocks as separate
+   blocks): this would catch more but failed 36 blocks in 18 template
+   files, creating excessive verbosity.
+2. Requiring `docs/idd-helper-scripts.md` on the exact same line as
+   `profile-selected`: this would fail 14 more template files where the
+   path is named within the same paragraph or surrounding list item.
