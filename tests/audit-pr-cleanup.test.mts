@@ -15,6 +15,7 @@ import {
   assertBatchApplyClaimScope,
   assertBatchTimeBudgetScope,
   createTimeBudget,
+  enrichAuditReviewThreads,
   evaluateOperationalComment,
   evaluateReviewComment,
   fetchReviewThreads,
@@ -25,6 +26,7 @@ import { computeReportSummary } from '../src/scripts/audit-pr-cleanup-summary.mt
 import { renderClaimedByMarker } from '../src/scripts/marker-helpers.mts';
 import {
   indexLatestGatingReviewsByAuthor,
+  indexThreadsByReview,
   renderLiveStatusDigest,
   retireLiveStatusDigestBody,
 } from '../src/scripts/protocol-helpers.mts';
@@ -1552,6 +1554,333 @@ test('evaluateReviewComment treats an edited or edit-state-unresolved dispositio
     uneditedReport,
   );
   assert.equal(uneditedReport.candidates.length, 1);
+});
+
+// #3791: PR #3786 thread PRRT_kwDOSWpaqs6pAh1L. CodeRabbit rewrote only
+// its hidden comment-to-reply marker five seconds after an unedited
+// **Accepted** reply, then posted a courtesy ack. F4 used to date the
+// original comment by updatedAt and report a missing disposition.
+const COMMENT_MARKER =
+  '<!-- This is an auto-generated comment by CodeRabbit -->';
+const REPLY_MARKER = '<!-- This is an auto-generated reply by CodeRabbit -->';
+const FINDING_3786 =
+  'The cleanup audit dates this thread comment by updatedAt.';
+const ORIGINAL_3786 = `${FINDING_3786}\n\n${COMMENT_MARKER}`;
+const COSMETIC_3786 = `${FINDING_3786}\n\n${REPLY_MARKER}`;
+const VISIBLE_3786 = `${FINDING_3786}\n\nA real wording change.\n\n${REPLY_MARKER}`;
+const DISPOSITION_AT_3786 = '2026-10-05T12:02:28Z';
+const EDIT_AT_3786 = '2026-10-05T12:02:33Z';
+const COURTESY_AT_3786 = '2026-10-05T12:02:49Z';
+const REVIEW_ID_3786 = 'REV-3786';
+
+function edit3786(
+  diff: string,
+  editedAt: string,
+  deletedAt: string | null = null,
+) {
+  return {
+    editedAt,
+    diff,
+    editorLogin: 'coderabbitai',
+    deletedAt,
+  };
+}
+
+function thread3786(options: {
+  history?: {
+    totalCount: number;
+    edits: ReturnType<typeof edit3786>[];
+  } | null;
+  body?: string;
+  includeCourtesy?: boolean;
+}): ReviewThreadNode {
+  const body = options.body ?? COSMETIC_3786;
+  const finding = {
+    id: 'PRRC_3786_root',
+    url: 'https://pr#PRRC_3786_root',
+    author: { login: 'coderabbitai[bot]' },
+    body,
+    createdAt: '2026-10-05T12:00:00Z',
+    updatedAt: EDIT_AT_3786,
+    lastEditedAt: EDIT_AT_3786,
+    viewerCanMinimize: true,
+    isMinimized: false,
+    pullRequestReview: { id: REVIEW_ID_3786 },
+    ...(options.history ? { userContentEdits: options.history } : {}),
+  };
+  const disposition = {
+    id: 'IC_3786_accept',
+    url: 'https://pr#IC_3786_accept',
+    author: { login: 'idd-bot' },
+    body: '**Accepted** — dated by the verified revision.',
+    createdAt: DISPOSITION_AT_3786,
+    updatedAt: DISPOSITION_AT_3786,
+    lastEditedAt: null,
+    viewerCanMinimize: true,
+    isMinimized: false,
+    pullRequestReview: { id: REVIEW_ID_3786 },
+  };
+  const nodes = [finding, disposition];
+  if (options.includeCourtesy !== false) {
+    nodes.push({
+      id: 'PRRC_3786_ack',
+      url: 'https://pr#PRRC_3786_ack',
+      author: { login: 'coderabbitai[bot]' },
+      body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+      createdAt: COURTESY_AT_3786,
+      updatedAt: COURTESY_AT_3786,
+      lastEditedAt: null,
+      viewerCanMinimize: true,
+      isMinimized: false,
+      pullRequestReview: { id: REVIEW_ID_3786 },
+    });
+  }
+  return {
+    id: 'PRRT_kwDOSWpaqs6pAh1L',
+    isResolved: true,
+    comments: { pageInfo: { hasNextPage: false }, nodes },
+  };
+}
+
+function cosmeticHistory3786(
+  diff: string = COSMETIC_3786,
+  extras: Partial<{
+    totalCount: number;
+    deletedAt: string | null;
+    editedAt: string;
+  }> = {},
+) {
+  const editedAt = extras.editedAt ?? EDIT_AT_3786;
+  return {
+    totalCount: extras.totalCount ?? 2,
+    edits: [
+      edit3786(diff, editedAt, extras.deletedAt ?? null),
+      edit3786(ORIGINAL_3786, '2026-10-05T12:00:00Z'),
+    ],
+  };
+}
+
+function dispositionPaths(thread: ReviewThreadNode): {
+  skipReason: string | undefined;
+  missingDisposition: number;
+} {
+  const report = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+  const finding = thread.comments?.nodes?.[0];
+  if (!finding) {
+    throw new Error('fixture thread has no finding comment');
+  }
+  evaluateReviewComment(finding, thread, mergedPr, noGatingReviews, report);
+  const index = indexThreadsByReview([thread], {
+    isDispositionAuthor: (login) => login === 'idd-bot',
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+  return {
+    skipReason: report.skipped[0]?.skipReason,
+    missingDisposition: index.get(REVIEW_ID_3786)?.missingDisposition ?? -1,
+  };
+}
+
+test('evaluateReviewComment and indexThreadsByReview accept a marker-only revision on PR #3786 thread PRRT_kwDOSWpaqs6pAh1L (#3791)', () => {
+  // The incident also posted a later courtesy ack. Cosmetic dating is
+  // what keeps the rewritten finding from blocking that ack.
+  const withCourtesy = dispositionPaths(
+    thread3786({ history: cosmeticHistory3786() }),
+  );
+  assert.equal(withCourtesy.skipReason, undefined);
+  assert.equal(withCourtesy.missingDisposition, 0);
+
+  // No later comment: the finding itself must date before the
+  // disposition, or both paths still report it missing.
+  const datedByCreation = dispositionPaths(
+    thread3786({
+      history: cosmeticHistory3786(),
+      includeCourtesy: false,
+    }),
+  );
+  assert.equal(datedByCreation.skipReason, undefined);
+  assert.equal(datedByCreation.missingDisposition, 0);
+});
+
+test('both F4 disposition paths still reject a visible post-disposition change (#3791)', () => {
+  const thread = thread3786({
+    body: VISIBLE_3786,
+    history: cosmeticHistory3786(VISIBLE_3786),
+    includeCourtesy: false,
+  });
+  const paths = dispositionPaths(thread);
+  assert.equal(
+    paths.skipReason,
+    'review thread is missing an IDD accept/reject disposition',
+  );
+  assert.equal(paths.missingDisposition, 1);
+});
+
+test('both F4 disposition paths stay fail-closed without a verified history (#3791)', () => {
+  const cases = [
+    thread3786({ history: null, includeCourtesy: false }),
+    thread3786({
+      history: cosmeticHistory3786(COSMETIC_3786, { totalCount: 3 }),
+      includeCourtesy: false,
+    }),
+    thread3786({
+      history: cosmeticHistory3786(COSMETIC_3786, {
+        editedAt: 'not-a-timestamp',
+      }),
+      includeCourtesy: false,
+    }),
+    thread3786({
+      history: cosmeticHistory3786(COSMETIC_3786, {
+        deletedAt: EDIT_AT_3786,
+      }),
+      includeCourtesy: false,
+    }),
+  ];
+  for (const thread of cases) {
+    const paths = dispositionPaths(thread);
+    assert.equal(
+      paths.skipReason,
+      'review thread is missing an IDD accept/reject disposition',
+    );
+    assert.equal(paths.missingDisposition, 1);
+  }
+});
+
+test('enrichAuditReviewThreads fetches only advisory-bot comments edited after the unedited disposition (#3791)', () => {
+  const calls: string[][] = [];
+  const bot = (id: string, lastEditedAt: string) => ({
+    id,
+    url: `https://pr#${id}`,
+    author: { login: 'coderabbitai[bot]' },
+    body: ORIGINAL_3786,
+    createdAt: '2026-10-05T12:00:00Z',
+    updatedAt: lastEditedAt,
+    lastEditedAt,
+    viewerCanMinimize: true,
+    isMinimized: false,
+    pullRequestReview: { id: REVIEW_ID_3786 },
+  });
+  const disposition = {
+    id: 'IC_anchor',
+    url: 'https://pr#IC_anchor',
+    author: { login: 'idd-bot' },
+    body: '**Accepted**',
+    createdAt: DISPOSITION_AT_3786,
+    updatedAt: DISPOSITION_AT_3786,
+    lastEditedAt: null,
+    viewerCanMinimize: true,
+    isMinimized: false,
+    pullRequestReview: { id: REVIEW_ID_3786 },
+  };
+  const humanEdited = {
+    ...bot('PRRC_human', EDIT_AT_3786),
+    author: { login: 'reviewer-a' },
+  };
+  const threads: ReviewThreadNode[] = [
+    {
+      id: 'PRRT_kwDOSWpaqs6pAh1L',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [bot('PRRC_after', EDIT_AT_3786), disposition],
+      },
+    },
+    {
+      id: 'THREAD_before',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [bot('PRRC_before', '2026-10-05T12:01:00Z'), disposition],
+      },
+    },
+    {
+      id: 'THREAD_human',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [humanEdited, disposition],
+      },
+    },
+    {
+      id: 'THREAD_no_disposition',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [bot('PRRC_orphan', EDIT_AT_3786)],
+      },
+    },
+    {
+      // An edited disposition is not an anchor, even when the bot
+      // comment's lastEditedAt is later than that edit.
+      id: 'THREAD_edited_disposition',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          bot('PRRC_edited_anchor', '2026-10-05T12:03:10Z'),
+          {
+            ...disposition,
+            id: 'IC_edited',
+            lastEditedAt: '2026-10-05T12:02:40Z',
+            updatedAt: '2026-10-05T12:02:40Z',
+          },
+        ],
+      },
+    },
+    {
+      // A missing lastEditedAt is unknown, not unedited.
+      id: 'THREAD_unknown_disposition',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          bot('PRRC_unknown_anchor', '2026-10-05T12:03:10Z'),
+          {
+            ...disposition,
+            id: 'IC_unknown',
+            lastEditedAt: undefined,
+          },
+        ],
+      },
+    },
+  ];
+  const enriched = enrichAuditReviewThreads(threads, {
+    dispositionAuthorLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+    port: {
+      getReviewThreadCommentUserContentEdits: (ids) => {
+        calls.push(ids);
+        throw new Error('history fetch failed');
+      },
+    },
+  });
+  assert.deepEqual(calls, [['PRRC_after']]);
+  assert.equal(enriched, threads);
+
+  const attached = enrichAuditReviewThreads(threads, {
+    dispositionAuthorLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+    port: {
+      getReviewThreadCommentUserContentEdits: (ids) => {
+        assert.deepEqual(ids, ['PRRC_after']);
+        return [
+          {
+            commentId: 'PRRC_after',
+            totalCount: 2,
+            edits: cosmeticHistory3786().edits,
+          },
+        ];
+      },
+    },
+  });
+  const attachedFinding = attached[0]?.comments?.nodes?.[0] as
+    | { userContentEdits?: { totalCount?: number } }
+    | undefined;
+  const untouched = attached[1]?.comments?.nodes?.[0] as
+    | { userContentEdits?: unknown }
+    | undefined;
+  assert.equal(attachedFinding?.userContentEdits?.totalCount, 2);
+  assert.equal(untouched?.userContentEdits, undefined);
 });
 
 test('evaluateReviewComment excludes the PR author from ack-only blocking feedback (#2618, Codex P2)', () => {

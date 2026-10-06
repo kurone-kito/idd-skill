@@ -1266,9 +1266,11 @@ export interface ProviderPort {
    * postdates their thread's latest IDD disposition -- see
    * `protocol-helpers.mts`'s `selectAdvisoryThreadCommentIdsEditedAfterDisposition`.
    * `review-activity-snapshot.mts` (#3655) makes the same bounded call
-   * through `review-thread-edit-histories.mts`. Every other review-thread
-   * consumer (the merged-PR sweep, `audit-pr-cleanup.mts`) never calls this
-   * method, so an edited thread comment keeps `updatedAt` dating there.
+   * through `review-thread-edit-histories.mts`. F4 `audit-pr-cleanup.mts`
+   * (#3791) does too, and it passes `requireUneditedDisposition` so the
+   * anchor must be explicitly unedited. The merged-PR sweep never calls
+   * this method, so an edited thread comment keeps `updatedAt` dating
+   * there.
    *
    * Returns one entry per requested id, `commentId` echoing it back.
    * `totalCount` is the comment's FULL edit-history size, which can exceed
