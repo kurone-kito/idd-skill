@@ -57,6 +57,12 @@ const REVIEWED_PRE_FLOOR_ACTIONS = new Set([
 ]);
 const REVIEWED_PRE_FLOOR_RUN_COMMANDS = new Set([
   'node scripts/audit-docs.mjs --check',
+  // Bare-node audits that already precede the floor assertion on main.
+  // pull_request CI tests the merge with main, which runs these steps
+  // (issues #3748 and #3751).
+  'node scripts/lint-source-contracts.mjs',
+  'node scripts/lint-source-boundaries.mjs',
+  'node scripts/validate-schemas.mjs',
 ]);
 
 /** Whether `text`'s top-level `concurrency:` block sets
@@ -1992,6 +1998,12 @@ test('YAML merge keys cannot inherit lint job or step controls', () => {
     '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
     '      - name: Run documentation audit',
     '        run: node scripts/audit-docs.mjs --check',
+    '      - name: Run bare-Node source contract audit',
+    '        run: node scripts/lint-source-contracts.mjs',
+    '      - name: Run source boundary lint',
+    '        run: node scripts/lint-source-boundaries.mjs',
+    '      - name: Run schema validation',
+    '        run: node scripts/validate-schemas.mjs',
     ...reviewedFloorStep.split('\n'),
   ].join('\n');
   assert.doesNotThrow(() => assertLintJobEnforcesNodeFloor(reviewedCheckout));
