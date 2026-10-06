@@ -643,6 +643,14 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of an array type',
+    source: (specifier) =>
+      `const value = identity<number[]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a satisfies type',
     source: (specifier) =>
       `const value = input satisfies Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -794,6 +802,22 @@ const prefixNotRegexSources: {
         specifier,
       ),
   },
+  {
+    name: 'a comparison inside an index before a greater-than regex',
+    source: (specifier) =>
+      `const value = items[count < limit] > /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a comparison before a comma and a greater-than regex',
+    source: (specifier) =>
+      `check(count < limit, total > /[/*]/);\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
 ];
 
 for (const { name, source } of prefixNotRegexSources) {
@@ -848,6 +872,46 @@ test('a multiline TypeScript assertion does not hide a later bare import', () =>
   ]);
   assert.match(stderr, /yaml/);
 });
+
+const laterHashbangMarkers: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a hashbang-like line after other code',
+    source: (specifier) =>
+      `const flag = 1;\n#!/usr/bin/env -S node --flag=/*\nimport bare from '__SPECIFIER__';\n*/\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a hashbang-like line inside a template interpolation',
+    source: (specifier) =>
+      `const value = ${backtick}\${#!/usr/bin/env -S node --flag=/*\nimport bare from '__SPECIFIER__';\n*/}${backtick};\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of laterHashbangMarkers) {
+  test(`the node-import rule keeps a real comment after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
+  });
+
+  test(`the standalone-mirror rule keeps a real comment after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
+  });
+}
 
 const identifierKeywordPrefixes: {
   name: string;

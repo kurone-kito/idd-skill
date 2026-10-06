@@ -556,9 +556,13 @@ function scanComments(source: string): {
 
     // A same-line `<...>` after an identifier is a type-argument list.
     // A comparison such as `n < limit)` has no closing `>` before a
-    // non-type token, so it stays a pair of operators.
+    // non-type token, so it stays a pair of operators. A `]` that closes
+    // a bracket opened before the `<`, or a comma, is such a token:
+    // `items[count < limit] > /regex/` and
+    // `check(count < limit, total > /regex/)` must not hide a later import.
     function closesTypeArgumentsOnLine(from: number): boolean {
       let depth = 0;
+      let bracketDepth = 0;
       for (let cursor = from; cursor < source.length; cursor += 1) {
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
@@ -575,9 +579,19 @@ function scanComments(source: string): {
           }
           continue;
         }
-        // Parentheses and expression operators stop the scan. Allowing
-        // them lets `n < limit)` reach a later `>` and hide a real import.
-        if (depth > 0 && /[A-Za-z0-9_$\s.,:[\]{}]/.test(typeChar)) {
+        if (depth > 0 && typeChar === '[') {
+          bracketDepth += 1;
+          continue;
+        }
+        if (depth > 0 && typeChar === ']') {
+          if (bracketDepth === 0) {
+            return false;
+          }
+          bracketDepth -= 1;
+          continue;
+        }
+        // Parentheses, commas, and expression operators stop the scan.
+        if (depth > 0 && /[A-Za-z0-9_$\s.:{}]/.test(typeChar)) {
           continue;
         }
         return false;
