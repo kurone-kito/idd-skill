@@ -530,7 +530,14 @@ function hasUnverifiableEnvironmentKey(
   let flowMapDepth = 0;
   const unverifiableKey =
     /(?:^|[{,])\s*(?:"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"|!{1,2}[^\s]+\s+(?:'[^']*'|"[^"]*"|[^\s,{]+))\s*:/;
+  const anchoredKey = /(?:^|[{,])\s*(?:(?:&[^\s,{}[\]]+|![^\s,{}[\]]+)\s+)+\S/;
+  const aliasedKey = /(?:^|[{,])\s*\*[^\s,{}[\]]+\s*:/;
   const explicitKeyIndicator = /(?:^|[{,])\s*\?(?:\s|$)/;
+  const rejectsEnvironmentKey = (value: string): boolean =>
+    unverifiableKey.test(value) ||
+    anchoredKey.test(value) ||
+    aliasedKey.test(value) ||
+    explicitKeyIndicator.test(value);
 
   for (const [index, line] of lines.entries()) {
     if (scalarContent[index]) {
@@ -554,7 +561,7 @@ function hasUnverifiableEnvironmentKey(
     );
     if (environmentHeader) {
       const value = environmentHeader[2];
-      if (unverifiableKey.test(value) || explicitKeyIndicator.test(value)) {
+      if (rejectsEnvironmentKey(value)) {
         return true;
       }
       const trimmedValue = value.trim();
@@ -573,10 +580,7 @@ function hasUnverifiableEnvironmentKey(
       environmentIndent !== undefined &&
       (flowMapDepth > 0 || indent > environmentIndent)
     ) {
-      if (
-        unverifiableKey.test(uncommented) ||
-        explicitKeyIndicator.test(uncommented)
-      ) {
+      if (rejectsEnvironmentKey(uncommented)) {
         return true;
       }
       if (flowMapDepth > 0) {
@@ -602,15 +606,17 @@ function hasYamlMergeKeyAtIndent(text: string, indent: number): boolean {
   );
 }
 
-/** Rejects escaped, tagged, or anchored mapping keys at structural
+/** Rejects escaped, tagged, anchored, or aliased mapping keys at structural
  * control-property indentation because the line-based checks below cannot
- * resolve them. */
+ * resolve them. An alias may be the whole key (`*skip:`) or a leading
+ * token whose following name is still unresolved (`*skip if:`). */
 function hasUnverifiableYamlKeyAtIndent(text: string, indent: number): boolean {
   const lines = text.split('\n');
   const scalarContent = yamlBlockScalarContentFlags(lines);
   const unverifiableKey =
     /^(?:"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"|!{1,2}[^\s]+\s+(?:'[^']*'|"[^"\\]*(?:\\.[^"\\]*)*"|[^\s,{]+))\s*:/;
   const decoratedKey = /^(?:(?:&[^\s]+|!{1,2}[^\s]+)\s+)+\S/;
+  const aliasedKey = /^\*[^\s]+/;
   return lines.some((line, index) => {
     if (scalarContent[index] || !line.startsWith(' '.repeat(indent))) {
       return false;
@@ -619,6 +625,7 @@ function hasUnverifiableYamlKeyAtIndent(text: string, indent: number): boolean {
     return (
       unverifiableKey.test(key) ||
       decoratedKey.test(key) ||
+      aliasedKey.test(key) ||
       /^\?(?:\s|$)/.test(key)
     );
   });
@@ -903,7 +910,7 @@ function assertNoNodeExecutionOverrides(text: string, scope: string): void {
   assert.equal(
     hasUnverifiableEnvironmentKey(lines, scalarContent),
     false,
-    `lint.yml: ${scope} must not use escaped or tagged YAML env keys because their resolved names cannot be verified`,
+    `lint.yml: ${scope} must not use escaped, tagged, anchored, or aliased YAML env keys because their resolved names cannot be verified`,
   );
   const usesUnresolvedEnvironmentAlias = lines.some((line, index) => {
     if (scalarContent[index]) {
@@ -964,12 +971,12 @@ function assertLintJobEnforcesNodeFloor(jobBody: string): void {
   assert.equal(
     hasUnverifiableYamlKeyAtIndent(jobBody, 4),
     false,
-    'lint.yml: lint job control keys must not be escaped, tagged, anchored, or explicit YAML keys',
+    'lint.yml: lint job control keys must not be escaped, tagged, anchored, aliased, or explicit YAML keys',
   );
   assert.equal(
     hasUnverifiableYamlKeyAtIndent(relevantSteps ?? '', 8),
     false,
-    'lint.yml: lint step control keys must not be escaped, tagged, anchored, or explicit YAML keys',
+    'lint.yml: lint step control keys must not be escaped, tagged, anchored, aliased, or explicit YAML keys',
   );
   assert.doesNotMatch(
     jobBody,
@@ -1017,7 +1024,7 @@ function assertLintJobUsesDefaultShell(
   assert.equal(
     hasUnverifiableYamlKeyAtIndent(workflow, 0),
     false,
-    'lint.yml: workflow root keys must not be escaped, tagged, anchored, or explicit YAML keys',
+    'lint.yml: workflow root keys must not be escaped, tagged, anchored, aliased, or explicit YAML keys',
   );
   assertNoNodeExecutionOverrides(
     extractWorkflowEnvironmentBlock(workflow),
@@ -1042,7 +1049,7 @@ function assertNodeVersionLogBeforeFloor(stepBody: string): void {
   assert.equal(
     hasUnverifiableYamlKeyAtIndent(stepBody, 8),
     false,
-    'lint.yml: Assert Node.js floor step control keys must not be escaped, tagged, anchored, or explicit YAML keys',
+    'lint.yml: Assert Node.js floor step control keys must not be escaped, tagged, anchored, aliased, or explicit YAML keys',
   );
   assert.equal(
     hasYamlMergeKeyAtIndent(stepBody, 8),
@@ -2036,6 +2043,7 @@ test('unreviewed actions and run steps before the Node floor assertion are rejec
         '        *action+key: actions/example@deadbeef',
       ],
       type: 'action',
+      rejection: /lint step control keys must not be escaped/,
     },
     { lines: ['      - run: node ./unreviewed-script.mjs'], type: 'run' },
     {
@@ -2071,7 +2079,9 @@ test('unreviewed actions and run steps before the Node floor assertion are rejec
     ].join('\n');
     assert.throws(
       () => assertLintJobEnforcesNodeFloor(jobBody),
-      /actions and run steps before the Node floor check must use reviewed entries/,
+      'rejection' in actionStep
+        ? actionStep.rejection
+        : /actions and run steps before the Node floor check must use reviewed entries/,
       `accepted unreviewed ${actionStep.type} steps: ${actionStep.lines.join(' | ')}`,
     );
   }
@@ -2103,12 +2113,17 @@ test('later lint steps may set their own environment and shell', () => {
 });
 
 test('escaped or tagged YAML env keys cannot hide Node execution overrides', () => {
-  const rejection = /must not use escaped or tagged YAML env keys/;
+  const rejection =
+    /must not use escaped, tagged, anchored, or aliased YAML env keys/;
   for (const environment of [
     '    env:\n      "\\u004eODE_OPTIONS": --require=./exit.cjs',
     '    env: { "\\u004eODE_OPTIONS": --require=./exit.cjs }',
     '    env:\n      !!str NODE_OPTIONS: --require=./exit.cjs',
     '    env:\n      ? "\\u004eODE_OPTIONS"\n      : --require=./exit.cjs',
+    '    env:\n      &node NODE_OPTIONS: --require=./exit.cjs',
+    '    env: { &node NODE_OPTIONS: --require=./exit.cjs }',
+    '    env:\n      *node: --require=./exit.cjs',
+    '    env: { *node: --require=./exit.cjs }',
   ]) {
     assert.throws(() => assertLintJobEnforcesNodeFloor(environment), rejection);
   }
@@ -2142,6 +2157,10 @@ test('escaped YAML control keys cannot skip or hide the floor guard', () => {
     /lint job control keys must not be escaped/,
   );
   assert.throws(
+    () => assertLintJobEnforcesNodeFloor('    *skip if: false'),
+    /lint job control keys must not be escaped/,
+  );
+  assert.throws(
     () => assertLintJobEnforcesNodeFloor('    !!str if: false'),
     /lint job control keys must not be escaped/,
   );
@@ -2156,6 +2175,13 @@ test('escaped YAML control keys cannot skip or hide the floor guard', () => {
     () =>
       assertLintJobEnforcesNodeFloor(
         '    steps:\n      - name: Assert Node.js floor\n        &skip if: false',
+      ),
+    /lint step control keys must not be escaped/,
+  );
+  assert.throws(
+    () =>
+      assertLintJobEnforcesNodeFloor(
+        '    steps:\n      - name: Assert Node.js floor\n        *skip if: false',
       ),
     /lint step control keys must not be escaped/,
   );
