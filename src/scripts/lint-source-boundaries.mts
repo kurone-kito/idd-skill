@@ -338,6 +338,9 @@ function scanComments(source: string): {
     let pendingClassExpressionBody: boolean | null = null;
     let pendingFunctionExpression: boolean | null = null;
     let pendingFunctionExpressionBody = false;
+    let scanningFunctionReturnType = false;
+    let functionReturnTypeAngleDepth = 0;
+    let functionReturnTypeBraceDepth = 0;
     let typescriptAssertionTypeContext = false;
     let typescriptAssertionTypeDepth = 0;
     let currentWordStartsExpressionContext = false;
@@ -362,7 +365,7 @@ function scanComments(source: string): {
       if (lastWordIsPropertyName) {
         return;
       }
-      if (lastWord === 'as') {
+      if (lastWord === 'as' || lastWord === 'satisfies') {
         typescriptAssertionTypeContext = true;
         typescriptAssertionTypeDepth = 0;
       }
@@ -542,6 +545,46 @@ function scanComments(source: string): {
       regexAfterRestrictedStatementLineBreak = false;
     }
 
+    if (!interpolation && source.startsWith('#!', index)) {
+      let end = index + 2;
+      while (end < source.length && !isLineTerminator(source[end])) {
+        end += 1;
+      }
+      maskComment(output, index, end);
+      index = end;
+    }
+
+    // A same-line `<...>` after an identifier is a type-argument list.
+    // A comparison such as `n < limit)` has no closing `>` before a
+    // non-type token, so it stays a pair of operators.
+    function closesTypeArgumentsOnLine(from: number): boolean {
+      let depth = 0;
+      for (let cursor = from; cursor < source.length; cursor += 1) {
+        const typeChar = source[cursor];
+        if (isLineTerminator(typeChar)) {
+          return false;
+        }
+        if (typeChar === '<') {
+          depth += 1;
+          continue;
+        }
+        if (typeChar === '>') {
+          depth -= 1;
+          if (depth === 0) {
+            return true;
+          }
+          continue;
+        }
+        // Parentheses and expression operators stop the scan. Allowing
+        // them lets `n < limit)` reach a later `>` and hide a real import.
+        if (depth > 0 && /[A-Za-z0-9_$\s.,:[\]{}]/.test(typeChar)) {
+          continue;
+        }
+        return false;
+      }
+      return false;
+    }
+
     while (index < source.length) {
       const ch = source[index];
       const next = source[index + 1];
@@ -699,9 +742,22 @@ function scanComments(source: string): {
         ch === ')' ? functionParameterExpressions.pop() : null;
       if (
         closesFunctionParameters !== null &&
-        closesFunctionParameters !== undefined
+        closesFunctionParameters !== undefined &&
+        !scanningFunctionReturnType
       ) {
         pendingFunctionExpressionBody = closesFunctionParameters;
+        scanningFunctionReturnType = false;
+        functionReturnTypeAngleDepth = 0;
+        functionReturnTypeBraceDepth = 0;
+      }
+      if (
+        ch === ':' &&
+        pendingFunctionExpressionBody &&
+        !scanningFunctionReturnType
+      ) {
+        scanningFunctionReturnType = true;
+        functionReturnTypeAngleDepth = 0;
+        functionReturnTypeBraceDepth = 0;
       }
       if (
         typescriptAssertionTypeContext &&
@@ -710,8 +766,27 @@ function scanComments(source: string): {
       ) {
         typescriptAssertionTypeContext = false;
       }
-      if (ch === '<' && typescriptAssertionTypeContext) {
-        typescriptAssertionTypeDepth += 1;
+      if (ch === '<') {
+        if (typescriptAssertionTypeContext) {
+          typescriptAssertionTypeDepth += 1;
+        } else if (
+          lastCodeCharIsIdentifierPart &&
+          closesTypeArgumentsOnLine(index)
+        ) {
+          typescriptAssertionTypeContext = true;
+          typescriptAssertionTypeDepth = 1;
+        }
+        if (scanningFunctionReturnType) {
+          functionReturnTypeAngleDepth += 1;
+        }
+      }
+      if (
+        ch === '>' &&
+        scanningFunctionReturnType &&
+        lastCodeChar !== '=' &&
+        functionReturnTypeAngleDepth > 0
+      ) {
+        functionReturnTypeAngleDepth -= 1;
       }
       const closesTypescriptAssertionType =
         ch === '>' &&
@@ -725,8 +800,19 @@ function scanComments(source: string): {
         }
       }
       if (ch === '{') {
-        const startsFunctionReturnType =
-          pendingFunctionExpressionBody && lastCodeChar === ':';
+        const returnTypeContinues =
+          scanningFunctionReturnType &&
+          (functionReturnTypeAngleDepth > 0 ||
+            functionReturnTypeBraceDepth > 0 ||
+            lastCodeChar === ':');
+        if (returnTypeContinues) {
+          functionReturnTypeBraceDepth += 1;
+        } else if (scanningFunctionReturnType) {
+          scanningFunctionReturnType = false;
+          functionReturnTypeAngleDepth = 0;
+          functionReturnTypeBraceDepth = 0;
+        }
+        const startsFunctionReturnType = returnTypeContinues;
         const startsObjectLiteral =
           !startsFunctionReturnType &&
           !controlFlowClosingParenthesis &&
@@ -735,6 +821,7 @@ function scanComments(source: string): {
             lastCodeChar === '(' ||
             lastCodeChar === '[' ||
             lastCodeChar === ',' ||
+            (lastCodeChar !== '' && '&|?+-*/%^~'.includes(lastCodeChar)) ||
             (lastCodeChar === ':' && objectLiteralBraces.at(-1) === true) ||
             (!lastWordIsPropertyName &&
               !BLOCK_PRECEDING_KEYWORDS.has(lastWord) &&
@@ -761,6 +848,9 @@ function scanComments(source: string): {
       const closesExpressionBrace =
         ch === '}' && expressionEndingBraces.pop() === true;
       if (ch === '}') {
+        if (functionReturnTypeBraceDepth > 0) {
+          functionReturnTypeBraceDepth -= 1;
+        }
         objectLiteralBraces.pop();
       }
       const closesControlFlowParenthesis =

@@ -635,6 +635,38 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation',
+    source: (specifier) =>
+      `const value = identity<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a satisfies type',
+    source: (specifier) =>
+      `const value = input satisfies Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a nested function return type',
+    source: (specifier) =>
+      `const value = function (): Promise<{ value: number }> { return { value: 1 }; } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an object literal on a binary-operator right side',
+    source: (specifier) =>
+      `const value = condition && {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after an async function expression body',
     source: (specifier) =>
       `const value = async function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -750,6 +782,14 @@ const prefixNotRegexSources: {
     name: 'a prefix negation after a statement block',
     source: (specifier) =>
       `{}\n!/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a hashbang whose flag text contains a block-comment marker',
+    source: (specifier) =>
+      `#!/usr/bin/env -S node --flag=/*\nimport bare from '__SPECIFIER__';\n*/\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
