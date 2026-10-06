@@ -1340,7 +1340,9 @@ below.
 
 `severity-tiered` is a third `deferByUrgency` value. It replaces the
 binary adopt-now allowlist with an ordinal urgency score (`very-low`
-< `low` < `medium` < `high`) beside the E4 severity. High defers only
+< `low` < `medium` < `high`) beside the E4 severity. At relax step 0,
+which is the whole matrix unless `critiqueLoop.deferRelaxAtRounds` is
+set (see the wave-gradient subsection below), High defers only
 at `very-low`. Medium, including unknown severity, defers at
 `very-low`, `low`, or `medium`. Low defers at every scored urgency.
 An unscored urgency does not defer. `low` and `low-and-medium` still
@@ -1364,6 +1366,86 @@ reported three safety findings on that same commit, so E4/E5 must
 inspect every actionable PATH A finding even when an overview is
 empty. PR #3574 drew repeated Medium correctness findings during its
 review cycle.
+
+#### Wave-gradient urgency defer (kurone-kito/idd-skill#3796)
+
+`critiqueLoop.deferRelaxAtRounds` adds an optional wave gradient to
+`severity-tiered`. Before the gradient, the matrix above was the same at
+every review wave, and the only round-dependent trigger,
+`deferAfterRounds`, was Low-only, so the matrix itself never relaxed as a
+pull request accumulated review waves.
+
+Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter re-import
+of the v0.14.0 template (figures at head `25e3d5e`): 32 commits, 11
+reviewed heads, 28 bot reviews and 74 review threads, open for about 12
+hours at that head, with no finding deferred (its description records no
+follow-up issue). Five earlier template re-imports in that repository
+(#62, #101, #126, #154, #189) merged after 1 to 4 heads. Of the 74
+threads, 26 were created or exposed by the pull request's own edits (one
+configured-branch inconsistency was reported site by site over six
+heads), and the first head already drew threads at the usual density (2.4
+per 1,000 diff lines, against 0.4 to 2.8 before). The instruction text a
+finding points at is the shipped behavior of an instruction repository,
+so adopt-now (c) rates most such findings `high` urgency, and without
+the gradient Medium or High findings of `high` urgency never defer
+however many waves have passed.
+
+Where the thresholds sit. Over the 100 merged pull requests numbered #3561
+to #3781 (merged 2026-09-27 to 2026-10-05), the PR-wide Copilot review
+count had a median of 2; 30 reached a 4th review, 25 a 5th, 14 a 7th and
+10 a 9th, and the largest was 111 (#3574, counted through the REST
+endpoint, because the GraphQL listing caps a pull request's reviews at
+100 nodes, so a heavily reviewed pull request can come out too low there,
+though never a threshold count). A gradient that starts at the 4th review
+leaves a typical pull request unchanged and acts only on the long tail,
+which is why `[4, 7]` is the recommended value.
+
+Maintainer decision (Groom hearing, 2026-10-05): add a wave gradient to
+`severity-tiered`, with thresholds that are PR-wide Copilot review counts,
+two steps at most, and at the final step never defer a High-tier finding
+of `high` urgency or a safety-class finding. The convergence-aware extra
+step and this repository's own opt-in are separate issues in the same
+roadmap. The normative rule is in
+[Wave-gradient urgency defer](idd-review-policy-profiles.md#wave-gradient-urgency-defer).
+
+Choices made while implementing, outside the hearing outcomes (which
+named only the final step): the High-tier `high` urgency and safety-class
+exclusion applies from step 1, and not at step 0, so a safety-class
+Low-tier finding still defers at step 0 as it does today and an absent
+field changes nothing. The safety class cites items 1, 2 and 4 of the
+needs-decision stop test and leaves out item 3, the instruction or helper
+contradiction, because most findings in an instruction repository would
+match it and the gradient would never act. The exclusions govern the
+`deferByUrgency` trigger only; `deferAfterRounds` is unchanged, as the
+scope limits of issue `#3796` say. The consequence to know: from
+step 1 on, a Medium-tier finding of `high` urgency that rests on adopt-now
+condition (a), (b) or (c) but is not safety class defers to the bundled
+follow-up.
+
+Worked example with `[4, 7]`. The columns after the step show whether one
+example finding defers (`defers`) or stays in the loop (`stays`): a
+Low-tier finding of `high` urgency, a Medium-tier finding of `high`
+urgency that is not safety class, a High-tier finding of `medium`
+urgency, a High-tier finding of `high` urgency, and a safety-class
+Low-tier finding of `low` urgency.
+
+| Copilot reviews | Step | Low, `high` | Medium, `high` | High, `medium` | High, `high` | Safety class, Low, `low` |
+| --------------- | ---- | ----------- | -------------- | -------------- | ------------ | ------------------------ |
+| 1               | 0    | `defers`    | `stays`        | `stays`        | `stays`      | `defers`                 |
+| 2               | 0    | `defers`    | `stays`        | `stays`        | `stays`      | `defers`                 |
+| 3               | 0    | `defers`    | `stays`        | `stays`        | `stays`      | `defers`                 |
+| 4               | 1    | `defers`    | `defers`       | `stays`        | `stays`      | `stays`                  |
+| 5               | 1    | `defers`    | `defers`       | `stays`        | `stays`      | `stays`                  |
+| 6               | 1    | `defers`    | `defers`       | `stays`        | `stays`      | `stays`                  |
+| 7               | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 8               | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 9               | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 10              | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 11              | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+
+Count 4 is the first at which the Medium-tier finding of `high` urgency
+defers, and count 7 is the first at which the High-tier finding of
+`medium` urgency does; the safety-class finding defers only at step 0.
 
 ### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
 

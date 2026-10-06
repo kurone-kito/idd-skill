@@ -5163,3 +5163,25 @@ test('isDispositionComment credits the needs-decision deferral reply, with and w
   );
   assert.equal(isDispositionComment({ body: `Not a marker: ${reply}` }), false);
 });
+
+// The wave gradient (docs/idd-review-policy-profiles.md, "Wave-gradient
+// urgency defer") adds `; step <k>` to the urgency clause of the same
+// `**Rejected**` deferral reply, so it must stay a recognized disposition.
+test('isDispositionComment credits an urgency deferral reply that carries the step suffix', () => {
+  const reply =
+    '**Rejected** — deferred to follow-up issue #5 (urgency low; severity high; step 1): reason';
+  assert.equal(isDispositionComment({ body: reply }), true);
+  assert.equal(
+    isDispositionComment({
+      body: `${reply}\n\n<!-- idd-skill-review-reply -->`,
+    }),
+    true,
+  );
+  assert.equal(
+    isDispositionComment({
+      body: '**Rejected** — deferred to follow-up issue #5 (urgency medium; severity medium, Copilot high; step 2): reason',
+    }),
+    true,
+  );
+  assert.equal(isDispositionComment({ body: `Not a marker: ${reply}` }), false);
+});
