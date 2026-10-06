@@ -1078,6 +1078,37 @@ test('every pinned needs-decision route, triage donor, whole-class sweep and wav
   }
 });
 
+test('replacing the converged equality pin with ready fails the wave-gradient audit (#3797)', () => {
+  const needle = '`converged` equal to `true`';
+  const replacement = '`ready` equal to `true`';
+  const paths = [
+    'idd-template/docs/idd-review-policy-profiles.md',
+    'docs/idd-review-policy-profiles.md',
+  ];
+  const real = new Map<string, string>();
+  for (const path of paths) {
+    real.set(path, readFileSync(join(REPOSITORY_ROOT, path), 'utf8'));
+  }
+  const failing = (documents: Map<string, string>) =>
+    collectRepositoryPolicyViolationsFromDocuments(documents).filter(
+      (violation) => violation.ruleId === 'wave-gradient-policy-doc',
+    );
+  assert.deepEqual(failing(real), []);
+  for (const path of paths) {
+    const original = real.get(path) as string;
+    assert.equal(original.split(needle).length - 1, 1, path);
+    const scratch = new Map(real);
+    scratch.set(path, original.replace(needle, replacement));
+    assert.ok(
+      failing(scratch).some(
+        (violation) =>
+          violation.path === path && violation.message.includes(needle),
+      ),
+      `${path} must fail once converged is replaced with ready`,
+    );
+  }
+});
+
 test('the whole-class sweep pins are scoped to the E9 bullet and reject the old sentence', () => {
   const reviewFixPaths = [
     'idd-template/.github/instructions/idd-review-fix.instructions.md',

@@ -199,7 +199,8 @@ scope-fenced item, an Accepted item mid-fix
   counts it; from step 1 the safety class (see the section) never defers,
   an exception to "never override"; `deferAfterRounds` is unchanged.
   Clause: `urgency <level>; severity <tier>[, Copilot <label>]`, plus
-  `; step <k>` above step 0.
+  `; step <k>` above step 0. Read `converged` once per pass; if true,
+  add one step ([wave gradient]).
 
 Bundle one E5 pass's deferred items into one follow-up issue (E6; do
 not append). Each keeps an AC bullet, exactly one

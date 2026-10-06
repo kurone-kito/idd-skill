@@ -1684,20 +1684,56 @@ function normalizeRelaxStep(value) {
   return value === 1 || value === 2 ? value : 0;
 }
 /**
- * The relax step for a pull request's PR-wide Copilot review count (#3796):
- * the number of configured thresholds less than or equal to the count, never
- * above 2. With `[4, 7]`, counts 0 to 3 give 0, 4 to 6 give 1 and 7 or more
- * give 2; an empty array always gives 0.
+ * The relax step for a pull request's PR-wide Copilot review count (#3796,
+ * #3797): the number of configured thresholds less than or equal to the
+ * count, plus one when `advisoryConverged` is true and the thresholds array
+ * is non-empty, never above 2. An empty array is the normalized form of an
+ * unset or invalid value (for example `[7, 4]`), so convergence cannot
+ * raise it. With `[4, 7]`, counts 0 to 3 give 0 or 1, counts 4 to 6 give 1
+ * or 2, and counts 7 or more give 2 either way.
  */
 // audit:ignore-dead-export: E4/E5 applies the step from instruction text; tests lock every boundary and there is no helper caller
-export function relaxStepForReviewCount(reviewCount, thresholds) {
-  let step = 0;
+export function relaxStepForReviewCount(
+  reviewCount,
+  thresholds,
+  advisoryConverged = false,
+) {
+  let counted = 0;
   for (const threshold of thresholds) {
     if (reviewCount >= threshold) {
-      step += 1;
+      counted += 1;
     }
   }
-  return step >= 2 ? 2 : step;
+  const countStep = counted >= 2 ? 2 : counted;
+  // Only a set, non-empty array can take the extra step. The cap is 2, so a
+  // count step that is already 2 does not rise and does not count as raised.
+  const extra =
+    advisoryConverged === true && thresholds.length > 0 && countStep < 2
+      ? 1
+      : 0;
+  const sum = countStep + extra;
+  const step = sum >= 2 ? 2 : sum;
+  return {
+    step,
+    raisedByConvergence: step > countStep,
+  };
+}
+/**
+ * Clause pieces after the urgency and severity text (#3796, #3797).
+ * `step <k>` is present above step 0. `converged <short-sha>` is present
+ * only when convergence raised the step. The short SHA is the first 7
+ * characters of the verdict's `prHeadSha`.
+ */
+// audit:ignore-dead-export: E5 appends these pieces from instruction text; tests lock the token condition and there is no helper caller
+export function relaxStepClauseParts(result, prHeadSha) {
+  const parts = [];
+  if (result.step > 0) {
+    parts.push(`step ${result.step}`);
+  }
+  if (result.raisedByConvergence) {
+    parts.push(`converged ${prHeadSha.slice(0, 7)}`);
+  }
+  return parts;
 }
 function severityTieredDefers(eligibility, urgency, step) {
   return (

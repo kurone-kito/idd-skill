@@ -647,6 +647,27 @@ pull requests can find gradient deferrals:
 follow-up uses the existing `review-fix-loop-cutoff` marker and the
 bundling rule of the E5 Defer block.
 
+**Converged extra step.** When the thresholds are set and valid, and
+the advisory policy is `reviewPolicy` absent or `copilot-advisory`, E5
+reads the profile-selected advisory-convergence command once per pass,
+before disposing any item and before any E6 reply. In this repository
+that command is `node scripts/advisory-convergence.mjs`; the other
+profiles use the `idd-advisory-convergence` bin or an `npx` wrapper.
+Pass `--pr` for the pull request and `--claim-issue` for the claimed
+issue, and pass no `--assert`. Reuse that read on any later return to
+E4-E6 in the same pass. The value is never carried across a push. Add
+one step, capped at 2, only when `converged` equal to `true` and the
+verdict's `prHeadSha` matches the `{head-SHA}` stored at E1 Step 1.
+Every other result adds nothing, including an unavailable helper, a
+non-zero exit, output that does not parse, a `converged` value that is
+absent or not exactly `true`, a `prHeadSha` that differs from the
+stored head, and a `reviewPolicy` other than absent or
+`copilot-advisory`. With a one-threshold array such as `[4]`,
+convergence reaches step 2, which is above that array's own final
+step. The reply keeps `step <k>`, and only when convergence raised the
+step it also carries `converged <short-sha>` (the first 7 hex digits
+of `prHeadSha`).
+
 ## Selection Checklist
 
 Before considering onboarding complete, record the selected profile in

@@ -13,6 +13,7 @@ import {
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
+  relaxStepClauseParts,
   relaxStepForReviewCount,
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
@@ -690,16 +691,73 @@ test('relaxStepForReviewCount counts the thresholds at or below the review count
     [[], 1000, 0],
   ];
   for (const [thresholds, count, step] of cases) {
+    const result = relaxStepForReviewCount(count, thresholds);
     assert.equal(
-      relaxStepForReviewCount(count, thresholds),
+      result.step,
       step,
       `${JSON.stringify(thresholds)} at count ${count}`,
     );
+    assert.equal(result.raisedByConvergence, false);
   }
-  assert.equal(relaxStepForReviewCount(Number.NaN, [4, 7]), 0);
-  assert.equal(relaxStepForReviewCount(-3, [4, 7]), 0);
+  assert.equal(relaxStepForReviewCount(Number.NaN, [4, 7]).step, 0);
+  assert.equal(relaxStepForReviewCount(-3, [4, 7]).step, 0);
   // The step never exceeds 2, even for thresholds that were not normalized.
-  assert.equal(relaxStepForReviewCount(10, [1, 2, 3]), 2);
+  assert.equal(relaxStepForReviewCount(10, [1, 2, 3]).step, 2);
+});
+
+test('relaxStepForReviewCount adds one converged step when the thresholds are set, capped at 2 (#3797)', () => {
+  const headSha = '0123456789abcdef';
+  const shortSha = '0123456';
+  const pairs: Array<
+    [readonly number[], number, 0 | 1 | 2, 0 | 1 | 2, boolean]
+  > = [
+    [[4, 7], 1, 0, 1, true],
+    [[4, 7], 3, 0, 1, true],
+    [[4, 7], 4, 1, 2, true],
+    [[4, 7], 6, 1, 2, true],
+    [[4, 7], 7, 2, 2, false],
+    [[4, 7], 11, 2, 2, false],
+    [[4], 3, 0, 1, true],
+    [[4], 4, 1, 2, true],
+    [[4], 9, 1, 2, true],
+    [[], 1, 0, 0, false],
+    [[], 4, 0, 0, false],
+    [[], 7, 0, 0, false],
+  ];
+  for (const [
+    thresholds,
+    count,
+    withoutConvergence,
+    withConvergence,
+    raised,
+  ] of pairs) {
+    const plain = relaxStepForReviewCount(count, thresholds, false);
+    const converged = relaxStepForReviewCount(count, thresholds, true);
+    assert.equal(plain.step, withoutConvergence);
+    assert.equal(plain.raisedByConvergence, false);
+    assert.equal(
+      converged.step,
+      withConvergence,
+      `${JSON.stringify(thresholds)} at count ${count}`,
+    );
+    assert.equal(converged.raisedByConvergence, raised);
+  }
+
+  // Count 4 with [4, 7]: capped sum 2 is above the count step 1, so the
+  // clause carries the converged token. Count 7 is already at the cap.
+  const raisedAtFour = relaxStepForReviewCount(4, [4, 7], true);
+  assert.deepEqual(relaxStepClauseParts(raisedAtFour, headSha), [
+    'step 2',
+    `converged ${shortSha}`,
+  ]);
+  const cappedAtSeven = relaxStepForReviewCount(7, [4, 7], true);
+  assert.deepEqual(relaxStepClauseParts(cappedAtSeven, headSha), ['step 2']);
+  assert.equal(
+    relaxStepClauseParts(cappedAtSeven, headSha).some((part) =>
+      part.startsWith('converged '),
+    ),
+    false,
+  );
 });
 
 test('decideUrgencyDefer raises the severity-tiered ceiling by relax step and denies a safety-class finding from step 1 (#3796)', () => {
