@@ -650,9 +650,11 @@ bundling rule of the E5 Defer block.
 **Converged extra step.** When the thresholds are set and valid, and
 the advisory policy is `reviewPolicy` absent or `copilot-advisory`, E5
 reads the profile-selected advisory-convergence command once per pass,
-before disposing any item and before any E6 reply. In this repository
-that command is `node scripts/advisory-convergence.mjs`; the other
-profiles use the `idd-advisory-convergence` bin or an `npx` wrapper.
+before disposing any item and before any E6 reply. The source
+repository and the vendored-node profile run
+`node scripts/advisory-convergence.mjs`. The package-manager profile
+runs the `idd-advisory-convergence` bin, and the ephemeral-npx profile
+runs an `npx` wrapper.
 Pass `--pr` for the pull request and `--claim-issue` for the claimed
 issue, and pass no `--assert`. Reuse that read on any later return to
 E4-E6 in the same pass. The value is never carried across a push. Add
