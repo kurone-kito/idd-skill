@@ -6329,9 +6329,10 @@ function isIddOriginatedThreadReply(comment, options) {
 // #3269 corrects a related but narrower premise, that GitHub's API
 // exposes no revision diff for an edited comment at all. It does
 // (GraphQL `userContentEdits`), and `hasFreshDisposition`'s own dating
-// (via `effectiveThreadCommentActivityAt`) now uses it, bounded to the
-// two merge-gate collectors that fetch it; `inPlaceEditOnly` here keeps
-// its own, separate, revision-content-blind heuristic unchanged.
+// (via `effectiveThreadCommentActivityAt`) now uses it. The two
+// merge-gate collectors and F4 audit-pr-cleanup (#3791) fetch that
+// history. `inPlaceEditOnly` here keeps its own, separate,
+// revision-content-blind heuristic unchanged.
 export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
   const none = { ackOnlyPostDisposition: false, inPlaceEditOnly: false };
   if (!thread.isResolved) {
@@ -11967,11 +11968,11 @@ function resolveThreadCommentRevisionDatingOutcome(comment, authorLogin) {
  *
  * `advisoryBotLogins` defaults to an empty set, so a caller that omits it
  * (every caller outside the two merge-gate collectors' own
- * disposition-evidence path) never verifies an edited comment as
- * cosmetic, regardless of what `userContentEdits` data happens to be
- * attached -- fail-closed defense in depth, matching the issue's own
- * negative test for "an allowlisted append on a comment by an author who
- * is not an advisory bot".
+ * disposition-evidence path and F4 `audit-pr-cleanup.mts`, #3791) never
+ * verifies an edited comment as cosmetic, regardless of what
+ * `userContentEdits` data happens to be attached -- fail-closed defense
+ * in depth, matching the issue's own negative test for "an allowlisted
+ * append on a comment by an author who is not an advisory bot".
  */
 function effectiveThreadCommentActivityAt(
   comment,
