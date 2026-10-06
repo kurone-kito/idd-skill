@@ -1557,6 +1557,18 @@ supports these keys:
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
   `low` and `low-and-medium`.
+- `critiqueLoop.deferRelaxAtRounds` (optional array of one or two
+  positive integers, strictly ascending, at most two; recommended
+  `[4, 7]`; omit the key to turn it off). The thresholds are PR-wide
+  Copilot review counts, the same count `critiqueLoop.deferAfterRounds`
+  uses, at which `severity-tiered` relaxes: a pull request's step is the
+  number of thresholds at or below its count, and each step raises the
+  highest urgency a tier may still defer at. It has an effect only when
+  `critiqueLoop.deferByUrgency` is `severity-tiered`, and an invalid
+  value means off, so a mistyped value never relaxes the rule. See
+  [the wave-gradient section](idd-review-policy-profiles.md#wave-gradient-urgency-defer)
+  of the review policy profiles for the steps, the never-deferred rows
+  and the clause suffix.
 - `critiqueLoop.deferNeedsDecision` (default `on`; `on` or `off`). A
   missing value resolves to `on`, exactly `on` and `off` resolve to
   themselves, any other present value (including `null`) resolves to

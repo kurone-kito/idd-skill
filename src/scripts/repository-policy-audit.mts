@@ -555,6 +555,55 @@ export const REVIEW_TRIAGE_DONOR_PINS: readonly PinnedClauseGroup[] = [
   },
 ];
 
+// The wave gradient of `critiqueLoop.deferByUrgency: "severity-tiered"` (issue
+// #3796) keeps its normative rule in the review policy profiles doc and only
+// a short pointer in the review-triage Defer block, so a session that skips
+// the doc behaves as before. These pins keep that pointer and each
+// load-bearing clause of the doc from being dropped, and keep the matrix
+// sentences' step-0 qualifier. Each phrase is a verbatim substring that
+// occurs once per file, matched on whitespace-collapsed text (a table row
+// is matched without its column padding).
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const WAVE_GRADIENT_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'wave-gradient-triage-pointer',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      'At step 0, High defers only at `very-low`',
+      'When `deferRelaxAtRounds` is set, apply the [wave gradient] first',
+      'only with `severity-tiered`',
+      'unset or invalid means off',
+      "the step is how many thresholds are at or below the PR's Copilot review count, counted as `deferAfterRounds` counts it",
+      'from step 1 the safety class (see the section) never defers, an exception to "never override"',
+      'plus `; step <k>` above step 0',
+      '[wave gradient]: ../../docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer',
+    ],
+  },
+  {
+    id: 'wave-gradient-policy-doc',
+    paths: [REVIEW_POLICY_PROFILES, LIVE_REVIEW_POLICY_PROFILES],
+    phrases: [
+      'The gradient applies only while `critiqueLoop.deferByUrgency` is `"severity-tiered"`',
+      'An unset key means off, and so does any other value',
+      "A pull request's relax step is the number of configured thresholds that are less than or equal to that count",
+      'the same count `critiqueLoop.deferAfterRounds` uses',
+      '| Low | `high` | `high` | `high` |',
+      '| Medium | `medium` | `high` | `high` |',
+      '| High | `very-low` | `low` | `medium` |',
+      'Every existing exclusion stays in force at every step',
+      'From step 1 on, a High-tier finding of `high` urgency never defers, and neither does a finding of the safety class',
+      'would hit item 1, 2 or 4 of the numbered stop test in [Needs-decision deferral](#needs-decision-deferral)',
+      'The safety class applies whatever `critiqueLoop.deferNeedsDecision` is set to.',
+      'still defers at step 0 as it does today, and a pull request whose field is absent changes nothing',
+      'defers to the bundled follow-up',
+      'urgency <level>; severity <tier>[, Copilot <label>]; step <k>',
+      'Off means step 0 for every pull request',
+      'An unscored urgency never defers at any step',
+      'These rules govern the `deferByUrgency` trigger only; the separate trigger `critiqueLoop.deferAfterRounds` is unchanged',
+    ],
+  },
+];
+
 // The F2 local check (issue #3802) must see the exact pull request head: it
 // fetches the head, requires equality, advances a clean branch that is strictly
 // behind by fast-forward only, and never resets. F3 points at that sequence.
@@ -588,6 +637,7 @@ const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
   ...WHOLE_CLASS_SWEEP_PINS,
+  ...WAVE_GRADIENT_PINS,
   ...PR_HEAD_FRESHNESS_PINS,
 ];
 

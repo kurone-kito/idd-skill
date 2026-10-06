@@ -280,6 +280,7 @@ interface PolicyConfigFile {
     e10NoProgressHoldAfter?: number;
     deferAfterRounds?: number;
     deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
+    deferRelaxAtRounds?: readonly number[];
     deferNeedsDecision?: 'on' | 'off';
     subagentWaitCeiling?: string;
     delegate?: {
@@ -1378,6 +1379,7 @@ const policyConfigFixture = {
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    deferRelaxAtRounds: [4, 7],
     deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
   },

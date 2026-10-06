@@ -195,10 +195,16 @@ scope-fenced item, an Accepted item mid-fix
   already-correct behavior; `medium`: local maintainability, or a
   correctness risk short of `high`; `high`: an adopt-now (a)-(c)
   condition. Unknown E4 severity counts as Medium; the floor only
-  raises. Unscored urgency never defers. High defers only at `very-low`
-  (Accept forced does not win); Medium or unknown, not at `high`; Low at
-  every scored urgency. Clause: `urgency <level>; severity <tier>[,
-  Copilot <label>]`.
+  raises. Unscored urgency never defers. At step 0, High defers only at
+  `very-low` (Accept forced does not win); Medium or unknown, not at
+  `high`; Low at every scored urgency. When `deferRelaxAtRounds` is set,
+  apply the [wave gradient] first: only with `severity-tiered`; unset or
+  invalid means off (step 0); the step is how many thresholds are at or
+  below the PR's Copilot review count, counted as `deferAfterRounds`
+  counts it; from step 1 the safety class (see the section) never defers,
+  an exception to "never override"; `deferAfterRounds` is unchanged.
+  Clause: `urgency <level>; severity <tier>[, Copilot <label>]`, plus
+  `; step <k>` above step 0.
 
 Bundle one E5 pass's deferred items into one follow-up issue (E6; do
 not append). Each keeps an AC bullet, exactly one
@@ -645,3 +651,4 @@ no-new-content advisory-bot reply needs a hold comment; stop instead
 of re-posting the disposition (#3324).
 
 [needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral
+[wave gradient]: ../../docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer
