@@ -840,7 +840,8 @@ test('collector avoids rescanning for every line that leaves list-item code', ()
 //     -f text="$BODY"
 // A closing line counts when the rendered reference to #3145 is a link
 // outside every blockquote and code element. This test makes no network call
-// (issue #3769).
+// (issue #3769). The task-checkbox rows of set E were queried the same way on
+// 2026-10-07 (issue #3789).
 const CLOSING_LINE = 'Closes #3145';
 const LIST_MARKERS = ['-', '*', '+', '1.', '1)', '10.'];
 
@@ -1221,6 +1222,357 @@ const REVIEW_GUARDS: ClosingShape[] = [
   })),
 ];
 
+// Set E: a task checkbox is an inline control, so GitHub reads what follows it
+// as paragraph text, even a `>` or another list marker (issue #3789). Padding
+// of five or more columns before the box still makes code (issue #3769). Rows
+// that an earlier set already holds are skipped and keep their own verdict.
+const RESOLVES_LINE = 'Resolves #3145';
+const CHECKBOXES = ['[ ]', '[x]', '[X]'];
+const TEXT_AFTER_CHECKBOX = [
+  `- > ${RESOLVES_LINE}`,
+  `- ${RESOLVES_LINE}`,
+  `1. > ${RESOLVES_LINE}`,
+  `2. ${RESOLVES_LINE}`,
+  `- - > ${RESOLVES_LINE}`,
+  `> > ${RESOLVES_LINE}`,
+  `>${RESOLVES_LINE}`,
+  `>  ${RESOLVES_LINE}`,
+  `# ${RESOLVES_LINE}`,
+  `\`\`\`\n${RESOLVES_LINE}\n\`\`\``,
+  `    > ${RESOLVES_LINE}`,
+  `- [ ] > ${RESOLVES_LINE}`,
+  `- [x] ${RESOLVES_LINE}`,
+];
+const EARLIER_QUOTE_OR_MARKER = [
+  '> ',
+  '>',
+  '> > ',
+  '- ',
+  '- - ',
+  '- > ',
+  '> - ',
+  '> - > ',
+  '1. ',
+  '1. > ',
+  '> 1. ',
+  '- 1. ',
+  '-  ',
+  '>  ',
+];
+const TASK_ITEM_FIRST_LINES = [
+  '- [ ] > sample',
+  '- [ ] sample',
+  '- [x] > sample',
+  '1. [ ] > sample',
+  '- [ ]     > sample',
+  '-     [ ] > sample',
+  '-    [ ] > sample',
+  '- [ ] - > sample',
+];
+const TASK_ITEM_NEXT_LINES = [
+  CLOSING_LINE,
+  `  ${CLOSING_LINE}`,
+  `\n${CLOSING_LINE}`,
+  `\n    ${CLOSING_LINE}`,
+  `> ${CLOSING_LINE}`,
+  `- ${CLOSING_LINE}`,
+  `2. ${CLOSING_LINE}`,
+];
+
+function verdictShapes(
+  family: string,
+  entries: [string, string, boolean][],
+): ClosingShape[] {
+  return entries.map(([note, body, counted]) => ({
+    id: `${family} ${note}`,
+    body,
+    counted,
+  }));
+}
+
+function withoutKnownBodies(
+  shapes: ClosingShape[],
+  known: ClosingShape[],
+): ClosingShape[] {
+  const verdicts = new Map(known.map(({ body, counted }) => [body, counted]));
+  return shapes.filter(({ id, body, counted }) => {
+    if (!verdicts.has(body)) {
+      verdicts.set(body, counted);
+      return true;
+    }
+    assert.equal(verdicts.get(body), counted, `${id}: repeated body`);
+    return false;
+  });
+}
+
+const TASK_CHECKBOX_SHAPES: ClosingShape[] = withoutKnownBodies(
+  [
+    // The rows of the issue, in its order. Rows 9 and 11 already sit in sets B
+    // and D, so they are asserted there and skipped here.
+    ...verdictShapes('E1 row', [
+      ['1', `- [ ] > ${RESOLVES_LINE}`, true],
+      ['2', `- [x] > ${RESOLVES_LINE}`, true],
+      ['3', `1. [ ] > ${RESOLVES_LINE}`, true],
+      ['4', `- [ ] - > ${RESOLVES_LINE}`, true],
+      ['5', `- [ ] > sample\n${CLOSING_LINE}`, true],
+      ['6', `- [ ]     > sample\n${CLOSING_LINE}`, true],
+      ['7', `- [ ] > sample\n> ${RESOLVES_LINE}`, false],
+      ['8', `- [ ] x\n  > ${RESOLVES_LINE}`, false],
+      ['9', `-     [ ] > ${RESOLVES_LINE}`, false],
+      ['10', `- [ ] ${RESOLVES_LINE}`, true],
+      ['11', `-     [ ] > sample\n${CLOSING_LINE}`, true],
+      ['12', `-    [ ] > ${RESOLVES_LINE}`, true],
+      ['13a', `> - [ ] ${RESOLVES_LINE}`, false],
+      ['13b', `> - [ ] > ${RESOLVES_LINE}`, false],
+      ['13c', `- > - [ ] ${RESOLVES_LINE}`, false],
+      ['13d', `- > - [ ] > ${RESOLVES_LINE}`, false],
+    ]),
+    // Every list marker and checkbox form, and what separates box and text.
+    ...LIST_MARKERS.flatMap((marker) =>
+      CHECKBOXES.map((box) => ({
+        id: `E2 ${marker} ${box}`,
+        body: `${marker} ${box} > ${RESOLVES_LINE}`,
+        counted: true,
+      })),
+    ),
+    ...['-', '1.'].flatMap((marker) =>
+      ['  ', '    ', '\t', ' \t'].map((separator) => ({
+        id: `E2 ${marker} separator ${JSON.stringify(separator)}`,
+        body: `${marker} [ ]${separator}> ${RESOLVES_LINE}`,
+        counted: true,
+      })),
+    ),
+    // Padding before the box: four columns still make a task item.
+    ...markerShapes(
+      'E3',
+      [1, 2, 3, 4],
+      (marker, padding) => `${marker}${padding}[ ] > ${RESOLVES_LINE}`,
+      true,
+    ),
+    ...markerShapes(
+      'E3 code',
+      [5, 6],
+      (marker, padding) => `${marker}${padding}[ ] > ${RESOLVES_LINE}`,
+      false,
+    ),
+    ...markerShapes(
+      'E3 closing line after the code',
+      [5, 6, 8],
+      (marker, padding) => `${marker}${padding}[ ] > sample\n${CLOSING_LINE}`,
+      true,
+    ),
+    ...verdictShapes('E3 tab', [
+      ['one tab', `-\t[ ] > ${RESOLVES_LINE}`, true],
+      ['space, tab', `- \t[ ] > ${RESOLVES_LINE}`, true],
+      ['two spaces, tab', `-  \t[ ] > ${RESOLVES_LINE}`, true],
+      ['three spaces, tab', `-   \t[ ] > ${RESOLVES_LINE}`, false],
+      ['ordered, one tab', `10.\t[ ] > ${RESOLVES_LINE}`, true],
+      ['ordered, space, tab', `10. \t[ ] > ${RESOLVES_LINE}`, false],
+      [
+        'three spaces, tab, closing line',
+        `-   \t[ ] > sample\n${CLOSING_LINE}`,
+        true,
+      ],
+    ]),
+    // Whatever follows the box on its line is paragraph text.
+    ...['-', '1.'].flatMap((marker) =>
+      TEXT_AFTER_CHECKBOX.map((text, index) => ({
+        id: `E4 ${marker} text ${index + 1}`,
+        body: `${marker} [ ] ${text}`,
+        counted: true,
+      })),
+    ),
+    // An earlier quote marker keeps the line in the quote, an earlier list
+    // marker does not.
+    ...EARLIER_QUOTE_OR_MARKER.flatMap((prefix) =>
+      [
+        `[ ] ${RESOLVES_LINE}`,
+        `[ ] > ${RESOLVES_LINE}`,
+        `[ ] > sample\n${CLOSING_LINE}`,
+      ].map((tail, index) => ({
+        id: `E5 ${JSON.stringify(prefix)} tail ${index + 1}`,
+        body: `${prefix}${tail}`,
+        counted: !prefix.includes('>'),
+      })),
+    ),
+    // Nesting.
+    ...verdictShapes('E6', [
+      ['one space of indent', ` - [ ] > ${RESOLVES_LINE}`, true],
+      ['two spaces of indent', `  - [ ] > ${RESOLVES_LINE}`, true],
+      ['three spaces of indent', `   - [ ] > ${RESOLVES_LINE}`, true],
+      [
+        'four spaces at the top level is code',
+        `    - [ ] > ${RESOLVES_LINE}`,
+        false,
+      ],
+      ['nested one space', `- outer\n - [ ] > ${RESOLVES_LINE}`, true],
+      ['nested two spaces', `- outer\n  - [ ] > ${RESOLVES_LINE}`, true],
+      ['nested four spaces', `- outer\n    - [ ] > ${RESOLVES_LINE}`, true],
+      ['third level', `- outer\n  - mid\n    - [ ] > ${RESOLVES_LINE}`, true],
+      ['ordered outer', `1. outer\n   - [ ] > ${RESOLVES_LINE}`, true],
+      ['ordered inner', `1. outer\n   1. [ ] > ${RESOLVES_LINE}`, true],
+      ['two-digit outer', `10. outer\n    - [ ] > ${RESOLVES_LINE}`, true],
+      ['after a blank line', `- outer\n\n  - [ ] > ${RESOLVES_LINE}`, true],
+      ['inside a quote', `> - outer\n>   - [ ] > ${RESOLVES_LINE}`, false],
+      ['after a paragraph', `intro\n- [ ] > ${RESOLVES_LINE}`, true],
+      [
+        'after a paragraph, blank line',
+        `intro\n\n- [ ] > ${RESOLVES_LINE}`,
+        true,
+      ],
+    ]),
+    // Where the closing line sits after a task item whose text starts with `>`.
+    ...TASK_ITEM_FIRST_LINES.flatMap((first) =>
+      TASK_ITEM_NEXT_LINES.map((next) => ({
+        id: `E7 ${JSON.stringify(first)} then ${JSON.stringify(next)}`,
+        body: `${first}\n${next}`,
+        // A real quote on the next line holds the closing line. With four
+        // columns of padding the item's content starts at column 5, so four
+        // spaces after a blank line is top-level code.
+        counted:
+          !next.startsWith('> ') &&
+          !(first === '-    [ ] > sample' && next === `\n    ${CLOSING_LINE}`),
+      })),
+    ),
+    // Shapes that look like a checkbox but are not, and code or quotes around
+    // one.
+    ...verdictShapes('E8', [
+      ['fenced block', `\`\`\`\n- [ ] > ${RESOLVES_LINE}\n\`\`\``, false],
+      ['inline code', `- [ ] \`> ${RESOLVES_LINE}\``, false],
+      [
+        'fence opened after the box',
+        `- [ ] \`\`\`\n  ${RESOLVES_LINE}\n  \`\`\``,
+        true,
+      ],
+      ['quote inside the item', `- [ ]\n  > ${RESOLVES_LINE}`, false],
+      ['quote after the item', `- [ ]\n> ${RESOLVES_LINE}`, false],
+      ['box without text, closing line next', `- [ ]\n${CLOSING_LINE}`, true],
+      ['two spaces inside the brackets', `- [  ] > ${RESOLVES_LINE}`, true],
+      ['empty brackets', `- [] > ${RESOLVES_LINE}`, true],
+      ['dash inside the brackets', `- [-] > ${RESOLVES_LINE}`, true],
+      ['no space after the box', `- [ ]> ${RESOLVES_LINE}`, true],
+      ['no space before the box', `-[ ] > ${RESOLVES_LINE}`, true],
+      ['box after a box', `- [ ] [x] > ${RESOLVES_LINE}`, true],
+    ]),
+    // The box opens the item's paragraph even when no text follows it, so a
+    // later indented ordered marker is paragraph text there; a padded item
+    // holds code, and the nested shapes keep reaching that rule.
+    ...verdictShapes('E9', [
+      [
+        'quote text, then an indented marker',
+        `- [ ] > x\n  2. > ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'leaf text, then an indented marker',
+        `- [ ] ---\n  2. > ${CLOSING_LINE}`,
+        true,
+      ],
+      ['box with trailing space only', `- [ ] \n  2. > ${CLOSING_LINE}`, true],
+      [
+        'quoted padded item with leaf text',
+        `> -     [ ] ---\n${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'four columns of padding, then an indented marker',
+        `-    [ ] > x\n     2. > ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'four columns of padding, ordered, then a marker',
+        `1.    [ ] > x\n       2. > ${CLOSING_LINE}`,
+        true,
+      ],
+      [
+        'padded box with trailing space only, then an indented marker',
+        `-     [ ] \n  2. > ${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'padded box with leaf text, then an indented marker',
+        `-     [ ] ---\n  2. > ${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'ordered padded box with trailing space only, then a marker',
+        `1.     [ ] \n   2. > ${CLOSING_LINE}`,
+        false,
+      ],
+      ['padded double box', `-     [ ] - [ ] > ${RESOLVES_LINE}`, false],
+      [
+        'padded item after a blank line',
+        `- a\n\n    -     [ ] > ${RESOLVES_LINE}`,
+        false,
+      ],
+      [
+        'padded item right after a paragraph',
+        `- a\n    -     [ ] > ${RESOLVES_LINE}`,
+        false,
+      ],
+      [
+        'padded item in an ordered list',
+        `1.  a\n\n    -     [ ] > ${RESOLVES_LINE}`,
+        false,
+      ],
+      [
+        'padded item on the third level',
+        `- a\n  - b\n    -     [ ] > ${RESOLVES_LINE}`,
+        false,
+      ],
+      ['padded item after a tab', `- a\n\t-     [ ] > ${RESOLVES_LINE}`, false],
+    ]),
+    // Text that would be a leaf block anywhere else, or no text at all, still
+    // opens a paragraph after a box, so the lazy line below a quoted task item
+    // stays in the quote.
+    ...verdictShapes('E10', [
+      [
+        'heading text in a quoted item',
+        `> - [ ] # sample\n${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'thematic-break text in a quoted item',
+        `> - [ ] ---\n${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'thematic-break text, quote before the marker',
+        `- > - [ ] ---\n${CLOSING_LINE}`,
+        false,
+      ],
+      ['html text in a quoted item', `> - [ ] <div>\n${CLOSING_LINE}`, false],
+      [
+        'heading text in a quoted ordered item',
+        `> 1. [ ] # sample\n${CLOSING_LINE}`,
+        false,
+      ],
+      ['quoted box with nothing after it', `> - [ ] \n${CLOSING_LINE}`, false],
+      [
+        'quoted ordered box with nothing after it',
+        `> 1. [x] \n${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'fence opened after a quoted box',
+        `> - [ ] \`\`\`js\n${CLOSING_LINE}`,
+        false,
+      ],
+      [
+        'tilde fence opened after a quoted box',
+        `> - [ ] ~~~\n${CLOSING_LINE}`,
+        false,
+      ],
+    ]),
+  ],
+  [
+    ...EXCESS_PADDING_COUNTED,
+    ...QUOTE_OR_CODE_IGNORED,
+    ...PROSE_COUNTED,
+    ...REVIEW_GUARDS,
+  ],
+);
+
 function assertClosingShapes(shapes: ClosingShape[]) {
   for (const { id, body, counted } of shapes) {
     // The table only exercises Markdown handling, so skip the local git
@@ -1259,6 +1611,7 @@ test('collector keeps the table of closing-line shapes complete and distinct', (
     QUOTE_OR_CODE_IGNORED,
     PROSE_COUNTED,
     REVIEW_GUARDS,
+    TASK_CHECKBOX_SHAPES,
   ].flat();
   assert.deepEqual(
     [
@@ -1266,8 +1619,9 @@ test('collector keeps the table of closing-line shapes complete and distinct', (
       QUOTE_OR_CODE_IGNORED.length,
       PROSE_COUNTED.length,
       REVIEW_GUARDS.length,
+      TASK_CHECKBOX_SHAPES.length,
     ],
-    [39, 89, 69, 38],
+    [39, 89, 69, 38, 252],
   );
   assert.equal(new Set(all.map(({ body }) => body)).size, all.length);
 });
@@ -1286,6 +1640,10 @@ test('collector still counts a closing line that GitHub renders as prose', () =>
 
 test('collector follows the rule through the shapes found in review', () => {
   assertClosingShapes(REVIEW_GUARDS);
+});
+
+test('collector reads the text after a task checkbox as paragraph text', () => {
+  assertClosingShapes(TASK_CHECKBOX_SHAPES);
 });
 
 test('collector drops a cached outer list zone after a nested list marker', () => {
