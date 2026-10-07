@@ -759,6 +759,23 @@ if (child.error || child.status !== 0) {
   }
 });
 
+test('preserves explicit child environments that clear NODE_OPTIONS', () => {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'node_options') delete env[key];
+  }
+  env.NODE_OPTIONS = '';
+  const result = spawnSync(
+    process.execPath,
+    ['-e', 'process.stdout.write(process.env.NODE_OPTIONS ?? "<unset>")'],
+    { encoding: 'utf8', env },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+});
+
 test('NODE_OPTIONS guards a Worker with empty execArgv and shares its ledger', async () => {
   const guardRoot = mkdtempSync(join(tmpdir(), 'idd-gh-guard-worker-test-'));
   const ledgerPath = join(guardRoot, 'attempts.jsonl');

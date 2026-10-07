@@ -596,6 +596,11 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
             windowsHide: true,
             env: {
               ...relayEnv,
+              // Preserve the sanitized state explicitly so process
+              // wrappers do not repopulate this relay with inherited
+              // startup hooks; the original value travels separately to
+              // the real command below.
+              NODE_OPTIONS: '',
               [WIN32_RELAY_COMMAND_ENV]: command,
               ...(callerNodeOptions
                 ? { [WIN32_RELAY_NODE_OPTIONS_ENV]: callerNodeOptions }

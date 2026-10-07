@@ -1545,11 +1545,19 @@ function addGuardToOptions(options, addImport) {
     }
   }
   if (addImport) {
-    const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
-    if (guardImport && !(env.NODE_OPTIONS ?? '').includes(guardImport)) {
-      env.NODE_OPTIONS = env.NODE_OPTIONS
-        ? `${env.NODE_OPTIONS} --import=${guardImport}`
-        : `--import=${guardImport}`;
+    const preservesEmptyNodeOptions =
+      record.env !== undefined &&
+      Object.entries(record.env).some(
+        ([name, value]) =>
+          name.toUpperCase() === 'NODE_OPTIONS' && value === '',
+      );
+    if (!preservesEmptyNodeOptions) {
+      const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
+      if (guardImport && !(env.NODE_OPTIONS ?? '').includes(guardImport)) {
+        env.NODE_OPTIONS = env.NODE_OPTIONS
+          ? `${env.NODE_OPTIONS} --import=${guardImport}`
+          : `--import=${guardImport}`;
+      }
     }
   } else {
     const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;

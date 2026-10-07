@@ -1731,6 +1731,18 @@ function optionsWithGuard(options: unknown, directGhFixture: boolean): unknown {
           ? `${current} ${requireFlag}`
           : requireFlag;
   } else {
+    const preservesEmptyNodeOptions =
+      record.env !== undefined &&
+      Object.entries(record.env).some(
+        ([name, value]) =>
+          name.toUpperCase() === 'NODE_OPTIONS' && value === '',
+      );
+    if (preservesEmptyNodeOptions) return { ...record, env };
+    // An explicitly empty NODE_OPTIONS is authoritative. In particular,
+    // the Windows telemetry relay deliberately clears it before its own
+    // startup and forwards the original value only to the real hook.
+    // Ordinary child environments already carry this preload, and Workers
+    // install their bridge through the separate Worker wrapper.
     appendGuardImport(env);
   }
   return { ...record, env };
