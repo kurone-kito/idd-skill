@@ -1684,20 +1684,59 @@ function normalizeRelaxStep(value) {
   return value === 1 || value === 2 ? value : 0;
 }
 /**
- * The relax step for a pull request's PR-wide Copilot review count (#3796):
- * the number of configured thresholds less than or equal to the count, never
- * above 2. With `[4, 7]`, counts 0 to 3 give 0, 4 to 6 give 1 and 7 or more
- * give 2; an empty array always gives 0.
+ * The relax step for a pull request's PR-wide Copilot review count (#3796,
+ * #3797): the number of configured thresholds less than or equal to the
+ * count, plus one when `advisoryConverged` is true and the thresholds
+ * pass `parseDeferRelaxAtRounds`, never above 2. An empty array is the
+ * normalized form of an unset value. A one- or two-entry array that fails
+ * that parser, such as `[7, 4]`, is off, so the step stays 0. A longer
+ * raw list still counts toward the cap of 2, and convergence cannot raise
+ * it. With `[4, 7]`, counts 0 to 3 give 0 or 1, counts 4 to 6 give 1 or 2,
+ * and counts 7 or more give 2 either way.
  */
 // audit:ignore-dead-export: E4/E5 applies the step from instruction text; tests lock every boundary and there is no helper caller
-export function relaxStepForReviewCount(reviewCount, thresholds) {
-  let step = 0;
-  for (const threshold of thresholds) {
+export function relaxStepForReviewCount(
+  reviewCount,
+  thresholds,
+  advisoryConverged = false,
+) {
+  const valid = parseDeferRelaxAtRounds(thresholds);
+  // Config rejects a one- or two-entry array that is not strictly
+  // ascending positive integers, and that value is off. A longer raw
+  // list is the un-normalized #3796 case: it still counts, capped at 2.
+  const countable = valid.length > 0 || thresholds.length > 2 ? thresholds : [];
+  let counted = 0;
+  for (const threshold of countable) {
     if (reviewCount >= threshold) {
-      step += 1;
+      counted += 1;
     }
   }
-  return step >= 2 ? 2 : step;
+  const countStep = counted >= 2 ? 2 : counted;
+  const extra =
+    advisoryConverged === true && valid.length > 0 && countStep < 2 ? 1 : 0;
+  const sum = countStep + extra;
+  const step = sum >= 2 ? 2 : sum;
+  return {
+    step,
+    raisedByConvergence: step > countStep,
+  };
+}
+/**
+ * Clause pieces after the urgency and severity text (#3796, #3797).
+ * `step <k>` is present above step 0. `converged <short-sha>` is present
+ * only when convergence raised the step. The short SHA is the first 7
+ * characters of the verdict's `prHeadSha`.
+ */
+// audit:ignore-dead-export: E5 appends these pieces from instruction text; tests lock the token condition and there is no helper caller
+export function relaxStepClauseParts(result, prHeadSha) {
+  const parts = [];
+  if (result.step > 0) {
+    parts.push(`step ${result.step}`);
+  }
+  if (result.raisedByConvergence) {
+    parts.push(`converged ${prHeadSha.slice(0, 7)}`);
+  }
+  return parts;
 }
 function severityTieredDefers(eligibility, urgency, step) {
   return (
