@@ -1556,6 +1556,30 @@ const prefixNotRegexSources: {
       ),
   },
   {
+    name: 'a method body after a block comment that starts with a slash',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/ note */ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call after a block comment that starts with a slash',
+    source: (specifier) =>
+      `const value = count<m<T> /*/ note */ (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after an empty block comment',
+    source: (specifier) =>
+      `const value = count<{ m(i) /**/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'a parenthesized void operator with a flush block comment',
     source: (specifier) =>
       `const value = count<(void/* note */0)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
