@@ -1516,11 +1516,11 @@ another one. Example: PR `#3147`'s Low-labelled wording findings were
 Accepted with "the review correctly identified wording issues in the
 F4 cleanup guidance; the pending in-scope documentation fix ...".
 `critiqueLoop.deferAfterRounds` (repo value `5`) does not cover this
-case: it only fires after the round threshold and only for Low items,
-and since its counter was fixed to count Copilot reviews (PR `#3168`,
-merged 2026-09-21) no merged PR has reached 5 Copilot reviews, so it
-has never fired — most review waves happen in rounds 1-4, before that
-cutoff can act.
+case: it only fires after the round threshold and only for Low items.
+Its counter was fixed to count Copilot reviews (PR `#3168`, merged
+2026-09-21). As of this 2026-09-24 observation, no merged PR had
+reached 5 Copilot reviews, so it had never fired — most review waves
+happened in rounds 1-4, before that cutoff could act.
 
 Copilot's severity label has no published definition, no
 configuration, and no API field: labels were introduced 2026-05-12
@@ -1565,6 +1565,11 @@ merges, other-bot fixes) — this trigger does not touch those.
   unchanged and Low-only.
   The High ceiling is superseded for needs-decision items by
   [the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
+- This repository sets `critiqueLoop.deferRelaxAtRounds` to `[4, 7]`,
+  because over merged pull requests #3561 to #3781 the median
+  PR-wide Copilot review count was 2, while 30 reached a 4th review
+  and 14 reached a 7th, so the first threshold leaves a typical pull
+  request unchanged and the second acts only on the long tail.
 - Keep `deferAfterRounds` as an unchanged backstop; the new rule is an
   independent trigger applying from the first E4/E5 pass.
 - Apply to every PATH A actor, not only Copilot, with the agent's E4
@@ -1697,6 +1702,50 @@ Low-tier finding of `low` urgency.
 Count 4 is the first at which the Medium-tier finding of `high` urgency
 defers, and count 7 is the first at which the High-tier finding of
 `medium` urgency does; the safety-class finding defers only at step 0.
+
+##### Converged extra step (kurone-kito/idd-skill#3797)
+
+The count step does nothing at the first or second review. Observed
+2026-10-05 on kurone-kito/setup.ubuntu#201, in the same reading as the
+wave-gradient section above (figures at head `25e3d5e`). At head
+`4af1831`, Copilot's overview reported no findings and no inline
+comments, a Codex thread was open beside it, and the fix was another
+push. That head was Copilot's 10th review, so under `[4, 7]` the count
+step was already 2 and convergence would have added nothing. The case
+that matters is a low review count. The opposite head in that reading,
+`2cb41a0`, had no findings but carried 5 suppressed comments that were
+never acknowledged, so `converged` stays false and the extra step does
+not apply.
+
+Maintainer decision (Groom hearing, 2026-10-05): treat a converged
+advisory gate as one extra relax step, capped at 2. The declined
+alternative, jumping to the final step on convergence, would also defer
+a High-tier finding of `medium` urgency at the first review. The extra
+step applies only when `reviewPolicy` is absent or `copilot-advisory`.
+Any other advisory-convergence result adds nothing: the helper is
+unavailable, the command fails, the output does not parse, `converged`
+is absent or not exactly true, or `prHeadSha` differs from the head
+stored at E1. A one-threshold array such as `[4]` plus convergence
+reaches step 2, which is above that array's own final step.
+
+Replay with `[4, 7]`. The three findings are a non-Copilot Medium-tier
+finding of `high` urgency, a High-tier finding of `high` urgency, and a
+safety-class finding.
+
+| Case                                              | Count | `converged` | Step | Medium, `high` | High, `high` | Safety class | Clause                          |
+| ------------------------------------------------- | ----- | ----------- | ---- | -------------- | ------------ | ------------ | ------------------------------- |
+| Copilot converged on HEAD, no suppressed comments | 1     | true        | 1    | `defers`       | `stays`      | `stays`      | `step 1; converged <short-sha>` |
+| Suppressed comments not yet acknowledged          | 1     | false       | 0    | `stays`        | `stays`      | `defers`     | no `converged` token            |
+| Count of 7 or more                                | 7     | true        | 2    | `defers`       | `stays`      | `stays`      | `step 2`, no `converged` token  |
+
+At count 1 with convergence, the Medium-tier finding of `high` urgency
+is deferred at step 1 and the clause is
+`step 1; converged <short-sha>`. The High-tier finding of `high`
+urgency and the safety-class finding are not deferred. When Copilot's
+suppressed comments are not yet acknowledged, `converged` is false and
+there is no extra step. At a count of 7 or more the count step is
+already 2, so convergence adds nothing and the clause carries no
+`converged` token.
 
 ### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
 

@@ -189,7 +189,7 @@ test('the rationale worked table matches the reference implementation for review
       adoptNow: false,
     };
     for (const [count, step, low, medium, high, highHigh, safety] of rows) {
-      const relaxStep = relaxStepForReviewCount(Number(count), [4, 7]);
+      const relaxStep = relaxStepForReviewCount(Number(count), [4, 7]).step;
       const label = `${path} count ${count}`;
       assert.equal(Number(step), relaxStep, `${label}: step`);
       assert.equal(

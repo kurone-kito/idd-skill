@@ -1568,7 +1568,9 @@ supports these keys:
   value means off, so a mistyped value never relaxes the rule. See
   [the wave-gradient section](idd-review-policy-profiles.md#wave-gradient-urgency-defer)
   of the review policy profiles for the steps, the never-deferred rows
-  and the clause suffix.
+  and the clause suffix. A converged advisory gate adds one further
+  step, still capped at 2, only when `reviewPolicy` is absent or
+  `copilot-advisory`.
 - `critiqueLoop.deferNeedsDecision` (default `on`; `on` or `off`). A
   missing value resolves to `on`, exactly `on` and `off` resolve to
   themselves, any other present value (including `null`) resolves to
