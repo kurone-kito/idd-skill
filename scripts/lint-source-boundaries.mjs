@@ -524,10 +524,49 @@ function scanComments(source) {
       const angleFollowsNew = [];
       let closedAngleFollowsName = false;
       let closedAngleFollowsNew = false;
+      // A lone `=` inside `(...)` starts a parameter default. Expression
+      // operators are types only there: `(x = a == b) => void`.
+      let defaultValueMinDepth = -1;
+      const inParameterDefault = () =>
+        defaultValueMinDepth >= 0 && parenDepth >= defaultValueMinDepth;
       for (let cursor = from; cursor < source.length; cursor += 1) {
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
           return false;
+        }
+        // `in`, `instanceof`, `delete`, `await`, and the `void`
+        // operator are expressions. `void` and `typeof` as types stay.
+        if (
+          depth > 0 &&
+          parenDepth > 0 &&
+          lastWord !== '' &&
+          !/[A-Za-z0-9_$]/.test(typeChar) &&
+          !inParameterDefault()
+        ) {
+          if (
+            lastWord === 'in' ||
+            lastWord === 'instanceof' ||
+            lastWord === 'delete' ||
+            lastWord === 'await'
+          ) {
+            return false;
+          }
+          if (lastWord === 'void') {
+            let look = cursor;
+            while (
+              look < source.length &&
+              (source[look] === ' ' || source[look] === '\t')
+            ) {
+              look += 1;
+            }
+            const operand = source[look];
+            if (
+              operand !== undefined &&
+              /[A-Za-z0-9_$(+\-!'"`]/.test(operand)
+            ) {
+              return false;
+            }
+          }
         }
         if (typeChar === '<') {
           depth += 1;
@@ -646,6 +685,9 @@ function scanComments(source) {
             return false;
           }
           parenDepth -= 1;
+          if (defaultValueMinDepth >= 0 && parenDepth < defaultValueMinDepth) {
+            defaultValueMinDepth = -1;
+          }
           lastWord = '';
           continue;
         }
@@ -668,25 +710,71 @@ function scanComments(source) {
           if (source[cursor + 1] === typeChar || !sawParen) {
             return false;
           }
+          // `|=` and `&=` assign. A single `|` or `&` is still a type.
+          if (source[cursor + 1] === '=' && !inParameterDefault()) {
+            return false;
+          }
           lastWord = '';
           continue;
         }
-        // Optional and default parameter marks stay inside the
-        // parameter list: `(x?: string)` and `(x = 1)`.
-        if (
-          depth > 0 &&
-          parenDepth > 0 &&
-          (typeChar === '=' || typeChar === '?')
-        ) {
+        // `=>` is the function-type arrow. `==` is equality. A lone
+        // `=` starts a parameter default, which may contain either.
+        if (depth > 0 && parenDepth > 0 && typeChar === '=') {
+          const nextEquals = source[cursor + 1];
+          if (nextEquals === '>') {
+            lastWord = '';
+            continue;
+          }
+          if (nextEquals === '=') {
+            if (!inParameterDefault()) {
+              return false;
+            }
+            continue;
+          }
+          if (defaultValueMinDepth < 0) {
+            defaultValueMinDepth = parenDepth;
+          }
+          lastWord = '';
           continue;
         }
         if (
           depth > 0 &&
+          parenDepth === 0 &&
           sawParen &&
           typeChar === '=' &&
           source[cursor + 1] === '>'
         ) {
           lastWord = '';
+          continue;
+        }
+        // `?.` and `??` are expressions. `?:` and `?` before a type
+        // stay inside a parameter list: `(x?: string)`.
+        if (depth > 0 && parenDepth > 0 && typeChar === '?') {
+          const nextQuestion = source[cursor + 1];
+          if (
+            (nextQuestion === '?' || nextQuestion === '.') &&
+            !inParameterDefault()
+          ) {
+            return false;
+          }
+          continue;
+        }
+        // `{ m?: string }`, `{ m?(x: string): void }`, and `[number?]`
+        // are optional members. A ternary `a ? b` is not, and neither
+        // is a bare `m?(x)` outside an object type.
+        if (depth > 0 && typeChar === '?') {
+          const nextQuestion = source[cursor + 1];
+          if (
+            (braceDepth > 0 &&
+              (nextQuestion === ':' || nextQuestion === '(')) ||
+            (bracketDepth > 0 && (nextQuestion === ']' || nextQuestion === ','))
+          ) {
+            lastWord = '';
+            continue;
+          }
+        }
+        // `!=` inside a parameter default is still that default.
+        if (depth > 0 && typeChar === '!' && inParameterDefault()) {
           continue;
         }
         // Any other expression operator stops the scan.

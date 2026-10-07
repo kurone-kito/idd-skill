@@ -884,6 +884,78 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of a default that uses equality',
+    source: (specifier) =>
+      `const value = identity<(x = a == b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a default that uses inequality',
+    source: (specifier) =>
+      `const value = identity<(x = a != b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a default that uses in',
+    source: (specifier) =>
+      `const value = identity<(x = a in b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional parameter',
+    source: (specifier) =>
+      `const value = identity<(x?: string) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parenthesized void type',
+    source: (specifier) =>
+      `const value = identity<(void)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a typeof query',
+    source: (specifier) =>
+      `const value = identity<(typeof a)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional property',
+    source: (specifier) =>
+      `const value = identity<{ m?: string }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional method',
+    source: (specifier) =>
+      `const value = identity<{ m?(x: string): void }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional tuple element',
+    source: (specifier) =>
+      `const value = identity<readonly [string, number?]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of a constructor type',
     source: (specifier) =>
       `const value = identity<new () => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1175,6 +1247,102 @@ const prefixNotRegexSources: {
     name: 'a bare extends call in a comparison',
     source: (specifier) =>
       `const value = count<extends(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized equality comparison',
+    source: (specifier) =>
+      `const value = count<(a == b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized strict equality comparison',
+    source: (specifier) =>
+      `const value = count<(a === b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized or-assignment',
+    source: (specifier) =>
+      `const value = count<(a |= b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized and-assignment',
+    source: (specifier) =>
+      `const value = count<(a &= b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized nullish coalescing comparison',
+    source: (specifier) =>
+      `const value = count<(a ?? b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized nullish assignment',
+    source: (specifier) =>
+      `const value = count<(a ??= b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized optional chain',
+    source: (specifier) =>
+      `const value = count<(a?.b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized in comparison',
+    source: (specifier) =>
+      `const value = count<(a in b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized instanceof comparison',
+    source: (specifier) =>
+      `const value = count<(a instanceof b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized void operator',
+    source: (specifier) =>
+      `const value = count<(void 0)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized delete operator',
+    source: (specifier) =>
+      `const value = count<(delete obj.a)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized await operator',
+    source: (specifier) =>
+      `const value = count<(await a)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
