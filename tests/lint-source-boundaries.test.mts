@@ -772,6 +772,14 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a brace that follows a comment ending in a slash',
+    source: (specifier) =>
+      `const value = identity<{ m(i) /* was ) */ T /*/*/ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of an array type',
     source: (specifier) =>
       `const value = identity<number[]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1575,6 +1583,38 @@ const prefixNotRegexSources: {
     name: 'a method body after an empty block comment',
     source: (specifier) =>
       `const value = count<{ m(i) /**/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a block comment that ends with a slash',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/*/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call after a block comment that ends with a slash',
+    source: (specifier) =>
+      `const value = count<m<T> /*/*/ (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a slash-start comment with no space before its closer',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/ note*/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a block comment that contains an opener',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/**/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),

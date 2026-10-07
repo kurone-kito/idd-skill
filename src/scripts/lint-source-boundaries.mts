@@ -745,6 +745,12 @@ function scanComments(source: string): {
             let candidate = -1;
             while (open > from && !isLineTerminator(source[open])) {
               if (source[open] === '/' && source[open + 1] === '*') {
+                // `/*/*/` ends with body `/` plus this closer. That
+                // pair is not another opener, so keep scanning.
+                if (open + 1 === closer - 1) {
+                  open -= 1;
+                  continue;
+                }
                 // Start after the opener. `/*/` is body text, not an
                 // empty comment; `/**/` still closes on its second star.
                 let end = open + 2;
