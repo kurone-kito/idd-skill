@@ -539,17 +539,29 @@ function scanComments(source) {
         if (
           depth > 0 &&
           parenDepth > 0 &&
+          braceDepth === 0 &&
           lastWord !== '' &&
           !/[A-Za-z0-9_$]/.test(typeChar) &&
           !inParameterDefault()
         ) {
+          // A mapped type `{ [K in T]: ... }` and a parameter named
+          // `await` are types. `a in b` and `await a` are expressions.
           if (
             lastWord === 'in' ||
             lastWord === 'instanceof' ||
             lastWord === 'delete' ||
             lastWord === 'await'
           ) {
-            return false;
+            let look = cursor;
+            while (
+              look < source.length &&
+              (source[look] === ' ' || source[look] === '\t')
+            ) {
+              look += 1;
+            }
+            if (source[look] !== ':') {
+              return false;
+            }
           }
           if (lastWord === 'void') {
             let look = cursor;
@@ -562,7 +574,7 @@ function scanComments(source) {
             const operand = source[look];
             if (
               operand !== undefined &&
-              /[A-Za-z0-9_$(+\-!'"`]/.test(operand)
+              /[A-Za-z0-9_$(+\-!'"`{]/.test(operand)
             ) {
               return false;
             }
@@ -698,6 +710,16 @@ function scanComments(source) {
             braceDepth > 0 ||
             parenDepth > 0
           ) {
+            // `(x = 1, a != b)` starts a new parameter. A comma nested
+            // in the default value, or in `{ a: 1, b: 2 }`, does not.
+            if (
+              defaultValueMinDepth >= 0 &&
+              parenDepth === defaultValueMinDepth &&
+              bracketDepth === 0 &&
+              braceDepth === 0
+            ) {
+              defaultValueMinDepth = -1;
+            }
             lastWord = '';
             continue;
           }

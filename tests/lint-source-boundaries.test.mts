@@ -908,6 +908,46 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of two parameter defaults',
+    source: (specifier) =>
+      `const value = identity<(x = 1, y = a == b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a mapped type in a parameter',
+    source: (specifier) =>
+      `const value = identity<(x: { [K in T]: boolean }) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parenthesized mapped type',
+    source: (specifier) =>
+      `const value = identity<({ [K in T]: boolean })> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a method named in',
+    source: (specifier) =>
+      `const value = identity<(x: { in(y: string): void }) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parameter named await',
+    source: (specifier) =>
+      `const value = identity<(await: string) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of an optional parameter',
     source: (specifier) =>
       `const value = identity<(x?: string) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1343,6 +1383,30 @@ const prefixNotRegexSources: {
     name: 'a parenthesized await operator',
     source: (specifier) =>
       `const value = count<(await a)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a comparison after a parameter default',
+    source: (specifier) =>
+      `const value = count<(x = 1, a != b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'an equality comparison after a parameter default',
+    source: (specifier) =>
+      `const value = count<(x = 1, a == b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized void operator on an object',
+    source: (specifier) =>
+      `const value = count<(void {a:1})> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
