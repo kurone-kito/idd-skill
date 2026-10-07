@@ -1700,7 +1700,6 @@ function appendGuardImport(env: NodeJS.ProcessEnv): void {
 
 function isWin32TelemetryRelayBootstrap(
   method: string,
-  args: unknown[],
   options: unknown,
 ): boolean {
   if (method !== 'spawn') return false;
@@ -1709,13 +1708,12 @@ function isWin32TelemetryRelayBootstrap(
       ? (options as LaunchOptions)
       : {};
   const env = record.env;
-  const [executable, argv] = args;
   return (
-    executable === process.execPath &&
-    Array.isArray(argv) &&
-    argv[0] === '--input-type=commonjs' &&
-    argv[1] === '-e' &&
     env?.NODE_OPTIONS === '' &&
+    // The helper scrubs this reserved channel from its parent's env, adds it
+    // only to the relay process, and the relay deletes it before spawning the
+    // real target. That makes it the stable identity of this bootstrap across
+    // the native Windows spawn overloads.
     typeof env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND === 'string'
   );
 }
@@ -1803,7 +1801,6 @@ function wrap(
         );
       const win32TelemetryRelayBootstrap = isWin32TelemetryRelayBootstrap(
         method,
-        args,
         hasCallback ? undefined : args[index],
       );
       const guardedOptions = optionsWithGuard(

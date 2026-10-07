@@ -1526,19 +1526,15 @@ function blockIfGh(api, command, args, options) {
   );
 }
 
-function isWin32TelemetryRelayBootstrap(method, args, options) {
+function isWin32TelemetryRelayBootstrap(method, options) {
   // Only the real telemetry relay may keep its sanitized empty startup
-  // options. Ordinary workers must still receive the guard preload.
+  // options. Its reserved command channel is scrubbed from the parent and
+  // removed before the relay starts the real target.
   if (method !== 'spawn') return false;
   const hasOptions =
     options !== null && typeof options === 'object' && !Array.isArray(options);
   const env = hasOptions ? options.env : undefined;
-  const [executable, argv] = args;
   return (
-    executable === process.execPath &&
-    Array.isArray(argv) &&
-    argv[0] === '--input-type=commonjs' &&
-    argv[1] === '-e' &&
     env?.NODE_OPTIONS === '' &&
     typeof env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND === 'string'
   );
@@ -1620,7 +1616,6 @@ function wrap(method, optionsIndex, inspect) {
         !directGhFixture,
         isWin32TelemetryRelayBootstrap(
           method,
-          args,
           hasCallback ? undefined : args[index],
         ),
       );
