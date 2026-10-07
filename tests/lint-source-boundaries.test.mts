@@ -828,6 +828,62 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of a conditional type',
+    source: (specifier) =>
+      `const value = identity<(T extends (A | B) ? C : D)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a method with an object return',
+    source: (specifier) =>
+      `const value = identity<{ m(): { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic method signature',
+    source: (specifier) =>
+      `const value = identity<{ m<T>(x: T): void }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic constructor type',
+    source: (specifier) =>
+      `const value = identity<new <T>() => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an abstract generic constructor',
+    source: (specifier) =>
+      `const value = identity<abstract new <T>() => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic construct signature',
+    source: (specifier) =>
+      `const value = identity<{ new <T>(x: T): T }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parenthesized function return',
+    source: (specifier) =>
+      `const value = identity<Foo<() => (string)>> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of a constructor type',
     source: (specifier) =>
       `const value = identity<new () => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1047,6 +1103,78 @@ const prefixNotRegexSources: {
     name: 'a parenthesized comparison joined with ||',
     source: (specifier) =>
       `const value = count<(limit) || flag> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic call in a comparison',
+    source: (specifier) =>
+      `const value = count<m<T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic member call in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.m<T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic call of a property named new in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.new<T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a spaced generic call in a comparison',
+    source: (specifier) =>
+      `const value = count<m<T> (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call of a generic function type in a comparison',
+    source: (specifier) =>
+      `const value = count<m<<T>(x: T) => T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body in a comparison',
+    source: (specifier) =>
+      `const value = count<{ m(i) { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'an async method body in a comparison',
+    source: (specifier) =>
+      `const value = count<{ async m() { return 1 } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic method body in a comparison',
+    source: (specifier) =>
+      `const value = count<{ m<T>(i) { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a bare extends call in a comparison',
+    source: (specifier) =>
+      `const value = count<extends(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),

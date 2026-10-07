@@ -520,6 +520,10 @@ function scanComments(source) {
       let lastWordIsProperty = false;
       let wordBroken = false;
       let nextWordIsProperty = false;
+      const angleFollowsName = [];
+      const angleFollowsNew = [];
+      let closedAngleFollowsName = false;
+      let closedAngleFollowsNew = false;
       for (let cursor = from; cursor < source.length; cursor += 1) {
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
@@ -527,6 +531,10 @@ function scanComments(source) {
         }
         if (typeChar === '<') {
           depth += 1;
+          // `m<T>(i)` is a call. `new <T>()` is a constructor type,
+          // and `<<T>(x: T) => T>` names no inner argument list.
+          angleFollowsName[depth] = lastWord !== '';
+          angleFollowsNew[depth] = lastWord === 'new' && !lastWordIsProperty;
           lastWord = '';
           lastWordIsProperty = false;
           wordBroken = false;
@@ -534,15 +542,24 @@ function scanComments(source) {
           continue;
         }
         if (typeChar === '>') {
-          // `=>` is the arrow in a function type, not a closer.
-          // Either way the word before this `>` must not stick to
-          // the next `(`, as in `identity<<T>(x: T) => T>`.
+          // `=>` is the arrow in a function type, not a closer. The
+          // `(` after it is a parenthesized return type, and the word
+          // before this `>` must not stick to that `(`.
+          if (sawParen && cursor > from && source[cursor - 1] === '=') {
+            closedAngleFollowsName = false;
+            closedAngleFollowsNew = false;
+            lastWord = '';
+            lastWordIsProperty = false;
+            wordBroken = false;
+            continue;
+          }
+          // A later `(` is a call when this `>` closed a list that
+          // followed a name (`m<T>(i)`). `new <T>()` stays a type.
+          closedAngleFollowsName = angleFollowsName[depth] === true;
+          closedAngleFollowsNew = angleFollowsNew[depth] === true;
           lastWord = '';
           lastWordIsProperty = false;
           wordBroken = false;
-          if (sawParen && cursor > from && source[cursor - 1] === '=') {
-            continue;
-          }
           depth -= 1;
           if (depth === 0) {
             return true;
@@ -562,8 +579,22 @@ function scanComments(source) {
           continue;
         }
         if (depth > 0 && typeChar === '{') {
+          // `{ m(i) { return i } }` is a method body. `{ m(): { a: number } }`
+          // is a return type: that brace does not follow `)`.
+          let beforeBrace = cursor - 1;
+          while (
+            beforeBrace > from &&
+            (source[beforeBrace] === ' ' || source[beforeBrace] === '\t')
+          ) {
+            beforeBrace -= 1;
+          }
+          if (source[beforeBrace] === ')') {
+            return false;
+          }
           braceDepth += 1;
           lastWord = '';
+          lastWordIsProperty = false;
+          wordBroken = false;
           continue;
         }
         if (depth > 0 && typeChar === '}') {
@@ -584,13 +615,23 @@ function scanComments(source) {
           ) {
             previous -= 1;
           }
+          // `extends` opens a parenthesized type only inside one,
+          // as in `(T extends (A | B))`. A bare `extends(` is not.
           const typeKeyword =
             !lastWordIsProperty &&
             (lastWord === 'new' ||
               lastWord === 'keyof' ||
-              lastWord === 'extends');
+              (lastWord === 'extends' && sawParen));
+          // `m<T>(i)` is a call. `new <T>()` and `{ m<T>(x: T): void }`
+          // keep the parenthesis inside the type.
+          const callAfterNamedArguments =
+            source[previous] === '>' &&
+            closedAngleFollowsName &&
+            !closedAngleFollowsNew &&
+            braceDepth === 0;
           if (
             source[previous] === ')' ||
+            callAfterNamedArguments ||
             (lastWord !== '' && braceDepth === 0 && !typeKeyword)
           ) {
             return false;
