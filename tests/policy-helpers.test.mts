@@ -760,6 +760,41 @@ test('relaxStepForReviewCount adds one converged step when the thresholds are se
   );
 });
 
+test('relaxStepForReviewCount keeps a short invalid threshold array off (#3797)', () => {
+  const off = [[7, 4], [0], [4, 4], [-1], [4, 3], [1.5, 4], [4, 1.5], [1.5]];
+  for (const thresholds of off) {
+    for (const count of [1, 4, 7, 11]) {
+      for (const converged of [false, true]) {
+        assert.deepEqual(
+          relaxStepForReviewCount(count, thresholds, converged),
+          { step: 0, raisedByConvergence: false },
+          `${JSON.stringify(thresholds)} at count ${count}`,
+        );
+      }
+    }
+  }
+  // A longer un-normalized list still counts and stays capped, and
+  // convergence does not raise it (#3796).
+  for (const thresholds of [
+    [1, 2, 3],
+    [4, 7, 9],
+  ] as const) {
+    for (const count of [1, 4, 7, 11]) {
+      const plain = relaxStepForReviewCount(count, thresholds, false);
+      const converged = relaxStepForReviewCount(count, thresholds, true);
+      assert.deepEqual(
+        converged,
+        plain,
+        `${JSON.stringify(thresholds)} at count ${count}`,
+      );
+      assert.equal(converged.raisedByConvergence, false);
+    }
+  }
+  assert.equal(relaxStepForReviewCount(10, [1, 2, 3], true).step, 2);
+  assert.equal(relaxStepForReviewCount(4, [4, 7, 9], true).step, 1);
+  assert.equal(relaxStepForReviewCount(11, [4, 7, 9], true).step, 2);
+});
+
 test('decideUrgencyDefer raises the severity-tiered ceiling by relax step and denies a safety-class finding from step 1 (#3796)', () => {
   const base = {
     mode: 'severity-tiered' as const,
