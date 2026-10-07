@@ -759,7 +759,7 @@ if (child.error || child.status !== 0) {
   }
 });
 
-test('preserves a sanitized telemetry relay bootstrap environment', async () => {
+test('adds only the test guard to a sanitized telemetry relay bootstrap', async () => {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.toUpperCase() === 'NODE_OPTIONS') delete env[key];
@@ -786,7 +786,7 @@ test('preserves a sanitized telemetry relay bootstrap environment', async () => 
   });
 
   assert.equal(exitCode, 0, stderr);
-  assert.equal(stdout, '<unset>');
+  assert.equal(stdout, `--import=${process.env.IDD_TEST_GH_GUARD_IMPORT}`);
 });
 
 test('reinstalls the GH guard when an explicit child environment clears NODE_OPTIONS', () => {

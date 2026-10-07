@@ -1698,39 +1698,7 @@ function appendGuardImport(env: NodeJS.ProcessEnv): void {
   }
 }
 
-function isWin32TelemetryRelayBootstrap(
-  method: string,
-  options: unknown,
-): boolean {
-  if (method !== 'spawn') return false;
-  const record =
-    options !== null && typeof options === 'object' && !Array.isArray(options)
-      ? (options as LaunchOptions)
-      : {};
-  const env = record.env;
-  const entries = Object.entries(env ?? {});
-  const nodeOptions = entries.filter(
-    ([name]) => name.toUpperCase() === 'NODE_OPTIONS',
-  );
-  const relayCommand = entries.find(
-    ([name]) =>
-      name.toUpperCase() === 'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND',
-  )?.[1];
-  return (
-    // The helper scrubs both values from its parent, adds them only to the
-    // relay process, and the relay removes them before starting the real
-    // target. The missing NODE_OPTIONS key is itself the sanitized state.
-    typeof relayCommand === 'string' &&
-    relayCommand.length > 0 &&
-    nodeOptions.every(([, value]) => value === '')
-  );
-}
-
-function optionsWithGuard(
-  options: unknown,
-  directGhFixture: boolean,
-  win32TelemetryRelayBootstrap: boolean,
-): unknown {
+function optionsWithGuard(options: unknown, directGhFixture: boolean): unknown {
   const record =
     options !== null && typeof options === 'object' && !Array.isArray(options)
       ? (options as LaunchOptions)
@@ -1763,13 +1731,10 @@ function optionsWithGuard(
           ? `${current} ${requireFlag}`
           : requireFlag;
   } else {
-    if (win32TelemetryRelayBootstrap) {
-      return { ...record, env };
-    }
-    // Preserve the Windows telemetry relay's intentionally sanitized
-    // startup environment. For every ordinary child, re-add the guard even
-    // when its explicit env cleared NODE_OPTIONS so it cannot bypass the
-    // real-gh check (review of #3755).
+    // The Windows telemetry helper removes caller NODE_OPTIONS before it
+    // starts its relay. Re-add only this trusted test guard so the relay's
+    // own child_process calls stay guarded; the relay forwards the original
+    // caller options separately to the configured target.
     appendGuardImport(env);
   }
   return { ...record, env };
@@ -1801,14 +1766,9 @@ function wrap(
           options?.env,
           launchDirectory(options?.cwd),
         );
-      const win32TelemetryRelayBootstrap = isWin32TelemetryRelayBootstrap(
-        method,
-        hasCallback ? undefined : args[index],
-      );
       const guardedOptions = optionsWithGuard(
         hasCallback ? undefined : args[index],
         directGhFixture,
-        win32TelemetryRelayBootstrap,
       );
       if (hasCallback) args.splice(index, 0, guardedOptions);
       else args[index] = guardedOptions;

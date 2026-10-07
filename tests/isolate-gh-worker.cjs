@@ -1526,29 +1526,7 @@ function blockIfGh(api, command, args, options) {
   );
 }
 
-function isWin32TelemetryRelayBootstrap(method, options) {
-  if (method !== 'spawn') return false;
-  const hasOptions =
-    options !== null && typeof options === 'object' && !Array.isArray(options);
-  const entries = Object.entries(hasOptions ? (options.env ?? {}) : {});
-  const nodeOptions = entries.filter(
-    ([name]) => name.toUpperCase() === 'NODE_OPTIONS',
-  );
-  const relayCommand = entries.find(
-    ([name]) =>
-      name.toUpperCase() === 'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND',
-  )?.[1];
-  return (
-    // The helper scrubs both values from its parent, adds them only to the
-    // relay process, and the relay removes them before starting the real
-    // target. The missing NODE_OPTIONS key is itself the sanitized state.
-    typeof relayCommand === 'string' &&
-    relayCommand.length > 0 &&
-    nodeOptions.every(([, value]) => value === '')
-  );
-}
-
-function addGuardToOptions(options, addImport, win32TelemetryRelayBootstrap) {
+function addGuardToOptions(options, addImport) {
   const hasOptions =
     options !== null && typeof options === 'object' && !Array.isArray(options);
   if (!hasOptions) options = {};
@@ -1567,13 +1545,15 @@ function addGuardToOptions(options, addImport, win32TelemetryRelayBootstrap) {
     }
   }
   if (addImport) {
-    if (!win32TelemetryRelayBootstrap) {
-      const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
-      if (guardImport && !(env.NODE_OPTIONS ?? '').includes(guardImport)) {
-        env.NODE_OPTIONS = env.NODE_OPTIONS
-          ? `${env.NODE_OPTIONS} --import=${guardImport}`
-          : `--import=${guardImport}`;
-      }
+    const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
+    // The Windows telemetry helper removes caller NODE_OPTIONS before it
+    // starts its relay. Re-add only this trusted test guard so the relay's
+    // own child_process calls stay guarded; the relay forwards the original
+    // caller options separately to the configured target.
+    if (guardImport && !(env.NODE_OPTIONS ?? '').includes(guardImport)) {
+      env.NODE_OPTIONS = env.NODE_OPTIONS
+        ? `${env.NODE_OPTIONS} --import=${guardImport}`
+        : `--import=${guardImport}`;
     }
   } else {
     const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
@@ -1616,10 +1596,6 @@ function wrap(method, optionsIndex, inspect) {
       const guardedOptions = addGuardToOptions(
         hasCallback ? undefined : args[index],
         !directGhFixture,
-        isWin32TelemetryRelayBootstrap(
-          method,
-          hasCallback ? undefined : args[index],
-        ),
       );
       if (hasCallback) args.splice(index, 0, guardedOptions);
       else args[index] = guardedOptions;
