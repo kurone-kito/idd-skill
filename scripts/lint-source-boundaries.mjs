@@ -515,7 +515,8 @@ function scanComments(source) {
       let bracketDepth = 0;
       let braceDepth = 0;
       let parenDepth = 0;
-      let functionType = false;
+      let sawParen = false;
+      let lastWord = '';
       for (let cursor = from; cursor < source.length; cursor += 1) {
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
@@ -523,11 +524,13 @@ function scanComments(source) {
         }
         if (typeChar === '<') {
           depth += 1;
+          lastWord = '';
           continue;
         }
         if (typeChar === '>') {
           // `=>` is the arrow in a function type, not a closer.
-          if (functionType && cursor > from && source[cursor - 1] === '=') {
+          if (sawParen && cursor > from && source[cursor - 1] === '=') {
+            lastWord = '';
             continue;
           }
           depth -= 1;
@@ -538,6 +541,7 @@ function scanComments(source) {
         }
         if (depth > 0 && typeChar === '[') {
           bracketDepth += 1;
+          lastWord = '';
           continue;
         }
         if (depth > 0 && typeChar === ']') {
@@ -549,6 +553,7 @@ function scanComments(source) {
         }
         if (depth > 0 && typeChar === '{') {
           braceDepth += 1;
+          lastWord = '';
           continue;
         }
         if (depth > 0 && typeChar === '}') {
@@ -559,8 +564,14 @@ function scanComments(source) {
           continue;
         }
         if (depth > 0 && typeChar === '(') {
+          // `limit(i)` is a call. A function type or a parenthesized
+          // type starts at `(`, or after `new`.
+          if (lastWord !== '' && lastWord !== 'new') {
+            return false;
+          }
           parenDepth += 1;
-          functionType = true;
+          sawParen = true;
+          lastWord = '';
           continue;
         }
         if (depth > 0 && typeChar === ')') {
@@ -568,6 +579,7 @@ function scanComments(source) {
             return false;
           }
           parenDepth -= 1;
+          lastWord = '';
           continue;
         }
         if (depth > 0 && typeChar === ',') {
@@ -577,18 +589,19 @@ function scanComments(source) {
             braceDepth > 0 ||
             parenDepth > 0
           ) {
+            lastWord = '';
             continue;
           }
           return false;
         }
-        // `|` and `&` are part of a function type's return type
-        // (`(x: string) => string | number`) and of a parenthesized
-        // parameter. At the top level they still end the scan.
-        if (
-          depth > 0 &&
-          functionType &&
-          (typeChar === '|' || typeChar === '&')
-        ) {
+        // A single `|` or `&` is a union or intersection inside a
+        // parenthesized type. `||` and `&&` are expression operators
+        // and end the scan, as does a top-level union or intersection.
+        if (depth > 0 && (typeChar === '|' || typeChar === '&')) {
+          if (source[cursor + 1] === typeChar || !sawParen) {
+            return false;
+          }
+          lastWord = '';
           continue;
         }
         // Optional and default parameter marks stay inside the
@@ -602,14 +615,22 @@ function scanComments(source) {
         }
         if (
           depth > 0 &&
-          functionType &&
+          sawParen &&
           typeChar === '=' &&
           source[cursor + 1] === '>'
         ) {
+          lastWord = '';
           continue;
         }
         // Any other expression operator stops the scan.
-        if (depth > 0 && /[A-Za-z0-9_$\s.:]/.test(typeChar)) {
+        if (depth > 0 && /[A-Za-z0-9_$]/.test(typeChar)) {
+          lastWord += typeChar;
+          continue;
+        }
+        if (depth > 0 && /[\s.:]/.test(typeChar)) {
+          if (typeChar !== ' ' && typeChar !== '\t') {
+            lastWord = '';
+          }
           continue;
         }
         return false;

@@ -788,6 +788,22 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of an intersection type',
+    source: (specifier) =>
+      `const value = identity<(string) & number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a constructor type',
+    source: (specifier) =>
+      `const value = identity<new () => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a satisfies type',
     source: (specifier) =>
       `const value = input satisfies Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -951,6 +967,38 @@ const prefixNotRegexSources: {
     name: 'a comparison before a comma and a greater-than regex',
     source: (specifier) =>
       `check(count < limit, total > /[/*]/);\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call in a comparison',
+    source: (specifier) =>
+      `const value = count<limit(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a member call in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.limit(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized comparison joined with &&',
+    source: (specifier) =>
+      `const value = count<(limit) && flag> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized comparison joined with ||',
+    source: (specifier) =>
+      `const value = count<(limit) || flag> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
