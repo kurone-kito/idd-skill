@@ -291,6 +291,7 @@ test('guards resolve effective cwd and inspect executable launch wrappers', (t) 
   const registeredBin = join(guardRoot, 'bin');
   const unregisteredBin = join(guardRoot, 'unregistered-bin');
   const markerPath = join(guardRoot, 'gh-dispatched');
+  const shellScriptPath = join(guardRoot, 'unexpected-gh.sh');
   const registeredGh = join(registeredBin, 'gh');
   const unregisteredGh = join(unregisteredBin, 'gh');
   const cwdGh = join(childCwd, 'bin', 'gh');
@@ -308,6 +309,10 @@ test('guards resolve effective cwd and inspect executable launch wrappers', (t) 
     encoding: 'utf8',
     mode: 0o755,
   });
+  writeFileSync(shellScriptPath, '#!/bin/sh\ngh api repos/o/r\n', {
+    encoding: 'utf8',
+    mode: 0o755,
+  });
   for (const executable of [unregisteredGh, cwdGh]) {
     writeFileSync(executable, script, { encoding: 'utf8', mode: 0o755 });
   }
@@ -316,6 +321,8 @@ test('guards resolve effective cwd and inspect executable launch wrappers', (t) 
     childCwd,
     fixtureCwd: guardRoot,
     fixtureGh,
+    registeredBin,
+    shellScriptPath,
     shellGhPath: unregisteredGh,
   };
   const checks = `
@@ -330,6 +337,24 @@ const runChecks = (paths) => {
     ['xargs argv wrapper', () => childProcess.spawnSync('xargs', ['gh', 'api'])],
     ['env split wrapper chain', () => childProcess.spawnSync('/usr/bin/env', ['-S', 'nohup gh api'])],
     ['xargs shell wrapper', () => childProcess.spawnSync('/bin/sh', ['-c', 'printf x | xargs -n 1 gh api'])],
+    ['command -p shell wrapper', () => childProcess.spawnSync('/bin/sh', ['-c', 'command -p gh api'])],
+    ['command -p ignores a registered PATH fixture', () => childProcess.spawnSync('/bin/sh', ['-c', 'command -p gh api'], { env: { ...process.env, PATH: paths.registeredBin } })],
+    ['timeout shell wrapper', () => childProcess.spawnSync('/bin/sh', ['-c', 'timeout 2 gh api'])],
+    ['eval payload', () => childProcess.spawnSync('/bin/sh', ['-c', 'eval "gh api repos/o/r"'])],
+    ['nested shell payload', () => childProcess.spawnSync('/bin/sh', ['-c', 'sh -c "gh api repos/o/r"'])],
+    ['escaped command word', () => childProcess.spawnSync('/bin/sh', ['-c', '\\gh api repos/o/r'])],
+    ['escaped character in command word', () => childProcess.spawnSync('/bin/sh', ['-c', 'g\\\\h api repos/o/r'])],
+    ['shell script path', () => childProcess.spawnSync('/bin/sh', [paths.shellScriptPath])],
+    ['shell cwd after separator', () => childProcess.spawnSync('/bin/sh', ['-c', 'cd ' + paths.childCwd + ' && PATH=bin gh api'])],
+    ['shell assignment expands command name', () => childProcess.spawnSync('/bin/sh', ['-c', 'tool=gh; "$tool" api repos/o/r'])],
+    ['unresolved command expansion fails closed', () => childProcess.spawnSync('/bin/sh', ['-c', '"$UNSET_GH_COMMAND" api'])],
+    ['sudo chdir shell wrapper', () => childProcess.spawnSync('/bin/sh', ['-c', 'sudo --chdir ' + paths.childCwd + ' gh api'])],
+    ['sudo chdir argv wrapper', () => childProcess.spawnSync('sudo', ['--chdir', paths.childCwd, 'gh', 'api'])],
+    ['sudo chdir equals argv wrapper', () => childProcess.spawnSync('sudo', ['--chdir=' + paths.childCwd, 'gh', 'api'])],
+    ['fork inspects full executable argv', () => childProcess.fork('unused-worker.cjs', ['api'], { execPath: '/usr/bin/env', execArgv: ['gh'] }).on('error', () => {})],
+    ['execSync uses the platform shell', () => childProcess.execSync('gh api repos/o/r')],
+    ['cmd call wrapper', () => childProcess.spawnSync(process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'cmd.exe', ['/c', 'call gh api repos/o/r'])],
+    ['multiline quoted literal', () => childProcess.spawnSync('/bin/sh', ['-c', 'printf "%s" "first\\n# gh api repos/o/r\\nlast"'])],
     ['multiline quoted comment', () => childProcess.spawnSync('/bin/sh', ['-c', 'printf "%s" "line one\\n# $(gh api repos/o/r)\\nline three"'])],
     ['registered relative fixture cwd', () => {
       const result = childProcess.spawnSync('gh', ['--version'], {
@@ -406,14 +431,24 @@ ${checks}
       nested: Array<{ name: string; code: string }>;
     };
     for (const result of [...results, ...nested]) {
-      if (result.name === 'registered relative fixture cwd') {
+      if (
+        result.name === 'registered relative fixture cwd' ||
+        result.name === 'multiline quoted literal'
+      ) {
         assert.equal(result.code, 'not-blocked', result.name);
       } else {
         assert.equal(result.code, 'IDD_UNEXPECTED_REAL_GH', result.name);
       }
     }
     const attempts = readAttempts(ledgerPath);
-    assert.equal(attempts.length, 18);
+    assert.equal(
+      attempts.length,
+      [...results, ...nested].filter(
+        (result) =>
+          result.name !== 'registered relative fixture cwd' &&
+          result.name !== 'multiline quoted literal',
+      ).length,
+    );
     assert.ok(attempts.some((attempt) => Number(attempt.threadId) > 0));
     assert.equal(existsSync(markerPath), false);
     assert.doesNotMatch(readFileSync(ledgerPath, 'utf8'), /secret|token/u);
@@ -456,12 +491,17 @@ test('Worker guards honor nullish child-process argument placeholders', async ()
   const workerSource = `
 const { parentPort } = require('node:worker_threads');
 const childProcess = require('node:child_process');
+const cmdShell = process.platform === 'win32'
+  ? (process.env.ComSpec || 'cmd.exe')
+  : 'cmd.exe';
 const calls = [
   ['spawnSync', () => childProcess.spawnSync('printf ok && gh api repos/o/r', null, { shell: true })],
   ['spawn', () => childProcess.spawn('printf ok && gh api repos/o/r', undefined, { shell: true })],
   ['execFile', () => childProcess.execFile('printf ok && gh api repos/o/r', null, { shell: true })],
   ['execFileSync', () => childProcess.execFileSync('printf ok && gh api repos/o/r', undefined, { shell: true })],
   ['fork', () => childProcess.fork('unused-worker.cjs', undefined, { execPath: ${JSON.stringify(missingGhPath)} }).on('error', () => {})],
+  ['execSync', () => childProcess.execSync('gh api repos/o/r')],
+  ['cmd call wrapper', () => childProcess.spawnSync(cmdShell, ['/c', 'call gh api repos/o/r'])],
   ...(process.platform === 'win32' ? [] : [
     ['spawnSync env PATH override', () => childProcess.spawnSync('/usr/bin/env', ['PATH=' + ${JSON.stringify(unregisteredBin)}, 'gh', 'api', 'repos/o/r'], { env: { ...process.env, PATH: ${JSON.stringify(registeredBin)} } })],
     ['spawnSync env credential', () => childProcess.spawnSync('/usr/bin/env', ['GH_TOKEN=opaque-secret-value', 'gh', 'api', 'repos/o/r'])],
@@ -556,6 +596,8 @@ parentPort.close();
         'execFile',
         'execFileSync',
         'fork',
+        'execSync',
+        'cmd call wrapper',
         ...(process.platform === 'win32'
           ? []
           : [
@@ -605,6 +647,8 @@ parentPort.close();
         'execFile',
         'execFileSync',
         'fork',
+        'execSync',
+        'spawnSync',
         ...(process.platform === 'win32'
           ? []
           : [
@@ -635,7 +679,7 @@ parentPort.close();
       /opaque-secret-value|split-secret-value/u,
     );
     if (process.platform !== 'win32') {
-      const pathAttempt = attempts[5];
+      const pathAttempt = attempts[7];
       assert.equal(pathAttempt?.resolvedExecutable, unregisteredGh);
       assert.deepEqual(pathAttempt?.args, [
         'PATH=[redacted]',
@@ -643,18 +687,18 @@ parentPort.close();
         'api',
         'repos/o/r',
       ]);
-      assert.deepEqual(attempts[6]?.args, [
+      assert.deepEqual(attempts[8]?.args, [
         'GH_TOKEN=[redacted]',
         'gh',
         'api',
         'repos/o/r',
       ]);
-      assert.deepEqual(attempts[7]?.args, ['-S', '[split string omitted]']);
+      assert.deepEqual(attempts[9]?.args, ['-S', '[split string omitted]']);
       assert.equal(
-        attempts[8]?.executable,
+        attempts[10]?.executable,
         'env wrapper with unresolved command',
       );
-      assert.deepEqual(attempts[11]?.args, [
+      assert.deepEqual(attempts[13]?.args, [
         '--',
         'PATH=[redacted]',
         'gh',
@@ -711,6 +755,25 @@ Promise.all([
   } finally {
     rmSync(guardRoot, { recursive: true, force: true });
   }
+});
+
+test('eval Worker bridge preserves a leading strict-mode directive', async () => {
+  const worker = new Worker(
+    `'use strict';\nconst { parentPort } = require('node:worker_threads');\nparentPort.postMessage((function () { return this; })() === undefined);`,
+    { eval: true, execArgv: [] },
+  );
+  const result = await new Promise<boolean>((resolve, reject) => {
+    worker.once('message', resolve);
+    worker.once('error', reject);
+  });
+  await new Promise<void>((resolve, reject) => {
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`worker exited with code ${code}`));
+    });
+  });
+  assert.equal(result, true);
 });
 
 test('an explicit empty NODE_OPTIONS cannot bypass the child GH guard', () => {

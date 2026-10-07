@@ -72,6 +72,7 @@ import {
   rmSync,
   writeSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -79,6 +80,15 @@ import { pathToFileURL } from 'node:url';
 const ROOT_MARKER = 'IDD_TEST_STATE_ROOT';
 const WATCHED_PREFIX = 'idd-';
 const RELATIVE_SPECIFIER = /^\.\.?(?:[\\/]|$)/;
+const nodeOptions = createRequire(import.meta.url)('./node-options.cjs') as {
+  appendNodeOptionsPreload: (
+    source: string,
+    flag: string,
+    value: string,
+    cwd: string,
+    knownFlags?: string[],
+  ) => string;
+};
 
 function toFileUrl(specifier: string): string {
   return pathToFileURL(resolve(specifier)).href;
@@ -198,13 +208,13 @@ async function installGhGuard(): Promise<void> {
   }
   const guardImport = new URL('./isolate-gh.mts', import.meta.url).href;
   process.env.IDD_TEST_GH_GUARD_IMPORT = guardImport;
-  const existingNodeOptions = process.env.NODE_OPTIONS ?? '';
-  if (!existingNodeOptions.includes(guardImport)) {
-    const importFlag = `--import=${guardImport}`;
-    process.env.NODE_OPTIONS = existingNodeOptions
-      ? `${existingNodeOptions} ${importFlag}`
-      : importFlag;
-  }
+  process.env.NODE_OPTIONS = nodeOptions.appendNodeOptionsPreload(
+    process.env.NODE_OPTIONS ?? '',
+    '--import',
+    guardImport,
+    process.cwd(),
+    ['--import'],
+  );
   await import(guardImport);
 }
 

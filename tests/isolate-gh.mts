@@ -1,6 +1,6 @@
 import childProcess from 'node:child_process';
 import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,6 +23,7 @@ interface LaunchOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly shell?: boolean | string;
   readonly execPath?: string;
+  readonly execArgv?: readonly string[];
 }
 
 type LaunchMethod = (...args: unknown[]) => unknown;
@@ -34,6 +35,28 @@ const workerBridgePath = fileURLToPath(
 const normalizedWorkerBridgePath = workerBridgePath.replaceAll('\\', '/');
 const workerBridgeUrl = pathToFileURL(workerBridgePath).href;
 const state = { acknowledged: new Set<string>(), root: null as string | null };
+const nodeOptions = createRequire(import.meta.url)('./node-options.cjs') as {
+  appendNodeOptionsPreload: (
+    source: string,
+    flag: string,
+    value: string,
+    cwd: string,
+    knownFlags?: string[],
+  ) => string;
+  hasNodeOptionsPreload: (
+    source: string | string[],
+    expected: string,
+    cwd: string,
+    flags: string[],
+  ) => boolean;
+  normalizeNodeOptionsImports: (source: string, cwd: string) => string;
+  removeNodeOptionsPreload: (
+    source: string,
+    expected: string,
+    cwd: string,
+    flags: string[],
+  ) => string;
+};
 
 function ensureLedger(): { ledger: string; ownerPid: number } {
   let root = process.env.IDD_TEST_GH_GUARD_ROOT;
@@ -80,6 +103,14 @@ function resolveFromCwd(cwd: string | null, value: string): string | null {
     : cwd === null
       ? null
       : path.resolve(cwd, value);
+}
+
+function nodeOptionsEnvKey(env: NodeJS.ProcessEnv): string {
+  return (
+    (process.platform === 'win32'
+      ? Object.keys(env).find((key) => key.toLowerCase() === 'node_options')
+      : undefined) ?? 'NODE_OPTIONS'
+  );
 }
 
 function normalizePath(value: string): string {
@@ -270,8 +301,51 @@ function shellPayload(
         return argument.slice(argument.indexOf(':') + 1);
       }
     }
+    const scriptPath = shellScriptPath(base, args);
+    if (scriptPath) {
+      const cwd = launchDirectory(options?.cwd) ?? currentDirectoryOrNull();
+      const absolutePath = resolveFromCwd(cwd, scriptPath);
+      try {
+        const source = absolutePath
+          ? fs.readFileSync(absolutePath, 'utf8')
+          : null;
+        if (source !== null && source.length <= 1_000_000) return source;
+      } catch {
+        // Fail closed when a shell script cannot be inspected before launch.
+      }
+      return 'gh';
+    }
+    return 'gh';
   }
   return options?.shell ? [command, ...args].map(String).join(' ') : null;
+}
+
+function shellScriptPath(
+  base: string,
+  args: readonly unknown[],
+): string | null {
+  const values = args.map(String);
+  const isPosix = ['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base);
+  if (['powershell', 'pwsh'].includes(base)) {
+    const fileIndex = values.findIndex(
+      (value) => value.toLowerCase() === '-file',
+    );
+    return fileIndex >= 0 ? (values[fileIndex + 1] ?? null) : null;
+  }
+  let index = 0;
+  while (index < values.length) {
+    const value = values[index] ?? '';
+    if (value === '--') return values[index + 1] ?? null;
+    if (isPosix && !value.startsWith('-')) return value;
+    if (!isPosix && !value.startsWith('/') && !value.startsWith('-')) {
+      return value;
+    }
+    if (!isPosix && /^\/[a-z]+$/iu.test(value)) {
+      if (/^\/(?:c|k)$/iu.test(value)) return null;
+    }
+    index += 1;
+  }
+  return null;
 }
 
 function readCommandSubstitution(
@@ -358,12 +432,13 @@ function readBacktickSubstitution(
   return null;
 }
 
-type ShellFlavor = 'posix' | 'powershell' | 'other';
+type ShellFlavor = 'posix' | 'powershell' | 'cmd' | 'other';
 
 function shellFlavor(command: string): ShellFlavor {
   const base = executableBase(command);
   if (['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base)) return 'posix';
   if (['powershell', 'pwsh'].includes(base)) return 'powershell';
+  if (base === 'cmd') return 'cmd';
   return 'other';
 }
 
@@ -375,10 +450,55 @@ function shellFlavorForLaunch(
     return typeof options.shell === 'string'
       ? shellFlavor(options.shell)
       : process.platform === 'win32'
-        ? 'other'
+        ? 'cmd'
         : 'posix';
   }
   return shellFlavor(command);
+}
+
+function decodeShellCommandWord(token: string, flavor: ShellFlavor): string {
+  if (flavor !== 'posix') {
+    return token.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2');
+  }
+  if (/^'[^']*'$/u.test(token)) return token.slice(1, -1);
+  if (/^"(?:\\.|[^"\\])*"$/u.test(token)) {
+    return token.slice(1, -1).replace(/\\(["\\$`])/gu, '$1');
+  }
+  return token.replace(/\\(.)/gu, '$1');
+}
+
+function expandShellCommandName(
+  token: string,
+  flavor: ShellFlavor,
+  env: NodeJS.ProcessEnv,
+): { value: string; unresolved: boolean } {
+  const value = decodeShellCommandWord(token, flavor);
+  if (flavor !== 'posix' || /^'[^']*'$/u.test(token) || /\\\$/u.test(token)) {
+    return { value, unresolved: false };
+  }
+  let unresolved = false;
+  const expanded = value.replace(
+    /(?<!\\)\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/gu,
+    (
+      _match,
+      simpleName: string | undefined,
+      bracedName: string | undefined,
+    ) => {
+      const name = simpleName ?? bracedName ?? '';
+      const entry = Object.keys(env).find(
+        (key) =>
+          key === name ||
+          (process.platform === 'win32' &&
+            key.toLowerCase() === name.toLowerCase()),
+      );
+      if (entry === undefined) {
+        unresolved = true;
+        return '';
+      }
+      return env[entry] ?? '';
+    },
+  );
+  return { value: expanded, unresolved };
 }
 
 function stripShellLineContinuations(source: string): string {
@@ -1008,7 +1128,11 @@ function unwrapLauncher(
     return unwrapEnvCommand(command, args, env, cwd);
   }
   const base = executableBase(command);
-  if (!['command', 'exec', 'nohup', 'sudo', 'time', 'xargs'].includes(base)) {
+  if (
+    !['command', 'exec', 'nohup', 'sudo', 'time', 'timeout', 'xargs'].includes(
+      base,
+    )
+  ) {
     return null;
   }
   const values = args.map(String);
@@ -1028,6 +1152,7 @@ function unwrapLauncher(
     const option = values[index] ?? '';
     if (option === '--') {
       index += 1;
+      if (base === 'timeout') continue;
       break;
     }
     if (base === 'command' && option === '-p') {
@@ -1051,6 +1176,16 @@ function unwrapLauncher(
     if (base === 'sudo' && option === '-D') {
       childCwd = resolveFromCwd(childCwd, values[index + 1] ?? '.');
       index += 2;
+      continue;
+    }
+    if (base === 'sudo' && option === '--chdir') {
+      childCwd = resolveFromCwd(childCwd, values[index + 1] ?? '.');
+      index += 2;
+      continue;
+    }
+    if (base === 'sudo' && option.startsWith('--chdir=')) {
+      childCwd = resolveFromCwd(childCwd, option.slice('--chdir='.length));
+      index += 1;
       continue;
     }
     if (base === 'sudo') {
@@ -1088,6 +1223,25 @@ function unwrapLauncher(
     if (base === 'time' && option.startsWith('-')) {
       index += ['-f', '-o', '--format', '--output'].includes(option) ? 2 : 1;
       continue;
+    }
+    if (base === 'timeout') {
+      if (['-k', '--kill-after', '-s', '--signal'].includes(option)) {
+        index += 2;
+        continue;
+      }
+      if (
+        option.startsWith('--kill-after=') ||
+        option.startsWith('--signal=')
+      ) {
+        index += 1;
+        continue;
+      }
+      if (option.startsWith('-') && option !== '--') {
+        index += 1;
+        continue;
+      }
+      index += 1;
+      break;
     }
     if (base === 'nohup' && option.startsWith('-')) {
       index += 1;
@@ -1278,20 +1432,27 @@ function shellContainsUnexpectedGh(
   let wrapper: string | null = null;
   let skipWrapperArgument = false;
   let skipEnvChdir = false;
+  let skipSudoChdir = false;
   let skipRedirectionTarget = false;
+  let timeoutNeedsDuration = false;
   let envOption: 'unset' | 'split' | null = null;
   let effectiveEnv = { ...(env ?? process.env) };
+  const shellEnv = { ...(env ?? process.env) };
   let effectiveCwd = cwd;
-  for (const token of tokens) {
+  let shellCwd = cwd;
+  for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex += 1) {
+    const token = tokens[tokenIndex] ?? '';
     if (/^[;&|(){}\n]$/u.test(token) || token === '&&' || token === '||') {
       commandPosition = true;
       wrapper = null;
       skipWrapperArgument = false;
       skipEnvChdir = false;
+      skipSudoChdir = false;
       skipRedirectionTarget = false;
+      timeoutNeedsDuration = false;
       envOption = null;
-      effectiveEnv = { ...(env ?? process.env) };
-      effectiveCwd = cwd;
+      effectiveEnv = { ...shellEnv };
+      effectiveCwd = shellCwd;
       continue;
     }
     if (!commandPosition) continue;
@@ -1303,7 +1464,7 @@ function shellContainsUnexpectedGh(
       skipRedirectionTarget = true;
       continue;
     }
-    const word = token.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2');
+    const word = decodeShellCommandWord(token, flavor);
     if (wrapper === 'env' && envOption === 'unset') {
       const key =
         process.platform === 'win32'
@@ -1345,9 +1506,30 @@ function shellContainsUnexpectedGh(
         effectiveCwd = resolveFromCwd(effectiveCwd, word);
         skipEnvChdir = false;
       }
+      if (skipSudoChdir) {
+        effectiveCwd = resolveFromCwd(effectiveCwd, word);
+        skipSudoChdir = false;
+      }
       skipWrapperArgument = false;
       continue;
     }
+    if (wrapper === 'timeout') {
+      if (word === '--') continue;
+      if (['-k', '--kill-after', '-s', '--signal'].includes(word)) {
+        skipWrapperArgument = true;
+        continue;
+      }
+      if (word.startsWith('--kill-after=') || word.startsWith('--signal=')) {
+        continue;
+      }
+      if (word.startsWith('-')) continue;
+      if (timeoutNeedsDuration) {
+        timeoutNeedsDuration = false;
+        wrapper = 'timeout-command';
+        continue;
+      }
+    }
+    if (wrapper === 'timeout-command') wrapper = null;
     if (wrapper === 'command-lookup') {
       commandPosition = false;
       wrapper = null;
@@ -1360,6 +1542,10 @@ function shellContainsUnexpectedGh(
     }
     if (wrapper === 'command' || wrapper === 'exec') {
       if (word === '--') continue;
+      if (wrapper === 'command' && word === '-p') {
+        effectiveEnv.PATH = defaultExecutableSearchPath();
+        continue;
+      }
       if (word.startsWith('-')) {
         skipWrapperArgument = wrapper === 'exec' && word === '-a';
         continue;
@@ -1367,6 +1553,13 @@ function shellContainsUnexpectedGh(
     }
     if (wrapper === 'sudo') {
       if (word === '--') continue;
+      if (word.startsWith('--chdir=')) {
+        effectiveCwd = resolveFromCwd(
+          effectiveCwd,
+          word.slice('--chdir='.length),
+        );
+        continue;
+      }
       if (word.startsWith('--') && word.includes('=')) continue;
       if (word.startsWith('-')) {
         skipWrapperArgument = [
@@ -1392,6 +1585,7 @@ function shellContainsUnexpectedGh(
           '--type',
           '--user',
         ].includes(word);
+        skipSudoChdir = word === '-D' || word === '--chdir';
         continue;
       }
     }
@@ -1440,6 +1634,9 @@ function shellContainsUnexpectedGh(
     if (wrapper === 'nohup' && (word === '--' || word.startsWith('-'))) {
       continue;
     }
+    if (wrapper === 'call') {
+      wrapper = null;
+    }
     const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(word);
     if (assignment) {
       const key =
@@ -1449,6 +1646,16 @@ function shellContainsUnexpectedGh(
             ) ?? assignment[1])
           : assignment[1];
       if (key) effectiveEnv[key] = assignment[2] ?? '';
+      const followingToken = tokens[tokenIndex + 1] ?? '';
+      if (
+        key &&
+        (!followingToken ||
+          /^[;&|(){}\n]$/u.test(followingToken) ||
+          followingToken === '&&' ||
+          followingToken === '||')
+      ) {
+        shellEnv[key] = assignment[2] ?? '';
+      }
       continue;
     }
     if (
@@ -1510,13 +1717,110 @@ function shellContainsUnexpectedGh(
       skipWrapperArgument = ['-C', '--chdir', '--argv0'].includes(word);
       continue;
     }
-    const base = executableBase(word);
+    const expandedCommand = expandShellCommandName(token, flavor, effectiveEnv);
+    if (expandedCommand.unresolved) return true;
+    const commandWord = expandedCommand.value;
+    const base = executableBase(commandWord);
     if (
-      ['command', 'exec', 'env', 'nohup', 'sudo', 'time', 'xargs'].includes(
-        base,
-      )
+      [
+        'command',
+        'exec',
+        'env',
+        'nohup',
+        'sudo',
+        'time',
+        'timeout',
+        'xargs',
+        ...(flavor === 'cmd' ? ['call'] : []),
+      ].includes(base)
     ) {
       wrapper = base;
+      timeoutNeedsDuration = base === 'timeout';
+      continue;
+    }
+    if (base === 'eval') {
+      const payloadTokens: string[] = [];
+      for (let index = tokenIndex + 1; index < tokens.length; index += 1) {
+        const next = tokens[index] ?? '';
+        if (/^[;&|(){}\n]$/u.test(next) || next === '&&' || next === '||') {
+          break;
+        }
+        payloadTokens.push(decodeShellCommandWord(next, flavor));
+      }
+      if (
+        shellContainsUnexpectedGh(
+          payloadTokens.join(' '),
+          effectiveEnv,
+          flavor,
+          effectiveCwd,
+        )
+      ) {
+        return true;
+      }
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (
+      [
+        'sh',
+        'bash',
+        'dash',
+        'zsh',
+        'ksh',
+        'cmd',
+        'powershell',
+        'pwsh',
+      ].includes(base)
+    ) {
+      const nestedArgs: string[] = [];
+      for (let index = tokenIndex + 1; index < tokens.length; index += 1) {
+        const argument = tokens[index] ?? '';
+        if (
+          /^[;&|(){}\n]$/u.test(argument) ||
+          argument === '&&' ||
+          argument === '||'
+        )
+          break;
+        nestedArgs.push(decodeShellCommandWord(argument, flavor));
+      }
+      const nestedSource = shellPayload(base, nestedArgs, {
+        cwd: effectiveCwd ?? undefined,
+      });
+      if (
+        nestedSource !== null &&
+        shellContainsUnexpectedGh(
+          nestedSource,
+          effectiveEnv,
+          shellFlavor(base),
+          effectiveCwd,
+        )
+      ) {
+        return true;
+      }
+      commandPosition = false;
+      continue;
+    }
+    if (base === 'cd') {
+      let nextIndex = tokenIndex + 1;
+      while (
+        nextIndex < tokens.length &&
+        ['-L', '-P'].includes(tokens[nextIndex] ?? '')
+      ) {
+        nextIndex += 1;
+      }
+      const destinationToken = tokens[nextIndex] ?? '';
+      const destination =
+        /^[;&|(){}\n]$/u.test(destinationToken) ||
+        destinationToken === '&&' ||
+        destinationToken === '||'
+          ? ''
+          : decodeShellCommandWord(destinationToken, flavor);
+      if (destination) shellCwd = resolveFromCwd(effectiveCwd, destination);
+      else if (process.env.HOME)
+        shellCwd = resolveFromCwd(effectiveCwd, process.env.HOME);
+      effectiveCwd = shellCwd;
+      commandPosition = false;
       continue;
     }
     if (['if', 'then', 'else', 'elif', 'while', 'until', 'do'].includes(word)) {
@@ -1525,8 +1829,8 @@ function shellContainsUnexpectedGh(
     commandPosition = false;
     wrapper = null;
     if (
-      isGhExecutable(word) &&
-      !isRegisteredFixture(word, effectiveEnv, effectiveCwd)
+      isGhExecutable(commandWord) &&
+      !isRegisteredFixture(commandWord, effectiveEnv, effectiveCwd)
     ) {
       return true;
     }
@@ -1549,7 +1853,9 @@ function argvContainsUnexpectedGh(
       unwrapped.cwd,
     );
   }
-  const shell = shellPayload(unwrapped.command, unwrapped.args);
+  const shell = shellPayload(unwrapped.command, unwrapped.args, {
+    cwd: unwrapped.cwd ?? undefined,
+  });
   return (
     shell !== null &&
     shellContainsUnexpectedGh(
@@ -1616,7 +1922,9 @@ function inspectInvocation(
       );
       if (unexpected) executable = `${executableBase(command)} wrapper for gh`;
     } else if (unwrapped.wrapped) {
-      const wrappedShell = shellPayload(unwrapped.command, unwrapped.args);
+      const wrappedShell = shellPayload(unwrapped.command, unwrapped.args, {
+        cwd: unwrapped.cwd ?? undefined,
+      });
       if (wrappedShell !== null) {
         unexpected = shellContainsUnexpectedGh(
           wrappedShell,
@@ -1688,14 +1996,16 @@ const shouldCheckExit =
   (process.env.IDD_TEST_GH_GUARD_SELF_CHECK === '1' ||
     ownerPid === process.pid);
 
-function appendGuardImport(env: NodeJS.ProcessEnv): void {
+function appendGuardImport(env: NodeJS.ProcessEnv, cwd: string | null): void {
   env.IDD_TEST_GH_GUARD_IMPORT = guardImport;
-  const current = env.NODE_OPTIONS ?? '';
-  if (!current.includes(guardImport)) {
-    env.NODE_OPTIONS = current
-      ? `${current} --import=${guardImport}`
-      : `--import=${guardImport}`;
-  }
+  const key = nodeOptionsEnvKey(env);
+  env[key] = nodeOptions.appendNodeOptionsPreload(
+    env[key] ?? '',
+    '--import',
+    guardImport,
+    cwd ?? currentDirectoryOrNull() ?? '.',
+    ['--import'],
+  );
 }
 
 const TELEMETRY_RELAY_COMMAND_ENV =
@@ -1746,20 +2056,22 @@ function optionsWithGuard(
       env[name] = process.env[name];
     }
   }
+  const cwd = launchDirectory(record.cwd);
+  const nodeOptionsKey = nodeOptionsEnvKey(env);
   if (directGhFixture) {
-    const importFlag = `--import=${guardImport}`;
-    const current = (env.NODE_OPTIONS ?? '')
-      .replaceAll(importFlag, '')
-      .replaceAll(`--import="${guardImport}"`, '')
-      .trim();
-    const requireFlag = `--require "${normalizedWorkerBridgePath}"`;
-    env.NODE_OPTIONS =
-      current.includes(normalizedWorkerBridgePath) ||
-      current.includes(workerBridgePath)
-        ? current
-        : current
-          ? `${current} ${requireFlag}`
-          : requireFlag;
+    const current = nodeOptions.removeNodeOptionsPreload(
+      env[nodeOptionsKey] ?? '',
+      guardImport,
+      cwd ?? currentDirectoryOrNull() ?? '.',
+      ['--import'],
+    );
+    env[nodeOptionsKey] = nodeOptions.appendNodeOptionsPreload(
+      current,
+      '--require',
+      normalizedWorkerBridgePath,
+      cwd ?? currentDirectoryOrNull() ?? '.',
+      ['--require', '--import'],
+    );
   } else if (telemetryRelay) {
     // Keep the relay's environment scrubbed: the telemetry helper forwards
     // its NODE_OPTIONS separately to the configured target, so putting the
@@ -1770,7 +2082,7 @@ function optionsWithGuard(
     // The Windows telemetry helper removes caller NODE_OPTIONS before it
     // starts its relay. Other children still receive only this trusted test
     // guard in NODE_OPTIONS.
-    appendGuardImport(env);
+    appendGuardImport(env, cwd);
   }
   return { ...record, env };
 }
@@ -1872,6 +2184,28 @@ const optionsAfterArgs = (args: unknown[]): number =>
   ((args[1] === null || args[1] === undefined) && args.length > 2)
     ? 2
     : 1;
+function execShellInvocation(
+  command: unknown,
+  optionsValue: unknown,
+): { shell: string; args: string[] } {
+  const options =
+    optionsValue !== null && typeof optionsValue === 'object'
+      ? (optionsValue as LaunchOptions)
+      : undefined;
+  const shell =
+    typeof options?.shell === 'string'
+      ? options.shell
+      : process.platform === 'win32'
+        ? (process.env.ComSpec ?? 'cmd.exe')
+        : '/bin/sh';
+  return {
+    shell,
+    args:
+      shellFlavor(shell) === 'cmd'
+        ? ['/d', '/s', '/c', String(command)]
+        : ['-c', String(command)],
+  };
+}
 wrap(
   'spawn',
   (command, argsOrOptions, options) => {
@@ -1900,14 +2234,18 @@ wrap(
 );
 wrap(
   'exec',
-  (command, options) =>
-    inspectInvocation('exec', 'sh', ['-c', String(command)], options),
+  (command, options) => {
+    const invocation = execShellInvocation(command, options);
+    inspectInvocation('exec', invocation.shell, invocation.args, options);
+  },
   () => 1,
 );
 wrap(
   'execSync',
-  (command, options) =>
-    inspectInvocation('execSync', 'sh', ['-c', String(command)], options),
+  (command, options) => {
+    const invocation = execShellInvocation(command, options);
+    inspectInvocation('execSync', invocation.shell, invocation.args, options);
+  },
   () => 1,
 );
 wrap(
@@ -1943,7 +2281,12 @@ wrap(
     inspectInvocation(
       'fork',
       (forkOptions as LaunchOptions | undefined)?.execPath ?? process.execPath,
-      [modulePath],
+      [
+        ...((forkOptions as LaunchOptions | undefined)?.execArgv ??
+          process.execArgv),
+        modulePath,
+        ...(Array.isArray(argsOrOptions) ? argsOrOptions : []),
+      ],
       forkOptions,
     );
   },
@@ -1974,27 +2317,35 @@ class GuardedWorker extends OriginalWorker {
     let workerExecArgv =
       options.execArgv === undefined ? undefined : [...options.execArgv];
     const execArgv = [...(workerExecArgv ?? process.execArgv)];
+    const workerCwd = currentDirectoryOrNull() ?? '.';
+    const nodeOptionsKey =
+      env === workerThreads.SHARE_ENV ? 'NODE_OPTIONS' : nodeOptionsEnvKey(env);
     const hasBridgePreload =
-      execArgv.some(
-        (argument, index) =>
-          argument === `--import=${workerBridgeUrl}` ||
-          (argument === '--import' &&
-            execArgv[index + 1] === workerBridgeUrl) ||
-          argument === `--require=${workerBridgePath}` ||
-          (argument === '--require' &&
-            execArgv[index + 1] === workerBridgePath),
-      ) ||
+      nodeOptions.hasNodeOptionsPreload(execArgv, workerBridgePath, workerCwd, [
+        '--require',
+        '--import',
+      ]) ||
       (env !== workerThreads.SHARE_ENV &&
-        (env.NODE_OPTIONS ?? '').includes(normalizedWorkerBridgePath));
+        nodeOptions.hasNodeOptionsPreload(
+          env[nodeOptionsKey] ?? '',
+          workerBridgePath,
+          workerCwd,
+          ['--require', '--import'],
+        ));
     const moduleEval =
       options.eval === true &&
       (options as WorkerOptions & { type?: string }).type === 'module';
     if ((options.eval !== true || moduleEval) && !hasBridgePreload) {
       if (workerExecArgv === undefined) {
         if (env !== workerThreads.SHARE_ENV) {
-          env.NODE_OPTIONS = env.NODE_OPTIONS
-            ? `${env.NODE_OPTIONS} --import=${workerBridgeUrl}`
-            : `--import=${workerBridgeUrl}`;
+          const key = nodeOptionsEnvKey(env);
+          env[key] = nodeOptions.appendNodeOptionsPreload(
+            env[key] ?? '',
+            '--import',
+            workerBridgeUrl,
+            workerCwd,
+            ['--require', '--import'],
+          );
         }
         // SHARE_ENV keeps the runtime's native implicit execArgv inheritance.
       } else {
@@ -2002,9 +2353,16 @@ class GuardedWorker extends OriginalWorker {
         workerExecArgv = execArgv;
       }
     }
+    const workerSource = String(filename);
+    const strictDirective =
+      options.eval === true && !moduleEval
+        ? (/^((?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*(?:'use strict'|"use strict")\s*;?)/u.exec(
+            workerSource,
+          )?.[1] ?? '')
+        : '';
     const source =
       options.eval === true && !moduleEval
-        ? `;(() => {\n  const Module = require('node:module');\n  Module._load(${JSON.stringify(workerBridgePath)}, null, false);\n})();\n${String(filename)}`
+        ? `${strictDirective}\n;(() => {\n  const Module = require('node:module');\n  Module._load(${JSON.stringify(workerBridgePath)}, null, false);\n})();\n${workerSource.slice(strictDirective.length)}`
         : filename;
     super(source, {
       ...options,
