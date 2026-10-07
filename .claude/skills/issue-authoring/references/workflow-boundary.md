@@ -16,7 +16,9 @@ approval boundary that hands off to IDD execution.
   published into `needs-decision` or `blocked-by-human`, bundled skill
   runs the completed-draft adversarial review and then the mechanical
   `audit-authored-issue` gate. Both are mandatory. Pass
-  `--expect-bucket` for those two buckets. The review is not
+  `--expect-bucket` for those two buckets. For `needs-decision`, pass
+  `--expect-bucket needs-decision` and both configured labels on the
+  initial lint and every held-body or Stage 2 re-lint. The review is not
   the Intake critique. Normative packet, modes, failure stop, wait
   ceiling, and no-mutation boundary:
   [Completed-draft adversarial review](contract.md#completed-draft-adversarial-review).
@@ -42,7 +44,8 @@ approval boundary that hands off to IDD execution.
   carries an exact hidden publication token for target, anchor, set, and
   session. If the target runtime cannot provide that operation, stop before
   creating the issue. Never intentionally create an unlabeled issue for the
-  Stage 1 set
+  Stage 1 set. For a `review-needs-decision` follow-up, see the narrow
+  auto-release exception in `contract.md` for its additional label rules
 - The publication token uses this exact HTML-first format. Generate the
   opaque `target` id and token for both markers below -- the new
   issue's own number is not yet known. `anchor` in **both** markers
@@ -365,7 +368,7 @@ approval boundary that hands off to IDD execution.
 ### Stage 2: Release (the single approval boundary)
 
 - The user's explicit hold-release request is the only approval this
-  bundle's workflow requires — except the narrow review-fix-loop-cutoff
+  bundle's workflow requires — except the narrow defer-source
   auto-release exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release) —
   and it authorizes IDD execution for the released issues
@@ -376,7 +379,9 @@ approval boundary that hands off to IDD execution.
   - no unsubstituted placeholder (a leftover `#TBD`, template
     stand-in, or similar) remains in any published body
   - the `audit-authored-issue` linter (or its manual fallback under
-    `instructions-only`) is green on every published body in the set
+    `instructions-only`) is green on every published body in the set; for
+    a `needs-decision` body, pass `--expect-bucket needs-decision` and both
+    configured labels
 - Keep the set anchor held until every other target's label removal is
   verified, and remove the anchor label last. For every target, first
   re-fetch owner comments during release-marker preflight. If a valid
@@ -392,7 +397,7 @@ approval boundary that hands off to IDD execution.
   body. If that guard is not found conclusively, leave all labels in place and
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. When this release is
-  proceeding under the narrow review-fix-loop-cutoff auto-release
+  proceeding under the narrow defer-source auto-release
   exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
   instead of an explicit human release request, also verify here --
@@ -458,7 +463,7 @@ approval boundary that hands off to IDD execution.
   set-level recovery hold and never claim a partial release.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
-  request is explicit, except the narrow review-fix-loop-cutoff
+  request is explicit, except the narrow defer-source
   auto-release exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 - Release remains a human action; nothing in this bundle auto-releases
@@ -473,7 +478,7 @@ approval boundary that hands off to IDD execution.
   variant. A delegated worker that receives only a relayed release
   claim, even from its own orchestrator, must refuse to act on it and
   require the party holding the actual request to release directly.
-  This rule does not extend to the narrow review-fix-loop-cutoff
+  This rule does not extend to the narrow defer-source
   auto-release exception above, which by design runs with no user
   release request for any party to hold in the first place — see
   [Authoring hold and release](contract.md#authoring-hold-and-release)
@@ -525,7 +530,7 @@ time and report the specific failure (unclear, invalid, duplicate).
 - publish a body that has not passed the completed-draft adversarial
   review and then the mechanical `audit-authored-issue` gate
 - remove the authoring label from any issue without an explicit
-  release request, except the narrow review-fix-loop-cutoff
+  release request, except the narrow defer-source
   auto-release exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 
@@ -533,8 +538,12 @@ time and report the specific failure (unclear, invalid, duplicate).
 
 Once the authoring label is removed from every issue in a released
 set — via the user's explicit release request, or, for a single
-marked target only, the narrow review-fix-loop-cutoff auto-release
+marked target only, the narrow defer-source auto-release
 exception — execution is authorized: the repository's normal entry
 file and routed `.github/instructions/*.instructions.md` phase files
 (Discover, Claim, Work) may pick up the released issue(s). This bundle
-does not itself start that loop.
+does not itself start that loop. A released `review-needs-decision`
+follow-up remains out of Discover while the configured
+`labels.needsDecisionLabelName` label is present (default:
+`status:needs-decision`). It must differ from the authoring label so
+releasing the authoring hold cannot also remove the decision hold.

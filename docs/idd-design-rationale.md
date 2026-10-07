@@ -903,6 +903,105 @@ and triage proceed while CI or the expected advisory re-review is
 incomplete. The next full E1 entry records the deferred watermark after
 those signals resolve.
 
+### Review-fix escalation examples
+
+Issue kurone-kito/idd-skill#2223's clone-scoped lock continued to draw
+new P1 concurrency findings over several review rounds even after
+replacing mtime-based staleness with PID-liveness checks. PR
+kurone-kito/idd-skill#2389 removed automatic stale-lock takeover and
+replaced it with a timeout that reports the lock path and holder PID
+for manual recovery, matching Git's own `index.lock` collision
+behavior (observed 2026-09-01, kurone-kito/idd-skill#2389). That
+simplification was safe because the issue's acceptance criteria
+required acquire/release, not automatic stale-lock recovery.
+
+The CommonMark-targeting structural-evidence parser for issue
+kurone-kito/idd-skill#2767 was implemented in PR
+kurone-kito/idd-skill#2840. An adversarial automated reviewer
+surfaced distinct gaps between the parser's supported behavior and
+CommonMark rendering over 27 review rounds, each an in-scope
+correctness gap rather than a repeating symptom of one mechanism
+(observed 2026-09-10, kurone-kito/idd-skill#2840). The loop ended
+after the operator accepted three remaining findings as a documented
+limitation and filed kurone-kito/idd-skill#2865 as the scoped
+follow-up.
+
+### Whole-class sweep: why the E13 reply names the pattern and the count
+
+E9's sweep rule ("fix the whole class, not just the flagged line") was
+soft in three ways: it left "systemic" undefined, it swept "the current
+diff (and adjacent sections)" rather than a defined file set, and
+nothing in the reply showed that a sweep ran, so a session that skipped
+it looked the same as one that did it. The old text also asked for "one
+commit"; the rule now asks for the same push, because the review cost
+is per push and commit atomicity is a separate repository rule. E10's
+round-count heuristic (Tier 1) is a complementary, round-level check
+for the same area and did not stop the cases below. The trigger is now a
+finding that names a searchable pattern, which narrows the old
+"systemic finding" wording on purpose: a class with no searchable form
+(a wrong ordering, a missing step) is not swept by this rule. The lite
+twin keeps the old wording; porting the rule there is a later issue.
+
+Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter
+re-import reviewed on 11 heads (kurone-kito/idd-skill#3801):
+
+- The same dangling clause, `reset on pass)`, sat at two sites of the
+  imported template, `idd-pre-merge.instructions.md` and
+  `idd-merge.instructions.md`. Copilot reported the first at head 2
+  (01:34Z); Codex reported the second at head 8 (09:15Z). Both files
+  were in the pull request's diff throughout.
+- A hard-coded base branch was reported site by site: B1 at head 3,
+  the lite D1 at head 4, the signed-merge wrapper at head 5, F4 at
+  head 8, and the lite D3 and D3.5 at head 9. Each report cost a push
+  and a fresh round of up to three review bots.
+
+Replay through the written rule:
+
+1. `reset on pass)` at head 2. Both reviewers quoted the fragment as a
+   code span, so the finding names a pattern. Searching the pull
+   request's changed files (50 at that head) for it finds one more
+   instance, in `idd-merge.instructions.md`, so the same push fixes both
+   sites and the E13 explanation says it swept `reset on pass)` and
+   fixed 1 other instance. Head 8's report of the second site never
+   happens.
+2. `origin/main` at head 3. The finding is a hard-coded base branch
+   where the configured one applies. A search for the literal in the
+   changed files at that head (50 files) hits 18 lines in 7 files: 2 in
+   `idd-work`, 6 in the lite `idd-pr-submit`, 3 in the lite `idd-work`,
+   2 in the lite `idd-merge-handoff`, 1 in the lite `idd-review-fix`, 3
+   in `docs/idd-helper-scripts.md` and 1 in
+   `docs/idd-design-rationale.md`. The rule asks for each instance of
+   that defect, so every hit is judged against it: the rationale
+   example (`git diff origin/main...HEAD` in a review-cost story) is not
+   an instance and stays, the instances are fixed in the same push (the
+   head-3 fix swept 3 files), and the reply names `origin/main` with the
+   number of other instances fixed, which tells a reader that one
+   flagged line led to a sweep of the changed files.
+
+What a text search cannot find: of the six sites of the base-branch
+defect, three held the literal (B1, the lite D1 and the wrapper); the
+other three did not. They were a `<default-branch>` placeholder, a
+missing `--base`, and a gap in the closing-set logic. The sweep rule
+cannot reach them, which is why the reply states the pattern that was
+searched: a reader or the next review wave can re-run that search, and
+a count of `0` needs the pattern named, so "swept, nothing else found"
+stays distinguishable from "not swept".
+
+A file the pull request does not change is never swept: widening the
+diff to every match multiplies the review surface of one push. Its
+instances go to the pull request body's follow-up list (editing the
+body follows E12's PR body sync rule; a reviewer's finding there is
+rejected under E5's "Reject now but should do eventually" rule). "The
+files this pull request changes" is the set D3.6 already derives with
+`git diff --name-only origin/{development-branch}...HEAD`, and a source
+file and its generated mirror count as one instance. The count belongs
+to a swept item: an item already fixed by an earlier push cites that
+commit instead, and an Accepted item with no E13 reply (a critique-pass
+finding) has nothing to carry it. The rule adds no checker, only a
+signal: E10 runs before the reply is written and never sees it. The audit pins the
+four clauses (trigger, file set with the same push, limit, reply
+content) so that a later rewording cannot drop one silently.
+
 ### Merge-main livelock under fast-moving `main`
 
 Under heavy concurrent-session load, `main` can advance before one
@@ -1078,6 +1177,9 @@ maintainer"). The default threshold (`15`) is an explicit starting
 point the repository owner expects to tune once real usage data
 exists, not a final calibration.
 
+This rule is superseded for needs-decision items by
+[the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
+
 `Reject (defer)` reuses the existing `**Rejected**`-prefixed reply
 format instead of introducing a new top-level disposition category:
 `isDispositionComment` already parses "starts with `**Rejected**`," and
@@ -1102,6 +1204,10 @@ marker-scoped rule: when a candidate's body carries the
 marker, its `Refs #<N>` reference is resolved the same way an ordinary
 `Blocked by #<N>` line is — excluded from Discover while `#<N>` stays
 open. An unmarked issue's `Refs` lines are completely unaffected.
+
+A follow-up filed under the second defer-source value,
+`review-needs-decision`, takes the same rule: see
+[the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
 
 #### Reconciling the deferred follow-up with its pull request (kurone-kito/idd-skill#3624)
 
@@ -1166,6 +1272,10 @@ Rejected alternatives:
 - **Enumerating through the origin issue's timeline.** It pages through
   every comment event of the origin issue, where the marker search is one
   call.
+
+The same reconciliation covers a follow-up filed under the second
+defer-source value, `review-needs-decision`: see
+[the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
 
 #### 2026-09-15 recalibration to 12, using a month of real data (kurone-kito/idd-skill#2999)
 
@@ -1406,11 +1516,11 @@ another one. Example: PR `#3147`'s Low-labelled wording findings were
 Accepted with "the review correctly identified wording issues in the
 F4 cleanup guidance; the pending in-scope documentation fix ...".
 `critiqueLoop.deferAfterRounds` (repo value `5`) does not cover this
-case: it only fires after the round threshold and only for Low items,
-and since its counter was fixed to count Copilot reviews (PR `#3168`,
-merged 2026-09-21) no merged PR has reached 5 Copilot reviews, so it
-has never fired — most review waves happen in rounds 1-4, before that
-cutoff can act.
+case: it only fires after the round threshold and only for Low items.
+Its counter was fixed to count Copilot reviews (PR `#3168`, merged
+2026-09-21). As of this 2026-09-24 observation, no merged PR had
+reached 5 Copilot reviews, so it had never fired — most review waves
+happened in rounds 1-4, before that cutoff could act.
 
 Copilot's severity label has no published definition, no
 configuration, and no API field: labels were introduced 2026-05-12
@@ -1453,6 +1563,13 @@ merges, other-bot fixes) — this trigger does not touch those.
   `low-and-medium`. This supersedes the 2026-09-10 Low-only ceiling
   **for this new trigger only**; `deferAfterRounds` itself stays
   unchanged and Low-only.
+  The High ceiling is superseded for needs-decision items by
+  [the needs-decision deferral entry](#needs-decision-deferral-of-review-findings-kurone-kitoidd-skill3776).
+- This repository sets `critiqueLoop.deferRelaxAtRounds` to `[4, 7]`,
+  because over merged pull requests #3561 to #3781 the median
+  PR-wide Copilot review count was 2, while 30 reached a 4th review
+  and 14 reached a 7th, so the first threshold leaves a typical pull
+  request unchanged and the second acts only on the long tail.
 - Keep `deferAfterRounds` as an unchanged backstop; the new rule is an
   independent trigger applying from the first E4/E5 pass.
 - Apply to every PATH A actor, not only Copilot, with the agent's E4
@@ -1478,7 +1595,9 @@ merges, other-bot fixes) — this trigger does not touch those.
 
 `severity-tiered` is a third `deferByUrgency` value. It replaces the
 binary adopt-now allowlist with an ordinal urgency score (`very-low`
-< `low` < `medium` < `high`) beside the E4 severity. High defers only
+< `low` < `medium` < `high`) beside the E4 severity. At relax step 0,
+which is the whole matrix unless `critiqueLoop.deferRelaxAtRounds` is
+set (see the wave-gradient subsection below), High defers only
 at `very-low`. Medium, including unknown severity, defers at
 `very-low`, `low`, or `medium`. Low defers at every scored urgency.
 An unscored urgency does not defer. `low` and `low-and-medium` still
@@ -1503,6 +1622,215 @@ reported three safety findings on that same commit, so E4/E5 must
 inspect every actionable PATH A finding even when an overview is
 empty. PR #3574 drew repeated Medium correctness findings during its
 review cycle.
+
+#### Wave-gradient urgency defer (kurone-kito/idd-skill#3796)
+
+`critiqueLoop.deferRelaxAtRounds` adds an optional wave gradient to
+`severity-tiered`. Before the gradient, the matrix above was the same at
+every review wave, and the only round-dependent trigger,
+`deferAfterRounds`, was Low-only, so the matrix itself never relaxed as a
+pull request accumulated review waves.
+
+Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter re-import
+of the v0.14.0 template (figures at head `25e3d5e`): 32 commits, 11
+reviewed heads, 28 bot reviews and 74 review threads, open for about 12
+hours at that head, with no finding deferred (its description records no
+follow-up issue). Five earlier template re-imports in that repository
+(#62, #101, #126, #154, #189) merged after 1 to 4 heads. Of the 74
+threads, 26 were created or exposed by the pull request's own edits (one
+configured-branch inconsistency was reported site by site over six
+heads), and the first head already drew threads at the usual density (2.4
+per 1,000 diff lines, against 0.4 to 2.8 before). The instruction text a
+finding points at is the shipped behavior of an instruction repository,
+so adopt-now (c) rates most such findings `high` urgency, and without
+the gradient Medium or High findings of `high` urgency never defer
+however many waves have passed.
+
+Where the thresholds sit. Over the 100 merged pull requests numbered #3561
+to #3781 (merged 2026-09-27 to 2026-10-05), the PR-wide Copilot review
+count had a median of 2; 30 reached a 4th review, 25 a 5th, 14 a 7th and
+10 a 9th, and the largest was 111 (#3574, counted through the REST
+endpoint, because the GraphQL listing caps a pull request's reviews at
+100 nodes, so a heavily reviewed pull request can come out too low there,
+though never a threshold count). A gradient that starts at the 4th review
+leaves a typical pull request unchanged and acts only on the long tail,
+which is why `[4, 7]` is the recommended value.
+
+Maintainer decision (Groom hearing, 2026-10-05): add a wave gradient to
+`severity-tiered`, with thresholds that are PR-wide Copilot review counts,
+two steps at most, and at the final step never defer a High-tier finding
+of `high` urgency or a safety-class finding. The convergence-aware extra
+step and this repository's own opt-in are separate issues in the same
+roadmap. The normative rule is in
+[Wave-gradient urgency defer](idd-review-policy-profiles.md#wave-gradient-urgency-defer).
+
+Choices made while implementing, outside the hearing outcomes (which
+named only the final step): the High-tier `high` urgency and safety-class
+exclusion applies from step 1, and not at step 0, so a safety-class
+Low-tier finding still defers at step 0 as it does today and an absent
+field changes nothing. The safety class cites items 1, 2 and 4 of the
+needs-decision stop test and leaves out item 3, the instruction or helper
+contradiction, because most findings in an instruction repository would
+match it and the gradient would never act. The exclusions govern the
+`deferByUrgency` trigger only; `deferAfterRounds` is unchanged, as the
+scope limits of issue `#3796` say. The consequence to know: from
+step 1 on, a Medium-tier finding of `high` urgency that rests on adopt-now
+condition (a), (b) or (c) but is not safety class defers to the bundled
+follow-up.
+
+Worked example with `[4, 7]`. The columns after the step show whether one
+example finding defers (`defers`) or stays in the loop (`stays`): a
+Low-tier finding of `high` urgency, a Medium-tier finding of `high`
+urgency that is not safety class, a High-tier finding of `medium`
+urgency, a High-tier finding of `high` urgency, and a safety-class
+Low-tier finding of `low` urgency.
+
+| Copilot reviews | Step | Low, `high` | Medium, `high` | High, `medium` | High, `high` | Safety class, Low, `low` |
+| --------------- | ---- | ----------- | -------------- | -------------- | ------------ | ------------------------ |
+| 1               | 0    | `defers`    | `stays`        | `stays`        | `stays`      | `defers`                 |
+| 2               | 0    | `defers`    | `stays`        | `stays`        | `stays`      | `defers`                 |
+| 3               | 0    | `defers`    | `stays`        | `stays`        | `stays`      | `defers`                 |
+| 4               | 1    | `defers`    | `defers`       | `stays`        | `stays`      | `stays`                  |
+| 5               | 1    | `defers`    | `defers`       | `stays`        | `stays`      | `stays`                  |
+| 6               | 1    | `defers`    | `defers`       | `stays`        | `stays`      | `stays`                  |
+| 7               | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 8               | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 9               | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 10              | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+| 11              | 2    | `defers`    | `defers`       | `defers`       | `stays`      | `stays`                  |
+
+Count 4 is the first at which the Medium-tier finding of `high` urgency
+defers, and count 7 is the first at which the High-tier finding of
+`medium` urgency does; the safety-class finding defers only at step 0.
+
+##### Converged extra step (kurone-kito/idd-skill#3797)
+
+The count step does nothing at the first or second review. Observed
+2026-10-05 on kurone-kito/setup.ubuntu#201, in the same reading as the
+wave-gradient section above (figures at head `25e3d5e`). At head
+`4af1831`, Copilot's overview reported no findings and no inline
+comments, a Codex thread was open beside it, and the fix was another
+push. That head was Copilot's 10th review, so under `[4, 7]` the count
+step was already 2 and convergence would have added nothing. The case
+that matters is a low review count. The opposite head in that reading,
+`2cb41a0`, had no findings but carried 5 suppressed comments that were
+never acknowledged, so `converged` stays false and the extra step does
+not apply.
+
+Maintainer decision (Groom hearing, 2026-10-05): treat a converged
+advisory gate as one extra relax step, capped at 2. The declined
+alternative, jumping to the final step on convergence, would also defer
+a High-tier finding of `medium` urgency at the first review. The extra
+step applies only when `reviewPolicy` is absent or `copilot-advisory`.
+Any other advisory-convergence result adds nothing: the helper is
+unavailable, the command fails, the output does not parse, `converged`
+is absent or not exactly true, or `prHeadSha` differs from the head
+stored at E1. A one-threshold array such as `[4]` plus convergence
+reaches step 2, which is above that array's own final step.
+
+Replay with `[4, 7]`. The three findings are a non-Copilot Medium-tier
+finding of `high` urgency, a High-tier finding of `high` urgency, and a
+safety-class finding.
+
+| Case                                              | Count | `converged` | Step | Medium, `high` | High, `high` | Safety class | Clause                          |
+| ------------------------------------------------- | ----- | ----------- | ---- | -------------- | ------------ | ------------ | ------------------------------- |
+| Copilot converged on HEAD, no suppressed comments | 1     | true        | 1    | `defers`       | `stays`      | `stays`      | `step 1; converged <short-sha>` |
+| Suppressed comments not yet acknowledged          | 1     | false       | 0    | `stays`        | `stays`      | `defers`     | no `converged` token            |
+| Count of 7 or more                                | 7     | true        | 2    | `defers`       | `stays`      | `stays`      | `step 2`, no `converged` token  |
+
+At count 1 with convergence, the Medium-tier finding of `high` urgency
+is deferred at step 1 and the clause is
+`step 1; converged <short-sha>`. The High-tier finding of `high`
+urgency and the safety-class finding are not deferred. When Copilot's
+suppressed comments are not yet acknowledged, `converged` is false and
+there is no extra step. At a count of 7 or more the count step is
+already 2, so convergence adds nothing and the clause carries no
+`converged` token.
+
+### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
+
+The review loop stops for a person at several points: the
+`Awaiting maintainer decision` hold for an inconclusive item and for a
+CODEOWNER or required-reviewer source (E5, E6), the E10 no-progress
+hold, and the Tier 2 and Tier 3 stops. Each stop lands where an
+autonomous session is least likely to have anyone to ask. Observed
+2026-10-05, second-hand: the maintainer reported that agents in recently
+imported adopter projects increasingly stop in the E phase to ask the
+operator about serious or hard-to-judge review findings (the adopter
+repositories are not named). Observed earlier in this repository:
+issue #2767 (PR #2840) ran 27 review rounds and ended only when the
+operator accepted three residual findings and filed issue #2865, as the
+Tier 3 example in "Review-fix escalation examples" records.
+
+Decision (maintainer ruling, 2026-10-05, roadmap #3776): when a finding
+needs a person's judgment and merging the pull request as it stands
+cannot do the damage listed in the stop test below, the session records
+the question as a `needs-decision` follow-up issue, answers the finding,
+resolves its thread as the selected profile allows, and keeps going. It
+applies at E5, E6 and the three review-fix stops, for advisory bots,
+critique-pass findings and people holding none of the actor-permission
+cap's standing. It is on by default, with
+`critiqueLoop.deferNeedsDecision` as the off switch. The rule itself is
+in the "Needs-decision deferral" section of
+`idd-review-policy-profiles.md`; the instructions carry only pointers
+that end in today's stop.
+
+The stop test, and why each item is in it. Judged assuming the finding
+is correct, the session still stops when merging as it stands would:
+
+1. leave the development branch's CI red or the pull request
+   unmergeable, because a deferral must not trade a known failure for a
+   backlog item, and nobody can be asked later in the same loop;
+2. leave the defect in claim, lock, merge-gate, security or
+   secret-handling, or data-destroying code or behavior, of the loop or
+   of the project, because those are the places where a wrong merge does
+   damage a revert may not repair, and where the protection that
+   issue #1933 gave a valid high-severity report matters most;
+3. ship an instruction or helper contradiction that would misguide the
+   next session's agent, because the damage repeats in every later
+   session rather than staying in one pull request; or
+4. be impossible to reverse in a follow-up pull request, because a
+   follow-up can only repair what a pull request can still change.
+
+What it overrides, for this narrow class only. First, the
+repository-owner-confirmed rule recorded with issue #2863 that Medium
+and High findings stay fully blocking; the urgency triggers of
+issues #3222 and #3589 had already relaxed it in narrow cases. Second,
+issue #1933's routing of an inconclusive claim to the
+`Awaiting maintainer decision` hold so that a valid high-severity report
+is never silently resolved. The route keeps what issue #1933 protected:
+the reply must name the unavailable check, and the follow-up must record
+the claim as unverified. An agent may now redirect a finding that only a
+maintainer could redirect before.
+
+Declined alternatives:
+
+- Resolving a CODEOWNER or required-reviewer thread unilaterally: it
+  removes the person the repository named, so that source, and any
+  person holding Triage, Write, Maintain or Admin standing, stays
+  outside the route.
+- Making the follow-up `Blocked by` the pull request instead of the
+  claimed issue: a pull request number unblocks the follow-up when the
+  pull request closes unmerged, while the claimed issue stays open in
+  that case.
+- Asking the operator in the session: that is the stop this route
+  replaces.
+- A new doc for the rule: registering it adds lines to the generated
+  blocks of two onboarding files, and the two onboarding bundles that
+  contain them had 3 B and 33 B of headroom, so the rule is a new
+  section of an existing doc.
+
+Moving a normative rule out of an instruction file into a doc is a
+deliberate choice forced by the byte budget: the review bundles sit near
+their ceiling, and each pointer is a way out of an existing stop, so a
+session that does not read the doc behaves as before. The route is a
+distinct rule, not a trigger of the E5 Defer rule, whose exclusions and
+unit tests stay as they are.
+
+Cap: the fourth distinct follow-up filed from one pull request holds as
+before. It bounds over-deferral by a weak model and the backlog that
+F3's deferred-follow-up search reads (preventive; no observed incident
+yet).
 
 ### review-ack worked example
 
@@ -1806,6 +2134,74 @@ When GitHub auto-delete is disabled, the profile-selected
 and verifies the result through the permitted helper command surface
 (PR `#3741` Codex review comment `#4174479403`).
 
+### F2 and F3 require the exact pull request head before the local checks (kurone-kito/idd-skill#3802)
+
+Before D3.5 and D3.7, F2 read the local worktree and accepted
+`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`. That test passes a
+checkout that is merely behind the pull request head, so D3.5 and D3.7
+could validate an older tree and miss a closing keyword or an impact
+checklist change made since. F3 said the worktree is checked out at the
+head "exactly" and then used the same ancestry test. Both passages said
+"after fetch" without fetching, and ended in a parenthesis that never
+opened (`reset on pass`) after a `git switch` clause that could never
+act once the branch check had passed.
+
+Observed 2026-10-05 on kurone-kito/setup.ubuntu#201, an adopter
+re-import reviewed on 11 heads: two bots reported the ancestry test at
+the first head, the pre-merge fragment at the second, and the F3 copy at
+the eighth. The adopter's reviewed patch is prior art for the sequence
+below.
+
+Provenance. The reset arrived with commit `cdf1126fb` (2026-09-10,
+kurone-kito/idd-skill#2749), which wrote `git fetch` plus
+`git checkout`/`git reset --hard`. Its ancestry guard came nine days
+later (`dc7628e7b`, `6be6d9f28` and `b0f5fdc77`, 2026-09-19,
+kurone-kito/idd-skill#3125): fetch, then stop and hold if the worktree is
+dirty or not an ancestor, then `git reset --hard` to the head only when
+the checks still hold, because a clean HEAD ahead of the pull request
+would otherwise lose unpushed commits. Two edits lost the target of that
+reset (`dd06e0d22` dropped the fetch command and the reset target, and
+`094c2aaae` introduced the literal `reset on pass`), so the intent, to
+advance a clean branch to the head, was never stated again.
+
+Decision (author design from that prior art and the original intent,
+maintainer ruling 2026-10-05 only that verified small template defects
+are fixed upstream): F2 states one sequence and F3 points at it.
+
+1. Fetch the pull request head into a remote-tracking ref with an
+   explicit refspec, behind the clone-scoped lock when workers share the
+   clone. A failed fetch holds, and a stale remote-tracking ref never
+   stands in for it. A fetched SHA that differs from `$PR_HEAD_SHA` means
+   the pull request moved while the advisory wait ran, so the session
+   returns to E1.
+2. Keep the branch check and the empty-status check.
+3. Run the shadow-path check before any command that moves HEAD, because
+   `git merge --ff-only` overwrites an ignored file that the target tree
+   tracks while `git status --porcelain` is empty.
+4. Require `git rev-parse HEAD` to equal `$PR_HEAD_SHA`. A strictly
+   behind HEAD advances by `git merge --ff-only` after the claim is
+   re-validated, since this is a git-state mutation, and must then equal
+   the head. Any other relation (ahead or diverged) holds.
+5. The check never runs `git reset`, so a HEAD ahead of the pull request
+   is held with its unpushed commits instead of being discarded.
+
+Equality is tested before ancestry because `is-ancestor` is non-strict:
+a HEAD equal to the head satisfies it too. The `git switch` clause is
+dropped, since after the branch check it could never act.
+
+| # | Case                         | Outcome                          | Sentence applied                    |
+| - | ---------------------------- | -------------------------------- | ----------------------------------- |
+| 1 | HEAD equals the fetched head | Proceeds, worktree untouched     | step 4, equality                    |
+| 2 | Clean and strictly behind    | Advances by ff-only, then equals | step 4, ff-only after re-validation |
+| 3 | HEAD ahead of the head       | Holds, commits kept              | step 4, any other relation          |
+| 4 | Head moved after the fetch   | Returns to E1                    | step 1, fetched SHA comparison      |
+
+Known limit this entry does not remove (preventive; no observed
+incident yet): an ignored file `tmp` that
+shadows a tracked path `tmp/f.txt` passes both shadow-path pipelines, so
+`git merge --ff-only` can still replace it while `git status --porcelain`
+is empty.
+
 ## Instruction delivery
 
 ### Skill-based on-demand delivery of phase instructions: no-go (2026-07-16)
@@ -1968,3 +2364,42 @@ prints, trace every claimed field name to its literal
 site in the current source — never infer it from a type name, an
 interface field, or a local variable name that merely looks like it
 could be the same thing.
+
+### Require a profile-selected pointer before helper commands
+
+Observed 2026-09-12 and 2026-10-05 on kurone-kito/setup.ubuntu: pull
+request #162 patched two instruction files (the appendix and
+suitability) and three docs to add profile-selected forms, but the
+v0.14.0 re-import (#201) erased those patches (at the base commit the
+appendix had 3 and suitability 2 occurrences of `profile-selected`, at
+the import commit 0). Seven review threads then reported bare commands:
+the appendix provider-outage block (two threads, one per bot), the
+suitability close-execute block, three lite files (merge-handoff, resume,
+resume-stall), and one thread on the F4 and stall-recovery commands
+(`idd-merge`, `idd-resume-stall`). An adopter on `ephemeral-npx` had to
+fix this by hand twice (#154 tracked and fixed as #162, and #201).
+
+The `unpointed-source-form` audit rule requires any non-exempt bare
+`node scripts/<name>.mjs` invocation in instruction files to be
+preceded (in the same file, or within the same blank-line-delimited
+paragraph or fenced block) by the `profile-selected` token (matched
+case-insensitively). In addition, a dedicated regression test
+verifies that each of the ten instruction files pairs its
+`profile-selected` pointer with a reference to
+`docs/idd-helper-scripts.md` in the same paragraph or list item.
+
+The check is scoped per file rather than per command because instruction
+files establish the helper resolution contract once near the top or
+before the first helper command; requiring the pointer on every command
+or block would add repetitive boilerplate across dozens of blocks
+without increasing clarity.
+
+Two deliberate non-goals:
+
+1. A strict per-paragraph rule (every block with a bare use must
+   contain `profile-selected`, counting fenced blocks as separate
+   blocks): this would catch more but failed 36 blocks in 18 template
+   files, creating excessive verbosity.
+2. Requiring `docs/idd-helper-scripts.md` on the exact same line as
+   `profile-selected`: this would fail 14 more template files where the
+   path is named within the same paragraph or surrounding list item.

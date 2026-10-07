@@ -13,6 +13,8 @@ import {
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
+  relaxStepClauseParts,
+  relaxStepForReviewCount,
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveDevelopmentBranch,
@@ -284,6 +286,49 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
       .deferByUrgency,
     'off',
   );
+});
+
+test('critiqueLoop.deferNeedsDecision defaults to on and only exact on/off pass through (#3777)', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.deferNeedsDecision, 'on');
+  // A missing field (absent key, undefined value, absent or non-object
+  // critiqueLoop block, absent config) resolves to the default.
+  for (const config of [
+    null,
+    {},
+    { critiqueLoop: {} },
+    { critiqueLoop: { deferNeedsDecision: undefined } },
+    { critiqueLoop: 'off' },
+    { critiqueLoop: ['off'] },
+    { critiqueLoop: null },
+    { critiqueLoop: 42 },
+    { critiqueLoop: true },
+  ]) {
+    assert.equal(
+      normalizePolicyConfig(config).critiqueLoop.deferNeedsDecision,
+      'on',
+      `expected ${JSON.stringify(config)} to resolve to on`,
+    );
+  }
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferNeedsDecision: 'on' } })
+      .critiqueLoop.deferNeedsDecision,
+    'on',
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferNeedsDecision: 'off' } })
+      .critiqueLoop.deferNeedsDecision,
+    'off',
+  );
+  // Any other present value resolves to off, never to the permissive
+  // default, so a mistyped value cannot enable the route.
+  for (const value of ['ON', ' on', 'OFF', 'false', false, null, '', 42]) {
+    assert.equal(
+      normalizePolicyConfig({ critiqueLoop: { deferNeedsDecision: value } })
+        .critiqueLoop.deferNeedsDecision,
+      'off',
+      `expected ${JSON.stringify(value)} to resolve to off`,
+    );
+  }
 });
 
 test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () => {
@@ -573,6 +618,413 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
     eligibility: null,
     blockedBy: 'mode-off',
   });
+});
+
+test('critiqueLoop.deferRelaxAtRounds defaults to an empty frozen array and keeps only one or two strictly ascending positive integers (#3796)', () => {
+  assert.deepEqual(POLICY_DEFAULTS.critiqueLoop.deferRelaxAtRounds, []);
+  assert.ok(Object.isFrozen(POLICY_DEFAULTS.critiqueLoop.deferRelaxAtRounds));
+  assert.deepEqual(
+    normalizePolicyConfig({}).critiqueLoop.deferRelaxAtRounds,
+    [],
+    'an absent field is off',
+  );
+  const invalid: unknown[] = [
+    [7, 4],
+    [4, 4],
+    [4, 7, 9],
+    [],
+    '4',
+    4,
+    null,
+    {},
+    [4, '7'],
+    [0, 4],
+    [-1, 4],
+    [1.5, 4],
+    // JSON cannot carry these, but an in-memory config can.
+    [4, Number.POSITIVE_INFINITY],
+    [Number.NaN],
+    [4, undefined],
+  ];
+  for (const value of invalid) {
+    assert.deepEqual(
+      normalizePolicyConfig({ critiqueLoop: { deferRelaxAtRounds: value } })
+        .critiqueLoop.deferRelaxAtRounds,
+      [],
+      `expected ${String(value)} to normalize to []`,
+    );
+  }
+  for (const value of [[4], [4, 7], [1, 2], [3, 10]]) {
+    const normalized = normalizePolicyConfig({
+      critiqueLoop: { deferRelaxAtRounds: value },
+    }).critiqueLoop.deferRelaxAtRounds;
+    assert.deepEqual(normalized, value);
+    assert.notEqual(normalized, value, 'the result is a fresh copy');
+  }
+  const first = normalizePolicyConfig({}).critiqueLoop.deferRelaxAtRounds;
+  const second = normalizePolicyConfig({}).critiqueLoop.deferRelaxAtRounds;
+  assert.notEqual(first, second, 'each call returns its own array');
+  assert.notEqual(first, POLICY_DEFAULTS.critiqueLoop.deferRelaxAtRounds);
+});
+
+test('relaxStepForReviewCount counts the thresholds at or below the review count (#3796)', () => {
+  const cases: Array<[readonly number[], number, 0 | 1 | 2]> = [
+    [[4, 7], 0, 0],
+    [[4, 7], 1, 0],
+    [[4, 7], 3, 0], // last count below the first threshold
+    [[4, 7], 4, 1], // first threshold is inclusive
+    [[4, 7], 5, 1],
+    [[4, 7], 6, 1], // last count below the second threshold
+    [[4, 7], 7, 2], // second threshold is inclusive
+    [[4, 7], 11, 2],
+    [[4, 7], 111, 2],
+    [[3], 2, 0],
+    [[3], 3, 1],
+    [[3], 50, 1],
+    [[3, 10], 2, 0],
+    [[3, 10], 3, 1],
+    [[3, 10], 9, 1],
+    [[3, 10], 10, 2],
+    [[3, 10], 11, 2],
+    [[], 0, 0],
+    [[], 12, 0],
+    [[], 1000, 0],
+  ];
+  for (const [thresholds, count, step] of cases) {
+    const result = relaxStepForReviewCount(count, thresholds);
+    assert.equal(
+      result.step,
+      step,
+      `${JSON.stringify(thresholds)} at count ${count}`,
+    );
+    assert.equal(result.raisedByConvergence, false);
+  }
+  assert.equal(relaxStepForReviewCount(Number.NaN, [4, 7]).step, 0);
+  assert.equal(relaxStepForReviewCount(-3, [4, 7]).step, 0);
+  // The step never exceeds 2, even for thresholds that were not normalized.
+  assert.equal(relaxStepForReviewCount(10, [1, 2, 3]).step, 2);
+});
+
+test('relaxStepForReviewCount adds one converged step when the thresholds are set, capped at 2 (#3797)', () => {
+  const headSha = '0123456789abcdef';
+  const shortSha = '0123456';
+  const pairs: Array<
+    [readonly number[], number, 0 | 1 | 2, 0 | 1 | 2, boolean]
+  > = [
+    [[4, 7], 1, 0, 1, true],
+    [[4, 7], 3, 0, 1, true],
+    [[4, 7], 4, 1, 2, true],
+    [[4, 7], 6, 1, 2, true],
+    [[4, 7], 7, 2, 2, false],
+    [[4, 7], 11, 2, 2, false],
+    [[4], 3, 0, 1, true],
+    [[4], 4, 1, 2, true],
+    [[4], 9, 1, 2, true],
+    [[], 1, 0, 0, false],
+    [[], 4, 0, 0, false],
+    [[], 7, 0, 0, false],
+  ];
+  for (const [
+    thresholds,
+    count,
+    withoutConvergence,
+    withConvergence,
+    raised,
+  ] of pairs) {
+    const plain = relaxStepForReviewCount(count, thresholds, false);
+    const converged = relaxStepForReviewCount(count, thresholds, true);
+    assert.equal(plain.step, withoutConvergence);
+    assert.equal(plain.raisedByConvergence, false);
+    assert.equal(
+      converged.step,
+      withConvergence,
+      `${JSON.stringify(thresholds)} at count ${count}`,
+    );
+    assert.equal(converged.raisedByConvergence, raised);
+  }
+
+  // Count 4 with [4, 7]: capped sum 2 is above the count step 1, so the
+  // clause carries the converged token. Count 7 is already at the cap.
+  const raisedAtFour = relaxStepForReviewCount(4, [4, 7], true);
+  assert.deepEqual(relaxStepClauseParts(raisedAtFour, headSha), [
+    'step 2',
+    `converged ${shortSha}`,
+  ]);
+  const cappedAtSeven = relaxStepForReviewCount(7, [4, 7], true);
+  assert.deepEqual(relaxStepClauseParts(cappedAtSeven, headSha), ['step 2']);
+  assert.equal(
+    relaxStepClauseParts(cappedAtSeven, headSha).some((part) =>
+      part.startsWith('converged '),
+    ),
+    false,
+  );
+});
+
+test('relaxStepForReviewCount keeps a short invalid threshold array off (#3797)', () => {
+  const off = [[7, 4], [0], [4, 4], [-1], [4, 3], [1.5, 4], [4, 1.5], [1.5]];
+  for (const thresholds of off) {
+    for (const count of [1, 4, 7, 11]) {
+      for (const converged of [false, true]) {
+        assert.deepEqual(
+          relaxStepForReviewCount(count, thresholds, converged),
+          { step: 0, raisedByConvergence: false },
+          `${JSON.stringify(thresholds)} at count ${count}`,
+        );
+      }
+    }
+  }
+  // A longer un-normalized list still counts and stays capped, and
+  // convergence does not raise it (#3796).
+  for (const thresholds of [
+    [1, 2, 3],
+    [4, 7, 9],
+  ] as const) {
+    for (const count of [1, 4, 7, 11]) {
+      const plain = relaxStepForReviewCount(count, thresholds, false);
+      const converged = relaxStepForReviewCount(count, thresholds, true);
+      assert.deepEqual(
+        converged,
+        plain,
+        `${JSON.stringify(thresholds)} at count ${count}`,
+      );
+      assert.equal(converged.raisedByConvergence, false);
+    }
+  }
+  assert.equal(relaxStepForReviewCount(10, [1, 2, 3], true).step, 2);
+  assert.equal(relaxStepForReviewCount(4, [4, 7, 9], true).step, 1);
+  assert.equal(relaxStepForReviewCount(11, [4, 7, 9], true).step, 2);
+});
+
+test('decideUrgencyDefer raises the severity-tiered ceiling by relax step and denies a safety-class finding from step 1 (#3796)', () => {
+  const base = {
+    mode: 'severity-tiered' as const,
+    path: 'A' as const,
+    e4Severity: 'medium' as const,
+    copilotLabel: null,
+    urgency: 'low' as const,
+    scopeFence: false,
+    protectedAuthority: false,
+    awaitingMaintainerDecision: false,
+    acceptedMidFix: false,
+    adoptNow: false,
+  };
+  type Tier = 'low' | 'medium' | 'high';
+  type Urgency = 'very-low' | 'low' | 'medium' | 'high';
+  const tiers: Array<[Tier | null, Tier]> = [
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    [null, 'medium'], // an unknown E4 tier counts as Medium
+  ];
+  const urgencies: Urgency[] = ['very-low', 'low', 'medium', 'high'];
+  const rank: Record<Urgency, number> = {
+    'very-low': 0,
+    low: 1,
+    medium: 2,
+    high: 3,
+  };
+  const ceiling: Record<Tier, [Urgency, Urgency, Urgency]> = {
+    low: ['high', 'high', 'high'],
+    medium: ['medium', 'high', 'high'],
+    high: ['very-low', 'low', 'medium'],
+  };
+  // The rule before the gradient existed, restated independently.
+  const stepZero = (tier: Tier, urgency: Urgency): boolean =>
+    tier === 'high'
+      ? urgency === 'very-low'
+      : tier === 'medium'
+        ? urgency !== 'high'
+        : true;
+
+  for (const [e4Severity, tier] of tiers) {
+    for (const urgency of urgencies) {
+      for (const step of [0, 1, 2]) {
+        const defer = rank[urgency] <= rank[ceiling[tier][step]];
+        assert.deepEqual(
+          decideUrgencyDefer({ ...base, e4Severity, urgency, relaxStep: step }),
+          {
+            defer,
+            eligibility: tier,
+            blockedBy: defer ? null : 'matrix',
+          },
+          `${e4Severity ?? 'unknown'}/${urgency}/step ${step}`,
+        );
+      }
+      // Step 0, an omitted step and every safetyClass value equal today's
+      // rule cell for cell.
+      for (const safetyClass of [undefined, false, true]) {
+        for (const relaxStep of [undefined, 0]) {
+          assert.equal(
+            decideUrgencyDefer({
+              ...base,
+              e4Severity,
+              urgency,
+              relaxStep,
+              safetyClass,
+            }).defer,
+            stepZero(tier, urgency),
+            `step 0 ${e4Severity ?? 'unknown'}/${urgency}/safetyClass ${String(safetyClass)}`,
+          );
+        }
+      }
+    }
+    for (const step of [0, 1, 2]) {
+      assert.deepEqual(
+        decideUrgencyDefer({
+          ...base,
+          e4Severity,
+          urgency: null,
+          relaxStep: step,
+        }),
+        { defer: false, eligibility: tier, blockedBy: 'unknown-urgency' },
+        `unscored/${e4Severity ?? 'unknown'}/step ${step}`,
+      );
+    }
+  }
+
+  // A High-tier finding of `high` urgency never defers at any step.
+  for (const step of [0, 1, 2]) {
+    assert.equal(
+      decideUrgencyDefer({
+        ...base,
+        e4Severity: 'high',
+        urgency: 'high',
+        relaxStep: step,
+      }).defer,
+      false,
+      `high/high/step ${step}`,
+    );
+  }
+
+  // A safety-class finding never defers from step 1, in every cell and with
+  // an unscored urgency, and carries the computed eligibility tier.
+  for (const [e4Severity, tier] of tiers) {
+    for (const urgency of [...urgencies, null]) {
+      for (const step of [1, 2]) {
+        assert.deepEqual(
+          decideUrgencyDefer({
+            ...base,
+            e4Severity,
+            urgency,
+            relaxStep: step,
+            safetyClass: true,
+          }),
+          { defer: false, eligibility: tier, blockedBy: 'safety-class' },
+          `safety/${e4Severity ?? 'unknown'}/${String(urgency)}/step ${step}`,
+        );
+      }
+    }
+  }
+  // ...but a safety-class finding still defers at step 0, as it did before.
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      urgency: 'high',
+      relaxStep: 0,
+      safetyClass: true,
+    }).defer,
+    true,
+  );
+
+  // Every earlier guard keeps its own block reason when safetyClass is set.
+  const guarded: Array<[string, Partial<typeof base>, string]> = [
+    ['mode off', { mode: 'off' as never }, 'mode-off'],
+    ['path B', { path: 'B' as never }, 'path-b'],
+    ['scope fence', { scopeFence: true }, 'scope-fence'],
+    [
+      'protected authority',
+      { protectedAuthority: true },
+      'protected-authority',
+    ],
+    [
+      'maintainer-decision hold',
+      { awaitingMaintainerDecision: true },
+      'awaiting-maintainer-decision',
+    ],
+    ['accepted mid-fix', { acceptedMidFix: true }, 'accepted-mid-fix'],
+  ];
+  for (const [label, override, blockedBy] of guarded) {
+    for (const step of [1, 2]) {
+      assert.equal(
+        decideUrgencyDefer({
+          ...base,
+          ...override,
+          relaxStep: step,
+          safetyClass: true,
+        }).blockedBy,
+        blockedBy,
+        `${label} at step ${step}`,
+      );
+    }
+  }
+
+  // The binary modes ignore both new inputs.
+  for (const mode of ['off', 'low', 'low-and-medium'] as const) {
+    for (const [e4Severity] of tiers) {
+      for (const urgency of [...urgencies, null]) {
+        const plain = { ...base, mode, e4Severity, urgency };
+        assert.deepEqual(
+          decideUrgencyDefer({ ...plain, relaxStep: 2, safetyClass: true }),
+          decideUrgencyDefer(plain),
+          `${mode}/${e4Severity ?? 'unknown'}/${String(urgency)}`,
+        );
+      }
+    }
+  }
+
+  // An out-of-range or non-integer step acts as step 0, with safetyClass too.
+  for (const relaxStep of [
+    3,
+    -1,
+    1.5,
+    0.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ]) {
+    for (const [e4Severity] of tiers) {
+      for (const urgency of [...urgencies, null]) {
+        const plain = { ...base, e4Severity, urgency };
+        assert.deepEqual(
+          decideUrgencyDefer({ ...plain, relaxStep, safetyClass: true }),
+          decideUrgencyDefer(plain),
+          `step ${String(relaxStep)} ${e4Severity ?? 'unknown'}/${String(urgency)}`,
+        );
+      }
+    }
+  }
+
+  // The Copilot floor raises the eligibility tier before the ceiling applies.
+  const floor = {
+    ...base,
+    e4Severity: 'low' as const,
+    copilotLabel: 'high' as const,
+  };
+  assert.equal(
+    decideUrgencyDefer({ ...floor, urgency: 'low', relaxStep: 1 }).defer,
+    true,
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...floor, urgency: 'medium', relaxStep: 1 }).defer,
+    false,
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...floor, urgency: 'medium', relaxStep: 2 }).defer,
+    true,
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...floor, urgency: 'high', relaxStep: 2 }).defer,
+    false,
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...floor,
+      urgency: 'low',
+      relaxStep: 1,
+      safetyClass: true,
+    }),
+    { defer: false, eligibility: 'high', blockedBy: 'safety-class' },
+  );
 });
 
 test('critiqueLoop.subagentWaitCeiling defaults to PT20M and accepts positive durations', () => {

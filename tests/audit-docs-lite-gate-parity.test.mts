@@ -153,6 +153,126 @@ test("deleting a real seed entry's lite fragment is detected", () => {
   assert.match(matching[0], /contains fragment not found/);
 });
 
+// kurone-kito/idd-skill#3803: step 3 of the lite claim file's same-second
+// tie-break is registered with a `pattern`, so reverting it to a bare assertion
+// or dropping its lost-case clause fails the audit.
+const TIE_BREAK_ENTRY = 'claim-same-second-tie-break';
+const STEP_THREE = /\n3\.\s[\s\S]*?(?=\n4\.\s)/;
+const ASSERTION_STEP_THREE = [
+  '',
+  '3. The active claim now uses **your** `{claim-id}` after that',
+  '   tie-break. A later trusted `claimed-by` with a different `{claim-id}`',
+  '   never disputes this (#3268): Claim-state parsing rules 4/6 could never',
+  '   have activated it, so it stays diagnostic only.',
+].join('\n');
+
+/** Audit violations for the tie-break entry after rewriting the real lite file. */
+function tieBreakViolations(rewrite: (liteText: string) => string): string[] {
+  const manifest = JSON.parse(
+    readRepoFile('audit/sync-manifest.json') ?? '{}',
+  ) as {
+    liteGateParity: {
+      id: string;
+      lite?: { file: string; pattern?: string };
+    }[];
+  };
+  const target = manifest.liteGateParity.find(
+    (entry) => entry.id === TIE_BREAK_ENTRY,
+  );
+  const file = target?.lite?.file;
+  assert.ok(
+    file && target?.lite?.pattern,
+    `expected the ${TIE_BREAK_ENTRY} entry`,
+  );
+  const realText = readRepoFile(file);
+  assert.ok(realText, `expected to read ${file}`);
+  const mutatedText = rewrite(realText);
+  const readWithScratchOverride = (path: string): string | null =>
+    path === file ? mutatedText : readRepoFile(path);
+  return collectLiteGateParityViolations(
+    manifest.liteGateParity,
+    readWithScratchOverride,
+  ).filter((violation) => violation.startsWith(`${TIE_BREAK_ENTRY}:`));
+}
+
+/**
+ * Replace the whole step 3 span of the Claim verification section, not just
+ * its `3.` marker. An earlier numbered list in the same file also has a
+ * step 3, so the search starts at the section heading.
+ */
+function rewriteStepThree(
+  liteText: string,
+  rewrite: (step: string) => string,
+): string {
+  const sectionStart = liteText.indexOf('\n## Claim verification\n');
+  assert.ok(sectionStart >= 0, 'expected the Claim verification heading');
+  const head = liteText.slice(0, sectionStart);
+  const section = liteText.slice(sectionStart);
+  const step = STEP_THREE.exec(section)?.[0];
+  assert.ok(step, 'expected step 3 of the lite claim verification');
+  return head + section.replace(step, () => rewrite(step));
+}
+
+test('the claim tie-break step passes on the real lite file', () => {
+  assert.deepEqual(
+    tieBreakViolations((liteText) => liteText),
+    [],
+  );
+});
+
+test('the claim tie-break step fails when it is reverted to an assertion', () => {
+  const violations = tieBreakViolations((liteText) =>
+    rewriteStepThree(liteText, () => ASSERTION_STEP_THREE),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
+test('the claim tie-break step fails when it keeps Verify but drops the lost case', () => {
+  const violations = tieBreakViolations((liteText) =>
+    rewriteStepThree(liteText, (step) => {
+      const rewritten = step.replace(
+        /;\s+another winner means claim contested/,
+        '',
+      );
+      assert.ok(rewritten.includes('Verify'), 'expected Verify to remain');
+      assert.ok(!rewritten.includes('contested'), 'expected the clause gone');
+      return rewritten;
+    }),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
+test('the claim tie-break step fails when it keeps the lost case but not Verify', () => {
+  const violations = tieBreakViolations((liteText) =>
+    rewriteStepThree(liteText, () => {
+      const rewritten = ASSERTION_STEP_THREE.replace(
+        'tie-break. A later',
+        'tie-break; another winner means claim contested. A later',
+      );
+      assert.ok(rewritten.includes('contested'), 'expected the clause');
+      assert.ok(!rewritten.includes('Verify'), 'expected no Verify');
+      return rewritten;
+    }),
+  );
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
+test('the claim tie-break pattern is scoped to step 3, not step 4', () => {
+  const violations = tieBreakViolations((liteText) => {
+    const reverted = rewriteStepThree(liteText, () => ASSERTION_STEP_THREE);
+    const afterStepThree = reverted.indexOf(ASSERTION_STEP_THREE);
+    assert.ok(afterStepThree >= 0, 'expected the reverted step 3');
+    const stepFour = reverted.indexOf('\n4. ', afterStepThree);
+    assert.ok(stepFour > afterStepThree, 'expected step 4 after step 3');
+    return `${reverted.slice(0, stepFour)}\n4. Verify that this is contested.${reverted.slice(stepFour + 3)}`;
+  });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /pattern not matched/);
+});
+
 test('absent or empty registry is a configuration error', () => {
   for (const entries of [null, undefined, []]) {
     const violations = collectLiteGateParityViolations(
@@ -502,11 +622,14 @@ test('fails when an omittedByDesign entry also carries a helperGate', () => {
   );
 });
 
-function runAuditDocs(cwd: string): { status: number; stderr: string } {
+function runAuditDocs(
+  cwd: string,
+  nodeArgs: readonly string[] = [],
+): { status: number; stdout: string; stderr: string } {
   try {
-    execFileSync(
+    const stdout = execFileSync(
       process.execPath,
-      [join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
+      [...nodeArgs, join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
       {
         cwd,
         env: fixtureEnv(),
@@ -514,11 +637,12 @@ function runAuditDocs(cwd: string): { status: number; stderr: string } {
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
-    return { status: 0, stderr: '' };
+    return { status: 0, stdout, stderr: '' };
   } catch (error) {
-    const e = error as { status?: unknown; stderr?: unknown };
+    const e = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
     return {
       status: typeof e.status === 'number' ? e.status : 1,
+      stdout: typeof e.stdout === 'string' ? e.stdout : '',
       stderr: typeof e.stderr === 'string' ? e.stderr : '',
     };
   }
@@ -532,6 +656,30 @@ function initFixture(): { dir: string; cleanup: () => void } {
     dir,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
+}
+
+/**
+ * A fixture that identifies itself as the source repository (package name and
+ * the `docs/token-cost.md` marker) and tracks no inventory audit files, so
+ * `audit-docs` runs its source checks and reports both files as missing.
+ */
+function initSourceFixtureWithoutInventoryAudit(): {
+  dir: string;
+  cleanup: () => void;
+} {
+  const fixture = initFixture();
+  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
+  writeFileSync(
+    join(fixture.dir, 'package.json'),
+    '{"name":"@kurone-kito/idd-skill"}\n',
+  );
+  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
+  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
+  execFileSync('git', ['add', '-A'], {
+    cwd: fixture.dir,
+    env: fixtureEnv(),
+  });
+  return fixture;
 }
 
 test('an omitted registry is optional when the lite corpus is absent', (t) => {
@@ -576,19 +724,8 @@ test('an omitted registry fails when the canonical lite corpus is present', (t) 
 });
 
 test('source repository audit fails when both inventory audit files are absent', (t) => {
-  const fixture = initFixture();
+  const fixture = initSourceFixtureWithoutInventoryAudit();
   t.after(fixture.cleanup);
-  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
-  writeFileSync(
-    join(fixture.dir, 'package.json'),
-    '{"name":"@kurone-kito/idd-skill"}\n',
-  );
-  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
-  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
-  execFileSync('git', ['add', '-A'], {
-    cwd: fixture.dir,
-    env: fixtureEnv(),
-  });
 
   const result = runAuditDocs(fixture.dir);
   assert.equal(result.status, 1);
@@ -603,19 +740,8 @@ test('source repository audit fails when both inventory audit files are absent',
 });
 
 test('source repository audit rejects untracked inventory audit files', (t) => {
-  const fixture = initFixture();
+  const fixture = initSourceFixtureWithoutInventoryAudit();
   t.after(fixture.cleanup);
-  mkdirSync(join(fixture.dir, 'docs'), { recursive: true });
-  writeFileSync(
-    join(fixture.dir, 'package.json'),
-    '{"name":"@kurone-kito/idd-skill"}\n',
-  );
-  writeFileSync(join(fixture.dir, 'docs', 'token-cost.md'), '# Dogfood\n');
-  writeFileSync(join(fixture.dir, 'audit', 'sync-manifest.json'), '{}\n');
-  execFileSync('git', ['add', '-A'], {
-    cwd: fixture.dir,
-    env: fixtureEnv(),
-  });
 
   const auditFiles = [
     'src/scripts/repository-inventory-audit.mts',
@@ -659,4 +785,44 @@ test('source repository audit rejects untracked inventory audit files', (t) => {
     result.stderr,
     /repository-inventory-audit-required-file: scripts\/repository-inventory-audit\.mjs: required source audit file is missing or untracked/,
   );
+});
+
+test('audit-docs delivers its whole failure report when stderr writes complete late', (t) => {
+  const fixture = initSourceFixtureWithoutInventoryAudit();
+  t.after(fixture.cleanup);
+  // On POSIX Node writes a piped stderr asynchronously, so a process.exit()
+  // right after the report drops whatever is still queued. Deferring every
+  // write by one event-loop turn reproduces that loss deterministically; a
+  // merely stalled reader does not, because the report (about 41 KB) fits in
+  // the 64 KB Linux pipe buffer.
+  const preloadDir = mkdtempSync(join(tmpdir(), 'audit-docs-preload-'));
+  t.after(() => rmSync(preloadDir, { recursive: true, force: true }));
+  const preload = join(preloadDir, 'defer-stderr-writes.cjs');
+  writeFileSync(
+    preload,
+    [
+      'const write = process.stderr._write.bind(process.stderr);',
+      'process.stderr._write = (chunk, encoding, callback) => {',
+      '  setImmediate(() => write(chunk, encoding, callback));',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const result = runAuditDocs(fixture.dir, ['--require', preload]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /documentation audit failed:/);
+  assert.match(result.stderr, /repository-instruction-audit\//);
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: src\/scripts\/repository-inventory-audit\.mts: required source audit file is missing or untracked/,
+  );
+  assert.match(
+    result.stderr,
+    /repository-inventory-audit-required-file: scripts\/repository-inventory-audit\.mjs: required source audit file is missing or untracked/,
+  );
+  // Setting the exit code without returning would still print the success line.
+  assert.equal(result.stdout.includes('documentation audit passed'), false);
 });

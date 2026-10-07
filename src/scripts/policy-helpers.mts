@@ -28,6 +28,12 @@ interface CritiqueLoopPolicy {
   e10NoProgressHoldAfter: number;
   deferAfterRounds: number;
   deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
+  /**
+   * Review-count thresholds at which `severity-tiered` relaxes (#3796): one
+   * or two strictly ascending positive integers, `[]` when off or invalid.
+   */
+  deferRelaxAtRounds: readonly number[];
+  deferNeedsDecision: 'on' | 'off';
   subagentWaitCeiling: string;
   delegate?: CritiqueLoopDelegate;
 }
@@ -512,6 +518,8 @@ interface RawConfig {
     e10NoProgressHoldAfter?: unknown;
     deferAfterRounds?: unknown;
     deferByUrgency?: unknown;
+    deferRelaxAtRounds?: unknown;
+    deferNeedsDecision?: unknown;
     subagentWaitCeiling?: unknown;
     delegate?: { command?: unknown; mode?: unknown };
     telemetryHook?: { command?: unknown };
@@ -590,6 +598,7 @@ const DEFER_BY_URGENCY_MODES = new Set([
   'low-and-medium',
   'severity-tiered',
 ]);
+const DEFER_NEEDS_DECISION_MODES = new Set(['on', 'off']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -731,6 +740,8 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10NoProgressHoldAfter: 3,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    deferRelaxAtRounds: Object.freeze([]),
+    deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
   }) as Readonly<CritiqueLoopPolicy>,
   reviewEscalation: Object.freeze({
@@ -961,6 +972,12 @@ export function normalizePolicyConfig(config: unknown) {
       DEFER_BY_URGENCY_MODES,
       POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
     ) as CritiqueLoopPolicy['deferByUrgency'],
+    deferRelaxAtRounds: parseDeferRelaxAtRounds(
+      c?.critiqueLoop?.deferRelaxAtRounds,
+    ),
+    deferNeedsDecision: parseDeferNeedsDecision(
+      c?.critiqueLoop?.deferNeedsDecision,
+    ),
     subagentWaitCeiling: parsePositiveDuration(
       c?.critiqueLoop?.subagentWaitCeiling,
       POLICY_DEFAULTS.critiqueLoop.subagentWaitCeiling,
@@ -1451,6 +1468,29 @@ function parseEnum(
   return fallback;
 }
 
+/**
+ * `critiqueLoop.deferNeedsDecision` deliberately differs from `parseEnum`:
+ * `parseEnum` falls back to the default for any non-member, but this
+ * field's default (`'on'`) is the permissive value, so a mistyped value
+ * (`'OFF'`, `false`, `null`, ...) must never enable the route against the
+ * operator's evident intent. Only a missing value (key absent or
+ * `undefined`, including a non-object `critiqueLoop` block) resolves to
+ * the default; exactly `'on'` / `'off'` resolve to themselves; any other
+ * present value resolves to `'off'`. This helper only sees parsed data, so
+ * a config file that exists but cannot be parsed is the instruction text's
+ * to handle (it will act as `'off'`; `loadPolicyConfig` rejects such a
+ * file, and a non-object top level too); `normalizePolicyConfig(null)`
+ * means `'on'`.
+ */
+function parseDeferNeedsDecision(value: unknown): 'on' | 'off' {
+  if (value === undefined) {
+    return POLICY_DEFAULTS.critiqueLoop.deferNeedsDecision;
+  }
+  return typeof value === 'string' && DEFER_NEEDS_DECISION_MODES.has(value)
+    ? (value as 'on' | 'off')
+    : 'off';
+}
+
 function parseDuration(value: unknown, fallback: string): string {
   if (typeof value === 'string' && ISO_DURATION_RE.test(value)) {
     return value;
@@ -1518,6 +1558,31 @@ function parsePositiveIntegerArray(
     normalized.push(entry);
   }
   return normalized;
+}
+
+/**
+ * Parse `critiqueLoop.deferRelaxAtRounds` (#3796): one or two strictly
+ * ascending integers of at least 1, returned as a fresh copy. Anything else
+ * (a non-array, an empty or longer array, a non-integer, zero, a negative, a
+ * duplicate, or a descending pair) is `[]`, which turns the gradient off, so
+ * a mistyped value never relaxes the rule. Unlike `parsePositiveIntegerArray`
+ * it enforces the length and order the schema cannot express.
+ */
+function parseDeferRelaxAtRounds(value: unknown): number[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2) {
+    return [];
+  }
+  const thresholds: number[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isInteger(entry) || entry < 1) {
+      return [];
+    }
+    if (thresholds.length > 0 && entry <= thresholds[thresholds.length - 1]) {
+      return [];
+    }
+    thresholds.push(entry);
+  }
+  return thresholds;
 }
 
 function parseNonEmptyString(value: unknown, fallback: string): string {
@@ -2164,6 +2229,7 @@ type UrgencyDeferBlock =
   | 'unknown-severity'
   | 'adopt-now'
   | 'above-ceiling'
+  | 'safety-class'
   | 'unknown-urgency'
   | 'matrix';
 
@@ -2183,6 +2249,19 @@ interface UrgencyDeferInput {
   awaitingMaintainerDecision: boolean;
   acceptedMidFix: boolean;
   adoptNow: boolean;
+  /**
+   * `severity-tiered` relax step (#3796): 0, 1 or 2. Any other value,
+   * including a non-integer or NaN, acts as 0. Defaults to 0.
+   */
+  relaxStep?: number;
+  /**
+   * Merging as-is, assuming the finding is correct, would leave CI red or
+   * the pull request unmergeable, a defect in claim, lock, merge-gate,
+   * security, secret-handling or data-destroying code or behavior, or a
+   * change impossible to reverse in a follow-up pull request. From relax
+   * step 1 on it blocks a `severity-tiered` deferral. Defaults to false.
+   */
+  safetyClass?: boolean;
 }
 
 interface UrgencyDeferDecision {
@@ -2238,17 +2317,113 @@ function denyUrgencyDefer(
   return { defer: false, eligibility, blockedBy };
 }
 
+type RelaxStep = 0 | 1 | 2;
+
+const URGENCY_RANK: Record<UrgencyScore, number> = {
+  'very-low': 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+};
+
+/**
+ * Highest urgency at which each eligibility tier may still defer under
+ * `severity-tiered`, indexed by relax step (#3796). Step 0 is the rule
+ * before the gradient existed: Low at every scored urgency, Medium unless
+ * `high`, High only at `very-low`.
+ */
+const SEVERITY_TIERED_CEILING: Record<
+  ReviewSeverityTier,
+  readonly [UrgencyScore, UrgencyScore, UrgencyScore]
+> = {
+  low: ['high', 'high', 'high'],
+  medium: ['medium', 'high', 'high'],
+  high: ['very-low', 'low', 'medium'],
+};
+
+function normalizeRelaxStep(value: number | undefined): RelaxStep {
+  return value === 1 || value === 2 ? value : 0;
+}
+
+interface RelaxStepResult {
+  /** Effective step after the optional converged extra step, capped at 2. */
+  step: RelaxStep;
+  /**
+   * True only when the capped sum of the count step and one extra step is
+   * greater than the count step alone (#3797).
+   */
+  raisedByConvergence: boolean;
+}
+
+/**
+ * The relax step for a pull request's PR-wide Copilot review count (#3796,
+ * #3797): the number of configured thresholds less than or equal to the
+ * count, plus one when `advisoryConverged` is true and the thresholds
+ * pass `parseDeferRelaxAtRounds`, never above 2. An empty array is the
+ * normalized form of an unset value. A one- or two-entry array that fails
+ * that parser, such as `[7, 4]`, is off, so the step stays 0. A longer
+ * raw list still counts toward the cap of 2, and convergence cannot raise
+ * it. With `[4, 7]`, counts 0 to 3 give 0 or 1, counts 4 to 6 give 1 or 2,
+ * and counts 7 or more give 2 either way.
+ */
+// audit:ignore-dead-export: E4/E5 applies the step from instruction text; tests lock every boundary and there is no helper caller
+export function relaxStepForReviewCount(
+  reviewCount: number,
+  thresholds: readonly number[],
+  advisoryConverged = false,
+): RelaxStepResult {
+  const valid = parseDeferRelaxAtRounds(thresholds);
+  // Config rejects a one- or two-entry array that is not strictly
+  // ascending positive integers, and that value is off. A longer raw
+  // list is the un-normalized #3796 case: it still counts, capped at 2.
+  const countable = valid.length > 0 || thresholds.length > 2 ? thresholds : [];
+  let counted = 0;
+  for (const threshold of countable) {
+    if (reviewCount >= threshold) {
+      counted += 1;
+    }
+  }
+  const countStep: RelaxStep = counted >= 2 ? 2 : (counted as RelaxStep);
+  const extra =
+    advisoryConverged === true && valid.length > 0 && countStep < 2 ? 1 : 0;
+  const sum = countStep + extra;
+  const step: RelaxStep = sum >= 2 ? 2 : (sum as RelaxStep);
+  return {
+    step,
+    raisedByConvergence: step > countStep,
+  };
+}
+
+/**
+ * Clause pieces after the urgency and severity text (#3796, #3797).
+ * `step <k>` is present above step 0. `converged <short-sha>` is present
+ * only when convergence raised the step. The short SHA is the first 7
+ * characters of the verdict's `prHeadSha`.
+ */
+// audit:ignore-dead-export: E5 appends these pieces from instruction text; tests lock the token condition and there is no helper caller
+export function relaxStepClauseParts(
+  result: RelaxStepResult,
+  prHeadSha: string,
+): readonly string[] {
+  const parts: string[] = [];
+  if (result.step > 0) {
+    parts.push(`step ${result.step}`);
+  }
+  if (result.raisedByConvergence) {
+    parts.push(`converged ${prHeadSha.slice(0, 7)}`);
+  }
+  return parts;
+}
+
 function severityTieredDefers(
   eligibility: ReviewSeverityTier,
   urgency: UrgencyScore,
+  step: RelaxStep,
 ): boolean {
-  if (eligibility === 'high') {
-    return urgency === 'very-low';
-  }
-  if (eligibility === 'medium') {
-    return urgency !== 'high';
-  }
-  return true;
+  return (
+    URGENCY_RANK[urgency] <=
+    URGENCY_RANK[SEVERITY_TIERED_CEILING[eligibility][step]]
+  );
 }
 
 /**
@@ -2257,7 +2432,10 @@ function severityTieredDefers(
  * closed toward not deferring. `severity-tiered` ignores `adoptNow` and
  * treats an unknown E4 tier as Medium before the Copilot floor, which
  * only raises eligibility. `low` and `low-and-medium` do not: they need
- * a known E4 tier, and the floor never stands in for it.
+ * a known E4 tier, and the floor never stands in for it. `relaxStep` and
+ * `safetyClass` apply to `severity-tiered` only (#3796): from step 1 a
+ * safety-class finding never defers, and each step raises the highest
+ * urgency a tier may defer at; the other modes ignore both.
  */
 // audit:ignore-dead-export: E4/E5 applies this matrix from instruction text; tests lock every cell and there is no helper caller
 export function decideUrgencyDefer(
@@ -2287,11 +2465,15 @@ export function decideUrgencyDefer(
 
   if (input.mode === 'severity-tiered') {
     const eligibility = higherSeverity(e4 ?? 'medium', copilot) ?? 'medium';
+    const step = normalizeRelaxStep(input.relaxStep);
+    if (step >= 1 && input.safetyClass === true) {
+      return denyUrgencyDefer('safety-class', eligibility);
+    }
     const urgency = knownUrgency(input.urgency);
     if (urgency === null) {
       return denyUrgencyDefer('unknown-urgency', eligibility);
     }
-    if (!severityTieredDefers(eligibility, urgency)) {
+    if (!severityTieredDefers(eligibility, urgency, step)) {
       return denyUrgencyDefer('matrix', eligibility);
     }
     return { defer: true, eligibility, blockedBy: null };

@@ -13,6 +13,7 @@ import {
   EDITED_AFTER_DISPOSITION_HINT,
   hasFreshDisposition,
   hasTrustedReviewAckAfter,
+  isDispositionComment,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
   listBlockingPresentRunNames,
@@ -5145,4 +5146,42 @@ test('STALE_THREAD_DISPOSITION_HINT names the reply that clears a thread and sta
   assert.match(STALE_THREAD_DISPOSITION_HINT, /post a hold comment/);
   // A single line, so it reads cleanly in the JSON output.
   assert.equal(STALE_THREAD_DISPOSITION_HINT.includes('\n'), false);
+});
+
+// The needs-decision route (docs/idd-review-policy-profiles.md, "Needs-decision
+// deferral") replies with the existing `**Rejected**` disposition shape, so
+// the F2/F3 gate must credit it exactly like an ordinary deferral.
+test('isDispositionComment credits the needs-decision deferral reply, with and without the reply stamp', () => {
+  const reply =
+    '**Rejected** — deferred to follow-up issue #3790 (needs-decision; the check the claim needs has no route in E5): the claim could not be verified, so the follow-up records it as unverified';
+  assert.equal(isDispositionComment({ body: reply }), true);
+  assert.equal(
+    isDispositionComment({
+      body: `${reply}\n\n<!-- idd-skill-review-reply -->`,
+    }),
+    true,
+  );
+  assert.equal(isDispositionComment({ body: `Not a marker: ${reply}` }), false);
+});
+
+// The wave gradient (docs/idd-review-policy-profiles.md, "Wave-gradient
+// urgency defer") adds `; step <k>` to the urgency clause of the same
+// `**Rejected**` deferral reply, so it must stay a recognized disposition.
+test('isDispositionComment credits an urgency deferral reply that carries the step suffix', () => {
+  const reply =
+    '**Rejected** — deferred to follow-up issue #5 (urgency low; severity high; step 1): reason';
+  assert.equal(isDispositionComment({ body: reply }), true);
+  assert.equal(
+    isDispositionComment({
+      body: `${reply}\n\n<!-- idd-skill-review-reply -->`,
+    }),
+    true,
+  );
+  assert.equal(
+    isDispositionComment({
+      body: '**Rejected** — deferred to follow-up issue #5 (urgency medium; severity medium, Copilot high; step 2): reason',
+    }),
+    true,
+  );
+  assert.equal(isDispositionComment({ body: `Not a marker: ${reply}` }), false);
 });

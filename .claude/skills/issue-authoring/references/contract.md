@@ -1001,6 +1001,8 @@ instructions.
   step-by-step runbook, so a middle-tier cloud model can implement it
   without drifting
 - candidate files, when present, are cues rather than an edit script
+- a `review-needs-decision` body follows the body contract below,
+  including its headings, source-comment link, and quoting rules
 
 ### Resolver
 
@@ -1140,6 +1142,18 @@ authoring marker, the declared shape's required section headings, the
 roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
 agreement for the suitability and effort footers — so a weak model does
 not have to hold every rule in its head at once while drafting.
+It also checks every live defer-source comment against the shared
+defined-value set and requires its single `Refs` origin. For
+`review-needs-decision`, pass `--origin-issue <number>` matching that
+`Refs` issue; the check also requires the configured authoring label and
+the matching needs-decision bucket marker.
+
+For every `needs-decision` body lint — initial Stage 1 publication,
+re-lint while held, and the Stage 2 release checklist — pass
+`--expect-bucket needs-decision` and both `--label` values: the
+configured authoring label and configured needs-decision label. The
+same rule applies to `blocked-by-human` with its matching expected
+bucket and labels.
 
 It also emits a **failing** finding, `dependency-line-grammar`: a
 `Blocked by`/`Depends on` mention that the shared line-anchored grammar
@@ -1551,6 +1565,8 @@ only approval boundary.
   set is fully wired, leave the label in place — that keeps Discover from
   selecting the unfinished set, while its owner markers preserve the set
   identity and target membership for a later verified resume.
+  A `review-needs-decision` follow-up also follows the label and
+  release requirements in the narrow auto-release exception below.
 - **New-issue ownership.** New-issue publication requires a
   capability-checked create-with-label operation that creates the issue with
   the authoring label atomically and carries an exact hidden publication token
@@ -1569,7 +1585,9 @@ only approval boundary.
   known number by the time a child is created. See also the CLI
   `--help` text's `authoring-owner`/`authoring-publication-intent`
   shape notes (`bin/idd-post-idd-marker.mjs --help`) for the related,
-  but not identical, per-marker-type distinction those two carry.
+  but not identical, per-marker-type distinction those two carry. For
+  `review-needs-decision`, see the narrow auto-release exception below
+  for its label setup and same-call label requirements.
   Carry this exact HTML-first body line:
 
   ```html
@@ -1698,6 +1716,8 @@ only approval boundary.
   the general non-anchor-child branch (an already-resolved real anchor
   reference, the anchor-heartbeat-before-each-child gate) to confirm it
   does not apply here. Pairs with the Stage 2 release fast path below.
+  A `review-needs-decision` standalone issue uses the same label setup
+  and same-call label rule described in the narrow exception below.
 - An atomically labeled publication is not set membership until its owner
   marker is verified. Persist each returned target identity in the durable
   originating Stage 1 hold before appending the marker. On resume, reconcile
@@ -2137,7 +2157,7 @@ only approval boundary.
   body. If that guard is not found conclusively, leave all labels in place and
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. When this release is
-  proceeding under the narrow review-fix-loop-cutoff auto-release
+  proceeding under the narrow defer-source auto-release
   exception below instead of an explicit human release request, also
   verify here -- immediately before the first label removal below,
   whether that removal is a non-anchor target's or the anchor's own --
@@ -2248,7 +2268,7 @@ only approval boundary.
   marker the token search still fetched) is
   inconclusive; second, run the exception's
   own provenance check -- the target's body must still carry the exact
-  `review-fix-loop-cutoff` marker from Stage 1 publication, and a
+  defined defer-source marker from Stage 1 publication, and a
   freshly recomputed body-sha256 must match that same target's
   `mode=acquire` owner marker's recorded `body-sha256` -- neither
   check is optional, and this fast path adds no shortcut through
@@ -2391,9 +2411,9 @@ only approval boundary.
   helper runtime unavailable" -- naming the reason. This never blocks
   release either; it only ensures a fully-silent skip never happens even
   in the one failure mode the mechanical signal cannot itself cover.
-- **Narrow auto-release exception (review-fix-loop-cutoff).** A
-  follow-up issue whose body carried the exact marker
-  `<!-- <marker-prefix>-authoring-defer-source: review-fix-loop-cutoff -->` at
+- **Narrow auto-release exception.** A single, non-roadmap follow-up
+  issue whose body carried one exact defined marker
+  `<!-- <marker-prefix>-authoring-defer-source: {defined-value} -->` at
   Stage 1 publication time — part of the initial `authoring-publication` body
   write, never added by a later edit — may complete the full Stage 2
   sequence above (release-marker preflight, release-guard, heartbeat
@@ -2427,7 +2447,7 @@ only approval boundary.
   mechanically (`#2891`). This
   exists because
   `idd-review-triage.instructions.md`'s round-count or
-  adopt-now-urgency defer trigger files this exact marker on a
+  adopt-now-urgency defer trigger writes `review-fix-loop-cutoff` on a
   follow-up issue during unattended autonomous execution, where no
   human is present to issue a release request —
   left under the ordinary human-gated boundary above, that deferred
@@ -2456,6 +2476,59 @@ only approval boundary.
   its own line, or apart from a second number on the same line, so more
   than one line or more than one number fails closed instead of
   guessing.
+
+  **Needs-decision publication and release (`review-needs-decision`).**
+  Use this value only for a follow-up that must wait for a person's
+  decision. Its exact defer-source marker is
+  `<!-- <marker-prefix>-authoring-defer-source: review-needs-decision -->`.
+  Its body carries `authoring-bucket: needs-decision`, and
+  the configured needs-decision label is applied in the same
+  capability-checked create call as the authoring label. If that
+  configured label is absent, create it with `gh label create` before
+  publication; a create or label-application failure stops publication.
+  The configured authoring and needs-decision label names must be
+  distinct: the audit rejects a collision, and Discover fails closed if
+  it encounters a marked follow-up under a colliding configuration.
+  During every initial lint, held-body re-lint, and Stage 2 lint, pass
+  `--expect-bucket needs-decision`, `--origin-issue <claimed-issue>`,
+  the configured authoring label, and the configured needs-decision
+  label. The expected origin must match the issue named by the sole
+  `Refs` line. Immediately before Stage 2
+  removes a label, re-fetch and verify both live labels; remove only the
+  authoring label, and only while the needs-decision label is still
+  present. If it is missing or cannot be verified, leave the issue held.
+  After the authoring label is removed, the needs-decision label keeps
+  the follow-up out of Discover until a person clears it; label removal
+  alone does not authorize IDD execution.
+
+### Needs-decision follow-up body
+
+A `review-needs-decision` body uses these headings in this order:
+`## Background`, `## Decision needed`, `## Options`, `## Open questions`,
+and `## Candidate files`. `Background` paraphrases the review finding,
+contains no quoted finding text, and links to the source review comment;
+for E10, Tier 2, or Tier 3, link to the comment that states the stop.
+List one recommended option and the cost of each option under `Options`.
+Add exactly one `Refs #<claimed-issue>` line and one
+`Blocked by #<claimed-issue>` line, both naming the claimed issue rather
+than a pull request. Pass `--origin-issue <claimed-issue>` to the audit;
+it requires the `Refs` number to match that expected origin. Discover
+resolves `Blocked by` through the issue endpoint, while F3 attributes
+the follow-up through its `Refs` origin; the matching `Blocked by` line
+is a drafting convention, not a checked relationship. End with
+autopilot-suitability `1` and the `authoring-bucket: needs-decision`
+marker.
+
+Do not put quoted review text in the body unless it is inside a fenced
+code block. A quoted line outside a fence must not begin with `Refs`,
+`Blocked by`, or `Depends on`, and a quoted HTML defer-source marker
+must stay inside a fence: Discover reads a marker inside a blockquote as
+live, and a quoted `Refs` line can make the origin ambiguous. These
+warnings are preventive; no observed incident yet. The mechanical gate
+requires the marker, matching expected `Refs` origin, configured
+authoring label, bucket, and sole `Refs` line, but does not check these
+five headings for a bucket body; the completed-draft review checks the
+full body shape.
 
 ## Publication boundary
 

@@ -1557,6 +1557,36 @@ supports these keys:
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
   `low` and `low-and-medium`.
+- `critiqueLoop.deferRelaxAtRounds` (optional array of one or two
+  positive integers, strictly ascending, at most two; recommended
+  `[4, 7]`; omit the key to turn it off). The thresholds are PR-wide
+  Copilot review counts, the same count `critiqueLoop.deferAfterRounds`
+  uses, at which `severity-tiered` relaxes: a pull request's step is the
+  number of thresholds at or below its count, and each step raises the
+  highest urgency a tier may still defer at. It has an effect only when
+  `critiqueLoop.deferByUrgency` is `severity-tiered`, and an invalid
+  value means off, so a mistyped value never relaxes the rule. See
+  [the wave-gradient section](idd-review-policy-profiles.md#wave-gradient-urgency-defer)
+  of the review policy profiles for the steps, the never-deferred rows
+  and the clause suffix. A converged advisory gate adds one further
+  step, still capped at 2, only when `reviewPolicy` is absent or
+  `copilot-advisory`.
+- `critiqueLoop.deferNeedsDecision` (default `on`; `on` or `off`). A
+  missing value resolves to `on`, exactly `on` and `off` resolve to
+  themselves, any other present value (including `null`) resolves to
+  `off` so a mistyped value never enables the route, and a config file
+  that exists but cannot be parsed acts as `off` (a missing file means
+  `on`). This handling is preventive; no observed incident yet. The
+  field controls whether the review loop may defer a finding that needs
+  a person's judgment to a `needs-decision` follow-up issue (the label
+  is `labels.needsDecisionLabelName`, default `status:needs-decision`)
+  when merging is safe; `off` restores the stop-for-a-person behavior.
+  It never changes any of the following: the
+  `Awaiting maintainer decision` hold for a CODEOWNER, a required
+  reviewer, or any person holding Triage, Write, Maintain or Admin
+  standing; `CHANGES_REQUESTED`; the F3 merge holds; the CI, E15, E11
+  and branch-sync holds; scope-fenced items; PATH B; or the lite
+  profile's stops.
 - `critiqueLoop.subagentWaitCeiling` (default `PT20M`)
 - `reviewEscalation.changesRequestedFirstEscalation` /
   `reviewEscalation.changesRequestedSecondEscalation`

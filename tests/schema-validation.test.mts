@@ -521,6 +521,129 @@ test('policy schema rejects a critiqueLoop.deferByUrgency value outside the enum
   );
 });
 
+test('policy schema accepts critiqueLoop.deferNeedsDecision on and off (#3777)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferNeedsDecision of ['on', 'off']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferNeedsDecision };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected deferNeedsDecision ${deferNeedsDecision} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects a critiqueLoop.deferNeedsDecision value outside the enum (#3777)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferNeedsDecision of ['ON', 'maybe', false]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferNeedsDecision };
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `expected deferNeedsDecision ${JSON.stringify(deferNeedsDecision)} to be rejected`,
+    );
+  }
+});
+
+test('policy schema defines critiqueLoop.deferNeedsDecision as a two-value string enum with its default in words (#3777)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      critiqueLoop: {
+        properties: {
+          deferNeedsDecision: {
+            type?: string;
+            enum?: unknown[];
+            description: string;
+          };
+        };
+      };
+    };
+  };
+  const property = schema.properties.critiqueLoop.properties.deferNeedsDecision;
+  assert.equal(property.type, 'string');
+  assert.deepEqual(property.enum, ['on', 'off']);
+  assert.ok(
+    property.description.includes('defaults to "on"'),
+    'expected the description to state the default in words',
+  );
+  // validate-schemas rejects the `default` keyword, so the default lives
+  // in the description only.
+  assert.equal('default' in property, false);
+});
+
+test('policy schema accepts critiqueLoop.deferRelaxAtRounds arrays of positive integers (#3796)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferRelaxAtRounds of [[4, 7], [3]]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferRelaxAtRounds };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected deferRelaxAtRounds ${JSON.stringify(deferRelaxAtRounds)} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects an invalid critiqueLoop.deferRelaxAtRounds value (#3796)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferRelaxAtRounds of [[], [0], [1.5], ['4'], 4]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferRelaxAtRounds };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) =>
+        error.includes('$.critiqueLoop.deferRelaxAtRounds'),
+      ),
+      `expected deferRelaxAtRounds ${JSON.stringify(deferRelaxAtRounds)} to be rejected: ${errors.join('\n')}`,
+    );
+  }
+});
+
+test('policy schema defines critiqueLoop.deferRelaxAtRounds as a positive-integer array with its default in words (#3796)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      critiqueLoop: {
+        properties: {
+          deferRelaxAtRounds: {
+            type?: string;
+            minItems?: number;
+            items?: { type?: string; minimum?: number };
+            description: string;
+          };
+        };
+      };
+    };
+  };
+  const property = schema.properties.critiqueLoop.properties.deferRelaxAtRounds;
+  assert.equal(property.type, 'array');
+  assert.equal(property.minItems, 1);
+  assert.equal(property.items?.type, 'integer');
+  assert.equal(property.items?.minimum, 1);
+  // The schema cannot express "at most two, strictly ascending", so the
+  // description says the helper enforces it and states the default in words.
+  const description = property.description.replace(/\s+/g, ' ');
+  assert.ok(
+    description.includes('when the key is omitted the gradient is off'),
+    'expected the description to state the default in words',
+  );
+  assert.ok(
+    description.includes('the helper enforces it'),
+    'expected the description to name the helper as the enforcer',
+  );
+  // validate-schemas rejects the `default` and `maxItems` keywords.
+  assert.equal('default' in property, false);
+  assert.equal('maxItems' in property, false);
+});
+
 test('policy schema accepts the worktreeGuard opt-in object', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

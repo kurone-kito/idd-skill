@@ -273,7 +273,8 @@ coordination-close procedure below:
    `branch: suitability-close/<number>-<slug>` — outside the
    `issue/*`/`roadmap-audit/*` scope the core cwd-vs-claim gate checks
    (`idd-overview-core.instructions.md`), so no worktree is needed.
-2. Re-validate that claim, then run (add `--apply` to mutate; omit it
+2. Re-validate that claim, then run the profile-selected form from
+   `docs/idd-helper-scripts.md` (add `--apply` to mutate; omit it
    to dry-run first):
 
    ```sh

@@ -63,6 +63,11 @@ const PR_SUBMIT =
   'idd-template/.github/instructions/idd-pr-submit.instructions.md';
 const REVIEW_FIX =
   'idd-template/.github/instructions/idd-review-fix.instructions.md';
+const LIVE_REVIEW_FIX = '.github/instructions/idd-review-fix.instructions.md';
+const LIVE_PR_SUBMIT = '.github/instructions/idd-pr-submit.instructions.md';
+const REVIEW_POLICY_PROFILES =
+  'idd-template/docs/idd-review-policy-profiles.md';
+const LIVE_REVIEW_POLICY_PROFILES = 'docs/idd-review-policy-profiles.md';
 const CI = 'idd-template/.github/instructions/idd-ci.instructions.md';
 const AUTONOMY = 'docs/idd-autonomy-contract.md';
 const TEMPLATE_AUTONOMY = 'idd-template/docs/idd-autonomy-contract.md';
@@ -133,6 +138,11 @@ function requirePhrases(
       fail(path, `missing required clause: ${phrase}`);
     }
   }
+}
+
+/** The text with the sentence that states the reset prohibition removed. */
+function withoutProhibition(text: string): string {
+  return text.replaceAll('never run `git reset`', '');
 }
 
 function collapsed(text: string): string {
@@ -306,6 +316,341 @@ function extractBoundedRegion(
   );
   return afterStart.slice(0, endIndex);
 }
+
+interface PinnedClauseGroup {
+  id: string;
+  paths: readonly string[];
+  phrases: readonly string[];
+  /** Match the phrases only inside the bullet that starts with this text,
+   * up to the next blank line or top-level bullet, instead of anywhere in
+   * the file. */
+  regionStart?: string;
+  /** With `regionStart`: look for that bullet only inside the section whose
+   * heading line starts with this text (up to the next `## ` heading), so
+   * a copy of the bullet moved to another section does not satisfy a pin. */
+  regionSection?: string;
+  /** Whitespace-collapsed file text that must not appear anywhere. */
+  forbidden?: readonly string[];
+}
+
+/** The raw text of the bullet or paragraph that starts with `start`: up to
+ * the next blank line or top-level bullet, so an unrelated sentence that
+ * happens to repeat a pinned clause elsewhere in the file cannot satisfy
+ * the pin. */
+function extractPinnedRegion(
+  path: string,
+  fileText: string,
+  start: string,
+  section?: string,
+): string {
+  let text = fileText;
+  if (section !== undefined) {
+    const sectionStart = text.indexOf(`\n${section}`);
+    if (sectionStart === -1) fail(path, `missing pinned section: ${section}`);
+    const afterHeading = text.slice(sectionStart + 1);
+    const sectionEnd = afterHeading.indexOf('\n## ');
+    text = sectionEnd === -1 ? afterHeading : afterHeading.slice(0, sectionEnd);
+  }
+  const startIndex = text.indexOf(start);
+  if (startIndex === -1) fail(path, `missing pinned region: ${start}`);
+  const rest = text.slice(startIndex);
+  const end = rest.slice(start.length).search(/\n(?:\n|- )/);
+  return end === -1 ? rest : rest.slice(0, start.length + end);
+}
+
+function pinnedGroupRule(group: PinnedClauseGroup): RuleDefinition {
+  return {
+    id: group.id,
+    paths: group.paths,
+    check({ text }) {
+      for (const path of group.paths) {
+        const raw = text(path);
+        const scope = collapsed(
+          group.regionStart === undefined
+            ? raw
+            : extractPinnedRegion(
+                path,
+                raw,
+                group.regionStart,
+                group.regionSection,
+              ),
+        );
+        const missing = group.phrases.filter(
+          (phrase) => !scope.includes(phrase),
+        );
+        if (missing.length > 0) {
+          fail(path, `missing required clauses: ${missing.join(' | ')}`);
+        }
+        const collapsedText = collapsed(raw);
+        for (const phrase of group.forbidden ?? []) {
+          if (collapsedText.includes(phrase)) {
+            fail(path, `forbidden clause present: ${phrase}`);
+          }
+        }
+      }
+    },
+  };
+}
+
+const NEEDS_DECISION_ROUTE_LINK =
+  '[needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral';
+
+// The needs-decision route (roadmap #3776, issue #3780) is a normative rule
+// kept in a doc section, with short pointers at the stop sites. Each phrase is
+// matched against whitespace-collapsed text, so line wrapping is free, and the
+// tests delete every phrase one at a time to prove each is load-bearing. The
+// pointer phrases keep their own distinct wording (or the old stop text they
+// follow) so deleting one pointer cannot be masked by another, and the old
+// stop sentences stay pinned verbatim so `"off"` restores today's behavior.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const NEEDS_DECISION_ROUTE_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'needs-decision-route-doc',
+    paths: [REVIEW_POLICY_PROFILES, LIVE_REVIEW_POLICY_PROFILES],
+    phrases: [
+      'consistent with the recorded profile decision. ## Needs-decision deferral This section is the full rule for the needs-decision route.',
+      'The route applies only while the resolved `critiqueLoop.deferNeedsDecision` is `"on"`, which is the default.',
+      'A value of `"off"`, or any other value that rule does not honor, restores every stop below exactly as it stands.',
+      "A verified-true finding that an acceptance criterion of the claimed issue is unmet, or that reports a regression this pull request introduced, is Accepted and fixed and is never deferred: conditions (a) and (b) of the E5 Defer rule's adopt-now test still apply.",
+      'Judge it assuming the finding is correct. Hold, as today (the existing hold comment and its resume condition, and the needs-decision claim release in `.github/instructions/idd-overview-appendix.instructions.md` when no session-side action remains), when merging the pull request as it stands would:',
+      "1. leave the development branch's CI red or the pull request unmergeable;",
+      '2. leave the defect the finding describes in claim, lock, merge-gate, security or secret-handling, or data-destroying code or behavior, of the loop or of the project;',
+      "3. ship an instruction or helper contradiction that would misguide the next session's agent; or",
+      '4. be impossible to reverse in a follow-up pull request.',
+      'Otherwise defer.',
+      'At S1 and S2, a verified-true finding with one reasonable resolution, or with alternatives equivalent in observable behavior, is Accepted and fixed, as today.',
+      "Defer only when two or more materially different resolutions exist that the claimed issue's acceptance criteria and the repository evidence do not rank, or when the claim cannot be verified because the check it needs has no route in E5's Verify-before-accept.",
+      "At S3 and S4 the stop itself is the trigger, because the loop cannot land the fix. There the stop test below alone decides and the S1 and S2 carve-out in this paragraph does not apply, since Tier 3's open-ended gaps are the acceptance criterion itself and may be deferred.",
+      'If any outstanding finding in a stop comes from another source, the stop holds as it does today.',
+      'At S3 and S4, continue at E11 after the record:',
+      'the thread stays unresolved and F2 holds it as that profile already does, so the stop stays in effect.',
+      'a needs-decision item is never bundled with round-count or urgency deferrals.',
+      'A Tier 2 deferral keeps the required behavior in place and ends only the stop.',
+      'the reply names the unavailable check and the follow-up records the claim as unverified',
+      'only as the selected review-thread resolution profile allows.',
+      'At S1 and S2 the deferral is one more Reject inside the triage pass: finish the remaining E5 decisions and E6 replies, then E7 and E8, as after any other Reject.',
+      'with the defer-source value `review-needs-decision`',
+      '**Rejected** — deferred to follow-up issue #<n> (needs-decision; <check or choice that is open>): <reason>',
+      'The fourth distinct follow-up filed from one pull request holds as it does today.',
+      'A pull request with no claimed issue holds as it does today',
+      'The route never applies to: a CODEOWNER or required-reviewer source (and any person holding Triage, Write, Maintain or Admin standing); `CHANGES_REQUESTED`; scope-fenced items; PATH B; the F3 merge holds; the CI, E15, E11 and branch-sync holds that wait for an operator.',
+      "The lite profile's stops are also unchanged:",
+    ],
+  },
+  {
+    id: 'needs-decision-route-triage',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      '(a critique-pass finding stays under the unchanged cap above). If E5 would hold for a person or ask the operator, the [needs-decision route] may defer the item instead; otherwise that hold stands.',
+      "**Exception**: if the source is a CODEOWNER or required reviewer, or the item is E5's inconclusive outcome, do not reject unilaterally. Reply using the format: `**Awaiting maintainer decision** — {your reasoning}` (name the unavailable check when inconclusive) and wait for the maintainer's response.",
+      "wait for the maintainer's response. For an inconclusive item from a source without standing, the [needs-decision route] may apply first; otherwise this hold stands.",
+      'authoring-defer-source: review-fix-loop-cutoff -->',
+      NEEDS_DECISION_ROUTE_LINK,
+    ],
+  },
+  {
+    id: 'needs-decision-route-review-fix',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    phrases: [
+      'If the same Accepted findings recur for `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes (default `3`) without progress, stop the auto-loop: post a hold comment summarizing the repeated findings and attempted fixes, and wait for a maintainer decision.',
+      'and wait for a maintainer decision. This hold stands unless the [needs-decision route] applies.',
+      'Do not use this stop condition to bypass serious issues: unresolved High/Medium findings remain blockers until fixed or explicitly redirected by a maintainer',
+      'redirected by a maintainer or deferred under the needs-decision route.',
+      "check the issue's acceptance criteria and any established external contract for whether that behavior was actually required; if so, stop for a maintainer decision instead of dropping it to converge review.",
+      'instead of dropping it to converge review. That stop stands unless the [needs-decision route] applies.',
+      'once several rounds each keep surfacing a genuinely new, in-scope spec-coverage gap rather than repeating one, list each outstanding gap with its evidence, and the round count, in a hold comment and stop for a maintainer decision.',
+      'comment and stop for a maintainer decision. That stop stands unless the [needs-decision route] applies.',
+      NEEDS_DECISION_ROUTE_LINK,
+    ],
+  },
+  {
+    id: 'needs-decision-route-pr-submit',
+    paths: [PR_SUBMIT, LIVE_PR_SUBMIT],
+    phrases: [
+      "carries a defined defer-source marker, continue at once to that skill's Stage 2 narrow auto-release exception",
+    ],
+  },
+];
+
+const WHOLE_CLASS_SWEEP_BULLET_START =
+  '- **Fix the whole class, not just the flagged line.**';
+const WHOLE_CLASS_SWEEP_SECTION = '## E9 — Fix accepted issues';
+
+// The E9 whole-class sweep bullet (issue #3801, observed on
+// kurone-kito/setup.ubuntu#201): the sweep is only useful if a reader can
+// tell it ran, so the trigger, the file set, the limit and the reply content
+// are each pinned as their own rule. Phrases are matched on whitespace-
+// collapsed text inside the bullet only (E9 and E12 already say "single
+// push", so a pin elsewhere in the file would be satisfied by an unrelated
+// sentence), and the tests delete every phrase one at a time.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const WHOLE_CLASS_SWEEP_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'review-fix-sweep-trigger',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: [
+      'When an Accepted finding names a pattern (command, code span, hard-coded value, or link or anchor form)',
+    ],
+    forbidden: ['Sweep the current diff (and adjacent sections)'],
+  },
+  {
+    id: 'review-fix-sweep-file-set',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: [
+      'search every file the PR changes for it and fix each instance of that defect in the same push',
+    ],
+  },
+  {
+    id: 'review-fix-sweep-limit',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: ['Never sweep unchanged files; list them in PR body follow-ups'],
+  },
+  {
+    id: 'review-fix-sweep-reply',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    regionStart: WHOLE_CLASS_SWEEP_BULLET_START,
+    regionSection: WHOLE_CLASS_SWEEP_SECTION,
+    phrases: [
+      "A swept item's E13 explanation names the pattern and the count of others fixed",
+      '(`0` needs the pattern named)',
+    ],
+  },
+];
+
+// Issue #3794 freed review-triage bundle headroom by cutting passages that
+// restate a rule living elsewhere. These pins keep each surviving copy (or the
+// pointer that replaced the cut text) from being dropped later, so the cut
+// can never leave a rule with no home. Phrases are verbatim substrings of the
+// real files, matched on whitespace-collapsed text. A plain-text hyphen
+// compound inside a phrase (re-run, completed-review, zero-Accepted-PATH-A,
+// E9-E15) stays on one line in the real files; a rewrap that splits one fails
+// this audit loudly, which is the cue to re-pin the reflowed text.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const REVIEW_TRIAGE_DONOR_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'review-fix-triage-donor-survivors',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    phrases: [
+      're-run the claim revalidation gate immediately before this edit',
+      'then fetch the current full body, edit only that claim in the fetched copy, and post the full result back',
+      'confirm `closingIssuesReferences` still matches the deliberate set exactly',
+      'Resolution means "agent acted", not "reviewer agreed" — a disagreeing reviewer can reopen the thread',
+    ],
+  },
+  {
+    id: 'review-triage-donor-pointers',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      'Edit it at E4 under E12\'s "PR body sync" safeguards (`idd-review-fix.instructions.md`), even when E8\'s zero-Accepted-PATH-A skip bypasses E9-E15 and E12 (`#3495`).',
+      "doesn't prove no review exists: disposition any separate _completed_ review of current HEAD under the completed-review rules above.",
+      '`disposition-non-review-notices` helper (see `docs/idd-helper-scripts.md`) posts the canonical disposition below with `--apply`',
+      '`docs/idd-helper-scripts.md` covers `review-disposition-verify.mjs` and the fields E7 consumes',
+    ],
+  },
+];
+
+// The wave gradient of `critiqueLoop.deferByUrgency: "severity-tiered"` (issue
+// #3796) keeps its normative rule in the review policy profiles doc and only
+// a short pointer in the review-triage Defer block, so a session that skips
+// the doc behaves as before. These pins keep that pointer and each
+// load-bearing clause of the doc from being dropped, and keep the matrix
+// sentences' step-0 qualifier. Each phrase is a verbatim substring that
+// occurs once per file, matched on whitespace-collapsed text (a table row
+// is matched without its column padding).
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const WAVE_GRADIENT_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'wave-gradient-triage-pointer',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      'At step 0, High defers only at `very-low`',
+      'When `deferRelaxAtRounds` is set, apply the [wave gradient] first',
+      'only with `severity-tiered`',
+      'unset or invalid means off',
+      "the step is how many thresholds are at or below the PR's Copilot review count, counted as `deferAfterRounds` counts it",
+      'from step 1 the safety class (see the section) never defers, an exception to "never override"',
+      'plus `; step <k>` above step 0',
+      'Read `converged` once per pass; if true, add one step',
+      '[wave gradient]: ../../docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer',
+    ],
+  },
+  {
+    id: 'wave-gradient-policy-doc',
+    paths: [REVIEW_POLICY_PROFILES, LIVE_REVIEW_POLICY_PROFILES],
+    phrases: [
+      'The gradient applies only while `critiqueLoop.deferByUrgency` is `"severity-tiered"`',
+      'An unset key means off, and so does any other value',
+      "A pull request's relax step is the number of configured thresholds that are less than or equal to that count",
+      'the same count `critiqueLoop.deferAfterRounds` uses',
+      '| Low | `high` | `high` | `high` |',
+      '| Medium | `medium` | `high` | `high` |',
+      '| High | `very-low` | `low` | `medium` |',
+      'Every existing exclusion stays in force at every step',
+      'From step 1 on, a High-tier finding of `high` urgency never defers, and neither does a finding of the safety class',
+      'would hit item 1, 2 or 4 of the numbered stop test in [Needs-decision deferral](#needs-decision-deferral)',
+      'The safety class applies whatever `critiqueLoop.deferNeedsDecision` is set to.',
+      'still defers at step 0 as it does today, and a pull request whose field is absent changes nothing',
+      'defers to the bundled follow-up',
+      'urgency <level>; severity <tier>[, Copilot <label>]; step <k>',
+      'set and valid',
+      '`converged` equal to `true`',
+      'adds nothing',
+      'once per pass',
+      'never carried across a push',
+      '`--claim-issue`',
+      'no `--assert`',
+      '`{head-SHA}`',
+      '`reviewPolicy` absent or `copilot-advisory`',
+      '`converged <short-sha>`',
+      'Off means step 0 for every pull request',
+      'An unscored urgency never defers at any step',
+      'These rules govern the `deferByUrgency` trigger only; the separate trigger `critiqueLoop.deferAfterRounds` is unchanged',
+    ],
+  },
+];
+
+// The F2 local check (issue #3802) must see the exact pull request head: it
+// fetches the head, requires equality, advances a clean branch that is strictly
+// behind by fast-forward only, and never resets. F3 points at that sequence.
+// Phrases are matched on whitespace-collapsed text and each is deleted from the
+// real files by the tests, so each must be unique to the new passage.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const PR_HEAD_FRESHNESS_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'pr-head-freshness-f2',
+    paths: F2_FILES,
+    phrases: [
+      'git fetch origin +refs/pull/{pr-number}/head:refs/remotes/origin/pull/{pr-number}/head',
+      'under the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock) when workers share the clone',
+      'A failed fetch holds; if `git rev-parse refs/remotes/origin/pull/{pr-number}/head` is not `$PR_HEAD_SHA`, the PR moved: return to E1.',
+      '`git branch --show-current` is `{branch-name}`; else hold. Require empty `git status --porcelain`; else hold.',
+      '`git rev-parse HEAD` must equal `$PR_HEAD_SHA`',
+      'behind it (`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`), re-validate the claim,',
+      'run `git merge --ff-only "$PR_HEAD_SHA"` and require equality again, else hold.',
+      'Any other relation holds; never run `git reset`.',
+    ],
+  },
+  {
+    id: 'pr-head-freshness-f3',
+    paths: F3_FILES,
+    // Joined so neither a template escape nor a template placeholder appears.
+    phrases: [["apply F2's sequence to `$", '{PR_HEAD_SHA_F3}`'].join('')],
+  },
+];
+
+const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
+  ...NEEDS_DECISION_ROUTE_PINS,
+  ...REVIEW_TRIAGE_DONOR_PINS,
+  ...WHOLE_CLASS_SWEEP_PINS,
+  ...WAVE_GRADIENT_PINS,
+  ...PR_HEAD_FRESHNESS_PINS,
+];
 
 const RULES: readonly RuleDefinition[] = [
   {
@@ -584,6 +929,47 @@ const RULES: readonly RuleDefinition[] = [
     },
   },
   {
+    id: 'pr-head-freshness-order',
+    paths: [...F2_FILES, ...F3_FILES],
+    check({ text }) {
+      for (const path of F2_FILES) {
+        const contents = collapsed(text(path));
+        // The checks must run in this order: the shadow-path check has to
+        // precede the only command that moves HEAD, and equality is tested
+        // before ancestry because `is-ancestor` is non-strict.
+        const steps = [
+          'git fetch origin +refs/pull/',
+          '`git rev-parse refs/remotes/origin/pull/{pr-number}/head`',
+          '`git branch --show-current`',
+          '`git status --porcelain`',
+          '`git ls-tree -r -z ',
+          '`git rev-parse HEAD` must equal',
+          '`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`',
+          '`git merge --ff-only "$PR_HEAD_SHA"`',
+        ];
+        let from = 0;
+        for (const step of steps) {
+          const at = contents.indexOf(step, from);
+          if (at < 0)
+            fail(path, `F2 local check is out of order or missing: ${step}`);
+          from = at + step.length;
+        }
+        if (/\bgit reset\b|reset on pass/.test(withoutProhibition(contents)))
+          fail(path, 'F2 local check must never reset the worktree');
+      }
+      for (const path of F3_FILES) {
+        const contents = collapsed(text(path));
+        if (contents.includes('is-ancestor'))
+          fail(
+            path,
+            'F3 must apply the F2 sequence, not restate an ancestry check',
+          );
+        if (/\bgit reset\b|reset on pass/.test(withoutProhibition(contents)))
+          fail(path, 'F3 local check must never reset the worktree');
+      }
+    },
+  },
+  {
     id: 'a45-outcome-fixtures',
     paths: [SUITABILITY, A45_FIXTURES],
     check({ text, json }) {
@@ -735,6 +1121,50 @@ const RULES: readonly RuleDefinition[] = [
         sections[0].section !== sections[1].section
       ) {
         fail(TEMPLATE_WORKFLOW, 'source and template critique guidance differ');
+      }
+    },
+  },
+  {
+    id: 'review-triage-in-place-edit-only-boundary',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    check({ text }) {
+      for (const path of [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE]) {
+        requirePhrases(path, collapsed(text(path)), [
+          '(`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a stricter subset — not an override path of its own.)',
+        ]);
+      }
+    },
+  },
+  {
+    id: 'review-triage-verify-confirm-boundary',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    check({ text }) {
+      for (const path of [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE]) {
+        requirePhrases(path, collapsed(text(path)), [
+          "A verify-then-confirm reply (analysis before the confirmation verb) isn't recognized, so #2125's override doesn't fire (recognized replies are unaffected).",
+        ]);
+      }
+    },
+  },
+  {
+    id: 'review-triage-repeating-advisory-hold',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    check({ text }) {
+      for (const path of [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE]) {
+        requirePhrases(path, collapsed(text(path)), [
+          "A repeating `missingThreads` entry that's a no-new-content advisory-bot reply needs a hold comment; stop instead of re-posting the disposition (#3324).",
+        ]);
+      }
+    },
+  },
+  {
+    id: 'f2-ack-only-override-condition',
+    paths: F2_FILES,
+    check({ text }) {
+      for (const path of F2_FILES) {
+        requirePhrases(path, collapsed(text(path)), [
+          'when `dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` (every blocking item is a `missingThreads` entry with `ackOnlyPostDisposition: true`, `missingRegularComments` empty), autopilot may deterministically override `return-to-e1` and proceed on the current HEAD SHA.',
+        ]);
       }
     },
   },
@@ -1537,6 +1967,7 @@ const RULES: readonly RuleDefinition[] = [
         fail(PR_SUBMIT, 'round-specific PR-body prose returned');
     },
   },
+  ...PINNED_CLAUSE_GROUPS.map(pinnedGroupRule),
 ];
 
 // audit:ignore-dead-export: fixture tests need each stable rule's input path.

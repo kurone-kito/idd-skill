@@ -1387,7 +1387,11 @@ function stripListItemMarker(content) {
 function continuesListContainer(content, contentIndent) {
   return content.trim() === '' || indentationColumns(content) >= contentIndent;
 }
-function stripLeadingIndentColumns(text, targetColumns, initialColumns = 0) {
+export function stripLeadingIndentColumns(
+  text,
+  targetColumns,
+  initialColumns = 0,
+) {
   if (targetColumns <= initialColumns) {
     return text;
   }
