@@ -1527,16 +1527,24 @@ function blockIfGh(api, command, args, options) {
 }
 
 function isWin32TelemetryRelayBootstrap(method, options) {
-  // Only the real telemetry relay may keep its sanitized empty startup
-  // options. Its reserved command channel is scrubbed from the parent and
-  // removed before the relay starts the real target.
   if (method !== 'spawn') return false;
   const hasOptions =
     options !== null && typeof options === 'object' && !Array.isArray(options);
-  const env = hasOptions ? options.env : undefined;
+  const entries = Object.entries(hasOptions ? (options.env ?? {}) : {});
+  const nodeOptions = entries.filter(
+    ([name]) => name.toUpperCase() === 'NODE_OPTIONS',
+  );
+  const relayCommand = entries.find(
+    ([name]) =>
+      name.toUpperCase() === 'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND',
+  )?.[1];
   return (
-    env?.NODE_OPTIONS === '' &&
-    typeof env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND === 'string'
+    // The helper scrubs both values from its parent, adds them only to the
+    // relay process, and the relay removes them before starting the real
+    // target. The missing NODE_OPTIONS key is itself the sanitized state.
+    typeof relayCommand === 'string' &&
+    relayCommand.length > 0 &&
+    nodeOptions.every(([, value]) => value === '')
   );
 }
 
@@ -1559,13 +1567,7 @@ function addGuardToOptions(options, addImport, win32TelemetryRelayBootstrap) {
     }
   }
   if (addImport) {
-    const preservesEmptyNodeOptions =
-      record.env !== undefined &&
-      Object.entries(record.env).some(
-        ([name, value]) =>
-          name.toUpperCase() === 'NODE_OPTIONS' && value === '',
-      );
-    if (!preservesEmptyNodeOptions || !win32TelemetryRelayBootstrap) {
+    if (!win32TelemetryRelayBootstrap) {
       const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
       if (guardImport && !(env.NODE_OPTIONS ?? '').includes(guardImport)) {
         env.NODE_OPTIONS = env.NODE_OPTIONS

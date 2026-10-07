@@ -1708,13 +1708,21 @@ function isWin32TelemetryRelayBootstrap(
       ? (options as LaunchOptions)
       : {};
   const env = record.env;
+  const entries = Object.entries(env ?? {});
+  const nodeOptions = entries.filter(
+    ([name]) => name.toUpperCase() === 'NODE_OPTIONS',
+  );
+  const relayCommand = entries.find(
+    ([name]) =>
+      name.toUpperCase() === 'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND',
+  )?.[1];
   return (
-    env?.NODE_OPTIONS === '' &&
-    // The helper scrubs this reserved channel from its parent's env, adds it
-    // only to the relay process, and the relay deletes it before spawning the
-    // real target. That makes it the stable identity of this bootstrap across
-    // the native Windows spawn overloads.
-    typeof env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND === 'string'
+    // The helper scrubs both values from its parent, adds them only to the
+    // relay process, and the relay removes them before starting the real
+    // target. The missing NODE_OPTIONS key is itself the sanitized state.
+    typeof relayCommand === 'string' &&
+    relayCommand.length > 0 &&
+    nodeOptions.every(([, value]) => value === '')
   );
 }
 
@@ -1755,13 +1763,7 @@ function optionsWithGuard(
           ? `${current} ${requireFlag}`
           : requireFlag;
   } else {
-    const preservesEmptyNodeOptions =
-      record.env !== undefined &&
-      Object.entries(record.env).some(
-        ([name, value]) =>
-          name.toUpperCase() === 'NODE_OPTIONS' && value === '',
-      );
-    if (preservesEmptyNodeOptions && win32TelemetryRelayBootstrap) {
+    if (win32TelemetryRelayBootstrap) {
       return { ...record, env };
     }
     // Preserve the Windows telemetry relay's intentionally sanitized

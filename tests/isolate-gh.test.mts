@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -757,6 +757,36 @@ if (child.error || child.status !== 0) {
   } finally {
     rmSync(guardRoot, { recursive: true, force: true });
   }
+});
+
+test('preserves a sanitized telemetry relay bootstrap environment', async () => {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === 'NODE_OPTIONS') delete env[key];
+  }
+  env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND = 'node relay-target';
+  const child = spawn(
+    process.execPath,
+    ['-e', 'process.stdout.write(process.env.NODE_OPTIONS ?? "<unset>")'],
+    { env, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr?.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+
+  assert.equal(exitCode, 0, stderr);
+  assert.equal(stdout, '<unset>');
 });
 
 test('reinstalls the GH guard when an explicit child environment clears NODE_OPTIONS', () => {
