@@ -324,6 +324,11 @@ function scanComments(source: string): {
     let braceDepth = 0;
     let lastCodeChar = '';
     let lastCodeCharIsIdentifierPart = false;
+    // A `.` after a plain decimal token (`1.`, `1_000.`) ends that
+    // numeric literal, so the next `/` is division. The same character
+    // after an identifier (`foo1.`) or an exponent (`1e2.`) is member
+    // access and must not take this path.
+    let numericLiteralDot = false;
     let lastWord = '';
     let previousWord = '';
     let lastWordIsPropertyName = false;
@@ -499,6 +504,10 @@ function scanComments(source: string): {
           postfixNonNullAssertion,
           regexAfterRestrictedStatementLineBreak,
         );
+      numericLiteralDot =
+        ch === '.' &&
+        !lastWordIsPropertyName &&
+        /^[0-9][0-9_]*$/.test(lastWord);
       const startsWord = wordBoundary || lastWord === '';
       if (startsWord) {
         const followsAsyncFunctionPrefix =
@@ -547,6 +556,7 @@ function scanComments(source: string): {
     function recordLiteral(end: string): void {
       lastCodeChar = end;
       lastCodeCharIsIdentifierPart = false;
+      numericLiteralDot = false;
       previousWord = '';
       previousWordIsPropertyName = false;
       lastWord = '';
@@ -989,6 +999,7 @@ function scanComments(source: string): {
 
       if (
         ch === '/' &&
+        !numericLiteralDot &&
         regexCanStartAfter(
           lastCodeChar,
           lastCodeCharIsIdentifierPart,

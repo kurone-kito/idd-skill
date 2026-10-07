@@ -1099,6 +1099,14 @@ const divisionWithCommentedImports: {
         specifier,
       ),
   },
+  {
+    name: 'division after a trailing-dot numeric literal',
+    source: (specifier) =>
+      `const value = 1. / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
 ];
 
 for (const { name, source } of divisionWithCommentedImports) {
@@ -1415,6 +1423,14 @@ const prefixNotRegexSources: {
     name: 'a spaced comparison through the in operator',
     source: (specifier) =>
       `const value = count < limit in items > /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after division by a trailing-dot numeric literal',
+    source: (specifier) =>
+      `const value = 1. / /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
