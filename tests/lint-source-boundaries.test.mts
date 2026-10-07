@@ -716,6 +716,22 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation with a block comment',
+    source: (specifier) =>
+      `const value = identity<Foo /* note */> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation with a closer inside a comment',
+    source: (specifier) =>
+      `const value = identity<Foo /* > */> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of an array type',
     source: (specifier) =>
       `const value = identity<number[]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1463,6 +1479,22 @@ const prefixNotRegexSources: {
     name: 'a regex after a comment before a member dot',
     source: (specifier) =>
       `const value = 1/*c*/. /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after division following a comment inside type arguments',
+    source: (specifier) =>
+      `const value = identity<Foo /* note */> / /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a comparison with a block comment through the in operator',
+    source: (specifier) =>
+      `const value = count < limit /* note */ in items > /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),

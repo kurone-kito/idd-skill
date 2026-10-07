@@ -75,7 +75,7 @@ const REVIEWED_CHECKOUT_INPUTS: Readonly<Record<string, string>> = {
 // branch does not change that closure. Issue #3775 edits
 // scripts/lint-source-boundaries.mjs, the only boundaries-closure file
 // whose bytes differ from main, so that command has its own added
-// digest. A further digest, including a one-byte edit, is not reviewed.
+// digests. A further digest, including a one-byte edit, is not reviewed.
 const REVIEWED_PRE_FLOOR_RUNS: readonly {
   command: string;
   digests: readonly string[];
@@ -102,6 +102,7 @@ const REVIEWED_PRE_FLOOR_RUNS: readonly {
     digests: [
       'de1b710b0e268c1148897cbbe89bef0d9bda398e3c26b007db7d90cdbcbe0162',
       '70dd318737656256481c8264e3371ece519a9a77c76b860d5a4e9eed4665fd69',
+      'a4e7f37c6b32715f6c30d9b0fb9cac8626035343c67298016713a90f40e42c98',
     ],
   },
   {

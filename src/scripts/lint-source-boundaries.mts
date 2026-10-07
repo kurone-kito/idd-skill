@@ -962,6 +962,29 @@ function scanComments(source: string): {
         if (depth > 0 && typeChar === '!' && inParameterDefault()) {
           continue;
         }
+        // A block comment is whitespace. `identity<Foo /* note */>`
+        // still closes, and a `>` inside the comment does not. A
+        // comment that runs past the line has no same-line closer.
+        if (depth > 0 && typeChar === '/' && source[cursor + 1] === '*') {
+          let end = cursor + 2;
+          let closed = false;
+          while (end < source.length && !isLineTerminator(source[end])) {
+            if (source[end] === '*' && source[end + 1] === '/') {
+              end += 2;
+              closed = true;
+              break;
+            }
+            end += 1;
+          }
+          if (!closed) {
+            return false;
+          }
+          if (lastWord !== '') {
+            wordBroken = true;
+          }
+          cursor = end - 1;
+          continue;
+        }
         // Any other expression operator stops the scan.
         if (depth > 0 && /[A-Za-z0-9_$]/.test(typeChar)) {
           if (wordBroken || lastWord === '') {
