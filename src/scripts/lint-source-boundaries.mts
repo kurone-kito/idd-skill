@@ -692,6 +692,69 @@ function scanComments(source: string): {
       let defaultValueMinDepth = -1;
       const inParameterDefault = (): boolean =>
         defaultValueMinDepth >= 0 && parenDepth >= defaultValueMinDepth;
+      // A same-line block comment is whitespace for the token looks
+      // below. Those looks used to skip only spaces, so a comment
+      // between `>` and `(` or between `)` and `{` hid the call or
+      // the method body.
+      const skipBlockCommentForward = (start: number): number | undefined => {
+        if (source[start] !== '/' || source[start + 1] !== '*') {
+          return undefined;
+        }
+        let end = start + 2;
+        while (end < source.length && !isLineTerminator(source[end])) {
+          if (source[end] === '*' && source[end + 1] === '/') {
+            return end + 2;
+          }
+          end += 1;
+        }
+        return undefined;
+      };
+      const nextCode = (start: number): number => {
+        let look = start;
+        while (look < source.length && !isLineTerminator(source[look])) {
+          if (source[look] === ' ' || source[look] === '\t') {
+            look += 1;
+            continue;
+          }
+          const afterComment = skipBlockCommentForward(look);
+          if (afterComment === undefined) {
+            return look;
+          }
+          look = afterComment;
+        }
+        return look;
+      };
+      const previousCode = (start: number): number => {
+        let previous = start;
+        while (previous > from && !isLineTerminator(source[previous])) {
+          if (source[previous] === ' ' || source[previous] === '\t') {
+            previous -= 1;
+            continue;
+          }
+          if (
+            source[previous] === '/' &&
+            previous - 1 > from &&
+            source[previous - 1] === '*'
+          ) {
+            let open = previous - 2;
+            let found = false;
+            while (open > from && !isLineTerminator(source[open])) {
+              if (source[open] === '/' && source[open + 1] === '*') {
+                previous = open - 1;
+                found = true;
+                break;
+              }
+              open -= 1;
+            }
+            if (!found) {
+              return previous;
+            }
+            continue;
+          }
+          return previous;
+        }
+        return previous;
+      };
       for (let cursor = from; cursor < source.length; cursor += 1) {
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
@@ -715,26 +778,12 @@ function scanComments(source: string): {
             lastWord === 'delete' ||
             lastWord === 'await'
           ) {
-            let look = cursor;
-            while (
-              look < source.length &&
-              (source[look] === ' ' || source[look] === '\t')
-            ) {
-              look += 1;
-            }
-            if (source[look] !== ':') {
+            if (source[nextCode(cursor)] !== ':') {
               return false;
             }
           }
           if (lastWord === 'void') {
-            let look = cursor;
-            while (
-              look < source.length &&
-              (source[look] === ' ' || source[look] === '\t')
-            ) {
-              look += 1;
-            }
-            const operand = source[look];
+            const operand = source[nextCode(cursor)];
             if (
               operand !== undefined &&
               /[A-Za-z0-9_$(+\-!'"`{]/.test(operand)
@@ -795,13 +844,7 @@ function scanComments(source: string): {
         if (depth > 0 && typeChar === '{') {
           // `{ m(i) { return i } }` is a method body. `{ m(): { a: number } }`
           // is a return type: that brace does not follow `)`.
-          let beforeBrace = cursor - 1;
-          while (
-            beforeBrace > from &&
-            (source[beforeBrace] === ' ' || source[beforeBrace] === '\t')
-          ) {
-            beforeBrace -= 1;
-          }
+          const beforeBrace = previousCode(cursor - 1);
           if (source[beforeBrace] === ')') {
             return false;
           }
@@ -822,13 +865,7 @@ function scanComments(source: string): {
           // `limit(i)` and `(value)(i)` are calls. A function type,
           // a parenthesized type, a method in an object type, or a
           // keyword such as `new` or `keyof` may open `(`.
-          let previous = cursor - 1;
-          while (
-            previous > from &&
-            (source[previous] === ' ' || source[previous] === '\t')
-          ) {
-            previous -= 1;
-          }
+          const previous = previousCode(cursor - 1);
           // `extends` opens a parenthesized type only inside one,
           // as in `(T extends (A | B))`. A bare `extends(` is not.
           const typeKeyword =
@@ -966,23 +1003,14 @@ function scanComments(source: string): {
         // still closes, and a `>` inside the comment does not. A
         // comment that runs past the line has no same-line closer.
         if (depth > 0 && typeChar === '/' && source[cursor + 1] === '*') {
-          let end = cursor + 2;
-          let closed = false;
-          while (end < source.length && !isLineTerminator(source[end])) {
-            if (source[end] === '*' && source[end + 1] === '/') {
-              end += 2;
-              closed = true;
-              break;
-            }
-            end += 1;
-          }
-          if (!closed) {
+          const afterComment = skipBlockCommentForward(cursor);
+          if (afterComment === undefined) {
             return false;
           }
           if (lastWord !== '') {
             wordBroken = true;
           }
-          cursor = end - 1;
+          cursor = afterComment - 1;
           continue;
         }
         // Any other expression operator stops the scan.

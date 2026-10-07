@@ -724,6 +724,14 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a mapped type with a block comment',
+    source: (specifier) =>
+      `const value = identity<({ [K in /* note */ T]: boolean })> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation with a closer inside a comment',
     source: (specifier) =>
       `const value = identity<Foo /* > */> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1487,6 +1495,30 @@ const prefixNotRegexSources: {
     name: 'a regex after division following a comment inside type arguments',
     source: (specifier) =>
       `const value = identity<Foo /* note */> / /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call separated from its type arguments by a block comment',
+    source: (specifier) =>
+      `const value = count<m<T> /* note */ (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body separated from its parameter list by a block comment',
+    source: (specifier) =>
+      `const value = count<{ m(i) /* note */ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized void operator with a flush block comment',
+    source: (specifier) =>
+      `const value = count<(void/* note */0)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
