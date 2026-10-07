@@ -596,6 +596,9 @@ function scanComments(source: string): {
       let parenDepth = 0;
       let sawParen = false;
       let lastWord = '';
+      let lastWordIsProperty = false;
+      let wordBroken = false;
+      let nextWordIsProperty = false;
       for (let cursor = from; cursor < source.length; cursor += 1) {
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
@@ -604,12 +607,19 @@ function scanComments(source: string): {
         if (typeChar === '<') {
           depth += 1;
           lastWord = '';
+          lastWordIsProperty = false;
+          wordBroken = false;
+          nextWordIsProperty = false;
           continue;
         }
         if (typeChar === '>') {
           // `=>` is the arrow in a function type, not a closer.
+          // Either way the word before this `>` must not stick to
+          // the next `(`, as in `identity<<T>(x: T) => T>`.
+          lastWord = '';
+          lastWordIsProperty = false;
+          wordBroken = false;
           if (sawParen && cursor > from && source[cursor - 1] === '=') {
-            lastWord = '';
             continue;
           }
           depth -= 1;
@@ -643,9 +653,25 @@ function scanComments(source: string): {
           continue;
         }
         if (depth > 0 && typeChar === '(') {
-          // `limit(i)` is a call. A function type or a parenthesized
-          // type starts at `(`, or after `new`.
-          if (lastWord !== '' && lastWord !== 'new') {
+          // `limit(i)` and `(value)(i)` are calls. A function type,
+          // a parenthesized type, a method in an object type, or a
+          // keyword such as `new` or `keyof` may open `(`.
+          let previous = cursor - 1;
+          while (
+            previous > from &&
+            (source[previous] === ' ' || source[previous] === '\t')
+          ) {
+            previous -= 1;
+          }
+          const typeKeyword =
+            !lastWordIsProperty &&
+            (lastWord === 'new' ||
+              lastWord === 'keyof' ||
+              lastWord === 'extends');
+          if (
+            source[previous] === ')' ||
+            (lastWord !== '' && braceDepth === 0 && !typeKeyword)
+          ) {
             return false;
           }
           parenDepth += 1;
@@ -703,12 +729,29 @@ function scanComments(source: string): {
         }
         // Any other expression operator stops the scan.
         if (depth > 0 && /[A-Za-z0-9_$]/.test(typeChar)) {
-          lastWord += typeChar;
+          if (wordBroken || lastWord === '') {
+            lastWord = typeChar;
+            lastWordIsProperty = nextWordIsProperty;
+            nextWordIsProperty = false;
+            wordBroken = false;
+          } else {
+            lastWord += typeChar;
+          }
           continue;
         }
         if (depth > 0 && /[\s.:]/.test(typeChar)) {
-          if (typeChar !== ' ' && typeChar !== '\t') {
+          if (typeChar === ' ' || typeChar === '\t') {
+            wordBroken = lastWord !== '';
+          } else if (typeChar === '.') {
             lastWord = '';
+            lastWordIsProperty = false;
+            wordBroken = true;
+            nextWordIsProperty = true;
+          } else {
+            lastWord = '';
+            lastWordIsProperty = false;
+            wordBroken = false;
+            nextWordIsProperty = false;
           }
           continue;
         }

@@ -796,6 +796,38 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of a method signature',
+    source: (specifier) =>
+      `const value = identity<{ m(x: string): void }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic function type parameter',
+    source: (specifier) =>
+      `const value = identity<<T>(x: T) => T> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an abstract constructor type',
+    source: (specifier) =>
+      `const value = identity<abstract new () => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a keyof parenthesized type',
+    source: (specifier) =>
+      `const value = identity<keyof (A | B)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of a constructor type',
     source: (specifier) =>
       `const value = identity<new () => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -991,6 +1023,22 @@ const prefixNotRegexSources: {
     name: 'a parenthesized comparison joined with &&',
     source: (specifier) =>
       `const value = count<(limit) && flag> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a property named new called in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.new(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call of a parenthesized comparison operand',
+    source: (specifier) =>
+      `const value = count<(limit)(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),
