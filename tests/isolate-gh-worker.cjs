@@ -1526,7 +1526,29 @@ function blockIfGh(api, command, args, options) {
   );
 }
 
-function addGuardToOptions(options, addImport) {
+const TELEMETRY_RELAY_COMMAND_ENV =
+  'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND';
+
+function telemetryRelayEvalIndex(command, args, options) {
+  if (
+    String(command) !== process.execPath ||
+    !Array.isArray(args) ||
+    !Object.keys(options?.env ?? {}).some(
+      (name) => name.toUpperCase() === TELEMETRY_RELAY_COMMAND_ENV,
+    )
+  ) {
+    return -1;
+  }
+  const evalIndex = args.findIndex(
+    (argument) => String(argument) === '-e' || String(argument) === '--eval',
+  );
+  const source = evalIndex < 0 ? '' : String(args[evalIndex + 1] ?? '');
+  return source.includes(`process.env.${TELEMETRY_RELAY_COMMAND_ENV}`)
+    ? evalIndex
+    : -1;
+}
+
+function addGuardToOptions(options, addImport, telemetryRelay) {
   const hasOptions =
     options !== null && typeof options === 'object' && !Array.isArray(options);
   if (!hasOptions) options = {};
@@ -1546,11 +1568,12 @@ function addGuardToOptions(options, addImport) {
   }
   if (addImport) {
     const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
-    // The Windows telemetry helper removes caller NODE_OPTIONS before it
-    // starts its relay. Re-add only this trusted test guard so the relay's
-    // own child_process calls stay guarded; the relay forwards the original
-    // caller options separately to the configured target.
-    if (guardImport && !(env.NODE_OPTIONS ?? '').includes(guardImport)) {
+    // Keep the relay's environment scrubbed: the telemetry helper forwards
+    // its NODE_OPTIONS separately to the configured target, so load the
+    // test guard on the relay's argv instead of contaminating that payload.
+    if (telemetryRelay) {
+      if (guardImport) env.IDD_TEST_GH_GUARD_IMPORT = guardImport;
+    } else if (guardImport && !(env.NODE_OPTIONS ?? '').includes(guardImport)) {
       env.NODE_OPTIONS = env.NODE_OPTIONS
         ? `${env.NODE_OPTIONS} --import=${guardImport}`
         : `--import=${guardImport}`;
@@ -1593,10 +1616,29 @@ function wrap(method, optionsIndex, inspect) {
           launchOptions?.env,
           launchDirectory(launchOptions?.cwd),
         );
+      const relayEvalIndex = [
+        'spawn',
+        'spawnSync',
+        'execFile',
+        'execFileSync',
+      ].includes(method)
+        ? telemetryRelayEvalIndex(args[0], args[1], launchOptions)
+        : -1;
       const guardedOptions = addGuardToOptions(
         hasCallback ? undefined : args[index],
         !directGhFixture,
+        relayEvalIndex >= 0,
       );
+      if (relayEvalIndex >= 0 && Array.isArray(args[1])) {
+        const relayArgs = [...args[1]];
+        const guardImport = process.env.IDD_TEST_GH_GUARD_IMPORT;
+        relayArgs.splice(
+          relayEvalIndex,
+          0,
+          guardImport ? `--import=${guardImport}` : `--require=${__filename}`,
+        );
+        args[1] = relayArgs;
+      }
       if (hasCallback) args.splice(index, 0, guardedOptions);
       else args[index] = guardedOptions;
     }

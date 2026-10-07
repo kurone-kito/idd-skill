@@ -1698,7 +1698,37 @@ function appendGuardImport(env: NodeJS.ProcessEnv): void {
   }
 }
 
-function optionsWithGuard(options: unknown, directGhFixture: boolean): unknown {
+const TELEMETRY_RELAY_COMMAND_ENV =
+  'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND';
+
+function telemetryRelayEvalIndex(
+  command: unknown,
+  args: unknown,
+  options: LaunchOptions | undefined,
+): number {
+  if (
+    String(command) !== process.execPath ||
+    !Array.isArray(args) ||
+    !Object.keys(options?.env ?? {}).some(
+      (name) => name.toUpperCase() === TELEMETRY_RELAY_COMMAND_ENV,
+    )
+  ) {
+    return -1;
+  }
+  const evalIndex = args.findIndex(
+    (argument) => String(argument) === '-e' || String(argument) === '--eval',
+  );
+  const source = evalIndex < 0 ? '' : String(args[evalIndex + 1] ?? '');
+  return source.includes(`process.env.${TELEMETRY_RELAY_COMMAND_ENV}`)
+    ? evalIndex
+    : -1;
+}
+
+function optionsWithGuard(
+  options: unknown,
+  directGhFixture: boolean,
+  telemetryRelay: boolean,
+): unknown {
   const record =
     options !== null && typeof options === 'object' && !Array.isArray(options)
       ? (options as LaunchOptions)
@@ -1730,11 +1760,16 @@ function optionsWithGuard(options: unknown, directGhFixture: boolean): unknown {
         : current
           ? `${current} ${requireFlag}`
           : requireFlag;
+  } else if (telemetryRelay) {
+    // Keep the relay's environment scrubbed: the telemetry helper forwards
+    // its NODE_OPTIONS separately to the configured target, so putting the
+    // test preload back here would contaminate that payload. Load the guard
+    // on the relay's own argv instead.
+    env.IDD_TEST_GH_GUARD_IMPORT = guardImport;
   } else {
     // The Windows telemetry helper removes caller NODE_OPTIONS before it
-    // starts its relay. Re-add only this trusted test guard so the relay's
-    // own child_process calls stay guarded; the relay forwards the original
-    // caller options separately to the configured target.
+    // starts its relay. Other children still receive only this trusted test
+    // guard in NODE_OPTIONS.
     appendGuardImport(env);
   }
   return { ...record, env };
@@ -1766,10 +1801,24 @@ function wrap(
           options?.env,
           launchDirectory(options?.cwd),
         );
+      const relayEvalIndex = [
+        'spawn',
+        'spawnSync',
+        'execFile',
+        'execFileSync',
+      ].includes(method)
+        ? telemetryRelayEvalIndex(args[0], args[1], options)
+        : -1;
       const guardedOptions = optionsWithGuard(
         hasCallback ? undefined : args[index],
         directGhFixture,
+        relayEvalIndex >= 0,
       );
+      if (relayEvalIndex >= 0 && Array.isArray(args[1])) {
+        const relayArgs = [...args[1]];
+        relayArgs.splice(relayEvalIndex, 0, `--import=${guardImport}`);
+        args[1] = relayArgs;
+      }
       if (hasCallback) args.splice(index, 0, guardedOptions);
       else args[index] = guardedOptions;
     }

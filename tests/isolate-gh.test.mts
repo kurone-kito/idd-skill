@@ -759,15 +759,18 @@ if (child.error || child.status !== 0) {
   }
 });
 
-test('adds only the test guard to a sanitized telemetry relay bootstrap', async () => {
+test('loads the test guard through relay argv without changing its environment', async () => {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.toUpperCase() === 'NODE_OPTIONS') delete env[key];
   }
   env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND = 'node relay-target';
+  const relaySource =
+    'const command = process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND; ' +
+    'process.stdout.write(JSON.stringify({ nodeOptions: process.env.NODE_OPTIONS ?? "<unset>", execArgv: process.execArgv }));';
   const child = spawn(
     process.execPath,
-    ['-e', 'process.stdout.write(process.env.NODE_OPTIONS ?? "<unset>")'],
+    ['--input-type=commonjs', '-e', relaySource],
     { env, stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let stdout = '';
@@ -786,7 +789,77 @@ test('adds only the test guard to a sanitized telemetry relay bootstrap', async 
   });
 
   assert.equal(exitCode, 0, stderr);
-  assert.equal(stdout, `--import=${process.env.IDD_TEST_GH_GUARD_IMPORT}`);
+  const result = JSON.parse(stdout) as {
+    nodeOptions: string;
+    execArgv: string[];
+  };
+  assert.equal(result.nodeOptions, '<unset>');
+  assert.ok(
+    result.execArgv.includes(
+      `--import=${process.env.IDD_TEST_GH_GUARD_IMPORT}`,
+    ),
+  );
+});
+
+test('CJS Worker guard loads in a telemetry relay without changing NODE_OPTIONS', async () => {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === 'NODE_OPTIONS') delete env[key];
+  }
+  const relaySource =
+    'const command = process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND; ' +
+    'process.stdout.write(JSON.stringify({ nodeOptions: process.env.NODE_OPTIONS ?? "<unset>", execArgv: process.execArgv }));';
+  const workerSource = `
+const { parentPort } = require('node:worker_threads');
+const { spawnSync } = require('node:child_process');
+const env = {
+  ...process.env,
+  IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND: 'node relay-target',
+};
+const child = spawnSync(
+  process.execPath,
+  ['--input-type=commonjs', '-e', ${JSON.stringify(relaySource)}],
+  { encoding: 'utf8', env },
+);
+parentPort.postMessage({
+  status: child.status,
+  error: child.error?.message,
+  stdout: child.stdout,
+  stderr: child.stderr,
+});
+`;
+  const worker = new Worker(workerSource, {
+    eval: true,
+    execArgv: [],
+    env,
+  });
+  const result = await new Promise<{
+    status: number | null;
+    error?: string;
+    stdout: string;
+    stderr: string;
+  }>((resolve, reject) => {
+    let received = false;
+    worker.once('message', (message) => {
+      received = true;
+      resolve(message);
+    });
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (!received)
+        reject(new Error(`worker exited before its result: ${code}`));
+    });
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.error || '');
+  const relay = JSON.parse(result.stdout) as {
+    nodeOptions: string;
+    execArgv: string[];
+  };
+  assert.equal(relay.nodeOptions, '<unset>');
+  const guardImport = process.env.IDD_TEST_GH_GUARD_IMPORT;
+  assert.ok(guardImport);
+  assert.ok(relay.execArgv.includes(`--import=${guardImport}`));
 });
 
 test('reinstalls the GH guard when an explicit child environment clears NODE_OPTIONS', () => {
