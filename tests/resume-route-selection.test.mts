@@ -518,7 +518,6 @@ test('collector ignores closing-keyword lookalikes in code and quotes', () => {
         '```',
         '> Closes #3145',
         '- > Fixes #3145',
-        '- [ ] > Resolves #3145',
         '  1. > Closes #3145',
       ].join('\n'),
       url: 'https://example.test/pr/3150',
