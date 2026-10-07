@@ -780,6 +780,14 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a brace that follows a comment after one ending in a slash',
+    source: (specifier) =>
+      `const value = identity<{ m(i) /*see)/*/ T /*/*/ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of an array type',
     source: (specifier) =>
       `const value = identity<number[]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1615,6 +1623,14 @@ const prefixNotRegexSources: {
     name: 'a method body after a block comment that contains an opener',
     source: (specifier) =>
       `const value = count<{ m(i) /*/**/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a comment that ends with a slash',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*see)/*/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),

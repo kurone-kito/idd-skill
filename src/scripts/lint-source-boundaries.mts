@@ -736,43 +736,32 @@ function scanComments(source: string): {
             previous - 1 > from &&
             source[previous - 1] === '*'
           ) {
-            // A block comment does not nest. `/* was foo() /* now */`
-            // is one comment from the leftmost `/*` whose first `*/`
-            // is this closer. The rightmost `/*` is text inside it,
-            // and stopping there leaves a `)` in front of `(` or `{`.
+            // A block comment does not nest. Walk forward with the
+            // same skip as the main loop, and take the comment that
+            // ends at this closer. A backward search treats the `/`
+            // before an earlier `*/` as a new `/*` (`/*see)/*/ T /*/*/`).
             const closer = previous;
-            let open = previous - 2;
-            let candidate = -1;
-            while (open > from && !isLineTerminator(source[open])) {
-              if (source[open] === '/' && source[open + 1] === '*') {
-                // `/*/*/` ends with body `/` plus this closer. That
-                // pair is not another opener, so keep scanning.
-                if (open + 1 === closer - 1) {
-                  open -= 1;
-                  continue;
-                }
-                // Start after the opener. `/*/` is body text, not an
-                // empty comment; `/**/` still closes on its second star.
-                let end = open + 2;
-                let matches = false;
-                while (end < closer && !isLineTerminator(source[end])) {
-                  if (source[end] === '*' && source[end + 1] === '/') {
-                    matches = end + 1 === closer;
-                    break;
-                  }
-                  end += 1;
-                }
-                if (!matches) {
+            let look = from + 1;
+            let opener = -1;
+            while (look < closer && !isLineTerminator(source[look])) {
+              if (source[look] === '/' && source[look + 1] === '*') {
+                const after = skipBlockCommentForward(look);
+                if (after === undefined || after > closer + 1) {
                   break;
                 }
-                candidate = open;
+                if (after === closer + 1) {
+                  opener = look;
+                  break;
+                }
+                look = after;
+                continue;
               }
-              open -= 1;
+              look += 1;
             }
-            if (candidate < 0) {
+            if (opener < 0) {
               return previous;
             }
-            previous = candidate - 1;
+            previous = opener - 1;
             continue;
           }
           return previous;
