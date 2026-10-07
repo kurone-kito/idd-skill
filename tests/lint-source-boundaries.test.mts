@@ -740,6 +740,38 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a function type whose comment mentions an opener',
+    source: (specifier) =>
+      `const value = identity</* was foo() /* now */ (x: string) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after keyof whose comment mentions an opener',
+    source: (specifier) =>
+      `const value = identity<keyof /* was foo() /* now */ (A | B)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a return type whose comment mentions an opener',
+    source: (specifier) =>
+      `const value = identity<{ m(): /* returns (T) /* docs */ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a brace that follows the later of two comments',
+    source: (specifier) =>
+      `const value = identity<{ m(i) /* was ) */ T /* now */ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of an array type',
     source: (specifier) =>
       `const value = identity<number[]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1511,6 +1543,14 @@ const prefixNotRegexSources: {
     name: 'a method body separated from its parameter list by a block comment',
     source: (specifier) =>
       `const value = count<{ m(i) /* note */ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a block comment that mentions an opener',
+    source: (specifier) =>
+      `const value = count<{ m(i) /* note /* still */ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
         '__SPECIFIER__',
         specifier,
       ),

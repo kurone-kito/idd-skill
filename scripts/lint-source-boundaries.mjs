@@ -656,19 +656,35 @@ function scanComments(source) {
             previous - 1 > from &&
             source[previous - 1] === '*'
           ) {
+            // A block comment does not nest. `/* was foo() /* now */`
+            // is one comment from the leftmost `/*` whose first `*/`
+            // is this closer. The rightmost `/*` is text inside it,
+            // and stopping there leaves a `)` in front of `(` or `{`.
+            const closer = previous;
             let open = previous - 2;
-            let found = false;
+            let candidate = -1;
             while (open > from && !isLineTerminator(source[open])) {
               if (source[open] === '/' && source[open + 1] === '*') {
-                previous = open - 1;
-                found = true;
-                break;
+                let end = open + 1;
+                let matches = false;
+                while (end < closer && !isLineTerminator(source[end])) {
+                  if (source[end] === '*' && source[end + 1] === '/') {
+                    matches = end + 1 === closer;
+                    break;
+                  }
+                  end += 1;
+                }
+                if (!matches) {
+                  break;
+                }
+                candidate = open;
               }
               open -= 1;
             }
-            if (!found) {
+            if (candidate < 0) {
               return previous;
             }
+            previous = candidate - 1;
             continue;
           }
           return previous;
