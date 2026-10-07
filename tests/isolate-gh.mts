@@ -1703,26 +1703,18 @@ function isWin32TelemetryRelayBootstrap(
   args: unknown[],
   options: unknown,
 ): boolean {
-  if (process.platform !== 'win32' || method !== 'spawn') return false;
+  if (method !== 'spawn') return false;
   const record =
     options !== null && typeof options === 'object' && !Array.isArray(options)
       ? (options as LaunchOptions)
       : {};
   const env = record.env;
   const [executable, argv] = args;
-  const script = Array.isArray(argv) ? argv[2] : undefined;
   return (
     executable === process.execPath &&
     Array.isArray(argv) &&
     argv[0] === '--input-type=commonjs' &&
     argv[1] === '-e' &&
-    typeof script === 'string' &&
-    script.includes(
-      'const command = process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND;',
-    ) &&
-    script.includes(
-      "const forwardedNodeOptions = env['IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS'] || '';",
-    ) &&
     env?.NODE_OPTIONS === '' &&
     typeof env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND === 'string'
   );
