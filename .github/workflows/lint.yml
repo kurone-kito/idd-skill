@@ -35,28 +35,7 @@ jobs:
     # duration. See issue #3728 for source run details.
     timeout-minutes: 10
     steps:
-      # fetch-depth: 0 is required by audit-docs' changed-file diff bases.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Run documentation audit
-        run: node scripts/audit-docs.mjs --check
-      - name: Run bare-Node source contract audit
-        run: node scripts/lint-source-contracts.mjs
-      # Whole-tree source boundary rules (import boundaries, no direct gh
-      # spawns, provider-port migration, no NUL bytes) run here as a plain
-      # Node entry with no install, so extracting them out of the test suite
-      # (#3748) cannot drop the bare-node lane's coverage of them.
-      - name: Run source boundary lint
-        run: node scripts/lint-source-boundaries.mjs
-      # Schema, fixture-pair and live-instance validation (the policy config,
-      # the phase graph data and the hearing catalog) runs here as a plain Node
-      # entry with no install, so moving it out of the test suite (#3751)
-      # cannot drop the bare-node lane's coverage of it. The schema and
-      # onboarding catalog agreements run inside the audit-docs step above.
-      - name: Run schema validation
-        run: node scripts/validate-schemas.mjs
+      # Check the runner Node before checkout or repository scripts execute.
       # The test suite is typed `.mts` executed via Node's native type
       # stripping (unflagged since 22.18), and this lane also invokes
       # migrated helper CLIs directly (e.g. verify-workshop-integrity.mjs
@@ -87,6 +66,28 @@ jobs:
               process.exit(1);
             }
           '
+      # fetch-depth: 0 is required by audit-docs' changed-file diff bases.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run documentation audit
+        run: node scripts/audit-docs.mjs --check
+      - name: Run bare-Node source contract audit
+        run: node scripts/lint-source-contracts.mjs
+      # Whole-tree source boundary rules (import boundaries, no direct gh
+      # spawns, provider-port migration, no NUL bytes) run here as a plain
+      # Node entry with no install, so extracting them out of the test suite
+      # (#3748) cannot drop the bare-node lane's coverage of them.
+      - name: Run source boundary lint
+        run: node scripts/lint-source-boundaries.mjs
+      # Schema, fixture-pair and live-instance validation (the policy config,
+      # the phase graph data and the hearing catalog) runs here as a plain Node
+      # entry with no install, so moving it out of the test suite (#3751)
+      # cannot drop the bare-node lane's coverage of it. The schema and
+      # onboarding catalog agreements run inside the audit-docs step above.
+      - name: Run schema validation
+        run: node scripts/validate-schemas.mjs
       - name: Run protocol tests
         run: node --test --import ./tests/isolate-state.mts tests/*.test.mts
       - name: Run workshop integrity check
