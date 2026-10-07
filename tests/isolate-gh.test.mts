@@ -713,7 +713,7 @@ Promise.all([
   }
 });
 
-test('a caught child CLI attempt fails the owning test process through its shared ledger', () => {
+test('an explicit empty NODE_OPTIONS cannot bypass the child GH guard', () => {
   const guardRoot = mkdtempSync(join(tmpdir(), 'idd-gh-guard-owner-test-'));
   const ledgerPath = join(guardRoot, 'attempts.jsonl');
   const childSource = `
@@ -728,7 +728,7 @@ try {
 const { spawnSync } = require('node:child_process');
 const child = spawnSync(process.execPath, ['-e', ${JSON.stringify(childSource)}], {
   encoding: 'utf8',
-  env: { ...process.env, IDD_TEST_GH_GUARD_SELF_CHECK: '0' },
+  env: { ...process.env, IDD_TEST_GH_GUARD_SELF_CHECK: '0', NODE_OPTIONS: '' },
 });
 if (child.error || child.status !== 0) {
   process.stderr.write(child.stderr || child.error?.message || 'child failed');
@@ -759,7 +759,7 @@ if (child.error || child.status !== 0) {
   }
 });
 
-test('preserves explicit child environments that clear NODE_OPTIONS', () => {
+test('reinstalls the GH guard when an explicit child environment clears NODE_OPTIONS', () => {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (key.toLowerCase() === 'node_options') delete env[key];
@@ -773,7 +773,7 @@ test('preserves explicit child environments that clear NODE_OPTIONS', () => {
 
   assert.equal(result.error, undefined);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, '');
+  assert.ok(result.stdout.includes(process.env.IDD_TEST_GH_GUARD_IMPORT ?? ''));
 });
 
 test('NODE_OPTIONS guards a Worker with empty execArgv and shares its ledger', async () => {
@@ -855,7 +855,7 @@ parentPort.postMessage({
   }
 });
 
-test('a guarded Worker adds the bridge to children when its env omits NODE_OPTIONS', async () => {
+test('a guarded Worker adds the bridge when a child env clears NODE_OPTIONS', async () => {
   const guardRoot = mkdtempSync(
     join(tmpdir(), 'idd-gh-guard-worker-child-test-'),
   );
@@ -869,7 +869,10 @@ test('a guarded Worker adds the bridge to children when its env omits NODE_OPTIO
 const { parentPort, workerData } = require('node:worker_threads');
 const { spawnSync } = require('node:child_process');
 const childSource = 'require("node:child_process").spawnSync(' + JSON.stringify(workerData.ghPath) + ', []);';
-const result = spawnSync(process.execPath, ['-e', childSource], { encoding: 'utf8' });
+const result = spawnSync(process.execPath, ['-e', childSource], {
+  encoding: 'utf8',
+  env: { ...process.env, NODE_OPTIONS: '' },
+});
 parentPort.postMessage({ status: result.status, stderr: result.stderr });
 `;
   try {

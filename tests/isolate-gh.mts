@@ -1698,7 +1698,41 @@ function appendGuardImport(env: NodeJS.ProcessEnv): void {
   }
 }
 
-function optionsWithGuard(options: unknown, directGhFixture: boolean): unknown {
+function isWin32TelemetryRelayBootstrap(
+  method: string,
+  args: unknown[],
+  options: unknown,
+): boolean {
+  if (process.platform !== 'win32' || method !== 'spawn') return false;
+  const record =
+    options !== null && typeof options === 'object' && !Array.isArray(options)
+      ? (options as LaunchOptions)
+      : {};
+  const env = record.env;
+  const [executable, argv] = args;
+  const script = Array.isArray(argv) ? argv[2] : undefined;
+  return (
+    executable === process.execPath &&
+    Array.isArray(argv) &&
+    argv[0] === '--input-type=commonjs' &&
+    argv[1] === '-e' &&
+    typeof script === 'string' &&
+    script.includes(
+      'const command = process.env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND;',
+    ) &&
+    script.includes(
+      "const forwardedNodeOptions = env['IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_NODE_OPTIONS'] || '';",
+    ) &&
+    env?.NODE_OPTIONS === '' &&
+    typeof env.IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND === 'string'
+  );
+}
+
+function optionsWithGuard(
+  options: unknown,
+  directGhFixture: boolean,
+  win32TelemetryRelayBootstrap: boolean,
+): unknown {
   const record =
     options !== null && typeof options === 'object' && !Array.isArray(options)
       ? (options as LaunchOptions)
@@ -1737,12 +1771,13 @@ function optionsWithGuard(options: unknown, directGhFixture: boolean): unknown {
         ([name, value]) =>
           name.toUpperCase() === 'NODE_OPTIONS' && value === '',
       );
-    if (preservesEmptyNodeOptions) return { ...record, env };
-    // An explicitly empty NODE_OPTIONS is authoritative. In particular,
-    // the Windows telemetry relay deliberately clears it before its own
-    // startup and forwards the original value only to the real hook.
-    // Ordinary child environments already carry this preload, and Workers
-    // install their bridge through the separate Worker wrapper.
+    if (preservesEmptyNodeOptions && win32TelemetryRelayBootstrap) {
+      return { ...record, env };
+    }
+    // Preserve the Windows telemetry relay's intentionally sanitized
+    // startup environment. For every ordinary child, re-add the guard even
+    // when its explicit env cleared NODE_OPTIONS so it cannot bypass the
+    // real-gh check (review of #3755).
     appendGuardImport(env);
   }
   return { ...record, env };
@@ -1774,9 +1809,15 @@ function wrap(
           options?.env,
           launchDirectory(options?.cwd),
         );
+      const win32TelemetryRelayBootstrap = isWin32TelemetryRelayBootstrap(
+        method,
+        args,
+        hasCallback ? undefined : args[index],
+      );
       const guardedOptions = optionsWithGuard(
         hasCallback ? undefined : args[index],
         directGhFixture,
+        win32TelemetryRelayBootstrap,
       );
       if (hasCallback) args.splice(index, 0, guardedOptions);
       else args[index] = guardedOptions;
