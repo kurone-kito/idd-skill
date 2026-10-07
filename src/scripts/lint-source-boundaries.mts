@@ -324,11 +324,14 @@ function scanComments(source: string): {
     let braceDepth = 0;
     let lastCodeChar = '';
     let lastCodeCharIsIdentifierPart = false;
-    // A `.` after a plain decimal token (`1.`, `1_000.`) ends that
-    // numeric literal, so the next `/` is division. The same character
-    // after an identifier (`foo1.`) or an exponent (`1e2.`) is member
-    // access and must not take this path.
+    // A flush `.` continues a decimal integer (`1.`, `1_000.`) and the
+    // next `/` is division. A dot after an exponent (`1e2.`, `1e+2.`),
+    // a second dot (`1.5.`), an identifier (`foo1.`), or any space or
+    // comment is member access, so `/` may still start a regex.
     let numericLiteralDot = false;
+    let openDecimalInteger = false;
+    let decimalFraction = false;
+    let numericExponentTail = false;
     let lastWord = '';
     let previousWord = '';
     let lastWordIsPropertyName = false;
@@ -449,6 +452,9 @@ function scanComments(source: string): {
         currentWordStartsExpressionContext = false;
       }
       wordBoundary = true;
+      openDecimalInteger = false;
+      decimalFraction = false;
+      numericExponentTail = false;
       if (hasLineTerminator) {
         possiblePostfixUpdate = false;
         postfixNonNullAssertion = false;
@@ -504,10 +510,7 @@ function scanComments(source: string): {
           postfixNonNullAssertion,
           regexAfterRestrictedStatementLineBreak,
         );
-      numericLiteralDot =
-        ch === '.' &&
-        !lastWordIsPropertyName &&
-        /^[0-9][0-9_]*$/.test(lastWord);
+      noteNumericLiteralChar(ch, sourceIndex);
       const startsWord = wordBoundary || lastWord === '';
       if (startsWord) {
         const followsAsyncFunctionPrefix =
@@ -553,10 +556,81 @@ function scanComments(source: string): {
       arrowBodyPending = startsArrowBody;
     }
 
+    function noteNumericLiteralChar(ch: string, sourceIndex: number): void {
+      const previousSourceChar = sourceIndex > 0 ? source[sourceIndex - 1] : '';
+      const continuesOpenDecimal =
+        openDecimalInteger && /[0-9_]/.test(previousSourceChar);
+      if (
+        ch === '.' &&
+        continuesOpenDecimal &&
+        /[0-9]/.test(previousSourceChar)
+      ) {
+        numericLiteralDot = true;
+        openDecimalInteger = false;
+        decimalFraction = true;
+        numericExponentTail = false;
+        return;
+      }
+      numericLiteralDot = false;
+      if (
+        decimalFraction &&
+        /[0-9_]/.test(ch) &&
+        /[0-9._]/.test(previousSourceChar)
+      ) {
+        return;
+      }
+      if (
+        /[0-9]/.test(ch) &&
+        !numericExponentTail &&
+        !decimalFraction &&
+        !lastWordIsPropertyName &&
+        !continuesOpenDecimal &&
+        !/[A-Za-z0-9_$]/.test(previousSourceChar) &&
+        previousSourceChar !== '.'
+      ) {
+        openDecimalInteger = true;
+        numericExponentTail = false;
+        return;
+      }
+      if (continuesOpenDecimal && /[0-9_]/.test(ch)) {
+        return;
+      }
+      if (
+        (ch === 'e' || ch === 'E') &&
+        ((continuesOpenDecimal && /[0-9]/.test(previousSourceChar)) ||
+          (decimalFraction && /[0-9.]/.test(previousSourceChar)))
+      ) {
+        openDecimalInteger = false;
+        decimalFraction = false;
+        numericExponentTail = true;
+        return;
+      }
+      if (
+        numericExponentTail &&
+        (ch === '+' || ch === '-') &&
+        /[eE]/.test(previousSourceChar)
+      ) {
+        return;
+      }
+      if (
+        numericExponentTail &&
+        /[0-9]/.test(ch) &&
+        /[0-9eE+-]/.test(previousSourceChar)
+      ) {
+        return;
+      }
+      openDecimalInteger = false;
+      decimalFraction = false;
+      numericExponentTail = false;
+    }
+
     function recordLiteral(end: string): void {
       lastCodeChar = end;
       lastCodeCharIsIdentifierPart = false;
       numericLiteralDot = false;
+      openDecimalInteger = false;
+      decimalFraction = false;
+      numericExponentTail = false;
       previousWord = '';
       previousWordIsPropertyName = false;
       lastWord = '';

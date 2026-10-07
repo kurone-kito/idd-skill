@@ -1435,6 +1435,38 @@ const prefixNotRegexSources: {
         specifier,
       ),
   },
+  {
+    name: 'a regex after a signed exponent and a member dot',
+    source: (specifier) =>
+      `const value = 1e+2. /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after a fraction exponent and a member dot',
+    source: (specifier) =>
+      `const value = 1.5e-2. /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after a spaced member dot',
+    source: (specifier) =>
+      `const value = 1 . /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after a comment before a member dot',
+    source: (specifier) =>
+      `const value = 1/*c*/. /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
 ];
 
 for (const { name, source } of prefixNotRegexSources) {
