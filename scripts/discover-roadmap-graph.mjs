@@ -63,6 +63,7 @@ import {
   GH_SEARCH_RESULT_CAP,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import { CLOSING_KEYWORD_ALTERNATION } from './supersession-detection.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // GitHub's search API returns at most 1000 results for a single query
@@ -89,8 +90,13 @@ const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
 // cross the hyphen boundary — GitHub itself does not recognize a compound
 // hyphenated word as a closing keyword, so this also matches real close
 // semantics, not just this repo's own heuristic.
-const KEYWORD_REFERENCE_REGEX =
-  /(?<!-)\b(Closes|Close|Closed|Fixes|Fixed|Fix|Resolves|Resolved|Resolve|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
+// The nine closing words come from the shared alternation (#3877) so the graph
+// cannot drift from the PR-side consumers; the colon is not part of the graph
+// grammar, which strips a leading colon itself.
+const KEYWORD_REFERENCE_REGEX = new RegExp(
+  `(?<!-)\\b((?:${CLOSING_KEYWORD_ALTERNATION})|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\\b`,
+  'giu',
+);
 // #1964: a recognized closing/dependency/sub-issue keyword sitting next to a
 // `#N` reference inside a negation clause (e.g. issue 1931's own merged
 // body — a field-report narrative about an unrelated already-closed

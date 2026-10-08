@@ -260,7 +260,7 @@ loop instead of returning to this D1 rebase path.
    inside the alternation would silently break the `resolve` branch):
 
    ```text
-   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b
+   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+#<N>\b
    ```
 
    Matching case-insensitively (`Closes`, `CLOSES`, and `closes` all

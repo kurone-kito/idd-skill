@@ -8,6 +8,7 @@ import {
   buildPrDetailArgs,
   evaluateHighConfidenceDuplicate,
   findCandidateFileOverlap,
+  findStrayCommitCloses,
   findTrustedSuitabilityRejection,
   isSuitabilityTriageVerdictCurrent,
   parseSuitabilityTriageVerdictMarker,
@@ -655,6 +656,44 @@ test('prReferencesIssue: keyword-adjacent forms still match after the #1888 narr
       `expected a match for body: ${body}`,
     );
   }
+});
+
+test('prReferencesIssue: the colon form GitHub links matches, case-insensitively (#3877)', () => {
+  for (const body of ['Closes: #1862', 'CLOSES: #1862', 'Fixes:  #1862']) {
+    assert.equal(
+      prReferencesIssue({ closingIssuesReferences: [], title: '', body }, 1862),
+      true,
+      `expected a match for body: ${body}`,
+    );
+  }
+});
+
+test('prReferencesIssue: a colon glued to "#" with no whitespace, and non-closing references, do not match (#3877)', () => {
+  for (const body of ['Closes:#1862', 'Refs #1862', 'Part of #1862']) {
+    assert.equal(
+      prReferencesIssue({ closingIssuesReferences: [], title: '', body }, 1862),
+      false,
+      `expected no match for body: ${body}`,
+    );
+  }
+});
+
+test('findStrayCommitCloses: flags the colon form for an issue outside the expected set (#3877)', () => {
+  const strays = findStrayCommitCloses(
+    [
+      {
+        sha: 'abc1234',
+        commit: { message: 'fix: tidy the parser\n\nCloses: #43' },
+      },
+      {
+        sha: 'def5678',
+        commit: { message: 'docs: note the set\n\nCloses: #3877' },
+      },
+    ],
+    [3877],
+  );
+
+  assert.deepEqual(strays, [{ sha: 'abc1234', issue: 43 }]);
 });
 
 test('prReferencesIssue: no match when neither signal references the issue', () => {

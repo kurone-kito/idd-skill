@@ -445,7 +445,7 @@ completion.
    equivalent to:
 
    ```text
-   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b
+   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+#<N>\b
    ```
 
 4. **If no match in the stripped body**:
@@ -505,7 +505,7 @@ completion.
    ```
 
    ```text
-   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(\d+)\b
+   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+#(\d+)\b
    ```
 
    Numbers in D3's deliberate closing set are expected; any other
