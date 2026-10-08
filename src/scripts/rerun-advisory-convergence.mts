@@ -447,6 +447,15 @@ export interface RerunAdvisoryConvergencePlan {
    * caller does not need to re-derive it from prose elsewhere. */
   planCaveat: string;
   /**
+   * Non-empty only when a command in `plan` belongs, through its
+   * `checkRunIds`, to a `pull_request_target` instance: such a rerun reuses
+   * that event's base-branch workflow definition, so a later change to the
+   * workflow file is invisible to it. Printed after `planCaveat` in the
+   * "Sequential recovery plan" section; empty otherwise, like
+   * `recoveryRefreshCaveat`.
+   */
+  workflowDefinitionNote: string;
+  /**
    * Populated when at least one instance is `bot-gated-skip` AND at least
    * one already-passing, non-bot, pull_request-family instance exists for
    * the same SHA -- UNLESS `plan` already contains a genuinely NON-bot
@@ -538,6 +547,13 @@ export interface RerunAdvisoryConvergencePlan {
 
 const PLAN_CAVEAT =
   'Rerun the rerun-eligible instances ONE AT A TIME, in the order listed below, waiting for each `gh run rerun` to finish before starting the next -- rerunning several concurrently makes them cancel each other via the shared concurrency group.';
+
+// Shared by `workflowDefinitionNote` and the maintainer-decision variants of
+// `rerunPolicyHoldNotice` that withhold a rerun-eligible `pull_request_target`
+// run. The verdict job's own run-time checkout stays current; only the
+// workflow-level definition is frozen at the original event.
+const WORKFLOW_DEFINITION_NOTE =
+  "A rerun reuses the original event's commit and workflow definition (for `pull_request_target`, the base branch's at that time), while the job still checks out the branch its workflow names (`main` in the shipped workflow) for scripts and policy. If the workflow file changed since and the rerun fails the same way, only a new event (a push to the PR branch, or closing and reopening it) picks the change up.";
 
 // Deliberately does NOT open with "No rerun-eligible instance exists": since
 // #1745, recoveryRefreshPlan can be populated alongside a non-empty `plan`
@@ -1046,14 +1062,31 @@ export function computeRerunPlan(
         decision.reason === 'rerun-budget-exhausted'
       );
     });
+  // A withheld rerun-eligible `pull_request_target` run (not a recovery-refresh
+  // candidate) adds WORKFLOW_DEFINITION_NOTE to the maintainer-decision
+  // variants below; the `--refresh-latest` variant stays as it is.
+  const pullRequestTargetCheckRunIds = new Set(
+    instances
+      .filter((instance) => instance.runEvent === 'pull_request_target')
+      .map((instance) => instance.checkRunId),
+  );
+  const withheldPullRequestTargetRerun = [...eligibleDecisions.entries()].some(
+    ([checkRunId, decision]) =>
+      decision.action === 'hold' &&
+      !isHandledRecoveryCheckRun(checkRunId) &&
+      pullRequestTargetCheckRunIds.has(checkRunId),
+  );
+  const workflowDefinitionHoldSuffix = withheldPullRequestTargetRerun
+    ? ` ${WORKFLOW_DEFINITION_NOTE}`
+    : '';
   const rerunPolicyHoldNotice =
     totalHeldCount === 0
       ? ''
       : rerunPolicy === 'hold'
-        ? `ciWait.rerunPolicy is "hold": ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} found, but auto-rerun is disallowed by this repository's policy -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`
+        ? `ciWait.rerunPolicy is "hold": ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} found, but auto-rerun is disallowed by this repository's policy -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).${workflowDefinitionHoldSuffix}`
         : everyWithheldIsSpentLiveCoverageRecovery
           ? `ciWait.rerunPolicy is "rerun-once" and ${describeRerunOnceHoldReasons(allHeldReasons)}: ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- every withheld instance is a live-coverage recovery that was not promoted. Rerun with: node scripts/rerun-advisory-convergence.mjs --pr ${input.prNumber} --refresh-latest --apply`
-          : `ciWait.rerunPolicy is "rerun-once" and ${describeRerunOnceHoldReasons(allHeldReasons)}: ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`;
+          : `ciWait.rerunPolicy is "rerun-once" and ${describeRerunOnceHoldReasons(allHeldReasons)}: ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).${workflowDefinitionHoldSuffix}`;
 
   const budgetHeldCheckRunIds = new Set(
     [...eligibleDecisions.entries(), ...refreshDecisions.entries()]
@@ -1101,6 +1134,13 @@ export function computeRerunPlan(
     counts,
     plan,
     planCaveat: PLAN_CAVEAT,
+    workflowDefinitionNote: plan.some((command) =>
+      command.checkRunIds.some((checkRunId) =>
+        pullRequestTargetCheckRunIds.has(checkRunId),
+      ),
+    )
+      ? WORKFLOW_DEFINITION_NOTE
+      : '',
     recoveryRefreshPlan,
     recoveryRefreshCaveat:
       recoveryRefreshPlan.length > 0 ? RECOVERY_REFRESH_CAVEAT : '',
@@ -2576,6 +2616,9 @@ export function buildRerunPlanTextSections(
         ...plan.plan.map((entry, index) => `  ${index + 1}. ${entry.command}`),
         '',
         plan.planCaveat,
+        ...(plan.workflowDefinitionNote
+          ? ['', plan.workflowDefinitionNote]
+          : []),
       ].join('\n'),
     );
   }
