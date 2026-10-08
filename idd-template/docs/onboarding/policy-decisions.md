@@ -677,8 +677,8 @@ Keep these rules in mind:
 - set `helperRuntime.packageSpec` only when the repository has pinned a
   reviewed tarball, mirror URL, or commit archive for its `ephemeral-npx`,
   `package-manager`, or `user-global` install; omit it to keep the mutable
-  default archive URL for every profile. An omitted `packageSpec` under
-  these profiles is a deliberate, supported choice, but
+  default archive URL. An omitted `packageSpec` under these profiles is a
+  deliberate, supported choice, but
   `idd-onboard.mjs --verify` surfaces it as a non-blocking reminder (see
   [Helper runtime profile](#helper-runtime-profile) above)
 
