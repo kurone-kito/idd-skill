@@ -999,6 +999,12 @@ test('idd-doctor leaves the user-global bin check out of other helper runtime pr
 });
 
 test('user-global bin inspection reads the owning package through a pnpm shim', (t) => {
+  if (process.platform === 'win32') {
+    // Windows resolves bins through PATHEXT extensions, and this fixture is a
+    // POSIX shell script with no extension.
+    t.skip('the shim fixture is a POSIX shell script');
+    return;
+  }
   // pnpm writes a regular shell shim, not a symlink, and names the real bin on
   // a cmd-shim-target line. Nothing about the shim itself is package metadata.
   const base = mkdtempSync(join(tmpdir(), 'idd-user-global-shim-'));
