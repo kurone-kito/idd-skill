@@ -737,6 +737,20 @@ function buildStubPreloadSource(
     '    if (isMain) return {};',
     '    return originalLoad.apply(this, arguments);',
     '  };',
+    // A NODE_OPTIONS `--import` (the GitHub CLI guard preload, #3755) makes
+    // Node load the main entry through the ESM loader instead of
+    // `Module._load`, so the override above never sees it and the import of
+    // the unreachable main path rejects with ERR_MODULE_NOT_FOUND after
+    // `scriptBody` has already started. Absorb exactly that rejection and
+    // let every other uncaught error through unchanged.
+    '  if (rawFirstArg !== undefined) {',
+    '    const absorbMainNotFound = function (error) {',
+    "      if (error && error.code === 'ERR_MODULE_NOT_FOUND' && String(error.message).toLowerCase().includes(rawFirstArg.toLowerCase())) return;",
+    "      process.removeListener('uncaughtException', absorbMainNotFound);",
+    '      throw error;',
+    '    };',
+    "    process.on('uncaughtException', absorbMainNotFound);",
+    '  }',
     '  {',
     scriptBody,
     '  }',
