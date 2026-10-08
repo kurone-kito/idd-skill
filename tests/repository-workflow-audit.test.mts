@@ -2220,6 +2220,61 @@ const RULE_CASES: readonly RuleCase[] = [
     mutation: { from: '\npermissions:', to: '\npermissions_x:' },
     expected: [{ message: 'on:/permissions: block not found' }],
   },
+  {
+    ruleId: 'RWA006',
+    name: 'a post step renamed while its old name survives in a comment',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const step = anchored(
+          text,
+          '      - name: Post the self-referential-bootstrap-auto waiver\n',
+        );
+        return `${text.slice(0, step)}      # - name: Post the self-referential-bootstrap-auto waiver\n      - name: Post the waiver\n${text.slice(step + '      - name: Post the self-referential-bootstrap-auto waiver\n'.length)}`;
+      },
+    },
+    expected: [{ message: 'no longer declares the expected post-step name' }],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'an artifact name renamed while its prefix survives in a shell path',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        anchored(text, '          name: idd-self-waiver-marker-');
+        const renamed = text.replace(
+          '          name: idd-self-waiver-marker-',
+          '          name: renamed-marker-',
+        );
+        const at = anchored(
+          renamed,
+          '      - name: Post the self-referential-bootstrap-auto waiver\n',
+        );
+        return `${renamed.slice(0, at)}      - name: Show the prefix\n        run: echo idd-self-waiver-marker-\n${renamed.slice(at)}`;
+      },
+    },
+    expected: [
+      { message: 'no longer declares the expected artifact-name prefix' },
+    ],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'a job id renamed while its old id survives in a comment',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const job = anchored(text, '  idd-advisory-convergence-self-waiver:\n');
+        const renamed = text.replace(
+          '  idd-advisory-convergence-self-waiver:\n',
+          '  renamed-self-waiver:\n',
+        );
+        return `${renamed.slice(0, job)}  # idd-advisory-convergence-self-waiver:\n${renamed.slice(job)}`;
+      },
+    },
+    expected: [
+      { message: 'no longer declares the expected self-waiver job id' },
+    ],
+  },
   // RWA006: self-waiver constants across both advisory-convergence copies.
   {
     ruleId: 'RWA006',

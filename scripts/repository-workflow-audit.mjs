@@ -341,6 +341,15 @@ function readStringConstant(source, name) {
   const match = new RegExp(`export const ${name} =\\s*'([^']*)';`).exec(source);
   return match?.[1];
 }
+// Whether a `name:` key carries the artifact prefix in its value. A step's
+// `- name:` line, a comment, or a `run:` line cannot satisfy this, because
+// only the value of a plain key is read.
+function declaresArtifactName(text, prefix) {
+  return text.split('\n').some((line) => {
+    const value = line.trim().match(/^name:\s*['"]?(.*)$/)?.[1];
+    return value?.startsWith(prefix) === true;
+  });
+}
 // Both copies must keep the self-waiver job id, post-step name, and artifact
 // prefix that the waiver provenance verifier reads, so a rename in one copy
 // cannot silently break the waiver check.
@@ -388,17 +397,23 @@ function checkSelfReferentialWaiverConstants(root, report) {
     if (workflow === undefined) {
       continue;
     }
-    if (!workflow.includes(`${jobId}:`)) {
+    // Declarations, not substrings: a comment or another step that repeats
+    // the same text must not satisfy these checks.
+    if (!jobIds(workflow)?.includes(jobId)) {
       report(
         RWA006,
         path,
         'no longer declares the expected self-waiver job id',
       );
     }
-    if (!workflow.includes(`name: ${postStepName}`)) {
+    if (
+      !workflow
+        .split('\n')
+        .some((line) => line.trim() === `- name: ${postStepName}`)
+    ) {
       report(RWA006, path, 'no longer declares the expected post-step name');
     }
-    if (!workflow.includes(artifactNamePrefix)) {
+    if (!declaresArtifactName(workflow, artifactNamePrefix)) {
       report(
         RWA006,
         path,
