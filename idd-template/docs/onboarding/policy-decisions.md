@@ -205,7 +205,7 @@ this order:
    resolvable one-shot helper command already exists
 4. `instructions-only` fallback when none of the above applies
 
-Repositories without Node.js remain fully supported through
+Repositories without Node.js remain supported through
 `instructions-only`.
 
 Run this manifest helper from the target repository root when helper
@@ -587,7 +587,7 @@ repository default branch)
 
 ### Helper Runtime Profile
 
-**Profile**: `{instructions-only | package-manager | vendored-node | ephemeral-npx}`
+**Profile**: `{instructions-only | package-manager | vendored-node | ephemeral-npx | user-global}`
 
 ### Issue-Author Approval Gate
 
