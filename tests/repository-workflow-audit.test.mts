@@ -3327,6 +3327,39 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ message: 'must declare exactly one actions/checkout step' }],
   },
+  {
+    ruleId: 'RWA006',
+    name: 'a post step that names the waiver poster in env: while its run body runs another command',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const name =
+          '      - name: Post the self-referential-bootstrap-auto waiver\n';
+        const start = anchored(text, name);
+        const next = text.indexOf('\n      - ', start + name.length);
+        const end = next === -1 ? text.length : next + 1;
+        const step = text.slice(start, end);
+        const run = '          node scripts/external-check-waiver.mjs \\\n';
+        const env = '        env:\n';
+        assert.ok(step.includes(run), 'fixture anchor not found: poster line');
+        assert.ok(
+          step.includes(env),
+          'fixture anchor not found: post step env',
+        );
+        const moved = step
+          .split(run)
+          .join('          node scripts/echo-check-waiver.mjs \\\n')
+          .split(env)
+          .join(
+            `${env}          WAIVER_POSTER: scripts/external-check-waiver.mjs\n`,
+          );
+        return text.slice(0, start) + moved + text.slice(end);
+      },
+    },
+    expected: [
+      { message: 'the post step must run scripts/external-check-waiver.mjs' },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

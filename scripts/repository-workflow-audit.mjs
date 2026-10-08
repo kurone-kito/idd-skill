@@ -482,6 +482,11 @@ function declaresArtifactName(jobBody, prefix) {
   const names = children.filter((line) => /^ {10}name:/.test(line));
   return names.length === 1 && names[0].startsWith(`          name: ${prefix}`);
 }
+// The run: body of a step, from its run: key on. A name in env: or if: does not run.
+function runBodyOf(stepText) {
+  const start = stepText.search(/^ {8}run: /m);
+  return start === -1 ? '' : stepText.slice(start);
+}
 // The waiver poster the self-waiver post step must run.
 const WAIVER_POSTER = 'scripts/external-check-waiver.mjs';
 // Both copies must keep the self-waiver job id, post-step name, and artifact
@@ -556,9 +561,9 @@ function checkSelfReferentialWaiverConstants(root, report) {
         'must declare the expected post-step name exactly once',
       );
     } else if (
-      !(stepTextNamed(tokenText(jobBody), postStepName) ?? '').includes(
-        WAIVER_POSTER,
-      )
+      !runBodyOf(
+        stepTextNamed(tokenText(jobBody), postStepName) ?? '',
+      ).includes(WAIVER_POSTER)
     ) {
       report(RWA006, path, `the post step must run ${WAIVER_POSTER}`);
     }
