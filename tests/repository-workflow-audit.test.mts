@@ -2293,6 +2293,61 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA005',
+    name: 'a checkout written as a flow mapping that splits its key across lines',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+      to: '      - { ? uses\n        : actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 }\n',
+    },
+    expected: [{ message: 'flow collections cannot be read by this audit' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a flow mapping whose run key hides a uses key on the same line',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const job = anchored(
+          text,
+          '\n  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${text.slice(0, job)}\n      - {env: {run: x}, uses: actions/checkout@v4, with: {ref: main}}${text.slice(job)}`;
+      },
+    },
+    expected: [{ message: 'flow collections cannot be read by this audit' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a second canonical upload added to a required gate',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const job = anchored(
+          text,
+          '\n  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${text.slice(0, job)}\n      - name: extra upload\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: idd-probe\n          path: /dev/null${text.slice(job)}`;
+      },
+    },
+    expected: [
+      {
+        message: 'a required gate may declare only its self-waiver upload',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate in which no step checks out the repository',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@',
+      to: '      - name: no checkout at ',
+      all: true,
+    },
+    expected: [{ message: 'no actions/checkout step to pin to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
     name: 'a checkout written as a complex mapping key',
     path: ROOT_ADVISORY,
     mutation: {

@@ -341,29 +341,28 @@ function readStringConstant(source, name) {
   const match = new RegExp(`export const ${name} =\\s*'([^']*)';`).exec(source);
   return match?.[1];
 }
-// Structure only: the lines of a workflow with comment lines removed and each
-// run: body blanked. A run: body is shell text, so its backslashes and colons
-// are not YAML syntax and must neither trip nor hide a structural check.
+// Structure only: the lines of a workflow with comment lines removed, and the
+// body of every block scalar (`key: |` or `key: >`) blanked. A block scalar's
+// body is text, not YAML structure, so its shell or script braces and
+// backslashes neither trip nor hide a structural check. Every other line,
+// including the rest of a line that carries a key, stays in view.
 function structuralLines(text) {
   const out = [];
-  let runColumn;
+  let blockColumn;
   for (const line of text.split('\n')) {
     if (/^\s*#/.test(line)) {
       continue;
     }
     if (
-      runColumn !== undefined &&
-      (line.trim() === '' || indentOf(line) > runColumn)
+      blockColumn !== undefined &&
+      (line.trim() === '' || indentOf(line) > blockColumn)
     ) {
       out.push('');
       continue;
     }
-    runColumn = undefined;
-    const run = line.match(/^(\s*(?:- +)?)run\s*:/);
-    if (run) {
-      runColumn = run[1].length;
-      out.push(`${run[1]}run:`);
-      continue;
+    blockColumn = undefined;
+    if (/:\s*[|>][-+0-9]*\s*$/.test(line)) {
+      blockColumn = line.search(/[^\s-]/);
     }
     out.push(line);
   }
@@ -431,7 +430,8 @@ const UPLOAD_WITH_KEYS = [
 ];
 // Whether the job's single upload step declares the artifact prefix as the
 // value of its own `name:` key. An env name, an extra step key, or a second
-// upload step cannot satisfy this.
+// upload step cannot satisfy this. The file-wide count of uploads is checked
+// in checkCheckoutSurface, so the verifier cannot trust an upload elsewhere.
 function declaresArtifactName(jobBody, prefix) {
   const lines = structuralLines(jobBody);
   const uploads = lines.flatMap((line, index) =>
@@ -558,6 +558,29 @@ const CHECKOUT_WITH_KEYS = [
 // or an extra key in a checkout step cannot hide a checkout.
 function checkCheckoutSurface(path, text, report) {
   const lines = structuralLines(text);
+  // A flow collection can hide a key on a line that reads as text, so flow
+  // syntax is refused in the jobs section. Expressions are removed first, since
+  // their braces are not flow syntax.
+  const jobsAt = lines.indexOf('jobs:');
+  if (
+    lines
+      .slice(jobsAt === -1 ? 0 : jobsAt)
+      .some((line) => /[[\]{}]/.test(line.replace(/\$\{\{.*?\}\}/g, '')))
+  ) {
+    report(RWA005, path, 'flow collections cannot be read by this audit');
+    return;
+  }
+  // The verifier trusts a prefixed artifact anywhere in the run, so the gate
+  // may declare exactly one upload in the whole file.
+  const uploads = lines.filter((line) => UPLOAD_USES.test(line));
+  if (uploads.length !== 1) {
+    report(
+      RWA005,
+      path,
+      'a required gate may declare only its self-waiver upload',
+    );
+    return;
+  }
   if (lines.some((line) => line.includes('\\'))) {
     report(
       RWA005,
