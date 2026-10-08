@@ -13,7 +13,10 @@ import {
   type InFlightIssueInput,
   loadManifest,
   normalizeContentionPath,
+  type OverlapAnalysis,
   type OverlapCandidateInput,
+  type OverlapCandidateResult,
+  type OverlapHit,
   parseArgs,
   parseCandidateFileEntries,
   parseCandidateFiles,
@@ -1285,7 +1288,6 @@ test('selectNonOverlappingBatch reports an in-flight issue with no known files',
     inFlight: [
       { number: 901, candidateFiles: [] },
       { number: 900, candidateFiles: ['src/x.mts'] },
-      { number: 901, candidateFiles: [MERGE_FILE] },
     ],
     batchSize: 1,
   });
@@ -1294,6 +1296,115 @@ test('selectNonOverlappingBatch reports an in-flight issue with no known files',
     { number: 900, filesUnknown: false, highContentionTouched: [] },
     { number: 901, filesUnknown: true, highContentionTouched: [] },
   ]);
+});
+
+test('selectNonOverlappingBatch unions the files of an in-flight number listed twice', () => {
+  // The later list must not be dropped: a smaller comparison set would let a
+  // colliding candidate through.
+  const result = batchOf({
+    candidates: [scored(1, [MERGE_FILE]), scored(2, [ADVISORY_FILE])],
+    inFlight: [
+      { number: 901, candidateFiles: [] },
+      { number: 901, candidateFiles: [MERGE_FILE] },
+      { number: 901, candidateFiles: ['src/x.mts'] },
+    ],
+    batchSize: 2,
+  });
+  assert.deepEqual(result.inFlight, [
+    { number: 901, filesUnknown: false, highContentionTouched: [MERGE_FILE] },
+  ]);
+  assert.deepEqual(result.batch, [2]);
+  assert.deepEqual(result.batchSkipped, [
+    { number: 1, collidedWith: 901, reason: 'in-flight', files: [MERGE_FILE] },
+  ]);
+});
+
+test('selectNonOverlappingBatch sorts shared paths itself for a caller-built analysis', () => {
+  // The analysis is hand-built with reversed path lists, so a sort that
+  // relied on analyzeSharedFileOverlap having run would leave them reversed.
+  const reversed = [REVIEW_FIX_FILE, MERGE_FILE];
+  const sorted = [...reversed].sort();
+  assert.notDeepEqual(reversed, sorted);
+  const entry = (
+    number: number,
+    touched: string[],
+    overlaps: OverlapHit[] = [],
+  ): OverlapCandidateResult => ({
+    number,
+    score: 4,
+    effectiveScore: 4,
+    candidateFiles: touched,
+    highContentionTouched: touched,
+    overlaps,
+    overlapFlag: overlaps.length > 0,
+  });
+  const analysis: OverlapAnalysis = {
+    candidates: [
+      entry(1, reversed),
+      entry(2, reversed),
+      entry(
+        3,
+        [ADVISORY_FILE],
+        [{ number: 991, reason: 'claim', files: reversed }],
+      ),
+    ],
+    recommendedOrder: [1, 2, 3],
+    summary: { candidateCount: 3, flaggedCount: 1, activeIssueCount: 1 },
+  };
+  const select = (inFlight: InFlightIssueInput[]) =>
+    selectNonOverlappingBatch({
+      analysis,
+      inFlight,
+      highContentionFiles: HIGH_CONTENTION,
+      batchSize: 3,
+    });
+  const batchRun = select([]);
+  assert.deepEqual(batchRun.batchSkipped, [
+    { number: 2, collidedWith: 1, reason: 'batch', files: sorted },
+    { number: 3, collidedWith: 991, reason: 'claim', files: sorted },
+  ]);
+  const inFlightRun = select([{ number: 900, candidateFiles: reversed }]);
+  assert.deepEqual(inFlightRun.batchSkipped[0], {
+    number: 1,
+    collidedWith: 900,
+    reason: 'in-flight',
+    files: sorted,
+  });
+  // The emitted list is a copy: sorting it never reorders the caller's input.
+  assert.deepEqual(analysis.candidates[2].overlaps[0].files, reversed);
+});
+
+test('selectNonOverlappingBatch keeps a candidate with only non-high-contention files in the known group', () => {
+  // "Known" means the candidate lists files at all, not that any is hot.
+  const candidates = [
+    scored(1, ['src/a.mts']),
+    scored(2, []),
+    scored(3, [MERGE_FILE]),
+  ];
+  assert.deepEqual(batchOf({ candidates, batchSize: 3 }).batch, [1, 3, 2]);
+  const analysis = analyzeSharedFileOverlap({
+    candidates,
+    activeIssues: [],
+    highContentionFiles: HIGH_CONTENTION,
+  });
+  const output = buildOverlapOutput({
+    repository: { owner: 'o', repo: 'r' },
+    checkedOverlap: false,
+    manifestMissing: false,
+    highContentionFiles: HIGH_CONTENTION,
+    analysis,
+    batchSelection: { batch: [], batchSkipped: [], inFlight: [] },
+  });
+  assert.deepEqual(
+    (output.candidates as { number: number; filesUnknown: boolean }[]).map(
+      (candidate) => [candidate.number, candidate.filesUnknown],
+    ),
+    [
+      [1, false],
+      [2, true],
+      [3, false],
+    ],
+  );
 });
 
 test('selectNonOverlappingBatch rejects a non-positive or fractional batch size', () => {

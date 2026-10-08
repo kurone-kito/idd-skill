@@ -717,18 +717,21 @@ export function selectNonOverlappingBatch(input) {
   const byNumber = new Map(
     input.analysis.candidates.map((candidate) => [candidate.number, candidate]),
   );
+  // A number listed twice contributes the union of its file lists: dropping a
+  // later list would shrink the comparison set, the unsafe direction here.
   const inFlightByNumber = new Map();
   for (const issue of input.inFlight) {
-    if (!inFlightByNumber.has(issue.number)) {
-      inFlightByNumber.set(issue.number, issue);
-    }
+    inFlightByNumber.set(issue.number, [
+      ...(inFlightByNumber.get(issue.number) ?? []),
+      ...issue.candidateFiles,
+    ]);
   }
-  const inFlightEvidence = [...inFlightByNumber.values()]
-    .sort((left, right) => left.number - right.number)
-    .map((issue) => ({
-      number: issue.number,
-      filesUnknown: issue.candidateFiles.length === 0,
-      highContentionTouched: intersect(issue.candidateFiles, highContention),
+  const inFlightEvidence = [...inFlightByNumber.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([number, candidateFiles]) => ({
+      number,
+      filesUnknown: candidateFiles.length === 0,
+      highContentionTouched: intersect(candidateFiles, highContention),
     }));
   // A candidate that is already running is not pickable: report it first.
   const batchSkipped = inFlightEvidence
@@ -769,7 +772,14 @@ export function selectNonOverlappingBatch(input) {
     }
     const collision = findBatchCollision(candidate, inFlightEvidence, picked);
     if (collision) {
-      batchSkipped.push({ number: candidate.number, ...collision });
+      // Sort at the one emit site: `analysis` is caller-supplied, so the
+      // order of its per-candidate paths is not a guarantee this function can
+      // lean on, and the copy keeps `files` from sharing an array with it.
+      batchSkipped.push({
+        number: candidate.number,
+        ...collision,
+        files: [...collision.files].sort(),
+      });
     } else {
       picked.push(candidate);
     }
