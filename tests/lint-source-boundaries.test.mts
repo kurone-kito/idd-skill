@@ -289,6 +289,1768 @@ for (const { name, edit, expected } of VIOLATION_CASES) {
   });
 }
 
+const backtick = String.fromCharCode(96);
+const hiddenImportShapes: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a glob in a line comment followed by a later block-comment end',
+    source: (specifier) =>
+      `// schemas/*.schema.json\nimport value from '${specifier}';\n/** end */\n`,
+  },
+  {
+    name: 'a line-comment marker in a quoted string',
+    source: (specifier) =>
+      `const value = 'x//y'; const load = () => import('${specifier}');\n`,
+  },
+  {
+    name: 'a block-comment marker in a quoted string',
+    source: (specifier) =>
+      `const value = 'schemas/*.json';\nimport value from '${specifier}';\n/** end */\n`,
+  },
+  {
+    name: 'a block-comment marker in template text',
+    source: (specifier) =>
+      `const value = ${backtick}schemas/*.json${backtick};\nimport value from '${specifier}';\n/** end */\n`,
+  },
+];
+
+for (const { name, source } of hiddenImportShapes) {
+  test(`the node-import rule sees an import after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule sees an import after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+const markerImportSources: [string, string][] = [
+  [
+    'a quoted string',
+    `const marker = "x//y /* ' ${backtick}"; const load = () => import('left-pad');\nimport value from 'yaml';\n`,
+  ],
+  [
+    'template text',
+    [
+      'const marker = ',
+      backtick,
+      'x //y /* \' " ' + '\\',
+      backtick,
+      ' text',
+      backtick,
+      "; const load = () => import('left-pad');\nimport value from 'yaml';\n",
+    ].join(''),
+  ],
+  [
+    'a regular-expression literal',
+    [
+      'const marker = /[',
+      backtick,
+      "\"']/; const escaped = /[\\/\\\\]/; const load = () => import('left-pad');\nimport value from 'yaml';\n",
+    ].join(''),
+  ],
+];
+
+for (const [name, source] of markerImportSources) {
+  test(`comment markers and delimiters in ${name} leave later imports visible`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', source));
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+    assert.match(stderr, /left-pad/);
+  });
+}
+
+const lexicalBoundarySources: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a regex after of with an escaped slash and quantifier',
+    source: (specifier) =>
+      String.raw`for (const m of /\/*x/g) {}
+import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after throw with a comment-like character-class member',
+    source: (specifier) =>
+      `throw /[/*]/;
+import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after a control-flow condition',
+    source: (specifier) =>
+      `if (ok) /[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after a control-flow block',
+    source: (specifier) =>
+      `if (ok) {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an arrow function block',
+    source: (specifier) =>
+      `const f = () => {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an else block',
+    source: (specifier) =>
+      `if (ok) {} else {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after a labeled block',
+    source: (specifier) =>
+      `label: {}
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after export default',
+    source: (specifier) =>
+      `export default /[/*]/;
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after extends',
+    source: (specifier) =>
+      `class Example extends /[/*]/ {}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated break',
+    source: (specifier) =>
+      `while (true) {
+  break
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated continue',
+    source: (specifier) =>
+      `while (true) {
+  continue
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated labeled break',
+    source: (specifier) =>
+      `outer: while (true) {
+  break outer
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated labeled continue',
+    source: (specifier) =>
+      `outer: while (true) {
+  continue outer
+  /[/*]/.test(value);
+}
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a regex after an ASI-terminated debugger statement',
+    source: (specifier) =>
+      `debugger
+/[/*]/.test(value);
+import value from '__SPECIFIER__';
+const marker = '*/';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a dynamic import after division following a property named if',
+    source: (specifier) =>
+      `const result = obj.if(value) / import('__SPECIFIER__') / 2;
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a line comment ending at U+2028',
+    source: (specifier) =>
+      `// comment\u2028import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+  {
+    name: 'a line comment ending at U+2029',
+    source: (specifier) =>
+      `// comment\u2029import value from '__SPECIFIER__';
+`.replace('__SPECIFIER__', specifier),
+  },
+];
+
+for (const { name, source } of lexicalBoundarySources) {
+  test(`the node-import rule sees imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule sees imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+const divisionWithCommentedImports: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'division after a property named return',
+    source: (specifier) =>
+      `const value = obj.return / 1 /* import('__SPECIFIER__') */;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an object literal',
+    source: (specifier) =>
+      `const value = {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division inside an arrow function expression body',
+    source: (specifier) =>
+      `const value = () => ({}) / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow function type assertion',
+    source: (specifier) =>
+      `const value = maybe as () => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a multiline comment on an arrow function type',
+    source: (specifier) =>
+      `const value = maybe as () => { a: number } / /*\nimport('__SPECIFIER__')\n*/ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type with a parameter list',
+    source: (specifier) =>
+      `const value = maybe as (x: string, y: number) => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type with a type argument',
+    source: (specifier) =>
+      `const value = maybe as <T>(x: T) => { a: T } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type with a comment before the arrow',
+    source: (specifier) =>
+      `const value = maybe as () /* note */ => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a nested arrow function type',
+    source: (specifier) =>
+      `const value = maybe as () => () => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type broken before the arrow',
+    source: (specifier) =>
+      `const value = maybe as ()\n  => { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an arrow type with a comment before the brace',
+    source: (specifier) =>
+      `const value = maybe as () => /* note */ { a: number } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a postfix increment',
+    source: (specifier) =>
+      `let value = 1;\nvalue++ / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a postfix decrement',
+    source: (specifier) =>
+      `let value = 1;\nvalue-- / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a TypeScript non-null assertion',
+    source: (specifier) =>
+      `declare const maybe: number | undefined;\nmaybe! / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a class expression body',
+    source: (specifier) =>
+      `const value = class {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function expression body',
+    source: (specifier) =>
+      `const value = function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function expression with an object return type',
+    source: (specifier) =>
+      `const value = function (): { value: number } { return { value: 1 }; } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic type assertion',
+    source: (specifier) =>
+      `const value = maybe as Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation',
+    source: (specifier) =>
+      `const value = identity<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation with a block comment',
+    source: (specifier) =>
+      `const value = identity<Foo /* note */> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a mapped type with a block comment',
+    source: (specifier) =>
+      `const value = identity<({ [K in /* note */ T]: boolean })> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation with a closer inside a comment',
+    source: (specifier) =>
+      `const value = identity<Foo /* > */> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function type whose comment mentions an opener',
+    source: (specifier) =>
+      `const value = identity</* was foo() /* now */ (x: string) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after keyof whose comment mentions an opener',
+    source: (specifier) =>
+      `const value = identity<keyof /* was foo() /* now */ (A | B)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a return type whose comment mentions an opener',
+    source: (specifier) =>
+      `const value = identity<{ m(): /* returns (T) /* docs */ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a brace that follows the later of two comments',
+    source: (specifier) =>
+      `const value = identity<{ m(i) /* was ) */ T /* now */ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a brace that follows a comment ending in a slash',
+    source: (specifier) =>
+      `const value = identity<{ m(i) /* was ) */ T /*/*/ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a brace that follows a comment after one ending in a slash',
+    source: (specifier) =>
+      `const value = identity<{ m(i) /*see)/*/ T /*/*/ { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an array type',
+    source: (specifier) =>
+      `const value = identity<number[]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation with a nested comma',
+    source: (specifier) =>
+      `const value = identity<Record<string, number>> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a tuple',
+    source: (specifier) =>
+      `const value = identity<[string, number]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an object type',
+    source: (specifier) =>
+      `const value = identity<{ a: number, b: number }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a function type',
+    source: (specifier) =>
+      `const value = identity<() => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parameterized function type',
+    source: (specifier) =>
+      `const value = identity<(x: string, y: number) => boolean> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a nested function type',
+    source: (specifier) =>
+      `const value = identity<() => () => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic function type',
+    source: (specifier) =>
+      `const value = identity<Promise<() => void>> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a function type with a union return',
+    source: (specifier) =>
+      `const value = identity<(x: string) => string | number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an intersection type',
+    source: (specifier) =>
+      `const value = identity<(string) & number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a method signature',
+    source: (specifier) =>
+      `const value = identity<{ m(x: string): void }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic function type parameter',
+    source: (specifier) =>
+      `const value = identity<<T>(x: T) => T> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an abstract constructor type',
+    source: (specifier) =>
+      `const value = identity<abstract new () => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a keyof parenthesized type',
+    source: (specifier) =>
+      `const value = identity<keyof (A | B)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a conditional type',
+    source: (specifier) =>
+      `const value = identity<(T extends (A | B) ? C : D)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a method with an object return',
+    source: (specifier) =>
+      `const value = identity<{ m(): { a: number } }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic method signature',
+    source: (specifier) =>
+      `const value = identity<{ m<T>(x: T): void }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic constructor type',
+    source: (specifier) =>
+      `const value = identity<new <T>() => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an abstract generic constructor',
+    source: (specifier) =>
+      `const value = identity<abstract new <T>() => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a generic construct signature',
+    source: (specifier) =>
+      `const value = identity<{ new <T>(x: T): T }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parenthesized function return',
+    source: (specifier) =>
+      `const value = identity<Foo<() => (string)>> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a default that uses equality',
+    source: (specifier) =>
+      `const value = identity<(x = a == b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a default that uses inequality',
+    source: (specifier) =>
+      `const value = identity<(x = a != b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a default that uses in',
+    source: (specifier) =>
+      `const value = identity<(x = a in b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of two parameter defaults',
+    source: (specifier) =>
+      `const value = identity<(x = 1, y = a == b) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a mapped type in a parameter',
+    source: (specifier) =>
+      `const value = identity<(x: { [K in T]: boolean }) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parenthesized mapped type',
+    source: (specifier) =>
+      `const value = identity<({ [K in T]: boolean })> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a method named in',
+    source: (specifier) =>
+      `const value = identity<(x: { in(y: string): void }) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parameter named await',
+    source: (specifier) =>
+      `const value = identity<(await: string) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional parameter',
+    source: (specifier) =>
+      `const value = identity<(x?: string) => void> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a parenthesized void type',
+    source: (specifier) =>
+      `const value = identity<(void)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a typeof query',
+    source: (specifier) =>
+      `const value = identity<(typeof a)> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional property',
+    source: (specifier) =>
+      `const value = identity<{ m?: string }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional method',
+    source: (specifier) =>
+      `const value = identity<{ m?(x: string): void }> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of an optional tuple element',
+    source: (specifier) =>
+      `const value = identity<readonly [string, number?]> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a constructor type',
+    source: (specifier) =>
+      `const value = identity<new () => Object> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a satisfies type',
+    source: (specifier) =>
+      `const value = input satisfies Array<number> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a nested function return type',
+    source: (specifier) =>
+      `const value = function (): Promise<{ value: number }> { return { value: 1 }; } / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an object literal on a binary-operator right side',
+    source: (specifier) =>
+      `const value = condition && {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an async function expression body',
+    source: (specifier) =>
+      `const value = async function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function expression at interpolation start',
+    source: (specifier) =>
+      `const value = ${backtick}\${function() {} / /* import('__SPECIFIER__') */ 2}${backtick};\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an object literal at interpolation start',
+    source: (specifier) =>
+      `const value = ${backtick}\${{} / /* import('__SPECIFIER__') */ 2}${backtick};\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a function expression on a binary-operator right side',
+    source: (specifier) =>
+      `const value = condition && function() {} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a private property named return',
+    source: (specifier) =>
+      `class Example { #return = 1; read() { return this.#return / /* import('__SPECIFIER__') */ 2; } }\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a Unicode identifier',
+    source: (specifier) =>
+      `const π = 1;\nπ / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after an astral Unicode identifier',
+    source: (specifier) =>
+      `const 𐐀 = 1;\n𐐀 / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a Unicode-escaped identifier',
+    source: (specifier) =>
+      `const \\u{03c0} = 1;\n\\u{03c0} / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a regular-expression literal',
+    source: (specifier) =>
+      `const value = /x/ / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a trailing-dot numeric literal',
+    source: (specifier) =>
+      `const value = 1. / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a plain single-quoted literal type',
+    source: (specifier) =>
+      `const value = identity<'a'> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a literal type with an escaped quote',
+    source: (specifier) =>
+      `const value = identity<'a\\'b,c'> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a string literal type with a comma',
+    source: (specifier) =>
+      `const value = identity<"a,b"> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a single-quoted literal type with an angle bracket',
+    source: (specifier) =>
+      `const value = identity<'a<b,c'> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a template literal type',
+    source: (specifier) =>
+      `const value = identity<\`a,${'$'}{string}\`> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of divisionWithCommentedImports) {
+  test(`the node-import rule ignores commented imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('left-pad')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
+  });
+
+  test(`the standalone-mirror rule ignores commented imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
+  });
+}
+
+const prefixNotRegexSources: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a prefix negation after return',
+    source: (specifier) =>
+      `function read() { return !/[/*]/; }\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a prefix negation after a control-flow condition',
+    source: (specifier) =>
+      `if (condition) !/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a prefix negation after a statement block',
+    source: (specifier) =>
+      `{}\n!/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a hashbang whose flag text contains a block-comment marker',
+    source: (specifier) =>
+      `#!/usr/bin/env -S node --flag=/*\nimport bare from '__SPECIFIER__';\n*/\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a comparison inside an index before a greater-than regex',
+    source: (specifier) =>
+      `const value = items[count < limit] > /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a comparison before a comma and a greater-than regex',
+    source: (specifier) =>
+      `check(count < limit, total > /[/*]/);\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call in a comparison',
+    source: (specifier) =>
+      `const value = count<limit(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a member call in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.limit(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized comparison joined with &&',
+    source: (specifier) =>
+      `const value = count<(limit) && flag> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a property named new called in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.new(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call of a parenthesized comparison operand',
+    source: (specifier) =>
+      `const value = count<(limit)(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized comparison joined with ||',
+    source: (specifier) =>
+      `const value = count<(limit) || flag> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic call in a comparison',
+    source: (specifier) =>
+      `const value = count<m<T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic member call in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.m<T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic call of a property named new in a comparison',
+    source: (specifier) =>
+      `const value = count<obj.new<T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a spaced generic call in a comparison',
+    source: (specifier) =>
+      `const value = count<m<T> (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call of a generic function type in a comparison',
+    source: (specifier) =>
+      `const value = count<m<<T>(x: T) => T>(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body in a comparison',
+    source: (specifier) =>
+      `const value = count<{ m(i) { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'an async method body in a comparison',
+    source: (specifier) =>
+      `const value = count<{ async m() { return 1 } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a generic method body in a comparison',
+    source: (specifier) =>
+      `const value = count<{ m<T>(i) { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a bare extends call in a comparison',
+    source: (specifier) =>
+      `const value = count<extends(i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized equality comparison',
+    source: (specifier) =>
+      `const value = count<(a == b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized strict equality comparison',
+    source: (specifier) =>
+      `const value = count<(a === b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized or-assignment',
+    source: (specifier) =>
+      `const value = count<(a |= b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized and-assignment',
+    source: (specifier) =>
+      `const value = count<(a &= b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized nullish coalescing comparison',
+    source: (specifier) =>
+      `const value = count<(a ?? b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized nullish assignment',
+    source: (specifier) =>
+      `const value = count<(a ??= b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized optional chain',
+    source: (specifier) =>
+      `const value = count<(a?.b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized in comparison',
+    source: (specifier) =>
+      `const value = count<(a in b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized instanceof comparison',
+    source: (specifier) =>
+      `const value = count<(a instanceof b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized void operator',
+    source: (specifier) =>
+      `const value = count<(void 0)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized delete operator',
+    source: (specifier) =>
+      `const value = count<(delete obj.a)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized await operator',
+    source: (specifier) =>
+      `const value = count<(await a)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a comparison after a parameter default',
+    source: (specifier) =>
+      `const value = count<(x = 1, a != b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'an equality comparison after a parameter default',
+    source: (specifier) =>
+      `const value = count<(x = 1, a == b)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized void operator on an object',
+    source: (specifier) =>
+      `const value = count<(void {a:1})> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a spaced comparison through the in operator',
+    source: (specifier) =>
+      `const value = count < limit in items > /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after division by a trailing-dot numeric literal',
+    source: (specifier) =>
+      `const value = 1. / /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after a signed exponent and a member dot',
+    source: (specifier) =>
+      `const value = 1e+2. /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after a fraction exponent and a member dot',
+    source: (specifier) =>
+      `const value = 1.5e-2. /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after a spaced member dot',
+    source: (specifier) =>
+      `const value = 1 . /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after a comment before a member dot',
+    source: (specifier) =>
+      `const value = 1/*c*/. /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a regex after division following a comment inside type arguments',
+    source: (specifier) =>
+      `const value = identity<Foo /* note */> / /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call separated from its type arguments by a block comment',
+    source: (specifier) =>
+      `const value = count<m<T> /* note */ (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body separated from its parameter list by a block comment',
+    source: (specifier) =>
+      `const value = count<{ m(i) /* note */ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a block comment that mentions an opener',
+    source: (specifier) =>
+      `const value = count<{ m(i) /* note /* still */ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a block comment that starts with a slash',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/ note */ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call after a block comment that starts with a slash',
+    source: (specifier) =>
+      `const value = count<m<T> /*/ note */ (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after an empty block comment',
+    source: (specifier) =>
+      `const value = count<{ m(i) /**/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a block comment that ends with a slash',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/*/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a call after a block comment that ends with a slash',
+    source: (specifier) =>
+      `const value = count<m<T> /*/*/ (i)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a slash-start comment with no space before its closer',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/ note*/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a block comment that contains an opener',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*/**/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a method body after a comment that ends with a slash',
+    source: (specifier) =>
+      `const value = count<{ m(i) /*see)/*/ { return i } }> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a parenthesized void operator with a flush block comment',
+    source: (specifier) =>
+      `const value = count<(void/* note */0)> /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a comparison with a block comment through the in operator',
+    source: (specifier) =>
+      `const value = count < limit /* note */ in items > /[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of prefixNotRegexSources) {
+  test(`the node-import rule preserves imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule preserves imports after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+const ambiguousTypeArguments = [
+  {
+    name: 'a top-level union',
+    source:
+      "const value = identity<string | number> / /* import('left-pad') */ 2;\n",
+  },
+  {
+    name: 'a top-level comma',
+    source: "const value = identity<A, B> / /* import('left-pad') */ 2;\n",
+  },
+];
+
+for (const { name, source } of ambiguousTypeArguments) {
+  test(`a commented import stays visible after ${name} in a type-argument position`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', source));
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /left-pad/);
+  });
+}
+
+test('a string literal type argument with a comma does not hide a later bare import', () => {
+  const source =
+    'const value = identity<"a,b"> / /[/*]/;\nimport bare from \'yaml\';\n';
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /yaml/);
+});
+
+test('a string still open at a line break in a would-be type argument list stays a comparison', () => {
+  const source =
+    "const v = count<'abc\nT> /[/*]/.test(s);\nimport bare from 'yaml';\n";
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.match(stderr, /yaml/);
+});
+
+test('a template literal spanning a line break in a would-be type argument list stays a comparison', () => {
+  const source =
+    "const v = count<`abc\nx`> /[/*]/.test(s);\nimport bare from 'yaml';\n";
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.match(stderr, /yaml/);
+});
+
+test('a line continuation carries a literal type over a line break', () => {
+  const source = "const v = identity<'a\\\nb'> / /* import('left-pad') */ 2;\n";
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 0, stderr);
+});
+
+test('division after an arrow type in a TypeScript assertion leaves comments hidden', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      `const value = maybe as Array<(s: string) => boolean> / /* import('left-pad') */ 2;\n`,
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 0, stderr);
+});
+
+test('a multiline TypeScript assertion does not hide a later bare import', () => {
+  const source = [
+    'const n = value as number',
+    'if (n < limit) items.map((s) => /[/*]/.test(s));',
+    "import bare from 'yaml'; /* closes any misread regex comment */",
+    '',
+  ].join('\n');
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /yaml/);
+});
+
+const laterHashbangMarkers: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'a hashbang-like line after other code',
+    source: (specifier) =>
+      `const flag = 1;\n#!/usr/bin/env -S node --flag=/*\nimport bare from '__SPECIFIER__';\n*/\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'a hashbang-like line inside a template interpolation',
+    source: (specifier) =>
+      `const value = ${backtick}\${#!/usr/bin/env -S node --flag=/*\nimport bare from '__SPECIFIER__';\n*/}${backtick};\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of laterHashbangMarkers) {
+  test(`the node-import rule keeps a real comment after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
+  });
+
+  test(`the standalone-mirror rule keeps a real comment after ${name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 0, stderr);
+  });
+}
+
+const identifierKeywordPrefixes: {
+  name: string;
+  source: (specifier: string) => string;
+}[] = [
+  {
+    name: 'classify',
+    source: (specifier) =>
+      `declare const input: string;\nconst value = classify(input);\nif (condition) {}\n/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'functionName',
+    source: (specifier) =>
+      `declare const input: string;\nconst value = functionName(input);\nif (condition) {}\n/[/*]/;\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+];
+
+for (const { name, source } of identifierKeywordPrefixes) {
+  test(`the node-import rule sees imports after the ${name} identifier`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', source('yaml')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+  });
+
+  test(`the standalone-mirror rule sees imports after the ${name} identifier`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', source('./helper.mjs')),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+  });
+}
+
+test('a block comment preserves the break-label context before a regex statement', () => {
+  const source = [
+    'outer: {',
+    '  break/**/outer',
+    '  /[/*]/;',
+    '}',
+    "import bare from 'yaml'; /* closes any misread regex comment */",
+    '',
+  ].join('\n');
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /yaml/);
+
+  const mirrorRoot = buildFixture((files) =>
+    files.set(
+      'scripts/mirror.mjs',
+      source.replace("from 'yaml'", "from './helper.mjs'"),
+    ),
+  );
+  const mirrorResult = runCli(['--root', mirrorRoot]);
+  assert.equal(mirrorResult.status, 1, mirrorResult.stderr);
+  assert.deepEqual(reportedRules(mirrorResult.stderr), [
+    'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+  ]);
+  assert.match(mirrorResult.stderr, /\.\/helper\.mjs/);
+});
+
+for (const [rule, filePath, specifier] of [
+  ['node-import rule', 'src/main.mts', 'yaml'],
+  ['standalone-mirror rule', 'scripts/mirror.mjs', './helper.mjs'],
+] as const) {
+  test(`${rule} preserves restricted-statement context after a Unicode break label`, () => {
+    const source = [
+      'π: {',
+      '  break π',
+      '  /[/*]/;',
+      '}',
+      `import bare from '${specifier}'; /* closes any misread regex comment */`,
+      '',
+    ].join('\n');
+    const root = buildFixture((files) => files.set(filePath, source));
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.match(
+      stderr,
+      rule === 'node-import rule' ? /yaml/ : /\.\/helper\.mjs/,
+    );
+  });
+}
+
+for (const [name, specifier] of [
+  ['node-import rule', 'yaml'],
+  ['standalone-mirror rule', './helper.mjs'],
+] as const) {
+  test(`${name} recognizes a regex statement after a leading function declaration`, () => {
+    const source =
+      `function read() {}\n/[/*]/.test(value);\nimport bare from '__SPECIFIER__'; /* closes any misread regex comment */\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      );
+    const root = buildFixture((files) =>
+      files.set(
+        name === 'node-import rule' ? 'src/main.mts' : 'scripts/mirror.mjs',
+        source,
+      ),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.ok(stderr.includes(specifier), stderr);
+  });
+}
+
+test('an import-looking line inside template text remains visible to the detector', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      `const value = ${backtick}text\nimport bare from 'yaml';\n${backtick};\n`,
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /yaml/);
+});
+
+test('line and block comments still hide import-looking text', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      "/* import bare from 'yaml'; */\n// import bare from 'left-pad';\n",
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 0, stderr);
+});
+
+test('the URL separator in a string does not hide a same-line dynamic import', () => {
+  const root = buildFixture((files) =>
+    files.set(
+      'src/main.mts',
+      'const url = "https://example.test/path"; const load = () => import("left-pad");\n',
+    ),
+  );
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(reportedRules(stderr), [
+    'NODE-IMPORT-BOUNDARY src/main.mts',
+  ]);
+  assert.match(stderr, /left-pad/);
+});
+
+const unterminatedSources: [string, string][] = [
+  ['a block comment', '/* never closes'],
+  ['a template literal', 'const value = `never closes'],
+  ['a template interpolation', `const value = \`open \${ { nested: true }`],
+];
+
+for (const [name, unfinished] of unterminatedSources) {
+  test(`an unterminated ${name} reports partial node-import findings`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `import value from 'yaml';\n${unfinished}`),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr).sort(), [
+      'NODE-IMPORT-BOUNDARY src/main.mts',
+      'NODE-IMPORT-BOUNDARY-INSPECTION src/main.mts',
+    ]);
+    assert.match(stderr, /yaml/);
+    assert.match(stderr, /unterminated/);
+  });
+
+  test(`an unterminated ${name} reports partial standalone-mirror findings`, () => {
+    const root = buildFixture((files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        `import value from './helper.mjs';\n${unfinished}`,
+      ),
+    );
+    const { status, stderr } = runCli(['--root', root]);
+    assert.equal(status, 1, stderr);
+    assert.deepEqual(reportedRules(stderr).sort(), [
+      'STANDALONE-MIRROR-IMPORTS scripts/mirror.mjs',
+      'STANDALONE-MIRROR-IMPORTS-INSPECTION scripts/mirror.mjs',
+    ]);
+    assert.match(stderr, /\.\/helper\.mjs/);
+    assert.match(stderr, /unterminated/);
+  });
+}
+
 test('the gh-spawn exemptions stay narrow: only the two documented files may spawn gh', () => {
   const root = buildFixture((files) => {
     files.set(
