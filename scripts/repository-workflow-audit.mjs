@@ -822,7 +822,12 @@ function jobIds(text) {
   if (start === -1) {
     return undefined;
   }
-  const body = text.slice(start + '\njobs:'.length);
+  const rest = text.slice(start + '\njobs:'.length);
+  // Only the jobs block counts. The next top-level key, or the end of the
+  // file, ends it, so a top-level `defaults:` block after `jobs:` is not read
+  // as a job.
+  const next = rest.search(/\n(?=[^\s#])/);
+  const body = next === -1 ? rest : rest.slice(0, next);
   return [...body.matchAll(/^ {2}([\w-]+):$/gm)].map((match) => match[1]);
 }
 // The top-level `concurrency:` block's indented body, or null when absent.

@@ -2546,6 +2546,26 @@ test('a missing copy is recorded once per rule, however many checks read it', ()
   });
 });
 
+test('a top-level defaults block after jobs is not counted as a job', () => {
+  // A reusable caller with one job stays a single-job workflow even when a
+  // top-level defaults block follows the jobs block.
+  const path = '.github/workflows/pnpm-boundary-node22-floor.yml';
+  const root = fixtureRoot({
+    [path]: {
+      transform: (text: string) =>
+        `${text}\ndefaults:\n  run:\n    shell: bash\n`,
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some((violation) => violation.ruleId === 'RWA002'),
+      false,
+      JSON.stringify(violations),
+    );
+  });
+});
+
 test('an unnamed step after the template notice step is not part of that step', () => {
   const root = fixtureRoot({
     [TEMPLATE_ADVISORY]: {
