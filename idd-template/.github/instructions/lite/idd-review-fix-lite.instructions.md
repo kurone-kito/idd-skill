@@ -304,11 +304,11 @@ self-critique and record risk.
    scripts/advisory-wait-state.mjs --pr {pr-number}
    --claim-id {claim-id} --agent-id {agent-id}
    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` in
-   the source/vendored profile; resolve the package-manager /
-   ephemeral-npx equivalent from `docs/idd-helper-scripts.md`). If it
-   fails, returns invalid JSON, or is missing any field from
-   `idd-advisory-wait-lite.instructions.md`'s own Required fields list,
-   stop and ask — do not fall back to a manual per-field fetch.
+   the source/vendored profile; resolve the profile-selected equivalent from
+   `docs/idd-helper-scripts.md`). If it fails, returns invalid JSON, or is
+   missing any field from `idd-advisory-wait-lite.instructions.md`'s own
+   Required fields list, stop and ask — do not fall back to a manual
+   per-field fetch.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
    - Off-head `SATISFIED` with `staleRequestRecovery.action ==
