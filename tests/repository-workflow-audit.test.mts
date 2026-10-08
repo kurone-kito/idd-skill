@@ -297,7 +297,7 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA004',
-    name: 'a merged-PR guard step ungated by its event',
+    name: 'a merged-PR guard step without its event condition',
     path: ROOT_CLEANUP,
     mutation: {
       from: "name: Require a merged PR for workflow_dispatch\n        if: github.event_name == 'workflow_dispatch'",
