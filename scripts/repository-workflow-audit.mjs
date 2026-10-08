@@ -171,12 +171,15 @@ function checkWorkflowDispatchCheckoutRef(path, text, report) {
     report(RWA004, path, 'must keep its actions/checkout step');
     return;
   }
-  const fetchDepthStart = text.indexOf('fetch-depth:', checkoutStart);
+  // Searched inside the checkout step only, so a later step's fetch-depth
+  // cannot satisfy this check.
+  const checkoutStep = stepTextFrom(text, checkoutStart);
+  const fetchDepthStart = checkoutStep.indexOf('fetch-depth:');
   if (fetchDepthStart === -1) {
     report(RWA004, path, 'checkout step must keep its fetch-depth: input');
     return;
   }
-  const checkoutWith = text.slice(checkoutStart, fetchDepthStart);
+  const checkoutWith = checkoutStep.slice(0, fetchDepthStart);
   if (
     !/ref: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.event\.repository\.default_branch \|\| github\.sha \}\}/.test(
       checkoutWith,
@@ -1148,16 +1151,14 @@ function jobBodyAfterHeader(text, header) {
 function jobPermissionsBlock(jobBody) {
   return jobBody.match(/^ {4}permissions:\n((?: {6}.*\n)+)/m)?.[1];
 }
-// The text of one step, from its marker to the next step's name line.
+// The text of one step, from its marker to the next step bullet. A bullet is
+// any `- ` at the steps indentation, so an unnamed step ends the step too.
 function stepTextFrom(text, index) {
-  const next = text.indexOf('\n      - name:', index + 1);
+  const next = text.indexOf('\n      - ', index + 1);
   return text.slice(index, next === -1 ? undefined : next);
 }
 function firstIfLine(stepText) {
   return stepText.split('\n').find((line) => line.trim().startsWith('if:'));
-}
-function onBlockOf(text) {
-  return text.slice(text.indexOf('\non:'), text.indexOf('\npermissions:'));
 }
 // Self-waiver job read-scope contracts (kurone-kito/idd-skill#2951, #2995).
 function checkSelfWaiverJobPermissions(root, report) {
@@ -1260,7 +1261,11 @@ function checkRequiredGateTriggers(root, report) {
     if (text === undefined) {
       continue;
     }
-    const onBlock = onBlockOf(text);
+    const onBlock = extractOnBlock(text);
+    if (onBlock === undefined) {
+      report(RWA005, path, 'on:/permissions: block not found');
+      continue;
+    }
     if (/pull_request_review_comment/.test(onBlock)) {
       report(RWA005, path, 'on: must not include pull_request_review_comment');
     }
@@ -1375,7 +1380,11 @@ function checkTokenScopeProbeWorkflows(root, report) {
   }
 }
 function checkProbeTriggersAndIdentity(path, workflow, report) {
-  const onBlock = onBlockOf(workflow);
+  const onBlock = extractOnBlock(workflow);
+  if (onBlock === undefined) {
+    report(RWA005, path, 'on:/permissions: block not found');
+    return;
+  }
   const triggerKeys = [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map(
     (match) => match[1],
   );
@@ -1693,14 +1702,22 @@ function checkCommentRefreshTriggers(root, report) {
     ) {
       report(RWA005, path, 'must skip a plain-issue issue_comment event');
     }
+    // Checked before the rerun step is looked up, so a missing rerun step does
+    // not hide a missing review trigger.
+    const onBlock = extractOnBlock(text);
+    if (onBlock === undefined) {
+      report(RWA005, path, 'on:/permissions: block not found');
+    } else if (!/pull_request_review:/.test(onBlock)) {
+      report(RWA005, path, 'on: must include pull_request_review');
+    }
     const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
     if (rerunIndex === -1) {
       report(RWA005, path, 'must have a "Rerun required HEAD check" step');
       continue;
     }
-    const prNumberAssignment = text
-      .slice(rerunIndex)
-      .match(/PR_NUMBER:\s*\$\{\{\s*([^}]+)\}\}/);
+    const prNumberAssignment = stepTextFrom(text, rerunIndex).match(
+      /PR_NUMBER:\s*\$\{\{\s*([^}]+)\}\}/,
+    );
     if (prNumberAssignment === null) {
       report(
         RWA005,
@@ -1713,9 +1730,6 @@ function checkCommentRefreshTriggers(root, report) {
       )
     ) {
       report(RWA005, path, 'PR_NUMBER must resolve from either event shape');
-    }
-    if (!/pull_request_review:/.test(onBlockOf(text))) {
-      report(RWA005, path, 'on: must include pull_request_review');
     }
     const reviewRerunIndex = text.indexOf('- name: Rerun required HEAD check');
     const ifLine = firstIfLine(stepTextFrom(text, reviewRerunIndex));
