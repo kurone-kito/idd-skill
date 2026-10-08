@@ -140,16 +140,19 @@ function makeSuperproject(): { superRepo: string; subRepo: string } {
 
 /**
  * Run the probe with `<path>` replaced by the superproject, through `sh`,
- * as F4 runs it. Return the exit status without throwing.
+ * as F4 runs it. Return the exit status and stdout without throwing.
  */
-function runProbe(probe: string, superRepo: string): number | null {
+function runProbe(
+  probe: string,
+  superRepo: string,
+): { status: number | null; stdout: string } {
   const command = probe.replace('<path>', `'${superRepo}'`);
   const result = spawnSync('sh', ['-c', command], {
     env: fixtureEnv(),
     encoding: 'utf8',
     stdio: 'pipe',
   });
-  return result.status;
+  return { status: result.status, stdout: result.stdout };
 }
 
 /**
@@ -157,7 +160,7 @@ function runProbe(probe: string, superRepo: string): number | null {
  * means the shell was killed by a signal, which is not a clean failure.
  */
 function assertProbeFails(probe: string, superRepo: string): void {
-  const status = runProbe(probe, superRepo);
+  const { status } = runProbe(probe, superRepo);
   assert.equal(typeof status, 'number', 'the probe was killed by a signal');
   assert.notEqual(status, 0);
 }
@@ -177,7 +180,7 @@ test('the probe is one line and identical across the four files', () => {
   }
 });
 
-test('a healthy submodule on a branch exits 0', () => {
+test('a healthy submodule on a branch exits 0 and prints its count', () => {
   const probe = extractProbe(IDD_MERGE_FILE);
   const { superRepo, subRepo } = makeSuperproject();
   // `git submodule add` leaves the submodule detached, so create a local
@@ -185,15 +188,22 @@ test('a healthy submodule on a branch exits 0', () => {
   git(subRepo, ['checkout', '-q', '-b', 'work']);
   assert.equal(git(subRepo, ['symbolic-ref', '-q', 'HEAD']), 'refs/heads/work');
 
-  assert.equal(runProbe(probe, superRepo), 0);
+  // A symbolic HEAD skips the trailing count, so only the unpushed count
+  // from the second leg is printed.
+  const { status, stdout } = runProbe(probe, superRepo);
+  assert.equal(status, 0);
+  assert.equal(stdout, "Entering 'sub'\n0\n");
 });
 
-test('a healthy submodule on a detached HEAD still exits 0', () => {
+test('a healthy submodule on a detached HEAD exits 0 and prints its counts', () => {
   const probe = extractProbe(IDD_MERGE_FILE);
   const { superRepo, subRepo } = makeSuperproject();
   git(subRepo, ['checkout', '-q', '--detach']);
 
-  assert.equal(runProbe(probe, superRepo), 0);
+  // A detached HEAD also prints the count of commits reachable from HEAD.
+  const { status, stdout } = runProbe(probe, superRepo);
+  assert.equal(status, 0);
+  assert.equal(stdout, "Entering 'sub'\n0\n0\n");
 });
 
 test('a failing git status makes the probe exit non-zero', () => {
