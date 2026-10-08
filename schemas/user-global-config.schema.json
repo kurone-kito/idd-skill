@@ -206,8 +206,8 @@
                   "path": {
                     "type": "string",
                     "minLength": 1,
-                    "pattern": "^(?:[^/\\\\]+[/\\\\])*[^/\\\\]+$",
-                    "description": "Path suffix matched on whole segments when origin is not GitHub."
+                    "pattern": "^(?![\\s\\S]*(?:^|[/\\\\])\\.{1,2}(?:[/\\\\]|$))(?:[^/\\\\]+[/\\\\])*[^/\\\\]+$",
+                    "description": "Path suffix matched on whole segments when origin is not GitHub. Dot and dot-dot segments are rejected because the resolver cannot match them safely."
                   }
                 },
                 "additionalProperties": false

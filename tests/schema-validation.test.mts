@@ -281,6 +281,34 @@ test('user-global nested policy fields are partial while array entries stay comp
   );
 });
 
+test('user-global path overrides reject dot segments', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const configFor = (path: string) => ({
+    overrides: [{ match: { path }, config: { issueScope: 'roadmap-first' } }],
+  });
+
+  for (const path of ['team/project', 'team\\project']) {
+    assert.deepEqual(validate(configFor(path), schema, '$', context), [], path);
+  }
+  for (const path of [
+    '.',
+    '..',
+    'team/./project',
+    'team/../project',
+    'team\n/./project',
+    'team\n/../project',
+  ]) {
+    assert.ok(
+      validate(configFor(path), schema, '$', context).length > 0,
+      `expected ${path} to be rejected`,
+    );
+  }
+});
+
 test('oneOf requires exactly one matching branch', () => {
   const exclusiveMatch = {
     oneOf: [
