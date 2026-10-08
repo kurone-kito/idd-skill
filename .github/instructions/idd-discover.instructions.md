@@ -644,7 +644,7 @@ with the CLI instead of hand-tracing `scripts/policy-helpers.mjs`:
 # source repo / vendored-node
 node scripts/select-desynced-index.mjs --token <session-token> --band-size <band-size>
 
-# package-manager / ephemeral-npx
+# package-manager / ephemeral-npx / user-global
 <profile-selected-select-desynced-index-command> --token <session-token> --band-size <band-size>
 ```
 

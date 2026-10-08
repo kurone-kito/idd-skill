@@ -67,7 +67,7 @@ node scripts/advisory-wait-state.mjs \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
 
-The package-manager / ephemeral-npx equivalent takes the same options.
+The package-manager / ephemeral-npx / user-global equivalent takes the same options.
 
 Contract: `docs/idd-helper-scripts.md#stable-helper-evidence-outputs`
 and `schemas/advisory-wait-state.schema.json`.
