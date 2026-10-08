@@ -22,7 +22,7 @@
     },
     "roots": {
       "type": "array",
-      "description": "Every open roadmap root the union enumeration started from: an issue found by the configured roadmap label, an embedded roadmap-id marker, or a configured legacy root.",
+      "description": "Every open roadmap root the union enumeration started from: an issue carrying an embedded roadmap-id marker, or a configured legacy root.",
       "items": {
         "type": "object",
         "required": [
@@ -48,7 +48,7 @@
           },
           "roadmapMarkerId": {
             "type": "string",
-            "description": "This root's own embedded roadmap-id marker value, or empty when the root issue carries no such marker (e.g. found by label or as a configured legacy root)."
+            "description": "This root's own embedded roadmap-id marker value, or empty when the root issue carries no such marker (e.g. found as a configured legacy root)."
           }
         }
       }

@@ -1439,11 +1439,12 @@ default below is unchanged.
     `inaccessibleReferenceCount: number, unresolvedReferenceCount: number,`
     `maxDepth: number }`
 - **Cross-roadmap autopilot mode (`--all-roadmaps`)**: discovers every
-  **open** roadmap root (an open issue carrying the `roadmap` label **or**
-  an `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: ... -->` marker **or** a
+  **open** roadmap root (an open issue carrying an
+  `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: ... -->` marker, or a
   configured `discover.legacyRoots` issue number, deduped against the
-  label/marker roots), runs the single-root enumeration above from each
-  root, and returns a **union** of open execution leaves. The output
+  marker roots; the `roadmap` label alone never makes a root), runs the
+  single-root enumeration above from each root, and returns a **union**
+  of open execution leaves. The output
   shape differs from single-root mode:
   - `mode`: `"all-roadmaps"`
   - `roots`: `[{ number: number, title: string, state: string,`
@@ -1602,29 +1603,27 @@ default below is unchanged.
     result.
 - **Legacy roots (`discover.legacyRoots`, #1315)**: a repository that
   adopted IDD after already running an ad-hoc "umbrella issue"
-  convention may have legacy roots that predate both the `roadmap`
-  label and the `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, so they
-  are never found by the two searches above (the graph walker still
-  follows their `Blocked by #NNN` references once reached from
-  elsewhere; only root _discovery_ has no path to them). Two
-  independent mitigations, usable together or separately:
-  - **Retro-label** the legacy umbrella with the configured roadmap
-    label — the label search is exact and complete, so this alone
-    makes it discoverable with no config change.
+  convention may have legacy roots that predate the
+  `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, so the marker search
+  never finds them (the graph walker still follows their
+  `Blocked by #NNN` references once reached from elsewhere; only root
+  _discovery_ has no path to them). Either of these makes such a root
+  discoverable:
+  - **Add the marker** to the legacy umbrella.
   - **`discover.legacyRoots`** in `.github/idd/config.json` — an array
     of issue numbers (schema: integers, minimum `1`) unioned into the
     root set on every `--all-roadmaps` run and deduped against the
-    label/marker roots. No extra `gh` search or fetch: the configured
+    marker roots. No extra `gh` search or fetch: the configured
     numbers are added directly, and each still goes through the normal
     per-root enumeration, so a stale or now-closed configured root is
-    handled the same way a race-closed label/marker root already is. A
+    handled the same way a race-closed marker root already is. A
     missing or invalid value (non-array, or any non-positive-integer
     entry) fails safe to no extra roots — the whole array is rejected
     rather than silently dropping just the bad entry.
-    Use retro-labeling when the legacy umbrella should also pick up other
-    label-driven behavior; use `discover.legacyRoots` when it should not
-    (e.g. the label would incorrectly surface it in label-based UI
-    elsewhere).
+
+  Labeling the umbrella with the roadmap label does not make it a root:
+  root discovery ignores the `roadmap` label, and the roadmap-id marker
+  alone identifies a root.
 - **Error conditions**: missing `--issue` (and no `--all-roadmaps`),
   combining `--issue` with `--all-roadmaps`, unknown flags, an unreadable
   root roadmap, or incomplete `subIssues` GraphQL data throw. Missing or

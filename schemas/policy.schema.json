@@ -673,7 +673,7 @@
             "type": "integer",
             "minimum": 1
           },
-          "description": "Issue numbers of legacy roadmap roots that predate the `roadmap` label and `<prefix>-roadmap-id` marker (e.g. an ad-hoc umbrella convention adopted before IDD). Unioned into `--all-roadmaps` root discovery and deduped against label/marker roots; a missing or invalid value fails safe to no extra roots."
+          "description": "Issue numbers of legacy roadmap roots that predate the `<prefix>-roadmap-id` marker (e.g. an ad-hoc umbrella convention adopted before IDD). Unioned into `--all-roadmaps` root discovery and deduped against marker roots; a missing or invalid value fails safe to no extra roots."
         },
         "milestoneScope": {
           "type": "string",
@@ -930,7 +930,7 @@
         "roadmapLabelName": {
           "type": "string",
           "minLength": 1,
-          "description": "GitHub label name (or umbrella marker) that identifies a roadmap issue. Optional; defaults to `roadmap`."
+          "description": "GitHub label name applied to roadmap issues. Root discovery ignores it: the `<prefix>-roadmap-id` marker alone identifies a roadmap root. Readiness still reads it. Optional; defaults to `roadmap`."
         },
         "blockedByHumanLabelName": {
           "type": "string",
