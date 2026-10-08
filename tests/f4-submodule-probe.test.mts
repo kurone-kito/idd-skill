@@ -152,6 +152,16 @@ function runProbe(probe: string, superRepo: string): number | null {
   return result.status;
 }
 
+/**
+ * Assert the probe fails with a real non-zero exit status. A null status
+ * means the shell was killed by a signal, which is not a clean failure.
+ */
+function assertProbeFails(probe: string, superRepo: string): void {
+  const status = runProbe(probe, superRepo);
+  assert.equal(typeof status, 'number', 'the probe was killed by a signal');
+  assert.notEqual(status, 0);
+}
+
 test('the probe is one line and identical across the four files', () => {
   const probes = PROBE_FILES.map((file) => extractProbe(file));
 
@@ -169,7 +179,11 @@ test('the probe is one line and identical across the four files', () => {
 
 test('a healthy submodule on a branch exits 0', () => {
   const probe = extractProbe(IDD_MERGE_FILE);
-  const { superRepo } = makeSuperproject();
+  const { superRepo, subRepo } = makeSuperproject();
+  // `git submodule add` leaves the submodule detached, so create a local
+  // branch and confirm HEAD is symbolic before probing it.
+  git(subRepo, ['checkout', '-q', '-b', 'work']);
+  assert.equal(git(subRepo, ['symbolic-ref', '-q', 'HEAD']), 'refs/heads/work');
 
   assert.equal(runProbe(probe, superRepo), 0);
 });
@@ -194,7 +208,7 @@ test('a failing git status makes the probe exit non-zero', () => {
   const gitDir = resolve(subRepo, git(subRepo, ['rev-parse', '--git-dir']));
   rmSync(join(gitDir, 'objects', treeSha.slice(0, 2), treeSha.slice(2)));
 
-  assert.notEqual(runProbe(probe, superRepo), 0);
+  assertProbeFails(probe, superRepo);
 });
 
 test('a failing git stash list makes the probe exit non-zero', () => {
@@ -208,5 +222,5 @@ test('a failing git stash list makes the probe exit non-zero', () => {
   assert.match(git(subRepo, ['stash', 'list']), /probe/);
   git(subRepo, ['config', 'log.date', 'bogus']);
 
-  assert.notEqual(runProbe(probe, superRepo), 0);
+  assertProbeFails(probe, superRepo);
 });
