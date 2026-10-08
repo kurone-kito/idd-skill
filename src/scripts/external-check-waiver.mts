@@ -2683,8 +2683,10 @@ function fetchPullRequest({
 }
 
 /**
- * #2328: the HEAD commit's own `committer.date`, the anchor the
- * `idd-advisory-convergence` waiver deadline is measured from. Returns an
+ * #2328: the HEAD commit's own `committer.date`, the anchor of the
+ * self-referential bootstrap waiver's validity window (#2657). The ordinary
+ * `idd-advisory-convergence` deadline is measured from `headObservedAt`.
+ * Returns an
  * empty string on any failure — a missing anchor keeps the hatch shut, which
  * is the safe direction, and never blocks a selector that is not
  * precondition-gated.

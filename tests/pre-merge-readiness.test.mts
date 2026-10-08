@@ -10106,8 +10106,8 @@ test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailabl
 // #2021: a posted, otherwise-valid `idd-advisory-convergence` waiver must
 // only make the REQUIRED CHECK itself `coveredByWaiver` once the SAME
 // deadline/terminal precondition `advisory-convergence.mts`'s own gate
-// enforces has also opened -- a 24h deadline anchored on the current HEAD
-// commit's own committedDate, or proven terminal Copilot unavailability.
+// enforces has also opened -- the configured deadline anchored on when GitHub first recorded the current HEAD
+// or proven terminal Copilot unavailability.
 // Before this fix, `pre-merge-readiness.mjs` reported `coveredByWaiver: true`
 // (and therefore `ready: true`) the moment a valid waiver marker existed,
 // regardless of whether either precondition had opened -- sending a session

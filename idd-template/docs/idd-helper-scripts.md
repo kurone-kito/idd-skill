@@ -2593,10 +2593,10 @@ The adopted helper boundaries are intentionally narrow:
 - (`#2021`) a `valid` waiver for the `idd-advisory-convergence` selector
   specifically only becomes `coveredByWaiver: true` once the SAME
   deadline/terminal precondition `advisory-convergence.mjs`'s own gate
-  enforces has also opened — a 24h deadline anchored on when GitHub
-  first recorded the current HEAD (its earliest check suite,
-  `#3253`), or proven terminal Copilot
-  unavailability. The output's `advisoryConvergenceWaiverPrecondition`
+  enforces has also opened — the configured deadline (default 24h)
+  anchored on when GitHub first recorded the current HEAD (its earliest
+  check suite, `#3253`), or proven terminal Copilot unavailability. The
+  output's `advisoryConvergenceWaiverPrecondition`
   field always reports this evaluation (`deadlineMinutes`,
   `headCommittedAt` (informational only), `headObservedAt` (the actual
   clock), `elapsedMinutes`, `deadlinePassed`,
@@ -6076,7 +6076,8 @@ reflexively as any other CLI option.
   the current HEAD, `pending` is `true` and the gate is not ready. After
   `advisoryWait.convergenceDeadline` (default 24h; see
   [policy constants](policy-constants.md#advisory-review-defaults)) has
-  elapsed since the current HEAD commit's own timestamp, the only pass
+  elapsed from when GitHub first recorded the current HEAD (its earliest
+  check suite), the only pass
   path is a valid maintainer external-check waiver for that HEAD under the
   selector `idd-advisory-convergence` (reusing the same
   `<!-- idd-external-check-waiver: ... -->` marker format and validity

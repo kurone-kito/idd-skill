@@ -246,7 +246,7 @@ preserves the Copilot-advisory behavior exactly.
 `advisoryWait.convergenceDeadline` is the `advisory-convergence.mjs` helper's
 (#1340) deadlock deadline: while the primary bot has not posted a zero-item
 review on the current PR HEAD, the gate reports pending; once this deadline
-elapses (measured from the current HEAD commit's own timestamp, not an IDD
+elapses (measured from when GitHub first recorded the current HEAD, not an IDD
 marker), the only pass path is a valid maintainer external-check waiver for
 that HEAD under the selector `idd-advisory-convergence`.
 `advisoryWait.secondaryBotLogin` is an **optional, non-gating** supplement:

@@ -358,7 +358,7 @@
         "convergenceDeadline": {
           "type": "string",
           "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
-          "description": "Whole-minute ISO 8601 duration from the HEAD commit's own timestamp after which the advisory-convergence check can only turn green via a maintainer waiver, not a fresh review. Optional; defaults to `PT24H`."
+          "description": "Whole-minute ISO 8601 duration from when GitHub first recorded the HEAD (its earliest check suite) after which the advisory-convergence check can only turn green via a maintainer waiver, not a fresh review. Optional; defaults to `PT24H`."
         },
         "sameHeadRerollCap": {
           "type": "integer",
