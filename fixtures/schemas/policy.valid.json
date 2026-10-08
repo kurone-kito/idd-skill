@@ -63,6 +63,9 @@
     "legacyRoots": [1234],
     "milestoneScope": "v0.8.0"
   },
+  "orchestrator": {
+    "maxWorkers": 8
+  },
   "claim": {
     "verifySettleDelay": "PT5S"
   },

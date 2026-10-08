@@ -923,6 +923,9 @@ test('every actions/setup-node step in idd-template/.github/workflows/*.yml pins
 test('policy normalization provides default-safe values and supports aliases', () => {
   assert.deepEqual(normalizePolicyConfig(null), {
     issueScope: 'roadmap-first',
+    orchestrator: {
+      maxWorkers: 2,
+    },
     orphanFirstPolicy: 'none',
     skipIssueAuthorApprovalGate: false,
     maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
@@ -1140,6 +1143,9 @@ test('policy normalization provides default-safe values and supports aliases', (
     }),
     {
       issueScope: 'orphan-first',
+      orchestrator: {
+        maxWorkers: 2,
+      },
       orphanFirstPolicy: 'maintainer-approved',
       skipIssueAuthorApprovalGate: true,
       maintainerApprovalActorPolicy: 'all-write-permission-actors',

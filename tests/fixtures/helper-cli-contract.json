@@ -637,6 +637,18 @@
         }
       }
     },
+    "idd-worker-budget.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-suggest-untrusted-labelers.mjs": {
       "runs": {
         "unknownFlag": {

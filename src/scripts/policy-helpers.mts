@@ -112,6 +112,10 @@ interface GithubApiPolicy {
   loadControl: GithubApiLoadControlPolicy;
 }
 
+interface OrchestratorPolicy {
+  maxWorkers: number;
+}
+
 /** How one policy document presents `critiqueLoop.delegate`. */
 export type CritiqueLoopDelegateLayerStatus =
   | 'absent'
@@ -512,6 +516,7 @@ interface RawConfig {
     legacyRoots?: unknown;
     milestoneScope?: unknown;
   };
+  orchestrator?: { maxWorkers?: unknown };
   claim?: { verifySettleDelay?: unknown };
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: unknown;
@@ -732,6 +737,11 @@ export const POLICY_DEFAULTS = Object.freeze({
     // disabled and ranking is unchanged, matching an absent key.
     milestoneScope: '',
   }),
+  // #3835: per-session worker cap used by the read-only dispatch budget
+  // helper. One still permits one worker; it does not disable activation.
+  orchestrator: Object.freeze({
+    maxWorkers: 2,
+  }) as Readonly<OrchestratorPolicy>,
   claim: Object.freeze({
     verifySettleDelay: 'PT5S',
   }),
@@ -957,6 +967,10 @@ export function normalizePolicyConfig(config: unknown) {
   }
 
   const c = config as RawConfig;
+  const rawOrchestratorMaxWorkers = parsePositiveInteger(
+    c?.orchestrator?.maxWorkers,
+    POLICY_DEFAULTS.orchestrator.maxWorkers,
+  );
 
   const forcedHandoffAuthorityAlias = firstAcceptedString(
     APPROVAL_ACTOR_POLICIES,
@@ -1292,6 +1306,12 @@ export function normalizePolicyConfig(config: unknown) {
         c?.discover?.milestoneScope,
         POLICY_DEFAULTS.discover.milestoneScope,
       ),
+    },
+    orchestrator: {
+      maxWorkers:
+        rawOrchestratorMaxWorkers <= 8
+          ? rawOrchestratorMaxWorkers
+          : POLICY_DEFAULTS.orchestrator.maxWorkers,
     },
     claim: {
       verifySettleDelay: parseDuration(

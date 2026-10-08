@@ -79,6 +79,7 @@ scripts/idd-merge-execute.mjs linguist-generated=true
 scripts/idd-onboard.mjs linguist-generated=true
 scripts/idd-roadmap-audit-execute.mjs linguist-generated=true
 scripts/idd-suggest-untrusted-labelers.mjs linguist-generated=true
+scripts/idd-worker-budget.mjs linguist-generated=true
 scripts/idd-worker-report.mjs linguist-generated=true
 scripts/lint-source-boundaries.mjs linguist-generated=true
 scripts/lint-source-contracts.mjs linguist-generated=true

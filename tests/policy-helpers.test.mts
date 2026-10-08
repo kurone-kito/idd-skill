@@ -45,6 +45,29 @@ test('issueScope defaults to roadmap-first and accepts all values', () => {
   );
 });
 
+test('orchestrator.maxWorkers defaults to 2, accepts 1..8, and falls back for invalid values', () => {
+  assert.equal(POLICY_DEFAULTS.orchestrator.maxWorkers, 2);
+  assert.equal(normalizePolicyConfig({}).orchestrator.maxWorkers, 2);
+  assert.equal(
+    normalizePolicyConfig({ orchestrator: { maxWorkers: 1 } }).orchestrator
+      .maxWorkers,
+    1,
+  );
+  assert.equal(
+    normalizePolicyConfig({ orchestrator: { maxWorkers: 8 } }).orchestrator
+      .maxWorkers,
+    8,
+  );
+  for (const value of [0, 9, 1.5, '3', null]) {
+    assert.equal(
+      normalizePolicyConfig({ orchestrator: { maxWorkers: value } })
+        .orchestrator.maxWorkers,
+      2,
+      `expected ${String(value)} to fall back to 2`,
+    );
+  }
+});
+
 test('advisoryWait.convergenceScope defaults to all-prs and accepts idd-claimed', () => {
   assert.equal(POLICY_DEFAULTS.advisoryWait.convergenceScope, 'all-prs');
   assert.equal(

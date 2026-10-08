@@ -1554,6 +1554,19 @@ top-level keys fail validation unless they use the `x-` prefix. Use
 `x-*` keys for repository-local extensions and keep official policy keys
 exact so typoed settings fail loudly.
 
+### Orchestrator worker cap
+
+The read-only `idd-worker-budget` helper calculates how many workers one
+orchestrator session may start. Its policy setting is:
+
+| Key                       | Default and range     | Scope                                             |
+| ------------------------- | --------------------- | ------------------------------------------------- |
+| `orchestrator.maxWorkers` | `2` (integer `1`–`8`) | One orchestrator session; `1` permits one worker. |
+
+This is a per-session cap. The helper also accounts for current host
+load, available memory, API quota, a harness limit, and the number of
+startable candidates (issue `kurone-kito/idd-skill#3835`).
+
 For discover/claim/review-loop threshold customization, the schema now
 supports these keys:
 
