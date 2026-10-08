@@ -117,7 +117,21 @@ interface ProfileEntry {
   // .gitattributes lines (one per managed file). Other profiles omit
   // this field entirely.
   recommendedGitattributes?: string[];
+  // Only the user-global profile has an operator-level uninstall step,
+  // so only it carries this field; other profiles omit it.
+  uninstallCommand?: string;
+  // Set only when installCommand is empty for a reason the operator can act
+  // on (for example Yarn Berry under user-global, or no package manager
+  // detected), so the report says why instead of leaving the operator to
+  // guess. Profiles that always have an install step omit this field.
+  installUnavailableReason?: string;
 }
+
+// Yarn Berry (2 or later) has no global install, so the user-global profile
+// cannot be installed through it. "classic" is Yarn 1; "unknown" means the
+// repository declares a Yarn flavor we could not read, and the install
+// command is withheld rather than guessed.
+type YarnFlavor = 'classic' | 'berry' | 'unknown';
 
 interface ManifestArgs {
   help: boolean;
@@ -137,6 +151,7 @@ export const PROFILE_NAMES = [
   'vendored-node',
   'ephemeral-npx',
   'instructions-only',
+  'user-global',
 ];
 const PACKAGE_NAME = '@kurone-kito/idd-skill';
 const DEFAULT_PACKAGE_SPEC =
@@ -734,6 +749,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
  * an unrecognized helper `id`, or an unrecognized `profile` -- callers
  * fall back to a documentation pointer alone in all three cases.
  */
+/**
+ * Bin names of every helper this build ships, in HELPER_COMMANDS order. The
+ * user-global doctor check resolves exactly this set over PATH, so the bin
+ * list is never maintained a second time.
+ */
+export function listHelperBinNames(): string[] {
+  return HELPER_COMMANDS.map((command) => command.binName);
+}
+
 export function resolveHelperCommandForProfile({
   helperId,
   profile,
@@ -758,6 +782,11 @@ export function resolveHelperCommandForProfile({
       // and yarn do not), so a manager-agnostic emitted string would be
       // wrong for at least one manager, which is worse than the bug this
       // resolver exists to fix.
+      return command.binName;
+    case 'user-global':
+      // The operator's global install puts each bin on PATH, so the bare
+      // bin name is the invocation for user-global exactly as it is for
+      // package-manager (no repository-local node_modules is involved).
       return command.binName;
     case 'ephemeral-npx':
       return `npx --yes --package ${normalizePackageSpec(packageSpec)} ${command.binName}`;
@@ -880,6 +909,7 @@ export function buildHelperRuntimeManifest({
     managedFiles,
     packageManager: normalizedPackageManager,
     packageSpec: normalizedPackageSpec,
+    yarnFlavor: detectYarnFlavor(normalizedTargetRoot),
   });
 
   const selectedProfiles: Record<string, ProfileEntry> = normalizedProfile
@@ -1149,14 +1179,20 @@ function buildProfileCatalog({
   managedFiles,
   packageManager,
   packageSpec,
+  yarnFlavor,
 }: {
   packageMetadata: PackageMetadata;
   managedFiles: ManagedFile[];
   packageManager: string;
   packageSpec: string;
+  yarnFlavor: YarnFlavor;
 }): Record<string, ProfileEntry> {
   const packageManagerScripts = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [command.scriptName, command.binName]),
+  );
+  const userGlobalUnavailableReason = userGlobalInstallUnavailableReason(
+    packageManager,
+    yarnFlavor,
   );
   const vendoredCommands = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [
@@ -1231,6 +1267,35 @@ function buildProfileCatalog({
         PACKAGE_SPEC_PIN_HINT,
       ],
     },
+    'user-global': {
+      profile: 'user-global',
+      description:
+        'Install the helper bins once per operator with a global package-manager install, so every repository resolves them from PATH without copying files or adding a dependency.',
+      packageManager,
+      installCommand: buildUserGlobalInstallCommand(
+        packageManager,
+        packageSpec,
+        yarnFlavor,
+      ),
+      uninstallCommand: buildUserGlobalUninstallCommand(
+        packageManager,
+        yarnFlavor,
+      ),
+      ...(userGlobalUnavailableReason
+        ? { installUnavailableReason: userGlobalUnavailableReason }
+        : {}),
+      managedDependencies: {
+        devDependencies: {},
+      },
+      managedPackageJsonScripts: {},
+      managedFiles: [],
+      commands: packageManagerScripts,
+      notes: [
+        'Nothing is written to the target repository: the global install lives outside it, and each helper bin resolves from PATH.',
+        'Run the install command once per operator machine; re-run it after changing helperRuntime.packageSpec.',
+        PACKAGE_SPEC_PIN_HINT,
+      ],
+    },
     'instructions-only': {
       profile: 'instructions-only',
       description:
@@ -1287,6 +1352,12 @@ function buildSwitchPlan({
         )
         .sort(([left], [right]) => left.localeCompare(right)),
     ),
+    // Only a switch away from user-global leaves an operator-level install
+    // behind, so the removal command is emitted only when the source profile
+    // has one; other switches keep their existing output shape.
+    ...(from.uninstallCommand
+      ? { removeGlobalInstallCommand: from.uninstallCommand }
+      : {}),
   };
 }
 
@@ -1317,6 +1388,89 @@ function buildPackageManagerInstallCommand(
   throw new Error(`unsupported package manager: ${packageManager}`);
 }
 
+/**
+ * Reads the target repository's Yarn flavor. Berry is declared by a
+ * `packageManager` pin to yarn@2 or later, or by a `.yarnrc.yml` at the root
+ * (a Berry-only config file). A `package.json` that exists but is not valid
+ * JSON is "unknown", not "classic", so an ambiguous repository never receives
+ * a Yarn Classic install command (fail closed).
+ */
+function detectYarnFlavor(root: string): YarnFlavor {
+  if (existsSync(resolve(root, '.yarnrc.yml'))) {
+    return 'berry';
+  }
+  const packageJsonPath = resolve(root, 'package.json');
+  if (!existsSync(packageJsonPath)) {
+    return 'classic';
+  }
+  let packageManagerPin: unknown;
+  try {
+    packageManagerPin = (
+      JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+        packageManager?: unknown;
+      }
+    ).packageManager;
+  } catch {
+    return 'unknown';
+  }
+  const match = /^yarn@(\d+)/u.exec(
+    typeof packageManagerPin === 'string' ? packageManagerPin : '',
+  );
+  if (match === null) {
+    return 'classic';
+  }
+  return Number(match[1]) >= 2 ? 'berry' : 'classic';
+}
+
+function buildUserGlobalInstallCommand(
+  packageManager: string,
+  packageSpec: string,
+  yarnFlavor: YarnFlavor,
+): string {
+  if (packageManager === 'npm') {
+    return `npm install -g ${packageSpec}`;
+  }
+  if (packageManager === 'pnpm') {
+    return `pnpm add -g ${packageSpec}`;
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'classic') {
+    return `yarn global add ${packageSpec}`;
+  }
+  return '';
+}
+
+function buildUserGlobalUninstallCommand(
+  packageManager: string,
+  yarnFlavor: YarnFlavor,
+): string {
+  if (packageManager === 'npm') {
+    return `npm uninstall -g ${PACKAGE_NAME}`;
+  }
+  if (packageManager === 'pnpm') {
+    return `pnpm remove -g ${PACKAGE_NAME}`;
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'classic') {
+    return `yarn global remove ${PACKAGE_NAME}`;
+  }
+  return '';
+}
+
+function userGlobalInstallUnavailableReason(
+  packageManager: string,
+  yarnFlavor: YarnFlavor,
+): string | undefined {
+  if (!packageManager) {
+    return 'No package manager was given or detected for the target repository; pass --package-manager <npm|pnpm|yarn> to emit the global install command.';
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'berry') {
+    return 'Yarn Berry (2 or later) has no global install, so the user-global profile is unsupported for this repository; use npm, pnpm, or Yarn Classic for the operator install.';
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'unknown') {
+    return "The target repository's package.json is not valid JSON, so its Yarn flavor cannot be determined and no global install command is emitted.";
+  }
+  return undefined;
+}
+
 function parseArgs(argv: string[]): ManifestArgs {
   const { values, help } = parseCliArgs(
     argv,
@@ -1336,8 +1490,8 @@ function printHelp(): void {
   process.stdout.write(`usage: node scripts/helper-runtime-manifest.mjs [options]
 
 Options:
-  --profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
-  --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
+  --profile <package-manager|vendored-node|ephemeral-npx|instructions-only|user-global>
+  --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only|user-global>
   --package-manager <npm|pnpm|yarn>
   --package-spec <npm-spec-or-tarball-url>
                         Affects package-spec-derived output only (each

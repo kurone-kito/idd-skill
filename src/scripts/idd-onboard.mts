@@ -2374,8 +2374,8 @@ export function checkStaleImportSignal(
 
 /**
  * `helperRuntime.profile` values whose helper commands resolve a package
- * spec (`npx --yes --package <spec> idd-*`, or the equivalent
- * `package.json` dependency pin) -- the two profiles
+ * spec (`npx --yes --package <spec> idd-*`, the equivalent `package.json`
+ * dependency pin, or the operator-level global install) -- the profiles
  * `helperRuntime.packageSpec` actually affects. `instructions-only` never
  * runs a helper command, and `vendored-node` copies helper files into the
  * repository instead of resolving them from a package spec, so a missing
@@ -2384,6 +2384,7 @@ export function checkStaleImportSignal(
 const PACKAGE_SPEC_APPLICABLE_PROFILES: ReadonlySet<string> = new Set([
   'ephemeral-npx',
   'package-manager',
+  'user-global',
 ]);
 
 /** Non-blocking package-pin advisory result for one target tree (#2987). */
@@ -2478,7 +2479,9 @@ export function checkPackagePinWarning(
     applicable && !packageSpecConfigured
       ? profile === 'ephemeral-npx'
         ? `helper commands for the "ephemeral-npx" helper runtime profile resolve against the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
-        : `the "package-manager" helper runtime profile installs its helper dependency from the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
+        : profile === 'user-global'
+          ? `the "user-global" helper runtime profile installs its helper bins for the operator from the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
+          : `the "package-manager" helper runtime profile installs its helper dependency from the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
       : null;
   return { profile, applicable, packageSpecConfigured, warning };
 }
