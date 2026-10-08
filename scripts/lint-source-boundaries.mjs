@@ -694,10 +694,13 @@ function scanComments(source) {
           return false;
         }
         // A string or template literal type holds characters that are not
-        // type syntax: `identity<"a,b">` and `identity<`x-${string}`>`
-        // would otherwise read the comma as a top-level separator and the
-        // list as a comparison. Skip it whole; one that does not close on
-        // this line cannot be a type argument here.
+        // type syntax. Without this branch a quote matches no branch below
+        // and ends the scan as a non-type token, so a literal argument would
+        // read as a comparison (`identity<'a'>`); skipping the literal whole
+        // also hides the commas, angle brackets and `/*` inside it
+        // (`identity<"a,b">`). A backslash consumes the next character, so an
+        // LF line continuation can carry the literal over a line break. A
+        // literal still open at a line break is not a type argument here.
         if (
           depth > 0 &&
           (typeChar === "'" || typeChar === '"' || typeChar === '`')

@@ -1180,6 +1180,22 @@ const divisionWithCommentedImports: {
       ),
   },
   {
+    name: 'division after a generic instantiation of a plain single-quoted literal type',
+    source: (specifier) =>
+      `const value = identity<'a'> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
+    name: 'division after a generic instantiation of a literal type with an escaped quote',
+    source: (specifier) =>
+      `const value = identity<'a\\'b,c'> / /* import('__SPECIFIER__') */ 2;\n`.replace(
+        '__SPECIFIER__',
+        specifier,
+      ),
+  },
+  {
     name: 'division after a generic instantiation of a string literal type with a comma',
     source: (specifier) =>
       `const value = identity<"a,b"> / /* import('__SPECIFIER__') */ 2;\n`.replace(
@@ -1739,13 +1755,29 @@ test('a string literal type argument with a comma does not hide a later bare imp
   assert.match(stderr, /yaml/);
 });
 
-test('an unclosed string in a would-be type argument list stays a comparison', () => {
+test('a string still open at a line break in a would-be type argument list stays a comparison', () => {
   const source =
-    "const value = count<'a,b > /[/*]/;\nimport bare from 'yaml';\n";
+    "const v = count<'abc\nT> /[/*]/.test(s);\nimport bare from 'yaml';\n";
   const root = buildFixture((files) => files.set('src/main.mts', source));
   const { status, stderr } = runCli(['--root', root]);
   assert.equal(status, 1, stderr);
   assert.match(stderr, /yaml/);
+});
+
+test('a template literal spanning a line break in a would-be type argument list stays a comparison', () => {
+  const source =
+    "const v = count<`abc\nx`> /[/*]/.test(s);\nimport bare from 'yaml';\n";
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 1, stderr);
+  assert.match(stderr, /yaml/);
+});
+
+test('a line continuation carries a literal type over a line break', () => {
+  const source = "const v = identity<'a\\\nb'> / /* import('left-pad') */ 2;\n";
+  const root = buildFixture((files) => files.set('src/main.mts', source));
+  const { status, stderr } = runCli(['--root', root]);
+  assert.equal(status, 0, stderr);
 });
 
 test('division after an arrow type in a TypeScript assertion leaves comments hidden', () => {
