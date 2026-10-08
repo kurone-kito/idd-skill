@@ -2010,11 +2010,14 @@ function shellSingleQuoted(value: string): string {
 // the owner's ledger, used only when the launch environment dropped it.
 function pathShimLauncher(ledgerFallback: string): string {
   if (process.platform === 'win32') {
+    // cmd.exe expands `%name%` even inside quotes, so a `%` in a path has to
+    // be doubled to reach the script as written.
+    const batchEscape = (value: string): string => value.replaceAll('%', '%%');
     return [
       '@echo off',
-      `if not defined IDD_TEST_GH_GUARD_LEDGER set "IDD_TEST_GH_GUARD_LEDGER=${ledgerFallback}"`,
+      `if not defined IDD_TEST_GH_GUARD_LEDGER set "IDD_TEST_GH_GUARD_LEDGER=${batchEscape(ledgerFallback)}"`,
       'set "NODE_OPTIONS="',
-      `"${process.execPath}" "${pathShimScriptPath}" %*`,
+      `"${batchEscape(process.execPath)}" "${batchEscape(pathShimScriptPath)}" %*`,
       '',
     ].join('\r\n');
   }
@@ -2047,11 +2050,15 @@ function installPathShim(ledgerFallback: string): void {
   }
   const binDirectory = path.join(root, 'bin');
   fs.mkdirSync(binDirectory, { recursive: true });
-  fs.writeFileSync(
-    path.join(binDirectory, process.platform === 'win32' ? 'gh.cmd' : 'gh'),
-    pathShimLauncher(ledgerFallback),
-    { encoding: 'utf8', mode: 0o755 },
+  // A failed write throws on purpose: a missing launcher must abort the run,
+  // not leave `gh` unguarded. The explicit chmod keeps the execute bit that a
+  // umask could otherwise strip from the mode above.
+  const launcher = path.join(
+    binDirectory,
+    process.platform === 'win32' ? 'gh.cmd' : 'gh',
   );
+  fs.writeFileSync(launcher, pathShimLauncher(ledgerFallback), 'utf8');
+  if (process.platform !== 'win32') fs.chmodSync(launcher, 0o755);
   const pathKey =
     process.platform === 'win32'
       ? (Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ??
