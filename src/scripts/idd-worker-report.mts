@@ -21,9 +21,12 @@
 // the waiter renames the lock aside, confirms the moved file is the very lock
 // it judged stale (same inode, modification time, and token), and puts a
 // fresh lock back when it is not. The holder also refreshes the lock's age
-// before it reads the store, so a slow scan of a large store is less likely to
-// age it out. Residual risks: between the rename and the restore another
-// writer can create a lock, and a process suspended for longer than
+// before it reads the store and about every `LOCK_REFRESH_MS` between lines
+// while it scans them, so a slow scan of a large store does not age it out.
+// The read of the file, the split into lines, and the parse of one very long
+// line cannot be interrupted, so they must finish within the stale age.
+// Residual risks: between the rename and the restore another writer can
+// create a lock, and a process suspended for longer than
 // `LOCK_STALE_MS` can wake up after its lock was taken over. Either way two
 // writers hold the lock at once; the line is a single `O_APPEND` write, so the
 // worst outcome is a duplicate row, never a torn line. Two bounded delays:
@@ -70,6 +73,8 @@ let cachedSchema: unknown;
 
 /** A lock older than this is treated as left behind by a dead holder. */
 const LOCK_STALE_MS = 5_000;
+/** How often the duplicate scan renews the lock (at most a fifth of the stale age). */
+const LOCK_REFRESH_MS = 1_000;
 /** Longer than the stale age, so one dead holder never fails every append. */
 const LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
 const LOCK_RETRY_MS = 25;
@@ -563,6 +568,44 @@ function parseLines(content: string): unknown[] {
 }
 
 /**
+ * True when a stored line carries the duplicate key `wanted`. Lines that are
+ * not valid JSON are skipped. `refresh` renews the lock's lease every
+ * `intervalMs` so a slow scan of a large store cannot let it go stale while
+ * this writer still holds it.
+ */
+// audit:ignore-dead-export: reached in production through appendWorkerReport; exported so the lease renewal is unit-tested with a fake clock (issue #3836)
+export function hasDuplicate(
+  content: string,
+  wanted: string,
+  refresh: () => void,
+  now: () => number = Date.now,
+  intervalMs: number = LOCK_REFRESH_MS,
+): boolean {
+  let renewedAt = now();
+  for (const line of content.split('\n')) {
+    if (now() - renewedAt >= intervalMs) {
+      refresh();
+      renewedAt = now();
+    }
+    if (line.trim() === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      duplicateKey(parsed as Partial<WorkerReport>) === wanted
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Validate `record`, then append it as one line unless a line with the same
  * `claimId`, `workerHandle` and `terminalPhase` already exists. Throws
  * (writing nothing and creating no directory) when the record is invalid.
@@ -591,15 +634,22 @@ export function appendWorkerReport(
     refreshLock(lockPath);
     const content = readStore(file);
     if (existsSync(file)) ensurePrivate(file, FILE_MODE);
+    refreshLock(lockPath);
     const wanted = duplicateKey(record as WorkerReport);
-    for (const existing of parseLines(content)) {
-      if (
-        typeof existing === 'object' &&
-        existing !== null &&
-        duplicateKey(existing as Partial<WorkerReport>) === wanted
-      ) {
-        return { status: 'duplicate', store: file };
-      }
+    const renewEveryMs = Math.min(
+      LOCK_REFRESH_MS,
+      Math.max(1, Math.floor(options.staleMs / 5)),
+    );
+    if (
+      hasDuplicate(
+        content,
+        wanted,
+        () => refreshLock(lockPath),
+        Date.now,
+        renewEveryMs,
+      )
+    ) {
+      return { status: 'duplicate', store: file };
     }
     // A writer that died mid-line leaves no trailing newline; start a fresh
     // line so the new record is not glued onto the torn one.

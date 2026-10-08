@@ -6939,7 +6939,9 @@ same as `AW4`/`AW5`.
   renaming it aside. The waiter then checks that the moved file is the lock
   it judged stale, by its inode, modification time, and token, and puts a
   fresh lock back if the holder changed in between. The holder refreshes
-  the lock's age before it reads the store.
+  the lock's age before it reads the store and about every second between
+  lines while it scans them (the read, the split into lines, and one very
+  long line cannot be interrupted).
   A store whose last line has no trailing newline gets a newline first, so
   a new record is never glued onto a torn one. The record is one `O_APPEND`
   write. Residual risk: if two writers ever hold the lock together (a

@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { defaultLoadControlDirectory } from '../src/scripts/github-api-load-control.mts';
 import {
   appendWorkerReport,
+  hasDuplicate,
   observeLock,
   resolveStateBase,
   resolveWorkerReportStore,
@@ -945,4 +946,51 @@ test('a stale lock with an empty body is taken over by an append', () => {
   } finally {
     cleanup(sandbox);
   }
+});
+
+test('the duplicate scan renews the lock lease while it works', () => {
+  const key = JSON.stringify(['claim', 'worker', 'F4']);
+  const line = (workerHandle: string): string =>
+    JSON.stringify({ claimId: 'claim', workerHandle, terminalPhase: 'F4' });
+  const content = [
+    line('a'),
+    'not json',
+    '',
+    line('b'),
+    'null',
+    line('c'),
+  ].join('\n');
+  // A fake clock that advances 600 ms per reading makes the 1 s interval
+  // elapse a few times during the scan.
+  let clock = 0;
+  const tick = (): number => {
+    clock += 600;
+    return clock;
+  };
+  let refreshes = 0;
+  assert.equal(
+    hasDuplicate(content, key, () => (refreshes += 1), tick, 1_000),
+    false,
+  );
+  // 600 ms per reading, a 1 s interval, six lines: renewed on the 2nd, 4th,
+  // and 6th line.
+  assert.equal(refreshes, 3);
+
+  // A match is found past bad, empty, and non-object lines.
+  const withMatch = `${content}\n${line('worker')}\n${line('after')}`;
+  refreshes = 0;
+  assert.equal(
+    hasDuplicate(
+      withMatch,
+      key,
+      () => (refreshes += 1),
+      () => 0,
+    ),
+    true,
+  );
+  assert.equal(
+    refreshes,
+    0,
+    'a scan that takes no time does not need to renew',
+  );
 });
