@@ -675,12 +675,12 @@ Keep these rules in mind:
 - keep `helperRuntime.profile` aligned with the human-readable helper
   runtime section when helper support is enabled
 - set `helperRuntime.packageSpec` only when the repository has pinned a
-  reviewed tarball, mirror URL, or commit archive for its `ephemeral-npx`
-  or `package-manager` helper install; omit it to keep the mutable
-  default archive URL for either profile — an omitted `packageSpec`
-  under `ephemeral-npx` or `package-manager` is a deliberate, supported
-  choice, but `idd-onboard.mjs --verify` surfaces it as a non-blocking
-  reminder (see [Helper runtime profile](#helper-runtime-profile) above)
+  reviewed tarball, mirror URL, or commit archive for its `ephemeral-npx`,
+  `package-manager`, or `user-global` install; omit it to keep the mutable
+  default archive URL for every profile. An omitted `packageSpec` under
+  these profiles is a deliberate, supported choice, but
+  `idd-onboard.mjs --verify` surfaces it as a non-blocking reminder (see
+  [Helper runtime profile](#helper-runtime-profile) above)
 
 The file validates against the canonical schema at:
 

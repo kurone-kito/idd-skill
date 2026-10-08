@@ -346,7 +346,7 @@ template copy instead resolves the cleanup-audit invocation through
 the repository's configured `helperRuntime.profile` (see
 [Helper Runtime Profiles](idd-helper-scripts.md#helper-runtime-profiles)):
 it runs the equivalent invocation under `vendored-node`,
-`package-manager`, and `ephemeral-npx`, and skips the audit and
+`package-manager`, `ephemeral-npx`, and `user-global`, and skips the audit and
 evidence-comment steps entirely under `instructions-only` (or when no
 profile is configured), where no runnable helper command exists for
 any profile. Permissions required are `contents: read`,

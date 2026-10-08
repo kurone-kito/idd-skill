@@ -138,7 +138,7 @@ the same as a commit or push:
      2. Otherwise, post `unclaimed-by` for this session's `{agent-id}`
         / `{claim-id}` with the profile-selected `post-idd-marker`
         helper (fields: agent id, claim id, timestamp; resolve the
-        package-manager / ephemeral-npx form from
+        package-manager / ephemeral-npx / user-global form from
         `docs/idd-helper-scripts.md`; the direct JSON `POST` in
         `idd-overview-core.instructions.md`'s Unclaim format is the
         fallback):

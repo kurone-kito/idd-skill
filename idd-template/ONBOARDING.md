@@ -707,7 +707,7 @@ error), so an agent can gate on the exit code without parsing prose.
   replacing a manual walkthrough of the checklist below with six check
   groups: manifest completeness (held targets are exempt), placeholder
   residue, helper loads (`vendored-node` only), stale-import signal,
-  package-pin advisory (for an `ephemeral-npx`/`package-manager` profile
+  package-pin advisory (for an `ephemeral-npx`/`package-manager`/`user-global` profile
   without `helperRuntime.packageSpec`; see the
   [helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
   and held-schema drift (a changed schema or fixture is still named by a
