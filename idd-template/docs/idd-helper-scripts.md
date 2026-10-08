@@ -2345,6 +2345,21 @@ Node.js helper path.
   those commands themselves. `idd-onboard.mjs --verify` reports a
   non-blocking advisory for either profile when no `packageSpec` is
   configured.
+- `user-global`: install the helper bins once per operator with the
+  `installCommand` the manifest emits (npm's `npm install -g`, pnpm's global
+  add, or Yarn Classic's `yarn global add`), and let every repository resolve
+  them
+  from `PATH`. Nothing is written into the repository, so no helper files or
+  dependency pins are added. `helperRuntime.packageSpec` (or `--package-spec`)
+  pins that global install. The manifest's `uninstallCommand` removes the
+  install for the current manager. A switch away from this profile lists every
+  global uninstall instead, because the repository cannot tell which manager
+  the operator installed with. Yarn Berry has no global install, so the
+  manifest reports it as unsupported with an `installUnavailableReason`.
+  `idd-doctor` checks this profile only: each helper bin must resolve on
+  `PATH`, and the bins must report one `@kurone-kito/idd-skill` version.
+  Repository evidence never proposes this profile; the operator chooses it
+  explicitly, because its helper bins live outside the repository.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 

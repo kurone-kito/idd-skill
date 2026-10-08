@@ -198,7 +198,7 @@ SAME_HEAD_REQUEST_MARKER_PRESENT=$(
 
 Post via the profile-selected post-idd-marker command (source repo /
 vendored-node: `node scripts/post-idd-marker.mjs`; package-manager /
-ephemeral-npx: resolve from `docs/idd-helper-scripts.md`)
+ephemeral-npx / user-global: resolve from `docs/idd-helper-scripts.md`)
 `--type advisory-recovery --target pr <pr-number> --agent-id <id>
 --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`, or manually:
 
@@ -238,7 +238,8 @@ export BOT_REST_LOGIN_BARE
 claim_revalidate() {
   # Run from the issue worktree. The profile-selected resume-claim-routing
   # command (source repo / vendored-node: `node scripts/resume-claim-routing.mjs`;
-  # package-manager / ephemeral-npx: resolve from `docs/idd-helper-scripts.md`)
+  # package-manager / ephemeral-npx / user-global: resolve from
+  # `docs/idd-helper-scripts.md`)
   # with `--assert` exits non-zero on any verdict except already_owned/keep.
   # That proves the claim id (and the activation nonce when --nonce is given
   # and a winner marker exists) and, when a worktree occupies the claimed
@@ -580,7 +581,8 @@ revalidate_head || exit 2
 node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number> \
   --agent-id <id> --claim-id <id> --head-sha <PR_HEAD_SHA> \
   --attempt <n> --timestamp <ISO8601> --apply
-# package-manager / ephemeral-npx profile, resolve the command name from
+# package-manager / ephemeral-npx / user-global profile, resolve the
+# command name from
 # docs/idd-helper-scripts.md:
 <profile-selected-post-idd-marker-command> --type advisory-recovery \
   --target pr <pr-number> --agent-id <id> --claim-id <id> \
@@ -607,7 +609,8 @@ node scripts/minimize-superseded-markers.mjs \
   --classifier OUTDATED \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
   --apply
-# package-manager / ephemeral-npx profile, resolve the command name from
+# package-manager / ephemeral-npx / user-global profile, resolve the
+# command name from
 # docs/idd-helper-scripts.md:
 <profile-selected-minimize-superseded-markers-command> \
   --subject-ids "<id1>,<id2>,..." \
