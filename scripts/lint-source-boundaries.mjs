@@ -299,7 +299,7 @@ function scanComments(source) {
     let arrowTypeHoldNewline = false;
     let postfixUpdateOperator = false;
     let postfixNonNullAssertion = false;
-    let codeCharBeforeLastWord = '';
+    let codeBeforeLastWordEndsBinding = false;
     let lastCodeCharIsComparisonAngle = false;
     let lastCodeCharIsConditionalColon = false;
     let codeNestingDepth = 0;
@@ -332,7 +332,7 @@ function scanComments(source) {
         !lastWordIsPropertyName &&
         lastWord === 'of' &&
         parenIsForHeader.at(-1) === true &&
-        /[A-Za-z0-9_$)\]}]/.test(codeCharBeforeLastWord)
+        codeBeforeLastWordEndsBinding
       );
     }
     function wordContinuesAt(ch, sourceIndex) {
@@ -501,7 +501,8 @@ function scanComments(source) {
         if (startsWord) {
           previousWord = lastWord;
           previousWordIsPropertyName = lastWordIsPropertyName;
-          codeCharBeforeLastWord = previousCodeChar;
+          codeBeforeLastWordEndsBinding =
+            previousCodeCharIsIdentifierPart || /[)\]}]/.test(previousCodeChar);
           lastWord = ch;
           lastWordIsPropertyName =
             previousCodeChar === '.' || previousCodeChar === '#';

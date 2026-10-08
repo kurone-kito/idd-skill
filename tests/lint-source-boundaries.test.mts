@@ -2697,3 +2697,27 @@ for (const row of reviewSecondRows) {
     assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
   });
 }
+
+// Third review pass on #3852: a for-of operator after a Unicode binding.
+const reviewThirdRows: { name: string; source: string }[] = [
+  {
+    name: 'a for-of regular expression after a Unicode binding',
+    source: 'for (const é of /a`b/) {}\n/`/.test(x);\n',
+  },
+];
+
+for (const row of reviewThirdRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
