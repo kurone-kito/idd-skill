@@ -5,7 +5,11 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { parseCliArgs } from './cli-args.mjs';
-import { extractCopilotReviewBodyRemark } from './copilot-review-body.mjs';
+import { parseOverviewSections } from './copilot-overview-sections.mjs';
+import {
+  classifyCopilotReviewBody,
+  extractCopilotReviewBodyRemark,
+} from './copilot-review-body.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -163,6 +167,7 @@ export function collectReviewActivitySnapshot(input) {
     },
     embeddedFindings,
     reviewBodyRemarks: buildCopilotReviewBodyRemarks(reviews),
+    copilotOverviewLabels: buildCopilotOverviewLabels(reviews),
   };
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
@@ -348,6 +353,60 @@ export function buildCopilotReviewBodyRemarks(reviews) {
       },
     ];
   });
+}
+/**
+ * Select the last `COMMENTED` Copilot review in `listReviews` order whose
+ * body is not an error body (the same skip `review-clause.mts` applies, so an
+ * error-bodied last review does not hide the earlier labels), and report its
+ * overview labels. `null` when no such review exists. Earlier reviews' Open
+ * sections are not returned, which bounds the output at one row.
+ */
+export function buildCopilotOverviewLabels(reviews) {
+  let latest = null;
+  for (const review of reviews) {
+    if (review.state !== 'COMMENTED') {
+      continue;
+    }
+    const author = String(review.user?.login ?? '').trim();
+    if (!isCopilotReviewerLogin(author)) {
+      continue;
+    }
+    if (classifyCopilotReviewBody(review.body).shape === 'error') {
+      continue;
+    }
+    latest = review;
+  }
+  if (latest === null) {
+    return null;
+  }
+  const body = String(latest.body ?? '');
+  const base = {
+    reviewId: String(latest.node_id ?? ''),
+    commitId: String(latest.commit_id ?? ''),
+  };
+  const shape = classifyCopilotReviewBody(body).shape;
+  if (shape === 'overview-v2') {
+    const sections = parseOverviewSections(body);
+    const consistent = sections.unparsedReasons.length === 0;
+    return {
+      ...base,
+      kind: consistent ? 'v2' : 'unparsed',
+      items: sections.open.map((item) => ({
+        discussionId: item.id,
+        severity: item.severity,
+        isNew: item.isNew,
+      })),
+      previouslyMissed: sections.previouslyMissed,
+      reason: consistent ? null : sections.unparsedReasons.join('; '),
+    };
+  }
+  return {
+    ...base,
+    kind: shape === 'overview-legacy' ? 'legacy' : 'other',
+    items: [],
+    previouslyMissed: null,
+    reason: null,
+  };
 }
 function normalizeReview(review) {
   return {

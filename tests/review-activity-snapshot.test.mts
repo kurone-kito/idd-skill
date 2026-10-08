@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCodeRabbitEmbeddedFindings,
+  buildCopilotOverviewLabels,
   buildCopilotReviewBodyRemarks,
   collectReviewActivitySnapshot,
   normalizeComment,
@@ -727,8 +729,250 @@ test('a remark-only snapshot keeps effective, counters and every other field unc
   // The review still counts as one item either way, and nothing else moves.
   assert.deepEqual(withRemark.counts, { comments: 0, reviews: 1, threads: 0 });
   assert.deepEqual(withRemark.effective, withoutRemark.effective);
-  const { reviewBodyRemarks: _withRemark, ...restWithRemark } = withRemark;
-  const { reviewBodyRemarks: _withoutRemark, ...restWithoutRemark } =
-    withoutRemark;
+  // #3868: the overview-labels key is evidence only too, so it is dropped here
+  // as well; the remaining fields must match exactly.
+  const {
+    reviewBodyRemarks: _withRemark,
+    copilotOverviewLabels: _withRemarkLabels,
+    ...restWithRemark
+  } = withRemark;
+  const {
+    reviewBodyRemarks: _withoutRemark,
+    copilotOverviewLabels: _withoutRemarkLabels,
+    ...restWithoutRemark
+  } = withoutRemark;
   assert.deepEqual(restWithRemark, restWithoutRemark);
+});
+
+// --- #3868: copilotOverviewLabels ------------------------------------------
+
+interface CorpusEntry {
+  id: string;
+  body: string;
+  expectedLabels: Record<string, { shape?: string }>;
+}
+
+const CORPUS: CorpusEntry[] = Object.values(
+  JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL('./fixtures/bot-comment-corpus/corpus.json', import.meta.url),
+      ),
+      'utf8',
+    ),
+  ) as Record<string, CorpusEntry>,
+);
+
+function corpusBody(id: string): string {
+  const entry = CORPUS.find((candidate) => candidate.id === id);
+  assert.ok(entry, `corpus entry ${id} exists`);
+  return entry.body;
+}
+
+function corpusBodyWithShape(shape: string): string {
+  const entry = CORPUS.find(
+    (candidate) =>
+      candidate.expectedLabels['copilot-review-body']?.shape === shape,
+  );
+  assert.ok(entry, `a corpus entry with shape ${shape} exists`);
+  return entry.body;
+}
+
+function copilotReview(
+  body: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    node_id: 'PRR_labels',
+    commit_id: 'a'.repeat(40),
+    user: { login: COPILOT_LOGIN },
+    state: 'COMMENTED',
+    submitted_at: '2026-10-01T00:00:00Z',
+    body,
+    ...overrides,
+  };
+}
+
+// Two Open items, one carrying `· New`, with the same badge markup the parser
+// reads in real bodies (`alt="<Level> severity"` before the discussion link).
+const TWO_OPEN_ITEMS_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '**Findings:** 2 <picture><img alt="High severity"></picture>',
+  '',
+  '<details>',
+  '<summary><strong>Open (2)</strong></summary>',
+  '',
+  '- <picture><source srcset="h.svg"><img alt="High severity" src="h.svg"></picture> [Fix the parser](#discussion_r111) · New',
+  '- <picture><img alt="Low severity" src="l.svg"></picture> [Tidy the docs](#discussion_r222)',
+  '',
+  '</details>',
+  '',
+].join('\n');
+
+test('copilotOverviewLabels reads a v2 Open item: severity, discussion id, isNew, shape', () => {
+  assert.deepEqual(
+    buildCopilotOverviewLabels([
+      copilotReview(corpusBody('copilot-v2-clean-3245')),
+    ]),
+    {
+      reviewId: 'PRR_labels',
+      commitId: 'a'.repeat(40),
+      kind: 'v2',
+      items: [{ discussionId: 4086537940, severity: 'medium', isNew: true }],
+      previouslyMissed: { high: 0, medium: 0, low: 0 },
+      reason: null,
+    },
+  );
+});
+
+test('copilotOverviewLabels yields every Open item of a multi-item body, with `· New` only where present', () => {
+  assert.deepEqual(
+    buildCopilotOverviewLabels([copilotReview(TWO_OPEN_ITEMS_BODY)]),
+    {
+      reviewId: 'PRR_labels',
+      commitId: 'a'.repeat(40),
+      kind: 'v2',
+      items: [
+        { discussionId: 111, severity: 'high', isNew: true },
+        { discussionId: 222, severity: 'low', isNew: false },
+      ],
+      previouslyMissed: { high: 0, medium: 0, low: 0 },
+      reason: null,
+    },
+  );
+});
+
+test('copilotOverviewLabels counts Previously missed per severity and gives no per-item severity', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBody('copilot-v2-previously-missed-3196')),
+  ]);
+  assert.equal(row?.kind, 'v2');
+  assert.deepEqual(row?.items, []);
+  assert.deepEqual(row?.previouslyMissed, { high: 0, medium: 1, low: 0 });
+  assert.equal(row?.reason, null);
+});
+
+test('copilotOverviewLabels reports a legacy body as legacy with no items', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBodyWithShape('overview-legacy')),
+  ]);
+  assert.deepEqual(
+    {
+      kind: row?.kind,
+      items: row?.items,
+      previouslyMissed: row?.previouslyMissed,
+    },
+    { kind: 'legacy', items: [], previouslyMissed: null },
+  );
+});
+
+test('copilotOverviewLabels does not read a v2 marker quoted in a code span as v2', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(
+      'The marker is written as `<!-- ccr-overview-v2 -->` in this review.\n\n**Findings:** None\n',
+    ),
+  ]);
+  assert.equal(row?.kind, 'other');
+  assert.deepEqual(row?.items, []);
+  assert.equal(row?.previouslyMissed, null);
+});
+
+test('copilotOverviewLabels: an Open item with no label is unparsed, keeps the partial list, invents no severity', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '',
+    '<details>',
+    '<summary><strong>Open (2)</strong></summary>',
+    '',
+    '- <picture><img alt="Medium severity" src="m.svg"></picture> [Labelled](#discussion_r301)',
+    '- Plain item with no badge [Unlabelled](#discussion_r302)',
+    '',
+    '</details>',
+    '',
+  ].join('\n');
+  assert.deepEqual(buildCopilotOverviewLabels([copilotReview(body)]), {
+    reviewId: 'PRR_labels',
+    commitId: 'a'.repeat(40),
+    kind: 'unparsed',
+    items: [{ discussionId: 301, severity: 'medium', isNew: false }],
+    previouslyMissed: { high: 0, medium: 0, low: 0 },
+    reason: 'Open header declared 2 but 1 were parsed',
+  });
+});
+
+test('copilotOverviewLabels returns the last listed review, even when an earlier one was submitted later', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBody('copilot-v2-clean-3245'), {
+      node_id: 'PRR_later_submitted',
+      submitted_at: '2026-10-02T00:00:00Z',
+    }),
+    copilotReview(corpusBody('copilot-v2-previously-missed-3196'), {
+      node_id: 'PRR_listed_last',
+      submitted_at: '2026-10-01T00:00:00Z',
+    }),
+  ]);
+  assert.equal(row?.reviewId, 'PRR_listed_last');
+  assert.equal(row?.kind, 'v2');
+});
+
+test('copilotOverviewLabels skips an error-bodied last review and returns the earlier v2 review', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBody('copilot-v2-clean-3245'), {
+      node_id: 'PRR_v2',
+    }),
+    copilotReview(corpusBodyWithShape('error'), {
+      node_id: 'PRR_error_last',
+    }),
+  ]);
+  assert.equal(row?.reviewId, 'PRR_v2');
+  assert.equal(row?.kind, 'v2');
+  assert.equal(row?.items.length, 1);
+});
+
+test('copilotOverviewLabels is null when no Copilot COMMENTED review exists', () => {
+  assert.equal(
+    buildCopilotOverviewLabels([
+      copilotReview(corpusBody('copilot-v2-clean-3245'), {
+        state: 'APPROVED',
+      }),
+      copilotReview(corpusBody('copilot-v2-clean-3245'), {
+        user: { login: 'human-reviewer' },
+      }),
+    ]),
+    null,
+  );
+  assert.equal(buildCopilotOverviewLabels([]), null);
+});
+
+test('copilotOverviewLabels is evidence only: the other fields match the same review with a body that carries no labels', () => {
+  for (const id of [
+    'copilot-v2-clean-3245',
+    'copilot-v2-previously-missed-3196',
+  ]) {
+    const withLabels = snapshotWithReviews([
+      copilotReview(corpusBody(id), { node_id: `PRR_${id}` }),
+    ]);
+    const withoutLabels = snapshotWithReviews([
+      copilotReview('**Findings:** None', { node_id: `PRR_${id}` }),
+    ]);
+    assert.notEqual(
+      withLabels.copilotOverviewLabels,
+      null,
+      `${id} yields a row`,
+    );
+    const {
+      copilotOverviewLabels: _withLabels,
+      reviewBodyRemarks: _withRemarks,
+      ...restWithLabels
+    } = withLabels;
+    const {
+      copilotOverviewLabels: _withoutLabels,
+      reviewBodyRemarks: _withoutRemarks,
+      ...restWithoutLabels
+    } = withoutLabels;
+    assert.deepEqual(restWithLabels, restWithoutLabels, id);
+  }
 });
