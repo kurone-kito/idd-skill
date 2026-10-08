@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -1252,6 +1253,61 @@ test("releasing a lock removes only the holder's own lock", () => {
     unlinkSync(lock);
     assert.doesNotThrow(() => releaseLock(lock, 'mine'));
     assert.deepEqual(leftovers(), []);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a dangling symlink at the lock path ages out instead of blocking every append', {
+  skip: process.platform === 'win32',
+}, () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    const nowhere = join(sandbox.root, 'nowhere');
+    symlinkSync(nowhere, lock);
+
+    // Fresh: not stale yet, so the append waits out its bounded timeout.
+    assert.throws(
+      () =>
+        appendWorkerReport(sandbox.store, report(), {
+          timeoutMs: 150,
+          retryMs: 10,
+        }),
+      /could not acquire the lock/,
+    );
+    assert.equal(existsSync(nowhere), false, 'the link is never followed');
+
+    // Aged past the stale age, the link itself is moved aside and removed.
+    const old = new Date(Date.now() - 60_000);
+    lutimesSync(lock, old, old);
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(storeLines(sandbox).length, 1);
+    assert.equal(existsSync(nowhere), false, 'the link target was not created');
+    assert.deepEqual(readdirSync(sandbox.storeDirectory).sort(), [
+      'reports.jsonl',
+    ]);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('summary reports a dangling store symlink instead of an empty store', {
+  skip: process.platform === 'win32',
+}, () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    symlinkSync(join(sandbox.root, 'nowhere'), sandbox.store);
+    const result = runCli(sandbox, ['summary']);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /dangling symbolic link/);
   } finally {
     cleanup(sandbox);
   }

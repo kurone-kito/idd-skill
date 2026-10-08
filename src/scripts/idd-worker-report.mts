@@ -362,7 +362,9 @@ export function observeLock(
   staleMs: number,
 ): LockObservation | undefined {
   try {
-    const stats = statSync(lockPath);
+    // lstat: a symbolic link, even a dangling one, is inspected as itself, so
+    // it gets an identity, ages out, and is moved aside without being followed.
+    const stats = lstatSync(lockPath);
     return {
       identity: `${stats.ino}:${stats.mtimeMs}:${readLockToken(lockPath) ?? ''}`,
       stale: Date.now() - stats.mtimeMs > staleMs,
@@ -603,6 +605,16 @@ function isPresent(path: string): boolean {
   }
 }
 
+/** True only when `path` itself is a symbolic link (dangling or not). */
+function isSymbolicLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 function readStore(file: string): string {
   try {
     // Stat first: reading a FIFO or a device would block, and a directory
@@ -612,7 +624,16 @@ function readStore(file: string): string {
     }
     return readFileSync(file, 'utf8');
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return '';
+    if (errorCode(error) === 'ENOENT') {
+      // A dangling link also reads as ENOENT; say so instead of reporting an
+      // empty store.
+      if (isSymbolicLink(file)) {
+        throw new Error(
+          `refusing to read ${file}: it is a dangling symbolic link`,
+        );
+      }
+      return '';
+    }
     throw error;
   }
 }

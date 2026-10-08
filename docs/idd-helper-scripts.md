@@ -6903,7 +6903,8 @@ same as `AW4`/`AW5`.
   links, and a regular directory and file, not a FIFO or a device: anything
   else is refused before it reads or writes the store (parent directories
   may be links). `summary` only reads, so it never changes a mode and
-  does not refuse a link, but it still refuses a non-regular file.
+  does not refuse a link to a regular file, but it still refuses a
+  non-regular file or a store file that is a dangling link.
 - Record: `schemas/worker-report.schema.json` (schema version 1). Required
   are `schemaVersion` (always `1`), `issue` and `pullRequest`
   (`owner/repo#number`, the latter or `null`),
