@@ -341,38 +341,126 @@ function readStringConstant(source, name) {
   const match = new RegExp(`export const ${name} =\\s*'([^']*)';`).exec(source);
   return match?.[1];
 }
-// The canonical spelling of the upload action's line in the self-waiver job.
-// Any other mention of the action is a violation, so a differently spelled
-// upload cannot hide the artifact that the verifier reads.
-const CANONICAL_UPLOAD_LINE = /^ {8}uses: actions\/upload-artifact@\S+/;
-// Whether the job's single upload step declares the prefix as the value of
-// its own `with:` name key. A `run:` line, an `env:` name, or a second upload
-// step cannot satisfy this.
-function declaresArtifactName(jobBody, prefix) {
-  const lines = uncommentedLines(jobBody);
-  const mentions = lines.filter((line) =>
-    /actions\/upload-artifact/i.test(line),
+// Structure only: the lines of a workflow with comment lines removed and each
+// run: body blanked. A run: body is shell text, so its backslashes and colons
+// are not YAML syntax and must neither trip nor hide a structural check.
+function structuralLines(text) {
+  const out = [];
+  let runColumn;
+  for (const line of text.split('\n')) {
+    if (/^\s*#/.test(line)) {
+      continue;
+    }
+    if (
+      runColumn !== undefined &&
+      (line.trim() === '' || indentOf(line) > runColumn)
+    ) {
+      out.push('');
+      continue;
+    }
+    runColumn = undefined;
+    const run = line.match(/^(\s*(?:- +)?)run\s*:/);
+    if (run) {
+      runColumn = run[1].length;
+      out.push(`${run[1]}run:`);
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
+}
+function indentOf(line) {
+  return line.length - line.trimStart().length;
+}
+// The canonical spellings of the action lines a required gate may contain. Any
+// other `uses` key is reported, whatever its spelling.
+const CHECKOUT_USES = /^ {6}- uses: actions\/checkout@\S+( # .*)?$/;
+const UPLOAD_USES = /^ {8}uses: actions\/upload-artifact@\S+( # .*)?$/;
+const CANONICAL_USES = [
+  CHECKOUT_USES,
+  /^ {6}- uses: actions\/setup-node@\S+( # .*)?$/,
+  UPLOAD_USES,
+];
+// The `uses` key in any spelling: quotes are dropped and case is folded, so
+// `"uses" :` and `Uses:` count too. Escapes are excluded by the backslash check.
+function isUsesKey(line) {
+  return /\buses\s*:/.test(line.replace(/["']/g, '').toLowerCase());
+}
+// The lines of a step after its first line: blank lines and lines indented
+// deeper than the six-space dash column.
+function stepLines(lines, start) {
+  const out = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() !== '' && indentOf(line) < 7) {
+      break;
+    }
+    out.push(line);
+  }
+  return out;
+}
+// The children of a step's single `with:` key, which must be spelled exactly
+// `        with:`. Undefined when the step has none, or more than one spelling.
+function withChildren(step) {
+  const headers = step.filter((line) =>
+    /\bwith\s*:/.test(line.replace(/["']/g, '').toLowerCase()),
   );
-  const canonical = lines.filter((line) => CANONICAL_UPLOAD_LINE.test(line));
-  if (mentions.length !== 1 || canonical.length !== 1) {
+  const at = step.indexOf('        with:');
+  if (headers.length !== 1 || at === -1) {
+    return undefined;
+  }
+  const children = [];
+  for (const line of step.slice(at + 1)) {
+    if (line.trim() === '') {
+      continue;
+    }
+    if (indentOf(line) < 9) {
+      break;
+    }
+    children.push(line);
+  }
+  return children;
+}
+// The upload step of a job, read in its canonical spelling only: the uses line
+// and the step's own keys at eight spaces, and the with: keys at ten. An `if:`
+// can only skip the upload, never rename or add an artifact, so it is allowed.
+const UPLOAD_STEP_KEYS = [UPLOAD_USES, /^ {8}with:$/, /^ {8}if: .+$/];
+const UPLOAD_WITH_KEYS = [
+  /^ {10}name: .+$/,
+  /^ {10}path: .+$/,
+  /^ {10}if-no-files-found: \w+$/,
+];
+// Whether the job's single upload step declares the artifact prefix as the
+// value of its own `name:` key. An env name, an extra step key, or a second
+// upload step cannot satisfy this.
+function declaresArtifactName(jobBody, prefix) {
+  const lines = structuralLines(jobBody);
+  const uploads = lines.flatMap((line, index) =>
+    UPLOAD_USES.test(line) ? [index] : [],
+  );
+  if (uploads.length !== 1) {
     return false;
   }
-  const step = lines
-    .join('\n')
-    .split(/\n {6}-(?=\s)/)
-    .find((segment) =>
-      segment.split('\n').some((line) => CANONICAL_UPLOAD_LINE.test(line)),
-    );
-  const block = step === undefined ? undefined : withBlockOf(step);
-  if (block === undefined) {
+  let start = uploads[0];
+  while (start >= 0 && !/^ {6}- /.test(lines[start])) {
+    start -= 1;
+  }
+  if (start < 0 || !/^ {6}- name: /.test(lines[start])) {
     return false;
   }
-  const names = block.filter((line) => /^\s*["']?name["']?\s*:/i.test(line));
-  const value =
-    names.length === 1
-      ? names[0].match(/^ {10}name:\s*['"]?(.*)$/)?.[1]
-      : undefined;
-  return value?.startsWith(prefix) === true;
+  const step = stepLines(lines, start);
+  const keys = step.filter(
+    (line) => line.trim() !== '' && indentOf(line) === 8,
+  );
+  const children = withChildren(step);
+  if (
+    !keys.every((line) => UPLOAD_STEP_KEYS.some((form) => form.test(line))) ||
+    children === undefined ||
+    !children.every((line) => UPLOAD_WITH_KEYS.some((form) => form.test(line)))
+  ) {
+    return false;
+  }
+  const names = children.filter((line) => /^ {10}name:/.test(line));
+  return names.length === 1 && names[0].startsWith(`          name: ${prefix}`);
 }
 // Both copies must keep the self-waiver job id, post-step name, and artifact
 // prefix that the waiver provenance verifier reads, so a rename in one copy
@@ -433,9 +521,9 @@ function checkSelfReferentialWaiverConstants(root, report) {
       continue;
     }
     if (
-      !jobBody
-        .split('\n')
-        .some((line) => line.trimEnd() === `      - name: ${postStepName}`)
+      !structuralLines(jobBody).some(
+        (line) => line.trimEnd() === `      - name: ${postStepName}`,
+      )
     ) {
       report(RWA006, path, 'no longer declares the expected post-step name');
     }
@@ -458,57 +546,68 @@ const DETECT_PACKAGE_MANAGER_STEP_START =
   '      - name: Detect package manager\n';
 const STEP_BOUNDARY_AFTER_DETECT = /\n {6}- name: /;
 const STEP_BOUNDARY = '\n      - ';
-// The lines of a workflow without its comment lines, so a comment can neither
-// hide nor fake a checkout, an upload, or a ref.
-function uncommentedLines(text) {
-  return text.split('\n').filter((line) => !/^\s*#/.test(line));
-}
-// The canonical spelling of a checkout step's action line. Any other mention
-// of the action fails closed, so a quoted, spaced, or differently cased key
-// cannot hide a checkout.
-const CANONICAL_CHECKOUT_LINE = /^ {6}- uses: actions\/checkout@\S+/;
-// The steps that check out the repository, or undefined when the action is
-// mentioned anywhere outside the canonical form. Splitting on a dash followed
-// by whitespace also catches a step whose dash is alone on its line.
-function checkoutSteps(text) {
-  const lines = uncommentedLines(text);
-  const mentions = lines.filter((line) => /actions\/checkout/i.test(line));
-  const canonical = lines.filter((line) => CANONICAL_CHECKOUT_LINE.test(line));
-  if (mentions.length !== canonical.length) {
-    return undefined;
+// The keys a checkout's with: block may carry. A repository key, a quoted key,
+// or a second ref is not on this list, so it fails the pinned-ref contract.
+const CHECKOUT_WITH_KEYS = [
+  /^ {10}ref: main$/,
+  /^ {10}fetch-depth: \d+$/,
+  /^ {10}persist-credentials: (true|false)$/,
+];
+// Checks each checkout step of a required gate on its own. A spelling the audit
+// cannot read is reported, so an escape, a complex key, a third-party action,
+// or an extra key in a checkout step cannot hide a checkout.
+function checkCheckoutSurface(path, text, report) {
+  const lines = structuralLines(text);
+  if (lines.some((line) => line.includes('\\'))) {
+    report(
+      RWA005,
+      path,
+      'a backslash outside run: blocks cannot be read by this audit',
+    );
+    return;
   }
-  return lines
-    .join('\n')
-    .split(/\n {6}-(?=\s)/)
-    .filter((step) => /^\s*uses: actions\/checkout@/.test(step));
-}
-// The lines of a step's own `with:` block, or undefined when the step has none
-// in its canonical spelling. A `with:` spelled any other way is not read.
-function withBlockOf(step) {
-  const lines = step.split('\n');
-  const at = lines.findIndex((line) => /^ {8}with:\s*$/.test(line));
-  if (at === -1) {
-    return undefined;
+  if (lines.some((line) => /^\s*(?:- +)?\?/.test(line))) {
+    report(RWA005, path, 'complex mapping keys cannot be read by this audit');
+    return;
   }
-  const block = [];
-  for (const line of lines.slice(at + 1)) {
-    if (line.trim() !== '' && !/^ {10}/.test(line)) {
-      break;
+  if (
+    lines
+      .filter(isUsesKey)
+      .some((line) => !CANONICAL_USES.some((form) => form.test(line)))
+  ) {
+    report(
+      RWA005,
+      path,
+      'uses must name a recognized action in its canonical form',
+    );
+    return;
+  }
+  const checkouts = lines.flatMap((line, index) =>
+    CHECKOUT_USES.test(line) ? [index] : [],
+  );
+  if (checkouts.length === 0) {
+    report(RWA005, path, 'no actions/checkout step to pin to ref: main');
+    return;
+  }
+  for (const index of checkouts) {
+    const step = stepLines(lines, index);
+    const keys = step.filter(
+      (line) => line.trim() !== '' && indentOf(line) === 8,
+    );
+    const children = withChildren(step);
+    const pinned =
+      keys.length === 1 &&
+      children !== undefined &&
+      children.every((line) =>
+        CHECKOUT_WITH_KEYS.some((form) => form.test(line)),
+      ) &&
+      children.filter((line) => /^ {10}ref:/.test(line)).length === 1 &&
+      children.includes('          ref: main');
+    if (!pinned) {
+      report(RWA005, path, 'checkout must stay pinned to ref: main');
+      return;
     }
-    block.push(line);
   }
-  return block;
-}
-// Whether a checkout step pins `ref: main` as its only ref key. Every ref-like
-// key in its with: block counts, whatever its spelling, so a quoted or spaced
-// key cannot add a second ref.
-function pinsTrustedRef(step) {
-  const block = withBlockOf(step);
-  if (block === undefined) {
-    return false;
-  }
-  const refs = block.filter((line) => /^\s*["']?ref["']?\s*:/i.test(line));
-  return refs.length === 1 && /^ {10}ref: main\s*$/.test(refs[0]);
 }
 const SETUP_NODE_STEP_COUNT = 4;
 // The RWA007 checks share one read of each template copy, so a missing copy is
@@ -1390,21 +1489,7 @@ function checkRequiredGateTriggers(root, report) {
     if (!/pull_request_target:/.test(onBlock)) {
       report(RWA005, path, 'on: must include pull_request_target');
     }
-    // Every checkout step, judged on its own, must pin the trusted default
-    // branch in its own with: block. Any spelling of the action other than the
-    // canonical line is reported, so none can hide a checkout.
-    const steps = checkoutSteps(text);
-    if (steps === undefined) {
-      report(
-        RWA005,
-        path,
-        'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
-      );
-    } else if (steps.length === 0) {
-      report(RWA005, path, 'no actions/checkout step to pin to ref: main');
-    } else if (!steps.every(pinsTrustedRef)) {
-      report(RWA005, path, 'checkout must stay pinned to ref: main');
-    }
+    checkCheckoutSurface(path, text, report);
   }
 }
 // The required gate's external-check-waiver jobs keep all three read scopes

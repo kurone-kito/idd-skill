@@ -2260,8 +2260,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        message:
-          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+        message: 'uses must name a recognized action in its canonical form',
       },
     ],
   },
@@ -2274,7 +2273,74 @@ const RULE_CASES: readonly RuleCase[] = [
       to: '      - uses: actions/cache@',
       all: true,
     },
-    expected: [{ message: 'no actions/checkout step to pin to ref: main' }],
+    expected: [
+      { message: 'uses must name a recognized action in its canonical form' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout whose action name hides an escape the audit cannot read',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+      to: '      - uses: actions\\x2fcheckout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+    },
+    expected: [
+      {
+        message: 'a backslash outside run: blocks cannot be read by this audit',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout written as a complex mapping key',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+      to: '      - ? uses\n        : actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+    },
+    expected: [
+      { message: 'complex mapping keys cannot be read by this audit' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a third-party action added to a required gate',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const job = anchored(
+          text,
+          '\n  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${text.slice(0, job)}\n      - uses: someone/cloner@v1${text.slice(job)}`;
+      },
+    },
+    expected: [
+      {
+        message: 'uses must name a recognized action in its canonical form',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout that adds a repository key to its with block',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '          ref: main\n',
+      to: '          ref: main\n          repository: someone/fork\n',
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout step that carries a second with block',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '          ref: main\n',
+      to: '          ref: main\n        with:\n          ref: main\n',
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
   },
   {
     ruleId: 'RWA005',
@@ -2286,8 +2352,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        message:
-          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+        message: 'uses must name a recognized action in its canonical form',
       },
     ],
   },
@@ -2301,8 +2366,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        message:
-          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+        message: 'uses must name a recognized action in its canonical form',
       },
     ],
   },
@@ -2316,8 +2380,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        message:
-          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+        message: 'uses must name a recognized action in its canonical form',
       },
     ],
   },
@@ -2331,8 +2394,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        message:
-          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+        message: 'uses must name a recognized action in its canonical form',
       },
     ],
   },
@@ -2418,6 +2480,21 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     },
     expected: [{ message: 'no longer declares the expected post-step name' }],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'an artifact name in an upload step that also carries an env key',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const uses = anchored(text, '        uses: actions/upload-artifact@');
+        const end = text.indexOf('\n', uses) + 1;
+        return `${text.slice(0, end)}        env:\n          PROBE: value\n${text.slice(end)}`;
+      },
+    },
+    expected: [
+      { message: 'no longer declares the expected artifact-name prefix' },
+    ],
   },
   {
     ruleId: 'RWA006',
