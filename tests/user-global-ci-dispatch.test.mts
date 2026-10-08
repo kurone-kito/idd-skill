@@ -10,6 +10,16 @@ const TEMPLATE_WORKFLOW_PATHS = [
   'idd-template/.github/workflows/post-merge-cleanup.yml',
 ] as const;
 
+// One `ephemeral-npx|user-global` arm per dispatch site: six in total.
+const EXPECTED_ARM_COUNTS: Record<
+  (typeof TEMPLATE_WORKFLOW_PATHS)[number],
+  number
+> = {
+  'idd-template/.github/workflows/idd-advisory-convergence.yml': 2,
+  'idd-template/.github/workflows/idd-advisory-convergence-comment.yml': 3,
+  'idd-template/.github/workflows/post-merge-cleanup.yml': 1,
+};
+
 const PINNED_OR_DEFAULT_SPEC =
   /SPEC="\$\{PACKAGE_SPEC:-https:\/\/codeload\.github\.com\/kurone-kito\/idd-skill\/tar\.gz\/refs\/heads\/main\}"/;
 
@@ -45,9 +55,10 @@ test('every ephemeral-npx dispatch arm also serves user-global through the same 
     const arms = [
       ...text.matchAll(/^( +)ephemeral-npx\|user-global\)\n([\s\S]*?)^ +;;$/gm),
     ];
-    assert.ok(
-      arms.length > 0,
-      `${path} must dispatch through an ephemeral-npx|user-global arm`,
+    assert.equal(
+      arms.length,
+      EXPECTED_ARM_COUNTS[path],
+      `${path} must dispatch user-global at every ephemeral-npx site`,
     );
     for (const arm of arms) {
       const body = arm[2] ?? '';
