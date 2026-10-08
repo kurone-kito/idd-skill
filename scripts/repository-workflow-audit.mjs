@@ -166,14 +166,16 @@ function checkWorkflowDispatchMergedGuard(path, text, report) {
   }
 }
 function checkWorkflowDispatchCheckoutRef(path, text, report) {
-  const checkoutStart = text.indexOf('uses: actions/checkout');
+  // Read as declarations: a commented-out checkout cannot stand in for the real one.
+  const declared = declarationText(text);
+  const checkoutStart = declared.search(/^ {6}- uses: actions\/checkout@/m);
   if (checkoutStart === -1) {
     report(RWA004, path, 'must keep its actions/checkout step');
     return;
   }
   // Searched inside the checkout step only, so a later step's fetch-depth
   // cannot satisfy this check.
-  const checkoutStep = stepTextFrom(text, checkoutStart);
+  const checkoutStep = stepTextFrom(declared, checkoutStart);
   const fetchDepthStart = checkoutStep.indexOf('fetch-depth:');
   if (fetchDepthStart === -1) {
     report(RWA004, path, 'checkout step must keep its fetch-depth: input');

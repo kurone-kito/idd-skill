@@ -3204,6 +3204,32 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose real ref is PR-controlled, with a commented decoy above it',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const realRef = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const decoy = [
+          `      # - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`,
+          `      #   with:`,
+          `      #     ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}`,
+          `      #     fetch-depth: 1`,
+          '',
+        ].join('\n');
+        anchored(text, realRef);
+        anchored(text, checkout);
+        return text
+          .split(checkout)
+          .join(decoy + checkout)
+          .split(realRef)
+          .join(`          ref: \${{ github.event.pull_request.head.sha }}\n`);
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
