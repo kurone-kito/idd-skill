@@ -1091,10 +1091,10 @@ function checkRequiredCheckWorkflows(root, report) {
       file === 'idd-advisory-convergence.yml'
         ? 'pull_request_target'
         : 'pull_request';
-    if (!new RegExp(`${pullRequestFamilyKey}:`).test(onBlock)) {
+    if (!new RegExp(`["']?${pullRequestFamilyKey}["']?\\s*:`).test(onBlock)) {
       report(RWA001, path, `must trigger on ${pullRequestFamilyKey}`);
     }
-    if (/\bpaths(-ignore)?:/.test(onBlock)) {
+    if (/\bpaths(-ignore)?["']?\s*:/.test(onBlock)) {
       report(
         RWA001,
         path,
@@ -1153,7 +1153,7 @@ function listPullRequestWorkflows(root, report) {
       report(RWA002, path, 'on:/permissions: block not found');
       continue;
     }
-    if (/^ {2}pull_request:/m.test(onBlock)) {
+    if (/^ {2}["']?pull_request["']?\s*:/m.test(onBlock)) {
       files.push(name);
     }
   }
@@ -2282,15 +2282,32 @@ function isGrammarLine(line) {
     GRAMMAR_TYPES.test(bare)
   );
 }
+// Line breaks other than LF: CR (alone or in CRLF), vertical tab, form feed,
+// NEL, LS, and PS. YAML parsers may honour some of these as line ends, and the
+// audit splits on LF only, so any of them fails the audit instead of hiding a line.
+const NON_LF_LINE_BREAKS = new Set([0x0b, 0x0c, 0x0d, 0x85, 0x2028, 0x2029]);
 // Reports each advisory or comment workflow with a line outside the grammar.
 function checkWorkflowGrammar(root, report) {
-  for (const path of [...ADVISORY_REQUIRED_PATHS, ...COMMENT_WORKFLOW_PATHS]) {
+  const grammarPaths = [
+    ...ADVISORY_REQUIRED_PATHS,
+    ...COMMENT_WORKFLOW_PATHS,
+    ...REQUIRED_CHECKS.map(({ file }) => `${WORKFLOWS_DIRECTORY}/${file}`),
+  ];
+  for (const path of grammarPaths) {
     const text = readRequiredText(root, path, RWA005, report);
     if (text === undefined) {
       continue;
     }
-    if (text.includes('\r')) {
-      report(RWA005, path, 'a carriage return cannot be read by this audit');
+    if (
+      [...text].some((character) =>
+        NON_LF_LINE_BREAKS.has(character.charCodeAt(0)),
+      )
+    ) {
+      report(
+        RWA005,
+        path,
+        'a line break other than LF cannot be read by this audit',
+      );
       continue;
     }
     if (structuralLines(text).some((line) => !isGrammarLine(line))) {

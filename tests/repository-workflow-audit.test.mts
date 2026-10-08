@@ -2405,7 +2405,9 @@ const RULE_CASES: readonly RuleCase[] = [
       from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
       to: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\r\n',
     },
-    expected: [{ message: 'a carriage return cannot be read by this audit' }],
+    expected: [
+      { message: 'a line break other than LF cannot be read by this audit' },
+    ],
   },
   {
     ruleId: 'RWA005',
@@ -2459,6 +2461,51 @@ const RULE_CASES: readonly RuleCase[] = [
       {
         message:
           'on: must not include pull_request_review (moved to the companion workflow)',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check gaining a path filter spelled with a space before its colon',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '  pull_request:\n',
+      to: '  pull_request:\n    paths :\n      - "docs/**"\n',
+    },
+    expected: [
+      {
+        message:
+          'pull_request trigger must not gain a path filter -- a path-filtered required check never reports for an out-of-filter change',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check gaining a path filter spelled with a quoted key',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '  pull_request:\n',
+      to: '  pull_request:\n    "paths":\n      - "docs/**"\n',
+    },
+    expected: [
+      {
+        message:
+          'pull_request trigger must not gain a path filter -- a path-filtered required check never reports for an out-of-filter change',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required check trigger written as a flow mapping with a path filter',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '  pull_request:\n',
+      to: '  pull_request: {paths: [docs/**]}\n',
+    },
+    expected: [
+      {
+        message:
+          'workflow syntax outside plain keys and values cannot be read by this audit',
       },
     ],
   },
