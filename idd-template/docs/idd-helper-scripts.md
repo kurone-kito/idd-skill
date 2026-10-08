@@ -5480,6 +5480,27 @@ reflexively as any other CLI option.
   2,048-character cap, and the cap was kept there as a documented limit;
   no missed remark was involved, so reading an empty array as "no remark"
   is only a risk so far (preventive; no observed incident yet).
+- Copilot overview labels (kurone-kito/idd-skill#3868): the snapshot
+  also emits `copilotOverviewLabels`, one row for the last non-error
+  Copilot `COMMENTED` review in list order, or `null` when there is no
+  such review. The row's `kind` is `v2` when the body's `Open` and
+  `Previously missed` sections agree with their own declared counts,
+  `unparsed` when they do not, `legacy` for a legacy overview, and
+  `other` for any other shape. Each row carries `reviewId`, `commitId`,
+  `kind`, `items`, `previouslyMissed`, and `reason`. For `v2` and
+  `unparsed`, `items` lists each `Open` item as `discussionId`,
+  `severity`, and `isNew` (the `· New` marker), and `previouslyMissed`
+  holds per-severity counts (`high`, `medium`, `low`); a
+  `Previously missed` item has no thread, so it has no per-item
+  severity. For `legacy` and `other`, `items` is empty and
+  `previouslyMissed` is `null`. `reason` is set only for `unparsed`.
+  An `unparsed` row's `items` is a partial list kept for diagnosis
+  only: it must not be used as an eligibility floor, because the parser
+  could not account for every item the body declares. The helper never
+  supplies a severity the body does not carry. The field is evidence
+  only: no counter or `effective` value reads it, and no instruction
+  points to it yet. The row is historical, so compare `commitId` with
+  `headSha`, as for `reviewBodyRemarks`.
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, optional `--nonce <token>` (this session's own
