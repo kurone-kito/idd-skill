@@ -2745,3 +2745,28 @@ for (const row of commentMarkerInLiteralShapes) {
     assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
   });
 }
+
+// Fifth review pass on #3852: a comparison chain whose `<` ends a line is not a
+// multi-line type-parameter list, because its `>` does not start its own line.
+const multilineComparisonShapes: { name: string; source: string }[] = [
+  {
+    name: 'a comparison chain whose less-than sign ends a line',
+    source: "const v = a<\n  b > {} / /* import('left-pad') */ 2;\n",
+  },
+];
+
+for (const row of multilineComparisonShapes) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}

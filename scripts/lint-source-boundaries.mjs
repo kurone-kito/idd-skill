@@ -98,6 +98,14 @@ const RESTRICTED_STATEMENT_KEYWORDS = new Set([
   'debugger',
 ]);
 /** ECMAScript line terminators, including the Unicode separators. */
+/** Whether only horizontal blanks come before `index` on its line. */
+function onlyBlanksBeforeOnLine(source, index) {
+  let start = index - 1;
+  while (start >= 0 && (source[start] === ' ' || source[start] === '\t')) {
+    start -= 1;
+  }
+  return start < 0 || isLineTerminator(source[start]);
+}
 /** Whether the first character after horizontal blanks from `from` ends a line. */
 function lineEndsAfterBlanks(source, from) {
   let index = from;
@@ -1358,7 +1366,8 @@ function scanComments(source) {
         const opener = openComparisonAngles.pop();
         angleIsComparison =
           opener === undefined ||
-          !/[\n\r\u2028\u2029]/.test(source.slice(opener, index));
+          !/[\n\r\u2028\u2029]/.test(source.slice(opener, index)) ||
+          !onlyBlanksBeforeOnLine(source, index);
       }
       if (ch === '{') {
         // A value-position arrow block (`() => {}`) is not an expression,
