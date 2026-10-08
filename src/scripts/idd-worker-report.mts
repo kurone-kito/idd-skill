@@ -70,9 +70,9 @@ const RETRYABLE_OPEN_CODES: ReadonlySet<string> = new Set(
 );
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
-/** RFC 3339 date-time, the shape the schema requires of its timestamps. */
-const TIMESTAMP_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+/** RFC 3339 date-time with an offset, captured by component. */
+const RFC3339_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/;
 
 /** How many `frictions[].file` values `summary` lists. */
 const FRICTION_FILE_LIMIT = 10;
@@ -238,10 +238,54 @@ export function resolveWorkerReportStore(
 // Validation
 // ---------------------------------------------------------------------------
 
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/**
+ * True when `value` is an RFC 3339 date-time with an offset that names a real
+ * instant: month 1-12, a day that exists in that month and year, hour 0-23,
+ * minute and second 0-59, and an offset within 23:59. The schema validator's
+ * `date-time` format only asks `Date.parse`, which normalizes `02-30` to
+ * March 2 and `T24:00:00` to the next day, so the record would otherwise be
+ * stored under a different instant than the one written.
+ */
+function isRealTimestamp(value: string): boolean {
+  const match = RFC3339_PATTERN.exec(value);
+  if (!match) return false;
+  const [year, month, day, hour, minute, second] = match
+    .slice(1, 7)
+    .map(Number);
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (
+    match[7] !== undefined &&
+    (Number(match[7]) > 23 || Number(match[8]) > 59)
+  ) {
+    return false;
+  }
+  return !Number.isNaN(Date.parse(value));
+}
+
 /** Schema errors for one candidate record; an empty list means valid. */
 export function validateWorkerReport(record: unknown): string[] {
   cachedSchema ??= loadJson(SCHEMA_PATH);
-  return validate(record, cachedSchema);
+  const errors = validate(record, cachedSchema);
+  for (const field of ['verifiedAt', 'recordedAt'] as const) {
+    const value = (record as Record<string, unknown> | null)?.[field];
+    if (
+      typeof value === 'string' &&
+      !errors.some((error) => error.startsWith(`$.${field}:`)) &&
+      !isRealTimestamp(value)
+    ) {
+      errors.push(`$.${field}: "${value}" is not a real calendar date-time`);
+    }
+  }
+  return errors;
 }
 
 // ---------------------------------------------------------------------------
@@ -594,12 +638,11 @@ function runCli(): HelperCliResult {
         new Error('--file and --stdin apply to append only'),
       );
     }
-    if (
-      since !== undefined &&
-      (!TIMESTAMP_PATTERN.test(since) || Number.isNaN(Date.parse(since)))
-    ) {
+    if (since !== undefined && !isRealTimestamp(since)) {
       throw markCliUsageError(
-        new Error(`--since must be an ISO 8601 date-time, got "${since}"`),
+        new Error(
+          `--since must be a real ISO 8601 date-time with an offset, got "${since}"`,
+        ),
       );
     }
     const summary = summarizeWorkerReports(
@@ -625,7 +668,8 @@ Local store for a worker's final report. Nothing is posted to GitHub.
   append             Validate one JSON record against
                      schemas/worker-report.schema.json (it must carry
                      schemaVersion 1 and every other required field; it is
-                     stored verbatim, nothing is stamped), then append it as one
+                     stored verbatim, nothing is stamped; verifiedAt and
+                     recordedAt must be real calendar date-times), then append it as one
                      line to idd-skill/worker-reports/reports.jsonl under the
                      per-user state root. Invalid input exits 1 and writes
                      nothing. A record with the same claimId, workerHandle and
@@ -637,8 +681,9 @@ Local store for a worker's final report. Nothing is posted to GitHub.
   --file <path>      append: read the record from this file.
   --stdin            append: read the record from standard input.
   --since <ISO8601>  summary: only count records whose recordedAt is at or
-                     after this time. An ISO 8601 date-time with an offset,
-                     such as 2026-10-08T02:00:00Z or 2026-10-08T11:00:00+09:00.
+                     after this time. A real ISO 8601 date-time with an
+                     offset, such as 2026-10-08T02:00:00Z or
+                     2026-10-08T11:00:00+09:00 (2026-02-30 is rejected).
   --help, -h         Show this help.
 
 State root: an absolute XDG_STATE_HOME, else ~/.local/state; on Windows an

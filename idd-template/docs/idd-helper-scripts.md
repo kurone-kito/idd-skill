@@ -6910,7 +6910,10 @@ same as `AW4`/`AW5`.
   `schemas/phase-graph.json` (a dot, as in `F2.5`, is accepted too). Every
   string is length-bounded. The helper stores the
   record verbatim: it stamps no timestamp and adds no field, so the caller
-  supplies `schemaVersion` and both timestamps.
+  supplies `schemaVersion` and both timestamps. `verifiedAt` and
+  `recordedAt` must be RFC 3339 date-times with an offset that name a real
+  instant: a day that does not exist (`2026-02-30`), hour 24, or an
+  out-of-range offset is rejected rather than silently normalized.
 - `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
   record. An invalid record exits `1`, writes nothing, and creates no
   directory. A record whose `claimId`, `workerHandle`, and `terminalPhase`
@@ -6923,7 +6926,7 @@ same as `AW4`/`AW5`.
   distribution of `reviewRounds`, the ten most frequent `frictions`
   `file` values, and `invalidLines`, the count of lines that are not valid
   records. `--since <ISO8601>` keeps only records whose `recordedAt` is at
-  or after that instant; it takes a date-time with an offset, such as
+  or after that instant; it takes a real date-time with an offset, such as
   `2026-10-08T02:00:00Z` or `2026-10-08T11:00:00+09:00`, not a bare date.
 - Concurrency: the duplicate check and the write happen together under an
   exclusive lock file next to the store (`reports.jsonl.lock`, created

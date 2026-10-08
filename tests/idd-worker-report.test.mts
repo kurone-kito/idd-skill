@@ -757,3 +757,67 @@ test('the schema accepts null where allowed and enforces the string bounds', () 
   assert.equal(ok({ reviewRounds: -1 }), false);
   assert.equal(ok({ reviewRounds: 0 }), true);
 });
+
+test('timestamps that name no real instant are rejected, not normalized', () => {
+  const ok = (overrides: Partial<WorkerReport>): boolean =>
+    validateWorkerReport(report(overrides)).length === 0;
+  const real = [
+    '2026-10-08T12:41:30Z',
+    '2024-02-29T00:00:00Z',
+    '2026-12-31T23:59:59.123456789Z',
+    '2026-10-08T12:00:00+23:59',
+    '2026-10-08T12:00:00-08:00',
+  ];
+  const impossible = [
+    '2026-02-30T00:00:00Z',
+    '2026-02-29T00:00:00Z',
+    '2026-04-31T00:00:00Z',
+    '2026-13-01T00:00:00Z',
+    '2026-00-10T00:00:00Z',
+    '2026-10-00T00:00:00Z',
+    '2026-10-08T24:00:00Z',
+    '2026-10-08T23:60:00Z',
+    '2026-10-08T23:59:60Z',
+    '2026-10-08T12:00:00+24:00',
+    '2026-10-08T12:00:00+00:60',
+    '2026-10-08',
+    '2026-10-08T12:00:00',
+  ];
+  for (const field of ['verifiedAt', 'recordedAt'] as const) {
+    for (const value of real) {
+      assert.equal(ok({ [field]: value }), true, `${field} ${value}`);
+    }
+    for (const value of impossible) {
+      assert.equal(ok({ [field]: value }), false, `${field} ${value}`);
+    }
+  }
+  const errors = validateWorkerReport(
+    report({ recordedAt: '2026-02-30T00:00:00Z' }),
+  );
+  assert.deepEqual(errors, [
+    '$.recordedAt: "2026-02-30T00:00:00Z" is not a real calendar date-time',
+  ]);
+});
+
+test('append rejects an impossible date and summary --since rejects one too', () => {
+  const sandbox = makeSandbox();
+  try {
+    const bad = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report({ verifiedAt: '2026-02-30T00:00:00Z' })),
+    );
+    assert.notEqual(bad.status, 0);
+    assert.match(bad.stderr, /not a real calendar date-time/);
+    assert.equal(existsSync(join(sandbox.state, 'idd-skill')), false);
+    const since = runCli(sandbox, [
+      'summary',
+      '--since',
+      '2026-02-30T00:00:00Z',
+    ]);
+    assert.notEqual(since.status, 0);
+    assert.match(since.stderr, /real ISO 8601 date-time/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
