@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -29,16 +30,25 @@ const TEMPLATE_COMMENT =
   'idd-template/.github/workflows/idd-advisory-convergence-comment.yml';
 const SELF_WAIVER_CONSTANTS = 'src/scripts/advisory-convergence.mts';
 
+// The root workflow directory is an input of the pull_request concurrency
+// inventory, so a fixture root carries every root workflow file.
+const ROOT_WORKFLOWS = readdirSync(join(REPO_ROOT, '.github', 'workflows'))
+  .filter((name) => name.endsWith('.yml'))
+  .map((name) => `.github/workflows/${name}`);
+
 // Every input any rule reads. A fixture root always carries all of them, so a
 // case that targets one rule never trips another rule's missing-input check.
-const FULL_INPUTS = [
-  ROOT_CLEANUP,
-  TEMPLATE_CLEANUP,
-  ROOT_ADVISORY,
-  TEMPLATE_ADVISORY,
-  TEMPLATE_COMMENT,
-  SELF_WAIVER_CONSTANTS,
-] as const;
+const FULL_INPUTS: readonly string[] = [
+  ...new Set([
+    ...ROOT_WORKFLOWS,
+    ROOT_CLEANUP,
+    TEMPLATE_CLEANUP,
+    ROOT_ADVISORY,
+    TEMPLATE_ADVISORY,
+    TEMPLATE_COMMENT,
+    SELF_WAIVER_CONSTANTS,
+  ]),
+];
 
 // A mutation rewrites one copy. `from`/`to` replace the first occurrence, or
 // every occurrence when `all` is set. `truncateAfter` keeps the copy only up
@@ -137,13 +147,16 @@ function matches(message: string, expectation: Expectation): boolean {
 }
 
 interface RuleCase {
-  ruleId: 'RWA004' | 'RWA006' | 'RWA007';
+  ruleId: 'RWA001' | 'RWA002' | 'RWA003' | 'RWA004' | 'RWA006' | 'RWA007';
   name: string;
   path: string;
   // The path the rule reports against, when it differs from the copy that
   // the case mutates (a whole-set count is reported against the directory).
   violationPath?: string;
-  mutation: Mutation;
+  // Without a mutation the case checks the root as built, which is how a
+  // missing-input case drops inputs through `omit` instead.
+  mutation?: Mutation;
+  omit?: readonly string[];
   expected: readonly Expectation[];
 }
 
@@ -544,6 +557,192 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  // RWA001: required status checks (replaced actions-usage test 1477).
+  {
+    ruleId: 'RWA001',
+    name: 'a required check that stops triggering on pull_request',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '\n  pull_request:\n',
+      to: '\n  pull_request_renamed:\n',
+    },
+    expected: [{ message: 'must trigger on pull_request' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check whose trigger gains a path filter',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '\n  pull_request:\n',
+      to: '\n  pull_request:\n    paths:\n      - "src/**"\n',
+    },
+    expected: [{ prefix: 'pull_request trigger must not gain a path filter' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check whose job id changes',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '\n  lint:\n    runs-on: ubuntu-latest',
+      to: '\n  lint-renamed:\n    runs-on: ubuntu-latest',
+    },
+    expected: [
+      { message: 'must keep required job id lint' },
+      { message: 'job lint not found' },
+    ],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check job that declares its own display name',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '\n  lint:\n    runs-on: ubuntu-latest',
+      to: '\n  lint:\n    name: Lint\n    runs-on: ubuntu-latest',
+    },
+    expected: [{ prefix: 'job lint must not declare its own display name' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'the advisory check trigger renamed away from pull_request_target',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '\n  pull_request_target:\n',
+      to: '\n  pull_request_renamed:\n',
+    },
+    expected: [{ message: 'must trigger on pull_request_target' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check job id written as a quoted YAML key',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '\n  lint:\n    runs-on: ubuntu-latest',
+      to: "\n  'lint':\n    runs-on: ubuntu-latest",
+    },
+    expected: [
+      { message: 'must keep required job id lint' },
+      { message: 'job lint not found' },
+    ],
+  },
+  // RWA002: pull_request concurrency (replaced actions-usage test 1547).
+  {
+    ruleId: 'RWA002',
+    name: 'a pull_request inventory below six workflows',
+    path: '.github/workflows/lint.yml',
+    violationPath: '.github/workflows',
+    omit: ROOT_WORKFLOWS.filter(
+      (path) => path !== '.github/workflows/lint.yml',
+    ),
+    expected: [
+      { prefix: 'expected >= 6 pull_request-triggered workflows, found' },
+    ],
+  },
+  {
+    ruleId: 'RWA002',
+    name: 'a pull_request workflow without an effective cancel-in-progress',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '  cancel-in-progress: true',
+      to: '  cancel-in-progress: false',
+    },
+    expected: [
+      {
+        prefix:
+          'must declare an effective cancel-in-progress concurrency setting',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA002',
+    name: 'a reusable-workflow caller that declares a sibling job',
+    path: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    mutation: {
+      from: '\njobs:\n',
+      to: '\njobs:\n  sibling:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo sibling\n',
+    },
+    expected: [
+      {
+        prefix:
+          'calls pnpm-boundary.yml as a reusable workflow, but declares 2 jobs',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA002',
+    name: 'a reusable-workflow callee that declares no effective cancel-in-progress',
+    path: '.github/workflows/pnpm-boundary.yml',
+    violationPath: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    mutation: {
+      from: `cancel-in-progress: \${{ startsWith(github.ref, 'refs/pull/') }}`,
+      to: 'cancel-in-progress: false',
+    },
+    expected: [
+      {
+        message:
+          'calls pnpm-boundary.yml as a reusable workflow, but pnpm-boundary.yml declares no effective cancel-in-progress for it to inherit',
+      },
+    ],
+  },
+  // RWA003: runner contracts (replaced actions-usage tests 1612, 1624, 1638, 1655).
+  {
+    ruleId: 'RWA003',
+    name: 'a pnpm-boundary default-lane runner fallback that is not ubuntu-latest',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: {
+      from: "inputs.runner || 'ubuntu-latest'",
+      to: "inputs.runner || 'ubuntu-slim'",
+    },
+    expected: [
+      {
+        prefix:
+          "the pnpm-boundary job's runs-on fallback must be ubuntu-latest",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a Node 22 floor lane without its ubuntu-latest runner input',
+    path: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    mutation: {
+      from: '      runner: ubuntu-latest',
+      to: '      runner: ubuntu-slim',
+    },
+    expected: [
+      {
+        prefix: "the job's with: block must pass runner: ubuntu-latest",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a declared runner default other than ubuntu-slim',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: {
+      from: '        default: ubuntu-slim',
+      to: '        default: ubuntu-latest',
+    },
+    expected: [
+      {
+        message:
+          'inputs.runner.default must stay ubuntu-slim -- the documented default for downstream workflow_call callers in docs/customization.md (#3665)',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a lint job moved to ubuntu-slim',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '    runs-on: ubuntu-latest',
+      to: '    runs-on: ubuntu-slim',
+    },
+    expected: [
+      {
+        prefix:
+          'the lint job must use ubuntu-latest; ubuntu-slim has a hard 15-minute cap',
+      },
+    ],
+  },
   // RWA006: self-waiver constants across both advisory-convergence copies.
   {
     ruleId: 'RWA006',
@@ -765,7 +964,10 @@ test('the workflow audit CLI reports the rule ID and relative path of a violatio
 
 for (const scenario of RULE_CASES) {
   test(`${scenario.ruleId} flags ${scenario.name}`, () => {
-    const root = fixtureRoot({ [scenario.path]: scenario.mutation });
+    const root = fixtureRoot(
+      scenario.mutation ? { [scenario.path]: scenario.mutation } : {},
+      scenario.omit ?? [],
+    );
     withRoot(root, () => {
       const violations = collectRepositoryWorkflowViolations(root);
       for (const expectation of scenario.expected) {
@@ -809,13 +1011,14 @@ test('a missing workflow copy is an inspection failure for every rule that reads
   });
 });
 
-test('RWA006 reports a missing advisory-convergence copy as an inspection failure', () => {
+test('a missing advisory-convergence copy is an inspection failure for each rule that reads it', () => {
   const root = fixtureRoot({}, [ROOT_ADVISORY]);
   withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
     assert.deepEqual(
-      collectRepositoryWorkflowViolations(root).map(
-        ({ ruleId, path, message }) => ({ ruleId, path, message }),
-      ),
+      violations
+        .filter((violation) => violation.ruleId === 'RWA006')
+        .map(({ ruleId, path, message }) => ({ ruleId, path, message })),
       [
         {
           ruleId: 'RWA006',
@@ -823,6 +1026,29 @@ test('RWA006 reports a missing advisory-convergence copy as an inspection failur
           message: 'required input is missing or unreadable',
         },
       ],
+    );
+    // The required-check rule reads the copy directly, so it reports the
+    // missing input itself. The concurrency rule lists the directory instead,
+    // so the absent copy shows up as a shortfall of pull_request workflows.
+    assert.ok(
+      violations.some(
+        (violation) =>
+          violation.ruleId === 'RWA001' &&
+          violation.path === ROOT_ADVISORY &&
+          violation.message === 'required input is missing or unreadable',
+      ),
+      'RWA001 must report the missing copy',
+    );
+    assert.ok(
+      violations.some(
+        (violation) =>
+          violation.ruleId === 'RWA002' &&
+          violation.path === '.github/workflows' &&
+          violation.message.startsWith(
+            'expected >= 6 pull_request-triggered workflows',
+          ),
+      ),
+      'RWA002 must report the inventory shortfall',
     );
   });
 });

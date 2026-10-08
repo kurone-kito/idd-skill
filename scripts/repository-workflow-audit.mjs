@@ -11,7 +11,7 @@
 // the repository files it names, makes no network calls, and runs under bare
 // Node with no installed dependencies. It is a local validator, not a
 // distributed helper command.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import './node-runtime-guard.mjs';
 
@@ -560,6 +560,531 @@ function checkSetupNodeSteps(inputs, report) {
     );
   }
 }
+const RWA001 = 'RWA001';
+const RWA002 = 'RWA002';
+const RWA003 = 'RWA003';
+const WORKFLOWS_DIRECTORY = '.github/workflows';
+const SLIM_CAP_NOTE =
+  'ubuntu-slim caps a job at 15 minutes, which cancelled the required pnpm-boundary check (#3665)';
+// Required status checks. Each job id and trigger must stay fixed, because
+// the ruleset waits on the display name GitHub derives from them.
+const REQUIRED_CHECKS = [
+  { file: 'lint.yml', jobId: 'lint' },
+  { file: 'idd-doctor.yml', jobId: 'idd-doctor' },
+  { file: 'pnpm-boundary.yml', jobId: 'pnpm-boundary' },
+  { file: 'idd-advisory-convergence.yml', jobId: 'idd-advisory-convergence' },
+];
+// cancel-in-progress values this repository's own workflows are known to use
+// for a genuinely self-cancelling pull_request-scoped concurrency group: a
+// literal `true`, or pnpm-boundary.yml's own conditional. An expression outside
+// this allowlist cannot be verified to evaluate true without running it, so a
+// new conditional must be added here deliberately.
+const KNOWN_SAFE_CANCEL_IN_PROGRESS_VALUES = new Set([
+  'true',
+  `\${{ startsWith(github.ref, 'refs/pull/') }}`,
+]);
+// YAML text helpers. They mirror the post-#3737 helpers of the workflow guard
+// test, so the audit and the remaining Node-floor tests read workflows alike.
+function yamlMappingColonIndex(line) {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (doubleQuoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      if (character === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+      break;
+    }
+    if (character === '"') {
+      doubleQuoted = true;
+    } else if (character === "'") {
+      singleQuoted = true;
+    } else if (
+      character === ':' &&
+      (index + 1 === line.length || /\s/.test(line[index + 1]))
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+function yamlBlockScalarHeader(line) {
+  const leadingIndent = line.match(/^ */)?.[0].length ?? 0;
+  let content = line.slice(leadingIndent);
+  let contentHeaderIndent = leadingIndent;
+  if (/^-\s/.test(content)) {
+    content = content.slice(1).trimStart();
+    const sequenceMappingColon = yamlMappingColonIndex(content);
+    if (sequenceMappingColon !== -1) {
+      contentHeaderIndent += 2;
+      content = content.slice(sequenceMappingColon + 1);
+    }
+  } else {
+    const mappingColon = yamlMappingColonIndex(content);
+    if (mappingColon === -1) {
+      return undefined;
+    }
+    content = content.slice(mappingColon + 1);
+  }
+  const value = stripYamlComment(content).trim();
+  const header = value.match(
+    /^(?:(?:&[^\s]+|![^\s]+)\s+)*(?:[|>])(?:([+-]?[1-9]|[1-9][+-]|[+-]))?$/,
+  );
+  if (!header) {
+    return undefined;
+  }
+  const explicitIndent = header[1]?.match(/[1-9]/)?.[0];
+  return {
+    contentHeaderIndent,
+    ...(explicitIndent ? { explicitIndent: Number(explicitIndent) } : {}),
+  };
+}
+function yamlBlockScalarContentFlags(lines) {
+  const contentFlags = lines.map(() => false);
+  let activeContentIndent;
+  let pendingHeaderIndent;
+  let pendingExplicitContentIndent;
+  for (const [index, line] of lines.entries()) {
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (activeContentIndent !== undefined) {
+      if (line.trim() === '') {
+        contentFlags[index] = true;
+        continue;
+      }
+      if (indent >= activeContentIndent) {
+        contentFlags[index] = true;
+        continue;
+      }
+      activeContentIndent = undefined;
+    }
+    if (pendingHeaderIndent !== undefined) {
+      if (line.trim() === '') {
+        continue;
+      }
+      const contentIndent =
+        pendingExplicitContentIndent ??
+        (indent > pendingHeaderIndent ? indent : undefined);
+      pendingHeaderIndent = undefined;
+      pendingExplicitContentIndent = undefined;
+      if (contentIndent !== undefined && indent >= contentIndent) {
+        contentFlags[index] = true;
+        activeContentIndent = contentIndent;
+        continue;
+      }
+    }
+    const header = yamlBlockScalarHeader(line);
+    if (header) {
+      pendingHeaderIndent = header.contentHeaderIndent;
+      pendingExplicitContentIndent = header.explicitIndent
+        ? pendingHeaderIndent + header.explicitIndent
+        : undefined;
+    }
+  }
+  return contentFlags;
+}
+// Removes a YAML comment from one line without treating a quoted # as a
+// comment marker.
+function stripYamlComment(line) {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (doubleQuoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (singleQuoted) {
+      if (character === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      doubleQuoted = true;
+    } else if (character === "'") {
+      singleQuoted = true;
+    } else if (
+      character === '#' &&
+      (index === 0 || /\s/.test(line[index - 1]))
+    ) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
+}
+// One job's indented body: the lines after `  <jobId>:` up to the next
+// two-space sibling key or the end of the root jobs mapping.
+function extractJobBody(text, jobId) {
+  const lines = text.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const jobsStartIndex = lines.findIndex(
+    (line, index) =>
+      !scalarContent[index] &&
+      /^(?:jobs|'jobs'|"jobs")\s*:\s*$/.test(stripYamlComment(line)),
+  );
+  if (jobsStartIndex === -1) {
+    return undefined;
+  }
+  const jobsEndIndex = lines.findIndex(
+    (line, index) =>
+      index > jobsStartIndex &&
+      !scalarContent[index] &&
+      line.trim() !== '' &&
+      !line.trimStart().startsWith('#') &&
+      !/^\s/.test(line),
+  );
+  const startIndex = lines.findIndex(
+    (line, index) =>
+      index > jobsStartIndex &&
+      (jobsEndIndex === -1 || index < jobsEndIndex) &&
+      !scalarContent[index] &&
+      line === `  ${jobId}:`,
+  );
+  if (startIndex === -1) {
+    return undefined;
+  }
+  const nextSiblingIndex = lines.findIndex(
+    (line, index) =>
+      index > startIndex &&
+      (jobsEndIndex === -1 || index < jobsEndIndex) &&
+      !scalarContent[index] &&
+      /^ {2}(?!#)\S/.test(line),
+  );
+  const endIndex =
+    nextSiblingIndex === -1
+      ? jobsEndIndex
+      : jobsEndIndex === -1
+        ? nextSiblingIndex
+        : Math.min(nextSiblingIndex, jobsEndIndex);
+  return lines
+    .slice(startIndex + 1, endIndex === -1 ? undefined : endIndex)
+    .join('\n');
+}
+// The indented block under one key at a fixed indent, or undefined when the
+// key is absent.
+function extractKeyBlock(text, indent, key) {
+  const lines = text.split('\n');
+  const start = lines.indexOf(`${' '.repeat(indent)}${key}:`);
+  if (start === -1) {
+    return undefined;
+  }
+  const deeper = ' '.repeat(indent + 1);
+  const body = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line !== '' && !line.startsWith(deeper)) {
+      break;
+    }
+    body.push(line);
+  }
+  return body.join('\n');
+}
+// The slice from the top-level `on:` key up to `permissions:`, which every
+// workflow in this repository places right after its trigger block.
+function extractOnBlock(text) {
+  const start = text.indexOf('\non:');
+  const end = text.indexOf('\npermissions:');
+  if (start === -1 || end === -1 || end <= start) {
+    return undefined;
+  }
+  return text.slice(start, end);
+}
+function jobIds(text) {
+  const start = text.indexOf('\njobs:');
+  if (start === -1) {
+    return undefined;
+  }
+  const body = text.slice(start + '\njobs:'.length);
+  return [...body.matchAll(/^ {2}([\w-]+):$/gm)].map((match) => match[1]);
+}
+// The top-level `concurrency:` block's indented body, or null when absent.
+function extractConcurrencyBlock(text) {
+  const match = text.match(/^concurrency:\n((?: {2}.*\n)+)/m);
+  return match ? match[1] : null;
+}
+// Whether the top-level concurrency block sets cancel-in-progress to a value
+// known to evaluate true for this repository's own pull_request runs. A key
+// that is present but false, or unset, cancels nothing.
+function hasEffectiveCancelInProgress(text) {
+  const block = extractConcurrencyBlock(text);
+  if (!block) {
+    return false;
+  }
+  const match = block.match(/^ {2}cancel-in-progress: (.+)$/m);
+  return (
+    match !== null && KNOWN_SAFE_CANCEL_IN_PROGRESS_VALUES.has(match[1].trim())
+  );
+}
+// The called workflow's own file name, when the text calls a local reusable
+// workflow; null otherwise.
+function reusableWorkflowCallTarget(text) {
+  const match = text.match(
+    /\n {4}uses: \.\/\.github\/workflows\/([\w.-]+\.ya?ml)/,
+  );
+  return match ? match[1] : null;
+}
+// RWA001: each required status check keeps its trigger, its job id, and a job
+// without a display name override.
+function checkRequiredCheckWorkflows(root, report) {
+  for (const { file, jobId } of REQUIRED_CHECKS) {
+    const path = `${WORKFLOWS_DIRECTORY}/${file}`;
+    const text = readRequiredText(root, path, RWA001, report);
+    if (text === undefined) {
+      continue;
+    }
+    const onBlock = extractOnBlock(text);
+    if (onBlock === undefined) {
+      report(RWA001, path, 'on:/permissions: block not found');
+      continue;
+    }
+    // idd-advisory-convergence.yml moved to a pull_request_target-only trigger,
+    // and the path-filter concern applies to that key as well.
+    const pullRequestFamilyKey =
+      file === 'idd-advisory-convergence.yml'
+        ? 'pull_request_target'
+        : 'pull_request';
+    if (!new RegExp(`${pullRequestFamilyKey}:`).test(onBlock)) {
+      report(RWA001, path, `must trigger on ${pullRequestFamilyKey}`);
+    }
+    if (/\bpaths(-ignore)?:/.test(onBlock)) {
+      report(
+        RWA001,
+        path,
+        `${pullRequestFamilyKey} trigger must not gain a path filter -- a path-filtered required check never reports for an out-of-filter change`,
+      );
+    }
+    if (!new RegExp(`^ {2}${jobId}:$`, 'm').test(text)) {
+      report(RWA001, path, `must keep required job id ${jobId}`);
+    }
+    // GitHub reports a required check under the job's display name, so a
+    // job-level name: would move the check the ruleset waits on.
+    const jobBody = extractJobBody(text, jobId);
+    if (jobBody === undefined) {
+      report(RWA001, path, `job ${jobId} not found`);
+      continue;
+    }
+    if (/^ {4}name:/m.test(jobBody)) {
+      report(
+        RWA001,
+        path,
+        `job ${jobId} must not declare its own display name -- that changes the literal required-status-check context`,
+      );
+    }
+  }
+}
+// The pull_request-triggered workflows, sorted by file name. The advisory
+// workflow is included by name because its trigger moved to pull_request_target
+// while it still re-runs on every push to an open pull request.
+function listPullRequestWorkflows(root, report) {
+  let names;
+  try {
+    names = readdirSync(resolve(root, WORKFLOWS_DIRECTORY))
+      .filter((name) => name.endsWith('.yml'))
+      .sort();
+  } catch {
+    report(
+      RWA002,
+      WORKFLOWS_DIRECTORY,
+      'required input is missing or unreadable',
+    );
+    return undefined;
+  }
+  const files = [];
+  for (const name of names) {
+    if (name === 'idd-advisory-convergence.yml') {
+      files.push(name);
+      continue;
+    }
+    const path = `${WORKFLOWS_DIRECTORY}/${name}`;
+    const text = readRequiredText(root, path, RWA002, report);
+    if (text === undefined) {
+      continue;
+    }
+    const onBlock = extractOnBlock(text);
+    if (onBlock === undefined) {
+      report(RWA002, path, 'on:/permissions: block not found');
+      continue;
+    }
+    if (/^ {2}pull_request:/m.test(onBlock)) {
+      files.push(name);
+    }
+  }
+  return files;
+}
+// RWA002: every pull_request-triggered workflow cancels superseded runs, either
+// directly or by inheriting that from its single reusable-workflow job.
+function checkPullRequestConcurrency(root, report) {
+  const files = listPullRequestWorkflows(root, report);
+  if (files === undefined) {
+    return;
+  }
+  if (files.length < 6) {
+    report(
+      RWA002,
+      WORKFLOWS_DIRECTORY,
+      `expected >= 6 pull_request-triggered workflows, found ${files.length}: ${files.join(', ')}`,
+    );
+  }
+  for (const file of files) {
+    const path = `${WORKFLOWS_DIRECTORY}/${file}`;
+    const text = readRequiredText(root, path, RWA002, report);
+    if (text === undefined || hasEffectiveCancelInProgress(text)) {
+      continue;
+    }
+    const calledFile = reusableWorkflowCallTarget(text);
+    if (!calledFile) {
+      report(
+        RWA002,
+        path,
+        'must declare an effective cancel-in-progress concurrency setting, or be a pure reusable-workflow caller that inherits one',
+      );
+      continue;
+    }
+    // Inherited concurrency cancels only the reusable-workflow job, so the
+    // exception holds only when that job is the file's sole job.
+    const ids = jobIds(text);
+    if (ids === undefined) {
+      report(RWA002, path, 'jobs: block not found');
+      continue;
+    }
+    if (ids.length !== 1) {
+      report(
+        RWA002,
+        path,
+        `calls ${calledFile} as a reusable workflow, but declares ${ids.length} jobs (${ids.join(', ')}) -- inherited concurrency only covers the reusable-workflow job itself, so every sibling job needs its own effective cancel-in-progress`,
+      );
+    }
+    const calledText = readRequiredText(
+      root,
+      `${WORKFLOWS_DIRECTORY}/${calledFile}`,
+      RWA002,
+      report,
+    );
+    if (calledText === undefined) {
+      continue;
+    }
+    if (!hasEffectiveCancelInProgress(calledText)) {
+      report(
+        RWA002,
+        path,
+        `calls ${calledFile} as a reusable workflow, but ${calledFile} declares no effective cancel-in-progress for it to inherit`,
+      );
+    }
+  }
+}
+function requireKeyBlock(text, indent, key, path, report) {
+  const block = extractKeyBlock(text, indent, key);
+  if (block === undefined) {
+    report(RWA003, path, `${key}: block not found at indent ${indent}`);
+  }
+  return block;
+}
+// RWA003: the runner contracts that keep the required checks off the 15-minute
+// ubuntu-slim cap, and keep the documented ubuntu-slim default for callers.
+function checkRunnerContracts(root, report) {
+  const pnpmBoundaryPath = `${WORKFLOWS_DIRECTORY}/pnpm-boundary.yml`;
+  const pnpmBoundary = readRequiredText(root, pnpmBoundaryPath, RWA003, report);
+  if (pnpmBoundary !== undefined) {
+    const jobBody = extractJobBody(pnpmBoundary, 'pnpm-boundary');
+    if (jobBody === undefined) {
+      report(RWA003, pnpmBoundaryPath, 'job pnpm-boundary not found');
+    } else if (
+      !/^ {4}runs-on: \$\{\{ inputs\.runner \|\| 'ubuntu-latest' \}\}$/m.test(
+        jobBody,
+      )
+    ) {
+      report(
+        RWA003,
+        pnpmBoundaryPath,
+        `the pnpm-boundary job's runs-on fallback must be ubuntu-latest -- the inputs context is empty under pull_request, so the fallback is the runner the default lane gets, and ${SLIM_CAP_NOTE}`,
+      );
+    }
+    const workflowCall = requireKeyBlock(
+      pnpmBoundary,
+      2,
+      'workflow_call',
+      pnpmBoundaryPath,
+      report,
+    );
+    const inputs =
+      workflowCall === undefined
+        ? undefined
+        : requireKeyBlock(workflowCall, 4, 'inputs', pnpmBoundaryPath, report);
+    const inputsRunner =
+      inputs === undefined
+        ? undefined
+        : requireKeyBlock(inputs, 6, 'runner', pnpmBoundaryPath, report);
+    if (
+      inputsRunner !== undefined &&
+      !/^ {8}default: ubuntu-slim$/m.test(inputsRunner)
+    ) {
+      report(
+        RWA003,
+        pnpmBoundaryPath,
+        'inputs.runner.default must stay ubuntu-slim -- the documented default for downstream workflow_call callers in docs/customization.md (#3665)',
+      );
+    }
+  }
+  const floorPath = `${WORKFLOWS_DIRECTORY}/pnpm-boundary-node22-floor.yml`;
+  const floor = readRequiredText(root, floorPath, RWA003, report);
+  if (floor !== undefined) {
+    const jobBody = extractJobBody(floor, 'pnpm-boundary-node22-floor');
+    if (jobBody === undefined) {
+      report(RWA003, floorPath, 'job pnpm-boundary-node22-floor not found');
+    } else {
+      const withBlock = requireKeyBlock(jobBody, 4, 'with', floorPath, report);
+      if (
+        withBlock !== undefined &&
+        !/^ {6}runner: ["']?ubuntu-latest["']?$/m.test(withBlock)
+      ) {
+        report(
+          RWA003,
+          floorPath,
+          `the job's with: block must pass runner: ubuntu-latest -- a workflow_call caller otherwise receives the declared ubuntu-slim default, and ${SLIM_CAP_NOTE}`,
+        );
+      }
+    }
+  }
+  const lintPath = `${WORKFLOWS_DIRECTORY}/lint.yml`;
+  const lint = readRequiredText(root, lintPath, RWA003, report);
+  if (lint !== undefined) {
+    const jobBody = extractJobBody(lint, 'lint');
+    if (jobBody === undefined) {
+      report(RWA003, lintPath, 'job lint not found');
+    } else if (!/^ {4}runs-on: ubuntu-latest$/m.test(jobBody)) {
+      report(
+        RWA003,
+        lintPath,
+        'the lint job must use ubuntu-latest; ubuntu-slim has a hard 15-minute cap, and issue #3728 recorded cancellation annotations for runs 36730573670, 36752800229, and 36955823310',
+      );
+    }
+  }
+}
 export function collectRepositoryWorkflowViolations(root) {
   const violations = [];
   const report = (ruleId, path, message) => {
@@ -570,6 +1095,9 @@ export function collectRepositoryWorkflowViolations(root) {
   const templateInputs = readTemplateSetupNodeInputs(root, report);
   checkDetectPackageManagerStepsAgree(templateInputs, report);
   checkSetupNodeSteps(templateInputs, report);
+  checkRequiredCheckWorkflows(root, report);
+  checkPullRequestConcurrency(root, report);
+  checkRunnerContracts(root, report);
   return violations;
 }
 export function runRepositoryWorkflowAuditCli(argv) {
