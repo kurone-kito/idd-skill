@@ -1094,6 +1094,25 @@ function checkRequiredCheckWorkflows(root, report) {
     if (!new RegExp(`["']?${pullRequestFamilyKey}["']?\\s*:`).test(onBlock)) {
       report(RWA001, path, `must trigger on ${pullRequestFamilyKey}`);
     }
+    // A required job runs the check that gates the merge, so it must not be
+    // conditional, wait on another job, or continue on error. The advisory gate
+    // is excluded: its needs and if are part of its own design.
+    const requiredJobBody = jobBlocks(text)?.get(jobId);
+    if (
+      file !== 'idd-advisory-convergence.yml' &&
+      requiredJobBody !== undefined &&
+      structuralLines(requiredJobBody).some(
+        (line) =>
+          /^ {4}(if|needs)\s*:/.test(line) ||
+          /^\s*continue-on-error\s*:/.test(line),
+      )
+    ) {
+      report(
+        RWA001,
+        path,
+        `${jobId} must not be conditional, depend on another job, or continue on error`,
+      );
+    }
     if (/\bpaths(-ignore)?["']?\s*:/.test(onBlock)) {
       report(
         RWA001,

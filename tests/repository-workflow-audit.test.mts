@@ -2510,6 +2510,51 @@ const RULE_CASES: readonly RuleCase[] = [
     ],
   },
   {
+    ruleId: 'RWA001',
+    name: 'a required job made conditional by a job-level if',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '  lint:\n',
+      to: '  lint:\n    if: false\n',
+    },
+    expected: [
+      {
+        message:
+          'lint must not be conditional, depend on another job, or continue on error',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required job that waits on another job',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '  lint:\n',
+      to: '  lint:\n    needs: lint-windows\n',
+    },
+    expected: [
+      {
+        message:
+          'lint must not be conditional, depend on another job, or continue on error',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required job step that continues on error',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '      - uses: actions/checkout@',
+      to: '        continue-on-error: true\n      - uses: actions/checkout@',
+    },
+    expected: [
+      {
+        message:
+          'lint must not be conditional, depend on another job, or continue on error',
+      },
+    ],
+  },
+  {
     ruleId: 'RWA005',
     name: 'a checkout written as a complex mapping key',
     path: ROOT_ADVISORY,
