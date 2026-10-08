@@ -2258,7 +2258,12 @@ const RULE_CASES: readonly RuleCase[] = [
         );
       },
     },
-    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+    expected: [
+      {
+        message:
+          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+      },
+    ],
   },
   {
     ruleId: 'RWA005',
@@ -2270,6 +2275,76 @@ const RULE_CASES: readonly RuleCase[] = [
       all: true,
     },
     expected: [{ message: 'no actions/checkout step to pin to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout whose uses key is quoted, which hides it from the canonical form',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+      to: '      - "uses": actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+    },
+    expected: [
+      {
+        message:
+          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout whose uses key has a space before its colon',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+      to: '      - uses : actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+    },
+    expected: [
+      {
+        message:
+          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout whose action name is differently cased',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+      to: '      - uses: Actions/Checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
+    },
+    expected: [
+      {
+        message:
+          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout whose dash stands alone on its line',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+      to: '      -\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+    },
+    expected: [
+      {
+        message:
+          'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout whose quoted ref key adds a second ref beside the pinned one',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '          ref: main\n',
+      to: `          ref: main\n          "ref": \${{ github.event.pull_request.head.sha }}\n`,
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
   },
   {
     ruleId: 'RWA005',
@@ -2322,6 +2397,45 @@ const RULE_CASES: readonly RuleCase[] = [
           '      - name: Post the self-referential-bootstrap-auto waiver\n',
         );
         return `${renamed.slice(0, at)}      - name: Show the prefix\n        run: echo idd-self-waiver-marker-\n${renamed.slice(at)}`;
+      },
+    },
+    expected: [
+      { message: 'no longer declares the expected artifact-name prefix' },
+    ],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'a self-waiver post step renamed while an indented copy of the old name stays in the job',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const step =
+          '      - name: Post the self-referential-bootstrap-auto waiver\n';
+        anchored(text, step);
+        const renamed = text.replace(step, '      - name: Post the waiver\n');
+        const at = anchored(renamed, '      - name: Post the waiver\n');
+        return `${renamed.slice(0, at)}        - name: Post the self-referential-bootstrap-auto waiver\n${renamed.slice(at)}`;
+      },
+    },
+    expected: [{ message: 'no longer declares the expected post-step name' }],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'an artifact name renamed while an env name in its upload step keeps the prefix',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        anchored(text, '          name: idd-self-waiver-marker-');
+        const renamed = text.replace(
+          '          name: idd-self-waiver-marker-',
+          '          name: renamed-marker-',
+        );
+        const uses = anchored(
+          renamed,
+          '        uses: actions/upload-artifact@',
+        );
+        const end = renamed.indexOf('\n', uses) + 1;
+        return `${renamed.slice(0, end)}        env:\n          name: idd-self-waiver-marker-probe\n${renamed.slice(end)}`;
       },
     },
     expected: [

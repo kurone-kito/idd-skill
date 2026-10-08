@@ -398,19 +398,39 @@ function readStringConstant(source: string, name: string): string | undefined {
   return match?.[1];
 }
 
-// Whether an upload-artifact step in the job declares the prefix as the value
-// of its `with:` name key. A `run:` line that merely contains the prefix cannot
-// satisfy this, because only that key's value is read.
+// The canonical spelling of the upload action's line in the self-waiver job.
+// Any other mention of the action is a violation, so a differently spelled
+// upload cannot hide the artifact that the verifier reads.
+const CANONICAL_UPLOAD_LINE = /^ {8}uses: actions\/upload-artifact@\S+/;
+
+// Whether the job's single upload step declares the prefix as the value of
+// its own `with:` name key. A `run:` line, an `env:` name, or a second upload
+// step cannot satisfy this.
 function declaresArtifactName(jobBody: string, prefix: string): boolean {
-  return jobBody
-    .split(STEP_BOUNDARY)
-    .filter((step) => /^\s*uses:\s*['"]?actions\/upload-artifact\b/m.test(step))
-    .some((step) =>
-      step.split('\n').some((line) => {
-        const value = line.match(/^ {10}name:\s*['"]?(.*)$/)?.[1];
-        return value?.startsWith(prefix) === true;
-      }),
+  const lines = uncommentedLines(jobBody);
+  const mentions = lines.filter((line) =>
+    /actions\/upload-artifact/i.test(line),
+  );
+  const canonical = lines.filter((line) => CANONICAL_UPLOAD_LINE.test(line));
+  if (mentions.length !== 1 || canonical.length !== 1) {
+    return false;
+  }
+  const step = lines
+    .join('\n')
+    .split(/\n {6}-(?=\s)/)
+    .find((segment) =>
+      segment.split('\n').some((line) => CANONICAL_UPLOAD_LINE.test(line)),
     );
+  const block = step === undefined ? undefined : withBlockOf(step);
+  if (block === undefined) {
+    return false;
+  }
+  const names = block.filter((line) => /^\s*["']?name["']?\s*:/i.test(line));
+  const value =
+    names.length === 1
+      ? names[0].match(/^ {10}name:\s*['"]?(.*)$/)?.[1]
+      : undefined;
+  return value?.startsWith(prefix) === true;
 }
 
 // Both copies must keep the self-waiver job id, post-step name, and artifact
@@ -477,7 +497,7 @@ function checkSelfReferentialWaiverConstants(
     if (
       !jobBody
         .split('\n')
-        .some((line) => line.trim() === `- name: ${postStepName}`)
+        .some((line) => line.trimEnd() === `      - name: ${postStepName}`)
     ) {
       report(RWA006, path, 'no longer declares the expected post-step name');
     }
@@ -504,35 +524,61 @@ const DETECT_PACKAGE_MANAGER_STEP_START =
 const STEP_BOUNDARY_AFTER_DETECT = /\n {6}- name: /;
 const STEP_BOUNDARY = '\n      - ';
 
-// The text of each actions/checkout step, with comment lines removed. A quoted
-// `uses:` value counts as a checkout too.
-function checkoutStepTexts(text: string): string[] {
-  const uncommented = text
-    .split('\n')
-    .filter((line) => !/^\s*#/.test(line))
-    .join('\n');
-  return uncommented
-    .split(STEP_BOUNDARY)
-    .filter((step) => /^\s*uses:\s*['"]?actions\/checkout\b/m.test(step));
+// The lines of a workflow without its comment lines, so a comment can neither
+// hide nor fake a checkout, an upload, or a ref.
+function uncommentedLines(text: string): string[] {
+  return text.split('\n').filter((line) => !/^\s*#/.test(line));
 }
 
-// Whether a checkout step pins `ref: main` as the only ref key of its own
-// `with:` block. A ref under env: or anywhere outside with: does not count.
-function pinsTrustedRef(step: string): boolean {
-  const lines = step.split('\n');
-  const withAt = lines.findIndex((line) => /^ {8}with:\s*$/.test(line));
-  if (withAt === -1) {
-    return false;
+// The canonical spelling of a checkout step's action line. Any other mention
+// of the action fails closed, so a quoted, spaced, or differently cased key
+// cannot hide a checkout.
+const CANONICAL_CHECKOUT_LINE = /^ {6}- uses: actions\/checkout@\S+/;
+
+// The steps that check out the repository, or undefined when the action is
+// mentioned anywhere outside the canonical form. Splitting on a dash followed
+// by whitespace also catches a step whose dash is alone on its line.
+function checkoutSteps(text: string): string[] | undefined {
+  const lines = uncommentedLines(text);
+  const mentions = lines.filter((line) => /actions\/checkout/i.test(line));
+  const canonical = lines.filter((line) => CANONICAL_CHECKOUT_LINE.test(line));
+  if (mentions.length !== canonical.length) {
+    return undefined;
   }
-  const withBlock: string[] = [];
-  for (const line of lines.slice(withAt + 1)) {
+  return lines
+    .join('\n')
+    .split(/\n {6}-(?=\s)/)
+    .filter((step) => /^\s*uses: actions\/checkout@/.test(step));
+}
+
+// The lines of a step's own `with:` block, or undefined when the step has none
+// in its canonical spelling. A `with:` spelled any other way is not read.
+function withBlockOf(step: string): string[] | undefined {
+  const lines = step.split('\n');
+  const at = lines.findIndex((line) => /^ {8}with:\s*$/.test(line));
+  if (at === -1) {
+    return undefined;
+  }
+  const block: string[] = [];
+  for (const line of lines.slice(at + 1)) {
     if (line.trim() !== '' && !/^ {10}/.test(line)) {
       break;
     }
-    withBlock.push(line);
+    block.push(line);
   }
-  const refs = withBlock.filter((line) => /^\s*ref:/.test(line));
-  return refs.length === 1 && /^ {10}ref:\s*main\s*$/.test(refs[0]);
+  return block;
+}
+
+// Whether a checkout step pins `ref: main` as its only ref key. Every ref-like
+// key in its with: block counts, whatever its spelling, so a quoted or spaced
+// key cannot add a second ref.
+function pinsTrustedRef(step: string): boolean {
+  const block = withBlockOf(step);
+  if (block === undefined) {
+    return false;
+  }
+  const refs = block.filter((line) => /^\s*["']?ref["']?\s*:/i.test(line));
+  return refs.length === 1 && /^ {10}ref: main\s*$/.test(refs[0]);
 }
 const SETUP_NODE_STEP_COUNT = 4;
 
@@ -1491,12 +1537,18 @@ function checkRequiredGateTriggers(root: string, report: Report): void {
       report(RWA005, path, 'on: must include pull_request_target');
     }
     // Every checkout step, judged on its own, must pin the trusted default
-    // branch in its own with: block. A whole-file search would pass when one
-    // step is pinned and another is not.
-    const checkoutSteps = checkoutStepTexts(text);
-    if (checkoutSteps.length === 0) {
+    // branch in its own with: block. Any spelling of the action other than the
+    // canonical line is reported, so none can hide a checkout.
+    const steps = checkoutSteps(text);
+    if (steps === undefined) {
+      report(
+        RWA005,
+        path,
+        'checkout must use the canonical `- uses: actions/checkout@<ref>` form',
+      );
+    } else if (steps.length === 0) {
       report(RWA005, path, 'no actions/checkout step to pin to ref: main');
-    } else if (!checkoutSteps.every(pinsTrustedRef)) {
+    } else if (!steps.every(pinsTrustedRef)) {
       report(RWA005, path, 'checkout must stay pinned to ref: main');
     }
   }
