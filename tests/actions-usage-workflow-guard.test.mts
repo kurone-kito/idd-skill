@@ -1373,11 +1373,6 @@ function assertNodeVersionLogBeforeFloor(stepBody: string): void {
   );
 }
 
-/** Extracts the indented body of the `key:` line that sits at exactly
- * `indent` spaces in `text`: every following line that is blank or indented
- * deeper than the key, up to the first line that is neither. Asserts the key
- * exists, so a renamed or removed block fails loudly instead of matching
- * nothing. */
 test('lint.yml logs Node.js version before asserting the Node floor', () => {
   const workflow = readWorkflow('lint.yml');
   const lintJob = extractJobBody(workflow, 'lint');
