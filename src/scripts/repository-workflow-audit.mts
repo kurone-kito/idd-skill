@@ -837,10 +837,12 @@ function checkSetupNodeSteps(
 ): void {
   let totalSetupNodeSteps = 0;
   for (const path of TEMPLATE_SETUP_NODE_PATHS) {
-    const content = inputs.get(path);
-    if (content === undefined) {
+    const raw = inputs.get(path);
+    if (raw === undefined) {
       continue;
     }
+    // Read as declarations: a commented-out use, or one inside a run body, is not a step.
+    const content = declarationText(raw);
     let searchFrom = 0;
     for (;;) {
       const usesIndex = content.indexOf(

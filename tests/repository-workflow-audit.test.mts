@@ -3288,6 +3288,24 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA007',
+    name: 'a commented setup-node use that keeps the count while the real action is replaced',
+    path: 'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
+    violationPath: 'idd-template/.github/workflows',
+    mutation: {
+      transform: (text: string) => {
+        const real = '      - uses: actions/setup-node@v4\n';
+        anchored(text, real);
+        return text
+          .split(real)
+          .join(
+            '      # - uses: actions/setup-node@v4\n      - uses: actions/setup-other@v4\n',
+          );
+      },
+    },
+    expected: [{ prefix: 'expected exactly 4 actions/setup-node steps' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
@@ -3555,6 +3573,32 @@ test('a pull_request workflow saved with a .yaml extension is inventoried', () =
         (violation) => violation.ruleId === 'RWA002' && violation.path === path,
       ),
       true,
+      JSON.stringify(violations),
+    );
+  });
+});
+
+test('RWA007 does not count a commented-out setup-node use', () => {
+  // A stray comment that names setup-node is not a step, so a healthy copy with
+  // one must not fail the four-step inventory.
+  const path =
+    'idd-template/.github/workflows/idd-advisory-convergence-comment.yml';
+  const real = '      - uses: actions/setup-node@v4\n';
+  const root = fixtureRoot({
+    [path]: {
+      transform: (text: string) => {
+        anchored(text, real);
+        return text
+          .split(real)
+          .join(`      # - uses: actions/setup-node@v4\n${real}`);
+      },
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some((violation) => violation.ruleId === 'RWA007'),
+      false,
       JSON.stringify(violations),
     );
   });
