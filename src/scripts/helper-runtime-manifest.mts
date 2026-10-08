@@ -1362,10 +1362,11 @@ function buildSwitchPlan({
         )
         .sort(([left], [right]) => left.localeCompare(right)),
     ),
-    // Only a switch away from user-global leaves an operator-level install
-    // behind, so the removal commands are emitted only for that source profile;
-    // other switches keep their existing output shape.
-    ...(fromProfile === 'user-global'
+    // Only a switch that leaves user-global leaves an operator-level install
+    // behind, so the removal commands are emitted only for that transition. A
+    // no-op switch (user-global to user-global) removes nothing, and other
+    // switches keep their existing output shape.
+    ...(fromProfile === 'user-global' && toProfile !== 'user-global'
       ? { removeGlobalInstallCommands: USER_GLOBAL_UNINSTALL_COMMANDS }
       : {}),
   };

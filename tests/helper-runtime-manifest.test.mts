@@ -991,3 +991,15 @@ test('switching to and from user-global lists the add, remove, and global-uninst
     ['@kurone-kito/idd-skill'],
   );
 });
+
+test('a user-global to user-global switch removes nothing and lists no uninstall commands', () => {
+  const noOp = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    fromProfile: 'user-global',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  }).switching;
+  assert.equal('removeGlobalInstallCommands' in (noOp ?? {}), false);
+  assert.deepEqual(noOp?.removeFiles, []);
+  assert.deepEqual(noOp?.addFiles, []);
+});
