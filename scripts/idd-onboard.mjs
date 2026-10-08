@@ -43,7 +43,8 @@
 // instead of forking its logic, the #1208 shared-module convention
 // `check-pnpm-boundary.mts` already uses), a package-pin advisory
 // (#2987: warns, but never blocks, when the target's effective
-// `helperRuntime.profile` is `ephemeral-npx`/`package-manager` with no
+// `helperRuntime.profile` is `ephemeral-npx`/`package-manager`/`user-global`
+// with no
 // `helperRuntime.packageSpec` configured, so helper commands silently
 // resolve against the mutable default archive URL instead of an audited
 // pin), and a held-schema drift advisory (#3215: warns, but never
@@ -6745,7 +6746,7 @@ blocking; not applicable, and spawns nothing, for any other profile),
 staleImportSignal (idd-doctor's content-based stale-import detector re-run
 against the target's imported files — informational only, never blocking),
 packagePinWarning (advisory only, never blocking: flags an
-ephemeral-npx/package-manager helperRuntime.profile with no configured
+ephemeral-npx/package-manager/user-global helperRuntime.profile with no configured
 helperRuntime.packageSpec, so helper commands silently resolve against the
 mutable default archive URL instead of an audited pin), and
 heldSchemaDrift (advisory only, never blocking: for each schema

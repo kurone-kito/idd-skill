@@ -10,7 +10,7 @@ takeover, return to resume lite Step 1.
 ## Helper runtime contract
 
 - **Helper-enabled profiles** (`package-manager`/`ephemeral-npx`/
-  vendored-node): resolve each `node scripts/<h>.mjs` to its
+  `user-global`/vendored-node): resolve each `node scripts/<h>.mjs` to its
   profile-selected form via `docs/idd-helper-scripts.md`, then run the
   commands below. If a required helper is missing, fails, or disagrees
   with live state → **hold and stop** (do not claim). Do not invent a

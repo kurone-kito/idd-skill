@@ -6,7 +6,7 @@ Lite profile for weak/local models. Same semantics as
 ## Helper runtime contract
 
 1. **When helper runtime is enabled** (`package-manager`, `ephemeral-npx`,
-   or vendored-node): resolve each `node scripts/<h>.mjs` to its
+   `user-global`, or vendored-node): resolve each `node scripts/<h>.mjs` to its
    profile-selected form via `docs/idd-helper-scripts.md`, then run the
    commands below. If a helper is **missing, fails, returns invalid
    JSON, or disagrees with live GitHub state** → **stop and ask**. Do
