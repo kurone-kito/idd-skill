@@ -1345,7 +1345,7 @@ downstream adopter proposed one rolling follow-up per pull request on
 2026-10-05 for that reason (#3222 records why the ban exists). The
 narrow auto-release of a defer-source follow-up compares the live
 body's SHA-256 with the `body-sha256` pinned by the first
-`mode=acquire` marker. A body appended to later no longer matches that
+`mode=acquire` marker. A body appended later no longer matches that
 pin, so it loses the auto-release. Keep one follow-up per pass, and
 create a new one for the next pass rather than appending.
 
