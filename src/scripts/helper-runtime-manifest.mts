@@ -141,7 +141,7 @@ type YarnFlavor = 'classic' | 'berry' | 'unknown';
 interface ManifestArgs {
   help: boolean;
   profile: string;
-  launcher: string;
+  launcher?: string;
   fromProfile: string;
   packageManager: string;
   packageSpec: string;
@@ -1052,12 +1052,12 @@ function resolveConfiguredLauncher(targetRoot: string): string {
 }
 
 /**
- * Validate a `--launcher` value (#3830). An empty value means unset and passes
- * through; any other value outside the three launchers is a usage error, the
- * same as an unsupported `--profile`.
+ * Validate a `--launcher` value (#3830). An absent value (`undefined`) passes
+ * through. Any other value must be one of the three launchers, so an explicit
+ * empty string is a usage error, the same as an unsupported `--profile`.
  */
-function normalizeLauncher(launcher: string): string {
-  if (!launcher || HELPER_RUNTIME_LAUNCHERS.has(launcher)) {
+function normalizeLauncher(launcher: string | undefined): string | undefined {
+  if (launcher === undefined || HELPER_RUNTIME_LAUNCHERS.has(launcher)) {
     return launcher;
   }
   throw markCliUsageError(new Error(`unsupported launcher: ${launcher}`));
@@ -1069,7 +1069,7 @@ export function buildHelperRuntimeManifest({
   packageManager = '',
   packageSpec = '',
   targetRoot = process.cwd(),
-  launcher = '',
+  launcher,
   probe,
 }: {
   profile?: string;
@@ -1090,7 +1090,7 @@ export function buildHelperRuntimeManifest({
   // output, that is when the ephemeral-npx entry is emitted (no --profile,
   // or --profile ephemeral-npx).
   const configuredLauncher =
-    normalizeLauncher(launcher) ||
+    normalizeLauncher(launcher) ??
     resolveConfiguredLauncher(normalizedTargetRoot);
   const emitsEphemeral =
     normalizedProfile === '' || normalizedProfile === 'ephemeral-npx';
@@ -1708,7 +1708,7 @@ function parseArgs(argv: string[]): ManifestArgs {
   return {
     help,
     profile: (values.profile as string | undefined) ?? '',
-    launcher: (values.launcher as string | undefined) ?? '',
+    launcher: values.launcher as string | undefined,
     fromProfile: (values['from-profile'] as string | undefined) ?? '',
     packageManager: (values['package-manager'] as string | undefined) ?? '',
     packageSpec: (values['package-spec'] as string | undefined) ?? '',

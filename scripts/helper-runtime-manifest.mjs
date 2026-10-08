@@ -904,12 +904,12 @@ function resolveConfiguredLauncher(targetRoot) {
   return '';
 }
 /**
- * Validate a `--launcher` value (#3830). An empty value means unset and passes
- * through; any other value outside the three launchers is a usage error, the
- * same as an unsupported `--profile`.
+ * Validate a `--launcher` value (#3830). An absent value (`undefined`) passes
+ * through. Any other value must be one of the three launchers, so an explicit
+ * empty string is a usage error, the same as an unsupported `--profile`.
  */
 function normalizeLauncher(launcher) {
-  if (!launcher || HELPER_RUNTIME_LAUNCHERS.has(launcher)) {
+  if (launcher === undefined || HELPER_RUNTIME_LAUNCHERS.has(launcher)) {
     return launcher;
   }
   throw markCliUsageError(new Error(`unsupported launcher: ${launcher}`));
@@ -920,7 +920,7 @@ export function buildHelperRuntimeManifest({
   packageManager = '',
   packageSpec = '',
   targetRoot = process.cwd(),
-  launcher = '',
+  launcher,
   probe,
 } = {}) {
   const packageRoot = PACKAGE_ROOT;
@@ -933,7 +933,7 @@ export function buildHelperRuntimeManifest({
   // output, that is when the ephemeral-npx entry is emitted (no --profile,
   // or --profile ephemeral-npx).
   const configuredLauncher =
-    normalizeLauncher(launcher) ||
+    normalizeLauncher(launcher) ??
     resolveConfiguredLauncher(normalizedTargetRoot);
   const emitsEphemeral =
     normalizedProfile === '' || normalizedProfile === 'ephemeral-npx';
@@ -1468,7 +1468,7 @@ function parseArgs(argv) {
   return {
     help,
     profile: values.profile ?? '',
-    launcher: values.launcher ?? '',
+    launcher: values.launcher,
     fromProfile: values['from-profile'] ?? '',
     packageManager: values['package-manager'] ?? '',
     packageSpec: values['package-spec'] ?? '',

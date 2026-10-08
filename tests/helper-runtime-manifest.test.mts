@@ -1204,6 +1204,18 @@ test('the --launcher flag overrides the configured value and an invalid flag exi
       () => buildHelperRuntimeManifest({ targetRoot: root, launcher: 'bogus' }),
       /unsupported launcher: bogus/,
     );
+    // An explicit empty value is invalid, not an absent flag.
+    const explicitEmpty = spawnSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/helper-runtime-manifest.mjs'), '--launcher='],
+      { cwd: root, encoding: 'utf8' },
+    );
+    assert.notEqual(explicitEmpty.status, 0);
+    assert.match(explicitEmpty.stderr, /unsupported launcher: /);
+    assert.throws(
+      () => buildHelperRuntimeManifest({ targetRoot: root, launcher: '' }),
+      /unsupported launcher: /,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
