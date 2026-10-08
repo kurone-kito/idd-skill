@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "issue": "kurone-kito/idd-skill#3836",
+  "pullRequest": null,
+  "harness": "claude-code",
+  "workerHandle": "agent-a1b2c3",
+  "terminalPhase": "F4",
+  "outcome": "done",
+  "verifiedAt": "2026-10-08T12:40:00Z",
+  "recordedAt": "2026-10-08T12:41:30Z",
+  "branch": "issue/3836-feat-retro-record-each-worker-s-final"
+}
