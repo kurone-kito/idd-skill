@@ -4850,3 +4850,173 @@ test('formatApplySummary reports an unresolved verdict when nothing cleared the 
   assert.match(text, /executed 0 rerun/);
   assert.match(text, /NOT resolved/);
 });
+
+// --- workflowDefinitionNote (#3859) ----------------------------------------
+//
+// A rerun of a `pull_request_target` run reuses the base branch's workflow
+// definition at the original event, so the plan says so. The note is shared
+// by the plan document and the maintainer-decision hold notices only; the
+// `pull_request` runs, the recovery-refresh candidates and `--refresh-latest`
+// stay unchanged.
+
+const WORKFLOW_DEFINITION_TEXT =
+  "A rerun reuses the original event's commit and workflow definition";
+
+test('#3859: a failed pull_request_target run stays rerun-eligible and gets the workflow-definition note', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          runEvent: 'pull_request_target',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, false);
+  assert.equal(plan.plan.length, 1);
+  assert.match(plan.plan[0]?.command ?? '', /gh run rerun 5001/);
+  assert.match(plan.workflowDefinitionNote, /reuses the original event/);
+});
+
+test('#3859: a failed pull_request run gets an empty workflow-definition note', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({ conclusion: 'failure', runEvent: 'pull_request' }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 1);
+  assert.equal(plan.workflowDefinitionNote, '');
+});
+
+test('#3859: a withheld pull_request_target run adds the note to the "hold" notice', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          runEvent: 'pull_request_target',
+        }),
+      ],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.deepEqual(plan.plan, []);
+  assert.equal(plan.workflowDefinitionNote, '');
+  assert.match(plan.rerunPolicyHoldNotice, /"hold"/);
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.ok(plan.rerunPolicyHoldNotice.includes(WORKFLOW_DEFINITION_TEXT));
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
+});
+
+test('#3859: a withheld pull_request run gets no note in the "hold" notice', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({ conclusion: 'failure', runEvent: 'pull_request' }),
+      ],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.ok(!plan.rerunPolicyHoldNotice.includes(WORKFLOW_DEFINITION_TEXT));
+});
+
+test('#3859: a budget-held pull_request_target run adds the note to the spent rerun-once notice', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          runEvent: 'pull_request_target',
+          runAttempt: 2,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, true);
+  assert.deepEqual(plan.plan, []);
+  assert.match(plan.rerunPolicyHoldNotice, /rerun-once/);
+  assert.match(plan.rerunPolicyHoldNotice, /maintainer must manually decide/);
+  assert.ok(plan.rerunPolicyHoldNotice.includes(WORKFLOW_DEFINITION_TEXT));
+  assert.doesNotMatch(plan.rerunPolicyHoldNotice, /--refresh-latest/);
+});
+
+test('#3859: a recovery-refresh candidate on a pull_request_target row gets no note', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+          runEvent: 'pull_request_target',
+          startedAt: '2026-07-16T11:00:00Z',
+        }),
+      ],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.equal(plan.workflowDefinitionNote, '');
+  assert.match(plan.rerunPolicyHoldNotice, /1 recovery-refresh candidate\(s\)/);
+  assert.ok(!plan.rerunPolicyHoldNotice.includes(WORKFLOW_DEFINITION_TEXT));
+});
+
+test('#3859: the sequential section prints the note after planCaveat only for pull_request_target plans', () => {
+  const target = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          runEvent: 'pull_request_target',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  const targetSections = buildRerunPlanTextSections(target);
+  assert.equal(targetSections.length, 1);
+  assert.ok(
+    (targetSections[0] ?? '').endsWith(
+      `${target.planCaveat}\n\n${target.workflowDefinitionNote}`,
+    ),
+  );
+
+  const pr = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({ conclusion: 'failure', runEvent: 'pull_request' }),
+      ],
+    }),
+    baseOptions(),
+  );
+  const prSections = buildRerunPlanTextSections(pr);
+  assert.equal(prSections.length, 1);
+  assert.ok((prSections[0] ?? '').endsWith(pr.planCaveat));
+});
+
+test('#3859: --refresh-latest output carries no workflow-definition note', () => {
+  const refresh = computeRefreshLatestPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          runEvent: 'pull_request_target',
+        }),
+      ],
+    }),
+    { now: NOW, rerunPolicy: 'rerun-once' },
+  );
+  assert.ok(!JSON.stringify(refresh).includes(WORKFLOW_DEFINITION_TEXT));
+});
