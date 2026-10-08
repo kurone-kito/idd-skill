@@ -191,7 +191,7 @@
                 "properties": {
                   "repo": {
                     "type": "string",
-                    "pattern": "^[^/\\s]+/[^/\\s]+$",
+                    "pattern": "^(?![.]{1,2}/)(?![^/]+/[.]{1,2}$)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
                     "description": "GitHub owner/repo slug matched case-insensitively."
                   }
                 },

@@ -62,6 +62,9 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   /** `providerOutage` controls trusted outage declarations and targets. */
   providerOutage:
     'pre-merge-readiness.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
+  /** `localValidationEvidence` configures the evidence freshness reported by readiness. */
+  localValidationEvidence:
+    'pre-merge-readiness.mts and local-validation-evidence.mts',
 });
 /** Local delegate objects are validated as a whole by their consumers. */
 const ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS = new Set([
@@ -129,6 +132,7 @@ export function deriveRepositoryIdentity(options) {
   }
   return {
     githubSlug: parseGithubOriginSlug(origin),
+    hasGithubOrigin: isGithubDotComOrigin(origin),
     mainWorktreeRoot: repositoryRootFromCommonDir(commonDir),
   };
 }
@@ -275,6 +279,18 @@ function selectOverride(rawOverrides, identity, platform) {
       );
       return;
     }
+    if (hasRepo && !isValidRepoOverride(value.match.repo)) {
+      diagnostics.push(
+        `ignored invalid user-global override at index ${index}: match.repo must be an owner/repo slug`,
+      );
+      return;
+    }
+    if (hasPath && !isValidPathOverride(value.match.path)) {
+      diagnostics.push(
+        `ignored invalid user-global override at index ${index}: match.path must contain only safe relative segments`,
+      );
+      return;
+    }
     let rank = -1;
     if (
       hasRepo &&
@@ -289,7 +305,7 @@ function selectOverride(rawOverrides, identity, platform) {
       }
     } else if (
       hasPath &&
-      !identity.githubSlug &&
+      !identity.hasGithubOrigin &&
       typeof value.match.path === 'string'
     ) {
       const rootSegments = pathSegments(identity.mainWorktreeRoot, platform);
@@ -334,6 +350,23 @@ function pathSegments(value, platform) {
   return platform === 'win32'
     ? segments.map((part) => part.toLowerCase())
     : segments;
+}
+function isValidRepoOverride(value) {
+  return (
+    typeof value === 'string' &&
+    /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(value) &&
+    !value.split('/').some((part) => part === '.' || part === '..')
+  );
+}
+function isValidPathOverride(value) {
+  return (
+    typeof value === 'string' &&
+    value
+      .split(/[\\/]/u)
+      .every(
+        (segment) => segment.length > 0 && segment !== '.' && segment !== '..',
+      )
+  );
 }
 function withoutOverrides(config) {
   const result = { ...config };
@@ -383,11 +416,29 @@ function parseGithubOriginSlug(remote) {
   const parts = path.split('/');
   if (
     parts.length !== 2 ||
-    parts.some((part) => !/^[A-Za-z0-9_.-]+$/u.test(part))
+    parts.some(
+      (part) =>
+        !/^[A-Za-z0-9_.-]+$/u.test(part) || part === '.' || part === '..',
+    )
   ) {
     return null;
   }
   return `${parts[0]}/${parts[1]}`.toLowerCase();
+}
+function isGithubDotComOrigin(remote) {
+  if (!remote) return false;
+  const urlLikeAuthority = /^[a-z][a-z\d+.-]*:\/*([^/?#]*)/iu.exec(remote)?.[1];
+  if (urlLikeAuthority !== undefined) {
+    const hostPort = urlLikeAuthority.slice(
+      urlLikeAuthority.lastIndexOf('@') + 1,
+    );
+    const hostname = hostPort.startsWith('[')
+      ? hostPort.slice(1, hostPort.indexOf(']'))
+      : hostPort.split(':', 1)[0];
+    if (hostname?.trim().toLowerCase() === 'github.com') return true;
+  }
+  const scp = /^(?:[^@/:]+@)?([^/:]+):/u.exec(remote);
+  return scp?.[1]?.trim().toLowerCase() === 'github.com';
 }
 function repositoryRootFromCommonDir(commonDir) {
   const value = commonDir.trim();

@@ -948,17 +948,19 @@ test('deriveRepositoryIdentity recognizes HTTPS, SSH URL, and SCP GitHub origins
   ]) {
     assert.deepEqual(identityFromGit(remote, '/repos/repo/.git'), {
       githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
       mainWorktreeRoot: '/repos/repo',
     });
   }
 });
 
 test('deriveRepositoryIdentity resolves linked and bare common-directory layouts', () => {
-  assert.equal(
-    identityFromGit('git@gitlab.com:owner/repo.git', '/srv/main/.git')
-      .mainWorktreeRoot,
-    '/srv/main',
+  const linked = identityFromGit(
+    'git@gitlab.com:owner/repo.git',
+    '/srv/main/.git',
   );
+  assert.equal(linked.mainWorktreeRoot, '/srv/main');
+  assert.equal(linked.hasGithubOrigin, false);
   assert.equal(
     identityFromGit(null, '/srv/repository.git').mainWorktreeRoot,
     '/srv/repository',
@@ -994,6 +996,7 @@ test('deriveRepositoryIdentity rejects lookalike hosts and malformed GitHub slug
     'https://user@github.com/owner/repo.git',
     'git@github.com:owner/repo/extra.git',
     'git@github.com:owner/repo?query',
+    'git@github.com:owner/..',
   ]) {
     assert.equal(
       identityFromGit(remote, '/srv/project/.git').githubSlug,
@@ -1003,10 +1006,40 @@ test('deriveRepositoryIdentity rejects lookalike hosts and malformed GitHub slug
   }
 });
 
+test('path overrides stay disabled for an invalid GitHub origin URL', () => {
+  for (const remote of [
+    'https://user@github.com/owner/repo.git',
+    'https:/github.com/owner/repo.git',
+    'https://github.com /owner/repo.git',
+    'git@github.com :owner/repo.git',
+  ]) {
+    const identity = identityFromGit(remote, '/srv/team/repo/.git');
+    assert.equal(identity.githubSlug, null, remote);
+    assert.equal(identity.hasGithubOrigin, true, remote);
+
+    const result = resolveLayeredPolicy({
+      localDocument: { exists: false },
+      identity,
+      userGlobalConfig: {
+        overrides: [
+          { match: { path: 'team/repo' }, config: { issueScope: 'roadmap' } },
+        ],
+      },
+    });
+
+    assert.equal(result.selectedOverrideIndex, null, remote);
+    assert.equal(result.config.issueScope, undefined, remote);
+  }
+});
+
 test('resolveLayeredPolicy matches path suffixes on whole segments and by specificity', () => {
   const result = resolveLayeredPolicy({
     localDocument: { exists: false },
-    identity: { githubSlug: null, mainWorktreeRoot: '/srv/foobar/bar/repo' },
+    identity: {
+      githubSlug: null,
+      hasGithubOrigin: false,
+      mainWorktreeRoot: '/srv/foobar/bar/repo',
+    },
     userGlobalConfig: {
       overrides: [
         { match: { path: 'foo/bar/repo' }, config: { issueScope: 'wrong' } },
@@ -1026,7 +1059,11 @@ test('resolveLayeredPolicy matches path suffixes on whole segments and by specif
 test('resolveLayeredPolicy ignores path entries for GitHub identities and folds Windows paths', () => {
   const github = resolveLayeredPolicy({
     localDocument: { exists: false },
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/owner/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/owner/repo',
+    },
     userGlobalConfig: {
       overrides: [
         { match: { path: 'owner/repo' }, config: { issueScope: 'path' } },
@@ -1040,6 +1077,7 @@ test('resolveLayeredPolicy ignores path entries for GitHub identities and folds 
     localDocument: { exists: false },
     identity: {
       githubSlug: null,
+      hasGithubOrigin: false,
       mainWorktreeRoot: 'C:\\Users\\Operator\\Repos\\Widget',
     },
     platform: 'win32',
@@ -1058,7 +1096,11 @@ test('resolveLayeredPolicy ignores path entries for GitHub identities and folds 
 test('resolveLayeredPolicy reports tied matching overrides and applies none', () => {
   const result = resolveLayeredPolicy({
     localDocument: { exists: false },
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/repo',
+    },
     defaults: { issueScope: 'default' },
     userGlobalConfig: {
       overrides: [
@@ -1076,6 +1118,35 @@ test('resolveLayeredPolicy reports tied matching overrides and applies none', ()
   );
 });
 
+test('resolveLayeredPolicy reports invalid override match values', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity: {
+      githubSlug: null,
+      hasGithubOrigin: false,
+      mainWorktreeRoot: '/srv/team/repo',
+    },
+    userGlobalConfig: {
+      overrides: [
+        { match: { path: 'team/../repo' }, config: { issueScope: 'roadmap' } },
+        { match: { repo: 'malformed' }, config: { issueScope: 'roadmap' } },
+        {
+          match: { repo: 'owner/repo?query' },
+          config: { issueScope: 'roadmap' },
+        },
+        { match: { repo: 'owner/..' }, config: { issueScope: 'roadmap' } },
+      ],
+    },
+  });
+
+  assert.equal(result.selectedOverrideIndex, null);
+  assert.equal(result.diagnostics.length, 4);
+  assert.ok(result.diagnostics[0]?.includes('match.path'));
+  assert.ok(result.diagnostics[1]?.includes('match.repo'));
+  assert.ok(result.diagnostics[2]?.includes('match.repo'));
+  assert.ok(result.diagnostics[3]?.includes('match.repo'));
+});
+
 test('resolveLayeredPolicy merges nested leaves, replaces arrays, and reports sources', () => {
   const result = resolveLayeredPolicy({
     localDocument: {
@@ -1085,7 +1156,11 @@ test('resolveLayeredPolicy merges nested leaves, replaces arrays, and reports so
         critiqueLoop: { nested: { localOnly: true, globalOnly: null } },
       },
     },
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/repo',
+    },
     defaults: {
       issueScope: 'default',
       critiqueLoop: {
@@ -1150,7 +1225,11 @@ test('resolveLayeredPolicy escapes dotted keys and keeps leaf provenance distinc
         'x-a': { b: 'nested extension' },
       },
     },
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/repo',
+    },
     defaults: {
       'x-a.b': 'default literal extension',
       'x-a': { b: 'default nested extension' },
@@ -1170,7 +1249,11 @@ test('resolveLayeredPolicy escapes dotted keys and keeps leaf provenance distinc
 test('resolveLayeredPolicy removes stale empty-object provenance after a child merge', () => {
   const result = resolveLayeredPolicy({
     localDocument: { exists: false },
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/repo',
+    },
     defaults: { critiqueLoop: {} },
     userGlobalConfig: {
       critiqueLoop: {},
@@ -1191,7 +1274,11 @@ test('resolveLayeredPolicy removes stale empty-object provenance after a child m
 });
 
 test('repository-policy fields stay local when a local document exists', () => {
-  const identity = { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' };
+  const identity = {
+    githubSlug: 'owner/repo',
+    hasGithubOrigin: true,
+    mainWorktreeRoot: '/srv/repo',
+  };
   const repositoryPolicyAliases = {
     'forced-handoff': { mode: 'disabled' },
     forcedHandoffMode: 'disabled',
@@ -1204,6 +1291,7 @@ test('repository-policy fields stay local when a local document exists', () => {
   };
   const userGlobalConfig = {
     ...repositoryPolicyAliases,
+    localValidationEvidence: { maxAge: 'PT9H' },
     helperRuntime: { profile: 'package-manager' },
     markerPrefix: 'global',
     mergePolicy: 'fully_autonomous_merge',
@@ -1221,6 +1309,7 @@ test('repository-policy fields stay local when a local document exists', () => {
           markerTrustAllowCollaboratorMarkers: true,
           allowCollaboratorMarkers: true,
           reviewPolicy: 'copilot-advisory',
+          localValidationEvidence: { maxAge: 'PT12H' },
           helperRuntime: { profile: 'vendored-node' },
           markerPrefix: 'override',
           mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
@@ -1247,6 +1336,7 @@ test('repository-policy fields stay local when a local document exists', () => {
   );
   assert.equal(local.config.markerPrefix, 'local');
   assert.equal(local.config.mergePolicy, 'human_merge');
+  assert.equal(local.config.localValidationEvidence, undefined);
   for (const key of Object.keys(repositoryPolicyAliases)) {
     assert.equal(
       Object.hasOwn(local.config, key),
@@ -1283,6 +1373,9 @@ test('repository-policy fields stay local when a local document exists', () => {
   assert.equal(noLocal.config.markerTrustAllowCollaboratorMarkers, true);
   assert.equal(noLocal.config.allowCollaboratorMarkers, true);
   assert.equal(noLocal.config.reviewPolicy, 'copilot-advisory');
+  assert.deepEqual(noLocal.config.localValidationEvidence, {
+    maxAge: 'PT12H',
+  });
   assert.deepEqual(noLocal.config.mergeGate, {
     soloCodeownerAdminFallback: 'hold-and-report',
   });
@@ -1295,7 +1388,11 @@ test('a malformed higher-layer value blocks inheritance at that field', () => {
       exists: true,
       config: { critiqueLoop: 'not-an-object' },
     },
-    identity: { githubSlug: null, mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: null,
+      hasGithubOrigin: false,
+      mainWorktreeRoot: '/srv/repo',
+    },
     defaults: { critiqueLoop: { deferAfterRounds: [1] } },
     userGlobalConfig: {
       critiqueLoop: { deferAfterRounds: [2] },
@@ -1312,7 +1409,11 @@ test('malformed repository-local delegates do not inherit global commands', () =
       exists: true,
       config: { critiqueLoop: { delegate: { mode: 'combined' } } },
     },
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/repo',
+    },
     userGlobalConfig: {
       critiqueLoop: {
         delegate: { command: 'global-reviewer', mode: 'combined' },
@@ -1340,7 +1441,11 @@ test('malformed local issue-authoring delegates do not inherit global commands',
         },
       },
     },
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/repo',
+    },
     userGlobalConfig: {
       issueAuthoring: {
         adversarialReview: {
@@ -1398,7 +1503,11 @@ test('loadRepositoryPolicyDocument applies canonical-first and legacy fallback s
 
   const blocked = resolveLayeredPolicy({
     localDocument: brokenCanonical,
-    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    identity: {
+      githubSlug: 'owner/repo',
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '/srv/repo',
+    },
     defaults: {
       markerPrefix: 'default',
       helperRuntime: { profile: 'instructions-only' },
@@ -1442,6 +1551,7 @@ test('REPOSITORY_POLICY_FIELDS is covered by policy schema properties', () => {
     'mergePolicy',
     'mergeGate',
     'markerPrefix',
+    'localValidationEvidence',
   ]) {
     assert.ok(
       fields.includes(required),

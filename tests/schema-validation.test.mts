@@ -309,6 +309,31 @@ test('user-global path overrides reject dot segments', () => {
   }
 });
 
+test('user-global repo overrides require a GitHub owner/repo slug', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const configFor = (repo: string) => ({
+    overrides: [{ match: { repo }, config: { issueScope: 'roadmap-first' } }],
+  });
+
+  assert.deepEqual(validate(configFor('owner/repo'), schema, '$', context), []);
+  for (const repo of [
+    'owner/repo?query',
+    'owner/repo#fragment',
+    'owner/repo name',
+    './repo',
+    'owner/..',
+  ]) {
+    assert.ok(
+      validate(configFor(repo), schema, '$', context).length > 0,
+      `expected ${repo} to be rejected`,
+    );
+  }
+});
+
 test('oneOf requires exactly one matching branch', () => {
   const exclusiveMatch = {
     oneOf: [
