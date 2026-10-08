@@ -7429,7 +7429,7 @@ Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
 unsigned).
 
-## Dead-export audit (idd-skill#3478)
+## Dead-export audit (kurone-kito/idd-skill#3478)
 
 `node scripts/audit-dead-exports.mjs --check` (source repository /
 vendored-node profile only — a repository-local lint check, not an
