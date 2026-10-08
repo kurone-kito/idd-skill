@@ -68,6 +68,8 @@ if (ledger) {
     at: new Date().toISOString(),
     api: 'path-shim',
     executable: 'gh',
+    // Null on purpose: the shell resolves `gh` before the launcher runs, and
+    // the shim does not see which PATH entry it was reached through.
     resolvedExecutable: null,
     args: safeArguments(process.argv.slice(2)),
     pid: process.pid,

@@ -1673,6 +1673,8 @@ function assertCaughtByShim(
   assert.doesNotMatch(run.result.stdout, /gh version/u);
   assert.equal(run.attempts.length, 1, run.ledgerText);
   assert.equal(run.attempts[0]?.api, expectedApi, run.ledgerText);
+  assert.equal(run.attempts[0]?.executable, 'gh', run.ledgerText);
+  assert.equal(run.attempts[0]?.resolvedExecutable, null, run.ledgerText);
 }
 
 const posixShellPayloads = [
