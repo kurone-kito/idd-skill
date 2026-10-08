@@ -3411,7 +3411,9 @@ allowlisted pull request until the base carries the scope: its step
 while the verdict job `idd-advisory-convergence`, which still runs after
 a failed posting job, can pass. A rerun is not expected to clear it, and
 when that signature and a diff that adds a scope to that `permissions:`
-block both match, there is no second cause to look for. This applies
+block both match, there is no second cause to look for. A
+`workflow_dispatch` run does not clear it either: that job is guarded by
+`github.event_name == 'pull_request_target'` and skips by design. This applies
 only where that step runs (not for a fork pull request, and under the
 `instructions-only` profile the job runs its own notice step instead and
 stays green). Until the base carries the scope, even a private
@@ -5253,6 +5255,14 @@ to post it is the consuming track's job.
   established (unreadable, or genuinely not yet covered) leaves the
   historical hold exactly as before this recovery path existed --
   fail-closed, never an invented rerun (#1806)
+- Also reports `workflowDefinitionNote` (#3859): a fixed note, non-empty
+  only when a `plan` command belongs to a `pull_request_target` run. It is
+  printed after `planCaveat`, and the same text is appended to the
+  maintainer-decision `rerunPolicyHoldNotice` when a withheld
+  rerun-eligible `pull_request_target` run is held. It is not added for a
+  recovery-refresh candidate or in the `--refresh-latest` variant. The
+  per-event workflow-definition rules live in the stale-definition
+  paragraph of `idd-ci.instructions.md` §Rerun mechanics, not here
 - Also reports a `recoveryRefreshPlan` when the rollup is stuck on a
   bot-gated instance alongside an already-passing non-bot
   pull_request-family instance — populated even alongside a non-empty
