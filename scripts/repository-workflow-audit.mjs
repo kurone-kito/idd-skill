@@ -1147,7 +1147,7 @@ function listPullRequestWorkflows(root, report) {
   let names;
   try {
     names = readdirSync(resolve(root, WORKFLOWS_DIRECTORY))
-      .filter((name) => name.endsWith('.yml'))
+      .filter((name) => /\.ya?ml$/.test(name))
       .sort();
   } catch {
     report(

@@ -3278,3 +3278,36 @@ test('an unnamed step after the template notice step is not part of that step', 
     );
   });
 });
+
+test('a pull_request workflow saved with a .yaml extension is inventoried', () => {
+  // GitHub loads .yaml workflows as well as .yml, so a pull_request .yaml file
+  // without an effective cancel-in-progress setting must be reported.
+  const root = fixtureRoot();
+  const path = '.github/workflows/extra-pr.yaml';
+  writeFileSync(
+    join(root, path),
+    [
+      'name: Extra pull request check',
+      'on:',
+      '  pull_request:',
+      'permissions:',
+      '  contents: read',
+      'jobs:',
+      '  extra:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      - run: echo ok',
+      '',
+    ].join('\n'),
+  );
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some(
+        (violation) => violation.ruleId === 'RWA002' && violation.path === path,
+      ),
+      true,
+      JSON.stringify(violations),
+    );
+  });
+});
