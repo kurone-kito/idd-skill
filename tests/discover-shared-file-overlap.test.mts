@@ -8,17 +8,24 @@ import {
   type ActiveIssueInput,
   analyzeSharedFileOverlap,
   applyOverlapTieBreaker,
+  buildOverlapOutput,
   hasCandidateFilesHeading,
+  type InFlightIssueInput,
   loadManifest,
   normalizeContentionPath,
+  type OverlapAnalysis,
   type OverlapCandidateInput,
+  type OverlapCandidateResult,
+  type OverlapHit,
   parseArgs,
   parseCandidateFileEntries,
   parseCandidateFiles,
   type RankableCandidate,
   resolveHighContentionFiles,
+  selectNonOverlappingBatch,
   toClaimComment,
 } from '../src/scripts/discover-shared-file-overlap.mts';
+import { selectDesyncedIndex } from '../src/scripts/policy-helpers.mts';
 import { resolveActiveClaim } from '../src/scripts/protocol-helpers.mts';
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -894,4 +901,672 @@ test('parseCandidateFiles still reads a real section whose first content is a fe
     '- `scripts/real.mjs`',
   ].join('\n');
   assert.deepEqual(parseCandidateFiles(body), ['scripts/real.mjs']);
+});
+
+// ---------------------------------------------------------------------------
+// #3838: --batch / --in-flight / --desync-token
+// ---------------------------------------------------------------------------
+
+function batchOf(options: {
+  candidates: OverlapCandidateInput[];
+  activeIssues?: ActiveIssueInput[];
+  inFlight?: InFlightIssueInput[];
+  batchSize: number;
+  desyncToken?: string;
+  floor?: number;
+  suitabilityEnabled?: boolean;
+}) {
+  const analysis = analyzeSharedFileOverlap({
+    candidates: options.candidates,
+    activeIssues: options.activeIssues ?? [],
+    highContentionFiles: HIGH_CONTENTION,
+    floor: options.floor,
+    suitabilityEnabled: options.suitabilityEnabled,
+  });
+  return selectNonOverlappingBatch({
+    analysis,
+    inFlight: options.inFlight ?? [],
+    highContentionFiles: HIGH_CONTENTION,
+    batchSize: options.batchSize,
+    desyncToken: options.desyncToken,
+    floor: options.floor,
+  });
+}
+
+function scored(
+  number: number,
+  candidateFiles: string[],
+  score: number | null = 4,
+): OverlapCandidateInput {
+  return { number, score, candidateFiles };
+}
+
+/** Candidate desync tokens; each test picks one by the index it produces. */
+const TOKENS = 'abcdefghijklmnopqrstuvwxyz'.split('');
+/** A token whose index in a band of three is not 0, so a desync test cannot
+ * pass by accident on the deterministic lowest-number pick. */
+const OFFSET_TOKEN = TOKENS.find(
+  (token) => selectDesyncedIndex(token, 3) !== 0,
+) as string;
+
+test('the offset token used by the desync tests really offsets', () => {
+  assert.notEqual(OFFSET_TOKEN, undefined);
+  assert.notEqual(selectDesyncedIndex(OFFSET_TOKEN, 3), 0);
+});
+
+test('selectNonOverlappingBatch skips the second of two candidates sharing a high-contention file', () => {
+  const result = batchOf({
+    candidates: [
+      scored(1, [MERGE_FILE]),
+      scored(2, [MERGE_FILE]),
+      scored(3, [ADVISORY_FILE]),
+    ],
+    batchSize: 2,
+  });
+  assert.deepEqual(result.batch, [1, 3]);
+  assert.deepEqual(result.batchSkipped, [
+    { number: 2, collidedWith: 1, reason: 'batch', files: [MERGE_FILE] },
+  ]);
+  assert.deepEqual(result.inFlight, []);
+});
+
+test('selectNonOverlappingBatch seeds the comparison set with in-flight issues', () => {
+  const result = batchOf({
+    candidates: [scored(1, [MERGE_FILE]), scored(2, [ADVISORY_FILE])],
+    inFlight: [{ number: 900, candidateFiles: [MERGE_FILE, 'src/x.mts'] }],
+    batchSize: 2,
+  });
+  assert.deepEqual(result.batch, [2]);
+  assert.deepEqual(result.batchSkipped, [
+    { number: 1, collidedWith: 900, reason: 'in-flight', files: [MERGE_FILE] },
+  ]);
+  assert.deepEqual(result.inFlight, [
+    { number: 900, filesUnknown: false, highContentionTouched: [MERGE_FILE] },
+  ]);
+});
+
+test('selectNonOverlappingBatch starts at the desync index of the ascending top-score band', () => {
+  // Fed as [30, 10, 20]: the band must be sorted internally, so the pick is
+  // the candidate at selectDesyncedIndex(token, 3) among [10, 20, 30].
+  const candidates = [
+    scored(30, [REVIEW_FIX_FILE]),
+    scored(10, [MERGE_FILE]),
+    scored(20, [ADVISORY_FILE]),
+  ];
+  const expected = [10, 20, 30][selectDesyncedIndex(OFFSET_TOKEN, 3)];
+  const withToken = batchOf({
+    candidates,
+    batchSize: 3,
+    desyncToken: OFFSET_TOKEN,
+  });
+  assert.equal(withToken.batch[0], expected);
+  assert.deepEqual(
+    [...withToken.batch].sort((a, b) => a - b),
+    [10, 20, 30],
+  );
+  // Without the token the walk starts at the top of recommendedOrder.
+  assert.deepEqual(batchOf({ candidates, batchSize: 3 }).batch, [10, 20, 30]);
+});
+
+test('selectNonOverlappingBatch reports a token-picked candidate that overlaps an in-flight issue', () => {
+  const candidates = [
+    scored(30, [REVIEW_FIX_FILE]),
+    scored(10, [MERGE_FILE]),
+    scored(20, [ADVISORY_FILE]),
+  ];
+  const expected = [10, 20, 30][selectDesyncedIndex(OFFSET_TOKEN, 3)];
+  const pickedFiles = candidates.find((c) => c.number === expected)
+    ?.candidateFiles as string[];
+  const result = batchOf({
+    candidates,
+    inFlight: [{ number: 900, candidateFiles: pickedFiles }],
+    batchSize: 3,
+    desyncToken: OFFSET_TOKEN,
+  });
+  assert.deepEqual(result.batchSkipped, [
+    {
+      number: expected,
+      collidedWith: 900,
+      reason: 'in-flight',
+      files: pickedFiles,
+    },
+  ]);
+  assert.equal(result.batch.length, 2);
+  assert.equal(result.batch.includes(expected), false);
+});
+
+test('selectNonOverlappingBatch sorts the band by issue number even when the overlap nudge reorders recommendedOrder', () => {
+  // 10 is flagged by an open pull request, so recommendedOrder is
+  // [20, 30, 10]; the band must still be indexed as [10, 20, 30].
+  const zeroToken = TOKENS.find((token) => selectDesyncedIndex(token, 3) === 0);
+  assert.notEqual(zeroToken, undefined);
+  const candidates = [
+    scored(10, [MERGE_FILE]),
+    scored(20, [ADVISORY_FILE]),
+    scored(30, [REVIEW_FIX_FILE]),
+  ];
+  const activeIssues: ActiveIssueInput[] = [
+    { number: 991, reason: 'pr', candidateFiles: [MERGE_FILE] },
+  ];
+  // Index 0 picks 10, the flagged lowest-numbered candidate: it is tried
+  // first and dropped into batchSkipped, then the walk continues in
+  // recommendedOrder. A batch of 2 fills before 10 would be reached in
+  // recommendedOrder, so a missing promotion leaves batchSkipped empty.
+  const flaggedPick = batchOf({
+    candidates,
+    activeIssues,
+    batchSize: 2,
+    desyncToken: zeroToken,
+  });
+  assert.deepEqual(flaggedPick.batchSkipped, [
+    { number: 10, collidedWith: 991, reason: 'pr', files: [MERGE_FILE] },
+  ]);
+  assert.deepEqual(flaggedPick.batch, [20, 30]);
+  // A nonzero index lands on the matching member of the sorted band.
+  const offsetPick = batchOf({
+    candidates,
+    activeIssues,
+    batchSize: 3,
+    desyncToken: OFFSET_TOKEN,
+  });
+  assert.equal(
+    offsetPick.batch[0],
+    [10, 20, 30][selectDesyncedIndex(OFFSET_TOKEN, 3)],
+  );
+});
+
+test('selectNonOverlappingBatch sizes the band by its top-score members, not the whole group', () => {
+  // The group is [10, 20, 30, 40] but only the first three tie at the top
+  // score, so the index must come from a band of 3, never 4.
+  const token = TOKENS.find(
+    (candidate) =>
+      selectDesyncedIndex(candidate, 3) !== selectDesyncedIndex(candidate, 4) &&
+      selectDesyncedIndex(candidate, 3) !== 0,
+  );
+  assert.notEqual(token, undefined);
+  const result = batchOf({
+    candidates: [
+      scored(10, [MERGE_FILE]),
+      scored(20, [ADVISORY_FILE]),
+      scored(30, [REVIEW_FIX_FILE]),
+      scored(40, ['src/lower-score.mts'], 3),
+    ],
+    batchSize: 4,
+    desyncToken: token,
+  });
+  assert.equal(result.batch[0], [10, 20, 30][selectDesyncedIndex(token, 3)]);
+  assert.equal(result.batch[3], 40);
+});
+
+test('selectNonOverlappingBatch compares only high-contention files', () => {
+  const shared = 'src/shared.mts';
+  const result = batchOf({
+    candidates: [
+      scored(1, [MERGE_FILE, shared]),
+      scored(2, [ADVISORY_FILE, shared]),
+    ],
+    inFlight: [{ number: 900, candidateFiles: [shared, 'src/other.mts'] }],
+    batchSize: 2,
+  });
+  assert.deepEqual(result.batch, [1, 2]);
+  assert.deepEqual(result.batchSkipped, []);
+});
+
+test('selectNonOverlappingBatch returns what fits when the batch size exceeds the candidates', () => {
+  const result = batchOf({
+    candidates: [scored(1, [MERGE_FILE]), scored(2, [ADVISORY_FILE])],
+    batchSize: 10,
+  });
+  assert.deepEqual(result.batch, [1, 2]);
+  assert.deepEqual(result.batchSkipped, []);
+});
+
+test('selectNonOverlappingBatch places a candidate with no candidate files after every known one', () => {
+  const candidates = [
+    scored(1, []),
+    scored(2, [MERGE_FILE]),
+    scored(3, [ADVISORY_FILE]),
+  ];
+  assert.deepEqual(batchOf({ candidates, batchSize: 3 }).batch, [2, 3, 1]);
+  assert.deepEqual(batchOf({ candidates, batchSize: 2 }).batch, [2, 3]);
+});
+
+test('selectNonOverlappingBatch lets an unknown-files candidate lose a desync pick instead of consuming it', () => {
+  // 5 has the same score and no files: it goes behind the known band, and
+  // the token still offsets inside [10, 20, 30].
+  const result = batchOf({
+    candidates: [
+      scored(5, []),
+      scored(30, [REVIEW_FIX_FILE]),
+      scored(10, [MERGE_FILE]),
+      scored(20, [ADVISORY_FILE]),
+    ],
+    batchSize: 4,
+    desyncToken: OFFSET_TOKEN,
+  });
+  assert.equal(
+    result.batch[0],
+    [10, 20, 30][selectDesyncedIndex(OFFSET_TOKEN, 3)],
+  );
+  assert.equal(result.batch[3], 5);
+});
+
+test('selectNonOverlappingBatch applies the desync pick to the unknown group when no candidate has known files', () => {
+  const result = batchOf({
+    candidates: [scored(30, []), scored(10, []), scored(20, [])],
+    batchSize: 3,
+    desyncToken: OFFSET_TOKEN,
+  });
+  assert.equal(
+    result.batch[0],
+    [10, 20, 30][selectDesyncedIndex(OFFSET_TOKEN, 3)],
+  );
+});
+
+test('selectNonOverlappingBatch skips a candidate overlapping an open pull request', () => {
+  const result = batchOf({
+    candidates: [scored(1, [MERGE_FILE]), scored(2, [ADVISORY_FILE])],
+    activeIssues: [{ number: 991, reason: 'pr', candidateFiles: [MERGE_FILE] }],
+    batchSize: 2,
+  });
+  assert.deepEqual(result.batch, [2]);
+  assert.deepEqual(result.batchSkipped, [
+    { number: 1, collidedWith: 991, reason: 'pr', files: [MERGE_FILE] },
+  ]);
+});
+
+test('selectNonOverlappingBatch ignores the token when the band top is below the floor or suitability is off', () => {
+  const candidates = [
+    scored(30, [REVIEW_FIX_FILE], 2),
+    scored(10, [MERGE_FILE], 2),
+    scored(20, [ADVISORY_FILE], 2),
+  ];
+  assert.deepEqual(
+    batchOf({ candidates, batchSize: 3, desyncToken: OFFSET_TOKEN, floor: 3 })
+      .batch,
+    [10, 20, 30],
+  );
+  assert.deepEqual(
+    batchOf({
+      candidates: candidates.map((c) => ({ ...c, score: 4 })),
+      batchSize: 3,
+      desyncToken: OFFSET_TOKEN,
+      suitabilityEnabled: false,
+    }).batch,
+    [10, 20, 30],
+  );
+});
+
+test('selectNonOverlappingBatch keeps the lowest-numbered pick for a single-entry band', () => {
+  const result = batchOf({
+    candidates: [scored(20, [ADVISORY_FILE], 3), scored(10, [MERGE_FILE], 4)],
+    batchSize: 2,
+    desyncToken: OFFSET_TOKEN,
+  });
+  assert.deepEqual(result.batch, [10, 20]);
+});
+
+test('selectNonOverlappingBatch reports one collision in the order in-flight, batch, claim', () => {
+  const candidates = [
+    scored(1, [ADVISORY_FILE]),
+    scored(2, [MERGE_FILE, ADVISORY_FILE, REVIEW_FIX_FILE]),
+  ];
+  const activeIssues: ActiveIssueInput[] = [
+    { number: 991, reason: 'claim', candidateFiles: [REVIEW_FIX_FILE] },
+  ];
+  const inFlight = [{ number: 900, candidateFiles: [MERGE_FILE] }];
+  const reasonOf = (options: {
+    withInFlight: boolean;
+    withBatchMember: boolean;
+  }) =>
+    batchOf({
+      candidates: options.withBatchMember ? candidates : candidates.slice(1),
+      activeIssues,
+      inFlight: options.withInFlight ? inFlight : [],
+      batchSize: 2,
+    }).batchSkipped.find((entry) => entry.number === 2)?.reason;
+  assert.equal(
+    reasonOf({ withInFlight: true, withBatchMember: true }),
+    'in-flight',
+  );
+  assert.equal(
+    reasonOf({ withInFlight: false, withBatchMember: true }),
+    'batch',
+  );
+  assert.equal(
+    reasonOf({ withInFlight: false, withBatchMember: false }),
+    'claim',
+  );
+});
+
+test('selectNonOverlappingBatch sorts shared paths and leaves unreached candidates out of both lists', () => {
+  const result = batchOf({
+    candidates: [
+      scored(1, [REVIEW_FIX_FILE, MERGE_FILE]),
+      scored(2, [MERGE_FILE, REVIEW_FIX_FILE]),
+      scored(3, [ADVISORY_FILE]),
+      scored(4, ['src/other.mts']),
+    ],
+    batchSize: 2,
+  });
+  assert.deepEqual(result.batch, [1, 3]);
+  assert.deepEqual(result.batchSkipped, [
+    {
+      number: 2,
+      collidedWith: 1,
+      reason: 'batch',
+      files: [REVIEW_FIX_FILE, MERGE_FILE].sort(),
+    },
+  ]);
+  const mentioned = [
+    ...result.batch,
+    ...result.batchSkipped.map((e) => e.number),
+  ];
+  assert.equal(mentioned.includes(4), false);
+});
+
+test('selectNonOverlappingBatch drops a candidate that is already in flight and still compares against its files', () => {
+  const result = batchOf({
+    candidates: [
+      scored(1, [MERGE_FILE]),
+      scored(2, [MERGE_FILE]),
+      scored(3, []),
+    ],
+    inFlight: [{ number: 1, candidateFiles: [MERGE_FILE] }],
+    batchSize: 3,
+  });
+  assert.deepEqual(result.batchSkipped, [
+    { number: 1, collidedWith: 1, reason: 'in-flight', files: [] },
+    { number: 2, collidedWith: 1, reason: 'in-flight', files: [MERGE_FILE] },
+  ]);
+  assert.deepEqual(result.batch, [3]);
+});
+
+test('selectNonOverlappingBatch reports an in-flight issue with no known files', () => {
+  const result = batchOf({
+    candidates: [scored(1, [MERGE_FILE])],
+    inFlight: [
+      { number: 901, candidateFiles: [] },
+      { number: 900, candidateFiles: ['src/x.mts'] },
+    ],
+    batchSize: 1,
+  });
+  assert.deepEqual(result.batch, [1]);
+  assert.deepEqual(result.inFlight, [
+    { number: 900, filesUnknown: false, highContentionTouched: [] },
+    { number: 901, filesUnknown: true, highContentionTouched: [] },
+  ]);
+});
+
+test('selectNonOverlappingBatch unions the files of an in-flight number listed twice', () => {
+  // The later list must not be dropped: a smaller comparison set would let a
+  // colliding candidate through.
+  const result = batchOf({
+    candidates: [scored(1, [MERGE_FILE]), scored(2, [ADVISORY_FILE])],
+    inFlight: [
+      { number: 901, candidateFiles: [] },
+      { number: 901, candidateFiles: [MERGE_FILE] },
+      { number: 901, candidateFiles: ['src/x.mts'] },
+    ],
+    batchSize: 2,
+  });
+  assert.deepEqual(result.inFlight, [
+    { number: 901, filesUnknown: false, highContentionTouched: [MERGE_FILE] },
+  ]);
+  assert.deepEqual(result.batch, [2]);
+  assert.deepEqual(result.batchSkipped, [
+    { number: 1, collidedWith: 901, reason: 'in-flight', files: [MERGE_FILE] },
+  ]);
+});
+
+test('selectNonOverlappingBatch sorts shared paths itself for a caller-built analysis', () => {
+  // The analysis is hand-built with reversed path lists, so a sort that
+  // relied on analyzeSharedFileOverlap having run would leave the batch and
+  // claim collisions reversed. (An in-flight collision is already sorted by
+  // the evidence's own intersect; that case is a pass-through check.)
+  const reversed = [REVIEW_FIX_FILE, MERGE_FILE];
+  const sorted = [...reversed].sort();
+  assert.notDeepEqual(reversed, sorted);
+  const entry = (
+    number: number,
+    overlaps: OverlapHit[] = [],
+  ): OverlapCandidateResult => ({
+    number,
+    score: 4,
+    effectiveScore: 4,
+    candidateFiles: [...reversed],
+    highContentionTouched: [...reversed],
+    overlaps,
+    overlapFlag: overlaps.length > 0,
+  });
+  // recommendedOrder is set by hand: the real analyzer would rank the flagged
+  // 3 last. Walking it first exercises claim-before-batch precedence: 3 is
+  // dropped by its claim, then 1 is picked and 2 collides with it.
+  const analysis: OverlapAnalysis = {
+    candidates: [
+      entry(1),
+      entry(2),
+      entry(3, [{ number: 991, reason: 'claim', files: [...reversed] }]),
+    ],
+    recommendedOrder: [3, 1, 2],
+    summary: { candidateCount: 3, flaggedCount: 1, activeIssueCount: 1 },
+  };
+  const claimHitFiles = analysis.candidates[2].overlaps[0].files;
+  const select = (inFlight: InFlightIssueInput[]) =>
+    selectNonOverlappingBatch({
+      analysis,
+      inFlight,
+      highContentionFiles: HIGH_CONTENTION,
+      batchSize: 3,
+    });
+  const batchRun = select([]);
+  assert.deepEqual(batchRun.batchSkipped, [
+    { number: 3, collidedWith: 991, reason: 'claim', files: sorted },
+    { number: 2, collidedWith: 1, reason: 'batch', files: sorted },
+  ]);
+  assert.deepEqual(batchRun.batch, [1]);
+  const inFlightRun = select([{ number: 900, candidateFiles: [...reversed] }]);
+  assert.deepEqual(inFlightRun.batchSkipped[0], {
+    number: 3,
+    collidedWith: 900,
+    reason: 'in-flight',
+    files: sorted,
+  });
+  // The emitted list is a copy: sorting it never reorders the caller's input,
+  // and the output never aliases the analysis's own array.
+  assert.deepEqual(claimHitFiles, [REVIEW_FIX_FILE, MERGE_FILE]);
+  assert.notStrictEqual(batchRun.batchSkipped[0].files, claimHitFiles);
+});
+
+test('selectNonOverlappingBatch keeps a candidate with only non-high-contention files in the known group', () => {
+  // "Known" means the candidate lists files at all, not that any is hot.
+  const candidates = [
+    scored(1, ['src/a.mts']),
+    scored(2, []),
+    scored(3, [MERGE_FILE]),
+  ];
+  assert.deepEqual(batchOf({ candidates, batchSize: 3 }).batch, [1, 3, 2]);
+  const analysis = analyzeSharedFileOverlap({
+    candidates,
+    activeIssues: [],
+    highContentionFiles: HIGH_CONTENTION,
+  });
+  const output = buildOverlapOutput({
+    repository: { owner: 'o', repo: 'r' },
+    checkedOverlap: false,
+    manifestMissing: false,
+    highContentionFiles: HIGH_CONTENTION,
+    analysis,
+    batchSelection: { batch: [], batchSkipped: [], inFlight: [] },
+  });
+  assert.deepEqual(
+    (output.candidates as { number: number; filesUnknown: boolean }[]).map(
+      (candidate) => [candidate.number, candidate.filesUnknown],
+    ),
+    [
+      [1, false],
+      [2, true],
+      [3, false],
+    ],
+  );
+});
+
+test('selectNonOverlappingBatch rejects a non-positive or fractional batch size', () => {
+  for (const batchSize of [0, -1, 1.5, Number.NaN]) {
+    assert.throws(
+      () => batchOf({ candidates: [scored(1, [MERGE_FILE])], batchSize }),
+      /batchSize must be a positive integer/,
+    );
+  }
+});
+
+test('buildOverlapOutput without a batch keeps the pre-batch key set and order', () => {
+  const analysis = analyzeSharedFileOverlap({
+    candidates: [scored(1, [MERGE_FILE]), scored(2, [])],
+    activeIssues: [],
+    highContentionFiles: HIGH_CONTENTION,
+  });
+  const output = buildOverlapOutput({
+    repository: { owner: 'o', repo: 'r' },
+    checkedOverlap: false,
+    manifestMissing: false,
+    highContentionFiles: new Set([REVIEW_FIX_FILE, MERGE_FILE]),
+    analysis,
+  });
+  assert.deepEqual(Object.keys(output), [
+    'repository',
+    'checkedOverlap',
+    'manifestMissing',
+    'highContentionFiles',
+    'candidates',
+    'recommendedOrder',
+    'summary',
+  ]);
+  assert.deepEqual(output, {
+    repository: { owner: 'o', repo: 'r' },
+    checkedOverlap: false,
+    manifestMissing: false,
+    highContentionFiles: [MERGE_FILE, REVIEW_FIX_FILE].sort(),
+    ...analysis,
+  });
+  assert.deepEqual(Object.keys(analysis.candidates[0]), [
+    'number',
+    'score',
+    'effectiveScore',
+    'candidateFiles',
+    'highContentionTouched',
+    'overlaps',
+    'overlapFlag',
+  ]);
+});
+
+test('buildOverlapOutput with a batch adds batch, batchSkipped, inFlight and per-candidate filesUnknown', () => {
+  const analysis = analyzeSharedFileOverlap({
+    candidates: [scored(1, [MERGE_FILE]), scored(2, [])],
+    activeIssues: [],
+    highContentionFiles: HIGH_CONTENTION,
+  });
+  const output = buildOverlapOutput({
+    repository: { owner: 'o', repo: 'r' },
+    checkedOverlap: false,
+    manifestMissing: false,
+    highContentionFiles: HIGH_CONTENTION,
+    analysis,
+    batchSelection: { batch: [1, 2], batchSkipped: [], inFlight: [] },
+  });
+  assert.deepEqual(Object.keys(output), [
+    'repository',
+    'checkedOverlap',
+    'manifestMissing',
+    'highContentionFiles',
+    'candidates',
+    'recommendedOrder',
+    'summary',
+    'batch',
+    'batchSkipped',
+    'inFlight',
+  ]);
+  const candidates = output.candidates as {
+    number: number;
+    filesUnknown: boolean;
+  }[];
+  assert.deepEqual(
+    candidates.map((c) => [c.number, c.filesUnknown]),
+    [
+      [1, false],
+      [2, true],
+    ],
+  );
+  assert.deepEqual(output.recommendedOrder, analysis.recommendedOrder);
+  assert.deepEqual(output.summary, analysis.summary);
+  // The analysis itself is not mutated, so the no-batch shape stays pinned.
+  assert.equal('filesUnknown' in analysis.candidates[0], false);
+});
+
+test('parseArgs: the batch flags default to null when absent', () => {
+  const args = parseArgs(['--issue', '5']);
+  assert.equal(args.batch, null);
+  assert.equal(args.inFlight, null);
+  assert.equal(args.desyncToken, null);
+});
+
+test('parseArgs: --batch, repeatable --in-flight and --desync-token are parsed', () => {
+  const args = parseArgs([
+    '--issues',
+    '5,6',
+    '--batch',
+    '2',
+    '--in-flight',
+    '7,9',
+    '--in-flight=9, 11',
+    '--desync-token',
+    'claude-1980feaa',
+  ]);
+  assert.equal(args.batch, 2);
+  assert.deepEqual(args.inFlight, [7, 9, 11]);
+  assert.equal(args.desyncToken, 'claude-1980feaa');
+});
+
+test('parseArgs: an empty --in-flight value is an empty set, not an error', () => {
+  assert.deepEqual(
+    parseArgs(['--issue', '5', '--batch', '1', '--in-flight', '']).inFlight,
+    [],
+  );
+  assert.deepEqual(
+    parseArgs(['--issue', '5', '--batch', '1', '--in-flight=']).inFlight,
+    [],
+  );
+});
+
+test('parseArgs: --batch and --in-flight reject anything but plain positive integers', () => {
+  for (const bad of ['0', '2x', '1.5', '-1', 'abc', '']) {
+    assert.throws(
+      () => parseArgs(['--issue', '5', '--batch', bad]),
+      /invalid --batch value/,
+      `--batch ${bad}`,
+    );
+  }
+  assert.throws(
+    () => parseArgs(['--issue', '5', '--batch', '1', '--in-flight', '3,4x']),
+    /invalid --in-flight value: 4x/,
+  );
+});
+
+test('parseArgs: --in-flight and --desync-token without --batch are usage errors', () => {
+  assert.throws(
+    () => parseArgs(['--issue', '5', '--in-flight', '3']),
+    /--in-flight requires --batch/,
+  );
+  assert.throws(
+    () => parseArgs(['--issue', '5', '--desync-token', 'tok']),
+    /--desync-token requires --batch/,
+  );
+  assert.throws(
+    () => parseArgs(['--issue', '5', '--batch', '1', '--desync-token', '']),
+    /--desync-token must not be empty/,
+  );
+});
+
+test('parseArgs: --help skips the batch combination checks', () => {
+  assert.equal(parseArgs(['--help', '--in-flight', '3']).help, true);
 });
