@@ -171,7 +171,7 @@ jobs:
       # keeps growing as later rounds add coverage, and a hard-coded
       # number would drift stale again on the very next addition.
       - name: Run critique telemetry hook tests
-        run: node --test tests/idd-critique-telemetry-hook.test.mts
+        run: node --test --import ./tests/isolate-state.mts tests/idd-critique-telemetry-hook.test.mts
       # `acquireClaimLock`'s fresh-create path (#2920) deliberately
       # depends on `linkSync` returning `EEXIST` for an existing
       # destination -- true on POSIX, but Windows uses a different
@@ -200,7 +200,7 @@ jobs:
         # on Windows is untested here -- safer to match on a unique
         # substring that avoids the question entirely.
         run: >-
-          node --test --test-name-pattern
+          node --test --import ./tests/isolate-state.mts --test-name-pattern
           "fresh acquire succeeds with no prior lock|structural invariants
           hold under a same-claim-id race|genuinely pre-existing matching
           lock reacquires with no racedCreate"
@@ -215,11 +215,11 @@ jobs:
       # and the pattern is ASCII-only for the same PowerShell reason.
       - name: Run read-cache Windows ACL tests
         run: >-
-          node --test --test-name-pattern "windows acl"
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "windows acl"
           tests/github-api-read-cache.test.mts
       # Regression coverage for kurone-kito/idd-skill#2988: the full file
       # is now safe after #2989 bounded its production fetch calls and
       # #2990 made the fixture suite hermetic on Windows. Keep this
       # whole-file step distinct from the narrowed claim-lock coverage.
       - name: Run branch-conflict-state tests
-        run: node --test tests/branch-conflict-state.test.mts
+        run: node --test --import ./tests/isolate-state.mts tests/branch-conflict-state.test.mts

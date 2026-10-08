@@ -1,0 +1,2133 @@
+'use strict';
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const moduleApi = require('node:module');
+const path = require('node:path');
+const { fileURLToPath } = require('node:url');
+const { promisify } = require('node:util');
+const workerThreads = require('node:worker_threads');
+const nodeOptions = require('./node-options.cjs');
+const { threadId } = workerThreads;
+
+function isGh(value) {
+  return (
+    path
+      .basename(String(value).replace(/^['"]|['"]$/gu, ''))
+      .replace(/\.exe$/iu, '')
+      .toLowerCase() === 'gh'
+  );
+}
+
+function isEnv(value) {
+  return (
+    path
+      .basename(String(value).replace(/^['"]|['"]$/gu, ''))
+      .replace(/\.exe$/iu, '')
+      .toLowerCase() === 'env'
+  );
+}
+
+function defaultExecutableSearchPath() {
+  if (process.platform !== 'win32') return '/bin:/usr/bin';
+  const windowsRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  return [path.join(windowsRoot, 'System32'), windowsRoot].join(path.delimiter);
+}
+
+function currentDirectoryOrNull() {
+  try {
+    return process.cwd();
+  } catch {
+    return null;
+  }
+}
+
+function nodeOptionsEnvKey(env) {
+  return (
+    (process.platform === 'win32'
+      ? Object.keys(env).find((key) => key.toLowerCase() === 'node_options')
+      : undefined) ?? 'NODE_OPTIONS'
+  );
+}
+
+function resolveFromCwd(cwd, value) {
+  return path.isAbsolute(value)
+    ? path.resolve(value)
+    : cwd === null
+      ? null
+      : path.resolve(cwd, value);
+}
+
+function launchDirectory(cwd) {
+  return cwd === undefined
+    ? currentDirectoryOrNull()
+    : resolveFromCwd(
+        currentDirectoryOrNull(),
+        cwd instanceof URL ? fileURLToPath(cwd) : cwd,
+      );
+}
+
+function resolvedGh(value, env, cwd) {
+  const effectiveCwd = cwd === undefined ? currentDirectoryOrNull() : cwd;
+  const command = String(value).replace(/^['"]|['"]$/gu, '');
+  if (command.includes('/') || command.includes('\\')) {
+    return resolveFromCwd(effectiveCwd, command);
+  }
+  const pathValue =
+    env === undefined
+      ? (process.env.PATH ?? process.env.Path ?? '')
+      : (env.PATH ?? env.Path ?? defaultExecutableSearchPath());
+  for (const directory of pathValue.split(path.delimiter)) {
+    for (const extension of process.platform === 'win32'
+      ? ['', '.exe']
+      : ['']) {
+      const candidate = resolveFromCwd(
+        effectiveCwd,
+        path.join(directory || '.', `${command}${extension}`),
+      );
+      if (candidate === null) continue;
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Continue searching the inherited PATH.
+      }
+    }
+  }
+  return null;
+}
+
+function fixturePaths() {
+  try {
+    const parsed = JSON.parse(
+      process.env.IDD_TEST_GH_GUARD_ALLOWED_STUBS ?? '[]',
+    );
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed
+            .filter((entry) => typeof entry === 'string')
+            .map((entry) =>
+              process.platform === 'win32'
+                ? path.resolve(entry).toLowerCase()
+                : path.resolve(entry),
+            )
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function normalizedPath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isRegisteredFixture(value, env, cwd) {
+  const resolved = resolvedGh(value, env, cwd);
+  return resolved !== null && fixturePaths().has(normalizedPath(resolved));
+}
+
+function shellPayload(command, args, options) {
+  const base = path
+    .basename(String(command))
+    .replace(/\.exe$/iu, '')
+    .toLowerCase();
+  if (
+    ['sh', 'bash', 'dash', 'zsh', 'ksh', 'cmd', 'powershell', 'pwsh'].includes(
+      base,
+    )
+  ) {
+    const isPosixShell = ['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base);
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = String(args[index]).toLowerCase();
+      if (
+        ['-c', '/c', '-command'].includes(argument) ||
+        (isPosixShell && /^-[a-z]*c$/u.test(argument))
+      ) {
+        return args
+          .slice(index + 1)
+          .map(String)
+          .join(' ');
+      }
+      if (argument.startsWith('-command:')) {
+        return argument.slice(argument.indexOf(':') + 1);
+      }
+    }
+    const scriptPath = shellScriptPath(base, args);
+    if (scriptPath) {
+      const cwd = launchDirectory(options?.cwd) ?? currentDirectoryOrNull();
+      const absolutePath = resolveFromCwd(cwd, scriptPath);
+      try {
+        const source = absolutePath
+          ? fs.readFileSync(absolutePath, 'utf8')
+          : null;
+        if (source !== null && source.length <= 1_000_000) return source;
+      } catch {
+        // Fail closed when a shell script cannot be inspected before launch.
+      }
+      return 'gh';
+    }
+    return 'gh';
+  }
+  return options?.shell ? [command, ...args].map(String).join(' ') : null;
+}
+
+function shellScriptPath(base, args) {
+  const values = args.map(String);
+  const isPosix = ['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base);
+  if (['powershell', 'pwsh'].includes(base)) {
+    const fileIndex = values.findIndex(
+      (value) => value.toLowerCase() === '-file',
+    );
+    return fileIndex >= 0 ? (values[fileIndex + 1] ?? null) : null;
+  }
+  let index = 0;
+  while (index < values.length) {
+    const value = values[index] ?? '';
+    if (value === '--') return values[index + 1] ?? null;
+    if (isPosix && !value.startsWith('-')) return value;
+    if (!isPosix && !value.startsWith('/') && !value.startsWith('-')) {
+      return value;
+    }
+    if (!isPosix && /^\/[a-z]+$/iu.test(value)) {
+      if (/^\/(?:c|k)$/iu.test(value)) return null;
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function readBacktickSubstitution(source, start) {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (source[index] === '`') {
+      return { body: source.slice(start + 1, index), end: index };
+    }
+  }
+  return null;
+}
+
+function readCommandSubstitution(source, start) {
+  let depth = 1;
+  let quote = null;
+  for (let index = start + 2; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === '"') {
+        quote = null;
+        continue;
+      }
+      if (source.startsWith('$(', index)) {
+        depth += 1;
+        index += 1;
+        continue;
+      }
+      if (character === '`') {
+        const nested = readBacktickSubstitution(source, index);
+        if (nested) index = nested.end;
+      }
+      continue;
+    }
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '`') {
+      const nested = readBacktickSubstitution(source, index);
+      if (nested) index = nested.end;
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (character === '(') {
+      depth += 1;
+      continue;
+    }
+    if (character === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return { body: source.slice(start + 2, index), end: index };
+      }
+    }
+  }
+  return null;
+}
+
+function shellSubstitutions(source) {
+  const substitutions = [];
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === '"') {
+        quote = null;
+        continue;
+      }
+      if (source.startsWith('$((', index)) {
+        index += 1;
+        continue;
+      }
+      if (source.startsWith('$(', index)) {
+        const nested = readCommandSubstitution(source, index);
+        if (nested) {
+          substitutions.push(nested.body);
+          index = nested.end;
+        }
+        continue;
+      }
+      if (character === '`') {
+        const nested = readBacktickSubstitution(source, index);
+        if (nested) {
+          substitutions.push(nested.body);
+          index = nested.end;
+        }
+      }
+      continue;
+    }
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (source.startsWith('$((', index)) {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      const nested = readCommandSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+      continue;
+    }
+    if (character === '`') {
+      const nested = readBacktickSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
+function hereDocumentSubstitutions(source) {
+  const substitutions = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith('$((', index)) {
+      index += 2;
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      const nested = readCommandSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+      continue;
+    }
+    if (character === '`') {
+      const nested = readBacktickSubstitution(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
+function splitEnvString(source) {
+  const words = [];
+  let word = '';
+  let quote = null;
+  let escaped = false;
+  let started = false;
+  for (const character of source) {
+    if (escaped) {
+      word += character;
+      escaped = false;
+      started = true;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      started = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else word += character;
+      started = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      started = true;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      if (started) words.push(word);
+      word = '';
+      started = false;
+      continue;
+    }
+    word += character;
+    started = true;
+  }
+  if (escaped) word += '\\';
+  if (started) words.push(word);
+  return words;
+}
+
+function unwrapEnvCommand(command, args, baseEnv, baseCwd) {
+  if (
+    path
+      .basename(String(command).replace(/^['"]|['"]$/gu, ''))
+      .replace(/\.exe$/iu, '')
+      .toLowerCase() !== 'env'
+  ) {
+    return null;
+  }
+  const valueOptions = new Set(['-C', '--chdir', '--argv0']);
+  const effectiveEnv = { ...baseEnv };
+  let effectiveCwd = baseCwd;
+  const splitArguments = [...args];
+  let index = 0;
+  let optionsTerminated = false;
+  const setValue = (name, value) => {
+    const key =
+      process.platform === 'win32'
+        ? (Object.keys(effectiveEnv).find(
+            (entry) => entry.toLowerCase() === name.toLowerCase(),
+          ) ?? name)
+        : name;
+    if (value === undefined) delete effectiveEnv[key];
+    else effectiveEnv[key] = value;
+  };
+  const resetPathIfMissing = () => {
+    if (effectiveEnv.PATH === undefined && effectiveEnv.Path === undefined) {
+      setValue('PATH', defaultExecutableSearchPath());
+    }
+  };
+  while (index < splitArguments.length) {
+    const argument = String(splitArguments[index]);
+    if (argument === '--') {
+      index += 1;
+      optionsTerminated = true;
+      continue;
+    }
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(argument);
+    if (assignment) {
+      setValue(assignment[1], assignment[2] ?? '');
+      index += 1;
+      continue;
+    }
+    if (optionsTerminated) {
+      return {
+        command: argument,
+        args: splitArguments.slice(index + 1),
+        env: effectiveEnv,
+        cwd: effectiveCwd,
+      };
+    }
+    if (argument === '-i' || argument === '--ignore-environment') {
+      for (const name of Object.keys(effectiveEnv)) delete effectiveEnv[name];
+      setValue('PATH', defaultExecutableSearchPath());
+      index += 1;
+      continue;
+    }
+    if (argument === '-u' || argument === '--unset') {
+      setValue(String(splitArguments[index + 1] ?? ''), undefined);
+      index += 2;
+      resetPathIfMissing();
+      continue;
+    }
+    if (argument.startsWith('--unset=')) {
+      setValue(argument.slice('--unset='.length), undefined);
+      index += 1;
+      resetPathIfMissing();
+      continue;
+    }
+    if (argument.startsWith('-u') && argument.length > 2) {
+      setValue(argument.slice(2), undefined);
+      index += 1;
+      resetPathIfMissing();
+      continue;
+    }
+    if (valueOptions.has(argument)) {
+      const value = String(splitArguments[index + 1] ?? '');
+      if (argument === '-C' || argument === '--chdir') {
+        effectiveCwd = resolveFromCwd(effectiveCwd, value);
+      }
+      index += 2;
+      continue;
+    }
+    if (argument.startsWith('--chdir=')) {
+      effectiveCwd = resolveFromCwd(effectiveCwd, argument.slice(8));
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith('-C') && argument.length > 2) {
+      effectiveCwd = resolveFromCwd(effectiveCwd, argument.slice(2));
+      index += 1;
+      continue;
+    }
+    if (argument === '-S' || argument === '--split-string') {
+      splitArguments.splice(
+        index,
+        2,
+        ...splitEnvString(String(splitArguments[index + 1] ?? '')),
+      );
+      continue;
+    }
+    if (argument.startsWith('--split-string=')) {
+      splitArguments.splice(index, 1, ...splitEnvString(argument.slice(15)));
+      continue;
+    }
+    if (argument.startsWith('-')) {
+      index += 1;
+      continue;
+    }
+    return {
+      command: argument,
+      args: splitArguments.slice(index + 1),
+      env: effectiveEnv,
+      cwd: effectiveCwd,
+    };
+  }
+  const target = splitArguments[index];
+  return target === undefined
+    ? null
+    : {
+        command: String(target),
+        args: splitArguments.slice(index + 1),
+        env: effectiveEnv,
+        cwd: effectiveCwd,
+      };
+}
+
+function unwrapLauncher(command, args, env, cwd) {
+  if (isEnv(command)) return unwrapEnvCommand(command, args, env, cwd);
+  const base = path
+    .basename(String(command).replace(/^['"]|['"]$/gu, ''))
+    .replace(/\.exe$/iu, '')
+    .toLowerCase();
+  if (
+    !['command', 'exec', 'nohup', 'sudo', 'time', 'timeout', 'xargs'].includes(
+      base,
+    )
+  ) {
+    return null;
+  }
+  const values = args.map(String);
+  let index = 0;
+  let childEnv = { ...env };
+  let childCwd = cwd;
+  if (base === 'command' && ['-v', '-V'].includes(values[0])) {
+    return {
+      command: '',
+      args: [],
+      env: childEnv,
+      cwd: childCwd,
+      terminal: true,
+    };
+  }
+  while (index < values.length) {
+    const option = values[index] ?? '';
+    if (option === '--') {
+      index += 1;
+      if (base === 'timeout') continue;
+      break;
+    }
+    if (base === 'command' && option === '-p') {
+      childEnv.PATH = defaultExecutableSearchPath();
+      index += 1;
+      continue;
+    }
+    if (base === 'exec' && option === '-c') {
+      childEnv = { PATH: defaultExecutableSearchPath() };
+      index += 1;
+      continue;
+    }
+    if (base === 'exec' && option === '-l') {
+      index += 1;
+      continue;
+    }
+    if (base === 'exec' && option === '-a') {
+      index += 2;
+      continue;
+    }
+    if (base === 'sudo' && option === '-D') {
+      childCwd = resolveFromCwd(childCwd, values[index + 1] ?? '.');
+      index += 2;
+      continue;
+    }
+    if (base === 'sudo' && option === '--chdir') {
+      childCwd = resolveFromCwd(childCwd, values[index + 1] ?? '.');
+      index += 2;
+      continue;
+    }
+    if (base === 'sudo' && option.startsWith('--chdir=')) {
+      childCwd = resolveFromCwd(childCwd, option.slice('--chdir='.length));
+      index += 1;
+      continue;
+    }
+    if (base === 'sudo') {
+      if (option.startsWith('--') && option.includes('=')) {
+        index += 1;
+        continue;
+      }
+      if (option.startsWith('-')) {
+        const valueOptions = new Set([
+          '-C',
+          '-D',
+          '-g',
+          '-h',
+          '-p',
+          '-R',
+          '-r',
+          '-t',
+          '-T',
+          '-U',
+          '-u',
+          '--close-from',
+          '--command-timeout',
+          '--group',
+          '--host',
+          '--other-user',
+          '--prompt',
+          '--role',
+          '--type',
+          '--user',
+        ]);
+        index += valueOptions.has(option) ? 2 : 1;
+        continue;
+      }
+    }
+    if (base === 'time' && option.startsWith('-')) {
+      index += ['-f', '-o', '--format', '--output'].includes(option) ? 2 : 1;
+      continue;
+    }
+    if (base === 'timeout') {
+      if (['-k', '--kill-after', '-s', '--signal'].includes(option)) {
+        index += 2;
+        continue;
+      }
+      if (
+        option.startsWith('--kill-after=') ||
+        option.startsWith('--signal=')
+      ) {
+        index += 1;
+        continue;
+      }
+      if (option.startsWith('-') && option !== '--') {
+        index += 1;
+        continue;
+      }
+      index += 1;
+      break;
+    }
+    if (base === 'nohup' && option.startsWith('-')) {
+      index += 1;
+      continue;
+    }
+    if (base === 'xargs') {
+      if (option.startsWith('--')) {
+        const [name] = option.split('=', 1);
+        if (
+          [
+            '--arg-file',
+            '--delimiter',
+            '--eof',
+            '--max-args',
+            '--max-chars',
+            '--max-lines',
+            '--max-procs',
+            '--replace',
+          ].includes(name ?? '')
+        ) {
+          index += option.includes('=') ? 1 : 2;
+          continue;
+        }
+        index += 1;
+        continue;
+      }
+      if (/^-[0-9]+(?:[A-Za-z].*)?$/u.test(option)) {
+        index += 1;
+        continue;
+      }
+      if (option.startsWith('-')) {
+        index += /^-[dEeILnPsa]$/u.test(option) ? 2 : 1;
+        continue;
+      }
+    }
+    if (base === 'command' && option.startsWith('-')) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  const target = values[index];
+  return target === undefined
+    ? null
+    : {
+        command: target,
+        args: args.slice(index + 1),
+        env: childEnv,
+        cwd: childCwd,
+      };
+}
+
+function unwrapEnvChain(
+  command,
+  args,
+  baseEnv,
+  baseCwd = currentDirectoryOrNull(),
+) {
+  let currentCommand = command;
+  let currentArgs = args;
+  let currentEnv = { ...(baseEnv ?? process.env) };
+  let currentCwd = baseCwd;
+  let wrapped = false;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const unwrapped = unwrapLauncher(
+      currentCommand,
+      currentArgs,
+      currentEnv,
+      currentCwd,
+    );
+    if (!unwrapped) break;
+    if (unwrapped.terminal) {
+      currentCommand = '';
+      currentArgs = [];
+      break;
+    }
+    currentCommand = unwrapped.command;
+    currentArgs = unwrapped.args;
+    currentEnv = unwrapped.env;
+    currentCwd = unwrapped.cwd;
+    wrapped = true;
+  }
+  const exhausted =
+    wrapped &&
+    unwrapLauncher(currentCommand, currentArgs, currentEnv, currentCwd) !==
+      null;
+  return {
+    command: currentCommand,
+    args: currentArgs,
+    env: currentEnv,
+    cwd: currentCwd,
+    wrapped,
+    exhausted,
+  };
+}
+
+function shellFlavor(command) {
+  const base = path
+    .basename(String(command).replace(/^['"]|['"]$/gu, ''))
+    .replace(/\.exe$/iu, '')
+    .toLowerCase();
+  if (['sh', 'bash', 'dash', 'zsh', 'ksh'].includes(base)) return 'posix';
+  if (['powershell', 'pwsh'].includes(base)) return 'powershell';
+  if (base === 'cmd') return 'cmd';
+  return 'other';
+}
+
+function shellFlavorForLaunch(command, options) {
+  if (options?.shell) {
+    return typeof options.shell === 'string'
+      ? shellFlavor(options.shell)
+      : process.platform === 'win32'
+        ? 'cmd'
+        : 'posix';
+  }
+  return shellFlavor(command);
+}
+
+function decodeShellCommandWord(token, flavor) {
+  if (flavor !== 'posix') {
+    return token.replace(/^(?:"(.*)"|'(.*)')$/u, '$1$2');
+  }
+  if (/^'[^']*'$/u.test(token)) return token.slice(1, -1);
+  if (/^"(?:\\.|[^"\\])*"$/u.test(token)) {
+    return token.slice(1, -1).replace(/\\(["\\$`])/gu, '$1');
+  }
+  return token.replace(/\\(.)/gu, '$1');
+}
+
+function expandShellCommandName(token, flavor, env) {
+  const value = decodeShellCommandWord(token, flavor);
+  if (flavor !== 'posix' || /^'[^']*'$/u.test(token) || /\\\$/u.test(token)) {
+    return { value, unresolved: false };
+  }
+  let unresolved = false;
+  const expanded = value.replace(
+    /(?<!\\)\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/gu,
+    (_match, simpleName, bracedName) => {
+      const name = simpleName ?? bracedName ?? '';
+      const entry = Object.keys(env).find(
+        (key) =>
+          key === name ||
+          (process.platform === 'win32' &&
+            key.toLowerCase() === name.toLowerCase()),
+      );
+      if (entry === undefined) {
+        unresolved = true;
+        return '';
+      }
+      return env[entry] ?? '';
+    },
+  );
+  return { value: expanded, unresolved };
+}
+
+function stripShellLineContinuations(source) {
+  let result = '';
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '\\' && quote !== "'") {
+      const next = source[index + 1];
+      if (next === '\n') {
+        index += 1;
+        continue;
+      }
+      if (next === '\r' && source[index + 2] === '\n') {
+        index += 2;
+        continue;
+      }
+      result += character;
+      if (next !== undefined) {
+        result += next;
+        index += 1;
+      }
+      continue;
+    }
+    result += character;
+    if (quote === "'") {
+      if (character === "'") quote = null;
+    } else if (quote === '"') {
+      if (character === '"') quote = null;
+    } else if (character === "'") {
+      quote = "'";
+    } else if (character === '"') {
+      quote = '"';
+    }
+  }
+  return result;
+}
+
+function readHereDocument(source, start) {
+  if (!source.startsWith('<<', start) || source[start + 2] === '<') {
+    return null;
+  }
+  let index = start + 2;
+  const stripTabs = source[index] === '-';
+  if (stripTabs) index += 1;
+  while (source[index] === ' ' || source[index] === '\t') index += 1;
+  let delimiter = '';
+  let quote = null;
+  let quoted = false;
+  for (; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      else delimiter += character;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = null;
+      else if (character === '\\' && source[index + 1] !== undefined) {
+        delimiter += source[index + 1];
+        index += 1;
+      } else delimiter += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      quoted = true;
+      continue;
+    }
+    if (character === '\\' && source[index + 1] !== undefined) {
+      quoted = true;
+      delimiter += source[index + 1];
+      index += 1;
+      continue;
+    }
+    if (/[\s;|&()<>]/u.test(character ?? '')) break;
+    delimiter += character;
+  }
+  if (delimiter.length === 0 || quote !== null) return null;
+  return { document: { delimiter, stripTabs, quoted }, end: index };
+}
+
+function blankLine(source) {
+  return source.replace(/[^\r\n]/gu, ' ');
+}
+
+function stripShellCommentsAndQuotedHereDocuments(source) {
+  const output = [];
+  const unquotedHereDocuments = [];
+  let pending = [];
+  let unquotedDocumentLines = [];
+  let shellQuote = null;
+  const lines = source.match(/[^\n]*\n|[^\n]+$/gu) ?? [];
+  for (const lineWithEnding of lines) {
+    const line = lineWithEnding.replace(/\r?\n$/u, '');
+    const ending = lineWithEnding.slice(line.length);
+    if (pending.length > 0) {
+      const document = pending[0];
+      const comparable = document.stripTabs ? line.replace(/^\t+/u, '') : line;
+      const isDelimiter = comparable === document.delimiter;
+      if (!isDelimiter && !document.quoted) unquotedDocumentLines.push(line);
+      output.push(blankLine(line), ending);
+      if (isDelimiter) {
+        if (!document.quoted) {
+          unquotedHereDocuments.push(unquotedDocumentLines.join('\n'));
+        }
+        unquotedDocumentLines = [];
+        pending = pending.slice(1);
+      }
+      continue;
+    }
+
+    const characters = [...line];
+    let quote = shellQuote;
+    const found = [];
+    for (let index = 0; index < characters.length; index += 1) {
+      const character = characters[index];
+      if (quote === "'") {
+        if (character === "'") quote = null;
+        continue;
+      }
+      if (quote === '"') {
+        if (character === '\\') index += 1;
+        else if (character === '"') quote = null;
+        continue;
+      }
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (character === "'") {
+        quote = "'";
+        continue;
+      }
+      if (character === '"') {
+        quote = '"';
+        continue;
+      }
+      if (
+        character === '#' &&
+        (index === 0 || /[\s;&|()]/u.test(characters[index - 1] ?? ''))
+      ) {
+        for (let rest = index; rest < characters.length; rest += 1) {
+          characters[rest] = ' ';
+        }
+        break;
+      }
+      if (character === '<' && characters[index + 1] === '<') {
+        const parsed = readHereDocument(line, index);
+        if (parsed) {
+          found.push(parsed.document);
+          index = parsed.end - 1;
+        }
+      }
+    }
+    output.push(characters.join(''), ending);
+    shellQuote = quote;
+    if (ending.length > 0) pending = found;
+  }
+  const unterminatedDocument = pending[0];
+  if (unterminatedDocument && !unterminatedDocument.quoted) {
+    unquotedHereDocuments.push(unquotedDocumentLines.join('\n'));
+  }
+  return { source: output.join(''), unquotedHereDocuments };
+}
+
+function stripPowerShellComments(source) {
+  const characters = [...source];
+  let quote = null;
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (quote === "'") {
+      if (character === "'" && characters[index + 1] === "'") index += 1;
+      else if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '`') index += 1;
+      else if (character === '"') quote = null;
+      continue;
+    }
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '<' && characters[index + 1] === '#') {
+      let depth = 1;
+      characters[index] = ' ';
+      characters[index + 1] = ' ';
+      index += 2;
+      while (index < characters.length && depth > 0) {
+        if (characters[index] === '<' && characters[index + 1] === '#') {
+          depth += 1;
+          characters[index] = ' ';
+          characters[index + 1] = ' ';
+          index += 2;
+        } else if (characters[index] === '#' && characters[index + 1] === '>') {
+          depth -= 1;
+          characters[index] = ' ';
+          characters[index + 1] = ' ';
+          index += 2;
+        } else {
+          if (characters[index] !== '\n' && characters[index] !== '\r') {
+            characters[index] = ' ';
+          }
+          index += 1;
+        }
+      }
+      index -= 1;
+      continue;
+    }
+    if (character === '#') {
+      while (index < characters.length && characters[index] !== '\n') {
+        characters[index] = ' ';
+        index += 1;
+      }
+    }
+  }
+  return characters.join('');
+}
+
+function readPowerShellSubexpression(source, start) {
+  let depth = 1;
+  let quote = null;
+  for (let index = start + 2; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'" && source[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = null;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '(') depth += 1;
+    else if (character === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return { body: source.slice(start + 2, index), end: index };
+      }
+    }
+  }
+  return null;
+}
+
+function powerShellSubstitutions(source) {
+  const substitutions = [];
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'" && source[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') {
+        quote = null;
+        continue;
+      }
+    } else if (character === "'") {
+      quote = "'";
+      continue;
+    } else if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (source.startsWith('$(', index)) {
+      const nested = readPowerShellSubexpression(source, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
+function shellGhCommand(
+  command,
+  env,
+  flavor = 'posix',
+  cwd = currentDirectoryOrNull(),
+) {
+  const posixSource =
+    flavor === 'posix'
+      ? stripShellCommentsAndQuotedHereDocuments(
+          stripShellLineContinuations(String(command)),
+        )
+      : null;
+  const parsedSource =
+    posixSource?.source ??
+    (flavor === 'powershell'
+      ? stripPowerShellComments(String(command))
+      : String(command).replace(/\$\([^)]*\)/gu, ' __literal_substitution__ '));
+  const substitutions =
+    flavor === 'posix'
+      ? [
+          ...shellSubstitutions(parsedSource),
+          ...(posixSource?.unquotedHereDocuments.flatMap(
+            hereDocumentSubstitutions,
+          ) ?? []),
+        ]
+      : flavor === 'powershell'
+        ? powerShellSubstitutions(parsedSource)
+        : [];
+  for (const substitution of substitutions) {
+    const nested = shellGhCommand(substitution, env, flavor, cwd);
+    if (nested) return nested;
+  }
+  const tokens =
+    parsedSource.match(
+      /"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||(?:[0-9]+)?(?:<<<|<<-|>>|<<|<>|>&|<&|[<>])|[;&|(){}\n]|[^\s;&|(){}<>\n]+/gu,
+    ) ?? [];
+  let commandPosition = true;
+  let wrapper = null;
+  let skipWrapperArgument = false;
+  let skipEnvChdir = false;
+  let skipSudoChdir = false;
+  let skipRedirectionTarget = false;
+  let timeoutNeedsDuration = false;
+  let envOption = null;
+  let effectiveEnv = { ...(env ?? process.env) };
+  const shellEnv = { ...(env ?? process.env) };
+  let effectiveCwd = cwd;
+  let shellCwd = cwd;
+  for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex += 1) {
+    const token = tokens[tokenIndex] ?? '';
+    if (/^[;&|(){}\n]$/u.test(token) || token === '&&' || token === '||') {
+      commandPosition = true;
+      wrapper = null;
+      skipWrapperArgument = false;
+      skipEnvChdir = false;
+      skipSudoChdir = false;
+      skipRedirectionTarget = false;
+      timeoutNeedsDuration = false;
+      envOption = null;
+      effectiveEnv = { ...shellEnv };
+      effectiveCwd = shellCwd;
+      continue;
+    }
+    if (!commandPosition) continue;
+    const word = decodeShellCommandWord(token, flavor);
+    if (skipRedirectionTarget) {
+      skipRedirectionTarget = false;
+      continue;
+    }
+    if (/^(?:[0-9]+)?(?:<<<|<<-|>>|<<|<>|>&|<&|[<>])$/u.test(token)) {
+      skipRedirectionTarget = true;
+      continue;
+    }
+    if (wrapper === 'env' && envOption === 'unset') {
+      delete effectiveEnv[word];
+      if (
+        word.toLowerCase() === 'path' &&
+        effectiveEnv.PATH === undefined &&
+        effectiveEnv.Path === undefined
+      ) {
+        effectiveEnv.PATH = defaultExecutableSearchPath();
+      }
+      envOption = null;
+      continue;
+    }
+    if (wrapper === 'env' && envOption === 'split') {
+      const split = splitEnvString(word);
+      if (split[0]) {
+        const nested = argvGhCommand(
+          split[0],
+          split.slice(1),
+          effectiveEnv,
+          effectiveCwd,
+        );
+        if (nested) return nested;
+      }
+      envOption = null;
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (skipWrapperArgument) {
+      if (skipEnvChdir) {
+        effectiveCwd = resolveFromCwd(effectiveCwd, word);
+        skipEnvChdir = false;
+      }
+      if (skipSudoChdir) {
+        effectiveCwd = resolveFromCwd(effectiveCwd, word);
+        skipSudoChdir = false;
+      }
+      skipWrapperArgument = false;
+      continue;
+    }
+    if (wrapper === 'timeout') {
+      if (word === '--') continue;
+      if (['-k', '--kill-after', '-s', '--signal'].includes(word)) {
+        skipWrapperArgument = true;
+        continue;
+      }
+      if (word.startsWith('--kill-after=') || word.startsWith('--signal=')) {
+        continue;
+      }
+      if (word.startsWith('-')) continue;
+      if (timeoutNeedsDuration) {
+        timeoutNeedsDuration = false;
+        wrapper = 'timeout-command';
+        continue;
+      }
+    }
+    if (wrapper === 'timeout-command') wrapper = null;
+    if (wrapper === 'command-lookup') {
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (word === '!') continue;
+    if (wrapper === 'command' && (word === '-v' || word === '-V')) {
+      wrapper = 'command-lookup';
+      continue;
+    }
+    if (wrapper === 'command' || wrapper === 'exec') {
+      if (word === '--') continue;
+      if (wrapper === 'command' && word === '-p') {
+        effectiveEnv.PATH = defaultExecutableSearchPath();
+        continue;
+      }
+      if (word.startsWith('-')) {
+        skipWrapperArgument = wrapper === 'exec' && word === '-a';
+        continue;
+      }
+    }
+    if (wrapper === 'sudo') {
+      if (word === '--') continue;
+      if (word.startsWith('--chdir=')) {
+        effectiveCwd = resolveFromCwd(
+          effectiveCwd,
+          word.slice('--chdir='.length),
+        );
+        continue;
+      }
+      if (word.startsWith('--') && word.includes('=')) continue;
+      if (word.startsWith('-')) {
+        skipWrapperArgument = [
+          '-C',
+          '-D',
+          '-g',
+          '-h',
+          '-p',
+          '-R',
+          '-r',
+          '-t',
+          '-T',
+          '-U',
+          '-u',
+          '--chdir',
+          '--close-from',
+          '--command-timeout',
+          '--group',
+          '--host',
+          '--other-user',
+          '--prompt',
+          '--role',
+          '--type',
+          '--user',
+        ].includes(word);
+        skipSudoChdir = word === '-D' || word === '--chdir';
+        continue;
+      }
+    }
+    if (wrapper === 'time') {
+      if (word === '--') continue;
+      if (
+        word === '-f' ||
+        word === '-o' ||
+        word === '--format' ||
+        word === '--output'
+      ) {
+        skipWrapperArgument = true;
+        continue;
+      }
+      if (word.startsWith('--format=') || word.startsWith('--output=')) {
+        continue;
+      }
+      if (word.startsWith('-')) continue;
+    }
+    if (wrapper === 'xargs') {
+      if (word === '--') continue;
+      if (word.startsWith('--')) {
+        const [option] = word.split('=', 1);
+        if (
+          [
+            '--arg-file',
+            '--delimiter',
+            '--eof',
+            '--max-args',
+            '--max-chars',
+            '--max-lines',
+            '--max-procs',
+            '--replace',
+          ].includes(option ?? '')
+        ) {
+          skipWrapperArgument = !word.includes('=');
+        }
+        continue;
+      }
+      if (/^-[0-9]+(?:[A-Za-z].*)?$/u.test(word)) continue;
+      if (word.startsWith('-')) {
+        skipWrapperArgument = /^-[dEeILnPsa]$/u.test(word);
+        continue;
+      }
+    }
+    if (wrapper === 'nohup' && (word === '--' || word.startsWith('-'))) {
+      continue;
+    }
+    if (wrapper === 'call') wrapper = null;
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(word);
+    if (assignment) {
+      const key =
+        process.platform === 'win32'
+          ? (Object.keys(effectiveEnv).find(
+              (entry) => entry.toLowerCase() === assignment[1].toLowerCase(),
+            ) ?? assignment[1])
+          : assignment[1];
+      effectiveEnv[key] = assignment[2] ?? '';
+      const followingToken = tokens[tokenIndex + 1] ?? '';
+      if (
+        !followingToken ||
+        /^[;&|(){}\n]$/u.test(followingToken) ||
+        followingToken === '&&' ||
+        followingToken === '||'
+      ) {
+        shellEnv[key] = assignment[2] ?? '';
+      }
+      continue;
+    }
+    if (
+      wrapper === 'env' &&
+      (word === '-i' || word === '--ignore-environment')
+    ) {
+      for (const key of Object.keys(effectiveEnv)) delete effectiveEnv[key];
+      effectiveEnv.PATH = defaultExecutableSearchPath();
+      continue;
+    }
+    if (wrapper === 'env' && (word === '-u' || word === '--unset')) {
+      envOption = 'unset';
+      continue;
+    }
+    if (wrapper === 'env' && (word === '-C' || word === '--chdir')) {
+      skipWrapperArgument = true;
+      skipEnvChdir = true;
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('--chdir=')) {
+      effectiveCwd = resolveFromCwd(effectiveCwd, word.slice(8));
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('-C') && word.length > 2) {
+      effectiveCwd = resolveFromCwd(effectiveCwd, word.slice(2));
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('--unset=')) {
+      delete effectiveEnv[word.slice('--unset='.length)];
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('-u') && word.length > 2) {
+      delete effectiveEnv[word.slice(2)];
+      continue;
+    }
+    if (wrapper === 'env' && (word === '-S' || word === '--split-string')) {
+      envOption = 'split';
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('--split-string=')) {
+      const split = splitEnvString(word.slice('--split-string='.length));
+      if (split[0]) {
+        const nested = argvGhCommand(
+          split[0],
+          split.slice(1),
+          effectiveEnv,
+          effectiveCwd,
+        );
+        if (nested) return nested;
+      }
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (wrapper === 'env' && word.startsWith('-')) {
+      skipWrapperArgument = ['-C', '--chdir', '--argv0'].includes(word);
+      continue;
+    }
+    const expandedCommand = expandShellCommandName(token, flavor, effectiveEnv);
+    if (expandedCommand.unresolved) return 'dynamic shell command';
+    const commandWord = expandedCommand.value;
+    const base = path
+      .basename(commandWord.replace(/^['"]|['"]$/gu, ''))
+      .replace(/\.exe$/iu, '')
+      .toLowerCase();
+    if (
+      [
+        'command',
+        'exec',
+        'env',
+        'nohup',
+        'sudo',
+        'time',
+        'timeout',
+        'xargs',
+        ...(flavor === 'cmd' ? ['call'] : []),
+      ].includes(base)
+    ) {
+      wrapper = base;
+      timeoutNeedsDuration = base === 'timeout';
+      continue;
+    }
+    if (base === 'eval') {
+      const payloadTokens = [];
+      for (let index = tokenIndex + 1; index < tokens.length; index += 1) {
+        const next = tokens[index] ?? '';
+        if (/^[;&|(){}\n]$/u.test(next) || next === '&&' || next === '||') {
+          break;
+        }
+        payloadTokens.push(decodeShellCommandWord(next, flavor));
+      }
+      const nested = shellGhCommand(
+        payloadTokens.join(' '),
+        effectiveEnv,
+        flavor,
+        effectiveCwd,
+      );
+      if (nested) return nested;
+      commandPosition = false;
+      wrapper = null;
+      continue;
+    }
+    if (
+      [
+        'sh',
+        'bash',
+        'dash',
+        'zsh',
+        'ksh',
+        'cmd',
+        'powershell',
+        'pwsh',
+      ].includes(base)
+    ) {
+      const nestedArgs = [];
+      for (let index = tokenIndex + 1; index < tokens.length; index += 1) {
+        const argument = tokens[index] ?? '';
+        if (
+          /^[;&|(){}\n]$/u.test(argument) ||
+          argument === '&&' ||
+          argument === '||'
+        )
+          break;
+        nestedArgs.push(decodeShellCommandWord(argument, flavor));
+      }
+      const nestedSource = shellPayload(base, nestedArgs, {
+        cwd: effectiveCwd ?? undefined,
+      });
+      if (nestedSource !== null) {
+        const nested = shellGhCommand(
+          nestedSource,
+          effectiveEnv,
+          shellFlavor(base),
+          effectiveCwd,
+        );
+        if (nested) return nested;
+      }
+      commandPosition = false;
+      continue;
+    }
+    if (base === 'cd') {
+      let nextIndex = tokenIndex + 1;
+      while (
+        nextIndex < tokens.length &&
+        ['-L', '-P'].includes(tokens[nextIndex] ?? '')
+      ) {
+        nextIndex += 1;
+      }
+      const destinationToken = tokens[nextIndex] ?? '';
+      const destination =
+        /^[;&|(){}\n]$/u.test(destinationToken) ||
+        destinationToken === '&&' ||
+        destinationToken === '||'
+          ? ''
+          : decodeShellCommandWord(destinationToken, flavor);
+      if (destination) shellCwd = resolveFromCwd(effectiveCwd, destination);
+      else if (process.env.HOME)
+        shellCwd = resolveFromCwd(effectiveCwd, process.env.HOME);
+      effectiveCwd = shellCwd;
+      commandPosition = false;
+      continue;
+    }
+    if (['if', 'then', 'else', 'elif', 'while', 'until', 'do'].includes(word)) {
+      continue;
+    }
+    commandPosition = false;
+    wrapper = null;
+    if (
+      isGh(commandWord) &&
+      !isRegisteredFixture(commandWord, effectiveEnv, effectiveCwd)
+    ) {
+      return commandWord;
+    }
+  }
+  return null;
+}
+
+function argvGhCommand(command, args, env, cwd = currentDirectoryOrNull()) {
+  const unwrapped = unwrapEnvChain(command, args, env, cwd);
+  if (unwrapped.exhausted) return 'gh in unresolved command wrapper';
+  if (isGh(unwrapped.command)) {
+    return isRegisteredFixture(unwrapped.command, unwrapped.env, unwrapped.cwd)
+      ? null
+      : unwrapped.command;
+  }
+  const shell = shellPayload(unwrapped.command, unwrapped.args, {
+    cwd: unwrapped.cwd ?? undefined,
+  });
+  return shell === null
+    ? null
+    : shellGhCommand(
+        shell,
+        unwrapped.env,
+        shellFlavor(unwrapped.command),
+        unwrapped.cwd,
+      );
+}
+
+function safeArgs(args) {
+  const values = [];
+  let redactNext = false;
+  for (const value of args) {
+    const argument = String(value);
+    if (redactNext) {
+      values.push('[redacted]');
+      redactNext = false;
+      continue;
+    }
+    const environmentAssignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(
+      argument,
+    );
+    if (environmentAssignment) {
+      values.push(`${environmentAssignment[1]}=[redacted]`);
+      continue;
+    }
+    const optionAndValue = /^(--?[A-Za-z0-9-]+)=(.*)$/u.exec(argument);
+    if (optionAndValue) {
+      const [, option, optionValue] = optionAndValue;
+      const sensitiveOption =
+        /^--?(?:token|password|secret|authorization|auth-token|access-token|client-secret)$/iu.test(
+          option ?? '',
+        );
+      values.push(
+        `${option}=${sensitiveOption || /(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b[A-Za-z_][A-Za-z0-9_]*(?:token|password|secret|authorization|key)=\S+)/iu.test(optionValue ?? '') ? '[redacted]' : '[value]'}`,
+      );
+      continue;
+    }
+    if (
+      /^--?(?:body|body-file|field|raw-field|header|input|json|title|token|password|secret|authorization|config|hostname)$/iu.test(
+        argument,
+      ) ||
+      /^-[fFH]$/u.test(argument)
+    ) {
+      values.push(argument);
+      redactNext = true;
+    } else if (
+      /(?:gh(?:p|o|u|s|r)_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+\S+|\b[A-Za-z_][A-Za-z0-9_]*(?:token|password|secret|authorization|key)=\S+)/iu.test(
+        argument,
+      )
+    ) {
+      values.push('[redacted]');
+    } else {
+      values.push(argument);
+    }
+  }
+  return values;
+}
+
+function safeInvocationArgs(command, args) {
+  if (!isEnv(command)) return safeArgs(args);
+  const sanitized = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = String(args[index]);
+    if (argument === '-S' || argument === '--split-string') {
+      sanitized.push(argument, '[split string omitted]');
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith('--split-string=')) {
+      sanitized.push('--split-string=[split string omitted]');
+      continue;
+    }
+    sanitized.push(argument);
+  }
+  return safeArgs(sanitized);
+}
+
+function blockIfGh(api, command, args, options) {
+  let ghCommand = null;
+  let direct = false;
+  let wrappedExecutable = null;
+  let shellInvocation = false;
+  let unresolvedEnvChain = false;
+  const cwd = launchDirectory(options?.cwd);
+  let directTarget = null;
+  if (
+    typeof options?.shell === 'string' &&
+    isGh(options.shell) &&
+    !isRegisteredFixture(options.shell, options?.env, cwd)
+  ) {
+    ghCommand = options.shell;
+    direct = true;
+    directTarget = options.shell;
+  }
+  if (!ghCommand && isGh(command)) {
+    if (isRegisteredFixture(command, options?.env, cwd)) {
+      const shell = shellPayload(command, args, options);
+      if (shell === null) return;
+      shellInvocation = true;
+      ghCommand = shellGhCommand(
+        shell,
+        options?.env,
+        shellFlavorForLaunch(command, options),
+        cwd,
+      );
+    } else {
+      ghCommand = String(command);
+      direct = true;
+    }
+  } else {
+    const unwrapped = unwrapEnvChain(command, args, options?.env, cwd);
+    if (unwrapped.exhausted) {
+      unresolvedEnvChain = true;
+      shellInvocation = true;
+      ghCommand = 'gh in unresolved env wrapper';
+    } else if (unwrapped.wrapped && isGh(unwrapped.command)) {
+      if (
+        !isRegisteredFixture(unwrapped.command, unwrapped.env, unwrapped.cwd)
+      ) {
+        ghCommand = unwrapped.command;
+        wrappedExecutable = unwrapped.command;
+      }
+    } else if (unwrapped.wrapped) {
+      const wrappedShell = shellPayload(unwrapped.command, unwrapped.args, {
+        cwd: unwrapped.cwd ?? undefined,
+      });
+      if (wrappedShell !== null) {
+        shellInvocation = true;
+        ghCommand = shellGhCommand(
+          wrappedShell,
+          unwrapped.env,
+          shellFlavor(unwrapped.command),
+          unwrapped.cwd,
+        );
+      }
+    }
+    if (!ghCommand && (!wrappedExecutable || options?.shell)) {
+      const shell = shellPayload(command, args, options);
+      if (shell !== null) {
+        shellInvocation = true;
+        ghCommand = shellGhCommand(
+          shell,
+          options?.env,
+          shellFlavorForLaunch(command, options),
+          cwd,
+        );
+      }
+    }
+  }
+  if (!ghCommand) return;
+
+  const env = options?.env;
+  const ledger =
+    env?.IDD_TEST_GH_GUARD_LEDGER ?? process.env.IDD_TEST_GH_GUARD_LEDGER;
+  if (!ledger) {
+    process.exitCode = 1;
+    throw Object.assign(
+      new Error('isolate-gh: blocked a worker gh call without an owner ledger'),
+      {
+        code: 'IDD_GH_GUARD_LEDGER_MISSING',
+      },
+    );
+  }
+  const resolved =
+    unresolvedEnvChain || shellInvocation
+      ? null
+      : direct
+        ? resolvedGh(directTarget ?? command, env, cwd)
+        : resolvedGh(
+            wrappedExecutable ?? ghCommand,
+            unwrapEnvChain(command, args, env, cwd).env,
+            unwrapEnvChain(command, args, env, cwd).cwd,
+          );
+  const expected =
+    resolved === null
+      ? null
+      : process.platform === 'win32'
+        ? resolved.toLowerCase()
+        : resolved;
+  if (expected !== null && fixturePaths().has(expected)) return;
+  const record = {
+    id: `gh-${process.pid}-${threadId}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    at: new Date().toISOString(),
+    api,
+    executable: direct
+      ? String(directTarget ?? command)
+      : unresolvedEnvChain
+        ? 'env wrapper with unresolved command'
+        : wrappedExecutable
+          ? 'env wrapper for gh'
+          : 'gh in shell command',
+    resolvedExecutable: resolved,
+    args:
+      !direct &&
+      (shellInvocation ||
+        (wrappedExecutable === null &&
+          shellPayload(command, args, options) !== null))
+        ? ['[shell command omitted]']
+        : safeInvocationArgs(command, args),
+    pid: process.pid,
+    threadId,
+  };
+  try {
+    fs.appendFileSync(ledger, `${JSON.stringify(record)}\n`, 'utf8');
+  } catch (error) {
+    process.exitCode = 1;
+    throw Object.assign(
+      new Error(
+        'isolate-gh: blocked a worker gh call because the attempt ledger could not be written',
+        { cause: error },
+      ),
+      {
+        code: 'IDD_GH_GUARD_LEDGER_FAILURE',
+      },
+    );
+  }
+  throw Object.assign(
+    new Error(`isolate-gh: blocked unexpected worker gh invocation via ${api}`),
+    { code: 'IDD_UNEXPECTED_REAL_GH', iddGhGuardAttemptId: record.id },
+  );
+}
+
+const TELEMETRY_RELAY_COMMAND_ENV =
+  'IDD_CRITIQUE_TELEMETRY_HOOK_WIN32_RELAY_COMMAND';
+
+function telemetryRelayEvalIndex(command, args, options) {
+  if (
+    String(command) !== process.execPath ||
+    !Array.isArray(args) ||
+    !Object.keys(options?.env ?? {}).some(
+      (name) => name.toUpperCase() === TELEMETRY_RELAY_COMMAND_ENV,
+    )
+  ) {
+    return -1;
+  }
+  const evalIndex = args.findIndex(
+    (argument) => String(argument) === '-e' || String(argument) === '--eval',
+  );
+  const source = evalIndex < 0 ? '' : String(args[evalIndex + 1] ?? '');
+  return source.includes(`process.env.${TELEMETRY_RELAY_COMMAND_ENV}`)
+    ? evalIndex
+    : -1;
+}
+
+function addGuardToOptions(options, addImport, telemetryRelay) {
+  const hasOptions =
+    options !== null && typeof options === 'object' && !Array.isArray(options);
+  if (!hasOptions) options = {};
+  const record = hasOptions ? options : {};
+  const env = { ...(record.env ?? process.env) };
+  for (const name of [
+    'IDD_TEST_GH_GUARD_ROOT',
+    'IDD_TEST_GH_GUARD_LEDGER',
+    'IDD_TEST_GH_GUARD_OWNER_PID',
+    'IDD_TEST_GH_GUARD_ROOT_OWNER_PID',
+    'IDD_TEST_GH_GUARD_IMPORT',
+    'IDD_TEST_GH_GUARD_ALLOWED_STUBS',
+  ]) {
+    if (env[name] === undefined && process.env[name] !== undefined) {
+      env[name] = process.env[name];
+    }
+  }
+  if (addImport) {
+    const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
+    // Keep the relay's environment scrubbed: the telemetry helper forwards
+    // its NODE_OPTIONS separately to the configured target, so load the
+    // test guard on the relay's argv instead of contaminating that payload.
+    if (telemetryRelay) {
+      if (guardImport) env.IDD_TEST_GH_GUARD_IMPORT = guardImport;
+    } else if (guardImport) {
+      const key = nodeOptionsEnvKey(env);
+      env[key] = nodeOptions.appendNodeOptionsPreload(
+        env[key] ?? '',
+        '--import',
+        guardImport,
+        launchDirectory(options?.cwd) ?? currentDirectoryOrNull() ?? '.',
+        ['--import'],
+      );
+    }
+  } else {
+    const guardImport = env.IDD_TEST_GH_GUARD_IMPORT;
+    const normalizedFilename = __filename.replaceAll('\\', '/');
+    const key = nodeOptionsEnvKey(env);
+    const cwd =
+      launchDirectory(options?.cwd) ?? currentDirectoryOrNull() ?? '.';
+    const current = guardImport
+      ? nodeOptions.removeNodeOptionsPreload(env[key] ?? '', guardImport, cwd, [
+          '--import',
+        ])
+      : nodeOptions.normalizeNodeOptionsImports(env[key] ?? '', cwd);
+    env[key] = nodeOptions.appendNodeOptionsPreload(
+      current,
+      '--require',
+      normalizedFilename,
+      cwd,
+      ['--require', '--import'],
+    );
+  }
+  return { ...record, env };
+}
+
+function wrap(method, optionsIndex, inspect) {
+  const original = childProcess[method];
+  const wrapped = function (...args) {
+    inspect(...args);
+    const index = optionsIndex(args);
+    if (index >= 0) {
+      const hasCallback =
+        ['exec', 'execFile'].includes(method) &&
+        typeof args[index] === 'function';
+      const launchOptions = hasCallback ? undefined : args[index];
+      const directGhFixture =
+        ['spawn', 'spawnSync', 'execFile', 'execFileSync'].includes(method) &&
+        isGh(args[0]) &&
+        isRegisteredFixture(
+          args[0],
+          launchOptions?.env,
+          launchDirectory(launchOptions?.cwd),
+        );
+      const relayEvalIndex = [
+        'spawn',
+        'spawnSync',
+        'execFile',
+        'execFileSync',
+      ].includes(method)
+        ? telemetryRelayEvalIndex(args[0], args[1], launchOptions)
+        : -1;
+      const guardedOptions = addGuardToOptions(
+        hasCallback ? undefined : args[index],
+        !directGhFixture,
+        relayEvalIndex >= 0,
+      );
+      if (relayEvalIndex >= 0 && Array.isArray(args[1])) {
+        const relayArgs = [...args[1]];
+        const guardImport = process.env.IDD_TEST_GH_GUARD_IMPORT;
+        relayArgs.splice(
+          relayEvalIndex,
+          0,
+          guardImport ? `--import=${guardImport}` : `--require=${__filename}`,
+        );
+        args[1] = relayArgs;
+      }
+      if (hasCallback) args.splice(index, 0, guardedOptions);
+      else args[index] = guardedOptions;
+    }
+    return Reflect.apply(original, this, args);
+  };
+  Object.setPrototypeOf(wrapped, original);
+  if (['exec', 'execFile'].includes(method)) {
+    Object.defineProperty(wrapped, promisify.custom, {
+      configurable: true,
+      value: function (...args) {
+        let child;
+        const result = new Promise((resolve, reject) => {
+          const callback = (error, stdout, stderr) => {
+            if (error) {
+              Object.assign(error, { stdout, stderr });
+              reject(error);
+            } else {
+              resolve({ stdout, stderr });
+            }
+          };
+          child = wrapped.apply(this, [...args, callback]);
+        });
+        result.child = child;
+        return result;
+      },
+    });
+  }
+  childProcess[method] = wrapped;
+}
+
+const optionsFromArgs = (argsOrOptions, options) =>
+  Array.isArray(argsOrOptions) ||
+  argsOrOptions === null ||
+  argsOrOptions === undefined
+    ? options
+    : argsOrOptions;
+const optionsAfterArgs = (args) =>
+  Array.isArray(args[1]) ||
+  ((args[1] === null || args[1] === undefined) && args.length > 2)
+    ? 2
+    : 1;
+function execShellInvocation(command, options) {
+  const shell =
+    typeof options?.shell === 'string'
+      ? options.shell
+      : process.platform === 'win32'
+        ? (process.env.ComSpec ?? 'cmd.exe')
+        : '/bin/sh';
+  return {
+    shell,
+    args:
+      shellFlavor(shell) === 'cmd'
+        ? ['/d', '/s', '/c', String(command)]
+        : ['-c', String(command)],
+  };
+}
+wrap('spawn', optionsAfterArgs, (command, argsOrOptions, options) => {
+  const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
+  blockIfGh('spawn', command, args, optionsFromArgs(argsOrOptions, options));
+});
+wrap('spawnSync', optionsAfterArgs, (command, argsOrOptions, options) => {
+  const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
+  blockIfGh(
+    'spawnSync',
+    command,
+    args,
+    optionsFromArgs(argsOrOptions, options),
+  );
+});
+wrap(
+  'exec',
+  () => 1,
+  (command, options) => {
+    const invocation = execShellInvocation(command, options);
+    blockIfGh('exec', invocation.shell, invocation.args, options);
+  },
+);
+wrap(
+  'execSync',
+  () => 1,
+  (command, options) => {
+    const invocation = execShellInvocation(command, options);
+    blockIfGh('execSync', invocation.shell, invocation.args, options);
+  },
+);
+wrap('execFile', optionsAfterArgs, (file, argsOrOptions, options) => {
+  const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
+  blockIfGh('execFile', file, args, optionsFromArgs(argsOrOptions, options));
+});
+wrap('execFileSync', optionsAfterArgs, (file, argsOrOptions, options) => {
+  const args = Array.isArray(argsOrOptions) ? argsOrOptions : [];
+  blockIfGh(
+    'execFileSync',
+    file,
+    args,
+    optionsFromArgs(argsOrOptions, options),
+  );
+});
+wrap('fork', optionsAfterArgs, (modulePath, argsOrOptions, options) => {
+  const forkOptions = optionsFromArgs(argsOrOptions, options);
+  blockIfGh(
+    'fork',
+    forkOptions?.execPath ?? process.execPath,
+    [
+      ...(forkOptions?.execArgv ?? process.execArgv),
+      modulePath,
+      ...(Array.isArray(argsOrOptions) ? argsOrOptions : []),
+    ],
+    forkOptions,
+  );
+});
+
+const OriginalWorker = workerThreads.Worker;
+const workerBridgePath = path.resolve(__filename);
+const normalizedWorkerBridgePath = normalizedPath(workerBridgePath);
+
+function hasWorkerBridge(execArgv, env) {
+  const fromExecArgv = execArgv.some((argument, index) => {
+    const flag = ['--require', '--import'].find(
+      (candidate) =>
+        argument === candidate || argument.startsWith(`${candidate}=`),
+    );
+    if (!flag) return false;
+    const value = argument.startsWith(`${flag}=`)
+      ? argument.slice(flag.length + 1)
+      : argument === flag
+        ? execArgv[index + 1]
+        : null;
+    if (value === undefined || value === null) return false;
+    try {
+      const candidate = value.startsWith('file:')
+        ? fileURLToPath(value)
+        : value;
+      return normalizedPath(candidate) === normalizedWorkerBridgePath;
+    } catch {
+      return false;
+    }
+  });
+  const options =
+    env === workerThreads.SHARE_ENV
+      ? (process.env[nodeOptionsEnvKey(process.env)] ?? '')
+      : (env[nodeOptionsEnvKey(env)] ?? '');
+  return (
+    fromExecArgv ||
+    nodeOptions.hasNodeOptionsPreload(
+      options,
+      workerBridgePath,
+      currentDirectoryOrNull() ?? '.',
+      ['--require', '--import'],
+    )
+  );
+}
+
+class GuardedWorker extends OriginalWorker {
+  constructor(filename, options = {}) {
+    const workerOptions =
+      options !== null && typeof options === 'object' ? options : {};
+    const env =
+      workerOptions.env === workerThreads.SHARE_ENV
+        ? workerThreads.SHARE_ENV
+        : { ...(workerOptions.env ?? process.env) };
+    if (env !== workerThreads.SHARE_ENV) {
+      for (const name of [
+        'IDD_TEST_GH_GUARD_ROOT',
+        'IDD_TEST_GH_GUARD_LEDGER',
+        'IDD_TEST_GH_GUARD_OWNER_PID',
+        'IDD_TEST_GH_GUARD_ROOT_OWNER_PID',
+        'IDD_TEST_GH_GUARD_IMPORT',
+        'IDD_TEST_GH_GUARD_ALLOWED_STUBS',
+      ]) {
+        if (env[name] === undefined && process.env[name] !== undefined) {
+          env[name] = process.env[name];
+        }
+      }
+    }
+    let workerExecArgv =
+      workerOptions.execArgv === undefined
+        ? undefined
+        : [...workerOptions.execArgv];
+    const execArgv = [...(workerExecArgv ?? process.execArgv)];
+    if (!hasWorkerBridge(execArgv, env)) {
+      if (workerExecArgv === undefined) {
+        if (env !== workerThreads.SHARE_ENV) {
+          const key =
+            process.platform === 'win32'
+              ? (Object.keys(env).find(
+                  (entry) => entry.toLowerCase() === 'node_options',
+                ) ?? 'NODE_OPTIONS')
+              : 'NODE_OPTIONS';
+          env[key] = nodeOptions.appendNodeOptionsPreload(
+            env[key] ?? '',
+            '--require',
+            workerBridgePath,
+            currentDirectoryOrNull() ?? '.',
+            ['--require', '--import'],
+          );
+        }
+        // SHARE_ENV keeps the runtime's native implicit execArgv inheritance.
+      } else {
+        execArgv.push(`--require=${workerBridgePath}`);
+        workerExecArgv = execArgv;
+      }
+    }
+    super(filename, {
+      ...workerOptions,
+      ...(workerExecArgv === undefined ? {} : { execArgv: workerExecArgv }),
+      env,
+    });
+  }
+}
+Object.setPrototypeOf(GuardedWorker, OriginalWorker);
+Object.defineProperty(GuardedWorker, 'name', { value: OriginalWorker.name });
+workerThreads.Worker = GuardedWorker;
+moduleApi.syncBuiltinESMExports();
