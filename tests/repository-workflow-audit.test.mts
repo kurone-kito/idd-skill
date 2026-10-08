@@ -2733,6 +2733,31 @@ test('a top-level defaults block after jobs is not counted as a job', () => {
   });
 });
 
+test('a column-zero comment inside the jobs block does not end the job scan', () => {
+  // A reusable caller's job count decides its exception, so a column-zero
+  // comment right after jobs: must not end the scan before the one job.
+  const path = '.github/workflows/pnpm-boundary-node22-floor.yml';
+  const root = fixtureRoot({
+    [path]: {
+      transform: (text: string) => {
+        assert.match(text, /\njobs:\n {2}[\w-]+:/);
+        return text.replace(
+          /\njobs:\n( {2}[\w-]+:)/,
+          '\njobs:\n# A column-zero note inside the jobs block.\n$1',
+        );
+      },
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some((violation) => violation.ruleId === 'RWA002'),
+      false,
+      JSON.stringify(violations),
+    );
+  });
+});
+
 test('an unnamed step after the template notice step is not part of that step', () => {
   const root = fixtureRoot({
     [TEMPLATE_ADVISORY]: {
