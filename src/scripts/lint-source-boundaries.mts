@@ -773,6 +773,32 @@ function scanComments(source: string): {
         if (isLineTerminator(typeChar)) {
           return false;
         }
+        // A string or template literal type holds characters that are not
+        // type syntax: `identity<"a,b">` and `identity<`x-${string}`>`
+        // would otherwise read the comma as a top-level separator and the
+        // list as a comparison. Skip it whole; one that does not close on
+        // this line cannot be a type argument here.
+        if (
+          depth > 0 &&
+          (typeChar === "'" || typeChar === '"' || typeChar === '`')
+        ) {
+          let literalEnd = cursor + 1;
+          while (
+            literalEnd < source.length &&
+            !isLineTerminator(source[literalEnd]) &&
+            source[literalEnd] !== typeChar
+          ) {
+            literalEnd += source[literalEnd] === '\\' ? 2 : 1;
+          }
+          if (source[literalEnd] !== typeChar) {
+            return false;
+          }
+          cursor = literalEnd;
+          lastWord = '';
+          lastWordIsProperty = false;
+          wordBroken = false;
+          continue;
+        }
         // `in`, `instanceof`, `delete`, `await`, and the `void`
         // operator are expressions. `void` and `typeof` as types stay.
         if (
