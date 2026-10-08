@@ -1306,6 +1306,65 @@ test('a malformed higher-layer value blocks inheritance at that field', () => {
   assert.equal(result.sourceMap['critiqueLoop.deferAfterRounds'], undefined);
 });
 
+test('malformed repository-local delegates do not inherit global commands', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: { critiqueLoop: { delegate: { mode: 'combined' } } },
+    },
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    userGlobalConfig: {
+      critiqueLoop: {
+        delegate: { command: 'global-reviewer', mode: 'combined' },
+      },
+    },
+  });
+
+  assert.deepEqual(result.config.critiqueLoop, {
+    delegate: { mode: 'combined' },
+  });
+  assert.equal(
+    result.sourceMap['critiqueLoop.delegate.mode'],
+    'repository-local',
+  );
+  assert.equal(result.sourceMap['critiqueLoop.delegate.command'], undefined);
+});
+
+test('malformed local issue-authoring delegates do not inherit global commands', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: {
+        issueAuthoring: {
+          adversarialReview: { delegate: { mode: 'combined' } },
+        },
+      },
+    },
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    userGlobalConfig: {
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'global-reviewer', mode: 'combined' },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    (result.config.issueAuthoring as { adversarialReview: unknown })
+      .adversarialReview,
+    { delegate: { mode: 'combined' } },
+  );
+  assert.equal(
+    result.sourceMap['issueAuthoring.adversarialReview.delegate.mode'],
+    'repository-local',
+  );
+  assert.equal(
+    result.sourceMap['issueAuthoring.adversarialReview.delegate.command'],
+    undefined,
+  );
+});
+
 test('loadRepositoryPolicyDocument applies canonical-first and legacy fallback semantics', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-repository-policy-'));
   const legacyPath = writeRepositoryPolicy(

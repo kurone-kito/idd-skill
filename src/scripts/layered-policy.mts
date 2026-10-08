@@ -66,6 +66,12 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
     'pre-merge-readiness.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
 });
 
+/** Local delegate objects are validated as a whole by their consumers. */
+const ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS = new Set([
+  'critiqueLoop.delegate',
+  'issueAuthoring.adversarialReview.delegate',
+]);
+
 export type PolicyLayerSource =
   | 'repository-local'
   | 'user-global-override'
@@ -335,7 +341,14 @@ function overlayPolicyLayer(
   for (const [key, value] of Object.entries(incoming)) {
     const childPath = joinPolicyPath(path, key);
     const baseValue = Object.hasOwn(base, key) ? base[key] : undefined;
-    if (isPlainObject(value) && isPlainObject(baseValue)) {
+    if (
+      isPlainObject(value) &&
+      isPlainObject(baseValue) &&
+      !(
+        source === 'repository-local' &&
+        ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS.has(childPath)
+      )
+    ) {
       const mergedChild = overlayPolicyLayer(
         baseValue,
         value,

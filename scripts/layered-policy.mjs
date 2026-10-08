@@ -63,6 +63,11 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   providerOutage:
     'pre-merge-readiness.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
 });
+/** Local delegate objects are validated as a whole by their consumers. */
+const ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS = new Set([
+  'critiqueLoop.delegate',
+  'issueAuthoring.adversarialReview.delegate',
+]);
 /** Read canonical policy first; use the legacy filename only after ENOENT. */
 // audit:ignore-dead-export: public layered-policy API introduced by #3818 for downstream roadmap consumers
 export function loadRepositoryPolicyDocument(repositoryRoot) {
@@ -196,7 +201,14 @@ function overlayPolicyLayer(base, incoming, source, path, sourceMap) {
   for (const [key, value] of Object.entries(incoming)) {
     const childPath = joinPolicyPath(path, key);
     const baseValue = Object.hasOwn(base, key) ? base[key] : undefined;
-    if (isPlainObject(value) && isPlainObject(baseValue)) {
+    if (
+      isPlainObject(value) &&
+      isPlainObject(baseValue) &&
+      !(
+        source === 'repository-local' &&
+        ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS.has(childPath)
+      )
+    ) {
       const mergedChild = overlayPolicyLayer(
         baseValue,
         value,
