@@ -29,6 +29,12 @@ const TEMPLATE_ADVISORY =
 const TEMPLATE_COMMENT =
   'idd-template/.github/workflows/idd-advisory-convergence-comment.yml';
 const SELF_WAIVER_CONSTANTS = 'src/scripts/advisory-convergence.mts';
+const ROOT_COMMENT = '.github/workflows/idd-advisory-convergence-comment.yml';
+const ROOT_PROBE = '.github/workflows/idd-advisory-convergence-probe.yml';
+const TEMPLATE_PROBE =
+  'idd-template/.github/workflows/idd-advisory-convergence-probe.yml';
+const ONBOARDING_GUIDE = 'idd-template/docs/onboarding/optional-host-setup.md';
+const EXTERNAL_CHECK_WAIVER = 'src/scripts/external-check-waiver.mts';
 
 // The root workflow directory is an input of the pull_request concurrency
 // inventory, so a fixture root carries every root workflow file.
@@ -47,6 +53,9 @@ const FULL_INPUTS: readonly string[] = [
     TEMPLATE_ADVISORY,
     TEMPLATE_COMMENT,
     SELF_WAIVER_CONSTANTS,
+    TEMPLATE_PROBE,
+    ONBOARDING_GUIDE,
+    EXTERNAL_CHECK_WAIVER,
   ]),
 ];
 
@@ -147,7 +156,14 @@ function matches(message: string, expectation: Expectation): boolean {
 }
 
 interface RuleCase {
-  ruleId: 'RWA001' | 'RWA002' | 'RWA003' | 'RWA004' | 'RWA006' | 'RWA007';
+  ruleId:
+    | 'RWA001'
+    | 'RWA002'
+    | 'RWA003'
+    | 'RWA004'
+    | 'RWA005'
+    | 'RWA006'
+    | 'RWA007';
   name: string;
   path: string;
   // The path the rule reports against, when it differs from the copy that
@@ -740,6 +756,1065 @@ const RULE_CASES: readonly RuleCase[] = [
       {
         prefix:
           'the lint job must use ubuntu-latest; ubuntu-slim has a hard 15-minute cap',
+      },
+    ],
+  },
+  // RWA005: advisory-convergence workflow contracts (replaced
+  // the static tests of the advisory-convergence comment workflow).
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate job id renamed away',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '\n  idd-advisory-convergence:\n',
+      to: '\n  idd-advisory-convergence-x:\n',
+    },
+    expected: [
+      { message: 'must keep job id idd-advisory-convergence' },
+      { message: 'must keep the required gate job' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate whose manual re-check no longer runs it',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: `    if: \${{ !cancelled() }}`,
+      to: `    if: \${{ always() }}`,
+    },
+    expected: [
+      { message: 'manual re-checks must still run the required gate' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe workflow renamed away',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'name: IDD self-waiver token-scope probe',
+      to: 'name: IDD probe',
+    },
+    expected: [{ message: 'probe must keep its workflow name' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that triggers on something other than issue_comment',
+    path: TEMPLATE_PROBE,
+    mutation: { from: '  issue_comment:', to: '  pull_request:' },
+    expected: [
+      { message: 'probe must use only issue_comment' },
+      {
+        message: 'probe must not expose another trigger or selected ref',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that also handles edited comments',
+    path: ROOT_PROBE,
+    mutation: { from: 'types: [created]', to: 'types: [edited]' },
+    expected: [
+      {
+        message: 'probe must run only for newly created comments',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate that also triggers on issue_comment',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '  pull_request_target:',
+      to: '  pull_request_target:\n  issue_comment:',
+    },
+    expected: [{ message: 'on: must not include issue_comment' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate that keeps the transitional pull_request trigger',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '  pull_request_target:',
+      to: '  pull_request:\n  pull_request_target:',
+    },
+    expected: [
+      {
+        message:
+          'on: must no longer include the transitional pull_request trigger',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate that drops pull_request_target',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '  pull_request_target:',
+      to: '  pull_request_target_removed:',
+    },
+    expected: [
+      { message: 'on: must still include pull_request_target' },
+      { message: 'on: must include pull_request_target' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate that adds pull_request_review',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '  pull_request_target:',
+      to: '  pull_request_target:\n  pull_request_review:',
+    },
+    expected: [
+      {
+        message:
+          'on: must not include pull_request_review (moved to the companion workflow)',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate that adds pull_request_review_comment',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '  pull_request_target:',
+      to: '  pull_request_target:\n  pull_request_review_comment:',
+    },
+    expected: [{ message: 'on: must not include pull_request_review_comment' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate checkout that is not pinned to main',
+    path: ROOT_ADVISORY,
+    mutation: { from: 'ref: main', to: 'ref: feature', all: true },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a self-waiver job that loses pull-requests: write',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: 'pull-requests: write',
+      to: 'pull-requests: read',
+      all: true,
+    },
+    expected: [{ includes: 'must keep pull-requests: write' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a self-waiver job that loses checks: read',
+    path: ROOT_ADVISORY,
+    mutation: { from: 'checks: read', to: 'checks: none', all: true },
+    expected: [
+      {
+        includes:
+          'idd-advisory-convergence-self-waiver job must keep checks: read',
+      },
+      { includes: 'idd-advisory-convergence job must keep checks: read' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a self-waiver job that loses statuses: read',
+    path: ROOT_ADVISORY,
+    mutation: { from: 'statuses: read', to: 'statuses: none', all: true },
+    expected: [
+      {
+        includes:
+          'idd-advisory-convergence-self-waiver job must keep statuses: read',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a waiver-invoking job that loses actions: read',
+    path: TEMPLATE_ADVISORY,
+    mutation: { from: 'actions: read', to: 'actions: none', all: true },
+    expected: [{ includes: 'must keep actions: read' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that admits any author association',
+    path: TEMPLATE_PROBE,
+    mutation: {
+      from: "github.event.comment.author_association == 'COLLABORATOR'",
+      to: "github.event.comment.author_association == 'NONE'",
+    },
+    expected: [
+      {
+        message:
+          'job must require a PR, the exact command, and a trusted author association',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe whose PR number comes from a caller input',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `PR_NUMBER: \${{ github.event.issue.number }}`,
+      to: `PR_NUMBER: \${{ inputs.pr }}`,
+    },
+    expected: [
+      {
+        message: 'PR number must come only from the issue_comment event',
+      },
+      {
+        message:
+          'probe must not accept caller-selected inputs or execute checked-out content',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template probe runner without the CI_RUNNER_LABEL fallback',
+    path: TEMPLATE_PROBE,
+    mutation: {
+      from: "vars.CI_RUNNER_LABEL || 'ubuntu-slim'",
+      to: "vars.CI_RUNNER_LABEL || 'ubuntu-latest'",
+    },
+    expected: [
+      {
+        message:
+          'runner must keep the CI_RUNNER_LABEL and ubuntu-slim fallback',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a root probe runner that is not ubuntu-slim',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'runs-on: ubuntu-slim',
+      to: 'runs-on: ubuntu-latest',
+    },
+    expected: [{ message: 'probe runner must be ubuntu-slim' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that reads the comment body without an environment variable',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `COMMENT_BODY: \${{ github.event.comment.body }}`,
+      to: 'COMMENT_BODY: static',
+    },
+    expected: [
+      {
+        message: 'comment text must be passed through an environment variable',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that authenticates with a non-run token',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `GH_TOKEN: \${{ github.token }}`,
+      to: `GH_TOKEN: \${{ secrets.TOKEN }}`,
+    },
+    expected: [
+      {
+        message: "probe must authenticate gh with this run's GITHUB_TOKEN",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that queries a fixed repository',
+    path: ROOT_PROBE,
+    mutation: {
+      from: '--repo "$GITHUB_REPOSITORY"',
+      to: '--repo "owner/repo"',
+      all: true,
+    },
+    expected: [{ message: 'probe must query the current repository' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that interpolates the comment into its shell command',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'READ_SCOPE_EVIDENCE=$(gh pr view "$PR_NUMBER"',
+      to: `READ_SCOPE_EVIDENCE=$(gh pr view "\${{ github.event.comment.body }}"`,
+    },
+    expected: [
+      {
+        message: 'comment text must not be interpolated into a shell command',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe whose exact-command guard is removed',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `if [[ "$COMMENT_BODY" != '/idd-probe-token-scopes' ]]; then`,
+      to: 'if false; then',
+    },
+    expected: [
+      {
+        message:
+          'shell must case-sensitively reject non-exact commands before API reads',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that skips GH_HOST normalization',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `NORMALIZED_GH_HOST=$(printf '%s' "\${GH_HOST:-}"`,
+      to: `NORMALIZED_GH_HOST=$(echo "\${GH_HOST:-}"`,
+    },
+    expected: [
+      {
+        message:
+          'probe must normalize GH_HOST before gh runs without a local repository',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that keeps a whitespace-only GH_HOST',
+    path: ROOT_PROBE,
+    mutation: {
+      from: "sed 's/^[[:space:]]*//; s/[[:space:]]*$//'",
+      to: 'cat',
+    },
+    expected: [
+      {
+        message: 'probe must treat whitespace-only GH_HOST as unset',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that does not derive the gh host from the server URL',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'export GH_HOST="$NORMALIZED_GH_HOST"',
+      to: 'export GH_HOST="fixed.example"',
+    },
+    expected: [
+      {
+        message: 'probe must derive the gh host from the Actions server URL',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that no longer queries gh pr view',
+    path: ROOT_PROBE,
+    mutation: { from: 'gh pr view', to: 'gh pr list', all: true },
+    expected: [{ message: 'probe must query gh pr view' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that drops a missing-linked-issue report',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'has no linked closing issue',
+      to: 'has no linked issue',
+    },
+    expected: [
+      { message: 'probe must report when it has no linked closing issue' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe without its read-only success summary',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'Read-only self-waiver query probe succeeded for PR',
+      to: 'Query succeeded for PR',
+    },
+    expected: [{ message: 'probe must print its read-only success summary' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that mentions a forbidden write command',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `GH_TOKEN: \${{ github.token }}`,
+      to: `GH_TOKEN: \${{ github.token }}\n          NOTE: gh api`,
+    },
+    expected: [
+      {
+        message:
+          'probe must not invoke a waiver, comment, label, or required-check write operation',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that widens its read scopes',
+    path: ROOT_PROBE,
+    mutation: {
+      from: '      pull-requests: read',
+      to: '      pull-requests: write',
+    },
+    expected: [
+      {
+        message: 'probe must grant exactly the six requested read-only scopes',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that loses its default-branch trigger note',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `# issue_comment uses the workflow definition from the repository's default branch.`,
+      to: '# note removed',
+    },
+    expected: [{ message: 'probe must keep its default-branch trigger note' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe job id renamed away',
+    path: ROOT_PROBE,
+    mutation: {
+      from: '  probe-self-waiver-token-scopes:',
+      to: '  probe-renamed:',
+    },
+    expected: [
+      { message: 'probe must keep its job id' },
+      { message: 'workflow must contain the token-scope probe job' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that declares the required job id',
+    path: ROOT_PROBE,
+    mutation: {
+      from: '  probe-self-waiver-token-scopes:',
+      to: '  idd-advisory-convergence:\n  probe-self-waiver-token-scopes:',
+    },
+    expected: [{ message: 'probe must not declare the required job id' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide without its waiver probe section',
+    path: ONBOARDING_GUIDE,
+    mutation: { from: '### Waiver probe', to: '### Probe' },
+    expected: [
+      { message: 'onboarding guide must explain the token-scope probe' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide table without pull-requests: read',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: '`pull-requests: read`',
+      to: '`pull-requests: none`',
+      all: true,
+    },
+    expected: [
+      { message: 'onboarding guide table must include pull-requests: read' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that stops calling the probe non-required',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'non-required',
+      to: 'optional',
+      all: true,
+    },
+    expected: [
+      { message: 'onboarding guide must describe the probe as non-required' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the private-access caveat',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'Public success does not prove private access',
+      to: 'Public success is fine',
+    },
+    expected: [
+      {
+        message:
+          'onboarding guide must say public success does not prove private access',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh job that reuses the required job id',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: '\n  refresh-if-idd-originated:\n',
+      to: '\n  idd-advisory-convergence:\n',
+    },
+    expected: [
+      { message: 'must not reuse the required job id' },
+      { message: 'must keep the refresh-if-idd-originated job' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template comment-refresh without pull_request_review_comment',
+    path: TEMPLATE_COMMENT,
+    mutation: {
+      from: '  pull_request_review_comment:',
+      to: '  pull_request_review_comment_removed:',
+    },
+    expected: [
+      { message: 'must keep the pull_request_review_comment trigger' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh that no longer calls the rerun helper',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: 'rerun-advisory-convergence',
+      to: 'rerun-removed',
+      all: true,
+    },
+    expected: [{ message: 'must keep the rerun helper' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh that no longer classifies origin',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: 'review-comment-origin',
+      to: 'origin-removed',
+      all: true,
+    },
+    expected: [{ message: 'must keep the review-comment origin classifier' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh that cancels an in-flight refresh',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: 'cancel-in-progress: false',
+      to: 'cancel-in-progress: true',
+      all: true,
+    },
+    expected: [{ message: 'must not cancel an in-flight IDD refresh' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh without the issue_comment trigger',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: '  issue_comment:',
+      to: '  issue_comment_removed:',
+    },
+    expected: [{ message: 'on: must include issue_comment' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh that no longer skips plain-issue comments',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null",
+      to: 'if: true',
+    },
+    expected: [{ message: 'must skip a plain-issue issue_comment event' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh PR number that ignores the issue event shape',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: `PR_NUMBER: \${{ github.event.pull_request.number || github.event.issue.number }}`,
+      to: `PR_NUMBER: \${{ github.event.issue.number }}`,
+      all: true,
+    },
+    expected: [{ message: 'PR_NUMBER must resolve from either event shape' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh without the pull_request_review trigger',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: '  pull_request_review:',
+      to: '  pull_request_review_removed:',
+    },
+    expected: [{ message: 'on: must include pull_request_review' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step whose if: does not OR in pull_request_review',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "if: github.event_name == 'pull_request_review' || (success()",
+      to: 'if: (success()',
+    },
+    expected: [
+      {
+        message: "rerun step's if: must OR in pull_request_review explicitly",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an empty comment-refresh workflow file',
+    path: ROOT_COMMENT,
+    mutation: { replaceWith: '' },
+    expected: [{ message: 'must not be empty' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a missing comment-refresh workflow file',
+    path: ROOT_COMMENT,
+    omit: [ROOT_COMMENT],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a missing token-scope probe workflow file',
+    path: ROOT_PROBE,
+    omit: [ROOT_PROBE],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a missing external-check-waiver helper',
+    path: EXTERNAL_CHECK_WAIVER,
+    omit: [EXTERNAL_CHECK_WAIVER],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh debounce step renamed away',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: '- name: Check for newer qualifying event',
+      to: '- name: Check newer',
+      all: true,
+    },
+    expected: [
+      {
+        message: 'must have a "Check for newer qualifying event" debounce step',
+      },
+      {
+        message: 'must keep the classify, debounce, and rerun steps',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a debounce step that exposes another id',
+    path: ROOT_COMMENT,
+    mutation: { from: 'id: debounce', to: 'id: other', all: true },
+    expected: [{ message: 'debounce step must expose id: debounce' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a debounce step that no longer invokes its helper',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: 'advisory-comment-debounce',
+      to: 'advisory-debounce-removed',
+      all: true,
+    },
+    expected: [
+      {
+        message: 'must invoke the advisory-comment-debounce helper',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step that drops the idd_originated requirement',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "(success() && steps.origin.outputs.idd_originated == 'true'",
+      to: "(success() && steps.origin.outputs.idd_originated == 'false'",
+    },
+    expected: [
+      {
+        message: "rerun step's if: must still require idd_originated",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step that runs even when the debounce step skipped',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "steps.debounce.outputs.skip != 'true')",
+      to: "steps.debounce.outputs.skip == 'true')",
+    },
+    expected: [
+      {
+        message: "rerun step's if: must require the debounce step did not skip",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a debounce step that no longer excludes pull_request_review',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "&& github.event_name != 'pull_request_review'",
+      to: "&& github.event_name != 'issue_comment'",
+    },
+    expected: [
+      {
+        message:
+          "debounce step's if: must explicitly exclude pull_request_review, not merely omit mentioning it",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step without an explicit success() call',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "if: github.event_name == 'pull_request_review' || (success() && ",
+      to: "if: github.event_name == 'pull_request_review' || (",
+    },
+    expected: [
+      {
+        message:
+          "rerun step's if: must call success() explicitly to suppress GitHub's implicit prepend",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step whose review branch is gated by success()',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "if: github.event_name == 'pull_request_review' ||",
+      to: "if: success() && github.event_name == 'pull_request_review' ||",
+    },
+    expected: [
+      {
+        message:
+          "rerun step's pull_request_review branch must not itself be gated by success()",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step whose review branch is gated by debounce',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "if: github.event_name == 'pull_request_review' ||",
+      to: "if: github.event_name == 'pull_request_review' && steps.debounce.outputs.skip != 'true' ||",
+    },
+    expected: [
+      {
+        message:
+          "rerun step's pull_request_review branch must not be gated by debounce.outputs.skip",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template comment-refresh rerun without the instructions-only exclusion',
+    path: TEMPLATE_COMMENT,
+    mutation: {
+      from: "steps.profile.outputs.profile != 'instructions-only'",
+      to: "steps.profile.outputs.profile == 'package-manager'",
+      all: true,
+    },
+    expected: [
+      {
+        message: "rerun step's if: must still exclude instructions-only",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver notice step renamed away',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: '- name: Notice when no helper runtime is configured',
+      to: '- name: Notice renamed',
+    },
+    expected: [
+      {
+        message:
+          'must keep a non-failing notice step for an unconfigured helper runtime',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver notice that is not gated on the allowlist',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: "if: steps.allowlist.outputs.touched == 'true' && steps.profile.outputs.profile == 'instructions-only'",
+      to: "if: steps.profile.outputs.profile == 'instructions-only'",
+    },
+    expected: [
+      {
+        message:
+          "notice step's if: must be gated on the allowlist touch result",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver notice that fails the job',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: 'echo "::notice::helperRuntime.profile resolves to instructions-only',
+      to: 'exit 1; echo "::notice::helperRuntime.profile resolves to instructions-only',
+    },
+    expected: [
+      {
+        message:
+          'notice step must not fail the job (exit 1) for an unconfigured helper runtime',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver notice without a ::notice:: annotation',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: 'echo "::notice::helperRuntime.profile resolves to instructions-only',
+      to: 'echo "::warning::helperRuntime.profile resolves to instructions-only',
+    },
+    expected: [
+      {
+        message: 'notice step must explain itself with a ::notice:: annotation',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver post step that does not exclude instructions-only',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: "steps.profile.outputs.profile != 'instructions-only'",
+      to: "steps.profile.outputs.profile == 'package-manager'",
+      all: true,
+    },
+    expected: [
+      {
+        message:
+          "post step's if: must exclude instructions-only, not rely on the case statement's *) fallthrough",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe whose query fields differ from the helper query',
+    path: ROOT_PROBE,
+    mutation: {
+      from: ',statusCheckRollup,closingIssuesReferences',
+      to: ',statusCheckRollup',
+    },
+    expected: [
+      {
+        message: 'probe query fields must match fetchPullRequest exactly',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that no longer names the default branch',
+    path: ONBOARDING_GUIDE,
+    mutation: { from: 'default branch', to: 'trunk', all: true },
+    expected: [{ message: 'onboarding guide must name the default branch' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that no longer names the issue_comment trigger',
+    path: ONBOARDING_GUIDE,
+    mutation: { from: 'issue_comment', to: 'comment event', all: true },
+    expected: [
+      {
+        message: 'onboarding guide must name the issue_comment trigger',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the post-on-target-PR instruction',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'Post this on the target PR:',
+      to: 'Run this somewhere:',
+    },
+    expected: [
+      {
+        message:
+          'onboarding guide must say to post the command on the target PR',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that names a different probe workflow',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'idd-advisory-convergence-probe.yml',
+      to: 'probe-workflow.yml',
+      all: true,
+    },
+    expected: [{ message: 'onboarding guide must name the probe workflow' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the edits rule',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'comments, edits, other text',
+      to: 'comments, changes, other text',
+    },
+    expected: [
+      {
+        message: 'onboarding guide must say edits do not re-trigger the probe',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the other-casing rule',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'other casing',
+      to: 'alternate letter case',
+    },
+    expected: [
+      { message: 'onboarding guide must say other casing is rejected' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that allows a ref input',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'No ref input, checkout, PR code,',
+      to: 'No inputs,',
+    },
+    expected: [
+      {
+        message:
+          'onboarding guide must say the probe takes no ref input or checkout',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the no-comment-write rule',
+    path: ONBOARDING_GUIDE,
+    mutation: { from: 'comment write', to: 'note write', all: true },
+    expected: [
+      {
+        message:
+          'onboarding guide must say the probe performs no comment write',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the three read exercises',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'Actions check, legacy status',
+      to: 'Checks, status',
+    },
+    expected: [
+      {
+        message: 'onboarding guide must name the three read exercises',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops this run token-access note',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: "this run's token access here",
+      to: 'this token access there',
+    },
+    expected: [
+      {
+        message: "onboarding guide must describe this run's token access",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the denied-read remedy',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: 'Denied reads point to token or',
+      to: 'Failed reads point to token or',
+    },
+    expected: [
+      {
+        message:
+          'onboarding guide must point denied reads at token or Actions settings',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide without the issues: write scope',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: '`issues: write`',
+      to: '`issues: none`',
+      all: true,
+    },
+    expected: [
+      { message: 'onboarding guide must name the issues: write scope' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide without the pull-requests: write scope',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: '`pull-requests: write`',
+      to: '`pull-requests: none`',
+      all: true,
+    },
+    expected: [
+      {
+        message: 'onboarding guide must name the pull-requests: write scope',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that narrows the trusted author associations',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: '`OWNER`, `MEMBER`, or `COLLABORATOR`',
+      to: '`OWNER` or `MEMBER`',
+    },
+    expected: [
+      {
+        message: 'onboarding guide must list the trusted author associations',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that shows a different command',
+    path: ONBOARDING_GUIDE,
+    mutation: {
+      from: '```text\n/idd-probe-token-scopes\n```',
+      to: '```text\n/probe\n```',
+    },
+    expected: [{ message: 'onboarding guide must show the exact command' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an onboarding guide that drops the required-gate caveat',
+    path: ONBOARDING_GUIDE,
+    mutation: { from: 'required-gate change', to: 'gate change', all: true },
+    expected: [
+      {
+        message: 'onboarding guide must say a required-gate change is needed',
       },
     ],
   },

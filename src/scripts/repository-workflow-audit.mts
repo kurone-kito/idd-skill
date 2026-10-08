@@ -1211,6 +1211,989 @@ function checkRunnerContracts(root: string, report: Report): void {
   }
 }
 
+const RWA005 = 'RWA005';
+
+const ADVISORY_REQUIRED_PATHS = [
+  '.github/workflows/idd-advisory-convergence.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence.yml',
+] as const;
+
+const PROBE_WORKFLOW_PATHS = [
+  '.github/workflows/idd-advisory-convergence-probe.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence-probe.yml',
+] as const;
+
+const COMMENT_WORKFLOW_PATHS = [
+  '.github/workflows/idd-advisory-convergence-comment.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
+] as const;
+
+const PROBE_READ_PERMISSIONS = [
+  'actions: read',
+  'checks: read',
+  'contents: read',
+  'issues: read',
+  'pull-requests: read',
+  'statuses: read',
+] as const;
+
+const ONBOARDING_GUIDE_PATH =
+  'idd-template/docs/onboarding/optional-host-setup.md';
+const EXTERNAL_CHECK_WAIVER_PATH = 'src/scripts/external-check-waiver.mts';
+
+// Each job's indented body, keyed by job id, from the root jobs mapping. Full
+// comment lines are dropped first so commented-out steps cannot satisfy a check.
+function jobBlocks(text: string): Map<string, string> | undefined {
+  const header = text.match(/^jobs:\s*$/m);
+  if (header?.index === undefined) {
+    return undefined;
+  }
+  const uncommented = text
+    .slice(header.index + header[0].length)
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  const nextTopLevel = uncommented.search(/^\S/m);
+  const jobsBody =
+    nextTopLevel === -1 ? uncommented : uncommented.slice(0, nextTopLevel);
+  const headers = [...jobsBody.matchAll(/^ {2}([\w-]+):\s*$/gm)];
+  const blocks = new Map<string, string>();
+  headers.forEach((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = headers[index + 1]?.index ?? jobsBody.length;
+    blocks.set(match[1], jobsBody.slice(start, end));
+  });
+  return blocks;
+}
+
+// The text after one job header line, up to the next two-space sibling key.
+function jobBodyAfterHeader(text: string, header: RegExp): string | undefined {
+  const match = text.match(header);
+  if (match?.index === undefined) {
+    return undefined;
+  }
+  const afterJob = text.slice(match.index + match[0].length);
+  const nextSibling = afterJob.match(/^ {2}\S/m);
+  return nextSibling?.index === undefined
+    ? afterJob
+    : afterJob.slice(0, nextSibling.index);
+}
+
+function jobPermissionsBlock(jobBody: string): string | undefined {
+  return jobBody.match(/^ {4}permissions:\n((?: {6}.*\n)+)/m)?.[1];
+}
+
+// The text of one step, from its marker to the next step's name line.
+function stepTextFrom(text: string, index: number): string {
+  const next = text.indexOf('\n      - name:', index + 1);
+  return text.slice(index, next === -1 ? undefined : next);
+}
+
+function firstIfLine(stepText: string): string | undefined {
+  return stepText.split('\n').find((line) => line.trim().startsWith('if:'));
+}
+
+function onBlockOf(text: string): string {
+  return text.slice(text.indexOf('\non:'), text.indexOf('\npermissions:'));
+}
+
+// Self-waiver job read-scope contracts (kurone-kito/idd-skill#2951, #2995).
+function checkSelfWaiverJobPermissions(root: string, report: Report): void {
+  for (const path of ADVISORY_REQUIRED_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    const jobBody = jobBodyAfterHeader(
+      text,
+      /^ {2}idd-advisory-convergence-self-waiver:$/m,
+    );
+    if (jobBody === undefined) {
+      report(
+        RWA005,
+        path,
+        'must keep the idd-advisory-convergence-self-waiver job',
+      );
+      continue;
+    }
+    const permissions = jobPermissionsBlock(jobBody);
+    if (permissions === undefined) {
+      report(
+        RWA005,
+        path,
+        'idd-advisory-convergence-self-waiver job must declare a permissions: block',
+      );
+      continue;
+    }
+    if (!/^ {6}pull-requests: write$/m.test(permissions)) {
+      report(
+        RWA005,
+        path,
+        'idd-advisory-convergence-self-waiver job must keep pull-requests: write (kurone-kito/idd-skill#2951 -- without it the marker POST 403s)',
+      );
+    }
+    if (!/^ {6}checks: read$/m.test(permissions)) {
+      report(
+        RWA005,
+        path,
+        "idd-advisory-convergence-self-waiver job must keep checks: read (kurone-kito/idd-skill#2995 -- --auto-bootstrap's statusCheckRollup read needs it)",
+      );
+    }
+    if (!/^ {6}statuses: read$/m.test(permissions)) {
+      report(
+        RWA005,
+        path,
+        "idd-advisory-convergence-self-waiver job must keep statuses: read (kurone-kito/idd-skill#2995 -- --auto-bootstrap's statusCheckRollup read needs it)",
+      );
+    }
+  }
+}
+
+// The required gate job keeps its id, its manual re-check condition, and its
+// checks read scope (kurone-kito/idd-skill#3253).
+function checkRequiredGateWorkflows(root: string, report: Report): void {
+  for (const path of ADVISORY_REQUIRED_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    if (!/^ {2}idd-advisory-convergence:$/m.test(text)) {
+      report(RWA005, path, 'must keep job id idd-advisory-convergence');
+    }
+    const requiredJob = jobBlocks(text)?.get('idd-advisory-convergence');
+    if (requiredJob === undefined) {
+      report(RWA005, path, 'must keep the required gate job');
+    } else if (!/^ {4}if: \$\{\{ !cancelled\(\) \}\}$/m.test(requiredJob)) {
+      report(RWA005, path, 'manual re-checks must still run the required gate');
+    }
+    if (/probe_token_scopes|probe-self-waiver-token-scopes/.test(text)) {
+      report(RWA005, path, 'must not reference the token-scope probe');
+    }
+    const jobBody = jobBodyAfterHeader(
+      text,
+      /^ {2}idd-advisory-convergence:$/m,
+    );
+    const permissions =
+      jobBody === undefined ? undefined : jobPermissionsBlock(jobBody);
+    if (jobBody === undefined) {
+      report(RWA005, path, 'must keep the idd-advisory-convergence job');
+    } else if (permissions === undefined) {
+      report(
+        RWA005,
+        path,
+        'idd-advisory-convergence job must declare a permissions: block',
+      );
+    } else if (!/^ {6}checks: read$/m.test(permissions)) {
+      report(
+        RWA005,
+        path,
+        "idd-advisory-convergence job must keep checks: read (kurone-kito/idd-skill#3253 -- getChangeRequestHeadObservedAt's checkSuites read needs it)",
+      );
+    }
+  }
+}
+
+// The trigger contract of the required gate: pull_request_target only.
+function checkRequiredGateTriggers(root: string, report: Report): void {
+  for (const path of ADVISORY_REQUIRED_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    const onBlock = onBlockOf(text);
+    if (/pull_request_review_comment/.test(onBlock)) {
+      report(RWA005, path, 'on: must not include pull_request_review_comment');
+    }
+    if (/issue_comment/.test(onBlock)) {
+      report(RWA005, path, 'on: must not include issue_comment');
+    }
+    if (/^\s*pull_request:\s*$/m.test(onBlock)) {
+      report(
+        RWA005,
+        path,
+        'on: must no longer include the transitional pull_request trigger',
+      );
+    }
+    if (!/^\s*pull_request_target:\s*$/m.test(onBlock)) {
+      report(RWA005, path, 'on: must still include pull_request_target');
+    }
+    if (/(?<!_)pull_request_review:/.test(onBlock)) {
+      report(
+        RWA005,
+        path,
+        'on: must not include pull_request_review (moved to the companion workflow)',
+      );
+    }
+    if (!/pull_request_target:/.test(onBlock)) {
+      report(RWA005, path, 'on: must include pull_request_target');
+    }
+    // Still checks out only the trusted default branch for every trigger.
+    if (!/ref:\s*main/.test(text)) {
+      report(RWA005, path, 'checkout must stay pinned to ref: main');
+    }
+  }
+}
+
+// The required gate's external-check-waiver jobs keep all three read scopes
+// (kurone-kito/idd-skill#3683). Discovery is by substring, so a template step
+// that calls the helper through another command is still covered.
+function checkExternalCheckWaiverInvokers(root: string, report: Report): void {
+  for (const path of ADVISORY_REQUIRED_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    const blocks = jobBlocks(text);
+    if (blocks === undefined) {
+      report(RWA005, path, 'workflow must declare a jobs: section');
+      continue;
+    }
+    const invokers = [...blocks].filter(([, body]) =>
+      body.includes('external-check-waiver'),
+    );
+    if (
+      !invokers.some(([id]) => id === 'idd-advisory-convergence-self-waiver')
+    ) {
+      report(
+        RWA005,
+        path,
+        'the scan must find idd-advisory-convergence-self-waiver as an external-check-waiver invoker, or this check would pass vacuously',
+      );
+    }
+    for (const [id, body] of invokers) {
+      const permissions = jobPermissionsBlock(body);
+      if (permissions === undefined) {
+        report(
+          RWA005,
+          path,
+          `${id} invokes external-check-waiver and must declare a permissions: block`,
+        );
+        continue;
+      }
+      for (const scope of ['actions', 'checks', 'statuses']) {
+        if (!new RegExp(`^ {6}${scope}: read$`, 'm').test(permissions)) {
+          report(
+            RWA005,
+            path,
+            `${id} invokes external-check-waiver and must keep ${scope}: read (kurone-kito/idd-skill#3683 -- its statusCheckRollup and check-suites reads can fail with "Resource not accessible by integration" in a private repository without it)`,
+          );
+        }
+      }
+    }
+  }
+}
+
+// The probe is a separate, non-required, issue_comment-only workflow that
+// reads exactly the six requested scopes and matches the helper's query.
+function checkTokenScopeProbeWorkflows(root: string, report: Report): void {
+  const helper = readRequiredText(
+    root,
+    EXTERNAL_CHECK_WAIVER_PATH,
+    RWA005,
+    report,
+  );
+  const helperFields = helper?.match(
+    /function fetchPullRequest\([\s\S]*?'--json',\s*'([^']+)'/,
+  )?.[1];
+  if (helper !== undefined && helperFields === undefined) {
+    report(
+      RWA005,
+      EXTERNAL_CHECK_WAIVER_PATH,
+      'fetchPullRequest must declare its --json fields',
+    );
+  }
+
+  for (const path of PROBE_WORKFLOW_PATHS) {
+    const workflow = readRequiredText(root, path, RWA005, report);
+    if (workflow === undefined) {
+      continue;
+    }
+    checkProbeTriggersAndIdentity(path, workflow, report);
+    const probe = jobBlocks(workflow)?.get('probe-self-waiver-token-scopes');
+    if (probe === undefined) {
+      report(RWA005, path, 'workflow must contain the token-scope probe job');
+      continue;
+    }
+    checkProbeJob(path, probe, helperFields, report);
+  }
+}
+
+function checkProbeTriggersAndIdentity(
+  path: string,
+  workflow: string,
+  report: Report,
+): void {
+  const onBlock = onBlockOf(workflow);
+  const triggerKeys = [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map(
+    (match) => match[1],
+  );
+  if (triggerKeys.length !== 1 || triggerKeys[0] !== 'issue_comment') {
+    report(RWA005, path, 'probe must use only issue_comment');
+  }
+  if (!/^ {4}types: \[created\]$/m.test(onBlock)) {
+    report(RWA005, path, 'probe must run only for newly created comments');
+  }
+  if (/workflow_dispatch|pull_request|push|workflow_call/.test(onBlock)) {
+    report(
+      RWA005,
+      path,
+      'probe must not expose another trigger or selected ref',
+    );
+  }
+  if (
+    !/^# issue_comment uses the workflow definition from the repository's default branch\.$/m.test(
+      workflow,
+    )
+  ) {
+    report(RWA005, path, 'probe must keep its default-branch trigger note');
+  }
+  if (!/^name: IDD self-waiver token-scope probe$/m.test(workflow)) {
+    report(RWA005, path, 'probe must keep its workflow name');
+  }
+  if (!/^ {2}probe-self-waiver-token-scopes:$/m.test(workflow)) {
+    report(RWA005, path, 'probe must keep its job id');
+  }
+  if (/^ {2}idd-advisory-convergence:$/m.test(workflow)) {
+    report(RWA005, path, 'probe must not declare the required job id');
+  }
+}
+
+// The probe job's own contract: trusted author gate, no caller-selected input,
+// hardened shell, read-only query, and exactly six read scopes.
+function checkProbeJob(
+  path: string,
+  probe: string,
+  helperFields: string | undefined,
+  report: Report,
+): void {
+  const fail = (message: string) => report(RWA005, path, message);
+  if (
+    !/^ {4}if: \$\{\{ github\.event\.issue\.pull_request != null && github\.event\.comment\.body == '\/idd-probe-token-scopes' && \(github\.event\.comment\.author_association == 'OWNER' \|\| github\.event\.comment\.author_association == 'MEMBER' \|\| github\.event\.comment\.author_association == 'COLLABORATOR'\) \}\}$/m.test(
+      probe,
+    )
+  ) {
+    fail(
+      'job must require a PR, the exact command, and a trusted author association',
+    );
+  }
+  if (
+    /inputs\.|github\.ref|workflow_dispatch|actions\/checkout|git clone/.test(
+      probe,
+    )
+  ) {
+    fail(
+      'probe must not accept caller-selected inputs or execute checked-out content',
+    );
+  }
+  if (path.startsWith('idd-template/')) {
+    if (
+      !/^ {4}runs-on: \$\{\{ vars\.CI_RUNNER_LABEL \|\| 'ubuntu-slim' \}\}$/m.test(
+        probe,
+      )
+    ) {
+      fail('runner must keep the CI_RUNNER_LABEL and ubuntu-slim fallback');
+    }
+  } else if (!/^ {4}runs-on: ubuntu-slim$/m.test(probe)) {
+    fail('probe runner must be ubuntu-slim');
+  }
+  if (
+    !/^ {10}PR_NUMBER: \$\{\{ github\.event\.issue\.number \}\}$/m.test(probe)
+  ) {
+    fail('PR number must come only from the issue_comment event');
+  }
+  if (
+    !/^ {10}COMMENT_BODY: \$\{\{ github\.event\.comment\.body \}\}$/m.test(
+      probe,
+    )
+  ) {
+    fail('comment text must be passed through an environment variable');
+  }
+  if (!/^ {10}GH_TOKEN: \$\{\{ github\.token \}\}$/m.test(probe)) {
+    fail("probe must authenticate gh with this run's GITHUB_TOKEN");
+  }
+  if (!/--repo "\$GITHUB_REPOSITORY"/.test(probe)) {
+    fail('probe must query the current repository');
+  }
+  const run = probe.slice(probe.indexOf('\n        run:'));
+  if (/\$\{\{\s*github\.event\.comment/.test(run)) {
+    fail('comment text must not be interpolated into a shell command');
+  }
+  const exactCommandGuard = run.indexOf(
+    `if [[ "$COMMENT_BODY" != '/idd-probe-token-scopes' ]]; then`,
+  );
+  const probeQuery = run.indexOf('gh pr view');
+  if (!(exactCommandGuard >= 0 && exactCommandGuard < probeQuery)) {
+    fail(
+      'shell must case-sensitively reject non-exact commands before API reads',
+    );
+  }
+  const hostSetup = probe.search(
+    /NORMALIZED_GH_HOST=\$\(printf '%s' "\$\{GH_HOST:-\}"/,
+  );
+  const query = probe.indexOf('gh pr view');
+  if (!(hostSetup >= 0 && hostSetup < query)) {
+    fail(
+      'probe must normalize GH_HOST before gh runs without a local repository',
+    );
+  }
+  if (!probe.includes("sed 's/^[[:space:]]*//; s/[[:space:]]*$//'")) {
+    fail('probe must treat whitespace-only GH_HOST as unset');
+  }
+  if (
+    !/if \[ -z "\$NORMALIZED_GH_HOST" \][\s\S]*?GITHUB_SERVER_URL[\s\S]*?NORMALIZED_GH_HOST="\$SERVER_HOST"[\s\S]*?export GH_HOST="\$NORMALIZED_GH_HOST"/.test(
+      probe,
+    )
+  ) {
+    fail('probe must derive the gh host from the Actions server URL');
+  }
+  if (!/gh pr view/.test(probe)) {
+    fail('probe must query gh pr view');
+  }
+  if (
+    !/--jq '\[any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\), any\(\.statusCheckRollup\[\]\?; \.__typename == "StatusContext"\), any\(\.closingIssuesReferences\[\]\?; \.number > 0\)\] \| map\(tostring\) \| join\(" "\)'/.test(
+      probe,
+    )
+  ) {
+    fail(
+      'probe must verify Actions, legacy status, and a linked issue exercise all read scopes',
+    );
+  }
+  for (const phrase of [
+    'has no Actions check run',
+    'has no legacy status context',
+    'has no linked closing issue',
+  ]) {
+    if (!probe.includes(phrase)) {
+      fail(`probe must report when it ${phrase}`);
+    }
+  }
+  if (
+    !/Read-only self-waiver query probe succeeded for PR .*Actions, legacy status, and a linked issue/.test(
+      probe,
+    )
+  ) {
+    fail('probe must print its read-only success summary');
+  }
+  if (
+    /external-check-waiver|gh api|gh issue|gh pr comment|--method|labels|required_status_checks/.test(
+      probe,
+    )
+  ) {
+    fail(
+      'probe must not invoke a waiver, comment, label, or required-check write operation',
+    );
+  }
+  const probeFields = probe.match(/--json\s+([^\s\\]+)/)?.[1];
+  if (probeFields !== helperFields) {
+    fail('probe query fields must match fetchPullRequest exactly');
+  }
+  const permissions = probe.match(/^ {4}permissions:\n((?: {6}.*\n)+)/m)?.[1];
+  if (permissions === undefined) {
+    fail('probe must declare job-level permissions');
+    return;
+  }
+  const actualPermissions = [...permissions.matchAll(/^ {6}([\w-]+: \w+)$/gm)]
+    .map((match) => match[1])
+    .sort();
+  if (
+    actualPermissions.join('\n') !==
+    [...PROBE_READ_PERMISSIONS].sort().join('\n')
+  ) {
+    fail('probe must grant exactly the six requested read-only scopes');
+  }
+}
+
+// The onboarding guide documents how to run the probe: its scopes, trigger,
+// command, and the denied-read remedy.
+function checkOnboardingGuideProbeSection(root: string, report: Report): void {
+  const guide = readRequiredText(root, ONBOARDING_GUIDE_PATH, RWA005, report);
+  if (guide === undefined) {
+    return;
+  }
+  const heading = '### Waiver probe';
+  const start = guide.indexOf(heading);
+  if (start === -1) {
+    report(
+      RWA005,
+      ONBOARDING_GUIDE_PATH,
+      'onboarding guide must explain the token-scope probe',
+    );
+    return;
+  }
+  const afterHeading = guide.slice(start + heading.length);
+  const nextHeading = afterHeading.search(/^#{1,3} /m);
+  const section =
+    nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+  const tableRows = section
+    .split('\n')
+    .filter((line) => line.startsWith('| `'));
+  for (const permission of PROBE_READ_PERMISSIONS) {
+    const cell = `\`${permission}\``;
+    if (!tableRows.some((line) => line.split('|')[1]?.trim() === cell)) {
+      report(
+        RWA005,
+        ONBOARDING_GUIDE_PATH,
+        `onboarding guide table must include ${permission}`,
+      );
+    }
+  }
+  const sectionChecks: readonly (readonly [RegExp, string])[] = [
+    [
+      /non-required/i,
+      'onboarding guide must describe the probe as non-required',
+    ],
+    [
+      /idd-advisory-convergence-probe\.yml/,
+      'onboarding guide must name the probe workflow',
+    ],
+    [/default branch/i, 'onboarding guide must name the default branch'],
+    [/issue_comment/i, 'onboarding guide must name the issue_comment trigger'],
+    [
+      /post this on the target PR/i,
+      'onboarding guide must say to post the command on the target PR',
+    ],
+    [
+      /```text\n\/idd-probe-token-scopes\n```/,
+      'onboarding guide must show the exact command',
+    ],
+    [
+      /`OWNER`, `MEMBER`, or `COLLABORATOR`/,
+      'onboarding guide must list the trusted author associations',
+    ],
+    [/edits/i, 'onboarding guide must say edits do not re-trigger the probe'],
+    [/other casing/i, 'onboarding guide must say other casing is rejected'],
+    [
+      /no ref input, checkout, PR code/i,
+      'onboarding guide must say the probe takes no ref input or checkout',
+    ],
+    [
+      /comment write/i,
+      'onboarding guide must say the probe performs no comment write',
+    ],
+    [
+      /Actions\s+check,\s+legacy status,\s+and linked\s+issue/i,
+      'onboarding guide must name the three read exercises',
+    ],
+    [
+      /this run's token access here/i,
+      "onboarding guide must describe this run's token access",
+    ],
+    [
+      /denied reads point to token or\s+Actions settings/i,
+      'onboarding guide must point denied reads at token or Actions settings',
+    ],
+    [/`issues: write`/, 'onboarding guide must name the issues: write scope'],
+    [
+      /`pull-requests: write`/,
+      'onboarding guide must name the pull-requests: write scope',
+    ],
+    [
+      /public success does not prove private access/i,
+      'onboarding guide must say public success does not prove private access',
+    ],
+    [
+      /required-gate change/i,
+      'onboarding guide must say a required-gate change is needed',
+    ],
+  ];
+  for (const [pattern, message] of sectionChecks) {
+    if (!pattern.test(section)) {
+      report(RWA005, ONBOARDING_GUIDE_PATH, message);
+    }
+  }
+}
+
+// The comment-refresh companion is non-required, uses its own job id, and
+// keeps its trigger, helper calls, and non-cancelling concurrency.
+function checkCommentRefreshIdentity(root: string, report: Report): void {
+  for (const path of COMMENT_WORKFLOW_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    if (/^ {2}idd-advisory-convergence:$/m.test(text)) {
+      report(RWA005, path, 'must not reuse the required job id');
+    }
+    if (!/^ {2}refresh-if-idd-originated:$/m.test(text)) {
+      report(RWA005, path, 'must keep the refresh-if-idd-originated job');
+    }
+    if (!/pull_request_review_comment:/.test(text)) {
+      report(RWA005, path, 'must keep the pull_request_review_comment trigger');
+    }
+    if (!/rerun-advisory-convergence/.test(text)) {
+      report(RWA005, path, 'must keep the rerun helper');
+    }
+    if (!/review-comment-origin/.test(text)) {
+      report(RWA005, path, 'must keep the review-comment origin classifier');
+    }
+    if (!/cancel-in-progress:\s*false/.test(text)) {
+      report(RWA005, path, 'must not cancel an in-flight IDD refresh');
+    }
+  }
+}
+
+// The companion also listens to issue_comment, skips plain issues, and gives the
+// rerun step its PR number from either event shape.
+function checkCommentRefreshTriggers(root: string, report: Report): void {
+  for (const path of COMMENT_WORKFLOW_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    if (!/issue_comment:/.test(text)) {
+      report(RWA005, path, 'on: must include issue_comment');
+    }
+    if (
+      !/github\.event_name\s*!=\s*'issue_comment'\s*\|\|\s*github\.event\.issue\.pull_request\s*!=\s*null/.test(
+        text,
+      )
+    ) {
+      report(RWA005, path, 'must skip a plain-issue issue_comment event');
+    }
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    if (rerunIndex === -1) {
+      report(RWA005, path, 'must have a "Rerun required HEAD check" step');
+      continue;
+    }
+    const prNumberAssignment = text
+      .slice(rerunIndex)
+      .match(/PR_NUMBER:\s*\$\{\{\s*([^}]+)\}\}/);
+    if (prNumberAssignment === null) {
+      report(
+        RWA005,
+        path,
+        'Rerun required HEAD check step must assign PR_NUMBER',
+      );
+    } else if (
+      !/github\.event\.pull_request\.number\s*\|\|\s*github\.event\.issue\.number/.test(
+        prNumberAssignment[1],
+      )
+    ) {
+      report(RWA005, path, 'PR_NUMBER must resolve from either event shape');
+    }
+    if (!/pull_request_review:/.test(onBlockOf(text))) {
+      report(RWA005, path, 'on: must include pull_request_review');
+    }
+    const reviewRerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    const ifLine = firstIfLine(stepTextFrom(text, reviewRerunIndex));
+    if (ifLine === undefined) {
+      report(RWA005, path, 'Rerun required HEAD check step must have an if:');
+    } else if (
+      !/github\.event_name\s*==\s*'pull_request_review'/.test(ifLine)
+    ) {
+      report(
+        RWA005,
+        path,
+        "rerun step's if: must OR in pull_request_review explicitly",
+      );
+    }
+  }
+}
+
+// The companion files exist and are not empty.
+function checkCommentRefreshFiles(root: string, report: Report): void {
+  for (const path of COMMENT_WORKFLOW_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text !== undefined && text.length === 0) {
+      report(RWA005, path, 'must not be empty');
+    }
+  }
+}
+
+// The debounce step runs between classification and rerun, gates the rerun, and
+// never delays a pull_request_review rerun.
+function checkCommentRefreshDebounce(root: string, report: Report): void {
+  for (const path of COMMENT_WORKFLOW_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    if (!/- name: Check for newer qualifying event/.test(text)) {
+      report(
+        RWA005,
+        path,
+        'must have a "Check for newer qualifying event" debounce step',
+      );
+    }
+    if (!/id:\s*debounce/.test(text)) {
+      report(RWA005, path, 'debounce step must expose id: debounce');
+    }
+    if (!/advisory-comment-debounce/.test(text)) {
+      report(RWA005, path, 'must invoke the advisory-comment-debounce helper');
+    }
+    const originIndex = text.indexOf('- name: Classify review comment');
+    const debounceIndex = text.indexOf(
+      '- name: Check for newer qualifying event',
+    );
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    if (originIndex === -1 || debounceIndex === -1 || rerunIndex === -1) {
+      report(RWA005, path, 'must keep the classify, debounce, and rerun steps');
+    } else {
+      if (!(originIndex < debounceIndex && debounceIndex < rerunIndex)) {
+        report(
+          RWA005,
+          path,
+          'steps must run in order: classify, debounce, rerun',
+        );
+      }
+      const ifLine = firstIfLine(stepTextFrom(text, rerunIndex));
+      if (ifLine === undefined) {
+        report(
+          RWA005,
+          path,
+          'Rerun required HEAD check step must have an if: condition',
+        );
+      } else {
+        if (
+          !/steps\.origin\.outputs\.idd_originated\s*==\s*'true'/.test(ifLine)
+        ) {
+          report(
+            RWA005,
+            path,
+            "rerun step's if: must still require idd_originated",
+          );
+        }
+        if (!/steps\.debounce\.outputs\.skip\s*!=\s*'true'/.test(ifLine)) {
+          report(
+            RWA005,
+            path,
+            "rerun step's if: must require the debounce step did not skip",
+          );
+        }
+      }
+    }
+    if (!/cancel-in-progress:\s*false/.test(text)) {
+      report(RWA005, path, 'must not cancel an in-flight IDD refresh');
+    }
+  }
+}
+
+// The rerun step calls success() explicitly, and the review branch is not
+// gated by success().
+function checkCommentRefreshSuccessCall(root: string, report: Report): void {
+  for (const path of COMMENT_WORKFLOW_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    if (rerunIndex === -1) {
+      report(RWA005, path, 'must have a "Rerun required HEAD check" step');
+      continue;
+    }
+    const ifLine = firstIfLine(stepTextFrom(text, rerunIndex));
+    if (ifLine === undefined) {
+      report(RWA005, path, 'rerun step must have an if: condition');
+      continue;
+    }
+    if (!/success\(\)/.test(ifLine)) {
+      report(
+        RWA005,
+        path,
+        "rerun step's if: must call success() explicitly to suppress GitHub's implicit prepend",
+      );
+    }
+    if (/pull_request_review'\s*&&\s*success\(\)/.test(ifLine)) {
+      report(
+        RWA005,
+        path,
+        "rerun step's pull_request_review branch must not itself be gated by success()",
+      );
+    }
+    if (
+      /success\(\)\s*&&\s*\(?\s*github\.event_name\s*==\s*'pull_request_review'/.test(
+        ifLine,
+      )
+    ) {
+      report(
+        RWA005,
+        path,
+        "rerun step's pull_request_review branch must not itself be gated by success()",
+      );
+    }
+  }
+}
+
+// Debounce never suppresses a pull_request_review rerun.
+function checkCommentRefreshReviewBypass(root: string, report: Report): void {
+  for (const path of COMMENT_WORKFLOW_PATHS) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    const debounceIndex = text.indexOf(
+      '- name: Check for newer qualifying event',
+    );
+    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    if (debounceIndex === -1 || rerunIndex === -1) {
+      report(RWA005, path, 'must keep the debounce and rerun steps');
+      continue;
+    }
+    const debounceIfLine = firstIfLine(text.slice(debounceIndex, rerunIndex));
+    if (debounceIfLine === undefined) {
+      report(RWA005, path, 'debounce step must have an if: condition');
+    } else if (
+      !/github\.event_name\s*!=\s*'pull_request_review'/.test(debounceIfLine)
+    ) {
+      report(
+        RWA005,
+        path,
+        "debounce step's if: must explicitly exclude pull_request_review, not merely omit mentioning it",
+      );
+    }
+    const rerunIfLine = firstIfLine(stepTextFrom(text, rerunIndex));
+    if (rerunIfLine === undefined) {
+      report(RWA005, path, 'rerun step must have an if: condition');
+      continue;
+    }
+    if (/pull_request_review'\s*&&[^|]*debounce/.test(rerunIfLine)) {
+      report(
+        RWA005,
+        path,
+        "rerun step's pull_request_review branch must not be gated by debounce.outputs.skip",
+      );
+    }
+    if (
+      /debounce\.outputs\.skip[^|]*&&[^)]*pull_request_review/.test(rerunIfLine)
+    ) {
+      report(
+        RWA005,
+        path,
+        "rerun step's pull_request_review branch must not be gated by debounce.outputs.skip",
+      );
+    }
+  }
+}
+
+// The template companion keeps the profile and manager guard on its rerun step.
+function checkTemplateCommentProfileGuard(root: string, report: Report): void {
+  const path =
+    'idd-template/.github/workflows/idd-advisory-convergence-comment.yml';
+  const text = readRequiredText(root, path, RWA005, report);
+  if (text === undefined) {
+    return;
+  }
+  const debounceIndex = text.indexOf(
+    '- name: Check for newer qualifying event',
+  );
+  const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+  if (debounceIndex === -1 || rerunIndex === -1) {
+    report(RWA005, path, 'must keep the debounce and rerun steps');
+    return;
+  }
+  const rerunIfLine = firstIfLine(stepTextFrom(text, rerunIndex));
+  if (rerunIfLine === undefined) {
+    report(RWA005, path, 'rerun step must have an if: condition');
+    return;
+  }
+  if (
+    !/steps\.profile\.outputs\.profile\s*!=\s*'instructions-only'/.test(
+      rerunIfLine,
+    )
+  ) {
+    report(
+      RWA005,
+      path,
+      "rerun step's if: must still exclude instructions-only",
+    );
+  }
+  if (
+    !/steps\.manager\.outputs\.manager\s*!=\s*'ambiguous'/.test(rerunIfLine)
+  ) {
+    report(
+      RWA005,
+      path,
+      "rerun step's if: must still exclude an ambiguous package manager",
+    );
+  }
+}
+
+// The template self-waiver job keeps a non-failing notice for an unconfigured
+// helper runtime, gated on the allowlist touch.
+function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
+  const path = 'idd-template/.github/workflows/idd-advisory-convergence.yml';
+  const text = readRequiredText(root, path, RWA005, report);
+  if (text === undefined) {
+    return;
+  }
+  const noticeIndex = text.indexOf(
+    '- name: Notice when no helper runtime is configured',
+  );
+  if (noticeIndex === -1) {
+    report(
+      RWA005,
+      path,
+      'must keep a non-failing notice step for an unconfigured helper runtime',
+    );
+    return;
+  }
+  const noticeStepText = stepTextFrom(text, noticeIndex);
+  const noticeIfLine = firstIfLine(noticeStepText);
+  if (noticeIfLine === undefined) {
+    report(RWA005, path, 'notice step must have an if: condition');
+  } else if (
+    !/steps\.allowlist\.outputs\.touched\s*==\s*'true'/.test(noticeIfLine)
+  ) {
+    report(
+      RWA005,
+      path,
+      "notice step's if: must be gated on the allowlist touch result",
+    );
+  }
+  const noticeStepCode = noticeStepText
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+  if (/exit 1/.test(noticeStepCode)) {
+    report(
+      RWA005,
+      path,
+      'notice step must not fail the job (exit 1) for an unconfigured helper runtime',
+    );
+  }
+  if (!/::notice::/.test(noticeStepCode)) {
+    report(
+      RWA005,
+      path,
+      'notice step must explain itself with a ::notice:: annotation',
+    );
+  }
+}
+
+// The template self-waiver post step excludes instructions-only explicitly.
+function checkTemplateSelfWaiverPostGuard(root: string, report: Report): void {
+  const path = 'idd-template/.github/workflows/idd-advisory-convergence.yml';
+  const text = readRequiredText(root, path, RWA005, report);
+  if (text === undefined) {
+    return;
+  }
+  const postIndex = text.indexOf(
+    '- name: Post the self-referential-bootstrap-auto waiver',
+  );
+  if (postIndex === -1) {
+    report(
+      RWA005,
+      path,
+      'must keep the self-referential-bootstrap-auto post step',
+    );
+    return;
+  }
+  const postIfLine = firstIfLine(stepTextFrom(text, postIndex));
+  if (postIfLine === undefined) {
+    report(RWA005, path, 'post step must have an if: condition');
+  } else if (
+    !/steps\.profile\.outputs\.profile\s*!=\s*'instructions-only'/.test(
+      postIfLine,
+    )
+  ) {
+    report(
+      RWA005,
+      path,
+      "post step's if: must exclude instructions-only, not rely on the case statement's *) fallthrough",
+    );
+  }
+}
+
 export function collectRepositoryWorkflowViolations(
   root: string,
 ): RepositoryWorkflowViolation[] {
@@ -1226,6 +2209,21 @@ export function collectRepositoryWorkflowViolations(
   checkRequiredCheckWorkflows(root, report);
   checkPullRequestConcurrency(root, report);
   checkRunnerContracts(root, report);
+  checkSelfWaiverJobPermissions(root, report);
+  checkRequiredGateWorkflows(root, report);
+  checkRequiredGateTriggers(root, report);
+  checkExternalCheckWaiverInvokers(root, report);
+  checkTokenScopeProbeWorkflows(root, report);
+  checkOnboardingGuideProbeSection(root, report);
+  checkCommentRefreshIdentity(root, report);
+  checkCommentRefreshTriggers(root, report);
+  checkCommentRefreshFiles(root, report);
+  checkCommentRefreshDebounce(root, report);
+  checkCommentRefreshSuccessCall(root, report);
+  checkCommentRefreshReviewBypass(root, report);
+  checkTemplateCommentProfileGuard(root, report);
+  checkTemplateSelfWaiverNotice(root, report);
+  checkTemplateSelfWaiverPostGuard(root, report);
   return violations;
 }
 
