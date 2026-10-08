@@ -694,7 +694,9 @@ export function computeRerunPlan(input, options) {
   // variants below; the `--refresh-latest` variant stays as it is.
   const pullRequestTargetCheckRunIds = new Set(
     instances
-      .filter((instance) => instance.runEvent === 'pull_request_target')
+      .filter(
+        (instance) => String(instance.runEvent ?? '') === 'pull_request_target',
+      )
       .map((instance) => instance.checkRunId),
   );
   const withheldPullRequestTargetRerun = [...eligibleDecisions.entries()].some(
