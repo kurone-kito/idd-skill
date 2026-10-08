@@ -341,14 +341,19 @@ function readStringConstant(source, name) {
   const match = new RegExp(`export const ${name} =\\s*'([^']*)';`).exec(source);
   return match?.[1];
 }
-// Whether a `name:` key carries the artifact prefix in its value. A step's
-// `- name:` line, a comment, or a `run:` line cannot satisfy this, because
-// only the value of a plain key is read.
-function declaresArtifactName(text, prefix) {
-  return text.split('\n').some((line) => {
-    const value = line.trim().match(/^name:\s*['"]?(.*)$/)?.[1];
-    return value?.startsWith(prefix) === true;
-  });
+// Whether an upload-artifact step in the job declares the prefix as the value
+// of its `with:` name key. A `run:` line that merely contains the prefix cannot
+// satisfy this, because only that key's value is read.
+function declaresArtifactName(jobBody, prefix) {
+  return jobBody
+    .split(STEP_BOUNDARY)
+    .filter((step) => /^\s*uses:\s*['"]?actions\/upload-artifact\b/m.test(step))
+    .some((step) =>
+      step.split('\n').some((line) => {
+        const value = line.match(/^ {10}name:\s*['"]?(.*)$/)?.[1];
+        return value?.startsWith(prefix) === true;
+      }),
+    );
 }
 // Both copies must keep the self-waiver job id, post-step name, and artifact
 // prefix that the waiver provenance verifier reads, so a rename in one copy
@@ -397,23 +402,25 @@ function checkSelfReferentialWaiverConstants(root, report) {
     if (workflow === undefined) {
       continue;
     }
-    // Declarations, not substrings: a comment or another step that repeats
-    // the same text must not satisfy these checks.
-    if (!jobIds(workflow)?.includes(jobId)) {
+    // Declarations, read from the job the verifier reads. A comment, another
+    // job, or another step that repeats the same text cannot satisfy these.
+    const jobBody = jobBlocks(workflow)?.get(jobId);
+    if (jobBody === undefined) {
       report(
         RWA006,
         path,
         'no longer declares the expected self-waiver job id',
       );
+      continue;
     }
     if (
-      !workflow
+      !jobBody
         .split('\n')
         .some((line) => line.trim() === `- name: ${postStepName}`)
     ) {
       report(RWA006, path, 'no longer declares the expected post-step name');
     }
-    if (!declaresArtifactName(workflow, artifactNamePrefix)) {
+    if (!declaresArtifactName(jobBody, artifactNamePrefix)) {
       report(
         RWA006,
         path,

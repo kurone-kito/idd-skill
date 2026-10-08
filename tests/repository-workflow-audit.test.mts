@@ -2330,6 +2330,47 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA006',
+    name: 'a self-waiver post step renamed while another job declares the old name',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const step =
+          '      - name: Post the self-referential-bootstrap-auto waiver\n';
+        anchored(text, step);
+        const renamed = text.replace(step, '      - name: Post the waiver\n');
+        const job = anchored(
+          renamed,
+          '  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${renamed.slice(0, job)}${step}        run: echo ok\n${renamed.slice(job)}`;
+      },
+    },
+    expected: [{ message: 'no longer declares the expected post-step name' }],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'a self-waiver artifact renamed while another job uploads under the prefix',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        anchored(text, '          name: idd-self-waiver-marker-');
+        const renamed = text.replace(
+          '          name: idd-self-waiver-marker-',
+          '          name: renamed-marker-',
+        );
+        const job = anchored(
+          renamed,
+          '  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${renamed.slice(0, job)}      - uses: actions/upload-artifact@v4\n        with:\n          name: idd-self-waiver-marker-probe\n${renamed.slice(job)}`;
+      },
+    },
+    expected: [
+      { message: 'no longer declares the expected artifact-name prefix' },
+    ],
+  },
+  {
+    ruleId: 'RWA006',
     name: 'a job id renamed while its old id survives in a comment',
     path: ROOT_ADVISORY,
     mutation: {
