@@ -46,6 +46,7 @@ import {
   resolveDistributedFileSet,
 } from './markdown-link-audit.mjs';
 import { collectRepositoryInstructionViolations } from './repository-instruction-audit.mjs';
+import { collectRepositoryWorkflowViolations } from './repository-workflow-audit.mjs';
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
@@ -242,6 +243,12 @@ async function main() {
       ...collectRepositoryInstructionViolations(root).map(
         ({ ruleId, path, message }) =>
           `repository-instruction-audit/${ruleId}: ${path}: ${message}`,
+      ),
+    );
+    errors.push(
+      ...collectRepositoryWorkflowViolations(root).map(
+        ({ ruleId, path, message }) =>
+          `repository-workflow-audit/${ruleId}: ${path}: ${message}`,
       ),
     );
   }
