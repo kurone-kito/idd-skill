@@ -1842,14 +1842,18 @@ function checkProbeTriggersAndIdentity(
   workflow: string,
   report: Report,
 ): void {
-  const onBlock = extractOnBlock(workflow);
+  const declared = declarationText(workflow);
+  const onBlock = onBlockOf(declared);
   if (onBlock === undefined) {
     report(RWA005, path, 'on:/permissions: block not found');
     return;
   }
-  const triggerKeys = [...onBlock.matchAll(/^ {2}([a-z_]+):/gm)].map(
-    (match) => match[1],
-  );
+  // Every key at the trigger indentation, quoted or not. A line that does not
+  // read as a plain or quoted key stays in the list, so it fails the check.
+  const triggerKeys = onBlock
+    .split('\n')
+    .filter((line) => /^ {2}\S/.test(line))
+    .map((line) => line.match(/^ {2}(["']?)([\w-]+)\1\s*:/)?.[2] ?? line);
   if (triggerKeys.length !== 1 || triggerKeys[0] !== 'issue_comment') {
     report(RWA005, path, 'probe must use only issue_comment');
   }

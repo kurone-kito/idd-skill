@@ -3162,6 +3162,16 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe whose trigger list adds a quoted schedule key',
+    path: ROOT_PROBE,
+    mutation: {
+      from: '\non:\n  issue_comment:\n',
+      to: '\non:\n  "schedule":\n  issue_comment:\n',
+    },
+    expected: [{ message: 'probe must use only issue_comment' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
