@@ -762,17 +762,21 @@ test('eval Worker bridge preserves a leading strict-mode directive', async () =>
     `'use strict';\nconst { parentPort } = require('node:worker_threads');\nparentPort.postMessage((function () { return this; })() === undefined);`,
     { eval: true, execArgv: [] },
   );
-  const result = await new Promise<boolean>((resolve, reject) => {
+  // Both listeners are registered before the first await: a Worker that posts
+  // one message and returns can emit `exit` before a listener added after the
+  // `message` await would exist, leaving that promise pending forever.
+  const messagePromise = new Promise<boolean>((resolve, reject) => {
     worker.once('message', resolve);
     worker.once('error', reject);
   });
-  await new Promise<void>((resolve, reject) => {
+  const exitPromise = new Promise<void>((resolve, reject) => {
     worker.once('error', reject);
     worker.once('exit', (code) => {
       if (code === 0) resolve();
       else reject(new Error(`worker exited with code ${code}`));
     });
   });
+  const [result] = await Promise.all([messagePromise, exitPromise]);
   assert.equal(result, true);
 });
 

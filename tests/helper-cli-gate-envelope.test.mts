@@ -238,6 +238,12 @@ test('clone-lock acquire timeout is an envelope gate exit 3', async () => {
     ],
     { env: childEnv(), stdio: 'ignore' },
   );
+  // Register the exit listener at spawn: when the holder exits early, `exit`
+  // fires during the polling loop below, and a listener added in `finally`
+  // afterwards would wait forever and hide the failed assertion.
+  const holderExited = new Promise<void>((resolve) => {
+    holder.once('exit', () => resolve());
+  });
   try {
     const deadline = Date.now() + 4_000;
     let held = false;
@@ -266,9 +272,7 @@ test('clone-lock acquire timeout is an envelope gate exit 3', async () => {
     assertGate(waiter, 3);
   } finally {
     holder.kill('SIGTERM');
-    await new Promise((resolve) => {
-      holder.once('exit', () => resolve(undefined));
-    });
+    await holderExited;
     rmSync(repo, { recursive: true, force: true });
   }
 });
