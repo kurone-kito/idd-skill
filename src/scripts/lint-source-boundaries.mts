@@ -1335,7 +1335,17 @@ function scanComments(source: string): {
           typescriptAssertionTypeDepth = 1;
         } else {
           angleIsComparison = true;
-          openComparisonAngles.push(index);
+          // Only `Name<` whose type-parameter list starts on the next line can
+          // close on a later line. A spaced comparison never opens one.
+          if (
+            index > 0 &&
+            isIdentifierPartAt(source, index - 1) &&
+            /^[ \t]*[\n\r\u2028\u2029]/.test(
+              source.slice(index + 1, index + 65),
+            )
+          ) {
+            openComparisonAngles.push(index);
+          }
         }
         if (scanningFunctionReturnType) {
           functionReturnTypeAngleDepth += 1;
@@ -1444,10 +1454,15 @@ function scanComments(source: string): {
       }
       const closesControlFlowParenthesis =
         ch === ')' && controlFlowParentheses.pop() === true;
+      if (ch === ';') {
+        // A statement ends every pending multi-line type-parameter opener.
+        openComparisonAngles.length = 0;
+      }
       if (ch === '?') {
         const afterQuestion = source[index + 1];
         if (
           afterQuestion !== undefined &&
+          source[index - 1] !== '?' &&
           !'.?:),=];}'.includes(afterQuestion)
         ) {
           pendingConditionalDepths.push(codeNestingDepth);

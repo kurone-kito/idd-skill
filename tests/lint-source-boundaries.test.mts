@@ -2595,3 +2595,70 @@ for (const [label, unit] of [
     assert.match(lines[0], /yaml$/);
   });
 }
+
+// Review follow-ups on #3852: a spaced comparison must not open a multi-line
+// type-parameter list for a later `>`, a statement end must clear any pending
+// opener, and `??` must not leave a conditional colon pending.
+const reviewFollowUpRows: { name: string; source: string }[] = [
+  {
+    name: 'a spaced comparison followed by a line break, then a comparison with an object literal',
+    source: "const v = a < b ||\n  c > {} / /* import('left-pad') */ 2;\n",
+  },
+  {
+    name: 'a spaced comparison before a multi-line type-parameter list and a later comparison',
+    source:
+      'const x = a < b;\ninterface A<\n  T\n> {}\nconst y = c > {} / 2; // a ` b\n',
+  },
+  {
+    name: 'a nullish coalescing operator before a label block',
+    source: 'const v = a ?? b;\nlbl: {}\n/`/.test(x);\n',
+  },
+];
+
+for (const row of reviewFollowUpRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+
+  test(`the standalone-mirror rule reads ${row.name}`, () => {
+    const mirror = row.source.replaceAll("'left-pad'", "'./helper.mjs'");
+    const root = buildFixture((files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        `${mirror}import bare from './helper.mjs';\n`,
+      ),
+    );
+    const lines = mirrorImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /found: \.\/helper\.mjs$/);
+  });
+}
+
+test('a deeply nested mirror source is reported through the standalone-mirror rule without a stack trace', () => {
+  const nested = `${'`${'.repeat(20000)}x${'}`'.repeat(20000)};\n`;
+  const root = buildFixture((files) =>
+    files.set(
+      'scripts/mirror.mjs',
+      `${nested}import bare from './helper.mjs';\n`,
+    ),
+  );
+  const { stderr } = runCli(['--root', root]);
+  assert.ok(
+    mirrorImportLines(stderr).includes(
+      'STANDALONE-MIRROR-IMPORTS-INSPECTION scripts/mirror.mjs: nesting too deep to scan',
+    ),
+    mirrorImportLines(stderr).join('\n'),
+  );
+  assert.doesNotMatch(stderr, /^\s+at /m);
+  assert.doesNotMatch(stderr, /file:\/\//);
+});
