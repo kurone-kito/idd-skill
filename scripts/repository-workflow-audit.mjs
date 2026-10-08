@@ -1098,9 +1098,10 @@ function checkRequiredCheckWorkflows(root, report) {
     // conditional, wait on another job, or continue on error. The advisory gate
     // is excluded: its needs and if are part of its own design.
     const requiredJobBody = jobBlocks(text)?.get(jobId);
-    if (
+    if (requiredJobBody === undefined) {
+      report(RWA001, path, `job ${jobId} not found`);
+    } else if (
       file !== 'idd-advisory-convergence.yml' &&
-      requiredJobBody !== undefined &&
       structuralLines(requiredJobBody).some(
         (line) =>
           /^ {4}(if|needs)\s*:/.test(line) ||
@@ -1354,7 +1355,7 @@ const EXTERNAL_CHECK_WAIVER_PATH = 'src/scripts/external-check-waiver.mts';
 // Each job's indented body, keyed by job id, from the root jobs mapping. Full
 // comment lines are dropped first so commented-out steps cannot satisfy a check.
 function jobBlocks(text) {
-  const header = text.match(/^jobs:\s*$/m);
+  const header = text.match(/^jobs:\s*(?:#.*)?$/m);
   if (header?.index === undefined) {
     return undefined;
   }

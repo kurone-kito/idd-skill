@@ -2555,6 +2555,23 @@ const RULE_CASES: readonly RuleCase[] = [
     ],
   },
   {
+    ruleId: 'RWA001',
+    name: 'a required job made conditional beneath a jobs header that carries a comment',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      transform: (text: string) =>
+        text
+          .replace('\njobs:\n', '\njobs: # keep the jobs block\n')
+          .replace('  lint:\n', '  lint:\n    if: false\n'),
+    },
+    expected: [
+      {
+        message:
+          'lint must not be conditional, depend on another job, or continue on error',
+      },
+    ],
+  },
+  {
     ruleId: 'RWA005',
     name: 'a checkout written as a complex mapping key',
     path: ROOT_ADVISORY,
