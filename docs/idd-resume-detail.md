@@ -883,7 +883,11 @@ against an unrelated branch, and none has an observed incident of its own
    replay tip, not the pre-operation tip: read the pre-operation tip
    from `$(git -C <path> rev-parse --git-path rebase-merge)/orig-head`
    or `rebase-apply/orig-head` (whichever the detection above matched)
-   instead.
+   instead. For an in-progress bisect, `HEAD` is the commit under test,
+   not the pre-operation position: read that position from
+   `BISECT_START` instead. A branch name there means the current tip of
+   that branch is the intended tip, and a commit id there (a detached
+   start) is the intended tip itself.
 
    Before the first step-3 mutation, acquire the
    [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for the
@@ -945,7 +949,8 @@ against an unrelated branch, and none has an observed incident of its own
    backup alone as sufficient preservation. Preserve unpushed commits
    — this worktree's own and every submodule's — on a backup ref:
    record the intended tip first (`git -C <path> rev-parse HEAD`, or
-   the pre-operation tip captured above for an in-progress rebase),
+   the pre-operation tip captured above for an in-progress rebase, or
+   the position `BISECT_START` names for an in-progress bisect),
    then `git -C <path> update-ref refs/idd-lwr/<branch> <that-sha>`
    (or the same scoped to a submodule's own path), or a bundle,
    instead of pushing them to the issue branch. A stale
