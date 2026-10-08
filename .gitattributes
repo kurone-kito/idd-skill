@@ -39,6 +39,7 @@ scripts/clone-lock.mjs linguist-generated=true
 scripts/code-span-wrap.mjs linguist-generated=true
 scripts/collaborator-permission.mjs linguist-generated=true
 scripts/consistency-helpers.mjs linguist-generated=true
+scripts/copilot-overview-sections.mjs linguist-generated=true
 scripts/copilot-review-body.mjs linguist-generated=true
 scripts/copilot-review-wave-audit.mjs linguist-generated=true
 scripts/delete-remote-branch.mjs linguist-generated=true

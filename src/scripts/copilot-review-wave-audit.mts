@@ -12,7 +12,8 @@
 // defer rule) can be re-measured on demand instead of rebuilt from throwaway
 // scripts each time (#3001, #3046, #3221). Never registered in
 // HELPER_COMMANDS or distributed to idd-template/ (see
-// SOURCE_REPO_INTERNAL_ENTRY_PATHS in tests/helper-invocation-profile.test.mts,
+// INTERNAL_ENTRY_REASONS in src/scripts/repository-inventory-audit.mts (its
+// entry for scripts/copilot-review-wave-audit.mjs),
 // same class as audit-code-span-wrap.mts / idd-critique-report.mts) -- an
 // adopter repository has no Copilot-review-wave baseline of its own to
 // measure against this one.
@@ -26,13 +27,21 @@
 // key by -- excluded from every thread-keyed metric below). A `What changed
 // in this PR` section may also appear. Every nested finding's own
 // `<summary>` never wraps its severity badge in `<strong>`, which is what
-// lets `findSections` below tell a top-level section header apart from a
-// nested one with a single discriminator. The header line's own
-// `**Findings:** N <picture ... alt="... severity">` also carries an `alt=`
-// attribute -- section-scoped extraction (below) never widens the "Open"
-// item scan to include that header line, avoiding a double-count.
+// lets `findSections` (copilot-overview-sections.mts) tell a top-level
+// section header apart from a nested one with a single discriminator. The
+// header line's own `**Findings:** N <picture ... alt="... severity">` also
+// carries an `alt=` attribute -- section-scoped extraction (below) never
+// widens the "Open" item scan to include that header line, avoiding a
+// double-count.
 
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
+import {
+  emptySeverityCounts,
+  type ParsedOpenFinding,
+  parseOverviewSections,
+  type Severity,
+  type SeverityCounts,
+} from './copilot-overview-sections.mts';
 import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
@@ -51,11 +60,18 @@ import {
 } from './protocol-helpers.mts';
 import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
 
+// Re-exported so the wave audit keeps its public types (its own test imports
+// `ParsedOpenFinding` from here), while the shared extraction owns them.
+export type {
+  ParsedOpenFinding,
+  Severity,
+  SeverityCounts,
+} from './copilot-overview-sections.mts';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type Severity = 'high' | 'medium' | 'low';
 const SEVERITIES: readonly Severity[] = ['high', 'medium', 'low'];
 
 export type TransitionKey = 'none' | Severity;
@@ -104,14 +120,6 @@ export interface RawComment {
   createdAt: string | null;
   lastEditedAt?: string | null;
 }
-
-export interface ParsedOpenFinding {
-  id: number;
-  severity: Severity;
-  isNew: boolean;
-}
-
-export type SeverityCounts = Record<Severity, number>;
 
 export interface ParsedOverview {
   kind: 'v2' | 'legacy' | 'unparsed';
@@ -190,16 +198,8 @@ export interface CohortSummary {
   transitions: TransitionRow[];
 }
 
-function emptySeverityCounts(): SeverityCounts {
-  return { high: 0, medium: 0, low: 0 };
-}
-
 function emptyDispositionCounts(): Record<Disposition, number> {
   return { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 0 };
-}
-
-function toSeverity(word: string): Severity {
-  return word.toLowerCase() as Severity;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,58 +208,12 @@ function toSeverity(word: string): Severity {
 
 const CCR_OVERVIEW_V2_MARKER = '<!-- ccr-overview-v2 -->';
 
-// The discriminator between a top-level section header and a nested
-// "Previously missed" finding's own <summary>: only a top-level header wraps
-// its text in <strong>. See this file's header comment.
-const SECTION_HEADER_RE = /<summary><strong>([^<]+)<\/strong><\/summary>/g;
-const OPEN_HEADER_RE = /^Open \((\d+)\)$/;
-const PREVIOUSLY_MISSED_HEADER_RE = /^Previously missed \((\d+)\)$/;
-const SEVERITY_ALT_RE = /alt="(High|Medium|Low) severity"/g;
-// Lazy `[\s\S]*?` is safe here only because each "Open" list item carries
-// exactly one `alt="..."` (on its <picture>'s single <img>, never its
-// <source> siblings) and exactly one `#discussion_r<id>` link -- confirmed
-// against real bodies (PR #3147 review 5255592914, PR #3210 review
-// 5292079228) -- so the lazy match cannot skip past one item into the next.
-// `· New` is U+00B7 MIDDLE DOT, not an ASCII period.
-const OPEN_ITEM_RE =
-  /alt="(High|Medium|Low) severity"[\s\S]*?\]\(#discussion_r(\d+)\)(\s*·\s*New)?/g;
-// The review's own `**Findings:** None` / `**Findings:** N <picture ...>`
-// summary line -- corroborating evidence cross-checked against whether an
-// "Open" section was actually found (see parseOverviewBody below).
-const FINDINGS_HEADER_RE = /\*\*Findings:\*\*\s*(None|\d+)/i;
-
-interface RawSection {
-  header: string;
-  content: string;
-}
-
-function findSections(body: string): RawSection[] {
-  const sections: RawSection[] = [];
-  const matches = [...body.matchAll(SECTION_HEADER_RE)];
-  for (let index = 0; index < matches.length; index += 1) {
-    const match = matches[index];
-    const header = match[1].trim();
-    const contentStart = (match.index ?? 0) + match[0].length;
-    const contentEnd =
-      index + 1 < matches.length
-        ? (matches[index + 1].index ?? body.length)
-        : body.length;
-    sections.push({ header, content: body.slice(contentStart, contentEnd) });
-  }
-  return sections;
-}
-
 /**
  * Parse one Copilot review's overview body. Never throws: a marker-absent
- * body is `legacy`; a marker-present body whose "Open" or "Previously
- * missed" section's parsed item count disagrees with its own header `(n)`
- * is `unparsed` (this file's own extraction likely missed something, e.g.
- * an unrecognized severity word) -- the acceptance criterion's "degrade
- * gracefully" contract. "Resolved since last review" and "What changed in
- * this PR" are recognized-and-ignored: neither feeds any metric this helper
- * computes, and an unrecognized future section on its own is deliberately
- * NOT treated as a parse failure -- only a genuine count mismatch in a
- * section this helper does rely on is.
+ * body is `legacy`; a marker-present body whose sections are not consistent
+ * with their own headers (see `parseOverviewSections`) is `unparsed`, keeping
+ * the partial extraction -- the "degrade gracefully" contract. "Resolved since
+ * last review" and "What changed in this PR" are recognized-and-ignored.
  */
 export function parseOverviewBody(body: unknown): ParsedOverview {
   const text = String(body ?? '');
@@ -271,71 +225,8 @@ export function parseOverviewBody(body: unknown): ParsedOverview {
     };
   }
 
-  const open: ParsedOpenFinding[] = [];
-  const previouslyMissed = emptySeverityCounts();
-  const unparsedReasons: string[] = [];
-  let sawOpenHeader = false;
-
-  for (const { header, content } of findSections(text)) {
-    const openMatch = OPEN_HEADER_RE.exec(header);
-    if (openMatch) {
-      sawOpenHeader = true;
-      const expected = Number.parseInt(openMatch[1], 10);
-      const items = [...content.matchAll(OPEN_ITEM_RE)];
-      for (const item of items) {
-        open.push({
-          severity: toSeverity(item[1]),
-          id: Number.parseInt(item[2], 10),
-          isNew: Boolean(item[3]),
-        });
-      }
-      if (items.length !== expected) {
-        unparsedReasons.push(
-          `Open header declared ${expected} but ${items.length} were parsed`,
-        );
-      }
-      continue;
-    }
-
-    const missedMatch = PREVIOUSLY_MISSED_HEADER_RE.exec(header);
-    if (missedMatch) {
-      const expected = Number.parseInt(missedMatch[1], 10);
-      const alts = [...content.matchAll(SEVERITY_ALT_RE)];
-      for (const alt of alts) {
-        previouslyMissed[toSeverity(alt[1])] += 1;
-      }
-      if (alts.length !== expected) {
-        unparsedReasons.push(
-          `Previously missed header declared ${expected} but ${alts.length} were parsed`,
-        );
-      }
-    }
-  }
-
-  // Copilot review, PR #3245 (#discussion_r4086537940's sibling "Previously
-  // missed" finding, review 2026-09-23T20:15:44Z): a marker-present body
-  // with none of the section headers above recognized (a genuinely
-  // no-findings review, OR a future markup change this parser doesn't
-  // know about) would otherwise silently fall through to `kind: 'v2'` with
-  // an empty `open` -- indistinguishable from a real zero-findings review.
-  // The `**Findings:** <None|N>` summary line is independent corroborating
-  // evidence: cross-check it against whether an "Open" section was ever
-  // found at all. A declared positive count with no matching Open section
-  // means the section markup itself went unrecognized -- degrade to
-  // `unparsed` rather than silently undercounting, per this helper's own
-  // "count the review as legacy or unparsed, never crash" contract.
-  const findingsHeaderMatch = FINDINGS_HEADER_RE.exec(text);
-  if (findingsHeaderMatch && !sawOpenHeader) {
-    const declared = findingsHeaderMatch[1].toLowerCase();
-    const declaredCount =
-      declared === 'none' ? 0 : Number.parseInt(declared, 10);
-    if (declaredCount > 0) {
-      unparsedReasons.push(
-        `Findings header declared ${declaredCount} but no Open section was found`,
-      );
-    }
-  }
-
+  const { open, previouslyMissed, unparsedReasons } =
+    parseOverviewSections(text);
   if (unparsedReasons.length > 0) {
     return {
       kind: 'unparsed',
