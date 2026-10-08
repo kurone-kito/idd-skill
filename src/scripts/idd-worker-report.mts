@@ -27,7 +27,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
+  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -417,6 +419,25 @@ function duplicateKey(record: {
   ]);
 }
 
+/**
+ * `mkdirSync` and `appendFileSync` apply their mode only when they create the
+ * entry, so a directory or store that already exists keeps its old mode. On
+ * POSIX, tighten one that grants group or world access (the records can hold
+ * session ids and free-form friction text) and refuse one owned by another
+ * user. On Windows the per-user profile's access control applies instead.
+ */
+function ensurePrivate(path: string, mode: number): void {
+  if (process.platform === 'win32') return;
+  const stats = statSync(path);
+  const uid = process.getuid?.();
+  if (uid !== undefined && stats.uid !== uid) {
+    throw new Error(`refusing to use ${path}: it is owned by another user`);
+  }
+  if ((stats.mode & 0o077) !== 0) {
+    chmodSync(path, mode);
+  }
+}
+
 function readStore(file: string): string {
   try {
     return readFileSync(file, 'utf8');
@@ -461,10 +482,12 @@ export function appendWorkerReport(
     recursive: true,
     mode: DIRECTORY_MODE,
   });
+  ensurePrivate(dirname(file), DIRECTORY_MODE);
   const lockPath = `${file}.lock`;
   const token = acquireLock(lockPath, options);
   try {
     const content = readStore(file);
+    if (existsSync(file)) ensurePrivate(file, FILE_MODE);
     const wanted = duplicateKey(record as WorkerReport);
     for (const existing of parseLines(content)) {
       if (

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -817,6 +818,40 @@ test('append rejects an impossible date and summary --since rejects one too', ()
     ]);
     assert.notEqual(since.status, 0);
     assert.match(since.stderr, /real ISO 8601 date-time/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('an existing store with group or world access is tightened before the append', {
+  skip: process.platform === 'win32',
+}, () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true, mode: 0o755 });
+    chmodSync(sandbox.storeDirectory, 0o755);
+    writeFileSync(sandbox.store, '', { mode: 0o644 });
+    chmodSync(sandbox.store, 0o644);
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(statSync(sandbox.storeDirectory).mode & 0o777, 0o700);
+    assert.equal(statSync(sandbox.store).mode & 0o777, 0o600);
+    // A second append leaves already-private modes alone.
+    const again = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report({ workerHandle: 'agent-two' })),
+    );
+    assert.equal(again.status, 0, again.stderr);
+    assert.equal(statSync(sandbox.store).mode & 0o777, 0o600);
+    // summary never changes a mode.
+    chmodSync(sandbox.store, 0o640);
+    assert.equal(runCli(sandbox, ['summary']).status, 0);
+    assert.equal(statSync(sandbox.store).mode & 0o777, 0o640);
   } finally {
     cleanup(sandbox);
   }

@@ -6895,7 +6895,10 @@ same as `AW4`/`AW5`.
   `LOCALAPPDATA`, otherwise `~/AppData/Local`. A relative value is ignored,
   the same rule as the GitHub API load-control directory. The directory is
   created on the first append with mode `0700` and the store with mode
-  `0600`, because records can hold friction text and session ids.
+  `0600`, because records can hold friction text and session ids. On POSIX, a
+  directory or store that already exists with group or world access is
+  tightened to those modes before the append, and one owned by another user
+  is refused; on Windows the profile's own access control applies.
 - Record: `schemas/worker-report.schema.json` (schema version 1). Required
   are `schemaVersion` (always `1`), `issue` and `pullRequest`
   (`owner/repo#number`, the latter or `null`),
