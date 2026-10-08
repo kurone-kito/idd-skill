@@ -1452,8 +1452,16 @@ function checkRequiredGateTriggers(root: string, report: Report): void {
     if (!/pull_request_target:/.test(onBlock)) {
       report(RWA005, path, 'on: must include pull_request_target');
     }
-    // Still checks out only the trusted default branch for every trigger.
-    if (!/ref:\s*main/.test(text)) {
+    // Every checkout step, judged on its own, still checks out only the
+    // trusted default branch. A whole-file search would pass when one step is
+    // pinned and another is not.
+    const checkoutSteps = text
+      .split(STEP_BOUNDARY)
+      .filter((step) => step.includes('uses: actions/checkout'));
+    if (
+      checkoutSteps.length === 0 ||
+      checkoutSteps.some((step) => !/^\s*ref:\s*main\s*$/m.test(step))
+    ) {
       report(RWA005, path, 'checkout must stay pinned to ref: main');
     }
   }

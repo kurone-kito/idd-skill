@@ -2221,6 +2221,26 @@ const RULE_CASES: readonly RuleCase[] = [
     expected: [{ message: 'on:/permissions: block not found' }],
   },
   {
+    ruleId: 'RWA005',
+    name: 'a required gate checkout moved to a PR-controlled ref while the self-waiver checkout stays pinned',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '          ref: main',
+      to: `          ref: \${{ github.event.pull_request.head.sha }}`,
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template required gate checkout moved to a PR-controlled ref',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: '          ref: main',
+      to: `          ref: \${{ github.event.pull_request.head.sha }}`,
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+  },
+  {
     ruleId: 'RWA006',
     name: 'a post step renamed while its old name survives in a comment',
     path: ROOT_ADVISORY,
