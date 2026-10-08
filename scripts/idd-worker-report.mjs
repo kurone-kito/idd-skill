@@ -17,11 +17,14 @@
 //
 // Concurrency: the duplicate check and the write happen together under an
 // exclusive lock file next to the store (`O_EXCL`). A holder that dies leaves
-// a lock that goes stale after `LOCK_STALE_MS` and is taken over by a waiter.
-// The takeover is a rename followed by an unlink, so two waiters cannot both
-// delete the same lock, but a waiter that judged the lock stale just before
-// its holder finished can still remove a fresh one. Residual risk: two
-// writers hold the lock at once. The line is a single `O_APPEND` write, so
+// a lock that goes stale after `LOCK_STALE_MS` and is taken over by a waiter:
+// the waiter renames the lock aside, confirms the moved file is the very lock
+// it judged stale (by its token), and puts a fresh lock back when it is not.
+// The holder also refreshes the lock's age before the write, so a long read of
+// a large store cannot age it out. Residual risk: between the rename and the
+// restore another writer can create a lock, and a process suspended for longer
+// than `LOCK_STALE_MS` can wake up after its lock was taken over. Either way
+// two writers hold the lock at once; the line is a single `O_APPEND` write, so
 // the worst outcome is a duplicate row, never a torn line.
 import { randomUUID } from 'node:crypto';
 import {
@@ -29,12 +32,14 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   statSync,
   unlinkSync,
+  utimesSync,
   writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -213,17 +218,48 @@ function lockIsStale(lockPath, staleMs) {
   }
 }
 /**
- * Move the stale lock aside, then delete it. Only one waiter's rename can
- * succeed. Returns true when the lock is gone (renamed by this call, or
- * already removed by another waiter), false when it is still in the way, so
+ * The token a lock file carries: `undefined` when there is no file, `''` when
+ * the body is empty or garbled (a holder that died between creating the file
+ * and writing it), otherwise the holder's token.
+ */
+function readLockToken(lockPath) {
+  try {
+    const body = JSON.parse(readFileSync(lockPath, 'utf8'));
+    return typeof body.token === 'string' ? body.token : '';
+  } catch (error) {
+    return errorCode(error) === 'ENOENT' ? undefined : '';
+  }
+}
+/**
+ * Move the stale lock aside, then delete it, but only if what was moved is the
+ * lock `observed` (its token) that the caller judged stale. The lock can be
+ * released and a fresh one created between the staleness check and the
+ * rename; renaming would then steal a live lock, so a mismatch puts the moved
+ * file back and reports failure. Only one waiter's rename can succeed.
+ * Returns true when the lock is gone, false when it is still in the way, so
  * the caller falls back to the bounded wait instead of spinning.
  */
-function takeOverLock(lockPath) {
+// audit:ignore-dead-export: reached in production through acquireLock; exported so the ownership-mismatch case is unit-tested (issue #3836)
+export function takeOverLock(lockPath, observed) {
   const graveyard = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
   try {
     renameSync(lockPath, graveyard);
   } catch (error) {
     return errorCode(error) === 'ENOENT';
+  }
+  const moved = readLockToken(graveyard);
+  if (moved !== observed) {
+    try {
+      linkSync(graveyard, lockPath);
+    } catch {
+      // A newer lock already exists; the holder we moved lost its lock.
+    }
+    try {
+      unlinkSync(graveyard);
+    } catch {
+      // A leftover graveyard file is harmless.
+    }
+    return false;
   }
   try {
     unlinkSync(graveyard);
@@ -231,6 +267,15 @@ function takeOverLock(lockPath) {
     // A leftover graveyard file is harmless; the next takeover uses a new name.
   }
   return true;
+}
+/** Keep the lock's age young while its holder works. */
+function refreshLock(lockPath) {
+  try {
+    const now = new Date();
+    utimesSync(lockPath, now, now);
+  } catch {
+    // Best effort: a failed refresh only shortens the effective stale age.
+  }
 }
 /** Create the lock exclusively; returns the token that proves ownership. */
 function acquireLock(lockPath, options) {
@@ -272,7 +317,12 @@ function acquireLock(lockPath, options) {
       closeSync(fd);
       return token;
     }
-    if (lockIsStale(lockPath, options.staleMs) && takeOverLock(lockPath)) {
+    const observed = readLockToken(lockPath);
+    if (
+      observed !== undefined &&
+      lockIsStale(lockPath, options.staleMs) &&
+      takeOverLock(lockPath, observed)
+    ) {
       continue;
     }
     if (Date.now() >= deadline) {
@@ -370,6 +420,7 @@ export function appendWorkerReport(file, record, lockOptions = {}) {
   try {
     const content = readStore(file);
     if (existsSync(file)) ensurePrivate(file, FILE_MODE);
+    refreshLock(lockPath);
     const wanted = duplicateKey(record);
     for (const existing of parseLines(content)) {
       if (

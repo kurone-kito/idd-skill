@@ -6935,11 +6935,15 @@ same as `AW4`/`AW5`.
   exclusive lock file next to the store (`reports.jsonl.lock`, created
   with `O_EXCL`). A waiter retries for up to ten seconds; a lock older than
   five seconds is treated as left by a dead holder and taken over by
-  renaming it aside. A store whose last line has no trailing newline gets
-  a newline first, so a new record is never glued onto a torn one. The
-  record is one `O_APPEND` write. Residual risk: if two writers ever hold
-  the lock together, the worst outcome is a duplicate row, never a torn
-  line.
+  renaming it aside. The waiter then checks that the moved file is the lock
+  it judged stale, by its token, and puts a fresh lock back if the holder
+  changed in between. The holder refreshes the lock's age before it writes.
+  A store whose last line has no trailing newline gets a newline first, so
+  a new record is never glued onto a torn one. The record is one `O_APPEND`
+  write. Residual risk: if two writers ever hold the lock together (a
+  process suspended past the stale age, or a new lock created in the
+  instant between the rename and the restore), the worst outcome is a
+  duplicate row, never a torn line.
 - In this source repository, `vendorSessionId` joins the token-cost events
   (`schemas/token-cost-event.schema.json`), matched on `claimId`; elsewhere
   it is informational.

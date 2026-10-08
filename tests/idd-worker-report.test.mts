@@ -23,6 +23,7 @@ import {
   resolveStateBase,
   resolveWorkerReportStore,
   summarizeWorkerReports,
+  takeOverLock,
   validateWorkerReport,
   type WorkerReport,
 } from '../src/scripts/idd-worker-report.mts';
@@ -852,6 +853,42 @@ test('an existing store with group or world access is tightened before the appen
     chmodSync(sandbox.store, 0o640);
     assert.equal(runCli(sandbox, ['summary']).status, 0);
     assert.equal(statSync(sandbox.store).mode & 0o777, 0o640);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('stale takeover moves only the lock it judged stale', () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    const leftovers = (): string[] =>
+      readdirSync(sandbox.storeDirectory).filter(
+        (name) => name !== 'reports.jsonl.lock',
+      );
+
+    // The lock is the one that was inspected: it is removed.
+    writeFileSync(lock, '{"pid":1,"token":"stale"}');
+    assert.equal(takeOverLock(lock, 'stale'), true);
+    assert.equal(existsSync(lock), false);
+    assert.deepEqual(leftovers(), []);
+
+    // A fresh lock replaced it before the rename: it is put back untouched.
+    const fresh = '{"pid":2,"token":"fresh"}';
+    writeFileSync(lock, fresh);
+    assert.equal(takeOverLock(lock, 'stale'), false);
+    assert.equal(readFileSync(lock, 'utf8'), fresh);
+    assert.deepEqual(leftovers(), []);
+
+    // A holder that died before writing its body leaves an unidentifiable lock.
+    writeFileSync(lock, '');
+    assert.equal(takeOverLock(lock, ''), true);
+    assert.equal(existsSync(lock), false);
+
+    // Already gone (another waiter took it over): nothing left in the way.
+    assert.equal(takeOverLock(lock, 'stale'), true);
+    assert.deepEqual(leftovers(), []);
   } finally {
     cleanup(sandbox);
   }
