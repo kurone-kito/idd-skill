@@ -271,8 +271,9 @@ mechanisms:
   retries the marker post that already succeeded (preventive; no
   observed incident yet — #2788). This mechanism lives
   inside the built `.mjs` helpers, so it only runs where a helper
-  runtime is configured (`vendored-node`, `package-manager`, or
-  `ephemeral-npx`); under `instructions-only` (or wherever the helper
+  runtime is configured (`vendored-node`, `package-manager`,
+  `ephemeral-npx`, or `user-global`); under `instructions-only` (or wherever
+  the helper
   is otherwise unavailable), an agent posts these markers' plain-text
   bodies by hand instead, and no equivalent manual minimize step
   exists yet for them the way the agent-followed instruction step

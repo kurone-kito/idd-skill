@@ -1158,8 +1158,9 @@ future inventory reviews do not need to re-infer their role from code.
   `--cleanup-backlog-window-days 1` to keep it fast, mirroring CI.
 - `scripts/helper-runtime-manifest.mjs` (`idd-helper-bundle-manifest`) —
   import helper and manifest inspector; emits machine-readable helper wiring
-  for all four profiles (`package-manager`, `vendored-node`,
-  `ephemeral-npx`, and `instructions-only`). Its output always carries a
+  for all five profiles (`package-manager`, `vendored-node`,
+  `ephemeral-npx`, `instructions-only`, and `user-global`). Its output always
+  carries a
   `runningBuild: { version, commandListScope: "running-build" }` field
   disclosing that `commandCatalog` describes only the currently running
   helper build, independent of any `--package-spec` target -- a per-profile
@@ -2343,8 +2344,8 @@ Node.js helper path.
   instead — its emitted helper commands are bare `idd-*` bin names, not
   a parameterized invocation string, so the pin never appears inside
   those commands themselves. `idd-onboard.mjs --verify` reports a
-  non-blocking advisory for either profile when no `packageSpec` is
-  configured.
+  non-blocking advisory for each profile that uses `packageSpec` when none
+  is configured.
 - `user-global`: install the helper bins once per operator with the
   `installCommand` the manifest emits (npm's `npm install -g`, pnpm's global
   add, or Yarn Classic's `yarn global add`), and let every repository resolve
@@ -2369,7 +2370,8 @@ canonical invocation is `node scripts/<name>.mjs`; the `package-manager` / `npx`
 may be skipped — keeping it only adds a second surface to align with the
 instruction files for no portability gain. Under `package-manager`,
 `ephemeral-npx`, and `user-global`, the `bin/` facade (`idd-*` bins, invoked
-through the `package.json` scripts, `npx`, or the operator's PATH) **is** the
+through the `package.json` scripts for `package-manager`, through `npx` for
+`ephemeral-npx`, or from the operator's PATH for `user-global`) **is** the
 authoritative surface and should be retained. `instructions-only` uses neither.
 When an instruction shows a `node scripts/...` command, resolve it to your
 profile's authoritative surface rather than maintaining both.
