@@ -206,6 +206,21 @@ interface RuleCase {
   expected: readonly Expectation[];
 }
 
+// Removes the first checkout step of one job and leaves the rest of the copy as it
+// is, so a required job that loses its own checkout is the only change.
+function removeJobCheckout(text: string, jobId: string): string {
+  const job = anchored(text, `\n  ${jobId}:\n`);
+  const step = text.indexOf('\n      - uses: actions/checkout@', job);
+  assert.notEqual(step, -1, `fixture anchor not found: checkout in ${jobId}`);
+  const end = text.indexOf('\n      - ', step + 1);
+  assert.notEqual(
+    end,
+    -1,
+    `fixture anchor not found: step after ${jobId}'s checkout`,
+  );
+  return text.slice(0, step) + text.slice(end);
+}
+
 // Each case mutates one copy and names the messages its rule must raise, so
 // every assertion of the replaced tests has a violating fixture. Every anchor
 // is checked against the real file when the fixture is built.
@@ -3039,6 +3054,33 @@ const RULE_CASES: readonly RuleCase[] = [
       to: 'name: Assert node',
     },
     expected: [{ includes: 'must be named "Assert Node.js floor"' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate job whose own checkout is removed',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) =>
+        removeJobCheckout(text, 'idd-advisory-convergence'),
+    },
+    expected: [
+      { message: 'idd-advisory-convergence must declare its own checkout' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a self-waiver job whose own checkout is removed',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) =>
+        removeJobCheckout(text, 'idd-advisory-convergence-self-waiver'),
+    },
+    expected: [
+      {
+        message:
+          'idd-advisory-convergence-self-waiver must declare its own checkout',
+      },
+    ],
   },
 ];
 

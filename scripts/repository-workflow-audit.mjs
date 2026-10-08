@@ -553,6 +553,12 @@ const CHECKOUT_WITH_KEYS = [
   /^ {10}fetch-depth: \d+$/,
   /^ {10}persist-credentials: (true|false)$/,
 ];
+// The advisory jobs that run the gate and its self-waiver. Each one must declare
+// its own checkout, so a checkout left in another job cannot stand in for it.
+const ADVISORY_CHECKOUT_JOBS = [
+  'idd-advisory-convergence',
+  'idd-advisory-convergence-self-waiver',
+];
 // Checks each checkout step of a required gate on its own. A spelling the audit
 // cannot read is reported, so an escape, a complex key, a third-party action,
 // or an extra key in a checkout step cannot hide a checkout.
@@ -629,6 +635,15 @@ function checkCheckoutSurface(path, text, report) {
     if (!pinned) {
       report(RWA005, path, 'checkout must stay pinned to ref: main');
       return;
+    }
+  }
+  for (const jobId of ADVISORY_CHECKOUT_JOBS) {
+    const body = jobBlocks(text)?.get(jobId);
+    if (
+      body === undefined ||
+      !structuralLines(body).some((line) => CHECKOUT_USES.test(line))
+    ) {
+      report(RWA005, path, `${jobId} must declare its own checkout`);
     }
   }
 }
