@@ -2348,6 +2348,57 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA005',
+    name: 'a gate whose steps key carries a trailing comment that looks like a block header',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const steps = anchored(text, '    steps:\n');
+        const pinned = text.replace(
+          '          ref: main\n',
+          `          ref: \${{ github.event.pull_request.head.sha }}\n`,
+        );
+        return `${pinned.slice(0, steps)}    steps: # note: |\n${pinned.slice(steps + '    steps:\n'.length)}`;
+      },
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a checkout written under an alias key',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const job = anchored(
+          text,
+          '\n  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${text.slice(0, job)}\n      - *probe: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1${text.slice(job)}`;
+      },
+    },
+    expected: [
+      {
+        message:
+          'workflow syntax outside plain keys and values cannot be read by this audit',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a trigger written as a flow mapping',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '  pull_request_target:\n',
+      to: '  pull_request_target: {}\n',
+    },
+    expected: [
+      {
+        message:
+          'workflow syntax outside plain keys and values cannot be read by this audit',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
     name: 'a checkout written as a complex mapping key',
     path: ROOT_ADVISORY,
     mutation: {

@@ -361,7 +361,7 @@ function structuralLines(text) {
       continue;
     }
     blockColumn = undefined;
-    if (/:\s*[|>][-+0-9]*\s*$/.test(line)) {
+    if (/:\s*[|>][-+0-9]*\s*$/.test(line.replace(/\s+#.*$/, ''))) {
       blockColumn = line.search(/[^\s-]/);
     }
     out.push(line);
@@ -2261,6 +2261,43 @@ function checkTemplateSelfWaiverPostGuard(root, report) {
     );
   }
 }
+// The one shape of YAML this audit reads. A line is a key with an optional
+// plain or quoted value, a sequence item, a bare dash, a block scalar header, a
+// blank, or the trigger types list. Anything else (a flow collection, an anchor,
+// an alias, a tag, a complex or quoted key, a continuation line) is outside the
+// grammar, so it fails the audit instead of hiding a step.
+const GRAMMAR_KEY =
+  /^\s*(?:- +)?[A-Za-z_][\w-]*\s*:(?:\s+(?![{[&*!?:%@`|>]).*)?$/;
+const GRAMMAR_BLOCK_HEADER = /^\s*(?:- +)?[A-Za-z_][\w-]*\s*:\s+[|>][-+0-9]*$/;
+const GRAMMAR_ITEM = /^\s*(?:-\s*|- +(?![{[&*!?:%@`"'|>]).*)$/;
+const GRAMMAR_TYPES = /^\s*types: \[[\w ,-]*\]$/;
+// Whether a line is in the grammar. A trailing comment is not part of the line.
+function isGrammarLine(line) {
+  const bare = line.replace(/\s+#.*$/, '');
+  return (
+    bare.trim() === '' ||
+    GRAMMAR_KEY.test(bare) ||
+    GRAMMAR_BLOCK_HEADER.test(bare) ||
+    GRAMMAR_ITEM.test(bare) ||
+    GRAMMAR_TYPES.test(bare)
+  );
+}
+// Reports each advisory or comment workflow with a line outside the grammar.
+function checkWorkflowGrammar(root, report) {
+  for (const path of [...ADVISORY_REQUIRED_PATHS, ...COMMENT_WORKFLOW_PATHS]) {
+    const text = readRequiredText(root, path, RWA005, report);
+    if (text === undefined) {
+      continue;
+    }
+    if (structuralLines(text).some((line) => !isGrammarLine(line))) {
+      report(
+        RWA005,
+        path,
+        'workflow syntax outside plain keys and values cannot be read by this audit',
+      );
+    }
+  }
+}
 export function collectRepositoryWorkflowViolations(root) {
   const violations = [];
   const reported = new Set();
@@ -2285,6 +2322,7 @@ export function collectRepositoryWorkflowViolations(root) {
   checkSelfWaiverJobPermissions(root, report);
   checkRequiredGateWorkflows(root, report);
   checkRequiredGateTriggers(root, report);
+  checkWorkflowGrammar(root, report);
   checkExternalCheckWaiverInvokers(root, report);
   checkTokenScopeProbeWorkflows(root, report);
   checkOnboardingGuideProbeSection(root, report);
