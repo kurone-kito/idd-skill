@@ -40,9 +40,6 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
-  SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX,
-  SELF_REFERENTIAL_WAIVER_JOB_ID,
-  SELF_REFERENTIAL_WAIVER_POST_STEP_NAME,
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   verifySelfReferentialBootstrapWaiverRun,
   viewerProbeGhOptions,
@@ -5671,43 +5668,6 @@ test('self-referential-bootstrap-auto: an absent/empty artifact-trusted-id set f
   );
   assert.equal(verdict.waiver.autoWaiverValid, false);
   assert.equal(verdict.ready, false);
-});
-
-test('self-referential-bootstrap-auto: SELF_REFERENTIAL_WAIVER_JOB_ID, SELF_REFERENTIAL_WAIVER_POST_STEP_NAME, and SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX stay in sync with BOTH copies of the workflow file (drift guard)', () => {
-  // Kept in sync by hand with `.github/workflows/idd-advisory-convergence.yml`
-  // AND its `idd-template/` mirror, the same convention
-  // SELF_REFERENTIAL_WAIVER_TRIGGER_FILES and
-  // ADVISORY_CONVERGENCE_WORKFLOW_PATH already use -- a job id, step
-  // name, or artifact-name prefix renamed in either copy without
-  // updating these constants would silently make
-  // `verifySelfReferentialBootstrapWaiverProvenance` or
-  // `verifySelfReferentialBootstrapWaiverArtifactBinding` reject every
-  // genuine marker (fail closed, but a self-inflicted outage rather than
-  // a workflow file drifting invisibly). Both copies are checked --
-  // Copilot review, PR #2914 flagged the round-1 version of this test as
-  // checking only the repository-root copy, leaving the `idd-template/`
-  // mirror free to drift unnoticed.
-  for (const relativePath of [
-    '../.github/workflows/idd-advisory-convergence.yml',
-    '../idd-template/.github/workflows/idd-advisory-convergence.yml',
-  ]) {
-    const workflow = readFileSync(
-      new URL(relativePath, import.meta.url),
-      'utf8',
-    );
-    assert.ok(
-      workflow.includes(`${SELF_REFERENTIAL_WAIVER_JOB_ID}:`),
-      `${relativePath}: no longer declares the expected self-waiver job id`,
-    );
-    assert.ok(
-      workflow.includes(`name: ${SELF_REFERENTIAL_WAIVER_POST_STEP_NAME}`),
-      `${relativePath}: no longer declares the expected post-step name`,
-    );
-    assert.ok(
-      workflow.includes(SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX),
-      `${relativePath}: no longer declares the expected artifact-name prefix`,
-    );
-  }
 });
 
 // --- #1570 AC6: no code path this issue adds ever invokes `gh pr merge

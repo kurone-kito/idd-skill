@@ -377,6 +377,272 @@ function checkPostMergeCleanupWorkflows(root: string, report: Report): void {
   }
 }
 
+const RWA006 = 'RWA006';
+
+const SELF_WAIVER_WORKFLOW_PATHS = [
+  '.github/workflows/idd-advisory-convergence.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence.yml',
+] as const;
+
+const SELF_WAIVER_CONSTANTS_PATH = 'src/scripts/advisory-convergence.mts';
+
+// Reads one string constant from the verifier's source text. Importing the
+// verifier would run its module graph, which loads the schema validator and
+// resolves the repository layout, so the audit reads the declaration instead.
+// A declaration that does not match fails closed.
+function readStringConstant(source: string, name: string): string | undefined {
+  const match = new RegExp(`export const ${name} =\\s*'([^']*)';`).exec(source);
+  return match?.[1];
+}
+
+// Both copies must keep the self-waiver job id, post-step name, and artifact
+// prefix that the waiver provenance verifier reads, so a rename in one copy
+// cannot silently break the waiver check.
+function checkSelfReferentialWaiverConstants(
+  root: string,
+  report: Report,
+): void {
+  const source = readRequiredText(
+    root,
+    SELF_WAIVER_CONSTANTS_PATH,
+    RWA006,
+    report,
+  );
+  if (source === undefined) {
+    return;
+  }
+  const jobId = readStringConstant(source, 'SELF_REFERENTIAL_WAIVER_JOB_ID');
+  const postStepName = readStringConstant(
+    source,
+    'SELF_REFERENTIAL_WAIVER_POST_STEP_NAME',
+  );
+  const artifactNamePrefix = readStringConstant(
+    source,
+    'SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX',
+  );
+  for (const [name, value] of [
+    ['SELF_REFERENTIAL_WAIVER_JOB_ID', jobId],
+    ['SELF_REFERENTIAL_WAIVER_POST_STEP_NAME', postStepName],
+    ['SELF_REFERENTIAL_WAIVER_ARTIFACT_NAME_PREFIX', artifactNamePrefix],
+  ] as const) {
+    if (value === undefined) {
+      report(
+        RWA006,
+        SELF_WAIVER_CONSTANTS_PATH,
+        `could not read ${name} from ${SELF_WAIVER_CONSTANTS_PATH}`,
+      );
+    }
+  }
+  if (
+    jobId === undefined ||
+    postStepName === undefined ||
+    artifactNamePrefix === undefined
+  ) {
+    return;
+  }
+  for (const path of SELF_WAIVER_WORKFLOW_PATHS) {
+    const workflow = readRequiredText(root, path, RWA006, report);
+    if (workflow === undefined) {
+      continue;
+    }
+    if (!workflow.includes(`${jobId}:`)) {
+      report(
+        RWA006,
+        path,
+        'no longer declares the expected self-waiver job id',
+      );
+    }
+    if (!workflow.includes(`name: ${postStepName}`)) {
+      report(RWA006, path, 'no longer declares the expected post-step name');
+    }
+    if (!workflow.includes(artifactNamePrefix)) {
+      report(
+        RWA006,
+        path,
+        'no longer declares the expected artifact-name prefix',
+      );
+    }
+  }
+}
+
+const RWA007 = 'RWA007';
+
+const TEMPLATE_SETUP_NODE_PATHS = [
+  'idd-template/.github/workflows/post-merge-cleanup.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence.yml',
+  'idd-template/.github/workflows/idd-advisory-convergence-comment.yml',
+] as const;
+
+const DETECT_PACKAGE_MANAGER_STEP_START =
+  '      - name: Detect package manager\n';
+const STEP_BOUNDARY_AFTER_DETECT = /\n {6}- name: /;
+const STEP_BOUNDARY = '\n      - ';
+const SETUP_NODE_STEP_COUNT = 4;
+
+// The RWA007 checks share one read of each template copy, so a missing copy is
+// reported once rather than once per check.
+function readTemplateSetupNodeInputs(
+  root: string,
+  report: Report,
+): Map<string, string> {
+  const inputs = new Map<string, string>();
+  for (const path of TEMPLATE_SETUP_NODE_PATHS) {
+    const text = readRequiredText(root, path, RWA007, report);
+    if (text !== undefined) {
+      inputs.set(path, text);
+    }
+  }
+  return inputs;
+}
+
+// Every copy of the "Detect package manager" step body must match the first
+// copy byte for byte, so the three template workflows cannot drift apart.
+function checkDetectPackageManagerStepsAgree(
+  inputs: ReadonlyMap<string, string>,
+  report: Report,
+): void {
+  const bodies: { path: string; body: string }[] = [];
+  for (const path of TEMPLATE_SETUP_NODE_PATHS) {
+    const text = inputs.get(path);
+    if (text === undefined) {
+      continue;
+    }
+    const startIndex = text.indexOf(DETECT_PACKAGE_MANAGER_STEP_START);
+    if (startIndex === -1) {
+      report(RWA007, path, 'expected to find a "Detect package manager" step');
+      continue;
+    }
+    const afterStart = text.slice(
+      startIndex + DETECT_PACKAGE_MANAGER_STEP_START.length,
+    );
+    const endIndex = afterStart.search(STEP_BOUNDARY_AFTER_DETECT);
+    if (endIndex === -1) {
+      report(
+        RWA007,
+        path,
+        'expected a step boundary after "Detect package manager"',
+      );
+      continue;
+    }
+    bodies.push({ path, body: afterStart.slice(0, endIndex) });
+  }
+  const reference = bodies.find(
+    ({ path }) => path === TEMPLATE_SETUP_NODE_PATHS[0],
+  );
+  if (reference === undefined) {
+    return;
+  }
+  for (const other of bodies) {
+    if (other.path !== reference.path && other.body !== reference.body) {
+      report(
+        RWA007,
+        other.path,
+        `"Detect package manager" step body drifted from ${reference.path}`,
+      );
+    }
+  }
+}
+
+function stepIfCondition(stepText: string): string | undefined {
+  const match = /^ {8}if: (.+)$/m.exec(stepText);
+  return match?.[1].trim();
+}
+
+function stepName(stepText: string): string | undefined {
+  const [firstLine] = stepText.split('\n', 1);
+  const match = /^ {6}- name: (.+)$/.exec(firstLine ?? '');
+  return match?.[1].trim();
+}
+
+// Each actions/setup-node step must pin check-latest, be immediately followed
+// by an "Assert Node.js floor" step, and share its if: condition. The three
+// template files must contain exactly SETUP_NODE_STEP_COUNT such steps.
+function checkSetupNodeSteps(
+  inputs: ReadonlyMap<string, string>,
+  report: Report,
+): void {
+  let totalSetupNodeSteps = 0;
+  for (const path of TEMPLATE_SETUP_NODE_PATHS) {
+    const content = inputs.get(path);
+    if (content === undefined) {
+      continue;
+    }
+    let searchFrom = 0;
+    for (;;) {
+      const usesIndex = content.indexOf(
+        'uses: actions/setup-node@',
+        searchFrom,
+      );
+      if (usesIndex === -1) {
+        break;
+      }
+      searchFrom = usesIndex + 1;
+      totalSetupNodeSteps += 1;
+
+      const stepStartIndex = content.lastIndexOf(STEP_BOUNDARY, usesIndex);
+      if (stepStartIndex === -1) {
+        report(
+          RWA007,
+          path,
+          `could not find the step bullet enclosing the actions/setup-node use at offset ${usesIndex}`,
+        );
+        continue;
+      }
+      const stepStart = stepStartIndex + 1;
+
+      const nextStepIndex = content.indexOf(STEP_BOUNDARY, usesIndex);
+      if (nextStepIndex === -1) {
+        report(
+          RWA007,
+          path,
+          `expected a step after the actions/setup-node step at offset ${usesIndex}`,
+        );
+        continue;
+      }
+      const nextStepStart = nextStepIndex + 1;
+
+      const stepAfterNextIndex = content.indexOf(STEP_BOUNDARY, nextStepStart);
+      const stepAfterNextStart =
+        stepAfterNextIndex === -1 ? content.length : stepAfterNextIndex + 1;
+
+      const setupNodeStep = content.slice(stepStart, nextStepStart);
+      const followingStep = content.slice(nextStepStart, stepAfterNextStart);
+
+      if (!/\n {10}check-latest: true\n/.test(setupNodeStep)) {
+        report(
+          RWA007,
+          path,
+          `the actions/setup-node step at offset ${usesIndex} is missing \`check-latest: true\``,
+        );
+      }
+      if (stepName(followingStep) !== 'Assert Node.js floor') {
+        report(
+          RWA007,
+          path,
+          `the step immediately after actions/setup-node at offset ${usesIndex} must be named "Assert Node.js floor"`,
+        );
+      }
+      if (stepIfCondition(followingStep) !== stepIfCondition(setupNodeStep)) {
+        report(
+          RWA007,
+          path,
+          `"Assert Node.js floor"'s if: must equal its actions/setup-node step's if: (offset ${usesIndex})`,
+        );
+      }
+    }
+  }
+  if (
+    inputs.size === TEMPLATE_SETUP_NODE_PATHS.length &&
+    totalSetupNodeSteps !== SETUP_NODE_STEP_COUNT
+  ) {
+    report(
+      RWA007,
+      'idd-template/.github/workflows',
+      `expected exactly ${SETUP_NODE_STEP_COUNT} actions/setup-node steps across the three idd-template workflow files (idd-skill#3240); update this count alongside a deliberate step-count change`,
+    );
+  }
+}
+
 export function collectRepositoryWorkflowViolations(
   root: string,
 ): RepositoryWorkflowViolation[] {
@@ -385,6 +651,10 @@ export function collectRepositoryWorkflowViolations(
     violations.push({ ruleId, path, message });
   };
   checkPostMergeCleanupWorkflows(root, report);
+  checkSelfReferentialWaiverConstants(root, report);
+  const templateInputs = readTemplateSetupNodeInputs(root, report);
+  checkDetectPackageManagerStepsAgree(templateInputs, report);
+  checkSetupNodeSteps(templateInputs, report);
   return violations;
 }
 
