@@ -2186,8 +2186,10 @@ only approval boundary.
   that this target is the only issue whose trusted `authoring-owner`
   marker carries that exact `set`
   (`node scripts/authoring-set-members.mjs --set <id>`). A zero exit
-  whose JSON has `soleMember: true` and `issues` equal to that one
-  target is the only passing result. The helper exits non-zero when
+  whose JSON has `soleMember: true`, `issues` equal to that one target,
+  and no `skippedMarkers` entry with `namesRequestedSet: true` is the only
+  passing result (an edited entry's flag reflects only the comment's
+  current text). The helper exits non-zero when
   enumeration does not finish, including a search response with
   `incomplete_results` or an index-lag window that does not finish.
   The candidate search is the owner-marker token, so an edited marker
@@ -2196,11 +2198,15 @@ only approval boundary.
   closed too. A trusted marker whose target names a different
   issue than the comment's host fails closed as well.
   **Exception:** a trusted owner marker that GitHub has minimized
-  with `minimizedReason: outdated` (case-insensitive) is silently
-  skipped rather than failing closed; it is a superseded comment
-  that the maintainer or an IDD tool has hidden as stale, and it
-  cannot prove or disprove current membership.
-  Any other result is inconclusive and blocks
+  with `minimizedReason: outdated` (case-insensitive) is not counted
+  as a member, because it cannot prove current membership. When it is
+  the set's only marker on its own issue, the helper fails closed
+  instead, naming that issue and comment. `skippedMarkers` lists each
+  skipped marker that could bear on the requested set, and
+  `skippedElsewhere` counts the markers of other sets. An edited,
+  unparseable or mistargeted skipped marker never fails the scan, but
+  its entry records whether it names the requested set
+  (`namesRequestedSet`). Any other result is inconclusive and blocks
   this exception the same way. A sibling's marker lives on the
   sibling's own issue and never appears in the marked target's own
   comment log. If either condition fails, or the helper cannot
@@ -2279,7 +2285,8 @@ only approval boundary.
   the sole member of its authoring set -- it carries no
   `<marker-prefix>-roadmap-id` marker, and
   `node scripts/authoring-set-members.mjs --set <id>` reports
-  `soleMember: true` with `issues` equal to this one target; that
+  `soleMember: true` with `issues` equal to this one target and no
+  `skippedMarkers` entry with `namesRequestedSet: true`; that
   helper is exactly the mechanical proof this fast path's own
   `|set|==1` premise rests on, so skipping it here would be a genuine
   weakening, not a condensation, and a non-zero exit (including

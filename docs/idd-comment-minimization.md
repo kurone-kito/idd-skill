@@ -634,9 +634,14 @@ markers, it evaluates every trusted `authoring-owner` comment it
 finds. Minimizing one of these comments as `OUTDATED` (GitHub returns
 the reason in lowercase: `outdated`) causes the scan to **skip** that
 comment rather than failing closed on an unparseable or malformed
-body. The comment is not counted as a set member and does not block
-the evaluation. Any other `minimizedReason`, including `resolved` and
-absent, leaves the ordinary fail-closed behavior in place. Observed
+body. The comment is not counted as a set member. When it is the only
+marker of the requested set on its own issue, the scan fails closed
+instead, naming that issue and comment, because the hidden marker can
+no longer show that the issue belongs to the set. The `skippedMarkers`
+report lists each skipped marker that could bear on the requested set,
+and an edited, unparseable or mistargeted one never fails the scan.
+Any other `minimizedReason`, including `resolved` and absent, leaves the
+ordinary fail-closed behavior in place. Observed
 2026-09-27, issue kurone-kito/idd-skill#3553: a minimized comment
 with an empty `body-sha256` on closed issue #2689 caused
 `authoring-set-members` to fail closed on the Stage 2 release of

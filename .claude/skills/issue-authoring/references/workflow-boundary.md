@@ -406,8 +406,9 @@ approval boundary that hands off to IDD execution.
   marked target is the sole member of its authoring set: it carries no
   `<marker-prefix>-roadmap-id` marker (never a roadmap anchor), and
   `node scripts/authoring-set-members.mjs --set <id>` reports
-  `soleMember: true` with `issues` equal to that one target. The
-  helper exits non-zero when enumeration does not finish, including a
+  `soleMember: true` with `issues` equal to that one target and no
+  `skippedMarkers` entry with `namesRequestedSet: true`. The helper exits
+  non-zero when enumeration does not finish, including a
   search response with `incomplete_results` or an index-lag window
   that does not finish. The candidate search is the owner-marker
   token, so an edited marker that dropped the set is still fetched
@@ -416,10 +417,15 @@ approval boundary that hands off to IDD execution.
   target names a different issue than the comment's host fails
   closed as well.
   **Exception:** a trusted owner marker that GitHub has minimized
-  with `minimizedReason: outdated` (case-insensitive) is silently
-  skipped rather than failing closed; it is a superseded comment
-  that the maintainer or an IDD tool has hidden as stale, and it
-  cannot prove or disprove current membership.
+  with `minimizedReason: outdated` (case-insensitive) is not counted
+  as a member, because it cannot prove current membership. When it is
+  the set's only marker on its own issue, the helper fails closed
+  instead, naming that issue and comment. `skippedMarkers` lists each
+  skipped marker that could bear on the requested set, and
+  `skippedElsewhere` counts the markers of other sets. An edited,
+  unparseable or mistargeted skipped marker never fails the scan, but
+  its entry records whether it names the requested set
+  (`namesRequestedSet`).
   Any other result is inconclusive and blocks
   this exception the same way. A sibling's
   marker lives on the sibling's own issue and never appears in the
