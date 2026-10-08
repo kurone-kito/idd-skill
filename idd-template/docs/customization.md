@@ -1556,7 +1556,12 @@ supports these keys:
 - `critiqueLoop.deferAfterRounds` (default `12`)
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
-  `low` and `low-and-medium`.
+  `low` and `low-and-medium`. Under `low` and `low-and-medium`, clause
+  (d) of the adopt-now test cascades: once one finding of a pass is
+  Accepted, another finding of that pass whose fix stays within that
+  push's files is adopt-now and is not deferred. `severity-tiered` has
+  no clause (d), so it is the mode without that cascade; its `high`
+  urgency still reads adopt-now conditions (a)-(c).
 - `critiqueLoop.deferRelaxAtRounds` (optional array of one or two
   positive integers, strictly ascending, at most two; recommended
   `[4, 7]`; omit the key to turn it off). The thresholds are PR-wide

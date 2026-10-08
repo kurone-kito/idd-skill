@@ -1591,6 +1591,19 @@ merges, other-bot fixes) — this trigger does not touch those.
   both stayed under `status:authoring` until a human asked for
   release, because the phase files stopped at the Stage 1 hold.
 
+#### E6 bundles one follow-up per pass (kurone-kito/idd-skill#3866)
+
+E6 bundles one E5 pass's deferred items into one follow-up issue and
+says not to append to it. Read alone, that is a bare rule, and a reader
+may treat the append ban as a limitation to work around: a private
+downstream adopter proposed one rolling follow-up per pull request on
+2026-10-05 for that reason (#3222 records why the ban exists). The
+narrow auto-release of a defer-source follow-up compares the live
+body's SHA-256 with the `body-sha256` pinned by the first
+`mode=acquire` marker. A body appended to later no longer matches that
+pin, so it loses the auto-release. Keep one follow-up per pass, and
+create a new one for the next pass rather than appending.
+
 #### Severity-tiered urgency (kurone-kito/idd-skill#3589)
 
 `severity-tiered` is a third `deferByUrgency` value. It replaces the
