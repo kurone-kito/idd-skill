@@ -220,7 +220,8 @@ interface PolicyConfigFile {
       | 'package-manager'
       | 'vendored-node'
       | 'ephemeral-npx'
-      | 'instructions-only';
+      | 'instructions-only'
+      | 'user-global';
   };
   issueScope?: 'roadmap' | 'roadmap-first' | 'orphan-first';
   orphanFirstPolicy?: 'none' | 'maintainer-approved' | 'public-disabled';

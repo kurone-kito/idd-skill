@@ -15,7 +15,7 @@ helper as the canonical A5(a) evidence collector.
 # source repo / vendored-node
 node scripts/claim-approval-gate.mjs --issue <issue-number>
 
-# package-manager / ephemeral-npx
+# package-manager / ephemeral-npx / user-global
 <profile-selected-claim-approval-command> --issue <issue-number>
 ```
 
@@ -155,7 +155,7 @@ helper instead of hand-tracing it:
 # source repo / vendored-node
 node scripts/branch-name.mjs --number <issue-number> --title <issue-title>
 
-# package-manager / ephemeral-npx
+# package-manager / ephemeral-npx / user-global
 <profile-selected-branch-name-command> --number <issue-number> --title <issue-title>
 ```
 
@@ -589,7 +589,7 @@ rules below for the same verdict. No release step — `git worktree
 remove` at F4 deletes the lock with the worktree, so a crashed
 session's leftover lock resolves the same way. See
 `docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for the
-package-manager / ephemeral-npx forms and mechanical detail.
+package-manager / ephemeral-npx / user-global forms and mechanical detail.
 
 **Generated-tokens record.** Re-check with `--read-tokens` alongside
 `--acquire`; absent/malformed recovers only via step 5

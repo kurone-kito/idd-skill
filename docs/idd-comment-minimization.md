@@ -271,8 +271,9 @@ mechanisms:
   retries the marker post that already succeeded (preventive; no
   observed incident yet — #2788). This mechanism lives
   inside the built `.mjs` helpers, so it only runs where a helper
-  runtime is configured (`vendored-node`, `package-manager`, or
-  `ephemeral-npx`); under `instructions-only` (or wherever the helper
+  runtime is configured (`vendored-node`, `package-manager`,
+  `ephemeral-npx`, or `user-global`); under `instructions-only` (or wherever
+  the helper
   is otherwise unavailable), an agent posts these markers' plain-text
   bodies by hand instead, and no equivalent manual minimize step
   exists yet for them the way the agent-followed instruction step
@@ -345,10 +346,11 @@ template copy instead resolves the cleanup-audit invocation through
 the repository's configured `helperRuntime.profile` (see
 [Helper Runtime Profiles](idd-helper-scripts.md#helper-runtime-profiles)):
 it runs the equivalent invocation under `vendored-node`,
-`package-manager`, and `ephemeral-npx`, and skips the audit and
-evidence-comment steps entirely under `instructions-only` (or when no
-profile is configured), where no runnable helper command exists for
-any profile. Permissions required are `contents: read`,
+`package-manager`, and `ephemeral-npx`; under `user-global` it stops with
+an explicit error, because CI runners have no operator-local install, and it
+skips the audit and evidence-comment steps entirely under `instructions-only`
+(or when no profile is configured), where no runnable helper command exists
+for any profile. Permissions required are `contents: read`,
 `issues: write`, and `pull-requests: write`, plus
 `pull_request_target` (not `pull_request`) so that fork PRs can
 post comments under a writeable `GITHUB_TOKEN`.

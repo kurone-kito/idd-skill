@@ -47,7 +47,7 @@ This check never rebases, merges, or pushes.
 1. Run the profile-selected branch-conflict-state helper: `node
    scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
    package-manager-profile `idd:branch-conflict-state` command, or the
-   ephemeral-npx equivalent (resolve the exact command from
+   profile-selected equivalent (resolve the exact command from
    `docs/idd-helper-scripts.md` if unsure). Read `syncRecommendation`:
    - `"none"`: the branch is conflict-free and, if branch protection
      requires an up-to-date head, already current — proceed to F2.
@@ -74,7 +74,7 @@ This check never rebases, merges, or pushes.
    from claim time, whenever one was recorded for the active claim —
    omitting it silently skips the merge-time activation-nonce
    comparison), or the package-manager-profile
-   `idd:pre-merge-readiness` command, or the ephemeral-npx equivalent
+   `idd:pre-merge-readiness` command, or the profile-selected equivalent
    (resolve the exact command from `docs/idd-helper-scripts.md` if
    unsure). This is the same helper the
    standard F2 treats as the authoritative source for the merge

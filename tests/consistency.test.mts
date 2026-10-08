@@ -570,7 +570,12 @@ test('helper runtime inspection accepts absent and supported profiles, rejects u
       profile: 'instructions-only',
     },
   );
-  for (const profile of ['package-manager', 'vendored-node', 'ephemeral-npx']) {
+  for (const profile of [
+    'package-manager',
+    'vendored-node',
+    'ephemeral-npx',
+    'user-global',
+  ]) {
     assert.deepEqual(
       inspectHelperRuntimeConfig({
         helperRuntime: {

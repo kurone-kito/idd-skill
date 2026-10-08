@@ -275,7 +275,7 @@ self-critique and record risk.
 3. For a review thread, post the reply and resolve it in one call with
    the profile-selected `resolve-review-thread` helper (`--pr`,
    `--comment-id`, `--body`, `--claim-issue`, `--claim-id`, `--apply`;
-   package-manager / ephemeral-npx equivalent in
+   package-manager / ephemeral-npx / user-global equivalent in
    `docs/idd-helper-scripts.md`), which appends the stamp and replies
    before resolving, so a failed reply never leaves a silently-resolved
    thread.
@@ -309,11 +309,11 @@ self-critique and record risk.
    scripts/advisory-wait-state.mjs --pr {pr-number}
    --claim-id {claim-id} --agent-id {agent-id}
    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` in
-   the source/vendored profile; resolve the package-manager /
-   ephemeral-npx equivalent from `docs/idd-helper-scripts.md`). If it
-   fails, returns invalid JSON, or is missing any field from
-   `idd-advisory-wait-lite.instructions.md`'s own Required fields list,
-   stop and ask — do not fall back to a manual per-field fetch.
+   the source/vendored profile; resolve the profile-selected equivalent from
+   `docs/idd-helper-scripts.md`). If it fails, returns invalid JSON, or is
+   missing any field from `idd-advisory-wait-lite.instructions.md`'s own
+   Required fields list, stop and ask — do not fall back to a manual
+   per-field fetch.
 4. Read the helper's `outcome` field and apply this decision table, top
    to bottom, first match wins:
    - Off-head `SATISFIED` with `staleRequestRecovery.action ==

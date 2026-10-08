@@ -20,7 +20,7 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
 ## Helper runtime contract
 
 1. **When helper runtime is enabled** (`package-manager`, vendored-node,
-   or any profile that ships the helpers): run the commands below
+   `user-global`, or any profile that ships the helpers): run the commands below
    first. If a helper is **missing, fails, returns invalid JSON, or
    disagrees with live GitHub state** → **stop and ask**. Do **not**
    fall through to the written tables in that situation.
@@ -32,7 +32,7 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
 vendored-node** invocation form. Under `package-manager` /
-`ephemeral-npx` profiles, `scripts/` is not vendored — resolve each
+`ephemeral-npx` / `user-global` profiles, `scripts/` is not vendored — resolve each
 command's profile-selected equivalent from
 `docs/idd-helper-scripts.md`. A helper missing on the active profile
 is a missing-helper case under rule 1 (stop and ask), not a reason to

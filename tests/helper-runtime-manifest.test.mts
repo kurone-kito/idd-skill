@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -800,4 +801,205 @@ test('buildHelperRuntimeManifest also reads a configured packageSpec from the le
   );
   const manifest = buildHelperRuntimeManifest({ targetRoot: dir });
   assert.equal(manifest.packageSpec, 'https://mirror.example/idd-skill.tgz');
+});
+
+// The user-global tests assert command strings only. None of them runs a real
+// global install, which would change the machine running the suite.
+const USER_GLOBAL_SPEC = 'https://mirror.example/idd-skill-user-global.tgz';
+
+function makeTargetRoot(prefix: string, files: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  for (const [name, contents] of Object.entries(files)) {
+    writeFileSync(join(root, name), contents);
+  }
+  return root;
+}
+
+test('user-global profile emits operator-level install and uninstall commands for npm and pnpm', () => {
+  const cases = [
+    {
+      packageManager: 'npm',
+      install: `npm install -g ${USER_GLOBAL_SPEC}`,
+      uninstall: 'npm uninstall -g @kurone-kito/idd-skill',
+    },
+    {
+      packageManager: 'pnpm',
+      install: `pnpm add -g ${USER_GLOBAL_SPEC}`,
+      uninstall: 'pnpm remove -g @kurone-kito/idd-skill',
+    },
+  ];
+  for (const { packageManager, install, uninstall } of cases) {
+    const entry = buildHelperRuntimeManifest({
+      profile: 'user-global',
+      packageManager,
+      packageSpec: USER_GLOBAL_SPEC,
+      targetRoot: REPO_ROOT,
+    }).profiles['user-global'];
+
+    assert.equal(entry.installCommand, install);
+    assert.equal(entry.uninstallCommand, uninstall);
+    assert.equal(entry.installUnavailableReason, undefined);
+    assert.deepEqual(entry.managedFiles, []);
+    assert.deepEqual(entry.managedDependencies.devDependencies, {});
+  }
+});
+
+test('user-global profile installs through Yarn Classic and reports Yarn Berry as unsupported', (t) => {
+  const classicRoot = makeTargetRoot('idd-user-global-yarn-classic-', {
+    'package.json': JSON.stringify({ packageManager: 'yarn@1.22.22' }),
+  });
+  const berryPinRoot = makeTargetRoot('idd-user-global-yarn-berry-pin-', {
+    'package.json': JSON.stringify({ packageManager: 'yarn@4.5.0' }),
+  });
+  const berryConfigRoot = makeTargetRoot('idd-user-global-yarn-berry-rc-', {
+    'package.json': JSON.stringify({}),
+    '.yarnrc.yml': 'nodeLinker: node-modules\n',
+  });
+  for (const root of [classicRoot, berryPinRoot, berryConfigRoot]) {
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+  }
+
+  const classic = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    packageManager: 'yarn',
+    packageSpec: USER_GLOBAL_SPEC,
+    targetRoot: classicRoot,
+  }).profiles['user-global'];
+  assert.equal(classic.installCommand, `yarn global add ${USER_GLOBAL_SPEC}`);
+  assert.equal(
+    classic.uninstallCommand,
+    'yarn global remove @kurone-kito/idd-skill',
+  );
+  assert.equal(classic.installUnavailableReason, undefined);
+
+  for (const root of [berryPinRoot, berryConfigRoot]) {
+    const berry = buildHelperRuntimeManifest({
+      profile: 'user-global',
+      packageManager: 'yarn',
+      packageSpec: USER_GLOBAL_SPEC,
+      targetRoot: root,
+    }).profiles['user-global'];
+    assert.equal(berry.installCommand, '');
+    assert.equal(berry.uninstallCommand, '');
+    assert.match(berry.installUnavailableReason ?? '', /Yarn Berry/u);
+  }
+});
+
+test('user-global profile withholds the Yarn command when package.json cannot be read', (t) => {
+  const brokenRoot = makeTargetRoot('idd-user-global-yarn-broken-', {
+    'package.json': '{ not json',
+  });
+  t.after(() => rmSync(brokenRoot, { recursive: true, force: true }));
+
+  const entry = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    packageManager: 'yarn',
+    packageSpec: USER_GLOBAL_SPEC,
+    targetRoot: brokenRoot,
+  }).profiles['user-global'];
+  assert.equal(entry.installCommand, '');
+  assert.match(entry.installUnavailableReason ?? '', /not valid JSON/u);
+});
+
+test('user-global profile explains a missing package manager instead of guessing one', (t) => {
+  const emptyRoot = makeTargetRoot('idd-user-global-none-', {});
+  t.after(() => rmSync(emptyRoot, { recursive: true, force: true }));
+
+  const entry = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    targetRoot: emptyRoot,
+  }).profiles['user-global'];
+  assert.equal(entry.installCommand, '');
+  assert.match(entry.installUnavailableReason ?? '', /--package-manager/u);
+});
+
+test('user-global commands are bare bin names resolved from PATH', () => {
+  const entry = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  }).profiles['user-global'];
+
+  const values = Object.values(entry.commands);
+  assert.ok(values.length > 0);
+  for (const value of values) {
+    assert.match(value, /^idd-[a-z0-9-]+$/u);
+  }
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'advisory-convergence',
+      profile: 'user-global',
+    }),
+    'idd-advisory-convergence',
+  );
+});
+
+test('switching to and from user-global lists the add, remove, and global-uninstall steps', () => {
+  const leaveForVendored = buildHelperRuntimeManifest({
+    profile: 'vendored-node',
+    fromProfile: 'user-global',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  }).switching;
+  // The operator's install manager is not knowable from the repository, so
+  // every global uninstall is listed.
+  assert.deepEqual(leaveForVendored?.removeGlobalInstallCommands, [
+    'npm uninstall -g @kurone-kito/idd-skill',
+    'pnpm remove -g @kurone-kito/idd-skill',
+    'yarn global remove @kurone-kito/idd-skill',
+  ]);
+  assert.deepEqual(leaveForVendored?.removeFiles, []);
+  assert.ok((leaveForVendored?.addFiles.length ?? 0) > 0);
+
+  const enterFromVendored = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    fromProfile: 'vendored-node',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  }).switching;
+  assert.equal(
+    'removeGlobalInstallCommands' in (enterFromVendored ?? {}),
+    false,
+  );
+  assert.deepEqual(enterFromVendored?.addFiles, []);
+  assert.ok((enterFromVendored?.removeFiles.length ?? 0) > 0);
+
+  const packageManagerToUserGlobal = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    fromProfile: 'package-manager',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  }).switching;
+  assert.deepEqual(packageManagerToUserGlobal?.removeDevDependencies, [
+    '@kurone-kito/idd-skill',
+  ]);
+  assert.deepEqual(packageManagerToUserGlobal?.addDevDependencies, {});
+
+  const userGlobalToPackageManager = buildHelperRuntimeManifest({
+    profile: 'package-manager',
+    fromProfile: 'user-global',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  }).switching;
+  assert.deepEqual(userGlobalToPackageManager?.removeGlobalInstallCommands, [
+    'npm uninstall -g @kurone-kito/idd-skill',
+    'pnpm remove -g @kurone-kito/idd-skill',
+    'yarn global remove @kurone-kito/idd-skill',
+  ]);
+  assert.deepEqual(
+    Object.keys(userGlobalToPackageManager?.addDevDependencies ?? {}),
+    ['@kurone-kito/idd-skill'],
+  );
+});
+
+test('a user-global to user-global switch removes nothing and lists no uninstall commands', () => {
+  const noOp = buildHelperRuntimeManifest({
+    profile: 'user-global',
+    fromProfile: 'user-global',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  }).switching;
+  assert.equal('removeGlobalInstallCommands' in (noOp ?? {}), false);
+  assert.deepEqual(noOp?.removeFiles, []);
+  assert.deepEqual(noOp?.addFiles, []);
 });

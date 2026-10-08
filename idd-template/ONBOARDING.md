@@ -707,7 +707,7 @@ error), so an agent can gate on the exit code without parsing prose.
   replacing a manual walkthrough of the checklist below with six check
   groups: manifest completeness (held targets are exempt), placeholder
   residue, helper loads (`vendored-node` only), stale-import signal,
-  package-pin advisory (for an `ephemeral-npx`/`package-manager` profile
+  package-pin advisory (for an `ephemeral-npx`/`package-manager`/`user-global` profile
   without `helperRuntime.packageSpec`; see the
   [helper runtime profile](docs/onboarding/policy-decisions.md#helper-runtime-profile)),
   and held-schema drift (a changed schema or fixture is still named by a
@@ -1037,12 +1037,12 @@ any copied file other than those three meta-docs.
 
 Apply the confirmed helper runtime profile after placeholder replacement:
 leave `helperRuntime` absent from `.github/idd/config.json` for the
-`instructions-only` default, which means no helper command is configured.
+`instructions-only` default, which configures no helper command.
 Only when the operator explicitly selects another supported profile should
 you add the object below, replacing the example value with
-`package-manager`, `vendored-node`, or `ephemeral-npx` as appropriate.
-Merge it into the top-level object in `.github/idd/config.json` and keep the
-surrounding member commas valid.
+`package-manager`, `vendored-node`, `ephemeral-npx`, or `user-global`.
+Merge it into the top-level object in `.github/idd/config.json` and keep member
+commas valid.
 
 ```json
 {
