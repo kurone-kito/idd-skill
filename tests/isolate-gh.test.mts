@@ -1685,43 +1685,52 @@ const posixShellPayloads = [
   { name: 'empty quotes inside the name', command: 'g""h --version' },
 ];
 
-for (const payload of posixShellPayloads) {
-  test(`path shim: posix ${payload.name} never reaches the real CLI`, {
-    skip: process.platform === 'win32',
-  }, () => {
-    assertCaughtByShim(
-      runGuardedChild(shellPayloadChild(payload.command), {
-        'source-gh.sh': 'gh --version\n',
-      }),
-    );
-  });
+function posixProbeChild(method: 'execFileSync' | 'spawnSync'): string {
+  return method === 'execFileSync'
+    ? [
+        "const childProcess = require('node:child_process');",
+        'try {',
+        "  process.stdout.write(childProcess.execFileSync('./probe.sh', [], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));",
+        '} catch (error) {',
+        '  process.stderr.write(String(error.stderr || error.message));',
+        '}',
+        '',
+      ].join('\n')
+    : [
+        "const childProcess = require('node:child_process');",
+        "const probe = childProcess.spawnSync('./probe.sh', [], { encoding: 'utf8' });",
+        'process.stdout.write(probe.stdout ?? "");',
+        'process.stderr.write(probe.stderr ?? "");',
+        '',
+      ].join('\n');
 }
 
-for (const method of ['execFileSync', 'spawnSync'] as const) {
-  test(`path shim: posix executable probe via ${method} never reaches the real CLI`, {
+// Every POSIX payload, shell and executable probe alike, with the files the
+// shell forms and the probes read. The shim and fixture tests share this list.
+const posixPayloadRuns = [
+  ...posixShellPayloads.map((payload) => ({
+    name: payload.name,
+    child: shellPayloadChild(payload.command),
+  })),
+  {
+    name: 'executable probe via execFileSync',
+    child: posixProbeChild('execFileSync'),
+  },
+  {
+    name: 'executable probe via spawnSync',
+    child: posixProbeChild('spawnSync'),
+  },
+];
+const posixPayloadFiles = {
+  'source-gh.sh': 'gh --version\n',
+  'probe.sh': '#!/bin/sh\ngh --version\n',
+};
+
+for (const run of posixPayloadRuns) {
+  test(`path shim: posix ${run.name} never reaches the real CLI`, {
     skip: process.platform === 'win32',
   }, () => {
-    const child =
-      method === 'execFileSync'
-        ? [
-            "const childProcess = require('node:child_process');",
-            'try {',
-            "  process.stdout.write(childProcess.execFileSync('./probe.sh', [], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));",
-            '} catch (error) {',
-            '  process.stderr.write(String(error.stderr || error.message));',
-            '}',
-            '',
-          ].join('\n')
-        : [
-            "const childProcess = require('node:child_process');",
-            "const probe = childProcess.spawnSync('./probe.sh', [], { encoding: 'utf8' });",
-            'process.stdout.write(probe.stdout ?? "");',
-            'process.stderr.write(probe.stderr ?? "");',
-            '',
-          ].join('\n');
-    assertCaughtByShim(
-      runGuardedChild(child, { 'probe.sh': '#!/bin/sh\ngh --version\n' }),
-    );
+    assertCaughtByShim(runGuardedChild(run.child, posixPayloadFiles));
   });
 }
 
@@ -1740,7 +1749,7 @@ test('path shim: a shim-launched attempt stores credential-shaped arguments reda
   assert.doesNotMatch(run.ledgerText, /secret-token-value/u);
 });
 
-test('path shim: a registered gh fixture still runs ahead of the shim', {
+test('path shim: a registered gh fixture still runs ahead of the shim for every posix payload', {
   skip: process.platform === 'win32',
 }, () => {
   const restore = stubExecutable(
@@ -1748,10 +1757,20 @@ test('path shim: a registered gh fixture still runs ahead of the shim', {
     "process.stdout.write('gh version fixture');",
   );
   try {
-    const run = runGuardedChild(shellPayloadChild('g""h --version'));
-    assert.equal(run.result.status, 0, run.result.stderr);
-    assert.equal(run.result.stdout, 'gh version fixture');
-    assert.equal(run.attempts.length, 0, run.ledgerText);
+    for (const payload of posixPayloadRuns) {
+      const run = runGuardedChild(payload.child, posixPayloadFiles);
+      assert.equal(
+        run.result.status,
+        0,
+        `${payload.name}: ${run.result.stderr}`,
+      );
+      assert.equal(run.result.stdout, 'gh version fixture', payload.name);
+      assert.equal(
+        run.attempts.length,
+        0,
+        `${payload.name}: ${run.ledgerText}`,
+      );
+    }
   } finally {
     restore();
   }
