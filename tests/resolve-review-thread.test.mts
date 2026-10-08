@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -831,10 +831,9 @@ test('--claimless rejects a malformed --claim-issue value too (compiled CLI, #26
 });
 
 test('--apply --claimless does not require --claim-issue / --claim-id (compiled CLI, #2616)', () => {
-  // Empty PATH means the run still fails once it reaches a real `gh` call
-  // (the closingIssuesReferences scoping check), but it must NOT fail on
-  // the "requires --claim-issue" validation gate --claimless is meant to
-  // skip.
+  // Empty PATH keeps the intentional missing-CLI fixture from resolving any
+  // executable. The test-only guard records and blocks the probe before
+  // dispatch, then fails the child process from its isolated ledger.
   //
   // The helper runs from a scratch working directory, not the repository
   // root: it reads this repository's config through its working directory,
@@ -842,6 +841,7 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
   // write a slot file under the per-user state directory before `gh` fails
   // to spawn (#3725).
   const scratch = mkdtempSync(join(tmpdir(), 'idd-claimless-cli-'));
+  const ledgerPath = join(scratch, 'gh-attempts.jsonl');
   try {
     execFileSync(
       process.execPath,
@@ -859,7 +859,12 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
       {
         cwd: scratch,
         encoding: 'utf8',
-        env: { ...process.env, PATH: '' },
+        env: {
+          ...process.env,
+          PATH: '',
+          IDD_TEST_GH_GUARD_LEDGER: ledgerPath,
+          IDD_TEST_GH_GUARD_SELF_CHECK: '1',
+        },
         // #3434: suppress the duplicate raw-stderr relay execFileSync
         // performs when no `stdio` override is given.
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -868,8 +873,15 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
     throw new Error('expected the CLI to exit non-zero');
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
-    assert.notEqual(failure.status, undefined);
+    assert.equal(failure.status, 1);
     assert.doesNotMatch(failure.stderr ?? '', /requires the --claim-issue/);
+    const [attempt] = readFileSync(ledgerPath, 'utf8')
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(attempt?.api, 'execFileSync');
+    assert.equal(attempt?.executable, 'gh');
+    assert.deepEqual(attempt?.args, ['repo', 'view', '--json', '[redacted]']);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

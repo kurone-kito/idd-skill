@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -824,6 +825,49 @@ process.stdin.on('end', () => {
   }
 });
 
+test('win32 telemetry relay blocks and records an unexpected gh command (#3755)', async () => {
+  const guardRoot = mkdtempSync(
+    join(tmpdir(), 'idd-critique-telemetry-hook-relay-guard-'),
+  );
+  const ledgerPath = join(guardRoot, 'attempts.jsonl');
+  const envKeys = [
+    'IDD_TEST_GH_GUARD_ROOT',
+    'IDD_TEST_GH_GUARD_LEDGER',
+    'IDD_TEST_GH_GUARD_OWNER_PID',
+    'IDD_TEST_GH_GUARD_ROOT_OWNER_PID',
+    'IDD_TEST_GH_GUARD_SELF_CHECK',
+  ];
+  const priorEnv = new Map(
+    envKeys.map((key) => [key, process.env[key]] as const),
+  );
+  process.env.IDD_TEST_GH_GUARD_ROOT = guardRoot;
+  process.env.IDD_TEST_GH_GUARD_LEDGER = ledgerPath;
+  process.env.IDD_TEST_GH_GUARD_OWNER_PID = String(process.pid);
+  process.env.IDD_TEST_GH_GUARD_ROOT_OWNER_PID = String(process.pid);
+  delete process.env.IDD_TEST_GH_GUARD_SELF_CHECK;
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'gh api repos/example/repo',
+      samplePayload(),
+      { timeoutMs: 5_000, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: false });
+    const attempts = readFileSync(ledgerPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { api?: string; executable?: string });
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0]?.api, 'spawn');
+    assert.equal(attempts[0]?.executable, 'gh in shell command');
+  } finally {
+    for (const [key, value] of priorEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(guardRoot, { recursive: true, force: true });
+  }
+});
+
 test('invokeCritiqueTelemetryHook win32 relay survives an inherited NODE_OPTIONS=--input-type=module (kurone-kito/idd-skill#2910 review, Codex)', async () => {
   // A caller whose own environment sets NODE_OPTIONS=--input-type=module
   // -- inherited by the relay spawn via `env: {...process.env, ...}` --
@@ -1381,7 +1425,10 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
       if (args[0] === process.execPath) {
         primaryChild = child;
       }
-      if (args[0] === 'taskkill') {
+      if (
+        args[0] === 'taskkill' &&
+        args[1]?.[1] === String(primaryChild?.pid)
+      ) {
         taskkillArgs = args[1] as string[];
         taskkillOptions = args[2] as Record<string, unknown>;
       }

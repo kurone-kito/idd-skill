@@ -8199,10 +8199,10 @@ test('bin/idd-onboard.mjs --hear --propose reports gh as unavailable, and skips 
 test('bin/idd-onboard.mjs --hear --propose reports gh as unavailable when no gh is on PATH', () => {
   const root = makeFixtureDir();
   writeHearFixture(root);
-  // An empty directory as the only PATH entry makes the spawn fail with ENOENT,
-  // so this run never reaches the fixture `gh` (or a real one). It hides `git`
-  // too, so it covers the missing-binary spawn failure only; the login-state
-  // guard is covered by the test above.
+  // An empty directory as the only PATH entry keeps the missing-CLI fixture
+  // from resolving any executable. The guard blocks the probe before
+  // dispatch; its separate ledger makes this child process fail even though
+  // onboarding still returns the unavailable-CLI evidence.
   const emptyBin = makeFixtureDir();
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -8211,17 +8211,27 @@ test('bin/idd-onboard.mjs --hear --propose reports gh as unavailable when no gh 
     }
   }
   env.PATH = emptyBin;
+  const ledgerPath = join(root, 'gh-attempts.jsonl');
+  env.IDD_TEST_GH_GUARD_LEDGER = ledgerPath;
+  env.IDD_TEST_GH_GUARD_SELF_CHECK = '1';
   const { status, verdict } = runCliBin(
     ['--hear', '--propose', '--target', root],
     { cwd: root, env },
   );
-  assert.equal(status, 0);
+  assert.equal(status, 1);
   const { ghCli } = verdict.stepZeroEvidence as HearStepZeroEvidence;
   assert.deepEqual(ghCli, {
     available: false,
     version: null,
     hostAuthenticated: null,
   });
+  const [attempt] = readFileSync(ledgerPath, 'utf8')
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.equal(attempt?.api, 'execFileSync');
+  assert.equal(attempt?.executable, 'gh');
+  assert.deepEqual(attempt?.args, ['--version']);
 });
 
 test('bin/idd-onboard.mjs --hear --apply confirms a complete, valid answers map into a schema-valid transcript', () => {

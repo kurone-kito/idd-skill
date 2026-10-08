@@ -366,7 +366,7 @@ that is `transport`, carrying `retryAt` when known, never `gate`.
 | ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `discover-orphan-filter.mjs`       | an unknown flag, an invalid `--pr`, a bare `--now`, or a malformed claim-state `--now` | none today (no arguments is `transport`)                                                                                                                    |
 | `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                      | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag                          | none today                                                                                                                                                  |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid value, a flag-combination error, or an unknown flag     | none today                                                                                                                                                  |
 | `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                               | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                | none today                                                                                                                                                  |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                    | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
@@ -437,6 +437,7 @@ outcome path.
 | `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
 | `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                |
 | `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                               | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)        | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception                                                                                                                         |
+| `idd-worker-report.mjs`              | a missing or unknown mode, an unknown flag, a bad `--file`/`--stdin`/`--since` combination or value, or a record that is unreadable, not JSON, or fails the schema (exit `1`)                                                          | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception, including a store lock that could not be acquired (network-free)                                                       |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
 every `bin/idd-*.mjs` and checks this table mechanically against a
@@ -891,6 +892,13 @@ in this preamble, since the fallback differs per helper.
   is trusted executable configuration and can transmit the issue draft
   the caller sends it (referenced in
   [kurone-kito/idd-skill#3599](https://github.com/kurone-kito/idd-skill/issues/3599))
+- `scripts/idd-worker-report.mjs` for a local store of each worker's final
+  report (referenced in
+  [kurone-kito/idd-skill#3836](https://github.com/kurone-kito/idd-skill/issues/3836)):
+  `append` validates one record against `schemas/worker-report.schema.json`
+  and appends it as one line under the per-user state root, and `summary`
+  reads the store back. Network-free: it makes no `gh` call and posts
+  nothing to GitHub.
 - `scripts/authoring-owner-provenance.mjs` for the defer-source
   auto-release exception's provenance check
   (`skills/issue-authoring/references/contract.md`): computes the sha256
@@ -1766,8 +1774,8 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
   <id1,id2,...>` (default
   `bundle-core,bundle-review-triage-phase,bundle-review-fix-phase,bundle-merge-phase`),
-  `--now <ISO8601>`, and
-  `--check-overlap`. The cross-issue active-set discovery (open PRs plus the
+  `--now <ISO8601>`, `--check-overlap`, and the batch options below. The
+  cross-issue active-set discovery (open PRs plus the
   claim comments of issues that have a remote `issue/<n>-*` branch, resolved
   with the shared claim-state rules and the configured claim stale age) is
   **gated behind `--check-overlap`** because it adds GitHub API cost; without it
@@ -1778,6 +1786,35 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   pushed, paginated to the end), so a non-stale claim held by another session is
   detected even when it is outside the unclaimed candidate set being ranked. A
   claim whose branch is not yet pushed is picked up once it appears remotely.
+- **Batch options** (`#3838`): an orchestrator that fills several worker
+  slots at once asks for a batch of candidates that do not overlap.
+  - `--batch <k>` (a plain positive integer): walk `recommendedOrder` and
+    keep a candidate unless its high-contention files intersect an
+    in-flight issue, a candidate already in the batch, or, with
+    `--check-overlap`, an actively-claimed or open-PR issue. Stop at `k`
+    picks. A batch larger than the candidate count returns what fits.
+  - `--in-flight <n1,n2,...>` (repeatable; an empty value is an empty set):
+    the issues the orchestrator's workers are already running. Their
+    `## Candidate files` seed the comparison set whether or not their
+    branches are pushed, which `--check-overlap` cannot see. A candidate
+    that is itself in flight is not pickable and is reported first in
+    `batchSkipped`.
+  - `--desync-token <token>` (non-empty): the session's desync token. The
+    helper takes the first non-empty group of candidates, known candidate
+    files first, then the band of its top-`effectiveScore` members, taken
+    only when that score is at or above the suitability floor, sorted by
+    ascending issue number. `selectDesyncedIndex` from the
+    `select-desynced-index` helper picks the index, and that candidate is
+    tried first. It goes through the same overlap check as every other
+    candidate, so a dropped pick lands in `batchSkipped` and the walk
+    continues in `recommendedOrder`, skipping candidates already tried.
+    The helper never reads `discover.selectionDesync`: an orchestrator whose
+    policy is `off` omits the token. With no token, an empty or single-entry
+    band, or a below-floor top score (which includes the suitability kill
+    switch being off, since every effective score is then 0), the walk starts
+    at the head of the first non-empty group, in `recommendedOrder`.
+  - `--in-flight` and `--desync-token` without `--batch` are usage errors,
+    never a silent no-op.
 - **High-contention set**: the union of the named bundles' member files plus
   `audit/sync-manifest.json`. Instruction files are keyed by their repo-wide
   unique basename so a source path, mirror path, or bare citation all match.
@@ -1800,11 +1837,33 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
     `reason: "claim" | "pr", files: string[] }], overlapFlag: boolean }]`
   - `recommendedOrder`: `number[]` — candidate numbers after the soft
     tie-breaker (score desc, then non-overlapping first within a score band,
-    then issue number). It does **not** apply `discover.selectionDesync`; the
-    agent layers the overlap nudge after its own desync pick. Advisory only;
+    then issue number). It does **not** apply `discover.selectionDesync`;
+    outside batch mode the agent layers the overlap nudge after its own desync
+    pick, and `--desync-token` does that inside `--batch`. Advisory only;
     never a hard gate.
   - `summary`: `{ candidateCount: number, flaggedCount: number,`
     `activeIssueCount: number }`
+  - Only with `--batch` (every key below is absent without it, so the
+    output above is unchanged):
+    - `batch`: `number[]` — the picked candidates, in pick order.
+    - `batchSkipped`: `[{ number: number, collidedWith: number,`
+      `reason: "in-flight" | "batch" | "claim" | "pr", files: string[] }]` —
+      the in-flight candidates first, then each candidate dropped in walk
+      order, with the first thing it collided with (precedence: in-flight,
+      then an earlier batch member, then a claim or open-PR overlap) and the
+      sorted shared paths. A candidate that is itself in flight reports its
+      own number as `collidedWith` and `files: []`. A skipped candidate is
+      not excluded: it stays in the graph for the next refill. A candidate
+      the walk never reached, because the batch filled up, appears in neither
+      list.
+    - `inFlight`: `[{ number: number, filesUnknown: boolean,`
+      `highContentionTouched: string[] }]` — each in-flight issue, so the
+      orchestrator sees which running workers could not be compared.
+    - On each `candidates[]` entry, `filesUnknown: boolean` — `true` when the
+      candidate has no parseable candidate files (no `## Candidate files`
+      section, or one that lists no usable path). Such a candidate joins the
+      batch only after every candidate with known files, and can never
+      collide, so a batch that relies on it has no overlap protection.
 - **Behavior boundary**: evidence-only and heuristic. `## Candidate files` are
   advisory cues, not an exhaustive manifest, so the overlap signal must stay a
   soft A4 Step 2 tie-breaker — never a claim gate. The written discover
@@ -1814,7 +1873,11 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   regardless of real file contention, not a signal that no contention exists
   (`#2462`); the
   `issue-authoring` skill's roadmap-child contract requires the section for
-  exactly this reason.
+  exactly this reason. `--batch` does not filter by suitability score, as
+  `recommendedOrder` does not: the caller passes only the A4 survivors at or
+  above `autopilotSuitability.floor`. With `manifestMissing: true` the
+  high-contention set is empty, so a batch is simply the first `k`
+  candidates in walk order with no overlap protection.
 
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same
@@ -6843,6 +6906,117 @@ same as `AW4`/`AW5`.
   when first building the reserved-label guard's bot-login list and
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).
+
+### Worker final report store
+
+- Source repo / vendored-node commands:
+
+  ```sh
+  node scripts/idd-worker-report.mjs append --file <path>
+  node scripts/idd-worker-report.mjs append --stdin
+  node scripts/idd-worker-report.mjs summary [--since <ISO8601>]
+  ```
+
+- Package-manager command: run the profile-selected `idd:worker-report`
+  package script. The examples use `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:worker-report -- append --file <path>
+  npm run idd:worker-report -- summary [--since <ISO8601>]
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:worker-report`
+  command from the helper runtime manifest wiring above; the literal
+  invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-worker-report append --file <path>
+
+  npx --yes --package <helper-package-spec> \
+    idd-worker-report summary [--since <ISO8601>]
+  ```
+
+- Purpose: an orchestrator that disposes of each worker once its outcome
+  is verified keeps what the worker did not post to its issue or pull
+  request: review rounds, stalls, deviations from the documented
+  procedure, instruction text that caused friction, and the follow-up
+  issues it filed. The store is local to the operator; nothing is posted
+  to GitHub, and the helper makes no `gh` call.
+- Store: `idd-skill/worker-reports/reports.jsonl` under the per-user
+  state root, one JSON object per line. The root is an absolute
+  `XDG_STATE_HOME`, otherwise `~/.local/state`; on Windows an absolute
+  `LOCALAPPDATA`, otherwise `~/AppData/Local`. A relative value is ignored,
+  the same rule as the GitHub API load-control directory. The directory is
+  created on the first append with mode `0700` and the store with mode
+  `0600`, because records can hold friction text and session ids. On POSIX, a
+  directory or store that already exists with group or world access is
+  tightened to those modes before the append, and one owned by another user
+  is refused; on Windows the profile's own access control applies. `append` also
+  requires the store directory and the store file to be real, not symbolic
+  links, and a regular directory and file, not a FIFO or a device: anything
+  else is refused before it reads or writes the store (parent directories
+  may be links). `summary` only reads, so it never changes a mode and
+  does not refuse a link to a regular file, but it still refuses a
+  non-regular file or a store file that is a dangling link.
+- Record: `schemas/worker-report.schema.json` (schema version 1). Required
+  are `schemaVersion` (always `1`), `issue` and `pullRequest`
+  (`owner/repo#number`, the latter or `null`),
+  `claimId`, `harness` (`claude-code`, `codex-cli`, `opencode`,
+  `grok-build`, `cursor-cli`, `copilot-cli`, `antigravity-cli`, or `other`),
+  `workerHandle`, `terminalPhase`, `outcome` (`merged`, `handed-off`,
+  `held`, `abandoned`, or `failed`), `verifiedAt`, and `recordedAt`.
+  Optional are `vendorSessionId`, `reviewRounds`, `stalls`, `deviations`,
+  `frictions` (an entry may name the instruction or doc path in `file`),
+  and `followUps`. `terminalPhase` and each `phase` take a phase id such as
+  `F4`, `E4`, or the canonical underscore form `F2_5` from
+  `schemas/phase-graph.json` (a dot, as in `F2.5`, is accepted too). Every
+  string is length-bounded. The helper stores the
+  record verbatim: it stamps no timestamp and adds no field, so the caller
+  supplies `schemaVersion` and both timestamps. `verifiedAt` and
+  `recordedAt` must be RFC 3339 date-times with an uppercase `T`, a `Z` or
+  numeric offset, and seconds `00` to `59`, that name a real instant: a day
+  that does not exist (`2026-02-30`), hour 24, or an out-of-range offset is
+  rejected rather than silently normalized.
+- `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
+  record. An invalid record exits `1`, writes nothing, and creates no
+  directory. A record whose `claimId`, `workerHandle`, and `terminalPhase`
+  match an existing line is not appended and prints
+  `{"status":"duplicate"}` with exit `0`, so a retried append is safe,
+  while a replacement worker on the same claim has its own `workerHandle`
+  and gets its own record. A new line prints `{"status":"appended"}`.
+- `summary`: read-only; it takes no lock and creates nothing. It prints
+  JSON with the outcome counts (all five outcomes, zero-filled), the
+  distribution of `reviewRounds`, the ten most frequent `frictions`
+  `file` values, and `invalidLines`, the count of lines that are not valid
+  records. `--since <ISO8601>` keeps only records whose `recordedAt` is at
+  or after that instant; it takes a real date-time with an offset, such as
+  `2026-10-08T02:00:00Z` or `2026-10-08T11:00:00+09:00`, not a bare date.
+- Concurrency: the duplicate check and the write happen together under an
+  exclusive lock file next to the store (`reports.jsonl.lock`, created
+  with `O_EXCL`). A waiter retries for up to ten seconds; a lock older than
+  five seconds is treated as left by a dead holder and taken over by
+  renaming it aside. The waiter then checks that the moved file is the lock
+  it judged stale, by its inode, modification time, and token, and puts a
+  fresh lock back if the holder changed in between. The holder refreshes
+  the lock's age before it reads the store and about every second between
+  lines while it scans them (the read, the split into lines, and one very
+  long line cannot be interrupted). The holder releases the lock the same
+  way a waiter takes one over: it renames the lock aside, checks the token,
+  and restores a lock that is not its own.
+  A store whose last line has no trailing newline gets a newline first, so
+  a new record is never glued onto a torn one. The record is one `O_APPEND`
+  write. Residual risk: if two writers ever hold the lock together (a
+  process suspended past the stale age, or a new lock created in the
+  instant between the rename and the restore), the worst outcome is a
+  duplicate row, never a torn line. Two delays are bounded: a restored lock
+  whose holder had already released lingers until it ages out (at most five
+  seconds), and on a filesystem whose inode changes across a rename a waiter
+  times out with `could not acquire the lock` instead of taking over.
+- In this source repository, `vendorSessionId` joins the token-cost events
+  (`schemas/token-cost-event.schema.json`), matched on `claimId`; elsewhere
+  it is informational.
 
 ### F4 branch-failure routes
 

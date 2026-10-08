@@ -811,7 +811,18 @@ function listItemParagraphContentColumn(line: string): number | null {
     // Five or more columns of padding start the item with code, not text.
     contentColumn = markerEnd + (padding > 4 ? 1 : padding);
     column = markerEnd + padding;
-    content = listItem.content.replace(TASK_CHECKBOX_PREFIX, '');
+    content = listItem.content;
+    const taskCheckbox = content.match(TASK_CHECKBOX_PREFIX);
+    if (taskCheckbox) {
+      // A task checkbox opens the item's paragraph, so whatever follows it,
+      // even nothing, is text: not another marker, quote or leaf block (issue
+      // #3789). Past four columns of padding the item holds code, which the
+      // checks below still read through the checkbox.
+      if (padding <= 4) {
+        return contentColumn;
+      }
+      content = content.slice(taskCheckbox[0].length);
+    }
   }
   return contentColumn !== null &&
     content.trim() !== '' &&
@@ -991,6 +1002,16 @@ function scanBlockQuoteAndListPrefixes(
       column = contentStartColumn;
       const taskCheckbox = remaining.match(TASK_CHECKBOX_PREFIX);
       if (taskCheckbox) {
+        // A task checkbox is an inline control, not a block prefix: what
+        // follows it is paragraph text, even a `>` or another list marker
+        // (issue #3789). Stop here and keep the checkbox in `remaining`, so
+        // text such as `[ ] ---` reads as a paragraph, not as a leaf block,
+        // and a quote that opened earlier on the line stays a quote.
+        if (contentStartColumn - markerEndColumn <= 4) {
+          break;
+        }
+        // Past four columns of padding the item holds code, where the
+        // checkbox is only text to skip (padding is issue #3769's).
         column = indentationColumns(taskCheckbox[0].slice(3), column + 3);
         remaining = remaining.slice(taskCheckbox[0].length);
       }
@@ -1016,6 +1037,9 @@ function mayContainBlockQuoteAfterListMarkers(line: string): boolean {
     candidate = listItem.content;
     const taskCheckbox = candidate.match(TASK_CHECKBOX_PREFIX);
     if (taskCheckbox) {
+      // The scan stops at a checkbox, but this reads on: the answer also gates
+      // the enclosing-list probe, and a nested padded item's code can hold a
+      // `>` after a checkbox (issue #3769).
       candidate = candidate.slice(taskCheckbox[0].length);
     }
   }
