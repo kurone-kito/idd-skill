@@ -1756,6 +1756,19 @@ test('policy schema accepts explicit ephemeral-npx helperRuntime', () => {
   assert.deepEqual(errors, []);
 });
 
+test('policy schema accepts explicit user-global helperRuntime with a pinned packageSpec', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = loadJson(
+    'fixtures/schemas/policy.valid.json',
+  ) as PolicyFixture;
+  instance.helperRuntime = {
+    profile: 'user-global',
+    packageSpec: 'https://mirror.example/idd-skill.tgz',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 test('policy schema accepts owners-and-maintainers-only approval actors', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = loadJson(
