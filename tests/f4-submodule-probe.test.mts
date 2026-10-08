@@ -113,7 +113,9 @@ function extractProbe(relativePath: string): string {
  * cases.
  */
 function makeSuperproject(): { superRepo: string; subRepo: string } {
-  const root = mkdtempSync(join(tmpdir(), 'f4-submodule-probe-'));
+  // The apostrophe in the prefix checks that the path is not spliced into
+  // the shell command unquoted.
+  const root = mkdtempSync(join(tmpdir(), "f4-submodule-probe-it's-"));
   tempRoots.push(root);
 
   const subRepo = join(root, 'sub-origin');
@@ -146,8 +148,10 @@ function runProbe(
   probe: string,
   superRepo: string,
 ): { status: number | null; stdout: string } {
-  const command = probe.replace('<path>', `'${superRepo}'`);
-  const result = spawnSync('sh', ['-c', command], {
+  // The superproject is passed as a positional argument, not spliced into
+  // the command, so a path containing quotes cannot change the command.
+  const command = probe.replace('<path>', '"$1"');
+  const result = spawnSync('sh', ['-c', command, 'probe', superRepo], {
     env: fixtureEnv(),
     encoding: 'utf8',
     stdio: 'pipe',
