@@ -496,6 +496,37 @@ const DETECT_PACKAGE_MANAGER_STEP_START =
   '      - name: Detect package manager\n';
 const STEP_BOUNDARY_AFTER_DETECT = /\n {6}- name: /;
 const STEP_BOUNDARY = '\n      - ';
+
+// The text of each actions/checkout step, with comment lines removed. A quoted
+// `uses:` value counts as a checkout too.
+function checkoutStepTexts(text: string): string[] {
+  const uncommented = text
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  return uncommented
+    .split(STEP_BOUNDARY)
+    .filter((step) => /^\s*uses:\s*['"]?actions\/checkout\b/m.test(step));
+}
+
+// Whether a checkout step pins `ref: main` as the only ref key of its own
+// `with:` block. A ref under env: or anywhere outside with: does not count.
+function pinsTrustedRef(step: string): boolean {
+  const lines = step.split('\n');
+  const withAt = lines.findIndex((line) => /^ {8}with:\s*$/.test(line));
+  if (withAt === -1) {
+    return false;
+  }
+  const withBlock: string[] = [];
+  for (const line of lines.slice(withAt + 1)) {
+    if (line.trim() !== '' && !/^ {10}/.test(line)) {
+      break;
+    }
+    withBlock.push(line);
+  }
+  const refs = withBlock.filter((line) => /^\s*ref:/.test(line));
+  return refs.length === 1 && /^ {10}ref:\s*main\s*$/.test(refs[0]);
+}
 const SETUP_NODE_STEP_COUNT = 4;
 
 // The RWA007 checks share one read of each template copy, so a missing copy is
@@ -1452,16 +1483,13 @@ function checkRequiredGateTriggers(root: string, report: Report): void {
     if (!/pull_request_target:/.test(onBlock)) {
       report(RWA005, path, 'on: must include pull_request_target');
     }
-    // Every checkout step, judged on its own, still checks out only the
-    // trusted default branch. A whole-file search would pass when one step is
-    // pinned and another is not.
-    const checkoutSteps = text
-      .split(STEP_BOUNDARY)
-      .filter((step) => step.includes('uses: actions/checkout'));
-    if (
-      checkoutSteps.length === 0 ||
-      checkoutSteps.some((step) => !/^\s*ref:\s*main\s*$/m.test(step))
-    ) {
+    // Every checkout step, judged on its own, must pin the trusted default
+    // branch in its own with: block. A whole-file search would pass when one
+    // step is pinned and another is not.
+    const checkoutSteps = checkoutStepTexts(text);
+    if (checkoutSteps.length === 0) {
+      report(RWA005, path, 'no actions/checkout step to pin to ref: main');
+    } else if (!checkoutSteps.every(pinsTrustedRef)) {
       report(RWA005, path, 'checkout must stay pinned to ref: main');
     }
   }

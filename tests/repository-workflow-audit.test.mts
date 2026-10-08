@@ -2222,6 +2222,57 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA005',
+    name: 'a checkout whose with-level ref is PR-controlled while a decoy ref sits under env',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const checkout =
+          '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n';
+        anchored(text, checkout);
+        const pinned = text.replace(
+          '          ref: main\n',
+          `          ref: \${{ github.event.pull_request.head.sha }}\n`,
+        );
+        const end = anchored(pinned, checkout) + checkout.length;
+        return `${pinned.slice(0, end)}        env:\n          ref: main\n${pinned.slice(end)}`;
+      },
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a quoted checkout uses value that moves to a PR-controlled ref',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const checkout =
+          '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n';
+        anchored(text, checkout);
+        const quoted = text.replace(
+          checkout,
+          '      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1\n',
+        );
+        return quoted.replace(
+          '          ref: main\n',
+          `          ref: \${{ github.event.pull_request.head.sha }}\n`,
+        );
+      },
+    },
+    expected: [{ message: 'checkout must stay pinned to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate that no longer checks out the repository',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@',
+      to: '      - uses: actions/cache@',
+      all: true,
+    },
+    expected: [{ message: 'no actions/checkout step to pin to ref: main' }],
+  },
+  {
+    ruleId: 'RWA005',
     name: 'a required gate checkout moved to a PR-controlled ref while the self-waiver checkout stays pinned',
     path: ROOT_ADVISORY,
     mutation: {
