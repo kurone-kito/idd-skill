@@ -1,0 +1,13 @@
+{
+  "overrides": [
+    {
+      "match": {
+        "repo": "owner/repo",
+        "path": "operators/team/repo"
+      },
+      "config": {
+        "markerPrefix": "idd-operator"
+      }
+    }
+  ]
+}

@@ -53,6 +53,24 @@ import {
   resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mts';
 
+export type {
+  GitTextRunner,
+  LayeredPolicyResolution,
+  PolicyLayerSource,
+  RepositoryIdentity,
+  RepositoryPolicyDocument,
+  ResolveLayeredPolicyInput,
+  UserGlobalPolicyDocument,
+  UserGlobalPolicyFields,
+  UserGlobalPolicyOverride,
+} from './layered-policy.mts';
+export {
+  deriveRepositoryIdentity,
+  loadRepositoryPolicyDocument,
+  REPOSITORY_POLICY_FIELDS,
+  resolveLayeredPolicy,
+} from './layered-policy.mts';
+
 /**
  * Weakly-typed, partial view of `.github/idd/config.json`. Every field is
  * optional and the object accepts arbitrary additional keys — this is an

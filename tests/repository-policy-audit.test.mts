@@ -111,6 +111,9 @@ function copyBareNodeRuntime(
     const imports = [
       ...sourceText.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm),
       ...sourceText.matchAll(/^\s*import\b[\s\S]*?\bfrom\s+['"]([^'"]+)['"]/gm),
+      ...sourceText.matchAll(
+        /^\s*export\s+(?:type\s+)?(?:\*\s+as\s+\w+|\*|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/gm,
+      ),
     ];
     for (const match of imports) {
       const specifier = match[1];
@@ -170,6 +173,9 @@ function copyAuditDocsRuntime(destination: string): string {
         ...sourceText.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm),
         ...sourceText.matchAll(
           /^\s*import\b[\s\S]*?\bfrom\s+['"]([^'"]+)['"]/gm,
+        ),
+        ...sourceText.matchAll(
+          /^\s*export\s+(?:type\s+)?(?:\*\s+as\s+\w+|\*|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/gm,
         ),
       ];
       for (const match of imports) {

@@ -47,6 +47,13 @@ import {
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mjs';
+
+export {
+  deriveRepositoryIdentity,
+  loadRepositoryPolicyDocument,
+  REPOSITORY_POLICY_FIELDS,
+  resolveLayeredPolicy,
+} from './layered-policy.mjs';
 /**
  * Read and parse `.github/idd/config.json` from the current working
  * directory, returning `null` when the file is missing,

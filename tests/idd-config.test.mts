@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { platform } from 'node:process';
@@ -7,14 +13,18 @@ import { test } from 'node:test';
 
 import {
   buildIddConfigContentsArgs,
+  deriveRepositoryIdentity,
   isUpstreamEscalationEnabled,
   loadIddConfig,
   loadPolicyConfig,
+  loadRepositoryPolicyDocument,
   loadTrustedActorConfig,
   loadTrustedIddConfig,
   loadUserGlobalPolicyDocument,
+  REPOSITORY_POLICY_FIELDS,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
   resolveEffectiveCritiqueLoopTelemetryHookFromEnv,
+  resolveLayeredPolicy,
   resolveUserGlobalConfigPath,
   selectTrustedConfigRef,
 } from '../src/scripts/idd-config.mts';
@@ -50,6 +60,39 @@ function withSandboxCwd<T>(run: (sandbox: string) => T): T {
 function writeConfig(sandbox: string, body: string): void {
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(join(sandbox, '.github', 'idd', 'config.json'), body);
+}
+
+function identityFromGit(remote: string | null, commonDir: string) {
+  return deriveRepositoryIdentity({
+    cwd: '/checkout/worktree',
+    runGit: (args, cwd) => {
+      assert.equal(cwd, resolve('/checkout/worktree'));
+      if (args.length === 1 && args[0] === 'remote') {
+        return remote === null ? 'upstream\n' : 'origin\nupstream\n';
+      }
+      if (args.join(' ') === 'remote get-url origin') {
+        assert.notEqual(remote, null);
+        return remote ?? '';
+      }
+      if (
+        args.join(' ') === 'rev-parse --path-format=absolute --git-common-dir'
+      ) {
+        return commonDir;
+      }
+      throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+    },
+  });
+}
+
+function writeRepositoryPolicy(
+  root: string,
+  relativePath: string,
+  body: string,
+): string {
+  const path = join(root, relativePath);
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, body);
+  return path;
 }
 
 test('loadIddConfig returns null when the config file is missing', () => {
@@ -895,4 +938,371 @@ test('an empty base ref and an unavailable default branch throw', () => {
       }),
     /no base ref was supplied/,
   );
+});
+
+test('deriveRepositoryIdentity recognizes HTTPS, SSH URL, and SCP GitHub origins', () => {
+  for (const remote of [
+    'https://github.com/Owner/Repo.git',
+    'ssh://git@GITHUB.COM/Owner/Repo',
+    'git@github.com:Owner/Repo.git',
+  ]) {
+    assert.deepEqual(identityFromGit(remote, '/repos/repo/.git'), {
+      githubSlug: 'owner/repo',
+      mainWorktreeRoot: '/repos/repo',
+    });
+  }
+});
+
+test('deriveRepositoryIdentity resolves linked and bare common-directory layouts', () => {
+  assert.equal(
+    identityFromGit('git@gitlab.com:owner/repo.git', '/srv/main/.git')
+      .mainWorktreeRoot,
+    '/srv/main',
+  );
+  assert.equal(
+    identityFromGit(null, '/srv/repository.git').mainWorktreeRoot,
+    '/srv/repository',
+  );
+});
+
+test('a non-GitHub origin identity can select a path override', () => {
+  const identity = identityFromGit(
+    'git@gitlab.com:owner/repo.git',
+    '/srv/operators/team/project/.git',
+  );
+  const result = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity,
+    userGlobalConfig: {
+      overrides: [
+        {
+          match: { path: 'operators/team/project' },
+          config: { issueScope: 'path' },
+        },
+      ],
+    },
+  });
+  assert.equal(identity.githubSlug, null);
+  assert.equal(result.config.issueScope, 'path');
+});
+
+test('deriveRepositoryIdentity rejects lookalike hosts and malformed GitHub slugs', () => {
+  for (const remote of [
+    'https://github.com.evil.test/owner/repo.git',
+    'http://github.com/owner/repo.git',
+    'https://github.com:443/owner/repo.git',
+    'https://user@github.com/owner/repo.git',
+    'git@github.com:owner/repo/extra.git',
+    'git@github.com:owner/repo?query',
+  ]) {
+    assert.equal(
+      identityFromGit(remote, '/srv/project/.git').githubSlug,
+      null,
+      remote,
+    );
+  }
+});
+
+test('resolveLayeredPolicy matches path suffixes on whole segments and by specificity', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity: { githubSlug: null, mainWorktreeRoot: '/srv/foobar/bar/repo' },
+    userGlobalConfig: {
+      overrides: [
+        { match: { path: 'foo/bar/repo' }, config: { issueScope: 'wrong' } },
+        { match: { path: 'bar/repo' }, config: { issueScope: 'shorter' } },
+        {
+          match: { path: 'foobar/bar/repo' },
+          config: { issueScope: 'specific' },
+        },
+      ],
+    },
+  });
+  assert.equal(result.selectedOverrideIndex, 2);
+  assert.equal(result.config.issueScope, 'specific');
+  assert.equal(result.sourceMap.issueScope, 'user-global-override');
+});
+
+test('resolveLayeredPolicy ignores path entries for GitHub identities and folds Windows paths', () => {
+  const github = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/owner/repo' },
+    userGlobalConfig: {
+      overrides: [
+        { match: { path: 'owner/repo' }, config: { issueScope: 'path' } },
+      ],
+    },
+  });
+  assert.equal(github.selectedOverrideIndex, null);
+  assert.equal(github.config.issueScope, undefined);
+
+  const windows = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity: {
+      githubSlug: null,
+      mainWorktreeRoot: 'C:\\Users\\Operator\\Repos\\Widget',
+    },
+    platform: 'win32',
+    userGlobalConfig: {
+      overrides: [
+        {
+          match: { path: 'users/operator/repos/widget' },
+          config: { issueScope: 'windows-match' },
+        },
+      ],
+    },
+  });
+  assert.equal(windows.config.issueScope, 'windows-match');
+});
+
+test('resolveLayeredPolicy reports tied matching overrides and applies none', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    defaults: { issueScope: 'default' },
+    userGlobalConfig: {
+      overrides: [
+        { match: { repo: 'OWNER/REPO' }, config: { issueScope: 'first' } },
+        { match: { repo: 'owner/repo' }, config: { issueScope: 'second' } },
+      ],
+    },
+  });
+  assert.equal(result.selectedOverrideIndex, null);
+  assert.equal(result.config.issueScope, 'default');
+  assert.ok(
+    result.diagnostics.some((entry) =>
+      entry.includes('conflicting user-global overrides'),
+    ),
+  );
+});
+
+test('resolveLayeredPolicy merges nested leaves, replaces arrays, and reports sources', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: {
+        issueScope: 'local',
+        critiqueLoop: { nested: { localOnly: true, globalOnly: null } },
+      },
+    },
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    defaults: {
+      issueScope: 'default',
+      critiqueLoop: {
+        deferAfterRounds: [1],
+        deferByUrgency: 'low',
+        nested: { defaultOnly: true },
+      },
+    },
+    userGlobalConfig: {
+      issueScope: 'global',
+      critiqueLoop: {
+        deferAfterRounds: [2],
+        deferByUrgency: 'medium',
+        nested: { globalOnly: 'global' },
+      },
+      overrides: [
+        {
+          match: { repo: 'owner/repo' },
+          config: {
+            issueScope: 'override',
+            critiqueLoop: {
+              deferAfterRounds: [3, 4],
+              nested: { overrideOnly: true },
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(result.config, {
+    issueScope: 'local',
+    critiqueLoop: {
+      deferAfterRounds: [3, 4],
+      deferByUrgency: 'medium',
+      nested: {
+        defaultOnly: true,
+        globalOnly: null,
+        overrideOnly: true,
+        localOnly: true,
+      },
+    },
+  });
+  assert.deepEqual(result.sourceMap, {
+    issueScope: 'repository-local',
+    'critiqueLoop.deferAfterRounds': 'user-global-override',
+    'critiqueLoop.deferByUrgency': 'user-global',
+    'critiqueLoop.nested.defaultOnly': 'default',
+    'critiqueLoop.nested.globalOnly': 'repository-local',
+    'critiqueLoop.nested.overrideOnly': 'user-global-override',
+    'critiqueLoop.nested.localOnly': 'repository-local',
+  });
+  assert.equal(result.selectedOverrideIndex, 0);
+});
+
+test('repository-policy fields stay local when a local document exists', () => {
+  const identity = { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' };
+  const userGlobalConfig = {
+    helperRuntime: { profile: 'package-manager' },
+    markerPrefix: 'global',
+    mergePolicy: 'fully_autonomous_merge',
+    mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
+    issueScope: 'roadmap-first',
+    overrides: [
+      {
+        match: { repo: 'owner/repo' },
+        config: {
+          helperRuntime: { profile: 'vendored-node' },
+          markerPrefix: 'override',
+          mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
+          issueScope: 'orphan-first',
+        },
+      },
+    ],
+  };
+  const local = resolveLayeredPolicy({
+    localDocument: { exists: true, config: { markerPrefix: 'local' } },
+    identity,
+    defaults: {
+      helperRuntime: { profile: 'instructions-only' },
+      markerPrefix: 'default',
+      mergePolicy: 'human_merge',
+      mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
+    },
+    userGlobalConfig,
+  });
+  assert.equal(
+    local.config.helperRuntime &&
+      (local.config.helperRuntime as { profile: string }).profile,
+    'instructions-only',
+  );
+  assert.equal(local.config.markerPrefix, 'local');
+  assert.equal(local.config.mergePolicy, 'human_merge');
+  assert.deepEqual(local.config.mergeGate, {
+    soloCodeownerAdminFallback: 'auto-admin-retry',
+  });
+  assert.equal(local.config.issueScope, 'orphan-first');
+  assert.equal(local.sourceMap['helperRuntime.profile'], 'default');
+  assert.equal(local.sourceMap.markerPrefix, 'repository-local');
+  assert.equal(local.sourceMap.issueScope, 'user-global-override');
+
+  const noLocal = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity,
+    userGlobalConfig,
+  });
+  assert.equal(
+    noLocal.config.helperRuntime &&
+      (noLocal.config.helperRuntime as { profile: string }).profile,
+    'vendored-node',
+  );
+  assert.equal(noLocal.config.markerPrefix, 'override');
+  assert.equal(noLocal.config.mergePolicy, 'fully_autonomous_merge');
+  assert.deepEqual(noLocal.config.mergeGate, {
+    soloCodeownerAdminFallback: 'hold-and-report',
+  });
+  assert.equal(noLocal.sourceMap.mergePolicy, 'user-global');
+});
+
+test('a malformed higher-layer value blocks inheritance at that field', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: { critiqueLoop: 'not-an-object' },
+    },
+    identity: { githubSlug: null, mainWorktreeRoot: '/srv/repo' },
+    defaults: { critiqueLoop: { deferAfterRounds: [1] } },
+    userGlobalConfig: {
+      critiqueLoop: { deferAfterRounds: [2] },
+    },
+  });
+  assert.equal(result.config.critiqueLoop, 'not-an-object');
+  assert.equal(result.sourceMap.critiqueLoop, 'repository-local');
+  assert.equal(result.sourceMap['critiqueLoop.deferAfterRounds'], undefined);
+});
+
+test('loadRepositoryPolicyDocument applies canonical-first and legacy fallback semantics', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-repository-policy-'));
+  const legacyPath = writeRepositoryPolicy(
+    root,
+    'idd-policy.json',
+    JSON.stringify({ markerPrefix: 'legacy' }),
+  );
+  const legacy = loadRepositoryPolicyDocument(root);
+  assert.equal(legacy.exists, true);
+  assert.equal(legacy.path, legacyPath);
+  assert.deepEqual(legacy.config, { markerPrefix: 'legacy' });
+
+  const canonicalPath = writeRepositoryPolicy(
+    root,
+    '.github/idd/config.json',
+    JSON.stringify({ markerPrefix: 'canonical' }),
+  );
+  const canonical = loadRepositoryPolicyDocument(root);
+  assert.equal(canonical.path, canonicalPath);
+  assert.deepEqual(canonical.config, { markerPrefix: 'canonical' });
+
+  writeFileSync(canonicalPath, '{ malformed');
+  const brokenCanonical = loadRepositoryPolicyDocument(root);
+  assert.equal(brokenCanonical.exists, true);
+  assert.equal(brokenCanonical.path, canonicalPath);
+  assert.equal(brokenCanonical.config, undefined);
+  assert.match(
+    brokenCanonical.diagnostic ?? '',
+    /cannot parse repository policy/u,
+  );
+
+  const blocked = resolveLayeredPolicy({
+    localDocument: brokenCanonical,
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    defaults: {
+      markerPrefix: 'default',
+      helperRuntime: { profile: 'instructions-only' },
+    },
+    userGlobalConfig: {
+      markerPrefix: 'global',
+      helperRuntime: { profile: 'package-manager' },
+      issueScope: 'roadmap-first',
+    },
+  });
+  assert.equal(blocked.config.markerPrefix, 'default');
+  assert.equal(
+    blocked.config.helperRuntime &&
+      (blocked.config.helperRuntime as { profile: string }).profile,
+    'instructions-only',
+  );
+  assert.equal(blocked.config.issueScope, 'roadmap-first');
+  assert.equal(blocked.diagnostics.length, 1);
+});
+
+test('REPOSITORY_POLICY_FIELDS is covered by policy schema properties', () => {
+  const policySchema = JSON.parse(
+    readFileSync(
+      new URL('../schemas/policy.schema.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { properties: Record<string, unknown> };
+  const fields = Object.keys(REPOSITORY_POLICY_FIELDS);
+  for (const field of fields) {
+    assert.ok(
+      Object.hasOwn(policySchema.properties, field),
+      `${field} missing from policy schema`,
+    );
+  }
+  for (const required of [
+    'helperRuntime',
+    'trustedMarkerActors',
+    'ciGate',
+    'advisoryWait',
+    'advisoryConvergence',
+    'mergePolicy',
+    'mergeGate',
+    'markerPrefix',
+  ]) {
+    assert.ok(
+      fields.includes(required),
+      `${required} missing from repository policy fields`,
+    );
+  }
 });

@@ -1,0 +1,23 @@
+{
+  "helperRuntime": {
+    "profile": "package-manager"
+  },
+  "overrides": [
+    {
+      "match": {
+        "repo": "owner/repo"
+      },
+      "config": {
+        "mergePolicy": "human_merge"
+      }
+    },
+    {
+      "match": {
+        "path": "operators/team/repo"
+      },
+      "config": {
+        "markerPrefix": "idd-operator"
+      }
+    }
+  ]
+}

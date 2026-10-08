@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/user-global-config.schema.json",
+  "title": "IDD User-Global Config",
+  "description": "Partial operator-global IDD policy with repository-specific overrides.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "$ref": "policy.schema.json#/properties/$schema"
+    },
+    "iddVersion": {
+      "$ref": "policy.schema.json#/properties/iddVersion"
+    },
+    "markerPrefix": {
+      "$ref": "policy.schema.json#/properties/markerPrefix"
+    },
+    "developmentBranch": {
+      "$ref": "policy.schema.json#/properties/developmentBranch"
+    },
+    "provider": {
+      "$ref": "policy.schema.json#/properties/provider"
+    },
+    "mergePolicy": {
+      "$ref": "policy.schema.json#/properties/mergePolicy"
+    },
+    "mergePolicyAck": {
+      "$ref": "policy.schema.json#/properties/mergePolicyAck"
+    },
+    "reviewPolicy": {
+      "$ref": "policy.schema.json#/properties/reviewPolicy"
+    },
+    "threadResolutionPolicy": {
+      "$ref": "policy.schema.json#/properties/threadResolutionPolicy"
+    },
+    "authoringLanguage": {
+      "$ref": "policy.schema.json#/properties/authoringLanguage"
+    },
+    "claimTiming": {
+      "$ref": "policy.schema.json#/properties/claimTiming"
+    },
+    "trustedMarkerActors": {
+      "$ref": "policy.schema.json#/properties/trustedMarkerActors"
+    },
+    "advisoryBotLogins": {
+      "$ref": "policy.schema.json#/properties/advisoryBotLogins"
+    },
+    "workshop": {
+      "$ref": "policy.schema.json#/properties/workshop"
+    },
+    "commands": {
+      "$ref": "policy.schema.json#/properties/commands"
+    },
+    "helperRuntime": {
+      "$ref": "policy.schema.json#/properties/helperRuntime"
+    },
+    "issueScope": {
+      "$ref": "policy.schema.json#/properties/issueScope"
+    },
+    "orphanFirstPolicy": {
+      "$ref": "policy.schema.json#/properties/orphanFirstPolicy"
+    },
+    "skipIssueAuthorApprovalGate": {
+      "$ref": "policy.schema.json#/properties/skipIssueAuthorApprovalGate"
+    },
+    "critiqueLoopProfile": {
+      "$ref": "policy.schema.json#/properties/critiqueLoopProfile"
+    },
+    "mergeHandoffActor": {
+      "$ref": "policy.schema.json#/properties/mergeHandoffActor"
+    },
+    "externalAdvisoryBot": {
+      "$ref": "policy.schema.json#/properties/externalAdvisoryBot"
+    },
+    "maintainerApprovalActorPolicy": {
+      "$ref": "policy.schema.json#/properties/maintainerApprovalActorPolicy"
+    },
+    "maintainerApprovalActors": {
+      "$ref": "policy.schema.json#/properties/maintainerApprovalActors"
+    },
+    "stallRecovery": {
+      "$ref": "policy.schema.json#/properties/stallRecovery"
+    },
+    "forcedHandoff": {
+      "$ref": "policy.schema.json#/properties/forcedHandoff"
+    },
+    "forced-handoff": {
+      "$ref": "policy.schema.json#/properties/forced-handoff"
+    },
+    "forcedHandoffMode": {
+      "$ref": "policy.schema.json#/properties/forcedHandoffMode"
+    },
+    "forced-handoff-mode": {
+      "$ref": "policy.schema.json#/properties/forced-handoff-mode"
+    },
+    "forcedHandoffAuthority": {
+      "$ref": "policy.schema.json#/properties/forcedHandoffAuthority"
+    },
+    "forced-handoff-authority": {
+      "$ref": "policy.schema.json#/properties/forced-handoff-authority"
+    },
+    "markerTrust": {
+      "$ref": "policy.schema.json#/properties/markerTrust"
+    },
+    "markerTrustAllowCollaboratorMarkers": {
+      "$ref": "policy.schema.json#/properties/markerTrustAllowCollaboratorMarkers"
+    },
+    "allowCollaboratorMarkers": {
+      "$ref": "policy.schema.json#/properties/allowCollaboratorMarkers"
+    },
+    "advisoryWait": {
+      "$ref": "policy.schema.json#/properties/advisoryWait"
+    },
+    "advisoryConvergence": {
+      "$ref": "policy.schema.json#/properties/advisoryConvergence"
+    },
+    "ciWait": {
+      "$ref": "policy.schema.json#/properties/ciWait"
+    },
+    "ciGate": {
+      "$ref": "policy.schema.json#/properties/ciGate"
+    },
+    "providerOutage": {
+      "$ref": "policy.schema.json#/properties/providerOutage"
+    },
+    "localValidationEvidence": {
+      "$ref": "policy.schema.json#/properties/localValidationEvidence"
+    },
+    "providerHealth": {
+      "$ref": "policy.schema.json#/properties/providerHealth"
+    },
+    "githubApi": {
+      "$ref": "policy.schema.json#/properties/githubApi"
+    },
+    "discover": {
+      "$ref": "policy.schema.json#/properties/discover"
+    },
+    "claim": {
+      "$ref": "policy.schema.json#/properties/claim"
+    },
+    "critiqueLoop": {
+      "$ref": "policy.schema.json#/properties/critiqueLoop"
+    },
+    "reviewEscalation": {
+      "$ref": "policy.schema.json#/properties/reviewEscalation"
+    },
+    "approvalSignals": {
+      "$ref": "policy.schema.json#/properties/approvalSignals"
+    },
+    "issueAuthoring": {
+      "$ref": "policy.schema.json#/properties/issueAuthoring"
+    },
+    "autopilotSuitability": {
+      "$ref": "policy.schema.json#/properties/autopilotSuitability"
+    },
+    "worktreeGuard": {
+      "$ref": "policy.schema.json#/properties/worktreeGuard"
+    },
+    "upstreamEscalation": {
+      "$ref": "policy.schema.json#/properties/upstreamEscalation"
+    },
+    "labels": {
+      "$ref": "policy.schema.json#/properties/labels"
+    },
+    "mergeGate": {
+      "$ref": "policy.schema.json#/properties/mergeGate"
+    },
+    "overrides": {
+      "type": "array",
+      "description": "Repository-specific partial policy entries, evaluated by match specificity.",
+      "items": {
+        "type": "object",
+        "required": [
+          "match",
+          "config"
+        ],
+        "properties": {
+          "match": {
+            "type": "object",
+            "description": "Selects one repository by GitHub slug or path suffix, never both.",
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "repo"
+                ],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "pattern": "^[^/\\s]+/[^/\\s]+$",
+                    "description": "GitHub owner/repo slug matched case-insensitively."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "path"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?:[^/\\\\]+[/\\\\])*[^/\\\\]+$",
+                    "description": "Path suffix matched on whole segments when origin is not GitHub."
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "config": {
+            "type": "object",
+            "description": "Partial policy fields applied above the user-global top-level fields.",
+            "properties": {
+              "$schema": {
+                "$ref": "policy.schema.json#/properties/$schema"
+              },
+              "iddVersion": {
+                "$ref": "policy.schema.json#/properties/iddVersion"
+              },
+              "markerPrefix": {
+                "$ref": "policy.schema.json#/properties/markerPrefix"
+              },
+              "developmentBranch": {
+                "$ref": "policy.schema.json#/properties/developmentBranch"
+              },
+              "provider": {
+                "$ref": "policy.schema.json#/properties/provider"
+              },
+              "mergePolicy": {
+                "$ref": "policy.schema.json#/properties/mergePolicy"
+              },
+              "mergePolicyAck": {
+                "$ref": "policy.schema.json#/properties/mergePolicyAck"
+              },
+              "reviewPolicy": {
+                "$ref": "policy.schema.json#/properties/reviewPolicy"
+              },
+              "threadResolutionPolicy": {
+                "$ref": "policy.schema.json#/properties/threadResolutionPolicy"
+              },
+              "authoringLanguage": {
+                "$ref": "policy.schema.json#/properties/authoringLanguage"
+              },
+              "claimTiming": {
+                "$ref": "policy.schema.json#/properties/claimTiming"
+              },
+              "trustedMarkerActors": {
+                "$ref": "policy.schema.json#/properties/trustedMarkerActors"
+              },
+              "advisoryBotLogins": {
+                "$ref": "policy.schema.json#/properties/advisoryBotLogins"
+              },
+              "workshop": {
+                "$ref": "policy.schema.json#/properties/workshop"
+              },
+              "commands": {
+                "$ref": "policy.schema.json#/properties/commands"
+              },
+              "helperRuntime": {
+                "$ref": "policy.schema.json#/properties/helperRuntime"
+              },
+              "issueScope": {
+                "$ref": "policy.schema.json#/properties/issueScope"
+              },
+              "orphanFirstPolicy": {
+                "$ref": "policy.schema.json#/properties/orphanFirstPolicy"
+              },
+              "skipIssueAuthorApprovalGate": {
+                "$ref": "policy.schema.json#/properties/skipIssueAuthorApprovalGate"
+              },
+              "critiqueLoopProfile": {
+                "$ref": "policy.schema.json#/properties/critiqueLoopProfile"
+              },
+              "mergeHandoffActor": {
+                "$ref": "policy.schema.json#/properties/mergeHandoffActor"
+              },
+              "externalAdvisoryBot": {
+                "$ref": "policy.schema.json#/properties/externalAdvisoryBot"
+              },
+              "maintainerApprovalActorPolicy": {
+                "$ref": "policy.schema.json#/properties/maintainerApprovalActorPolicy"
+              },
+              "maintainerApprovalActors": {
+                "$ref": "policy.schema.json#/properties/maintainerApprovalActors"
+              },
+              "stallRecovery": {
+                "$ref": "policy.schema.json#/properties/stallRecovery"
+              },
+              "forcedHandoff": {
+                "$ref": "policy.schema.json#/properties/forcedHandoff"
+              },
+              "forced-handoff": {
+                "$ref": "policy.schema.json#/properties/forced-handoff"
+              },
+              "forcedHandoffMode": {
+                "$ref": "policy.schema.json#/properties/forcedHandoffMode"
+              },
+              "forced-handoff-mode": {
+                "$ref": "policy.schema.json#/properties/forced-handoff-mode"
+              },
+              "forcedHandoffAuthority": {
+                "$ref": "policy.schema.json#/properties/forcedHandoffAuthority"
+              },
+              "forced-handoff-authority": {
+                "$ref": "policy.schema.json#/properties/forced-handoff-authority"
+              },
+              "markerTrust": {
+                "$ref": "policy.schema.json#/properties/markerTrust"
+              },
+              "markerTrustAllowCollaboratorMarkers": {
+                "$ref": "policy.schema.json#/properties/markerTrustAllowCollaboratorMarkers"
+              },
+              "allowCollaboratorMarkers": {
+                "$ref": "policy.schema.json#/properties/allowCollaboratorMarkers"
+              },
+              "advisoryWait": {
+                "$ref": "policy.schema.json#/properties/advisoryWait"
+              },
+              "advisoryConvergence": {
+                "$ref": "policy.schema.json#/properties/advisoryConvergence"
+              },
+              "ciWait": {
+                "$ref": "policy.schema.json#/properties/ciWait"
+              },
+              "ciGate": {
+                "$ref": "policy.schema.json#/properties/ciGate"
+              },
+              "providerOutage": {
+                "$ref": "policy.schema.json#/properties/providerOutage"
+              },
+              "localValidationEvidence": {
+                "$ref": "policy.schema.json#/properties/localValidationEvidence"
+              },
+              "providerHealth": {
+                "$ref": "policy.schema.json#/properties/providerHealth"
+              },
+              "githubApi": {
+                "$ref": "policy.schema.json#/properties/githubApi"
+              },
+              "discover": {
+                "$ref": "policy.schema.json#/properties/discover"
+              },
+              "claim": {
+                "$ref": "policy.schema.json#/properties/claim"
+              },
+              "critiqueLoop": {
+                "$ref": "policy.schema.json#/properties/critiqueLoop"
+              },
+              "reviewEscalation": {
+                "$ref": "policy.schema.json#/properties/reviewEscalation"
+              },
+              "approvalSignals": {
+                "$ref": "policy.schema.json#/properties/approvalSignals"
+              },
+              "issueAuthoring": {
+                "$ref": "policy.schema.json#/properties/issueAuthoring"
+              },
+              "autopilotSuitability": {
+                "$ref": "policy.schema.json#/properties/autopilotSuitability"
+              },
+              "worktreeGuard": {
+                "$ref": "policy.schema.json#/properties/worktreeGuard"
+              },
+              "upstreamEscalation": {
+                "$ref": "policy.schema.json#/properties/upstreamEscalation"
+              },
+              "labels": {
+                "$ref": "policy.schema.json#/properties/labels"
+              },
+              "mergeGate": {
+                "$ref": "policy.schema.json#/properties/mergeGate"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

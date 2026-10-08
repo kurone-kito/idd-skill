@@ -11,6 +11,7 @@ import type {
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
 import type { IddRoadmapAuditExecuteVerdict } from '../src/scripts/idd-roadmap-audit-execute.mts';
+import type { UserGlobalPolicyDocument } from '../src/scripts/layered-policy.mts';
 import type {
   OnboardingHearingCatalog,
   OnboardingHearingTranscript,
@@ -669,6 +670,63 @@ export const policyConfigKeys = [
   'githubApi',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
+export const userGlobalConfigKeys = [
+  '$schema',
+  'iddVersion',
+  'markerPrefix',
+  'developmentBranch',
+  'provider',
+  'mergePolicy',
+  'mergePolicyAck',
+  'reviewPolicy',
+  'threadResolutionPolicy',
+  'authoringLanguage',
+  'claimTiming',
+  'trustedMarkerActors',
+  'advisoryBotLogins',
+  'workshop',
+  'commands',
+  'helperRuntime',
+  'issueScope',
+  'orphanFirstPolicy',
+  'skipIssueAuthorApprovalGate',
+  'critiqueLoopProfile',
+  'mergeHandoffActor',
+  'externalAdvisoryBot',
+  'maintainerApprovalActorPolicy',
+  'maintainerApprovalActors',
+  'stallRecovery',
+  'forcedHandoff',
+  'forced-handoff',
+  'forcedHandoffMode',
+  'forced-handoff-mode',
+  'forcedHandoffAuthority',
+  'forced-handoff-authority',
+  'markerTrust',
+  'markerTrustAllowCollaboratorMarkers',
+  'allowCollaboratorMarkers',
+  'advisoryWait',
+  'advisoryConvergence',
+  'ciWait',
+  'ciGate',
+  'providerOutage',
+  'localValidationEvidence',
+  'providerHealth',
+  'githubApi',
+  'discover',
+  'claim',
+  'critiqueLoop',
+  'reviewEscalation',
+  'approvalSignals',
+  'issueAuthoring',
+  'autopilotSuitability',
+  'worktreeGuard',
+  'upstreamEscalation',
+  'labels',
+  'mergeGate',
+  'overrides',
+] as const satisfies readonly (keyof UserGlobalPolicyDocument)[];
+
 // PreMergeReadinessReport is index-signature typed (its summary builder
 // returns `Record<string, unknown>` plus a handful of named fields), so
 // `keyof` collapses to `string | number`: the `satisfies` below is vacuous and no
@@ -797,6 +855,10 @@ const exhaustivenessWitnesses: {
     PolicyConfigFile,
     (typeof policyConfigKeys)[number]
   >;
+  userGlobalConfig: CoversAllKeysOf<
+    UserGlobalPolicyDocument,
+    (typeof userGlobalConfigKeys)[number]
+  >;
   stalledSessionQuietCheck: CoversAllKeysOf<
     StalledSessionQuietCheckReport,
     (typeof stalledSessionQuietCheckKeys)[number]
@@ -829,6 +891,7 @@ const exhaustivenessWitnesses: {
   onboardingHearingCatalog: true,
   onboardingHearingTranscript: true,
   policyConfig: true,
+  userGlobalConfig: true,
   stalledSessionQuietCheck: true,
   tokenCostSample: true,
   tokenCostEvent: true,
@@ -1436,6 +1499,16 @@ const policyConfigFixture = {
   },
 } satisfies PolicyConfigFile;
 
+const userGlobalConfigFixture = {
+  markerPrefix: 'idd',
+  overrides: [
+    {
+      match: { repo: 'example/project' },
+      config: { mergePolicy: 'human_merge' },
+    },
+  ],
+} satisfies UserGlobalPolicyDocument;
+
 const preMergeReadinessFixture = {
   protocolVersion: '1',
   decisionAuthority: 'instructions',
@@ -1873,6 +1946,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
     keys: policyConfigKeys,
     fixture: policyConfigFixture,
   },
+  'user-global-config.schema.json': {
+    keys: userGlobalConfigKeys,
+    fixture: userGlobalConfigFixture,
+  },
   'pre-merge-readiness.schema.json': {
     keys: preMergeReadinessKeys,
     fixture: preMergeReadinessFixture,
@@ -1922,15 +1999,24 @@ test('every catalog schema file has test data and no test data is stale', () => 
 // ---------------------------------------------------------------------------
 
 for (const entry of SCHEMA_TYPE_MAP) {
+  const context = {
+    root: process.cwd(),
+    schemaPath: `schemas/${entry.schemaFile}`,
+  };
+
   test(`${entry.schemaFile}: schema keywords are validator-supported (gaps pinned)`, () => {
     // Sort both sides: the pinned SET stays strict while key-traversal
     // order inside the validator cannot make the pin brittle.
-    const errors = [...checkSchemaKeywords(loadSchema(entry))].sort();
+    const errors = [
+      ...checkSchemaKeywords(loadSchema(entry), '$', context),
+    ].sort();
     assert.deepEqual(errors, [...(entry.knownKeywordGaps ?? [])].sort());
   });
 
   test(`${entry.schemaFile}: canonical ${entry.exportedType} fixture validates against the schema`, () => {
-    const errors = [...validate(entry.fixture, loadSchema(entry))].sort();
+    const errors = [
+      ...validate(entry.fixture, loadSchema(entry), '$', context),
+    ].sort();
     assert.deepEqual(errors, [...(entry.knownValidationGaps ?? [])].sort());
   });
 

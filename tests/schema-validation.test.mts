@@ -111,6 +111,70 @@ test('policy schema uses only allowed keywords', () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
+test('user-global config schema uses only supported local refs and oneOf', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  assert.deepEqual(
+    checkSchemaKeywords(schema, '$', {
+      root: REPO_ROOT,
+      schemaPath: 'schemas/user-global-config.schema.json',
+    }),
+    [],
+  );
+});
+
+test('schema refs validate policy property targets and reject remote or escaping refs', () => {
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const reference = { $ref: 'policy.schema.json#/properties/markerPrefix' };
+  assert.deepEqual(validate('idd-operator', reference, '$', context), []);
+  assert.ok(validate('Bad', reference, '$', context).length > 0);
+
+  for (const ref of [
+    'https://example.test/schema.json',
+    '../policy.schema.json#/properties/markerPrefix',
+    'policy.schema.json#/properties/not-a-policy-field',
+  ]) {
+    const errors = checkSchemaKeywords({ $ref: ref }, '$', context);
+    assert.ok(errors.length > 0, `expected ${ref} to be rejected`);
+  }
+  assert.ok(
+    checkSchemaKeywords({ $ref: reference.$ref }).some((error) =>
+      error.includes('without schema source context'),
+    ),
+  );
+});
+
+test('oneOf requires exactly one matching branch', () => {
+  const exclusiveMatch = {
+    oneOf: [
+      {
+        type: 'object',
+        required: ['repo'],
+        properties: { repo: { type: 'string' } },
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        required: ['path'],
+        properties: { path: { type: 'string' } },
+        additionalProperties: false,
+      },
+    ],
+  };
+  assert.ok(
+    validate({}, exclusiveMatch).some((error) => error.includes('got 0')),
+  );
+  assert.deepEqual(validate({ repo: 'owner/repo' }, exclusiveMatch), []);
+  assert.ok(
+    validate(
+      { one: true },
+      { oneOf: [{ type: 'object' }, { type: 'object' }] },
+    ).some((error) => error.includes('got 2')),
+  );
+});
+
 test('policy schema declares ciWait only once at the top level', () => {
   const schemaText = readFileSync(
     new URL('../schemas/policy.schema.json', import.meta.url),
@@ -141,8 +205,10 @@ test('every reachable property in every published schema has a description', () 
   // staying out of scope for the same reason.
   interface SchemaPropertyNode {
     description?: unknown;
+    $ref?: unknown;
     properties?: Record<string, SchemaPropertyNode>;
     items?: SchemaPropertyNode;
+    oneOf?: SchemaPropertyNode[];
   }
   function isSchemaObject(
     node: SchemaPropertyNode | undefined,
@@ -155,6 +221,7 @@ test('every reachable property in every published schema has a description', () 
     missing: string[],
     visited: { count: number },
     requireDescription: boolean,
+    policyProperties: Record<string, SchemaPropertyNode>,
   ): void {
     // A malformed node (non-object, null, or array) fails the description
     // check itself rather than being silently skipped -- otherwise a
@@ -162,10 +229,20 @@ test('every reachable property in every published schema has a description', () 
     // still counts toward the per-file visited guard.
     if (requireDescription) {
       visited.count += 1;
+      const ref =
+        typeof node?.$ref === 'string'
+          ? /^policy\.schema\.json#\/properties\/([A-Za-z0-9_$-]+)$/u.exec(
+              node.$ref,
+            )
+          : null;
+      const targetName = ref?.[1];
+      const target = targetName ? policyProperties[targetName] : undefined;
       if (
         !isSchemaObject(node) ||
-        typeof node.description !== 'string' ||
-        node.description.trim() === ''
+        ((typeof node.description !== 'string' ||
+          node.description.trim() === '') &&
+          (typeof target?.description !== 'string' ||
+            target.description.trim() === ''))
       ) {
         missing.push(path);
       }
@@ -178,6 +255,7 @@ test('every reachable property in every published schema has a description', () 
         missing,
         visited,
         true,
+        policyProperties,
       );
     }
     if (isSchemaObject(node.items)) {
@@ -187,6 +265,17 @@ test('every reachable property in every published schema has a description', () 
         missing,
         visited,
         false,
+        policyProperties,
+      );
+    }
+    for (const [index, branch] of (node.oneOf ?? []).entries()) {
+      collectMissingDescriptions(
+        branch,
+        `${path}.oneOf[${index}]`,
+        missing,
+        visited,
+        false,
+        policyProperties,
       );
     }
   }
@@ -202,6 +291,10 @@ test('every reachable property in every published schema has a description', () 
   );
 
   const missing: string[] = [];
+  const policySchema = loadJson('schemas/policy.schema.json') as {
+    properties?: Record<string, SchemaPropertyNode>;
+  };
+  const policyProperties = policySchema.properties ?? {};
   for (const file of schemaFiles) {
     const schema = loadJson(`schemas/${file}`) as {
       properties?: Record<string, SchemaPropertyNode>;
@@ -227,6 +320,7 @@ test('every reachable property in every published schema has a description', () 
         missing,
         visited,
         true,
+        policyProperties,
       );
     }
     assert.ok(
