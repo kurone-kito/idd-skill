@@ -1141,9 +1141,69 @@ test('resolveLayeredPolicy merges nested leaves, replaces arrays, and reports so
   assert.equal(result.selectedOverrideIndex, 0);
 });
 
+test('resolveLayeredPolicy escapes dotted keys and keeps leaf provenance distinct', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: {
+        'x-a.b': 'literal extension',
+        'x-a': { b: 'nested extension' },
+      },
+    },
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    defaults: {
+      'x-a.b': 'default literal extension',
+      'x-a': { b: 'default nested extension' },
+    },
+  });
+
+  assert.deepEqual(result.config, {
+    'x-a.b': 'literal extension',
+    'x-a': { b: 'nested extension' },
+  });
+  assert.deepEqual(result.sourceMap, {
+    'x-a\\.b': 'repository-local',
+    'x-a.b': 'repository-local',
+  });
+});
+
+test('resolveLayeredPolicy removes stale empty-object provenance after a child merge', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    identity: { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' },
+    defaults: { critiqueLoop: {} },
+    userGlobalConfig: {
+      critiqueLoop: {},
+      overrides: [
+        {
+          match: { repo: 'owner/repo' },
+          config: { critiqueLoop: { deferByUrgency: 'low' } },
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.sourceMap.critiqueLoop, undefined);
+  assert.equal(
+    result.sourceMap['critiqueLoop.deferByUrgency'],
+    'user-global-override',
+  );
+});
+
 test('repository-policy fields stay local when a local document exists', () => {
   const identity = { githubSlug: 'owner/repo', mainWorktreeRoot: '/srv/repo' };
+  const repositoryPolicyAliases = {
+    'forced-handoff': { mode: 'disabled' },
+    forcedHandoffMode: 'disabled',
+    'forced-handoff-mode': 'disabled',
+    forcedHandoffAuthority: 'owners-and-maintainers-only',
+    'forced-handoff-authority': 'owners-and-maintainers-only',
+    markerTrustAllowCollaboratorMarkers: false,
+    allowCollaboratorMarkers: false,
+    reviewPolicy: 'no-advisory',
+  };
   const userGlobalConfig = {
+    ...repositoryPolicyAliases,
     helperRuntime: { profile: 'package-manager' },
     markerPrefix: 'global',
     mergePolicy: 'fully_autonomous_merge',
@@ -1153,6 +1213,14 @@ test('repository-policy fields stay local when a local document exists', () => {
       {
         match: { repo: 'owner/repo' },
         config: {
+          'forced-handoff': { mode: 'human-gated' },
+          forcedHandoffMode: 'human-gated',
+          'forced-handoff-mode': 'human-gated',
+          forcedHandoffAuthority: 'all-write-permission-actors',
+          'forced-handoff-authority': 'all-write-permission-actors',
+          markerTrustAllowCollaboratorMarkers: true,
+          allowCollaboratorMarkers: true,
+          reviewPolicy: 'copilot-advisory',
           helperRuntime: { profile: 'vendored-node' },
           markerPrefix: 'override',
           mergeGate: { soloCodeownerAdminFallback: 'hold-and-report' },
@@ -1179,6 +1247,13 @@ test('repository-policy fields stay local when a local document exists', () => {
   );
   assert.equal(local.config.markerPrefix, 'local');
   assert.equal(local.config.mergePolicy, 'human_merge');
+  for (const key of Object.keys(repositoryPolicyAliases)) {
+    assert.equal(
+      Object.hasOwn(local.config, key),
+      false,
+      `global repository-policy alias ${key} must be filtered`,
+    );
+  }
   assert.deepEqual(local.config.mergeGate, {
     soloCodeownerAdminFallback: 'auto-admin-retry',
   });
@@ -1199,6 +1274,15 @@ test('repository-policy fields stay local when a local document exists', () => {
   );
   assert.equal(noLocal.config.markerPrefix, 'override');
   assert.equal(noLocal.config.mergePolicy, 'fully_autonomous_merge');
+  assert.equal(noLocal.config['forced-handoff-mode'], 'human-gated');
+  assert.equal(noLocal.config.forcedHandoffMode, 'human-gated');
+  assert.equal(
+    noLocal.config['forced-handoff-authority'],
+    'all-write-permission-actors',
+  );
+  assert.equal(noLocal.config.markerTrustAllowCollaboratorMarkers, true);
+  assert.equal(noLocal.config.allowCollaboratorMarkers, true);
+  assert.equal(noLocal.config.reviewPolicy, 'copilot-advisory');
   assert.deepEqual(noLocal.config.mergeGate, {
     soloCodeownerAdminFallback: 'hold-and-report',
   });

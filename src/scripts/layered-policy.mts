@@ -22,6 +22,8 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   mergeGate: 'idd-merge-execute.mts',
   /** `advisoryConvergence` configures the convergence helper policy read. */
   advisoryConvergence: 'advisory-convergence.mts',
+  /** `reviewPolicy` controls whether advisory convergence applies. */
+  reviewPolicy: 'advisory-convergence.mts',
   /** `ciGate` controls trusted CI and waiver decisions in its listed readers. */
   ciGate:
     'pre-merge-readiness.mts, resume-route-selection.mts, ci-wait-state.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
@@ -40,10 +42,24 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   claimTiming: 'pre-merge-readiness.mts and rerun-advisory-convergence.mts',
   /** `forcedHandoff` determines trusted handoff authority and validation. */
   forcedHandoff: 'pre-merge-readiness.mts and external-check-waiver.mts',
+  // The normalizer also reads these legacy aliases before falling back to
+  // defaults, so keep them repository-owned whenever a local document exists.
+  'forced-handoff': 'pre-merge-readiness.mts and external-check-waiver.mts',
+  forcedHandoffMode: 'pre-merge-readiness.mts and external-check-waiver.mts',
+  'forced-handoff-mode':
+    'pre-merge-readiness.mts and external-check-waiver.mts',
+  forcedHandoffAuthority:
+    'pre-merge-readiness.mts and external-check-waiver.mts',
+  'forced-handoff-authority':
+    'pre-merge-readiness.mts and external-check-waiver.mts',
   /** `issueAuthoring` supplies the authoring guard label used by readiness. */
   issueAuthoring: 'pre-merge-readiness.mts',
   /** `markerTrust` controls whether collaborator-authored markers are trusted. */
   markerTrust:
+    'pre-merge-readiness.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
+  markerTrustAllowCollaboratorMarkers:
+    'pre-merge-readiness.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
+  allowCollaboratorMarkers:
     'pre-merge-readiness.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
   /** `providerOutage` controls trusted outage declarations and targets. */
   providerOutage:
@@ -317,15 +333,22 @@ function overlayPolicyLayer(
 
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(incoming)) {
-    const childPath = path ? `${path}.${key}` : key;
-    if (isPlainObject(value) && isPlainObject(base[key])) {
-      defineOwn(
-        merged,
-        key,
-        overlayPolicyLayer(base[key], value, source, childPath, sourceMap),
+    const childPath = joinPolicyPath(path, key);
+    const baseValue = Object.hasOwn(base, key) ? base[key] : undefined;
+    if (isPlainObject(value) && isPlainObject(baseValue)) {
+      const mergedChild = overlayPolicyLayer(
+        baseValue,
+        value,
+        source,
+        childPath,
+        sourceMap,
       );
-      if (Object.keys(value).length === 0)
+      defineOwn(merged, key, mergedChild);
+      if (isPlainObject(mergedChild) && Object.keys(mergedChild).length === 0) {
         defineOwn(sourceMap, childPath, source);
+      } else {
+        delete sourceMap[childPath];
+      }
     } else {
       clearSourcePath(sourceMap, childPath);
       defineOwn(merged, key, cloneJsonValue(value));
@@ -343,11 +366,17 @@ function markLeafSources(
 ): void {
   if (isPlainObject(value) && Object.keys(value).length > 0) {
     for (const [key, child] of Object.entries(value)) {
-      markLeafSources(child, source, path ? `${path}.${key}` : key, sourceMap);
+      markLeafSources(child, source, joinPolicyPath(path, key), sourceMap);
     }
   } else if (path) {
     defineOwn(sourceMap, path, source);
   }
+}
+
+/** Escape literal path separators inside a policy key before joining segments. */
+function joinPolicyPath(parent: string, key: string): string {
+  const segment = key.replace(/\\/gu, '\\\\').replace(/\./gu, '\\.');
+  return parent ? `${parent}.${segment}` : segment;
 }
 
 function clearSourcePath(
