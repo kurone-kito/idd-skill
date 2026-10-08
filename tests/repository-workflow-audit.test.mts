@@ -74,6 +74,19 @@ function realText(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, relativePath), 'utf8');
 }
 
+// A transform that moves or inserts text must find its anchors. A missing
+// anchor either makes a replacement a no-op or moves an insertion to the
+// wrong offset, so the helper fails the test instead.
+function anchored(text: string, anchor: string): number {
+  const index = text.indexOf(anchor);
+  assert.notEqual(
+    index,
+    -1,
+    `fixture anchor not found: ${JSON.stringify(anchor)}`,
+  );
+  return index;
+}
+
 function applyMutation(text: string, mutation: Mutation): string {
   if ('replaceWith' in mutation) {
     return mutation.replaceWith;
@@ -1966,10 +1979,11 @@ const RULE_CASES: readonly RuleCase[] = [
     path: ROOT_COMMENT,
     mutation: {
       transform: (text: string) => {
-        const debounce = text.indexOf(
+        const debounce = anchored(
+          text,
           '      - name: Check for newer qualifying event',
         );
-        const rerun = text.indexOf('      - name: Rerun required HEAD check');
+        const rerun = anchored(text, '      - name: Rerun required HEAD check');
         const after = text.indexOf('\n      - ', rerun + 1);
         const end = after === -1 ? text.length : after;
         const debounceBlock = text.slice(debounce, rerun).replace(/\n$/, '');
@@ -1992,10 +2006,13 @@ const RULE_CASES: readonly RuleCase[] = [
     name: 'a comment-refresh whose rerun step is renamed and whose review trigger is removed',
     path: ROOT_COMMENT,
     mutation: {
-      transform: (text: string) =>
-        text
+      transform: (text: string) => {
+        anchored(text, '- name: Rerun required HEAD check');
+        anchored(text, '  pull_request_review:');
+        return text
           .replace('- name: Rerun required HEAD check', '- name: Rerun renamed')
-          .replace('  pull_request_review:', '  pull_request_review_removed:'),
+          .replace('  pull_request_review:', '  pull_request_review_removed:');
+      },
     },
     expected: [
       { message: 'must have a "Rerun required HEAD check" step' },
@@ -2008,9 +2025,10 @@ const RULE_CASES: readonly RuleCase[] = [
     path: ROOT_COMMENT,
     mutation: {
       transform: (text: string) => {
-        const rerun = text.indexOf('- name: Rerun required HEAD check');
+        const rerun = anchored(text, '- name: Rerun required HEAD check');
         const after = text.indexOf('\n      - ', rerun + 1);
         const end = after === -1 ? text.length : after;
+        assert.match(text.slice(rerun, end), /\n {10}PR_NUMBER: /);
         const body = text.slice(rerun, end).replace(/\n {10}PR_NUMBER: .*/, '');
         const extra = `\n      - name: Extra step\n        env:\n          PR_NUMBER: \${{ github.event.pull_request.number || github.event.issue.number }}\n        run: echo ok`;
         return text.slice(0, rerun) + body + extra + text.slice(end);
@@ -2026,8 +2044,10 @@ const RULE_CASES: readonly RuleCase[] = [
     path: ROOT_CLEANUP,
     mutation: {
       transform: (text: string) => {
+        anchored(text, '          fetch-depth: 1\n');
         const removed = text.replace('          fetch-depth: 1\n', '');
-        const later = removed.indexOf(
+        const later = anchored(
+          removed,
           '      - name: Post cleanup evidence comment',
         );
         return (
@@ -2177,6 +2197,20 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     },
     expected: [{ message: 'debounce step must have an if: condition' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate without a permissions block to bound its trigger',
+    path: ROOT_ADVISORY,
+    mutation: { from: '\npermissions:', to: '\npermissions_x:' },
+    expected: [{ message: 'on:/permissions: block not found' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh workflow without a permissions block to bound its trigger',
+    path: ROOT_COMMENT,
+    mutation: { from: '\npermissions:', to: '\npermissions_x:' },
+    expected: [{ message: 'on:/permissions: block not found' }],
   },
   // RWA006: self-waiver constants across both advisory-convergence copies.
   {
@@ -2508,7 +2542,8 @@ test('an unnamed step after the template notice step is not part of that step', 
   const root = fixtureRoot({
     [TEMPLATE_ADVISORY]: {
       transform: (text: string) => {
-        const notice = text.indexOf(
+        const notice = anchored(
+          text,
           '- name: Notice when no helper runtime is configured',
         );
         const after = text.indexOf('\n      - ', notice + 1);
@@ -2523,6 +2558,26 @@ test('an unnamed step after the template notice step is not part of that step', 
         violation.message.startsWith('notice step must not fail the job'),
       ),
       false,
+      JSON.stringify(violations),
+    );
+  });
+
+  // Positive control: with `exit 1` inside the notice step, the same check
+  // must fire. Otherwise the clean result above could come from a check that
+  // never reads the notice step.
+  const control = fixtureRoot({
+    [TEMPLATE_ADVISORY]: {
+      from: 'echo "::notice::helperRuntime.profile resolves to instructions-only',
+      to: 'exit 1; echo "::notice::helperRuntime.profile resolves to instructions-only',
+    },
+  });
+  withRoot(control, () => {
+    const violations = collectRepositoryWorkflowViolations(control);
+    assert.equal(
+      violations.some((violation) =>
+        violation.message.startsWith('notice step must not fail the job'),
+      ),
+      true,
       JSON.stringify(violations),
     );
   });
