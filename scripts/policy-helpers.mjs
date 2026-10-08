@@ -143,7 +143,12 @@ const HELPER_RUNTIME_PROFILES = new Set([
   'instructions-only',
   'user-global',
 ]);
-const HELPER_RUNTIME_KEYS = new Set(['profile', 'packageSpec']);
+export const HELPER_RUNTIME_KEYS = new Set([
+  'profile',
+  'packageSpec',
+  'launcher',
+]);
+export const HELPER_RUNTIME_LAUNCHERS = new Set(['auto', 'npx', 'pnpm-dlx']);
 const ISSUE_SCOPES = new Set(['roadmap', 'roadmap-first', 'orphan-first']);
 const ORPHAN_FIRST_POLICIES = new Set([
   'none',
@@ -444,6 +449,20 @@ export function inspectHelperRuntimeConfig(config) {
       reason: `unsupported helperRuntime.profile "${profile}"`,
     };
   }
+  // Optional launcher for the ephemeral-npx profile. Absent keeps the result
+  // shape unchanged, so the key is returned only when it is configured.
+  let launcher;
+  if (hasOwn(helperRuntime, 'launcher')) {
+    const value = helperRuntime.launcher;
+    if (typeof value !== 'string' || !HELPER_RUNTIME_LAUNCHERS.has(value)) {
+      return {
+        status: 'invalid',
+        reason:
+          'helperRuntime.launcher must be one of "auto", "npx", or "pnpm-dlx"',
+      };
+    }
+    launcher = value;
+  }
   // Optional: absent by default (existing behavior, existing profile-only
   // callers/tests are unaffected). When present, it must be a non-empty
   // string in the shell-safe character allowlist -- mirrors
@@ -458,9 +477,18 @@ export function inspectHelperRuntimeConfig(config) {
           'helperRuntime.packageSpec must be a non-empty string using only shell-safe characters (letters, digits, and @:/_.+^#%-)',
       };
     }
-    return { status: 'ok', profile, packageSpec };
+    return {
+      status: 'ok',
+      profile,
+      packageSpec,
+      ...(launcher === undefined ? {} : { launcher }),
+    };
   }
-  return { status: 'ok', profile };
+  return {
+    status: 'ok',
+    profile,
+    ...(launcher === undefined ? {} : { launcher }),
+  };
 }
 export function normalizePolicyConfig(config) {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {

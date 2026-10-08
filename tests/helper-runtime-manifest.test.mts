@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -18,8 +18,11 @@ import {
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
   detectPackageManager,
+  detectPnpmMajor,
+  PNPM_DLX_MIN_MAJOR,
   recommendHelperRuntimeProfile,
   resolveHelperCommandForProfile,
+  resolveLauncher,
   resolveSourcePackageMetadata,
 } from '../src/scripts/helper-runtime-manifest.mts';
 
@@ -1002,4 +1005,332 @@ test('a user-global to user-global switch removes nothing and lists no uninstall
   assert.equal('removeGlobalInstallCommands' in (noOp ?? {}), false);
   assert.deepEqual(noOp?.removeFiles, []);
   assert.deepEqual(noOp?.addFiles, []);
+});
+
+// #3830: the ephemeral-npx launcher, the pnpm probe and the --launcher flag.
+function targetRootWithLauncher(launcher: string | undefined): string {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-launcher-target-'));
+  if (launcher !== undefined) {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        helperRuntime: { profile: 'ephemeral-npx', launcher },
+      }),
+    );
+  }
+  return dir;
+}
+
+test('resolveLauncher keeps npx unless auto meets the pnpm floor (idd-skill#3830)', () => {
+  assert.deepEqual(resolveLauncher(undefined, 12), {
+    configured: null,
+    resolved: 'npx',
+    reason: 'no launcher is configured; npx is the default',
+  });
+  assert.equal(resolveLauncher('npx', 12).resolved, 'npx');
+  assert.equal(resolveLauncher('pnpm-dlx', null).resolved, 'pnpm-dlx');
+  // The expectations follow the exported floor, so moving it moves them too.
+  const expected = (major: number | null) =>
+    major !== null && major >= PNPM_DLX_MIN_MAJOR ? 'pnpm-dlx' : 'npx';
+  for (const major of [null, 9, PNPM_DLX_MIN_MAJOR, 12]) {
+    const result = resolveLauncher('auto', major);
+    assert.equal(
+      result.resolved,
+      expected(major),
+      `auto with pnpm ${String(major)}`,
+    );
+    assert.ok(result.reason.length > 0);
+  }
+});
+
+test('detectPnpmMajor reads the leading major and returns null on every failure without throwing (idd-skill#3830)', () => {
+  const seen: Array<{ cwd: string; timeoutMs: number }> = [];
+  assert.equal(
+    detectPnpmMajor({
+      cwd: '/target',
+      timeoutMs: 1234,
+      probe: (cwd, timeoutMs) => {
+        seen.push({ cwd, timeoutMs });
+        return '12.4.1\n';
+      },
+    }),
+    12,
+  );
+  assert.deepEqual(seen, [{ cwd: '/target', timeoutMs: 1234 }]);
+  assert.equal(detectPnpmMajor({ cwd: '/target', probe: () => '12' }), 12);
+  let defaultTimeout = 0;
+  detectPnpmMajor({
+    cwd: '/target',
+    probe: (_cwd, timeoutMs) => {
+      defaultTimeout = timeoutMs;
+      return '10.0.0';
+    },
+  });
+  assert.equal(defaultTimeout, 5000, 'the probe timeout defaults to 5000 ms');
+  assert.equal(
+    detectPnpmMajor({
+      cwd: '/target',
+      probe: () => {
+        throw Object.assign(new Error('spawn pnpm ENOENT'), { code: 'ENOENT' });
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    detectPnpmMajor({
+      cwd: '/target',
+      probe: () => {
+        throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    detectPnpmMajor({ cwd: '/target', probe: () => 'garbage' }),
+    null,
+  );
+  assert.equal(detectPnpmMajor({ cwd: '/target', probe: () => '' }), null);
+});
+
+test('ephemeral-npx emits npx by default and pnpm dlx only when the launcher resolves to it (idd-skill#3830)', () => {
+  const packageSpec = 'git+https://example.com/idd-skill.git#abc1234';
+  const root = targetRootWithLauncher(undefined);
+  try {
+    const defaults = buildHelperRuntimeManifest({
+      profile: 'ephemeral-npx',
+      packageSpec,
+      targetRoot: root,
+    });
+    const entry = defaults.profiles['ephemeral-npx'];
+    assert.ok(entry);
+    assert.ok(Object.keys(entry.commands).length > 0);
+    // Exactly the pre-launcher shape: `npx --yes --package <spec> <bin>`.
+    for (const command of Object.values(entry.commands)) {
+      const tokens = command.split(' ');
+      assert.equal(tokens.length, 5, command);
+      assert.deepEqual(
+        tokens.slice(0, 4),
+        ['npx', '--yes', '--package', packageSpec],
+        command,
+      );
+    }
+    assert.equal(entry.launcher?.configured, null);
+    assert.equal(entry.launcher?.resolved, 'npx');
+
+    const dlx = buildHelperRuntimeManifest({
+      profile: 'ephemeral-npx',
+      packageSpec,
+      targetRoot: root,
+      launcher: 'pnpm-dlx',
+    });
+    const dlxEntry = dlx.profiles['ephemeral-npx'];
+    assert.ok(dlxEntry);
+    for (const command of Object.values(dlxEntry.commands)) {
+      const tokens = command.split(' ');
+      assert.equal(tokens.length, 5, command);
+      assert.deepEqual(
+        tokens.slice(0, 4),
+        ['pnpm', 'dlx', '--package', packageSpec],
+        command,
+      );
+    }
+    assert.equal(dlxEntry.launcher?.resolved, 'pnpm-dlx');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('buildHelperRuntimeManifest probes pnpm only when auto would change the emitted output (idd-skill#3830)', () => {
+  const root = targetRootWithLauncher('auto');
+  let probes = 0;
+  const probe = () => {
+    probes += 1;
+    return '10.0.0';
+  };
+  try {
+    buildHelperRuntimeManifest({
+      profile: 'package-manager',
+      packageManager: 'pnpm',
+      targetRoot: root,
+      probe,
+    });
+    assert.equal(
+      probes,
+      0,
+      'package-manager output does not depend on the launcher',
+    );
+
+    const manifest = buildHelperRuntimeManifest({
+      profile: 'ephemeral-npx',
+      targetRoot: root,
+      probe,
+    });
+    assert.equal(probes, 1);
+    assert.equal(
+      manifest.profiles['ephemeral-npx']?.launcher?.resolved,
+      'pnpm-dlx',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the --launcher flag overrides the configured value and an invalid flag exits non-zero (idd-skill#3830)', () => {
+  const root = targetRootWithLauncher('npx');
+  try {
+    const overridden = buildHelperRuntimeManifest({
+      profile: 'ephemeral-npx',
+      targetRoot: root,
+      launcher: 'pnpm-dlx',
+    });
+    assert.equal(
+      overridden.profiles['ephemeral-npx']?.launcher?.resolved,
+      'pnpm-dlx',
+    );
+
+    const invalid = spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/helper-runtime-manifest.mjs'),
+        '--launcher',
+        'pnpm',
+      ],
+      { cwd: root, encoding: 'utf8' },
+    );
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /unsupported launcher: pnpm/);
+    assert.throws(
+      () => buildHelperRuntimeManifest({ targetRoot: root, launcher: 'bogus' }),
+      /unsupported launcher: bogus/,
+    );
+    // An explicit empty value is invalid, not an absent flag.
+    const explicitEmpty = spawnSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/helper-runtime-manifest.mjs'), '--launcher='],
+      { cwd: root, encoding: 'utf8' },
+    );
+    assert.notEqual(explicitEmpty.status, 0);
+    assert.match(explicitEmpty.stderr, /unsupported launcher: /);
+    assert.throws(
+      () => buildHelperRuntimeManifest({ targetRoot: root, launcher: '' }),
+      /unsupported launcher: /,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('auto probes pnpm in the target root and falls back to npx when the probe throws (idd-skill#3830)', () => {
+  const root = targetRootWithLauncher(undefined);
+  try {
+    const seen: Array<{ cwd: string; timeoutMs: number }> = [];
+    const probed = buildHelperRuntimeManifest({
+      profile: 'ephemeral-npx',
+      targetRoot: root,
+      launcher: 'auto',
+      probe: (cwd, timeoutMs) => {
+        seen.push({ cwd, timeoutMs });
+        return '10.0.0';
+      },
+    });
+    assert.deepEqual(seen, [{ cwd: root, timeoutMs: 5000 }]);
+    assert.equal(
+      probed.profiles['ephemeral-npx']?.launcher?.resolved,
+      'pnpm-dlx',
+    );
+
+    const failed = buildHelperRuntimeManifest({
+      profile: 'ephemeral-npx',
+      targetRoot: root,
+      launcher: 'auto',
+      probe: () => {
+        throw Object.assign(new Error('spawn pnpm ENOENT'), {
+          code: 'ENOENT',
+        });
+      },
+    });
+    const entry = failed.profiles['ephemeral-npx'];
+    assert.equal(entry?.launcher?.resolved, 'npx');
+    for (const command of Object.values(entry?.commands ?? {})) {
+      assert.match(command, /^npx --yes --package /);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pnpm dlx commands mirror the npx commands for the default and an explicit spec (idd-skill#3830)', () => {
+  const root = targetRootWithLauncher(undefined);
+  try {
+    for (const packageSpec of [
+      '',
+      'git+https://example.com/idd-skill.git#abc1234',
+    ]) {
+      const npx = buildHelperRuntimeManifest({
+        profile: 'ephemeral-npx',
+        packageSpec,
+        targetRoot: root,
+      }).profiles['ephemeral-npx'];
+      const dlx = buildHelperRuntimeManifest({
+        profile: 'ephemeral-npx',
+        packageSpec,
+        targetRoot: root,
+        launcher: 'pnpm-dlx',
+      }).profiles['ephemeral-npx'];
+      assert.ok(npx && dlx);
+      assert.deepEqual(Object.keys(dlx.commands), Object.keys(npx.commands));
+      for (const [name, command] of Object.entries(npx.commands)) {
+        assert.equal(
+          dlx.commands[name],
+          command.replace('npx --yes --package ', 'pnpm dlx --package '),
+          name,
+        );
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('launcher values leave the other profile entries unchanged and add the launcher object to ephemeral-npx only (idd-skill#3830)', () => {
+  const root = targetRootWithLauncher(undefined);
+  try {
+    const build = (launcher?: string) =>
+      buildHelperRuntimeManifest({
+        packageManager: 'pnpm',
+        targetRoot: root,
+        launcher,
+      }).profiles;
+    const unset = build();
+    const npx = build('npx');
+    const dlx = build('pnpm-dlx');
+    for (const profile of Object.keys(unset)) {
+      if (profile === 'ephemeral-npx') {
+        continue;
+      }
+      const entry = unset[profile];
+      assert.ok(entry);
+      assert.equal('launcher' in entry, false, `${profile} has no launcher`);
+      assert.deepEqual(npx[profile], entry, profile);
+      assert.deepEqual(dlx[profile], entry, profile);
+    }
+    const ephemeral = unset['ephemeral-npx'];
+    assert.ok(ephemeral && 'launcher' in ephemeral);
+    const npxEntry = npx['ephemeral-npx'];
+    assert.deepEqual(
+      {
+        commands: npxEntry?.commands,
+        description: npxEntry?.description,
+        notes: npxEntry?.notes,
+      },
+      {
+        commands: ephemeral.commands,
+        description: ephemeral.description,
+        notes: ephemeral.notes,
+      },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

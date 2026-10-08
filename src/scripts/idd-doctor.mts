@@ -39,8 +39,12 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import {
+  detectPnpmMajor,
+  type HelperLauncher,
   listHelperBinNames,
+  type PnpmVersionProbe,
   resolveHelperCommandForProfile,
+  resolveLauncher,
 } from './helper-runtime-manifest.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import {
@@ -1478,6 +1482,7 @@ const LIVE_CONFIG_ERRORS_SHOWN = 10;
 function resolveConfiguredHelperRuntime(root: string): {
   profile: string;
   packageSpec: string;
+  launcher: string;
 } {
   for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
     const absolutePath = join(root, file);
@@ -1488,17 +1493,18 @@ function resolveConfiguredHelperRuntime(root: string): {
     try {
       config = JSON.parse(readFileSync(absolutePath, 'utf8'));
     } catch {
-      return { profile: 'instructions-only', packageSpec: '' };
+      return { profile: 'instructions-only', packageSpec: '', launcher: '' };
     }
     const helperRuntime = inspectHelperRuntimeConfig(config);
     return helperRuntime.status === 'ok'
       ? {
           profile: helperRuntime.profile,
           packageSpec: helperRuntime.packageSpec ?? '',
+          launcher: helperRuntime.launcher ?? '',
         }
-      : { profile: 'instructions-only', packageSpec: '' };
+      : { profile: 'instructions-only', packageSpec: '', launcher: '' };
   }
-  return { profile: 'instructions-only', packageSpec: '' };
+  return { profile: 'instructions-only', packageSpec: '', launcher: '' };
 }
 
 // audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
@@ -1520,6 +1526,25 @@ export function resolveConfiguredHelperRuntimePackageSpec(
   root: string,
 ): string {
   return resolveConfiguredHelperRuntime(root).packageSpec;
+}
+
+/**
+ * Resolve the ephemeral-npx launcher that the cleanup-backlog remediation
+ * names (idd-skill#3830). Only `auto` under the `ephemeral-npx` profile
+ * needs a pnpm probe, which runs `pnpm --version` in `root`, the repository
+ * being checked. Every other configuration resolves without one, and an
+ * unset value keeps `npx`.
+ */
+export function resolveCleanupBacklogLauncher(
+  root: string,
+  { probe }: { probe?: PnpmVersionProbe } = {},
+): HelperLauncher {
+  const { profile, launcher } = resolveConfiguredHelperRuntime(root);
+  const pnpmMajor =
+    profile === 'ephemeral-npx' && launcher === 'auto'
+      ? detectPnpmMajor({ probe, cwd: root })
+      : null;
+  return resolveLauncher(launcher || undefined, pnpmMajor).resolved;
 }
 
 /**
@@ -3024,6 +3049,10 @@ const CLEANUP_BACKLOG_DOCS_POINTER = 'docs/idd-comment-minimization.md';
  * archive URL under `ephemeral-npx`, unchanged from before this pin
  * existed.
  *
+ * The optional `launcher` (idd-skill#3830) is the resolved ephemeral-npx
+ * launcher from `resolveCleanupBacklogLauncher`. It defaults to `npx`, so
+ * an unset launcher produces the same text as before.
+ *
  * The `docs/idd-comment-minimization.md` pointer stays in every profile,
  * including `instructions-only`, which has no runnable command at all --
  * the pointer alone is then the whole remediation clause.
@@ -3031,12 +3060,14 @@ const CLEANUP_BACKLOG_DOCS_POINTER = 'docs/idd-comment-minimization.md';
 export function formatCleanupBacklogRemediation(
   profile: string,
   packageSpec = '',
+  launcher: HelperLauncher = 'npx',
 ): string {
   const docsClause = `see ${CLEANUP_BACKLOG_DOCS_POINTER}`;
   const command = resolveHelperCommandForProfile({
     helperId: CLEANUP_BACKLOG_HELPER_ID,
     profile,
     packageSpec,
+    launcher,
   });
   if (!command) {
     return `Remediation: ${docsClause}.`;
@@ -3185,6 +3216,7 @@ function checkPostMergeCleanupBacklog(
     requireGithub?: boolean;
   },
   report: DoctorReport,
+  { probe }: { probe?: PnpmVersionProbe } = {},
 ) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
@@ -3380,7 +3412,12 @@ function checkPostMergeCleanupBacklog(
       ? ` (${bootstrapEra.size} bootstrap-era, merged before ${bootstrapCutoff})`
       : '';
   const { profile, packageSpec } = resolveConfiguredHelperRuntime(root);
-  const remediation = formatCleanupBacklogRemediation(profile, packageSpec);
+  const launcher = resolveCleanupBacklogLauncher(root, { probe });
+  const remediation = formatCleanupBacklogRemediation(
+    profile,
+    packageSpec,
+    launcher,
+  );
   // State the scoping explicitly (idd-skill#1936) so an operator reading a
   // low count does not misread it as "no merged PRs in the window" --
   // non-IDD merges (Dependabot bumps, etc.) are already excluded above and
