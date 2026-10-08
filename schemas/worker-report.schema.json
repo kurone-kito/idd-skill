@@ -66,8 +66,8 @@
     },
     "terminalPhase": {
       "type": "string",
-      "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
-      "description": "The last phase the worker completed, for example F4 or F2.5."
+      "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,31}$",
+      "description": "The last phase the worker completed, as a phase id such as F4 or the canonical F2_5 (a dot, as in F2.5, is accepted too)."
     },
     "outcome": {
       "type": "string",
@@ -117,7 +117,7 @@
         "properties": {
           "phase": {
             "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
+            "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,31}$",
             "description": "Phase id the entry belongs to, for example F4 or E4."
           },
           "summary": {
@@ -142,7 +142,7 @@
         "properties": {
           "phase": {
             "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
+            "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,31}$",
             "description": "Phase id the entry belongs to, for example F4 or E4."
           },
           "summary": {
@@ -167,7 +167,7 @@
         "properties": {
           "phase": {
             "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
+            "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,31}$",
             "description": "Phase id the entry belongs to, for example F4 or E4."
           },
           "summary": {

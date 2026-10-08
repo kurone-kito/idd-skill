@@ -717,6 +717,17 @@ test('the schema accepts null where allowed and enforces the string bounds', () 
   const ok = (overrides: Partial<WorkerReport>): boolean =>
     validateWorkerReport(report(overrides)).length === 0;
   assert.equal(ok({ pullRequest: null }), true);
+  // Canonical machine-facing phase ids (schemas/phase-graph.json) use an
+  // underscore, so a copied id must be accepted everywhere a phase appears.
+  assert.equal(ok({ terminalPhase: 'F2_5' }), true);
+  assert.equal(ok({ terminalPhase: 'F2.5' }), true);
+  assert.equal(ok({ terminalPhase: '2_5' }), false);
+  assert.equal(ok({ stalls: [{ phase: 'F2_5', summary: 'x' }] }), true);
+  assert.equal(ok({ deviations: [{ phase: 'F2_5', summary: 'x' }] }), true);
+  assert.equal(
+    ok({ frictions: [{ phase: 'F2_5', summary: 'x', file: 'a.md' }] }),
+    true,
+  );
   assert.equal(ok({ vendorSessionId: null }), true);
   assert.equal(ok({ vendorSessionId: 'path/like' }), false);
   const bounds: [string, (n: number) => Partial<WorkerReport>, number][] = [

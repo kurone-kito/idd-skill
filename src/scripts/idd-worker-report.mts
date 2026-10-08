@@ -118,7 +118,7 @@ export interface WorkerReport {
   claimId: string;
   harness: WorkerReportHarness;
   workerHandle: string;
-  /** The last phase the worker completed, for example `F4` or `F2.5`. */
+  /** The last phase the worker completed, such as `F4` or the canonical `F2_5`. */
   terminalPhase: string;
   outcome: WorkerReportOutcome;
   verifiedAt: string;

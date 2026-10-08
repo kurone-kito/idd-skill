@@ -6905,7 +6905,10 @@ same as `AW4`/`AW5`.
   `held`, `abandoned`, or `failed`), `verifiedAt`, and `recordedAt`.
   Optional are `vendorSessionId`, `reviewRounds`, `stalls`, `deviations`,
   `frictions` (an entry may name the instruction or doc path in `file`),
-  and `followUps`. Every string is length-bounded. The helper stores the
+  and `followUps`. `terminalPhase` and each `phase` take a phase id such as
+  `F4`, `E4`, or the canonical underscore form `F2_5` from
+  `schemas/phase-graph.json` (a dot, as in `F2.5`, is accepted too). Every
+  string is length-bounded. The helper stores the
   record verbatim: it stamps no timestamp and adds no field, so the caller
   supplies `schemaVersion` and both timestamps.
 - `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
