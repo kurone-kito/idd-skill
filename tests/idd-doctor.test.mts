@@ -2595,6 +2595,24 @@ test('resolveConfiguredHelperRuntimePackageSpec reads a configured pin, defaults
   }
 });
 
+test('resolveConfiguredHelperRuntimeProfile accepts a configured launcher without falling back (idd-skill#3830)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-helper-launcher-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        helperRuntime: { profile: 'ephemeral-npx', launcher: 'pnpm-dlx' },
+      }),
+    );
+    // An unsupported key would make the resolver fall back to
+    // instructions-only; a supported launcher keeps the profile.
+    assert.equal(resolveConfiguredHelperRuntimeProfile(dir), 'ephemeral-npx');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('resolveConfiguredHelperRuntimePackageSpec also reads the legacy idd-policy.json path', () => {
   const dir = mkdtempSync(
     join(tmpdir(), 'idd-doctor-helper-package-spec-legacy-'),

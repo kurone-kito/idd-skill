@@ -3490,6 +3490,15 @@ test('runVerify blocks when manifest completeness or placeholder residue fails',
 // checkPackagePinWarning / runVerify's packagePinWarning field (#2987)
 // ---------------------------------------------------------------------------
 
+test('checkPackagePinWarning keeps ephemeral-npx when a launcher is configured (idd-skill#3830)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'ephemeral-npx', launcher: 'auto' });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'ephemeral-npx');
+  assert.equal(result.applicable, true);
+});
+
 test('checkPackagePinWarning warns for package-manager with no packageSpec configured', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);

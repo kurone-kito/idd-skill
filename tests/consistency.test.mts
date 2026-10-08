@@ -613,6 +613,71 @@ test('helper runtime inspection accepts absent and supported profiles, rejects u
   );
 });
 
+test('helper runtime inspection accepts an optional launcher and returns it only when configured (idd-skill#3830)', () => {
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: { profile: 'ephemeral-npx', launcher: 'pnpm-dlx' },
+    }),
+    { status: 'ok', profile: 'ephemeral-npx', launcher: 'pnpm-dlx' },
+  );
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+        launcher: 'auto',
+      },
+    }),
+    {
+      status: 'ok',
+      profile: 'ephemeral-npx',
+      packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+      launcher: 'auto',
+    },
+  );
+  // Absent launcher keeps the exact result shape: no launcher key at all.
+  assert.deepEqual(
+    inspectHelperRuntimeConfig({
+      helperRuntime: { profile: 'instructions-only' },
+    }),
+    { status: 'ok', profile: 'instructions-only' },
+  );
+  for (const launcher of ['pnpm', 'npm', '', 42]) {
+    assert.deepEqual(
+      inspectHelperRuntimeConfig({
+        helperRuntime: { profile: 'ephemeral-npx', launcher },
+      }),
+      {
+        status: 'invalid',
+        reason:
+          'helperRuntime.launcher must be one of "auto", "npx", or "pnpm-dlx"',
+      },
+    );
+  }
+  // A bad launcher is rejected even alongside a valid packageSpec, and a
+  // bad packageSpec is still rejected alongside a valid launcher.
+  assert.equal(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'https://example.com/pinned-idd-skill.tgz',
+        launcher: 'bogus',
+      },
+    }).status,
+    'invalid',
+  );
+  assert.equal(
+    inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile: 'ephemeral-npx',
+        packageSpec: 'has a space',
+        launcher: 'npx',
+      },
+    }).status,
+    'invalid',
+  );
+});
+
 test('helper runtime inspection accepts an optional pinned packageSpec and rejects a malformed one (idd-skill#1731)', () => {
   assert.deepEqual(
     inspectHelperRuntimeConfig({
