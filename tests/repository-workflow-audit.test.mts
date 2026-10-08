@@ -3082,6 +3082,86 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose issue_comment trigger is commented out',
+    path: ROOT_COMMENT,
+    mutation: { from: '\n  issue_comment:\n', to: '\n  # issue_comment:\n' },
+    expected: [{ message: 'on: must include issue_comment' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose pull_request_review_comment trigger is commented out',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: '\n  pull_request_review_comment:\n',
+      to: '\n  # pull_request_review_comment:\n',
+    },
+    expected: [
+      { message: 'must keep the pull_request_review_comment trigger' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose rerun helper survives only in header comments',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: 'scripts/rerun-advisory-convergence.mjs',
+      to: 'scripts/rerun-advisory-disabled.mjs',
+      all: true,
+    },
+    expected: [{ message: 'must keep the rerun helper' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose real cancel-in-progress is true while a comment keeps false',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: '  cancel-in-progress: false\n',
+      to: '  cancel-in-progress: true\n',
+    },
+    expected: [{ message: 'must not cancel an in-flight IDD refresh' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose rerun step name survives only in a comment',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const old = '      - name: Rerun required HEAD check';
+        const step = anchored(text, old);
+        return (
+          text.slice(0, step) +
+          '      # - name: Rerun required HEAD check\n' +
+          '      - name: Rerun disabled' +
+          text.slice(step + old.length)
+        );
+      },
+    },
+    expected: [{ message: 'must have a "Rerun required HEAD check" step' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose debounce step name survives only in a comment',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const old = '      - name: Check for newer qualifying event';
+        const step = anchored(text, old);
+        return (
+          text.slice(0, step) +
+          '      # - name: Check for newer qualifying event\n' +
+          '      - name: Check for newer events' +
+          text.slice(step + old.length)
+        );
+      },
+    },
+    expected: [
+      {
+        message: 'must have a "Check for newer qualifying event" debounce step',
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

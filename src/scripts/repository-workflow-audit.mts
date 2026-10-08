@@ -1168,6 +1168,53 @@ function extractOnBlock(text: string): string | undefined {
   return text.slice(start, end);
 }
 
+// The workflow as YAML keys see it: full-line comments dropped, block-scalar
+// bodies blanked, and trailing comments cut. A key, a step name, or an if:
+// condition read from this view cannot be supplied by a comment.
+function declarationText(text: string): string {
+  return structuralLines(text)
+    .map((line) => line.replace(/\s+#.*$/, ''))
+    .join('\n');
+}
+
+// The workflow with full-line comments dropped and trailing comments cut, but
+// block-scalar bodies kept. A token that lives in a run: body reads from this
+// view, so a comment cannot supply it.
+function tokenText(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .map((line) => line.replace(/\s+#.*$/, ''))
+    .join('\n');
+}
+
+// The top-level on: block of a declaration view, from `on:` up to `permissions:`.
+function onBlockOf(declared: string): string | undefined {
+  const start = declared.indexOf('\non:');
+  const end = declared.indexOf('\npermissions:');
+  if (start === -1 || end === -1 || end <= start) {
+    return undefined;
+  }
+  return declared.slice(start, end);
+}
+
+// The top-level concurrency block of a declaration view, or '' when absent.
+function concurrencyOf(declared: string): string {
+  return extractConcurrencyBlock(`${declared}\n`) ?? '';
+}
+
+// The character offset of the `- name:` line of the named step in a view, or -1.
+// The step names passed here contain no regular-expression metacharacters.
+function stepOffset(view: string, name: string): number {
+  return view.search(new RegExp(`^ {6}- name: ${name}\\s*$`, 'm'));
+}
+
+// The text of the named step in a view, or undefined when no step has that name.
+function stepTextNamed(view: string, name: string): string | undefined {
+  const index = stepOffset(view, name);
+  return index === -1 ? undefined : stepTextFrom(view, index);
+}
+
 function jobIds(text: string): string[] | undefined {
   const start = text.indexOf('\njobs:');
   if (start === -1) {
@@ -2087,22 +2134,30 @@ function checkCommentRefreshIdentity(root: string, report: Report): void {
     if (text === undefined) {
       continue;
     }
-    if (/^ {2}idd-advisory-convergence:$/m.test(text)) {
+    const declared = declarationText(text);
+    const tokens = tokenText(text);
+    if (/^ {2}idd-advisory-convergence:$/m.test(declared)) {
       report(RWA005, path, 'must not reuse the required job id');
     }
-    if (!/^ {2}refresh-if-idd-originated:$/m.test(text)) {
+    if (!/^ {2}refresh-if-idd-originated:$/m.test(declared)) {
       report(RWA005, path, 'must keep the refresh-if-idd-originated job');
     }
-    if (!/pull_request_review_comment:/.test(text)) {
+    if (
+      !/^ {2}["']?pull_request_review_comment["']?\s*:/m.test(
+        onBlockOf(declared) ?? '',
+      )
+    ) {
       report(RWA005, path, 'must keep the pull_request_review_comment trigger');
     }
-    if (!/rerun-advisory-convergence/.test(text)) {
+    if (!/rerun-advisory-convergence/.test(tokens)) {
       report(RWA005, path, 'must keep the rerun helper');
     }
-    if (!/review-comment-origin/.test(text)) {
+    if (!/review-comment-origin/.test(tokens)) {
       report(RWA005, path, 'must keep the review-comment origin classifier');
     }
-    if (!/cancel-in-progress:\s*false/.test(text)) {
+    if (
+      !/^ {2}cancel-in-progress:\s*false\s*$/m.test(concurrencyOf(declared))
+    ) {
       report(RWA005, path, 'must not cancel an in-flight IDD refresh');
     }
   }
@@ -2116,30 +2171,34 @@ function checkCommentRefreshTriggers(root: string, report: Report): void {
     if (text === undefined) {
       continue;
     }
-    if (!/issue_comment:/.test(text)) {
+    const declared = declarationText(text);
+    const onBlock = onBlockOf(declared);
+    if (
+      onBlock === undefined ||
+      !/^ {2}["']?issue_comment["']?\s*:/m.test(onBlock)
+    ) {
       report(RWA005, path, 'on: must include issue_comment');
     }
     if (
       !/github\.event_name\s*!=\s*'issue_comment'\s*\|\|\s*github\.event\.issue\.pull_request\s*!=\s*null/.test(
-        text,
+        declared,
       )
     ) {
       report(RWA005, path, 'must skip a plain-issue issue_comment event');
     }
     // Checked before the rerun step is looked up, so a missing rerun step does
     // not hide a missing review trigger.
-    const onBlock = extractOnBlock(text);
     if (onBlock === undefined) {
       report(RWA005, path, 'on:/permissions: block not found');
-    } else if (!/pull_request_review:/.test(onBlock)) {
+    } else if (!/^ {2}["']?pull_request_review["']?\s*:/m.test(onBlock)) {
       report(RWA005, path, 'on: must include pull_request_review');
     }
-    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    const rerunIndex = stepOffset(declared, 'Rerun required HEAD check');
     if (rerunIndex === -1) {
       report(RWA005, path, 'must have a "Rerun required HEAD check" step');
       continue;
     }
-    const prNumberAssignment = stepTextFrom(text, rerunIndex).match(
+    const prNumberAssignment = stepTextFrom(declared, rerunIndex).match(
       /PR_NUMBER:\s*\$\{\{\s*([^}]+)\}\}/,
     );
     if (prNumberAssignment === null) {
@@ -2155,8 +2214,8 @@ function checkCommentRefreshTriggers(root: string, report: Report): void {
     ) {
       report(RWA005, path, 'PR_NUMBER must resolve from either event shape');
     }
-    const reviewRerunIndex = text.indexOf('- name: Rerun required HEAD check');
-    const ifLine = firstIfLine(stepTextFrom(text, reviewRerunIndex));
+    const reviewRerunIndex = stepOffset(declared, 'Rerun required HEAD check');
+    const ifLine = firstIfLine(stepTextFrom(declared, reviewRerunIndex));
     if (ifLine === undefined) {
       report(RWA005, path, 'Rerun required HEAD check step must have an if:');
     } else if (
@@ -2189,24 +2248,27 @@ function checkCommentRefreshDebounce(root: string, report: Report): void {
     if (text === undefined) {
       continue;
     }
-    if (!/- name: Check for newer qualifying event/.test(text)) {
+    const declared = declarationText(text);
+    const tokens = tokenText(text);
+    if (stepOffset(declared, 'Check for newer qualifying event') === -1) {
       report(
         RWA005,
         path,
         'must have a "Check for newer qualifying event" debounce step',
       );
     }
-    if (!/id:\s*debounce/.test(text)) {
+    if (!/^ {8}id: debounce\s*$/m.test(declared)) {
       report(RWA005, path, 'debounce step must expose id: debounce');
     }
-    if (!/advisory-comment-debounce/.test(text)) {
+    if (!/advisory-comment-debounce/.test(tokens)) {
       report(RWA005, path, 'must invoke the advisory-comment-debounce helper');
     }
-    const originIndex = text.indexOf('- name: Classify review comment');
-    const debounceIndex = text.indexOf(
-      '- name: Check for newer qualifying event',
+    const originIndex = stepOffset(declared, 'Classify review comment');
+    const debounceIndex = stepOffset(
+      declared,
+      'Check for newer qualifying event',
     );
-    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    const rerunIndex = stepOffset(declared, 'Rerun required HEAD check');
     if (originIndex === -1 || debounceIndex === -1 || rerunIndex === -1) {
       report(RWA005, path, 'must keep the classify, debounce, and rerun steps');
     } else {
@@ -2217,7 +2279,7 @@ function checkCommentRefreshDebounce(root: string, report: Report): void {
           'steps must run in order: classify, debounce, rerun',
         );
       }
-      const ifLine = firstIfLine(stepTextFrom(text, rerunIndex));
+      const ifLine = firstIfLine(stepTextFrom(declared, rerunIndex));
       if (ifLine === undefined) {
         report(
           RWA005,
@@ -2243,7 +2305,9 @@ function checkCommentRefreshDebounce(root: string, report: Report): void {
         }
       }
     }
-    if (!/cancel-in-progress:\s*false/.test(text)) {
+    if (
+      !/^ {2}cancel-in-progress:\s*false\s*$/m.test(concurrencyOf(declared))
+    ) {
       report(RWA005, path, 'must not cancel an in-flight IDD refresh');
     }
   }
@@ -2257,12 +2321,13 @@ function checkCommentRefreshSuccessCall(root: string, report: Report): void {
     if (text === undefined) {
       continue;
     }
-    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    const declared = declarationText(text);
+    const rerunIndex = stepOffset(declared, 'Rerun required HEAD check');
     if (rerunIndex === -1) {
       report(RWA005, path, 'must have a "Rerun required HEAD check" step');
       continue;
     }
-    const ifLine = firstIfLine(stepTextFrom(text, rerunIndex));
+    const ifLine = firstIfLine(stepTextFrom(declared, rerunIndex));
     if (ifLine === undefined) {
       report(RWA005, path, 'rerun step must have an if: condition');
       continue;
@@ -2302,16 +2367,18 @@ function checkCommentRefreshReviewBypass(root: string, report: Report): void {
     if (text === undefined) {
       continue;
     }
-    const debounceIndex = text.indexOf(
-      '- name: Check for newer qualifying event',
+    const declared = declarationText(text);
+    const debounceIndex = stepOffset(
+      declared,
+      'Check for newer qualifying event',
     );
-    const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+    const rerunIndex = stepOffset(declared, 'Rerun required HEAD check');
     if (debounceIndex === -1 || rerunIndex === -1) {
       report(RWA005, path, 'must keep the debounce and rerun steps');
       continue;
     }
     // The debounce step's own condition, so a later step's `if:` cannot stand in.
-    const debounceIfLine = firstIfLine(stepTextFrom(text, debounceIndex));
+    const debounceIfLine = firstIfLine(stepTextFrom(declared, debounceIndex));
     if (debounceIfLine === undefined) {
       report(RWA005, path, 'debounce step must have an if: condition');
     } else if (
@@ -2323,7 +2390,7 @@ function checkCommentRefreshReviewBypass(root: string, report: Report): void {
         "debounce step's if: must explicitly exclude pull_request_review, not merely omit mentioning it",
       );
     }
-    const rerunIfLine = firstIfLine(stepTextFrom(text, rerunIndex));
+    const rerunIfLine = firstIfLine(stepTextFrom(declared, rerunIndex));
     if (rerunIfLine === undefined) {
       report(RWA005, path, 'rerun step must have an if: condition');
       continue;
@@ -2355,15 +2422,17 @@ function checkTemplateCommentProfileGuard(root: string, report: Report): void {
   if (text === undefined) {
     return;
   }
-  const debounceIndex = text.indexOf(
-    '- name: Check for newer qualifying event',
+  const declared = declarationText(text);
+  const debounceIndex = stepOffset(
+    declared,
+    'Check for newer qualifying event',
   );
-  const rerunIndex = text.indexOf('- name: Rerun required HEAD check');
+  const rerunIndex = stepOffset(declared, 'Rerun required HEAD check');
   if (debounceIndex === -1 || rerunIndex === -1) {
     report(RWA005, path, 'must keep the debounce and rerun steps');
     return;
   }
-  const rerunIfLine = firstIfLine(stepTextFrom(text, rerunIndex));
+  const rerunIfLine = firstIfLine(stepTextFrom(declared, rerunIndex));
   if (rerunIfLine === undefined) {
     report(RWA005, path, 'rerun step must have an if: condition');
     return;
@@ -2398,8 +2467,11 @@ function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
   if (text === undefined) {
     return;
   }
-  const noticeIndex = text.indexOf(
-    '- name: Notice when no helper runtime is configured',
+  const declared = declarationText(text);
+  const tokens = tokenText(text);
+  const noticeIndex = stepOffset(
+    declared,
+    'Notice when no helper runtime is configured',
   );
   if (noticeIndex === -1) {
     report(
@@ -2409,7 +2481,7 @@ function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
     );
     return;
   }
-  const noticeStepText = stepTextFrom(text, noticeIndex);
+  const noticeStepText = stepTextFrom(declared, noticeIndex);
   const noticeIfLine = firstIfLine(noticeStepText);
   if (noticeIfLine === undefined) {
     report(RWA005, path, 'notice step must have an if: condition');
@@ -2422,7 +2494,9 @@ function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
       "notice step's if: must be gated on the allowlist touch result",
     );
   }
-  const noticeStepCode = noticeStepText
+  const noticeStepCode = (
+    stepTextNamed(tokens, 'Notice when no helper runtime is configured') ?? ''
+  )
     .split('\n')
     .filter((line) => !line.trim().startsWith('#'))
     .join('\n');
@@ -2449,8 +2523,10 @@ function checkTemplateSelfWaiverPostGuard(root: string, report: Report): void {
   if (text === undefined) {
     return;
   }
-  const postIndex = text.indexOf(
-    '- name: Post the self-referential-bootstrap-auto waiver',
+  const declared = declarationText(text);
+  const postIndex = stepOffset(
+    declared,
+    'Post the self-referential-bootstrap-auto waiver',
   );
   if (postIndex === -1) {
     report(
@@ -2460,7 +2536,7 @@ function checkTemplateSelfWaiverPostGuard(root: string, report: Report): void {
     );
     return;
   }
-  const postIfLine = firstIfLine(stepTextFrom(text, postIndex));
+  const postIfLine = firstIfLine(stepTextFrom(declared, postIndex));
   if (postIfLine === undefined) {
     report(RWA005, path, 'post step must have an if: condition');
   } else if (
