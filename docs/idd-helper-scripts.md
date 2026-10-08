@@ -2313,12 +2313,33 @@ at a consumer's install time). `kurone-kito/idd-skill#3043` removed
 `engines.pnpm` and replaced its contributor-facing safety net with an
 explicit pnpm-version check inside its own `verify-install-deps`
 helper instead, which is never exposed via `package.json`'s `bin` and
-so never reaches a consumer's install. The principle for any project
-that vends its own helper package under this profile: an `engines`
-field added for contributor-local-dev reasons is not scoped to that
-project alone -- pnpm's `engineStrict` enforces `engines` against every
-consumer using the `package-manager` profile, so any such field needs
-the same consumer-impact check before landing.
+so never reaches a consumer's install.
+
+**A lifecycle script can also reach consumers through the git-hosted gate.**
+pnpm's git-hosted gate can refuse, for some references and versions, an
+install of a git-hosted package whose manifest carries a `prepare`,
+`prepublish`, `prepack`, or `publish` script. The key list was measured with
+git+file toy repositories. The exact spec can be allow-listed (for example
+through `allowBuilds` in `pnpm-workspace.yaml`), and the pnpm 10 error names
+`onlyBuiltDependencies`. A pnpm dlx run of the commit-SHA URL was refused as
+well, and neither an --allow-build flag nor a workspace entry for the exact
+`<name>@<resolved URL>` key stopped it on pnpm 12.9.1. The refusal was
+observed on 2026-10-08, and `kurone-kito/idd-skill#3829` is the second case
+of the leak class that `kurone-kito/idd-skill#3043` fixed for engines.pnpm.
+Under pnpm dlx, before this change, a commit-SHA URL
+(kurone-kito/idd-skill@92a20cb) was refused on pnpm 10, 11, and 12.9.1; the
+refs/heads/main URL of kurone-kito/idd-skill was refused on pnpm 10 only
+while that branch still carried `prepare`; and a refs/tags/v0.14.0 URL ran
+on pnpm 12.9.1 (pnpm 10 and 11 were not tried). The guard test
+`tests/package-lifecycle-scripts.test.mts` (source repo only) fails when one of
+the four keys above returns to this package's `package.json`. The principle for
+any project that vends its own helper package under this profile: an `engines`
+field or lifecycle script added for contributor-local-dev reasons is not scoped
+to that project alone -- pnpm's `engineStrict` enforces `engines` against every
+consumer using the `package-manager` profile, and pnpm's git-hosted gate can
+refuse a lifecycle script for any consumer that installs the package from a
+git-hosted URL, so any such field or script needs the same consumer-impact
+check before landing.
 
 ## Import-Time Selection Order
 
