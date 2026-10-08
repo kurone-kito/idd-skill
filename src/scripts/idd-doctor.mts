@@ -10,11 +10,20 @@ import {
   accessSync,
   existsSync,
   constants as fsConstants,
+  lstatSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
 } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path';
 import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitabilityMarker,
@@ -29,7 +38,10 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mts';
+import {
+  listHelperBinNames,
+  resolveHelperCommandForProfile,
+} from './helper-runtime-manifest.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import {
   isValidIsoTimestamp,
@@ -76,6 +88,11 @@ export interface DoctorOptions {
   cleanupBacklogBootstrapCutoff?: string;
   workshopCrossRefAllowMissing?: string[];
   strict?: boolean;
+  /**
+   * PATH string the user-global helper check resolves bins over. Defaults to
+   * the process PATH; tests pass a stub so they never touch process.env.
+   */
+  pathValue?: string;
 }
 
 /** Verdict for one primary-worktree HEAD classification. */
@@ -139,6 +156,7 @@ export function runDoctor({
   cleanupBacklogBootstrapCutoff,
   workshopCrossRefAllowMissing,
   strict,
+  pathValue,
 }: DoctorOptions): DoctorReport {
   const files = listFiles(root);
   const textFiles = files.filter(isTextLikeFile);
@@ -161,6 +179,7 @@ export function runDoctor({
   );
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
+  checkUserGlobalHelperBins(root, report, pathValue ?? process.env.PATH ?? '');
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
   checkMergePolicyAcknowledgement(root, report);
@@ -1198,6 +1217,214 @@ function checkHelperRuntimeConfig(root: string, report: DoctorReport) {
     }
     report.passes.push(
       `${file} declares helper runtime profile "${helperRuntime.profile}"`,
+    );
+  }
+}
+
+/** One helper bin resolved over a PATH string for the user-global profile. */
+export interface UserGlobalHelperBin {
+  bin: string;
+  /** First PATH entry that provides the bin, or null when none does. */
+  resolvedPath: string | null;
+  /** Version of the owning package, or null when it cannot be read. */
+  version: string | null;
+}
+
+const IDD_PACKAGE_NAME = '@kurone-kito/idd-skill';
+
+/**
+ * Resolves each helper bin over `pathValue` and reads the version of the
+ * package that owns each resolved bin. `pathValue` is the operator's PATH,
+ * passed in rather than read from process.env so tests can stub it. A bin is
+ * owned by the nearest `package.json` above its real path, and the version is
+ * reported only when that package is `@kurone-kito/idd-skill`.
+ */
+export function inspectUserGlobalHelperBins({
+  pathValue,
+  binNames,
+}: {
+  pathValue: string;
+  binNames: readonly string[];
+}): UserGlobalHelperBin[] {
+  return binNames.map((bin) => {
+    const resolvedPath = resolveBinOnPath(bin, pathValue);
+    return {
+      bin,
+      resolvedPath,
+      version:
+        resolvedPath === null ? null : readOwningPackageVersion(resolvedPath),
+    };
+  });
+}
+
+function resolveBinOnPath(bin: string, pathValue: string): string | null {
+  const extensions =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';')
+      : [''];
+  for (const directory of pathValue.split(delimiter)) {
+    if (directory === '') {
+      continue;
+    }
+    for (const extension of extensions) {
+      const candidate = join(directory, `${bin}${extension}`);
+      if (isExecutableFile(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function isExecutableFile(path: string): boolean {
+  try {
+    const stats = statSync(path);
+    return (
+      stats.isFile() &&
+      (process.platform === 'win32' || (stats.mode & 0o111) !== 0)
+    );
+  } catch {
+    return false;
+  }
+}
+
+// pnpm writes a regular shell shim instead of a symlink, and the shim names
+// its real bin on a `# cmd-shim-target=<absolute path>` line. Reading that line
+// lets the owning package be found. The shim is read only when it is small,
+// and the path it names is trusted only to locate package metadata.
+const CMD_SHIM_TARGET_PATTERN = /^# cmd-shim-target=(.+)$/mu;
+const MAX_CMD_SHIM_BYTES = 64 * 1024;
+
+/**
+ * The real file behind a PATH-resolved bin: the symlink target for an npm
+ * symlink, the `cmd-shim-target` path for a pnpm shim, or the bin's own real
+ * path otherwise. Returns null when nothing can be read.
+ */
+function resolveRealBinPath(binPath: string): string | null {
+  let entry: ReturnType<typeof lstatSync>;
+  try {
+    entry = lstatSync(binPath);
+  } catch {
+    return null;
+  }
+  if (!entry.isSymbolicLink() && entry.size <= MAX_CMD_SHIM_BYTES) {
+    const shimTarget = readCmdShimTarget(binPath);
+    if (shimTarget !== null) {
+      return shimTarget;
+    }
+  }
+  try {
+    return realpathSync(binPath);
+  } catch {
+    return null;
+  }
+}
+
+function readCmdShimTarget(binPath: string): string | null {
+  let contents: string;
+  try {
+    contents = readFileSync(binPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const target = CMD_SHIM_TARGET_PATTERN.exec(contents)?.[1]?.trim() ?? '';
+  if (target === '' || !isAbsolute(target) || !exists(target)) {
+    return null;
+  }
+  try {
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+function readOwningPackageVersion(binPath: string): string | null {
+  const realBinPath = resolveRealBinPath(binPath);
+  if (realBinPath === null) {
+    return null;
+  }
+  const packageJsonPath = findNearestPackageJson(dirname(realBinPath));
+  if (packageJsonPath === null) {
+    return null;
+  }
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    return packageJson.name === IDD_PACKAGE_NAME &&
+      typeof packageJson.version === 'string'
+      ? packageJson.version
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function findNearestPackageJson(directory: string): string | null {
+  const packageJsonPath = join(directory, 'package.json');
+  if (exists(packageJsonPath)) {
+    return packageJsonPath;
+  }
+  const parent = dirname(directory);
+  return parent === directory ? null : findNearestPackageJson(parent);
+}
+
+/**
+ * Reports the user-global helper runtime: every helper bin should resolve on
+ * the operator's PATH, and all of them should come from one
+ * `@kurone-kito/idd-skill` version. Runs only when the configured profile is
+ * `user-global`, so other profiles keep their existing output unchanged.
+ */
+function checkUserGlobalHelperBins(
+  root: string,
+  report: DoctorReport,
+  pathValue: string,
+) {
+  if (resolveConfiguredHelperRuntimeProfile(root) !== 'user-global') {
+    return;
+  }
+  const bins = inspectUserGlobalHelperBins({
+    pathValue,
+    binNames: listHelperBinNames(),
+  });
+  const missing = bins
+    .filter((entry) => entry.resolvedPath === null)
+    .map((entry) => entry.bin);
+  const present = bins.filter((entry) => entry.resolvedPath !== null);
+  const unreadable = present
+    .filter((entry) => entry.version === null)
+    .map((entry) => entry.bin);
+  const versions = [
+    ...new Set(
+      present
+        .map((entry) => entry.version)
+        .filter((version): version is string => version !== null),
+    ),
+  ];
+
+  if (missing.length > 0) {
+    report.warnings.push(
+      `user-global helper runtime: ${missing.length} helper bin(s) not found on PATH (${missing.join(', ')}); run the user-global installCommand from idd-helper-bundle-manifest once per operator`,
+    );
+  }
+  if (unreadable.length > 0) {
+    report.warnings.push(
+      `user-global helper runtime: version could not be read for ${unreadable.join(', ')}; ownership by ${IDD_PACKAGE_NAME} could not be verified for these bins`,
+    );
+  }
+  if (versions.length > 1) {
+    report.warnings.push(
+      `user-global helper runtime: helper bins report different versions (${versions.join(', ')}); reinstall so every bin comes from one version`,
+    );
+  }
+  if (
+    missing.length === 0 &&
+    unreadable.length === 0 &&
+    versions.length === 1
+  ) {
+    report.passes.push(
+      `user-global helper runtime: all ${bins.length} helper bins resolve on PATH at version ${versions[0]}`,
     );
   }
 }

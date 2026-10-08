@@ -17,7 +17,7 @@ policy helper command as the canonical read-only policy resolver.
 # source repo / vendored-node profile
 node scripts/ci-wait-policy.mjs
 
-# package-manager / ephemeral-npx profile
+# package-manager / ephemeral-npx / user-global profile
 <profile-selected-ci-wait-policy-command>
 ```
 
@@ -145,7 +145,7 @@ that set instead of re-deriving it.
    # source repo / vendored-node profile
    node scripts/ci-wait-state.mjs --pr {pr-number}
 
-   # package-manager / ephemeral-npx profile
+   # package-manager / ephemeral-npx / user-global profile
    <profile-selected-ci-wait-state-command> --pr {pr-number}
    ```
 
@@ -261,7 +261,7 @@ zero-pending checks; see helper docs.
 # source repo / vendored-node profile
 node scripts/rerun-advisory-convergence.mjs --pr <n> [--apply]
 
-# package-manager / ephemeral-npx profile
+# package-manager / ephemeral-npx / user-global profile
 <profile-selected-rerun-advisory-convergence-command> --pr <n> [--apply]
 ```
 

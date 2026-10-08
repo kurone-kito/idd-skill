@@ -1166,8 +1166,9 @@ future inventory reviews do not need to re-infer their role from code.
   `--cleanup-backlog-window-days 1` to keep it fast, mirroring CI.
 - `scripts/helper-runtime-manifest.mjs` (`idd-helper-bundle-manifest`) —
   import helper and manifest inspector; emits machine-readable helper wiring
-  for all four profiles (`package-manager`, `vendored-node`,
-  `ephemeral-npx`, and `instructions-only`). Its output always carries a
+  for all five profiles (`package-manager`, `vendored-node`,
+  `ephemeral-npx`, `instructions-only`, and `user-global`). Its output always
+  carries a
   `runningBuild: { version, commandListScope: "running-build" }` field
   disclosing that `commandCatalog` describes only the currently running
   helper build, independent of any `--package-spec` target -- a per-profile
@@ -2285,12 +2286,13 @@ cannot add it, so they fall back to the 60-second backoff.
 When a repository imports the IDD template, helper support should be
 selected from one of these profiles:
 
-| Profile             | Intended use                                                                                                                | Dependency model                                                               | Portability expectation                                                                                                                 |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `package-manager`   | The adopter already uses pnpm, npm, or yarn for the repository.                                                             | Reuse the repository's existing package manager and pre-resolved dependencies. | Preferred when a package manager project already exists; do not fall back to ad hoc `npx` in this mode.                                 |
-| `vendored-node`     | The adopter has Node.js available but does not want helper execution to depend on registry resolution at runtime.           | Copy a local helper bundle into the repository during import.                  | Keeps helper execution repository-local while remaining optional.                                                                       |
-| `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands.                      | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`. |
-| `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.           | First-class supported fallback; no helper config is required.                                                                           |
+| Profile             | Intended use                                                                                                                | Dependency model                                                                                                                                                                                                        | Portability expectation                                                                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `package-manager`   | The adopter already uses pnpm, npm, or yarn for the repository.                                                             | Reuse the repository's existing package manager and pre-resolved dependencies.                                                                                                                                          | Preferred when a package manager project already exists; do not fall back to ad hoc `npx` in this mode.                                                       |
+| `vendored-node`     | The adopter has Node.js available but does not want helper execution to depend on registry resolution at runtime.           | Copy a local helper bundle into the repository during import.                                                                                                                                                           | Keeps helper execution repository-local while remaining optional.                                                                                             |
+| `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands.                                                                                                                                                               | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`.                       |
+| `user-global`       | The operator installs the helper bins once per machine, and repositories resolve them from PATH without copying files.      | A global install through the operator's own npm, pnpm, or Yarn Classic (`yarn global add`), outside the repository. No repository file or dev dependency is added. Yarn Berry has no global install and is unsupported. | Pin `helperRuntime.packageSpec` so every operator installs the same build. `idd-doctor` reports bins missing from PATH and bins reporting different versions. |
+| `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.                                                                                                                                                    | First-class supported fallback; no helper config is required.                                                                                                 |
 
 **`package-manager`-profile consumers install this package's own
 `package.json`, `engines`/`packageManager` fields included.** A
@@ -2311,12 +2313,33 @@ at a consumer's install time). `kurone-kito/idd-skill#3043` removed
 `engines.pnpm` and replaced its contributor-facing safety net with an
 explicit pnpm-version check inside its own `verify-install-deps`
 helper instead, which is never exposed via `package.json`'s `bin` and
-so never reaches a consumer's install. The principle for any project
-that vends its own helper package under this profile: an `engines`
-field added for contributor-local-dev reasons is not scoped to that
-project alone -- pnpm's `engineStrict` enforces `engines` against every
-consumer using the `package-manager` profile, so any such field needs
-the same consumer-impact check before landing.
+so never reaches a consumer's install.
+
+**A lifecycle script can also reach consumers through the git-hosted gate.**
+pnpm's git-hosted gate can refuse, for some references and versions, an
+install of a git-hosted package whose manifest carries a `prepare`,
+`prepublish`, `prepack`, or `publish` script. The key list was measured with
+git+file toy repositories. The exact spec can be allow-listed (for example
+through `allowBuilds` in `pnpm-workspace.yaml`), and the pnpm 10 error names
+`onlyBuiltDependencies`. A pnpm dlx run of the commit-SHA URL was refused as
+well, and neither an --allow-build flag nor a workspace entry for the exact
+`<name>@<resolved URL>` key stopped it on pnpm 12.9.1. The refusal was
+observed on 2026-10-08, and `kurone-kito/idd-skill#3829` is the second case
+of the leak class that `kurone-kito/idd-skill#3043` fixed for engines.pnpm.
+Under pnpm dlx, before this change, a commit-SHA URL
+(kurone-kito/idd-skill@92a20cb) was refused on pnpm 10, 11, and 12.9.1; the
+refs/heads/main URL of kurone-kito/idd-skill was refused on pnpm 10 only
+while that branch still carried `prepare`; and a refs/tags/v0.14.0 URL ran
+on pnpm 12.9.1 (pnpm 10 and 11 were not tried). The guard test
+`tests/package-lifecycle-scripts.test.mts` (source repo only) fails when one of
+the four keys above returns to this package's `package.json`. The principle for
+any project that vends its own helper package under this profile: an `engines`
+field or lifecycle script added for contributor-local-dev reasons is not scoped
+to that project alone -- pnpm's `engineStrict` enforces `engines` against every
+consumer using the `package-manager` profile, and pnpm's git-hosted gate can
+refuse a lifecycle script for any consumer that installs the package from a
+git-hosted URL, so any such field or script needs the same consumer-impact
+check before landing.
 
 ## Import-Time Selection Order
 
@@ -2405,8 +2428,29 @@ Node.js helper path.
   instead — its emitted helper commands are bare `idd-*` bin names, not
   a parameterized invocation string, so the pin never appears inside
   those commands themselves. `idd-onboard.mjs --verify` reports a
-  non-blocking advisory for either profile when no `packageSpec` is
-  configured.
+  non-blocking advisory for each profile that uses `packageSpec` when none
+  is configured.
+- `user-global`: install the helper bins once per operator with the
+  `installCommand` the manifest emits (npm's `npm install -g`, pnpm's global
+  add, or Yarn Classic's `yarn global add`), and let every repository resolve
+  them
+  from `PATH`. Nothing is written into the repository, so no helper files or
+  dependency pins are added. `helperRuntime.packageSpec` (or `--package-spec`)
+  pins that global install. The manifest's `uninstallCommand` removes the
+  install for the current manager. A switch away from this profile lists every
+  global uninstall instead, because the repository cannot tell which manager
+  the operator installed with. Yarn Berry has no global install, so the
+  manifest reports it as unsupported with an `installUnavailableReason`
+  (preventive; no observed incident yet).
+  `idd-doctor` checks this profile only: each helper bin must resolve on
+  `PATH`, and the bins must report one `@kurone-kito/idd-skill` version.
+  Repository evidence never proposes this profile; the operator chooses it
+  explicitly, because its helper bins live outside the repository. The
+  distributed CI workflows (advisory convergence, its comment job, and
+  post-merge cleanup) do not dispatch this profile. They stop with an explicit
+  error when it is recorded, because CI runners have no operator-local install,
+  so a CI run needs `package-manager`, `vendored-node`, or `ephemeral-npx`
+  (preventive; no observed incident yet).
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 
@@ -2414,12 +2458,13 @@ Node.js helper path.
 canonical invocation is `node scripts/<name>.mjs`; the `package-manager` / `npx`
 `bin/` facade (the `idd-*` bin wrappers) is **redundant** in this profile and
 may be skipped — keeping it only adds a second surface to align with the
-instruction files for no portability gain. Under `package-manager` and
-`ephemeral-npx`, the `bin/` facade (`idd-*` bins, invoked through the
-`package.json` scripts or `npx`) **is** the authoritative surface and should be
-retained. `instructions-only` uses neither. When an instruction shows a
-`node scripts/...` command, resolve it to your profile's authoritative surface
-rather than maintaining both.
+instruction files for no portability gain. Under `package-manager`,
+`ephemeral-npx`, and `user-global`, the `bin/` facade (`idd-*` bins, invoked
+through the `package.json` scripts for `package-manager`, through `npx` for
+`ephemeral-npx`, or from the operator's PATH for `user-global`) **is** the
+authoritative surface and should be retained. `instructions-only` uses neither.
+When an instruction shows a `node scripts/...` command, resolve it to your
+profile's authoritative surface rather than maintaining both.
 
 **Authoring rule for instructions/docs.** A mandatory helper step (one
 with no skip/fallback wording) must always name an `instructions-only`
@@ -3447,7 +3492,7 @@ other case leaves the PR `in-loop`:
 
 Post it with the profile-selected `post-idd-marker` command -- see
 [Post operational markers](#post-operational-markers-write-side) above
-for the source-repo / package-manager / ephemeral-npx forms;
+for the source-repo / package-manager / ephemeral-npx / user-global forms;
 source-repo example: `node scripts/post-idd-marker.mjs --type
 out-of-loop --target pr <n> --agent-id <id> --timestamp <iso8601>
 --apply`. `pr:` is derived from `--target pr <n>`'s own positional

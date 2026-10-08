@@ -1,20 +1,26 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
+import {
+  buildHelperRuntimeManifest,
+  listHelperBinNames,
+} from '../src/scripts/helper-runtime-manifest.mts';
 import {
   DOCUMENTED_TOOLCHAIN_SEGMENTS,
+  inspectUserGlobalHelperBins,
   runDoctor,
 } from '../src/scripts/idd-doctor.mts';
 
@@ -840,4 +846,252 @@ test('idd-doctor reports a failed cleanup-evidence read as a warning without req
     runDoctor({ root, requireGithub: true, cleanupBacklogWarnThreshold: 0 }),
   );
   assert.ok(strict.errors.includes(message), strict.errors.join('\n'));
+});
+
+// The user-global bin check takes the PATH string directly, so these tests
+// never mutate process.env. The fake install mirrors what `npm install -g`
+// produces: a package root with real bin files, and a PATH directory whose
+// entries are symlinks into it. The symlink and executable-bit fixtures are
+// POSIX-only.
+const USER_GLOBAL_TEST_VERSION = '9.9.9';
+
+function createFakeGlobalInstall(
+  binNames: readonly string[],
+  {
+    owner = '@kurone-kito/idd-skill',
+    version = USER_GLOBAL_TEST_VERSION,
+  }: { owner?: string; version?: string } = {},
+) {
+  const base = mkdtempSync(join(tmpdir(), 'idd-user-global-install-'));
+  const packageRoot = join(base, 'lib', 'node_modules', ...owner.split('/'));
+  const binDir = join(packageRoot, 'bin');
+  const pathDir = join(base, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  mkdirSync(pathDir, { recursive: true });
+  writeFileSync(
+    join(packageRoot, 'package.json'),
+    JSON.stringify({ name: owner, version }),
+  );
+  for (const bin of binNames) {
+    const target = join(binDir, `${bin}.mjs`);
+    writeFileSync(target, '#!/usr/bin/env node\n');
+    chmodSync(target, 0o755);
+    symlinkSync(target, join(pathDir, bin));
+  }
+  return { base, pathDir };
+}
+
+test('user-global bin inspection resolves bins over PATH and reads the owning package version', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('symlink and executable-bit fixtures are POSIX-only');
+    return;
+  }
+  const { base, pathDir } = createFakeGlobalInstall([
+    'idd-advisory-convergence',
+  ]);
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+
+  const [entry] = inspectUserGlobalHelperBins({
+    pathValue: pathDir,
+    binNames: ['idd-advisory-convergence'],
+  });
+  assert.equal(entry.resolvedPath, join(pathDir, 'idd-advisory-convergence'));
+  assert.equal(entry.version, USER_GLOBAL_TEST_VERSION);
+});
+
+test('user-global bin inspection withholds the version when another package owns the bin', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('symlink and executable-bit fixtures are POSIX-only');
+    return;
+  }
+  const { base, pathDir } = createFakeGlobalInstall(['idd-doctor'], {
+    owner: 'some-other-package',
+  });
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+
+  const [entry] = inspectUserGlobalHelperBins({
+    pathValue: pathDir,
+    binNames: ['idd-doctor'],
+  });
+  assert.equal(entry.resolvedPath, join(pathDir, 'idd-doctor'));
+  assert.equal(entry.version, null);
+});
+
+test('user-global bin inspection reports absent bins and skips empty PATH entries', (t) => {
+  const empty = mkdtempSync(join(tmpdir(), 'idd-user-global-empty-'));
+  t.after(() => rmSync(empty, { recursive: true, force: true }));
+  const absent = { bin: 'idd-doctor', resolvedPath: null, version: null };
+
+  assert.deepEqual(
+    inspectUserGlobalHelperBins({
+      pathValue: ['', empty].join(delimiter),
+      binNames: ['idd-doctor'],
+    }),
+    [absent],
+  );
+  assert.deepEqual(
+    inspectUserGlobalHelperBins({ pathValue: '', binNames: ['idd-doctor'] }),
+    [absent],
+  );
+});
+
+test('idd-doctor warns about user-global helper bins missing from the operator PATH', (t) => {
+  const root = createDoctorFixtureRepoFromConfig({
+    ...REQUIRED_CONFIG_BASE,
+    helperRuntime: { profile: 'user-global' },
+  });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const empty = mkdtempSync(join(tmpdir(), 'idd-user-global-doctor-empty-'));
+  t.after(() => rmSync(empty, { recursive: true, force: true }));
+
+  const report = runDoctor({ root, requireGithub: false, pathValue: empty });
+  const missing = report.warnings.find(
+    (warning) =>
+      warning.startsWith('user-global helper runtime: ') &&
+      warning.includes('not found on PATH'),
+  );
+  assert.ok(missing, report.warnings.join('\n'));
+  assert.ok(missing.includes(`${listHelperBinNames().length} helper bin(s)`));
+});
+
+test('idd-doctor passes the user-global check when every helper bin resolves to one version', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('symlink and executable-bit fixtures are POSIX-only');
+    return;
+  }
+  const binNames = listHelperBinNames();
+  const { base, pathDir } = createFakeGlobalInstall(binNames);
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const root = createDoctorFixtureRepoFromConfig({
+    ...REQUIRED_CONFIG_BASE,
+    helperRuntime: { profile: 'user-global' },
+  });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const report = runDoctor({ root, requireGithub: false, pathValue: pathDir });
+  assert.ok(
+    report.passes.includes(
+      `user-global helper runtime: all ${binNames.length} helper bins resolve on PATH at version ${USER_GLOBAL_TEST_VERSION}`,
+    ),
+    report.passes.join('\n'),
+  );
+  assert.ok(
+    !report.warnings.some((warning) =>
+      warning.startsWith('user-global helper runtime: '),
+    ),
+    report.warnings.join('\n'),
+  );
+});
+
+test('idd-doctor leaves the user-global bin check out of other helper runtime profiles', (t) => {
+  const root = createDoctorFixtureRepo('package-manager.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const report = runDoctor({ root, requireGithub: false, pathValue: '' });
+  assert.ok(
+    !report.warnings.some((warning) =>
+      warning.includes('user-global helper runtime'),
+    ),
+  );
+  assert.ok(
+    !report.passes.some((pass) => pass.includes('user-global helper runtime')),
+  );
+});
+
+test('user-global bin inspection reads the owning package through a pnpm shim', (t) => {
+  if (process.platform === 'win32') {
+    // Windows resolves bins through PATHEXT extensions, and this fixture is a
+    // POSIX shell script with no extension.
+    t.skip('the shim fixture is a POSIX shell script');
+    return;
+  }
+  // pnpm writes a regular shell shim, not a symlink, and names the real bin on
+  // a cmd-shim-target line. Nothing about the shim itself is package metadata.
+  const base = mkdtempSync(join(tmpdir(), 'idd-user-global-shim-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const packageRoot = join(
+    base,
+    'global',
+    'node_modules',
+    '@kurone-kito',
+    'idd-skill',
+  );
+  mkdirSync(join(packageRoot, 'bin'), { recursive: true });
+  writeFileSync(
+    join(packageRoot, 'package.json'),
+    JSON.stringify({
+      name: '@kurone-kito/idd-skill',
+      version: USER_GLOBAL_TEST_VERSION,
+    }),
+  );
+  const realBin = join(packageRoot, 'bin', 'idd-doctor.mjs');
+  writeFileSync(realBin, '#!/usr/bin/env node\n');
+  const pathDir = join(base, 'bin');
+  mkdirSync(pathDir, { recursive: true });
+  const shim = join(pathDir, 'idd-doctor');
+  writeFileSync(
+    shim,
+    `#!/bin/sh\n# cmd-shim-target=${realBin}\nexec node "${realBin}" "$@"\n`,
+  );
+  chmodSync(shim, 0o755);
+
+  const [entry] = inspectUserGlobalHelperBins({
+    pathValue: pathDir,
+    binNames: ['idd-doctor'],
+  });
+  assert.equal(entry.resolvedPath, shim);
+  assert.equal(entry.version, USER_GLOBAL_TEST_VERSION);
+});
+
+test('idd-doctor warns instead of passing when user-global helper bins report different versions', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('symlink and executable-bit fixtures are POSIX-only');
+    return;
+  }
+  // Each bin gets its own package root, and the roots carry different versions.
+  const base = mkdtempSync(join(tmpdir(), 'idd-user-global-mixed-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const pathDir = join(base, 'bin');
+  mkdirSync(pathDir, { recursive: true });
+  listHelperBinNames().forEach((bin, index) => {
+    const packageRoot = join(
+      base,
+      `install-${index}`,
+      'lib',
+      'node_modules',
+      '@kurone-kito',
+      'idd-skill',
+    );
+    mkdirSync(join(packageRoot, 'bin'), { recursive: true });
+    writeFileSync(
+      join(packageRoot, 'package.json'),
+      JSON.stringify({
+        name: '@kurone-kito/idd-skill',
+        version: index === 0 ? '1.0.0' : '2.0.0',
+      }),
+    );
+    const target = join(packageRoot, 'bin', `${bin}.mjs`);
+    writeFileSync(target, '#!/usr/bin/env node\n');
+    chmodSync(target, 0o755);
+    symlinkSync(target, join(pathDir, bin));
+  });
+  const root = createDoctorFixtureRepoFromConfig({
+    ...REQUIRED_CONFIG_BASE,
+    helperRuntime: { profile: 'user-global' },
+  });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const report = runDoctor({ root, requireGithub: false, pathValue: pathDir });
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes('helper bins report different versions (1.0.0, 2.0.0)'),
+    ),
+    report.warnings.join('\n'),
+  );
+  assert.ok(
+    !report.passes.some((pass) =>
+      pass.startsWith('user-global helper runtime: all '),
+    ),
+    report.passes.join('\n'),
+  );
 });

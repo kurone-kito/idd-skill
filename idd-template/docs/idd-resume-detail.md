@@ -455,8 +455,9 @@ node scripts/delete-remote-branch.mjs \
 ```
 
 Use the helper runtime manifest's canonical command form for
-package-manager or ephemeral-npx. If helper runtime is unavailable, hold
-and ask an authorized operator to perform the atomic deletion; do not
+package-manager, ephemeral-npx, or user-global. If helper runtime is
+unavailable, hold and ask an authorized operator to perform the atomic
+deletion; do not
 wrap, quote, or otherwise disguise a command that the active tool policy
 denies. This keeps compare-and-delete available through the explicitly
 permitted helper surface (PR `#3741` Codex review comment

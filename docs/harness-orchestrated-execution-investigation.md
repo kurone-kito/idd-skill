@@ -340,12 +340,13 @@ pays for itself when self-direction is the actual, demonstrated blocker.
 
 ## 5. Relationship to existing Helper Runtime Profiles
 
-The four [Helper Runtime Profiles](idd-helper-scripts.md#helper-runtime-profiles)
-(`package-manager`, `vendored-node`, `ephemeral-npx`, `instructions-only`)
+The [Helper Runtime Profiles](idd-helper-scripts.md#helper-runtime-profiles)
+(`package-manager`, `vendored-node`, `ephemeral-npx`, `instructions-only`,
+`user-global`)
 all answer one question: **how is a helper command resolved and made
 runnable** in an importing repository (an existing package manager, a
-vendored bundle, one-shot `npx`, or no helper runtime at all). None of the
-four says anything about **who decides when to invoke a helper** — today
+vendored bundle, one-shot `npx`, or no helper runtime at all). None of them
+says anything about **who decides when to invoke a helper** — today
 that decision is always the model, reading the phase instructions and
 choosing to run the documented command for the current step.
 Harness-orchestrated execution changes exactly that second, currently
@@ -353,9 +354,9 @@ unaddressed axis: the harness, not the model, decides when each helper in
 the Section 1 contract runs.
 
 This makes harness-orchestrated execution an **orthogonal concept layered
-on top of** one of the profiles, not a fifth profile alongside them, and
+on top of** one of the profiles, not another profile alongside them, and
 not a replacement value for the existing `profile` field. A repository
-still separately chooses how helpers are resolved (one of the four rows in
+still separately chooses how helpers are resolved (one of the rows in
 the table); harness orchestration is a second, independent decision about
 who drives invocation, applicable in principle regardless of which profile
 resolves the helper commands.
@@ -367,8 +368,9 @@ orchestrate under `instructions-only` would have no callable helper surface
 to sequence at all — it would have to reimplement every step's logic
 itself, which is precisely the reimplementation risk Section 2 documents.
 Harness-orchestrated execution is therefore only a coherent mode on top of
-`package-manager`, `vendored-node`, or `ephemeral-npx`; a repository on
-`instructions-only` would need to adopt one of the other three profiles
+`package-manager`, `vendored-node`, `ephemeral-npx`, or `user-global`; a
+repository on
+`instructions-only` would need to adopt one of the other profiles
 first before this mode could apply.
 
 ## Distinctions from adjacent work

@@ -576,6 +576,7 @@ const HELPER_RUNTIME_PROFILES = new Set([
   'vendored-node',
   'ephemeral-npx',
   'instructions-only',
+  'user-global',
 ]);
 const HELPER_RUNTIME_KEYS = new Set(['profile', 'packageSpec']);
 const ISSUE_SCOPES = new Set(['roadmap', 'roadmap-first', 'orphan-first']);

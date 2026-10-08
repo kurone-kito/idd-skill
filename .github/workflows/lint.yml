@@ -217,6 +217,17 @@ jobs:
         run: >-
           node --test --import ./tests/isolate-state.mts --test-name-pattern "windows acl"
           tests/github-api-read-cache.test.mts
+      # The gh guard's PATH shim (kurone-kito/idd-skill#3841) is the only
+      # thing that sees a `gh` that cmd.exe or PowerShell resolves through
+      # PATH, so these two rows run here. Name filtered like the steps above,
+      # and the pattern is ASCII-only for the same PowerShell reason. Node
+      # exits 0 when a pattern matches no test, so the step also requires a
+      # passing test in the TAP output before it counts as green.
+      - name: Run gh guard PATH shim Windows tests
+        run: |
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "path shim: windows" --test-reporter=tap tests/isolate-gh.test.mts | Tee-Object -FilePath path-shim-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path path-shim-windows.tap -Pattern '^# pass [1-9]' -Quiet)) { throw 'no gh guard PATH shim test passed' }
       # Regression coverage for kurone-kito/idd-skill#2988: the full file
       # is now safe after #2989 bounded its production fetch calls and
       # #2990 made the fixture suite hermetic on Windows. Keep this

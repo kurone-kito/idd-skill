@@ -1082,7 +1082,7 @@ hand-copying a placeholder recipe:
 
    **The supported invocation runs from a local
    `kurone-kito/idd-skill` clone** — `idd-onboard` is not a cataloged
-   `package-manager` / `ephemeral-npx` helper command in
+   `package-manager` / `ephemeral-npx` / `user-global` helper command in
    [IDD helper script evaluation](idd-helper-scripts.md), unlike the
    sweep helper in step 1, so this document does not offer a
    package-manager or `npx` form for it. Without a local clone
