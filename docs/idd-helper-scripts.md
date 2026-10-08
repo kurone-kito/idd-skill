@@ -2356,7 +2356,8 @@ Node.js helper path.
   install for the current manager. A switch away from this profile lists every
   global uninstall instead, because the repository cannot tell which manager
   the operator installed with. Yarn Berry has no global install, so the
-  manifest reports it as unsupported with an `installUnavailableReason`.
+  manifest reports it as unsupported with an `installUnavailableReason`
+  (preventive; no observed incident yet).
   `idd-doctor` checks this profile only: each helper bin must resolve on
   `PATH`, and the bins must report one `@kurone-kito/idd-skill` version.
   Repository evidence never proposes this profile; the operator chooses it
