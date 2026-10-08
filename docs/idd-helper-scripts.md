@@ -2222,12 +2222,13 @@ cannot add it, so they fall back to the 60-second backoff.
 When a repository imports the IDD template, helper support should be
 selected from one of these profiles:
 
-| Profile             | Intended use                                                                                                                | Dependency model                                                               | Portability expectation                                                                                                                 |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `package-manager`   | The adopter already uses pnpm, npm, or yarn for the repository.                                                             | Reuse the repository's existing package manager and pre-resolved dependencies. | Preferred when a package manager project already exists; do not fall back to ad hoc `npx` in this mode.                                 |
-| `vendored-node`     | The adopter has Node.js available but does not want helper execution to depend on registry resolution at runtime.           | Copy a local helper bundle into the repository during import.                  | Keeps helper execution repository-local while remaining optional.                                                                       |
-| `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands.                      | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`. |
-| `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.           | First-class supported fallback; no helper config is required.                                                                           |
+| Profile             | Intended use                                                                                                                | Dependency model                                                                                                                                                                                                        | Portability expectation                                                                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `package-manager`   | The adopter already uses pnpm, npm, or yarn for the repository.                                                             | Reuse the repository's existing package manager and pre-resolved dependencies.                                                                                                                                          | Preferred when a package manager project already exists; do not fall back to ad hoc `npx` in this mode.                                                       |
+| `vendored-node`     | The adopter has Node.js available but does not want helper execution to depend on registry resolution at runtime.           | Copy a local helper bundle into the repository during import.                                                                                                                                                           | Keeps helper execution repository-local while remaining optional.                                                                                             |
+| `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands.                                                                                                                                                               | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`.                       |
+| `user-global`       | The operator installs the helper bins once per machine, and repositories resolve them from PATH without copying files.      | A global install through the operator's own npm, pnpm, or Yarn Classic (`yarn global add`), outside the repository. No repository file or dev dependency is added. Yarn Berry has no global install and is unsupported. | Pin `helperRuntime.packageSpec` so every operator installs the same build. `idd-doctor` reports bins missing from PATH and bins reporting different versions. |
+| `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.                                                                                                                                                    | First-class supported fallback; no helper config is required.                                                                                                 |
 
 **`package-manager`-profile consumers install this package's own
 `package.json`, `engines`/`packageManager` fields included.** A
@@ -2351,12 +2352,12 @@ Node.js helper path.
 canonical invocation is `node scripts/<name>.mjs`; the `package-manager` / `npx`
 `bin/` facade (the `idd-*` bin wrappers) is **redundant** in this profile and
 may be skipped — keeping it only adds a second surface to align with the
-instruction files for no portability gain. Under `package-manager` and
-`ephemeral-npx`, the `bin/` facade (`idd-*` bins, invoked through the
-`package.json` scripts or `npx`) **is** the authoritative surface and should be
-retained. `instructions-only` uses neither. When an instruction shows a
-`node scripts/...` command, resolve it to your profile's authoritative surface
-rather than maintaining both.
+instruction files for no portability gain. Under `package-manager`,
+`ephemeral-npx`, and `user-global`, the `bin/` facade (`idd-*` bins, invoked
+through the `package.json` scripts, `npx`, or the operator's PATH) **is** the
+authoritative surface and should be retained. `instructions-only` uses neither.
+When an instruction shows a `node scripts/...` command, resolve it to your
+profile's authoritative surface rather than maintaining both.
 
 **Authoring rule for instructions/docs.** A mandatory helper step (one
 with no skip/fallback wording) must always name an `instructions-only`
