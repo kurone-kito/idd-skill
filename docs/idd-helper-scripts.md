@@ -2360,7 +2360,11 @@ Node.js helper path.
   `idd-doctor` checks this profile only: each helper bin must resolve on
   `PATH`, and the bins must report one `@kurone-kito/idd-skill` version.
   Repository evidence never proposes this profile; the operator chooses it
-  explicitly, because its helper bins live outside the repository.
+  explicitly, because its helper bins live outside the repository. The
+  distributed CI workflows (advisory convergence, its comment job, and
+  post-merge cleanup) do not dispatch this profile. They stop with an explicit
+  error when it is recorded, because CI runners have no operator-local install,
+  so a CI run needs one of the other profiles.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 
