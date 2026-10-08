@@ -1882,7 +1882,8 @@ function checkCommentRefreshReviewBypass(root, report) {
       report(RWA005, path, 'must keep the debounce and rerun steps');
       continue;
     }
-    const debounceIfLine = firstIfLine(text.slice(debounceIndex, rerunIndex));
+    // The debounce step's own condition, so a later step's `if:` cannot stand in.
+    const debounceIfLine = firstIfLine(stepTextFrom(text, debounceIndex));
     if (debounceIfLine === undefined) {
       report(RWA005, path, 'debounce step must have an if: condition');
     } else if (

@@ -2157,6 +2157,27 @@ const RULE_CASES: readonly RuleCase[] = [
     mutation: { from: '\n      runner:\n', to: '\n      runner_x:\n' },
     expected: [{ message: 'runner: block not found at indent 6' }],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a debounce step without its own condition while a later step has one',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const condition =
+          "        if: steps.origin.outputs.idd_originated == 'true' && github.event_name != 'pull_request_review'\n";
+        const rerun = '      - name: Rerun required HEAD check';
+        assert.ok(
+          text.includes(condition),
+          'fixture anchor not found: debounce condition',
+        );
+        assert.ok(text.includes(rerun), 'fixture anchor not found: rerun step');
+        const without = text.replace(condition, '');
+        const at = without.indexOf(rerun);
+        return `${without.slice(0, at)}      - name: Intervening step\n        if: github.event_name != 'pull_request_review'\n        run: echo ok\n${without.slice(at)}`;
+      },
+    },
+    expected: [{ message: 'debounce step must have an if: condition' }],
+  },
   // RWA006: self-waiver constants across both advisory-convergence copies.
   {
     ruleId: 'RWA006',
