@@ -130,6 +130,15 @@ const RESTRICTED_STATEMENT_KEYWORDS = new Set([
 ]);
 
 /** ECMAScript line terminators, including the Unicode separators. */
+/** Whether the first character after horizontal blanks from `from` ends a line. */
+function lineEndsAfterBlanks(source: string, from: number): boolean {
+  let index = from;
+  while (source[index] === ' ' || source[index] === '\t') {
+    index += 1;
+  }
+  return index < source.length && isLineTerminator(source[index]);
+}
+
 function isLineTerminator(ch: string | undefined): boolean {
   return ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
 }
@@ -333,6 +342,7 @@ function scanComments(source: string): {
     let arrowTypeHoldNewline = false;
     let postfixUpdateOperator = false;
     let postfixNonNullAssertion = false;
+    let codeCharBeforeLastWord = '';
     let lastCodeCharIsComparisonAngle = false;
     let lastCodeCharIsConditionalColon = false;
     let codeNestingDepth = 0;
@@ -358,6 +368,18 @@ function scanComments(source: string): {
     const expressionEndingBraces: boolean[] = [];
     const objectLiteralBraces: boolean[] = [];
     const parenIsForHeader: boolean[] = [];
+
+    // `of` is the for-of operator only directly after a binding or a closing
+    // bracket inside a for header. After `=` it is an identifier, as in
+    // `for (const q = of / 2; ; )`.
+    function forOfKeywordActive(): boolean {
+      return (
+        !lastWordIsPropertyName &&
+        lastWord === 'of' &&
+        parenIsForHeader.at(-1) === true &&
+        /[A-Za-z0-9_$)\]}]/.test(codeCharBeforeLastWord)
+      );
+    }
 
     function wordContinuesAt(ch: string, sourceIndex: number): boolean {
       return (
@@ -505,7 +527,7 @@ function scanComments(source: string): {
           postfixUpdateOperator,
           postfixNonNullAssertion,
           regexAfterRestrictedStatementLineBreak,
-          parenIsForHeader.at(-1) === true,
+          forOfKeywordActive(),
         );
       noteNumericLiteralChar(ch, sourceIndex);
       const startsWord = wordBoundary || lastWord === '';
@@ -532,6 +554,7 @@ function scanComments(source: string): {
         if (startsWord) {
           previousWord = lastWord;
           previousWordIsPropertyName = lastWordIsPropertyName;
+          codeCharBeforeLastWord = previousCodeChar;
           lastWord = ch;
           lastWordIsPropertyName =
             previousCodeChar === '.' || previousCodeChar === '#';
@@ -1182,7 +1205,7 @@ function scanComments(source: string): {
           postfixUpdateOperator,
           postfixNonNullAssertion,
           regexAfterRestrictedStatementLineBreak,
-          parenIsForHeader.at(-1) === true,
+          forOfKeywordActive(),
         )
       ) {
         let end = index + 1;
@@ -1340,9 +1363,7 @@ function scanComments(source: string): {
           if (
             index > 0 &&
             isIdentifierPartAt(source, index - 1) &&
-            /^[ \t]*[\n\r\u2028\u2029]/.test(
-              source.slice(index + 1, index + 65),
-            )
+            lineEndsAfterBlanks(source, index + 1)
           ) {
             openComparisonAngles.push(index);
           }
@@ -1419,9 +1440,7 @@ function scanComments(source: string): {
             (!lastWordIsPropertyName &&
               !BLOCK_PRECEDING_KEYWORDS.has(lastWord) &&
               REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
-            (!lastWordIsPropertyName &&
-              lastWord === 'of' &&
-              parenIsForHeader.at(-1) === true) ||
+            forOfKeywordActive() ||
             (!lastWordIsPropertyName &&
               lastWord === 'default' &&
               previousWord === 'export' &&

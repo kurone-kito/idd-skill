@@ -2376,7 +2376,7 @@ const lexerRows: { name: string; source: string; expect: 'clean' | 'yaml' }[] =
     },
     {
       name: '2f: an object literal in a template interpolation',
-      source: 'const t = `$' + '{c ? 1 : {} / 2}`; // a ` b\n',
+      source: 'const t = `' + '$' + '{c ? 1 : {} / 2}`; // a ` b\n',
       expect: 'clean',
     },
     {
@@ -2662,3 +2662,38 @@ test('a deeply nested mirror source is reported through the standalone-mirror ru
   assert.doesNotMatch(stderr, /^\s+at /m);
   assert.doesNotMatch(stderr, /file:\/\//);
 });
+
+// Second review pass on #3852: `of` is a for-of operator only after a binding,
+// so an identifier named `of` in a for header keeps its division; a real for-of
+// regular expression still works; and the multi-line type-list opener has no
+// fixed whitespace cutoff.
+const reviewSecondRows: { name: string; source: string }[] = [
+  {
+    name: 'an identifier named of in a for header before a division',
+    source: "for (const q = of / /* import('left-pad') */ 2; ; ) {}\n",
+  },
+  {
+    name: 'a for-of header whose right side is a regular expression containing a backtick',
+    source: 'for (const m of /`/.source) {}\n/`/.test(x);\n',
+  },
+  {
+    name: 'a multi-line type-parameter list opened after more than sixty-four spaces',
+    source: `class A<${' '.repeat(80)}\n  T\n> {}\n/\`/.test(x);\n`,
+  },
+];
+
+for (const row of reviewSecondRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
