@@ -2451,8 +2451,9 @@ Node.js helper path.
   path as `ephemeral-npx`: each run executes the helper through `npx`, from
   `helperRuntime.packageSpec` when it is set, so CI runs the build named
   there rather than anything on an operator's `PATH`. CI reads only the
-  committed `.github/idd/config.json`. When `packageSpec` is unset, CI falls
-  back to the mutable default archive URL, as `ephemeral-npx` does, and
+  committed policy files: `.github/idd/config.json`, falling back to the
+  legacy root `idd-policy.json`. When `packageSpec` is unset, CI falls back
+  to the mutable default archive URL, as `ephemeral-npx` does, and
   `idd-onboard --verify` warns about it (#2987). Pin `packageSpec` to the
   same reviewed build the operators install.
 - `instructions-only`: keep helper dependencies, helper files, and helper
