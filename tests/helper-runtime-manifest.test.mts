@@ -941,10 +941,13 @@ test('switching to and from user-global lists the add, remove, and global-uninst
     packageManager: 'pnpm',
     targetRoot: REPO_ROOT,
   }).switching;
-  assert.equal(
-    leaveForVendored?.removeGlobalInstallCommand,
+  // The operator's install manager is not knowable from the repository, so
+  // every global uninstall is listed.
+  assert.deepEqual(leaveForVendored?.removeGlobalInstallCommands, [
+    'npm uninstall -g @kurone-kito/idd-skill',
     'pnpm remove -g @kurone-kito/idd-skill',
-  );
+    'yarn global remove @kurone-kito/idd-skill',
+  ]);
   assert.deepEqual(leaveForVendored?.removeFiles, []);
   assert.ok((leaveForVendored?.addFiles.length ?? 0) > 0);
 
@@ -955,7 +958,7 @@ test('switching to and from user-global lists the add, remove, and global-uninst
     targetRoot: REPO_ROOT,
   }).switching;
   assert.equal(
-    'removeGlobalInstallCommand' in (enterFromVendored ?? {}),
+    'removeGlobalInstallCommands' in (enterFromVendored ?? {}),
     false,
   );
   assert.deepEqual(enterFromVendored?.addFiles, []);
@@ -978,10 +981,11 @@ test('switching to and from user-global lists the add, remove, and global-uninst
     packageManager: 'pnpm',
     targetRoot: REPO_ROOT,
   }).switching;
-  assert.equal(
-    userGlobalToPackageManager?.removeGlobalInstallCommand,
+  assert.deepEqual(userGlobalToPackageManager?.removeGlobalInstallCommands, [
+    'npm uninstall -g @kurone-kito/idd-skill',
     'pnpm remove -g @kurone-kito/idd-skill',
-  );
+    'yarn global remove @kurone-kito/idd-skill',
+  ]);
   assert.deepEqual(
     Object.keys(userGlobalToPackageManager?.addDevDependencies ?? {}),
     ['@kurone-kito/idd-skill'],

@@ -56,6 +56,16 @@ export const PROFILE_NAMES = [
   'user-global',
 ];
 const PACKAGE_NAME = '@kurone-kito/idd-skill';
+// Every global uninstall a user-global install could have been made with. The
+// repository cannot tell which manager installed the operator's copy, so a
+// switch away from user-global lists all of them and the operator runs the one
+// that matches their own install. Declared above the import.meta.main trigger
+// below, which can run main() before later module-level consts are initialized.
+const USER_GLOBAL_UNINSTALL_COMMANDS = [
+  `npm uninstall -g ${PACKAGE_NAME}`,
+  `pnpm remove -g ${PACKAGE_NAME}`,
+  `yarn global remove ${PACKAGE_NAME}`,
+];
 const DEFAULT_PACKAGE_SPEC =
   'https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main';
 const SOURCE_REPOSITORY = 'github:kurone-kito/idd-skill';
@@ -1173,10 +1183,10 @@ function buildSwitchPlan({ fromProfile, toProfile, profileCatalog }) {
         .sort(([left], [right]) => left.localeCompare(right)),
     ),
     // Only a switch away from user-global leaves an operator-level install
-    // behind, so the removal command is emitted only when the source profile
-    // has one; other switches keep their existing output shape.
-    ...(from.uninstallCommand
-      ? { removeGlobalInstallCommand: from.uninstallCommand }
+    // behind, so the removal commands are emitted only for that source profile;
+    // other switches keep their existing output shape.
+    ...(fromProfile === 'user-global'
+      ? { removeGlobalInstallCommands: USER_GLOBAL_UNINSTALL_COMMANDS }
       : {}),
   };
 }
