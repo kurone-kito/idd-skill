@@ -39,15 +39,16 @@
 #     content, but it is a wider execution surface than this source
 #     repository's own dogfooded copy (which only ever runs its single
 #     tracked `scripts/audit-pr-cleanup.mjs`), so it is called out here
-#     explicitly. Under `ephemeral-npx` specifically, when the repository
-#     has not configured `helperRuntime.packageSpec`, the invocation
-#     falls back to fetching a **mutable** default archive URL
+#     explicitly. Under `ephemeral-npx` and `user-global` specifically, when
+#     the repository has not configured `helperRuntime.packageSpec`, the
+#     invocation falls back to fetching a **mutable** default archive URL
 #     (`https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main`)
 #     over the network at run time -- not base-branch-tracked content and
 #     not a declared dependency either. This is a real, wider execution
-#     surface than the other profiles; adopters on `ephemeral-npx` should
-#     pin `helperRuntime.packageSpec` to a reviewed tarball or mirror URL
-#     (see docs/idd-helper-scripts.md's "Profile Wiring Surface" section)
+#     surface than the other profiles; adopters on `ephemeral-npx` or
+#     `user-global` should pin `helperRuntime.packageSpec` to a reviewed
+#     tarball or mirror URL (see docs/idd-helper-scripts.md's "Profile
+#     Wiring Surface" section)
 #     to close this gap.
 #   - The `pr_number` value (a `workflow_dispatch` number input, not
 #     strictly enforced as numeric for direct API dispatches) is passed
@@ -228,13 +229,6 @@ jobs:
               break
             fi
           done
-          if [ "$PROFILE" = "user-global" ]; then
-            # user-global is an operator-local install. CI runners do not have it,
-            # and this workflow does not dispatch it, so stop here rather than
-            # falling back to instructions-only silently.
-            echo "::error::helperRuntime.profile is user-global, an operator-local install that CI runners do not have. This workflow cannot dispatch it. Use package-manager, vendored-node, or ephemeral-npx in .github/idd/config.json to run this check in CI."
-            exit 1
-          fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
       - name: Setup Node.js
@@ -401,7 +395,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               # shellcheck disable=SC2086
               JSON=$(npx --yes --package "$SPEC" idd-audit-pr-cleanup --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)

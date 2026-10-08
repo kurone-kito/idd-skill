@@ -262,13 +262,6 @@ jobs:
               fi
             done
           fi
-          if [ "$PROFILE" = "user-global" ]; then
-            # user-global is an operator-local install. CI runners do not have it,
-            # and this workflow does not dispatch it, so stop here rather than
-            # falling back to instructions-only silently.
-            echo "::error::helperRuntime.profile is user-global, an operator-local install that CI runners do not have. This workflow cannot dispatch it. Use package-manager, vendored-node, or ephemeral-npx in .github/idd/config.json to run this check in CI."
-            exit 1
-          fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
@@ -412,7 +405,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-review-comment-origin
               ;;
@@ -484,7 +477,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-advisory-comment-debounce --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
               ;;
@@ -572,7 +565,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               # shellcheck disable=SC2086
               npx --yes --package "$SPEC" idd-rerun-advisory-convergence --pr "$PR_NUMBER" $REFRESH_FLAG --apply
