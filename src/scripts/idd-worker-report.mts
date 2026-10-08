@@ -323,11 +323,16 @@ function sleepSync(ms: number): void {
 
 /**
  * The token a lock file carries: `undefined` when there is no file, `''` when
- * the body is empty or garbled (a holder that died between creating the file
+ * the body is empty or garbled, or the node is not a regular file (a holder that died between creating the file
  * and writing it), otherwise the holder's token.
  */
 function readLockToken(lockPath: string): string | undefined {
   try {
+    // Never open anything but a regular file: reading a FIFO or a device
+    // would block here and the bounded wait would never be reached. Such a
+    // node is unidentifiable, so it ages out and is taken over like any
+    // other stale lock.
+    if (!lstatSync(lockPath).isFile()) return '';
     const body = JSON.parse(readFileSync(lockPath, 'utf8')) as {
       token?: unknown;
     };
@@ -494,17 +499,14 @@ function acquireLock(lockPath: string, options: LockOptions): string {
 /** Remove the lock only while it is still ours. */
 function releaseLock(lockPath: string, token: string): void {
   try {
-    const body = JSON.parse(readFileSync(lockPath, 'utf8')) as {
-      token?: unknown;
-    };
-    if (body.token !== token) return;
+    // Through readLockToken, so a special file is never opened here either.
+    if (readLockToken(lockPath) !== token) return;
     unlinkSync(lockPath);
   } catch (error) {
     // Already gone, replaced, or briefly held open by another process on
     // Windows: the stale-age takeover covers anything left behind.
     const code = errorCode(error);
     if (code === 'ENOENT' || code === 'EPERM' || code === 'EBUSY') return;
-    if (error instanceof SyntaxError) return;
     throw error;
   }
 }

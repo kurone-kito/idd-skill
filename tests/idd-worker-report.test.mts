@@ -1171,3 +1171,46 @@ test('a lock that is no longer ours is not kept fresh by a resumed holder', () =
     cleanup(sandbox);
   }
 });
+
+test('a FIFO at the lock path neither blocks the wait nor survives its stale age', {
+  skip: process.platform === 'win32',
+}, (t) => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    const made = spawnSync('mkfifo', [lock]);
+    if (made.status !== 0) {
+      t.skip('mkfifo is not available on this host');
+      return;
+    }
+    // Fresh: not stale yet, so the append waits out its bounded timeout and
+    // fails. A regression that reads the FIFO would block this in-process
+    // call for good, so a hang here, not a failed assertion, is the symptom.
+    assert.throws(
+      () =>
+        appendWorkerReport(sandbox.store, report(), {
+          timeoutMs: 150,
+          retryMs: 10,
+        }),
+      /could not acquire the lock/,
+    );
+    assert.equal(existsSync(sandbox.store), false);
+    // Aged past the stale age, it is moved aside like any other stale lock.
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.notEqual(result.status, null, 'must not block');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(storeLines(sandbox).length, 1);
+    assert.deepEqual(readdirSync(sandbox.storeDirectory).sort(), [
+      'reports.jsonl',
+    ]);
+  } finally {
+    cleanup(sandbox);
+  }
+});
