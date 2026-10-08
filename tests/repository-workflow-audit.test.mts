@@ -2127,3 +2127,19 @@ test('a missing advisory-convergence copy is an inspection failure for each rule
     );
   });
 });
+
+test('a missing copy is recorded once per rule, however many checks read it', () => {
+  const root = fixtureRoot({}, [ROOT_COMMENT]);
+  withRoot(root, () => {
+    const findings = collectRepositoryWorkflowViolations(root).filter(
+      (violation) => violation.path === ROOT_COMMENT,
+    );
+    assert.deepEqual(findings, [
+      {
+        ruleId: 'RWA005',
+        path: ROOT_COMMENT,
+        message: 'required input is missing or unreadable',
+      },
+    ]);
+  });
+});

@@ -2198,7 +2198,15 @@ export function collectRepositoryWorkflowViolations(
   root: string,
 ): RepositoryWorkflowViolation[] {
   const violations: RepositoryWorkflowViolation[] = [];
+  const reported = new Set<string>();
+  // Several checks read the same copy, so an identical finding for the same
+  // rule and path is recorded once: a missing input is reported once per rule.
   const report: Report = (ruleId, path, message) => {
+    const key = JSON.stringify([ruleId, path, message]);
+    if (reported.has(key)) {
+      return;
+    }
+    reported.add(key);
     violations.push({ ruleId, path, message });
   };
   checkPostMergeCleanupWorkflows(root, report);
