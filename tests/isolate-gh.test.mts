@@ -1658,6 +1658,7 @@ function shellPayloadChild(command: string): string {
     `  process.stdout.write(childProcess.execSync(${JSON.stringify(command)}, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));`,
     '} catch (error) {',
     '  process.stderr.write(String(error.stderr || error.message));',
+    '  process.exitCode = error.status || 1;',
     '}',
     '',
   ].join('\n');
@@ -1693,6 +1694,7 @@ function posixProbeChild(method: 'execFileSync' | 'spawnSync'): string {
         "  process.stdout.write(childProcess.execFileSync('./probe.sh', [], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));",
         '} catch (error) {',
         '  process.stderr.write(String(error.stderr || error.message));',
+        '  process.exitCode = error.status || 1;',
         '}',
         '',
       ].join('\n')
@@ -1701,6 +1703,7 @@ function posixProbeChild(method: 'execFileSync' | 'spawnSync'): string {
         "const probe = childProcess.spawnSync('./probe.sh', [], { encoding: 'utf8' });",
         'process.stdout.write(probe.stdout ?? "");',
         'process.stderr.write(probe.stderr ?? "");',
+        'if (probe.status !== 0) process.exitCode = probe.status ?? 1;',
         '',
       ].join('\n');
 }
@@ -1803,6 +1806,7 @@ test('path shim: windows cmd resolves gh through the guard bin', {
       "const probe = childProcess.spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', '%GH% --version'], { encoding: 'utf8', env: { ...process.env, GH: 'gh' } });",
       'process.stdout.write(probe.stdout ?? "");',
       'process.stderr.write(probe.stderr ?? "");',
+      'if (probe.status !== 0) process.exitCode = probe.status ?? 1;',
       '',
     ].join('\n'),
   );
@@ -1818,6 +1822,7 @@ test('path shim: windows powershell resolves gh through the guard bin', {
       "const probe = childProcess.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:GH --version'], { encoding: 'utf8', env: { ...process.env, GH: 'gh' } });",
       'process.stdout.write(probe.stdout ?? "");',
       'process.stderr.write(probe.stderr ?? "");',
+      'if (probe.status !== 0) process.exitCode = probe.status ?? 1;',
       '',
     ].join('\n'),
   );
