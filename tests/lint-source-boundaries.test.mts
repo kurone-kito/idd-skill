@@ -2770,3 +2770,64 @@ for (const row of multilineComparisonShapes) {
     assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
   });
 }
+
+// Sixth review pass on #3852: a statement end or a closing block makes an
+// earlier comparison opener stale, and the rows of the second and third passes
+// must hold under the standalone-mirror rule too.
+const statementBoundaryRows: { name: string; source: string }[] = [
+  {
+    name: 'a statement ended by a semicolon before a comparison chain',
+    source: "const x = a<\n  b;\n> {} / /* import('left-pad') */ 2;\n",
+  },
+  {
+    name: 'a closing block before a comparison chain',
+    source:
+      "function f() {\n  const x = a<\n    b\n  }\n}\n> {} / /* import('left-pad') */ 2;\n",
+  },
+];
+
+for (const row of statementBoundaryRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
+
+const mirrorOfRow = (source: string): string =>
+  source
+    .replaceAll("'yaml'", "'./helper.mjs'")
+    .replaceAll("'left-pad'", "'./helper.mjs'");
+
+for (const row of [
+  ...statementBoundaryRows,
+  ...reviewSecondRows,
+  ...reviewThirdRows,
+]) {
+  test(`the standalone-mirror rule reads ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', mirrorOfRow(row.source)),
+    );
+    assert.deepEqual(mirrorImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the standalone-mirror rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        `${mirrorOfRow(row.source)}import bare from './helper.mjs';\n`,
+      ),
+    );
+    const lines = mirrorImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /found: \.\/helper\.mjs$/);
+  });
+}

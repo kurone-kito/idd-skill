@@ -313,6 +313,8 @@ function scanComments(source) {
     let codeNestingDepth = 0;
     const pendingConditionalDepths = [];
     const openComparisonAngles = [];
+    // The nesting depth at which each opener above was recorded.
+    const openComparisonAngleDepths = [];
     let possiblePostfixUpdate = false;
     let lineBreakSinceCode = false;
     let pendingClassExpressionBody = null;
@@ -1330,6 +1332,7 @@ function scanComments(source) {
             lineEndsAfterBlanks(source, index + 1)
           ) {
             openComparisonAngles.push(index);
+            openComparisonAngleDepths.push(codeNestingDepth);
           }
         }
         if (scanningFunctionReturnType) {
@@ -1364,6 +1367,7 @@ function scanComments(source) {
         // type-parameter list (`class A<\n  T,\n  U\n> {}`), which the
         // same-line lookahead cannot close. On one line it is a comparison.
         const opener = openComparisonAngles.pop();
+        openComparisonAngleDepths.pop();
         angleIsComparison =
           opener === undefined ||
           !/[\n\r\u2028\u2029]/.test(source.slice(opener, index)) ||
@@ -1441,6 +1445,7 @@ function scanComments(source) {
       if (ch === ';') {
         // A statement ends every pending multi-line type-parameter opener.
         openComparisonAngles.length = 0;
+        openComparisonAngleDepths.length = 0;
       }
       if (ch === '?') {
         const afterQuestion = source[index + 1];
@@ -1463,6 +1468,18 @@ function scanComments(source) {
         codeNestingDepth += 1;
       } else if (ch === ')' || ch === ']' || ch === '}') {
         codeNestingDepth = Math.max(0, codeNestingDepth - 1);
+        if (ch === '}') {
+          // A closing block ends the statements it held, so openers recorded
+          // inside it are stale. Openers outside it, such as one inside a
+          // type list that holds an object type, stay.
+          while (
+            openComparisonAngleDepths.length > 0 &&
+            (openComparisonAngleDepths.at(-1) ?? -1) > codeNestingDepth
+          ) {
+            openComparisonAngleDepths.pop();
+            openComparisonAngles.pop();
+          }
+        }
       }
       recordCodeChar(ch, index);
       if (!/\s/.test(ch)) {
