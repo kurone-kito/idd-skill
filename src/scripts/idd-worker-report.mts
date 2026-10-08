@@ -1,0 +1,647 @@
+#!/usr/bin/env node
+// idd-generated-from: src/scripts/idd-worker-report.mts
+//
+// The scripts/idd-worker-report.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
+//
+// Local store for a worker's final report (issue #3836, roadmap #3834). An
+// orchestrator that disposes of each worker once its outcome is verified
+// loses whatever the worker did not post to its issue or pull request: how
+// many review rounds it ran, where it stalled, where it left the documented
+// procedure, which instruction text caused friction, and which follow-up
+// issues it filed. `append` validates one record against
+// `schemas/worker-report.schema.json` and appends it as one JSONL line under
+// the per-user state root; `summary` reads the store back. Nothing is ever
+// posted to GitHub, and this helper makes no `gh` call.
+//
+// Concurrency: the duplicate check and the write happen together under an
+// exclusive lock file next to the store (`O_EXCL`). A holder that dies leaves
+// a lock that goes stale after `LOCK_STALE_MS` and is taken over by a waiter.
+// The takeover is a rename followed by an unlink, so two waiters cannot both
+// delete the same lock, but a waiter that judged the lock stale just before
+// its holder finished can still remove a fresh one. Residual risk: two
+// writers hold the lock at once. The line is a single `O_APPEND` write, so
+// the worst outcome is a duplicate row, never a torn line.
+
+import { randomUUID } from 'node:crypto';
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, posix, win32 } from 'node:path';
+import { parseCliArgs } from './cli-args.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  type HelperCliResult,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
+import { loadJson, validate } from './validate-schemas.mts';
+
+const SCHEMA_PATH = 'schemas/worker-report.schema.json';
+
+// Loaded once: `summary` validates every stored line.
+let cachedSchema: unknown;
+
+/** A lock older than this is treated as left behind by a dead holder. */
+const LOCK_STALE_MS = 5_000;
+/** Longer than the stale age, so one dead holder never fails every append. */
+const LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
+const LOCK_RETRY_MS = 25;
+/**
+ * Errors from the exclusive create that mean another process holds the lock
+ * (or, on Windows, is still deleting the previous one), so the loop retries
+ * within its deadline. Anything else is a real failure and is thrown.
+ */
+const RETRYABLE_OPEN_CODES: ReadonlySet<string> = new Set(
+  process.platform === 'win32'
+    ? ['EEXIST', 'EPERM', 'EACCES', 'EBUSY']
+    : ['EEXIST'],
+);
+const DIRECTORY_MODE = 0o700;
+const FILE_MODE = 0o600;
+/** RFC 3339 date-time, the shape the schema requires of its timestamps. */
+const TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+
+/** How many `frictions[].file` values `summary` lists. */
+const FRICTION_FILE_LIMIT = 10;
+
+const OUTCOMES = [
+  'merged',
+  'handed-off',
+  'held',
+  'abandoned',
+  'failed',
+] as const;
+
+export type WorkerReportOutcome = (typeof OUTCOMES)[number];
+
+export type WorkerReportHarness =
+  | 'claude-code'
+  | 'codex-cli'
+  | 'opencode'
+  | 'grok-build'
+  | 'cursor-cli'
+  | 'copilot-cli'
+  | 'antigravity-cli'
+  | 'other';
+
+/** One `stalls` or `deviations` entry. */
+export interface WorkerReportNote {
+  phase: string;
+  summary: string;
+}
+
+/** One `frictions` entry: a note that may name the instruction or doc path. */
+export interface WorkerReportFriction extends WorkerReportNote {
+  file?: string;
+}
+
+/** One line of the worker-report store (`schemas/worker-report.schema.json`). */
+export interface WorkerReport {
+  schemaVersion: 1;
+  /** `owner/repo#number`. */
+  issue: string;
+  /** `owner/repo#number`, or `null` when the worker opened no pull request. */
+  pullRequest: string | null;
+  claimId: string;
+  harness: WorkerReportHarness;
+  workerHandle: string;
+  /** The last phase the worker completed, for example `F4` or `F2.5`. */
+  terminalPhase: string;
+  outcome: WorkerReportOutcome;
+  verifiedAt: string;
+  recordedAt: string;
+  vendorSessionId?: string | null;
+  reviewRounds?: number;
+  stalls?: WorkerReportNote[];
+  deviations?: WorkerReportNote[];
+  frictions?: WorkerReportFriction[];
+  followUps?: string[];
+}
+
+export interface AppendResult {
+  status: 'appended' | 'duplicate';
+  store: string;
+}
+
+export interface WorkerReportSummary {
+  store: string;
+  since: string | null;
+  total: number;
+  /** Lines that were not valid JSON or did not match the schema. */
+  invalidLines: number;
+  outcomes: Record<WorkerReportOutcome, number>;
+  reviewRounds: {
+    /** Reports that carry `reviewRounds`. */
+    recorded: number;
+    /** Report count by round count, ascending by round. */
+    distribution: Record<string, number>;
+  };
+  frictionFiles: { file: string; count: number }[];
+}
+
+interface LockOptions {
+  staleMs: number;
+  timeoutMs: number;
+  retryMs: number;
+}
+
+const DEFAULT_LOCK_OPTIONS: LockOptions = {
+  staleMs: LOCK_STALE_MS,
+  timeoutMs: LOCK_ACQUIRE_TIMEOUT_MS,
+  retryMs: LOCK_RETRY_MS,
+};
+
+// Flag-spec keys stay the dashed literal on purpose: the flag-name checks scan
+// this file's compiled .mjs source text for quoted flag literals. Declared
+// above the import.meta.main trigger so it is initialized when runCli() runs.
+const WORKER_REPORT_FLAG_SPEC = {
+  '--file': { type: 'string' },
+  '--stdin': { type: 'boolean', default: false },
+  '--since': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-worker-report', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// State root and store path
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-user state base, resolved like `defaultLoadControlDirectory` in
+ * `github-api-load-control.mts`: an absolute `XDG_STATE_HOME`, else
+ * `~/.local/state`; on Windows an absolute `LOCALAPPDATA`, else
+ * `~/AppData/Local`. A relative value is ignored, because it would resolve
+ * against each caller's working directory and split the store across
+ * worktrees. Kept as its own copy so this helper does not pull the
+ * 1400-line load-control module into a vendored bundle; a test pins the two
+ * to the same base.
+ */
+// audit:ignore-dead-export: reached in production through resolveWorkerReportStore; exported so the platform cases are unit-tested (issue #3836)
+export function resolveStateBase(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir(),
+): string {
+  const pathApi = platform === 'win32' ? win32 : posix;
+  const absolute = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (!trimmed) return undefined;
+    return pathApi.isAbsolute(trimmed) ? trimmed : undefined;
+  };
+  if (platform === 'win32') {
+    return (
+      absolute(env.LOCALAPPDATA) ?? pathApi.join(homeDir, 'AppData', 'Local')
+    );
+  }
+  return (
+    absolute(env.XDG_STATE_HOME) ?? pathApi.join(homeDir, '.local', 'state')
+  );
+}
+
+/** `<state base>/idd-skill/worker-reports/reports.jsonl`. */
+// audit:ignore-dead-export: reached in production through runCli; exported so the path is unit-tested (issue #3836)
+export function resolveWorkerReportStore(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir(),
+): string {
+  const pathApi = platform === 'win32' ? win32 : posix;
+  return pathApi.join(
+    resolveStateBase(env, platform, homeDir),
+    'idd-skill',
+    'worker-reports',
+    'reports.jsonl',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+/** Schema errors for one candidate record; an empty list means valid. */
+export function validateWorkerReport(record: unknown): string[] {
+  cachedSchema ??= loadJson(SCHEMA_PATH);
+  return validate(record, cachedSchema);
+}
+
+// ---------------------------------------------------------------------------
+// Lock
+// ---------------------------------------------------------------------------
+
+function errorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function lockIsStale(lockPath: string, staleMs: number): boolean {
+  try {
+    return Date.now() - statSync(lockPath).mtimeMs > staleMs;
+  } catch {
+    // Gone or unreadable: not stale, so the caller retries the create.
+    return false;
+  }
+}
+
+/**
+ * Move the stale lock aside, then delete it. Only one waiter's rename can
+ * succeed. Returns true when the lock is gone (renamed by this call, or
+ * already removed by another waiter), false when it is still in the way, so
+ * the caller falls back to the bounded wait instead of spinning.
+ */
+function takeOverLock(lockPath: string): boolean {
+  const graveyard = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
+  try {
+    renameSync(lockPath, graveyard);
+  } catch (error) {
+    return errorCode(error) === 'ENOENT';
+  }
+  try {
+    unlinkSync(graveyard);
+  } catch {
+    // A leftover graveyard file is harmless; the next takeover uses a new name.
+  }
+  return true;
+}
+
+/** Create the lock exclusively; returns the token that proves ownership. */
+function acquireLock(lockPath: string, options: LockOptions): string {
+  const token = randomUUID();
+  const deadline = Date.now() + options.timeoutMs;
+  let lastCode = 'EEXIST';
+  for (;;) {
+    let fd: number | undefined;
+    try {
+      fd = openSync(lockPath, 'wx', FILE_MODE);
+    } catch (error) {
+      lastCode = errorCode(error) ?? '';
+      if (!RETRYABLE_OPEN_CODES.has(lastCode)) throw error;
+    }
+    if (fd !== undefined) {
+      try {
+        writeSync(
+          fd,
+          JSON.stringify({
+            pid: process.pid,
+            token,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      } catch (error) {
+        // Do not leave an empty lock that blocks every other writer.
+        try {
+          closeSync(fd);
+        } catch {
+          // The lock removal below is what matters.
+        }
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // The stale-age takeover covers anything left behind.
+        }
+        throw error;
+      }
+      closeSync(fd);
+      return token;
+    }
+    if (lockIsStale(lockPath, options.staleMs) && takeOverLock(lockPath)) {
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `could not acquire the lock ${lockPath} within ${options.timeoutMs} ms (last error ${lastCode})`,
+      );
+    }
+    sleepSync(options.retryMs);
+  }
+}
+
+/** Remove the lock only while it is still ours. */
+function releaseLock(lockPath: string, token: string): void {
+  try {
+    const body = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+      token?: unknown;
+    };
+    if (body.token !== token) return;
+    unlinkSync(lockPath);
+  } catch (error) {
+    // Already gone, replaced, or briefly held open by another process on
+    // Windows: the stale-age takeover covers anything left behind.
+    const code = errorCode(error);
+    if (code === 'ENOENT' || code === 'EPERM' || code === 'EBUSY') return;
+    if (error instanceof SyntaxError) return;
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
+
+function duplicateKey(record: {
+  claimId?: unknown;
+  workerHandle?: unknown;
+  terminalPhase?: unknown;
+}): string {
+  return JSON.stringify([
+    record.claimId,
+    record.workerHandle,
+    record.terminalPhase,
+  ]);
+}
+
+function readStore(file: string): string {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return '';
+    throw error;
+  }
+}
+
+function parseLines(content: string): unknown[] {
+  const parsed: unknown[] = [];
+  for (const line of content.split('\n')) {
+    if (line.trim() === '') continue;
+    try {
+      parsed.push(JSON.parse(line));
+    } catch {
+      parsed.push(undefined);
+    }
+  }
+  return parsed;
+}
+
+/**
+ * Validate `record`, then append it as one line unless a line with the same
+ * `claimId`, `workerHandle` and `terminalPhase` already exists. Throws
+ * (writing nothing and creating no directory) when the record is invalid.
+ * The caller's record is stored verbatim: nothing is stamped or rewritten.
+ */
+export function appendWorkerReport(
+  file: string,
+  record: unknown,
+  lockOptions: Partial<LockOptions> = {},
+): AppendResult {
+  const errors = validateWorkerReport(record);
+  if (errors.length > 0) {
+    throw markCliUsageError(
+      new Error(`record fails schema validation: ${errors.join('; ')}`),
+    );
+  }
+  const options = { ...DEFAULT_LOCK_OPTIONS, ...lockOptions };
+  mkdirSync(dirname(file), {
+    recursive: true,
+    mode: DIRECTORY_MODE,
+  });
+  const lockPath = `${file}.lock`;
+  const token = acquireLock(lockPath, options);
+  try {
+    const content = readStore(file);
+    const wanted = duplicateKey(record as WorkerReport);
+    for (const existing of parseLines(content)) {
+      if (
+        typeof existing === 'object' &&
+        existing !== null &&
+        duplicateKey(existing as Partial<WorkerReport>) === wanted
+      ) {
+        return { status: 'duplicate', store: file };
+      }
+    }
+    // A writer that died mid-line leaves no trailing newline; start a fresh
+    // line so the new record is not glued onto the torn one.
+    const prefix = content !== '' && !content.endsWith('\n') ? '\n' : '';
+    appendFileSync(file, `${prefix}${JSON.stringify(record)}\n`, {
+      mode: FILE_MODE,
+    });
+    return { status: 'appended', store: file };
+  } finally {
+    releaseLock(lockPath, token);
+  }
+}
+
+/** Counts over the store; read-only, never takes the lock or creates a path. */
+export function summarizeWorkerReports(
+  file: string,
+  since: string | null = null,
+): WorkerReportSummary {
+  const sinceMs = since === null ? null : Date.parse(since);
+  const outcomes = Object.fromEntries(
+    OUTCOMES.map((outcome) => [outcome, 0]),
+  ) as Record<WorkerReportOutcome, number>;
+  const rounds = new Map<number, number>();
+  const frictionFiles = new Map<string, number>();
+  let total = 0;
+  let invalidLines = 0;
+  let recorded = 0;
+  for (const entry of parseLines(readStore(file))) {
+    if (entry === undefined || validateWorkerReport(entry).length > 0) {
+      invalidLines += 1;
+      continue;
+    }
+    const report = entry as WorkerReport;
+    if (sinceMs !== null && Date.parse(report.recordedAt) < sinceMs) continue;
+    total += 1;
+    outcomes[report.outcome] += 1;
+    if (report.reviewRounds !== undefined) {
+      recorded += 1;
+      rounds.set(
+        report.reviewRounds,
+        (rounds.get(report.reviewRounds) ?? 0) + 1,
+      );
+    }
+    for (const friction of report.frictions ?? []) {
+      if (friction.file === undefined) continue;
+      frictionFiles.set(
+        friction.file,
+        (frictionFiles.get(friction.file) ?? 0) + 1,
+      );
+    }
+  }
+  const distribution: Record<string, number> = {};
+  for (const round of [...rounds.keys()].sort((a, b) => a - b)) {
+    distribution[String(round)] = rounds.get(round) ?? 0;
+  }
+  return {
+    store: file,
+    since,
+    total,
+    invalidLines,
+    outcomes,
+    reviewRounds: { recorded, distribution },
+    frictionFiles: [...frictionFiles.entries()]
+      .map(([path, count]) => ({ file: path, count }))
+      .sort(
+        (a, b) =>
+          b.count - a.count || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0),
+      )
+      .slice(0, FRICTION_FILE_LIMIT),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+function readRecordInput(file: string | undefined, stdin: boolean): unknown {
+  let text: string;
+  try {
+    text = stdin
+      ? readFileSync(0, 'utf8')
+      : readFileSync(file as string, 'utf8');
+  } catch (error) {
+    throw markCliUsageError(
+      new Error(
+        `cannot read the record from ${stdin ? 'stdin' : (file as string)}: ${(error as Error).message}`,
+      ),
+    );
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw markCliUsageError(
+      new Error('the record is not valid JSON (expected one JSON object)'),
+    );
+  }
+}
+
+function isModeWord(token: string): boolean {
+  return token === 'append' || token === 'summary';
+}
+
+function runCli(): HelperCliResult {
+  const argv = process.argv.slice(2);
+  const first = argv[0];
+  if (first === undefined) {
+    throw markCliUsageError(
+      new Error('a mode is required: append or summary (see --help)'),
+    );
+  }
+  // A leading flag (including --help and any unknown one) goes straight to
+  // the shared parser; otherwise the first token is the mode word.
+  const modeWord = first.startsWith('-') ? undefined : first;
+  let parsed: ReturnType<typeof parseCliArgs>;
+  try {
+    parsed = parseCliArgs(
+      modeWord === undefined ? argv : argv.slice(1),
+      WORKER_REPORT_FLAG_SPEC,
+    );
+  } catch (error) {
+    const late = modeWord === undefined ? argv.find(isModeWord) : undefined;
+    if (
+      late !== undefined &&
+      (error as Error).message === `unknown argument: ${late}`
+    ) {
+      throw markCliUsageError(
+        new Error(`put the mode word first: ${late} [flags]`),
+      );
+    }
+    throw error;
+  }
+  const { values, help } = parsed;
+  if (help) {
+    printHelp();
+    return 0;
+  }
+  if (modeWord === undefined) {
+    throw markCliUsageError(
+      new Error('a mode is required before any flag: append or summary'),
+    );
+  }
+  const file = typeof values.file === 'string' ? values.file : undefined;
+  const stdin = values.stdin === true;
+  const since = typeof values.since === 'string' ? values.since : undefined;
+  if (modeWord === 'append') {
+    if (since !== undefined) {
+      throw markCliUsageError(new Error('--since applies to summary only'));
+    }
+    if ((file === undefined) === !stdin) {
+      throw markCliUsageError(
+        new Error('append needs exactly one of --file <path> or --stdin'),
+      );
+    }
+    const record = readRecordInput(file, stdin);
+    const result = appendWorkerReport(resolveWorkerReportStore(), record);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return 0;
+  }
+  if (modeWord === 'summary') {
+    if (file !== undefined || stdin) {
+      throw markCliUsageError(
+        new Error('--file and --stdin apply to append only'),
+      );
+    }
+    if (
+      since !== undefined &&
+      (!TIMESTAMP_PATTERN.test(since) || Number.isNaN(Date.parse(since)))
+    ) {
+      throw markCliUsageError(
+        new Error(`--since must be an ISO 8601 date-time, got "${since}"`),
+      );
+    }
+    const summary = summarizeWorkerReports(
+      resolveWorkerReportStore(),
+      since ?? null,
+    );
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+    return 0;
+  }
+  throw markCliUsageError(
+    new Error(`unknown mode "${modeWord}": expected append or summary`),
+  );
+}
+
+function printHelp(): void {
+  process.stdout.write(`Usage:
+  node scripts/idd-worker-report.mjs append --file <path>
+  node scripts/idd-worker-report.mjs append --stdin
+  node scripts/idd-worker-report.mjs summary [--since <ISO8601>]
+
+Local store for a worker's final report. Nothing is posted to GitHub.
+
+  append             Validate one JSON record against
+                     schemas/worker-report.schema.json (it must carry
+                     schemaVersion 1 and every other required field; it is
+                     stored verbatim, nothing is stamped), then append it as one
+                     line to idd-skill/worker-reports/reports.jsonl under the
+                     per-user state root. Invalid input exits 1 and writes
+                     nothing. A record with the same claimId, workerHandle and
+                     terminalPhase as an existing line is reported as
+                     {"status":"duplicate"} (exit 0) and not appended.
+  summary            Print outcome counts, the review-round distribution and
+                     the most frequent frictions files. Never writes.
+
+  --file <path>      append: read the record from this file.
+  --stdin            append: read the record from standard input.
+  --since <ISO8601>  summary: only count records whose recordedAt is at or
+                     after this time. An ISO 8601 date-time with an offset,
+                     such as 2026-10-08T02:00:00Z or 2026-10-08T11:00:00+09:00.
+  --help, -h         Show this help.
+
+State root: an absolute XDG_STATE_HOME, else ~/.local/state; on Windows an
+absolute LOCALAPPDATA, else ~/AppData/Local. A relative value is ignored.
+`);
+}

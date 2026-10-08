@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "issue": "kurone-kito/idd-skill#3836",
+  "pullRequest": "kurone-kito/idd-skill#3850",
+  "claimId": "e6afe472-bb40-4395-9019-7723167c6d57",
+  "harness": "claude-code",
+  "workerHandle": "agent-a1b2c3",
+  "terminalPhase": "F4",
+  "outcome": "merged",
+  "verifiedAt": "2026-10-08T12:40:00Z",
+  "recordedAt": "2026-10-08T12:41:30Z",
+  "vendorSessionId": "sess_opaque_1",
+  "reviewRounds": 2,
+  "stalls": [
+    {
+      "phase": "D",
+      "summary": "CI queue delayed the first check run by ten minutes."
+    }
+  ],
+  "deviations": [
+    {
+      "phase": "E4",
+      "summary": "Replied to a review thread before the watermark was posted."
+    }
+  ],
+  "frictions": [
+    {
+      "phase": "B1",
+      "summary": "The worktree naming rule was easy to misread.",
+      "file": ".github/instructions/idd-work.instructions.md"
+    }
+  ],
+  "followUps": [
+    "kurone-kito/idd-skill#3851"
+  ]
+}

@@ -684,6 +684,18 @@
           "kind": "usage"
         }
       }
+    },
+    "idd-worker-report.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
     }
   },
   "extraScenarios": {

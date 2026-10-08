@@ -633,6 +633,16 @@ const HELPER_COMMANDS = [
     description:
       'Fetch-driven hide-on-supersede sweep for authoring-owner / authoring-publication-intent markers: fetches one or more issues via GraphQL, classifies and filters superseded candidates, and minimizes them via minimize-superseded-markers.mjs.',
   },
+  {
+    id: 'worker-report',
+    scriptName: 'idd:worker-report',
+    binName: 'idd-worker-report',
+    entryPath: 'scripts/idd-worker-report.mjs',
+    vendoredCommand: 'node scripts/idd-worker-report.mjs',
+    description:
+      "Validate and append a worker's final report to the local per-user store, or summarize that store; nothing is posted to GitHub.",
+    contractPaths: ['schemas/worker-report.schema.json'],
+  },
 ];
 /**
  * Resolve the invocation string for one helper command under one

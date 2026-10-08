@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/worker-report.schema.json",
+  "title": "Worker final report",
+  "description": "One line of the local worker-report store. An orchestrator records it after verifying a worker's outcome against GitHub and before disposing of the worker, so what the worker did not post to its issue or pull request is not lost. Stored locally and never posted to GitHub by default.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "issue",
+    "pullRequest",
+    "claimId",
+    "harness",
+    "workerHandle",
+    "terminalPhase",
+    "outcome",
+    "verifiedAt",
+    "recordedAt"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [
+        1
+      ],
+      "description": "Literal schema version. Always 1 for this contract."
+    },
+    "issue": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}#[1-9][0-9]{0,9}$",
+      "description": "The issue the worker handled, as owner/repo#number."
+    },
+    "pullRequest": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}#[1-9][0-9]{0,9}$",
+      "description": "The worker's pull request as owner/repo#number, or null when it opened none."
+    },
+    "claimId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\s]{1,200}$",
+      "description": "The IDD claim-id the worker held."
+    },
+    "harness": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex-cli",
+        "opencode",
+        "grok-build",
+        "cursor-cli",
+        "copilot-cli",
+        "antigravity-cli",
+        "other"
+      ],
+      "description": "The agent harness that ran the worker. Follows the rows of the roadmap's worker mechanism table, not the source-repository-only vendor values of token-cost-event."
+    },
+    "workerHandle": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[\\s\\S]{1,200}$",
+      "description": "The harness's own identifier for this worker."
+    },
+    "terminalPhase": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
+      "description": "The last phase the worker completed, for example F4 or F2.5."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "merged",
+        "handed-off",
+        "held",
+        "abandoned",
+        "failed"
+      ],
+      "description": "How the worker's run ended, as verified by the orchestrator."
+    },
+    "verifiedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "When the orchestrator checked the outcome against GitHub."
+    },
+    "recordedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "When this record was written."
+    },
+    "vendorSessionId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[^\\s/\\\\]{1,200}$",
+      "description": "Opaque vendor session id when known. In this repository it joins the token-cost events, matched on claimId. Never a filesystem path."
+    },
+    "reviewRounds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many review rounds the worker ran."
+    },
+    "stalls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "summary"
+        ],
+        "properties": {
+          "phase": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
+            "description": "Phase id the entry belongs to, for example F4 or E4."
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[\\s\\S]{1,500}$",
+            "description": "What happened, in at most 500 characters."
+          }
+        }
+      },
+      "description": "Where the worker stalled."
+    },
+    "deviations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "summary"
+        ],
+        "properties": {
+          "phase": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
+            "description": "Phase id the entry belongs to, for example F4 or E4."
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[\\s\\S]{1,500}$",
+            "description": "What happened, in at most 500 characters."
+          }
+        }
+      },
+      "description": "Where the worker left the documented procedure."
+    },
+    "frictions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "summary"
+        ],
+        "properties": {
+          "phase": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,31}$",
+            "description": "Phase id the entry belongs to, for example F4 or E4."
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[\\s\\S]{1,500}$",
+            "description": "What happened, in at most 500 characters."
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\r\\n]{1,300}$",
+            "description": "The instruction or doc path involved."
+          }
+        }
+      },
+      "description": "Instruction text that caused friction."
+    },
+    "followUps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}#[1-9][0-9]{0,9}$"
+      },
+      "description": "Follow-up issues the worker filed, as owner/repo#number."
+    }
+  }
+}

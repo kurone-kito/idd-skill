@@ -1,0 +1,748 @@
+import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { defaultLoadControlDirectory } from '../src/scripts/github-api-load-control.mts';
+import {
+  appendWorkerReport,
+  resolveStateBase,
+  resolveWorkerReportStore,
+  summarizeWorkerReports,
+  validateWorkerReport,
+  type WorkerReport,
+} from '../src/scripts/idd-worker-report.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const CLI_PATH = join(REPO_ROOT, 'scripts/idd-worker-report.mjs');
+
+interface Sandbox {
+  root: string;
+  state: string;
+  home: string;
+  store: string;
+  storeDirectory: string;
+}
+
+/**
+ * A throwaway per-user state root that is removed afterwards. Every spawn
+ * overrides all four variables a state root can come from, so nothing can
+ * fall back to the real home directory, and the `tests/isolate-state.mts`
+ * leak scan (which only watches its own throwaway root) never sees a file.
+ */
+function makeSandbox(): Sandbox {
+  const root = mkdtempSync(join(tmpdir(), 'idd-worker-report-'));
+  const state = join(root, 'state');
+  const home = join(root, 'home');
+  mkdirSync(home);
+  const storeDirectory = join(state, 'idd-skill', 'worker-reports');
+  return {
+    root,
+    state,
+    home,
+    store: join(storeDirectory, 'reports.jsonl'),
+    storeDirectory,
+  };
+}
+
+function cleanup(sandbox: Sandbox): void {
+  rmSync(sandbox.root, { recursive: true, force: true });
+}
+
+function sandboxEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    XDG_STATE_HOME: sandbox.state,
+    LOCALAPPDATA: sandbox.state,
+    HOME: sandbox.home,
+    USERPROFILE: sandbox.home,
+  };
+}
+
+function runCli(
+  sandbox: Sandbox,
+  args: string[],
+  input?: string,
+): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+    encoding: 'utf8',
+    env: sandboxEnv(sandbox),
+    input,
+    timeout: 60_000,
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+interface ChildResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Start the CLI without waiting, feeding `input` on stdin. */
+function startCli(
+  sandbox: Sandbox,
+  args: string[],
+  input: string,
+): Promise<ChildResult> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI_PATH, ...args], {
+      env: sandboxEnv(sandbox),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+    // A child that exits before reading stdin must fail the assertions, not
+    // crash the runner with an unhandled EPIPE.
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
+}
+
+function report(overrides: Partial<WorkerReport> = {}): WorkerReport {
+  return {
+    schemaVersion: 1,
+    issue: 'kurone-kito/idd-skill#3836',
+    pullRequest: 'kurone-kito/idd-skill#3850',
+    claimId: 'e6afe472-bb40-4395-9019-7723167c6d57',
+    harness: 'claude-code',
+    workerHandle: 'agent-a1b2c3',
+    terminalPhase: 'F4',
+    outcome: 'merged',
+    verifiedAt: '2026-10-08T12:40:00Z',
+    recordedAt: '2026-10-08T12:41:30Z',
+    ...overrides,
+  };
+}
+
+function storeLines(sandbox: Sandbox): string[] {
+  return readFileSync(sandbox.store, 'utf8')
+    .split('\n')
+    .filter((line) => line !== '');
+}
+
+test('a valid record is appended once as one JSON line', () => {
+  const sandbox = makeSandbox();
+  try {
+    const record = report();
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(record),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      status: 'appended',
+      store: sandbox.store,
+    });
+    assert.deepEqual(
+      storeLines(sandbox).map((line) => JSON.parse(line)),
+      [record],
+    );
+    if (process.platform !== 'win32') {
+      assert.equal(statSync(sandbox.store).mode & 0o777, 0o600);
+      assert.equal(statSync(sandbox.storeDirectory).mode & 0o777, 0o700);
+    }
+    assert.equal(
+      existsSync(`${sandbox.store}.lock`),
+      false,
+      'the lock file must be released',
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('append reads the record from --file', () => {
+  const sandbox = makeSandbox();
+  try {
+    const file = join(sandbox.root, 'record.json');
+    writeFileSync(file, JSON.stringify(report()));
+    const result = runCli(sandbox, ['append', '--file', file]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(storeLines(sandbox).length, 1);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('an invalid record is rejected and nothing is written', () => {
+  const sandbox = makeSandbox();
+  try {
+    const invalid = { ...report(), outcome: 'done', branch: 'x' };
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(invalid),
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /record fails schema validation/);
+    assert.match(result.stderr, /"done" not in enum/);
+    assert.equal(
+      existsSync(join(sandbox.state, 'idd-skill')),
+      false,
+      'a rejected record must not even create the directory',
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('input that is not JSON is a usage error and writes nothing', () => {
+  const sandbox = makeSandbox();
+  try {
+    const result = runCli(sandbox, ['append', '--stdin'], 'not json');
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /not valid JSON/);
+    assert.equal(existsSync(join(sandbox.state, 'idd-skill')), false);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('the same claimId, workerHandle and terminalPhase is a duplicate; a different workerHandle is appended', () => {
+  const sandbox = makeSandbox();
+  try {
+    const first = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.equal(first.status, 0, first.stderr);
+    // A retried append, even stamped with a later recordedAt, is a duplicate.
+    const retried = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report({ recordedAt: '2026-10-08T13:00:00Z' })),
+    );
+    assert.equal(retried.status, 0, retried.stderr);
+    assert.equal(JSON.parse(retried.stdout).status, 'duplicate');
+    assert.equal(storeLines(sandbox).length, 1);
+    // A replacement worker on the same claim gets its own record.
+    const replacement = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report({ workerHandle: 'agent-replacement' })),
+    );
+    assert.equal(JSON.parse(replacement.stdout).status, 'appended');
+    // A different terminal phase is a different record too.
+    const otherPhase = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report({ terminalPhase: 'F2.5', outcome: 'handed-off' })),
+    );
+    assert.equal(JSON.parse(otherPhase.stdout).status, 'appended');
+    assert.equal(storeLines(sandbox).length, 3);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a relative XDG_STATE_HOME or LOCALAPPDATA is ignored', () => {
+  assert.equal(
+    resolveStateBase({ XDG_STATE_HOME: 'relative/state' }, 'linux', '/home/u'),
+    '/home/u/.local/state',
+  );
+  assert.equal(
+    resolveStateBase({ XDG_STATE_HOME: '  ' }, 'linux', '/home/u'),
+    '/home/u/.local/state',
+  );
+  assert.equal(
+    resolveStateBase({ XDG_STATE_HOME: '/var/state' }, 'linux', '/home/u'),
+    '/var/state',
+  );
+  assert.equal(
+    resolveStateBase({ LOCALAPPDATA: 'Local' }, 'win32', 'C:\\Users\\u'),
+    'C:\\Users\\u\\AppData\\Local',
+  );
+  assert.equal(
+    resolveStateBase(
+      { LOCALAPPDATA: 'D:\\Data\\Local' },
+      'win32',
+      'C:\\Users\\u',
+    ),
+    'D:\\Data\\Local',
+  );
+  assert.equal(
+    resolveWorkerReportStore({ XDG_STATE_HOME: '/var/state' }, 'linux', '/h'),
+    '/var/state/idd-skill/worker-reports/reports.jsonl',
+  );
+  assert.equal(
+    resolveWorkerReportStore(
+      { LOCALAPPDATA: 'D:\\Data\\Local' },
+      'win32',
+      'C:\\Users\\u',
+    ),
+    'D:\\Data\\Local\\idd-skill\\worker-reports\\reports.jsonl',
+  );
+});
+
+test('the state base matches the base github-api-load-control uses', () => {
+  const cases: [NodeJS.ProcessEnv, NodeJS.Platform][] = [
+    [{ XDG_STATE_HOME: '/var/state' }, 'linux'],
+    [{ XDG_STATE_HOME: 'relative' }, 'linux'],
+    [{}, 'linux'],
+    [{ LOCALAPPDATA: 'D:\\Data\\Local' }, 'win32'],
+  ];
+  for (const [env, platform] of cases) {
+    const loadControl = defaultLoadControlDirectory(env, platform);
+    // <base>/idd-skill/github-api-load-control
+    assert.equal(
+      dirname(dirname(loadControl)),
+      resolveStateBase(env, platform, homedir()),
+      `${platform} ${JSON.stringify(env)}`,
+    );
+  }
+});
+
+test('two concurrent appends produce two whole lines', async () => {
+  const sandbox = makeSandbox();
+  try {
+    const handles = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6'];
+    const results = await Promise.all(
+      handles.map(
+        (workerHandle) =>
+          new Promise<{ status: number | null; stderr: string }>((resolve) => {
+            const child = spawn(
+              process.execPath,
+              [CLI_PATH, 'append', '--stdin'],
+              { env: sandboxEnv(sandbox), stdio: ['pipe', 'ignore', 'pipe'] },
+            );
+            let stderr = '';
+            child.stderr.on('data', (chunk) => {
+              stderr += String(chunk);
+            });
+            child.on('close', (status) => resolve({ status, stderr }));
+            child.stdin.end(JSON.stringify(report({ workerHandle })));
+          }),
+      ),
+    );
+    for (const result of results) {
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const parsed = storeLines(sandbox).map(
+      (line) => JSON.parse(line) as WorkerReport,
+    );
+    assert.deepEqual(parsed.map((entry) => entry.workerHandle).sort(), handles);
+    assert.equal(existsSync(`${sandbox.store}.lock`), false);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('concurrent appends of the same record yield exactly one line', async () => {
+  const sandbox = makeSandbox();
+  try {
+    const input = JSON.stringify(report());
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        startCli(sandbox, ['append', '--stdin'], input),
+      ),
+    );
+    for (const result of results) {
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const statuses = results
+      .map((result) => JSON.parse(result.stdout).status as string)
+      .sort();
+    assert.deepEqual(statuses, [
+      'appended',
+      ...Array.from({ length: 7 }, () => 'duplicate'),
+    ]);
+    assert.equal(storeLines(sandbox).length, 1);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('an append waits for a fresh lock and completes once it is released', async () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    writeFileSync(lock, '{"pid":1,"token":"live","createdAt":"now"}');
+    const pending = startCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    const early = await Promise.race([
+      pending.then(() => 'finished'),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve('waiting'), 600),
+      ),
+    ]);
+    assert.equal(
+      early,
+      'waiting',
+      'the append must not finish without the lock',
+    );
+    assert.equal(existsSync(sandbox.store), false, 'must wait for the lock');
+    rmSync(lock);
+    const result = await pending;
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).status, 'appended');
+    assert.equal(storeLines(sandbox).length, 1);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a stale lock file is taken over', () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    writeFileSync(lock, '{"pid":1,"token":"dead","createdAt":"2000-01-01"}');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(storeLines(sandbox).length, 1);
+    assert.equal(existsSync(lock), false, 'the taken-over lock is released');
+    assert.deepEqual(
+      readdirSync(sandbox.storeDirectory).sort(),
+      ['reports.jsonl'],
+      'no graveyard file is left behind',
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a fresh lock held by someone else times out and nothing is written', () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    writeFileSync(lock, '{"pid":1,"token":"live","createdAt":"now"}');
+    assert.throws(
+      () =>
+        appendWorkerReport(sandbox.store, report(), {
+          timeoutMs: 150,
+          retryMs: 10,
+        }),
+      /could not acquire the lock/,
+    );
+    assert.equal(existsSync(sandbox.store), false);
+    assert.equal(
+      readFileSync(lock, 'utf8'),
+      '{"pid":1,"token":"live","createdAt":"now"}',
+      "another holder's lock is left alone",
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a partial last line is not glued onto the next record', () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    writeFileSync(
+      sandbox.store,
+      `${JSON.stringify(report())}\n{"schemaVersion":1,"is`,
+    );
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report({ workerHandle: 'agent-next' })),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const lines = storeLines(sandbox);
+    assert.equal(lines.length, 3);
+    assert.equal(JSON.parse(lines[2]).workerHandle, 'agent-next');
+    const summary = summarizeWorkerReports(sandbox.store);
+    assert.equal(summary.total, 2);
+    assert.equal(summary.invalidLines, 1);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('summary on an empty store reports zero and creates nothing', () => {
+  const sandbox = makeSandbox();
+  try {
+    const result = runCli(sandbox, ['summary']);
+    assert.equal(result.status, 0, result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.store, sandbox.store);
+    assert.equal(summary.total, 0);
+    assert.equal(summary.invalidLines, 0);
+    assert.deepEqual(summary.outcomes, {
+      merged: 0,
+      'handed-off': 0,
+      held: 0,
+      abandoned: 0,
+      failed: 0,
+    });
+    assert.deepEqual(summary.reviewRounds, { recorded: 0, distribution: {} });
+    assert.deepEqual(summary.frictionFiles, []);
+    assert.equal(existsSync(join(sandbox.state, 'idd-skill')), false);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('summary on a store with three records counts outcomes, rounds and friction files', () => {
+  const sandbox = makeSandbox();
+  try {
+    const friction = (file: string) => ({
+      phase: 'B1',
+      summary: 'Confusing wording.',
+      file,
+    });
+    const records: WorkerReport[] = [
+      report({
+        workerHandle: 'a',
+        reviewRounds: 2,
+        frictions: [friction('docs/a.md'), friction('docs/b.md')],
+        recordedAt: '2026-10-08T10:00:00Z',
+      }),
+      report({
+        workerHandle: 'b',
+        outcome: 'failed',
+        reviewRounds: 2,
+        frictions: [friction('docs/a.md'), { phase: 'C', summary: 'No file.' }],
+        recordedAt: '2026-10-08T11:00:00Z',
+      }),
+      report({
+        workerHandle: 'c',
+        outcome: 'handed-off',
+        reviewRounds: 5,
+        recordedAt: '2026-10-08T12:00:00Z',
+      }),
+    ];
+    for (const record of records) {
+      const appended = runCli(
+        sandbox,
+        ['append', '--stdin'],
+        JSON.stringify(record),
+      );
+      assert.equal(appended.status, 0, appended.stderr);
+    }
+    // A non-JSON line and a schema-invalid line are counted, not fatal.
+    writeFileSync(
+      sandbox.store,
+      `${readFileSync(sandbox.store, 'utf8')}garbage\n{"schemaVersion":2}\n`,
+    );
+    const summary = JSON.parse(runCli(sandbox, ['summary']).stdout);
+    assert.equal(summary.total, 3);
+    assert.equal(summary.invalidLines, 2);
+    assert.deepEqual(summary.outcomes, {
+      merged: 1,
+      'handed-off': 1,
+      held: 0,
+      abandoned: 0,
+      failed: 1,
+    });
+    assert.deepEqual(summary.reviewRounds, {
+      recorded: 3,
+      distribution: { '2': 2, '5': 1 },
+    });
+    assert.deepEqual(summary.frictionFiles, [
+      { file: 'docs/a.md', count: 2 },
+      { file: 'docs/b.md', count: 1 },
+    ]);
+    // --since filters on recordedAt.
+    const since = JSON.parse(
+      runCli(sandbox, ['summary', '--since', '2026-10-08T11:00:00Z']).stdout,
+    );
+    assert.equal(since.total, 2);
+    assert.equal(since.since, '2026-10-08T11:00:00Z');
+    assert.equal(since.outcomes.merged, 0);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('usage errors exit non-zero and create nothing', () => {
+  const sandbox = makeSandbox();
+  try {
+    const record = JSON.stringify(report());
+    const cases: { args: string[]; input?: string; message: RegExp }[] = [
+      { args: [], message: /a mode is required/ },
+      { args: ['--nope'], message: /unknown argument: --nope/ },
+      { args: ['--stdin'], message: /a mode is required before any flag/ },
+      { args: ['bogus-mode'], message: /unknown mode "bogus-mode"/ },
+      { args: ['append'], message: /exactly one of --file/ },
+      {
+        args: ['append', '--stdin', '--file', 'x.json'],
+        input: record,
+        message: /exactly one of --file/,
+      },
+      {
+        args: ['append', '--stdin', '--since', '2026-10-08T00:00:00Z'],
+        input: record,
+        message: /--since applies to summary only/,
+      },
+      { args: ['summary', '--stdin'], message: /append only/ },
+      { args: ['summary', '--since', 'yesterday'], message: /ISO 8601/ },
+      {
+        args: ['append', '--file', join(sandbox.root, 'missing.json')],
+        message: /cannot read the record/,
+      },
+    ];
+    for (const { args, input, message } of cases) {
+      const result = runCli(sandbox, args, input);
+      assert.notEqual(result.status, 0, `${args.join(' ')} should fail`);
+      assert.match(result.stderr, message, args.join(' '));
+    }
+    assert.equal(existsSync(join(sandbox.state, 'idd-skill')), false);
+    const help = runCli(sandbox, ['--help']);
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /append --file <path>/);
+    assert.equal(runCli(sandbox, ['append', '--help']).status, 0);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('validateWorkerReport accepts the valid fixture and rejects the invalid one', () => {
+  const read = (name: string): unknown =>
+    JSON.parse(readFileSync(join(REPO_ROOT, 'fixtures/schemas', name), 'utf8'));
+  assert.deepEqual(validateWorkerReport(read('worker-report.valid.json')), []);
+  const errors = validateWorkerReport(read('worker-report.invalid.json'));
+  assert.ok(errors.some((error) => error.includes('claimId')));
+  assert.ok(errors.some((error) => error.includes('"done" not in enum')));
+  assert.ok(errors.some((error) => error.includes('"branch" not allowed')));
+});
+
+test('a relative state variable makes the CLI fall back to the home directory', () => {
+  const sandbox = makeSandbox();
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_PATH, 'append', '--stdin'],
+      {
+        encoding: 'utf8',
+        input: JSON.stringify(report()),
+        env: {
+          ...sandboxEnv(sandbox),
+          XDG_STATE_HOME: 'relative-state',
+          LOCALAPPDATA: 'relative-state',
+        },
+        timeout: 60_000,
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const base =
+      process.platform === 'win32'
+        ? join(sandbox.home, 'AppData', 'Local')
+        : join(sandbox.home, '.local', 'state');
+    const store = join(base, 'idd-skill', 'worker-reports', 'reports.jsonl');
+    assert.equal(JSON.parse(result.stdout).store, store);
+    assert.equal(existsSync(store), true);
+    assert.equal(
+      existsSync(join(REPO_ROOT, 'relative-state')),
+      false,
+      'a relative value must not create a directory in the working tree',
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('--since compares instants, so an offset timestamp is placed correctly', () => {
+  const sandbox = makeSandbox();
+  try {
+    // 11:00 at +09:00 is 02:00 UTC.
+    const record = report({ recordedAt: '2026-10-08T11:00:00+09:00' });
+    assert.equal(
+      runCli(sandbox, ['append', '--stdin'], JSON.stringify(record)).status,
+      0,
+    );
+    const total = (since: string): number =>
+      JSON.parse(runCli(sandbox, ['summary', '--since', since]).stdout).total;
+    assert.equal(total('2026-10-08T02:00:00Z'), 1);
+    assert.equal(total('2026-10-08T02:00:01Z'), 0);
+    assert.equal(total('2026-10-08T11:00:00+09:00'), 1);
+    // A date without a time or offset is not accepted.
+    const dateOnly = runCli(sandbox, ['summary', '--since', '2026-10-08']);
+    assert.notEqual(dateOnly.status, 0);
+    assert.match(dateOnly.stderr, /ISO 8601/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a mode word after the flags gets a pointed error', () => {
+  const sandbox = makeSandbox();
+  try {
+    const result = runCli(sandbox, ['--file', 'x.json', 'append']);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /put the mode word first: append/);
+    const help = runCli(sandbox, ['--help', 'summary']);
+    assert.notEqual(help.status, 0);
+    assert.match(help.stderr, /put the mode word first: summary/);
+    // A different parse error is not rewritten.
+    const bogus = runCli(sandbox, ['--bogus', 'summary']);
+    assert.notEqual(bogus.status, 0);
+    assert.match(bogus.stderr, /unknown argument: --bogus/);
+    assert.doesNotMatch(bogus.stderr, /put the mode word first/);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('the schema accepts null where allowed and enforces the string bounds', () => {
+  const ok = (overrides: Partial<WorkerReport>): boolean =>
+    validateWorkerReport(report(overrides)).length === 0;
+  assert.equal(ok({ pullRequest: null }), true);
+  assert.equal(ok({ vendorSessionId: null }), true);
+  assert.equal(ok({ vendorSessionId: 'path/like' }), false);
+  const bounds: [string, (n: number) => Partial<WorkerReport>, number][] = [
+    ['claimId', (n) => ({ claimId: 'c'.repeat(n) }), 200],
+    ['workerHandle', (n) => ({ workerHandle: 'w'.repeat(n) }), 200],
+    ['terminalPhase', (n) => ({ terminalPhase: `F${'4'.repeat(n - 1)}` }), 32],
+    ['vendorSessionId', (n) => ({ vendorSessionId: 's'.repeat(n) }), 200],
+    [
+      'stalls summary',
+      (n) => ({ stalls: [{ phase: 'D', summary: 's'.repeat(n) }] }),
+      500,
+    ],
+    [
+      'frictions file',
+      (n) => ({
+        frictions: [{ phase: 'B1', summary: 'x', file: 'f'.repeat(n) }],
+      }),
+      300,
+    ],
+  ];
+  for (const [name, build, limit] of bounds) {
+    assert.equal(ok(build(limit)), true, `${name} at ${limit}`);
+    assert.equal(ok(build(limit + 1)), false, `${name} at ${limit + 1}`);
+  }
+  assert.equal(ok({ issue: 'owner/repo#0' }), false);
+  assert.equal(ok({ issue: 'owner/repo#12' }), true);
+  assert.equal(ok({ reviewRounds: -1 }), false);
+  assert.equal(ok({ reviewRounds: 0 }), true);
+});

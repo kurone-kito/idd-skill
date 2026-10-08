@@ -437,6 +437,7 @@ outcome path.
 | `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
 | `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                |
 | `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                               | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)        | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception                                                                                                                         |
+| `idd-worker-report.mjs`              | a missing or unknown mode, an unknown flag, a bad `--file`/`--stdin`/`--since` combination or value, or a record that is unreadable, not JSON, or fails the schema (exit `1`)                                                          | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception, including a store lock that could not be acquired (network-free)                                                       |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
 every `bin/idd-*.mjs` and checks this table mechanically against a
@@ -891,6 +892,13 @@ in this preamble, since the fallback differs per helper.
   is trusted executable configuration and can transmit the issue draft
   the caller sends it (referenced in
   [kurone-kito/idd-skill#3599](https://github.com/kurone-kito/idd-skill/issues/3599))
+- `scripts/idd-worker-report.mjs` for a local store of each worker's final
+  report (referenced in
+  [kurone-kito/idd-skill#3836](https://github.com/kurone-kito/idd-skill/issues/3836)):
+  `append` validates one record against `schemas/worker-report.schema.json`
+  and appends it as one line under the per-user state root, and `summary`
+  reads the store back. Network-free: it makes no `gh` call and posts
+  nothing to GitHub.
 - `scripts/authoring-owner-provenance.mjs` for the defer-source
   auto-release exception's provenance check
   (`skills/issue-authoring/references/contract.md`): computes the sha256
@@ -6843,6 +6851,89 @@ same as `AW4`/`AW5`.
   when first building the reserved-label guard's bot-login list and
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).
+
+### Worker final report store
+
+- Source repo / vendored-node commands:
+
+  ```sh
+  node scripts/idd-worker-report.mjs append --file <path>
+  node scripts/idd-worker-report.mjs append --stdin
+  node scripts/idd-worker-report.mjs summary [--since <ISO8601>]
+  ```
+
+- Package-manager command: run the profile-selected `idd:worker-report`
+  package script. The examples use `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:worker-report -- append --file <path>
+  npm run idd:worker-report -- summary [--since <ISO8601>]
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:worker-report`
+  command from the helper runtime manifest wiring above; the literal
+  invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-worker-report append --file <path>
+
+  npx --yes --package <helper-package-spec> \
+    idd-worker-report summary [--since <ISO8601>]
+  ```
+
+- Purpose: an orchestrator that disposes of each worker once its outcome
+  is verified keeps what the worker did not post to its issue or pull
+  request: review rounds, stalls, deviations from the documented
+  procedure, instruction text that caused friction, and the follow-up
+  issues it filed. The store is local to the operator; nothing is posted
+  to GitHub, and the helper makes no `gh` call.
+- Store: `idd-skill/worker-reports/reports.jsonl` under the per-user
+  state root, one JSON object per line. The root is an absolute
+  `XDG_STATE_HOME`, otherwise `~/.local/state`; on Windows an absolute
+  `LOCALAPPDATA`, otherwise `~/AppData/Local`. A relative value is ignored,
+  the same rule as the GitHub API load-control directory. The directory is
+  created on the first append with mode `0700` and the store with mode
+  `0600`, because records can hold friction text and session ids.
+- Record: `schemas/worker-report.schema.json` (schema version 1). Required
+  are `schemaVersion` (always `1`), `issue` and `pullRequest`
+  (`owner/repo#number`, the latter or `null`),
+  `claimId`, `harness` (`claude-code`, `codex-cli`, `opencode`,
+  `grok-build`, `cursor-cli`, `copilot-cli`, `antigravity-cli`, or `other`),
+  `workerHandle`, `terminalPhase`, `outcome` (`merged`, `handed-off`,
+  `held`, `abandoned`, or `failed`), `verifiedAt`, and `recordedAt`.
+  Optional are `vendorSessionId`, `reviewRounds`, `stalls`, `deviations`,
+  `frictions` (an entry may name the instruction or doc path in `file`),
+  and `followUps`. Every string is length-bounded. The helper stores the
+  record verbatim: it stamps no timestamp and adds no field, so the caller
+  supplies `schemaVersion` and both timestamps.
+- `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
+  record. An invalid record exits `1`, writes nothing, and creates no
+  directory. A record whose `claimId`, `workerHandle`, and `terminalPhase`
+  match an existing line is not appended and prints
+  `{"status":"duplicate"}` with exit `0`, so a retried append is safe,
+  while a replacement worker on the same claim has its own `workerHandle`
+  and gets its own record. A new line prints `{"status":"appended"}`.
+- `summary`: read-only; it takes no lock and creates nothing. It prints
+  JSON with the outcome counts (all five outcomes, zero-filled), the
+  distribution of `reviewRounds`, the ten most frequent `frictions`
+  `file` values, and `invalidLines`, the count of lines that are not valid
+  records. `--since <ISO8601>` keeps only records whose `recordedAt` is at
+  or after that instant; it takes a date-time with an offset, such as
+  `2026-10-08T02:00:00Z` or `2026-10-08T11:00:00+09:00`, not a bare date.
+- Concurrency: the duplicate check and the write happen together under an
+  exclusive lock file next to the store (`reports.jsonl.lock`, created
+  with `O_EXCL`). A waiter retries for up to ten seconds; a lock older than
+  five seconds is treated as left by a dead holder and taken over by
+  renaming it aside. A store whose last line has no trailing newline gets
+  a newline first, so a new record is never glued onto a torn one. The
+  record is one `O_APPEND` write. Residual risk: if two writers ever hold
+  the lock together, the worst outcome is a duplicate row, never a torn
+  line.
+- In this source repository, `vendorSessionId` joins the token-cost events
+  (`schemas/token-cost-event.schema.json`), matched on `claimId`; elsewhere
+  it is informational.
 
 ### F4 branch-failure routes
 
