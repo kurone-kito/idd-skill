@@ -1339,8 +1339,9 @@ test('selectNonOverlappingBatch sorts shared paths itself for a caller-built ana
     overlaps,
     overlapFlag: overlaps.length > 0,
   });
-  // 3 is flagged by a claim, so it is walked first and dropped by that claim;
-  // 1 is then picked and 2 collides with it.
+  // recommendedOrder is set by hand: the real analyzer would rank the flagged
+  // 3 last. Walking it first exercises claim-before-batch precedence: 3 is
+  // dropped by its claim, then 1 is picked and 2 collides with it.
   const analysis: OverlapAnalysis = {
     candidates: [
       entry(1),
