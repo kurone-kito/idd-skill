@@ -366,7 +366,7 @@ that is `transport`, carrying `retryAt` when known, never `gate`.
 | ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `discover-orphan-filter.mjs`       | an unknown flag, an invalid `--pr`, a bare `--now`, or a malformed claim-state `--now` | none today (no arguments is `transport`)                                                                                                                    |
 | `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                      | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag                          | none today                                                                                                                                                  |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid value, a flag-combination error, or an unknown flag     | none today                                                                                                                                                  |
 | `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                               | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                | none today                                                                                                                                                  |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                    | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
@@ -1766,8 +1766,8 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
   <id1,id2,...>` (default
   `bundle-core,bundle-review-triage-phase,bundle-review-fix-phase,bundle-merge-phase`),
-  `--now <ISO8601>`, and
-  `--check-overlap`. The cross-issue active-set discovery (open PRs plus the
+  `--now <ISO8601>`, `--check-overlap`, and the batch options below. The
+  cross-issue active-set discovery (open PRs plus the
   claim comments of issues that have a remote `issue/<n>-*` branch, resolved
   with the shared claim-state rules and the configured claim stale age) is
   **gated behind `--check-overlap`** because it adds GitHub API cost; without it
@@ -1778,6 +1778,35 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   pushed, paginated to the end), so a non-stale claim held by another session is
   detected even when it is outside the unclaimed candidate set being ranked. A
   claim whose branch is not yet pushed is picked up once it appears remotely.
+- **Batch options** (`#3838`): an orchestrator that fills several worker
+  slots at once asks for a batch of candidates that do not overlap.
+  - `--batch <k>` (a plain positive integer): walk `recommendedOrder` and
+    keep a candidate unless its high-contention files intersect an
+    in-flight issue, a candidate already in the batch, or, with
+    `--check-overlap`, an actively-claimed or open-PR issue. Stop at `k`
+    picks. A batch larger than the candidate count returns what fits.
+  - `--in-flight <n1,n2,...>` (repeatable; an empty value is an empty set):
+    the issues the orchestrator's workers are already running. Their
+    `## Candidate files` seed the comparison set whether or not their
+    branches are pushed, which `--check-overlap` cannot see. A candidate
+    that is itself in flight is not pickable and is reported first in
+    `batchSkipped`.
+  - `--desync-token <token>` (non-empty): the session's desync token. The
+    helper takes the first non-empty group of candidates, known candidate
+    files first, then the band of its top-`effectiveScore` members, taken
+    only when that score is at or above the suitability floor, sorted by
+    ascending issue number. `selectDesyncedIndex` from the
+    `select-desynced-index` helper picks the index, and that candidate is
+    tried first. It goes through the same overlap check as every other
+    candidate, so a dropped pick lands in `batchSkipped` and the walk
+    continues in `recommendedOrder`, skipping candidates already tried.
+    The helper never reads `discover.selectionDesync`: an orchestrator whose
+    policy is `off` omits the token. With no token, an empty or single-entry
+    band, or a below-floor top score (which includes the suitability kill
+    switch being off, since every effective score is then 0), the walk starts
+    at the head of the first non-empty group, in `recommendedOrder`.
+  - `--in-flight` and `--desync-token` without `--batch` are usage errors,
+    never a silent no-op.
 - **High-contention set**: the union of the named bundles' member files plus
   `audit/sync-manifest.json`. Instruction files are keyed by their repo-wide
   unique basename so a source path, mirror path, or bare citation all match.
@@ -1800,11 +1829,33 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
     `reason: "claim" | "pr", files: string[] }], overlapFlag: boolean }]`
   - `recommendedOrder`: `number[]` — candidate numbers after the soft
     tie-breaker (score desc, then non-overlapping first within a score band,
-    then issue number). It does **not** apply `discover.selectionDesync`; the
-    agent layers the overlap nudge after its own desync pick. Advisory only;
+    then issue number). It does **not** apply `discover.selectionDesync`;
+    outside batch mode the agent layers the overlap nudge after its own desync
+    pick, and `--desync-token` does that inside `--batch`. Advisory only;
     never a hard gate.
   - `summary`: `{ candidateCount: number, flaggedCount: number,`
     `activeIssueCount: number }`
+  - Only with `--batch` (every key below is absent without it, so the
+    output above is unchanged):
+    - `batch`: `number[]` — the picked candidates, in pick order.
+    - `batchSkipped`: `[{ number: number, collidedWith: number,`
+      `reason: "in-flight" | "batch" | "claim" | "pr", files: string[] }]` —
+      the in-flight candidates first, then each candidate dropped in walk
+      order, with the first thing it collided with (precedence: in-flight,
+      then an earlier batch member, then a claim or open-PR overlap) and the
+      sorted shared paths. A candidate that is itself in flight reports its
+      own number as `collidedWith` and `files: []`. A skipped candidate is
+      not excluded: it stays in the graph for the next refill. A candidate
+      the walk never reached, because the batch filled up, appears in neither
+      list.
+    - `inFlight`: `[{ number: number, filesUnknown: boolean,`
+      `highContentionTouched: string[] }]` — each in-flight issue, so the
+      orchestrator sees which running workers could not be compared.
+    - On each `candidates[]` entry, `filesUnknown: boolean` — `true` when the
+      candidate has no parseable candidate files (no `## Candidate files`
+      section, or one that lists no usable path). Such a candidate joins the
+      batch only after every candidate with known files, and can never
+      collide, so a batch that relies on it has no overlap protection.
 - **Behavior boundary**: evidence-only and heuristic. `## Candidate files` are
   advisory cues, not an exhaustive manifest, so the overlap signal must stay a
   soft A4 Step 2 tie-breaker — never a claim gate. The written discover
@@ -1814,7 +1865,11 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   regardless of real file contention, not a signal that no contention exists
   (`#2462`); the
   `issue-authoring` skill's roadmap-child contract requires the section for
-  exactly this reason.
+  exactly this reason. `--batch` does not filter by suitability score, as
+  `recommendedOrder` does not: the caller passes only the A4 survivors at or
+  above `autopilotSuitability.floor`. With `manifestMissing: true` the
+  high-contention set is empty, so a batch is simply the first `k`
+  candidates in walk order with no overlap protection.
 
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same
