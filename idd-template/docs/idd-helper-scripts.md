@@ -2447,10 +2447,14 @@ Node.js helper path.
   Repository evidence never proposes this profile; the operator chooses it
   explicitly, because its helper bins live outside the repository. The
   distributed CI workflows (advisory convergence, its comment job, and
-  post-merge cleanup) do not dispatch this profile. They stop with an explicit
-  error when it is recorded, because CI runners have no operator-local install,
-  so a CI run needs `package-manager`, `vendored-node`, or `ephemeral-npx`
-  (preventive; no observed incident yet).
+  post-merge cleanup) dispatch this profile through the same pinned-archive
+  path as `ephemeral-npx`: each run executes the helper through `npx`, from
+  `helperRuntime.packageSpec` when it is set, so CI runs the build named
+  there rather than anything on an operator's `PATH`. CI reads only the
+  committed `.github/idd/config.json`. When `packageSpec` is unset, CI falls
+  back to the mutable default archive URL, as `ephemeral-npx` does, and
+  `idd-onboard --verify` warns about it (#2987). Pin `packageSpec` to the
+  same reviewed build the operators install.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 
