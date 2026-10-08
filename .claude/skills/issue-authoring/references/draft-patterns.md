@@ -363,14 +363,14 @@ automatically execution-order-independent: if one track edits a shared
 CI check's own workflow _definition_ (e.g. a `.yml` file), any other
 in-flight track whose CI run relies on that check inherits a hidden
 ordering dependency, even though the tracks' own edited files never
-overlap. `gh run rerun` reuses the original event's workflow definition, so a
-fix merged to `main` on a sibling track stays invisible to a rerun until
-a new event (a branch-sync merge of `main`, or reopening the PR) picks
-it up (see `.github/instructions/idd-ci.instructions.md`'s Rerun
-mechanics). Note
-this dependency in
-the roadmap's parallel note rather than assuming disjoint files always
-mean safe parallelism.
+overlap. `gh run rerun` reuses the original event's workflow definition,
+so a fix merged to `main` on a sibling track stays invisible to a rerun
+until a new event (a branch-sync merge of `main`, or reopening the PR)
+picks it up (see `.github/instructions/idd-ci.instructions.md`'s Rerun
+mechanics). Observed 2026-10-05 in a private adopter and reproduced on
+2026-10-09 (issue `#3859`). Note this dependency in the roadmap's
+parallel note rather than assuming disjoint files always mean safe
+parallelism.
 
 ### Artificial decomposition
 
