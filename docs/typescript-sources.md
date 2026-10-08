@@ -226,8 +226,9 @@ is prepended later and stays ahead of the shim. Its path is registered, so
 a fixture still runs as before. Residuals the shim cannot see: an absolute
 path to the real `gh` inside a script a payload runs, a script that rewrites
 `PATH` first, and a launch whose explicit environment drops the guard
-directory or leaves `PATH` unset. The `Windows platform tests` job runs the
-two `path shim: windows` cases by name pattern.
+directory or leaves `PATH` unset (preventive; no observed incident yet).
+The `Windows platform tests` job runs the two `path shim: windows` cases by
+name pattern.
 
 Unit tests import the typed `src/scripts/*.mts`
 sources so assertions are checked against the real signatures;
