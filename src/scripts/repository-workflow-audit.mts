@@ -1267,7 +1267,7 @@ function checkRequiredCheckWorkflows(root: string, report: Report): void {
     if (text === undefined) {
       continue;
     }
-    const onBlock = extractOnBlock(text);
+    const onBlock = onBlockOf(declarationText(text));
     if (onBlock === undefined) {
       report(RWA001, path, 'on:/permissions: block not found');
       continue;
@@ -1278,7 +1278,11 @@ function checkRequiredCheckWorkflows(root: string, report: Report): void {
       file === 'idd-advisory-convergence.yml'
         ? 'pull_request_target'
         : 'pull_request';
-    if (!new RegExp(`["']?${pullRequestFamilyKey}["']?\\s*:`).test(onBlock)) {
+    if (
+      !new RegExp(`^ {2}["']?${pullRequestFamilyKey}["']?\\s*:`, 'm').test(
+        onBlock,
+      )
+    ) {
       report(RWA001, path, `must trigger on ${pullRequestFamilyKey}`);
     }
     // A required job runs the check that gates the merge, so it must not be
@@ -1718,7 +1722,7 @@ function checkRequiredGateTriggers(root: string, report: Report): void {
     if (text === undefined) {
       continue;
     }
-    const onBlock = extractOnBlock(text);
+    const onBlock = onBlockOf(declarationText(text));
     if (onBlock === undefined) {
       report(RWA005, path, 'on:/permissions: block not found');
       continue;
@@ -1746,7 +1750,7 @@ function checkRequiredGateTriggers(root: string, report: Report): void {
         'on: must not include pull_request_review (moved to the companion workflow)',
       );
     }
-    if (!/pull_request_target\s*:/.test(onBlock)) {
+    if (!/^ {2}["']?pull_request_target["']?\s*:/m.test(onBlock)) {
       report(RWA005, path, 'on: must include pull_request_target');
     }
     checkCheckoutSurface(path, text, report);

@@ -3172,6 +3172,23 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ message: 'probe must use only issue_comment' }],
   },
+  {
+    ruleId: 'RWA001',
+    name: 'a required workflow whose pull_request trigger is commented out',
+    path: '.github/workflows/lint.yml',
+    mutation: { from: '\n  pull_request:\n', to: '\n  # pull_request:\n' },
+    expected: [{ message: 'must trigger on pull_request' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate whose pull_request_target trigger is commented out',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '\n  pull_request_target:\n',
+      to: '\n  # pull_request_target:\n',
+    },
+    expected: [{ message: 'on: must include pull_request_target' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
