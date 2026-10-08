@@ -2331,3 +2331,503 @@ test('the module and its generated copy satisfy their own rules', () => {
     assert.deepEqual(findBareSpecifiers(text), [], path);
   }
 });
+
+// #3852: the import scan misread these shapes. Rows marked `yaml` must still
+// report their import. Rows marked `clean` must not hide the import that
+// follows them: each one also runs with `import bare from 'yaml';` appended,
+// which must be the single report line. The negative controls (ctl1 to ctl12)
+// keep a regular expression after a construct that could be a division.
+const lexerRows: { name: string; source: string; expect: 'clean' | 'yaml' }[] =
+  [
+    {
+      name: '1a: a byte-order mark before a hashbang that opens a block comment',
+      source: "﻿#!/usr/bin/env node /*\nimport bare from 'yaml';\n*/\n",
+      expect: 'yaml',
+    },
+    {
+      name: '1b: a byte-order mark before a first-line import',
+      source: "﻿import bare from 'yaml';\n",
+      expect: 'yaml',
+    },
+    {
+      name: '2a: an object literal after the colon of a conditional',
+      source: "const value = ok ? 1 : {} / /* import('left-pad') */ 2;\n",
+      expect: 'clean',
+    },
+    {
+      name: '2b: an object literal after a conditional colon, then division',
+      source: 'const v = c ? 1 : {} / 2; // a ` b\n',
+      expect: 'clean',
+    },
+    {
+      name: '2c: an object literal after a less-than comparison',
+      source: 'const v = a < {} / 2; // a ` b\n',
+      expect: 'clean',
+    },
+    {
+      name: '2d: an object literal after a greater-than comparison',
+      source: 'const v = a > {} / 2; // a ` b\n',
+      expect: 'clean',
+    },
+    {
+      name: '2e: a regular expression after an object literal division',
+      source: 'const v = c ? 1 : {} / /}/.source; // a ` b\n',
+      expect: 'clean',
+    },
+    {
+      name: '2f: an object literal in a template interpolation',
+      source: 'const t = `' + '$' + '{c ? 1 : {} / 2}`; // a ` b\n',
+      expect: 'clean',
+    },
+    {
+      name: '3a: a line break after a non-null assertion, then a yaml import',
+      source:
+        "const ratio = total!\n  / count; // reads schemas/*.json\nimport bare from 'yaml';\n// end */\n",
+      expect: 'yaml',
+    },
+    {
+      name: '3b: a line break after a non-null assertion, then division',
+      source: "const q = a!\n  / 2; // import('left-pad')\n",
+      expect: 'clean',
+    },
+    {
+      name: '3c: a line break after a non-null assertion, then a backtick',
+      source: 'const share = done!\n  / total; // a single ` backtick\n',
+      expect: 'clean',
+    },
+    {
+      name: '4: a variable named of before a division',
+      source: 'const of = 4;\nconst q = of / 2; // a ` b\n',
+      expect: 'clean',
+    },
+    {
+      name: '5a: a plus sign separated from the next plus sign',
+      source: 'const v = b + +/}/.source.length; // a ` b\n',
+      expect: 'clean',
+    },
+    {
+      name: '5b: a minus sign separated from the next minus sign',
+      source: 'const v = (u)- -/`/.source.length;\n',
+      expect: 'clean',
+    },
+    {
+      name: '5c: a decrement on the next line is a prefix operator',
+      source: 'let i = 0;\ni\n--/`/.lastIndex;\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl1: an arrow body followed by a regular expression',
+      source: 'const f = () => {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl2: a generic class followed by a regular expression',
+      source: 'class A<T> {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl3: a case block followed by a regular expression',
+      source: 'switch (x) {\n  case 1: {} /`/.test(y);\n}\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl4: a label block followed by a regular expression',
+      source: 'lbl: {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl5: a class extending a generic followed by a regular expression',
+      source: 'class A extends B<T> {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl6: a generic interface followed by a regular expression',
+      source: 'interface A<T> {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl7: a generic return type followed by a regular expression',
+      source: 'function f(): Array<T> {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl8: a multi-line generic interface followed by a regular expression',
+      source: 'interface A<\n  T\n> {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl9: a multi-line generic class followed by a regular expression',
+      source: 'class A<\n  T,\n  U\n> {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl10: a multi-line generic type followed by a regular expression',
+      source: 'type X = Array<\n  T\n>\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl11: a multi-line generic function followed by a regular expression',
+      source: 'function f<\n  T\n>() {}\n/`/.test(x);\n',
+      expect: 'clean',
+    },
+    {
+      name: 'ctl12: a case colon after a ternary followed by a regular expression',
+      source: 'switch (x) {\n  case a ? 1 : 2: {} /`/.test(y);\n}\n',
+      expect: 'clean',
+    },
+  ];
+
+/** The node-import rule's report and inspection lines on stderr. */
+function nodeImportLines(stderr: string): string[] {
+  return stderr
+    .split('\n')
+    .filter(
+      (line) =>
+        line.startsWith('NODE-IMPORT-BOUNDARY ') ||
+        line.startsWith('NODE-IMPORT-BOUNDARY-INSPECTION '),
+    );
+}
+
+/** The standalone-mirror rule's report and inspection lines on stderr. */
+function mirrorImportLines(stderr: string): string[] {
+  return stderr
+    .split('\n')
+    .filter(
+      (line) =>
+        line.startsWith('STANDALONE-MIRROR-IMPORTS ') ||
+        line.startsWith('STANDALONE-MIRROR-IMPORTS-INSPECTION '),
+    );
+}
+
+for (const row of lexerRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    if (row.expect === 'clean') {
+      assert.deepEqual(lines, []);
+    } else {
+      assert.equal(lines.length, 1, lines.join('\n'));
+      assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+    }
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    if (row.expect !== 'clean') {
+      return;
+    }
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+    assert.doesNotMatch(lines[0], /-INSPECTION/);
+  });
+
+  test(`the standalone-mirror rule reads ${row.name}`, () => {
+    const mirror = row.source
+      .replaceAll("'yaml'", "'./helper.mjs'")
+      .replaceAll("'left-pad'", "'./helper.mjs'");
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', mirror),
+    );
+    const lines = mirrorImportLines(runCli(['--root', root]).stderr);
+    if (row.expect === 'clean') {
+      assert.deepEqual(lines, []);
+    } else {
+      assert.equal(lines.length, 1, lines.join('\n'));
+      assert.match(lines[0], /found: \.\/helper\.mjs$/);
+    }
+  });
+
+  test(`the standalone-mirror rule sees an import after ${row.name}`, () => {
+    if (row.expect !== 'clean') {
+      return;
+    }
+    const mirror = row.source
+      .replaceAll("'yaml'", "'./helper.mjs'")
+      .replaceAll("'left-pad'", "'./helper.mjs'");
+    const root = buildFixture((files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        `${mirror}import bare from './helper.mjs';\n`,
+      ),
+    );
+    const lines = mirrorImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /found: \.\/helper\.mjs$/);
+    assert.doesNotMatch(lines[0], /-INSPECTION/);
+  });
+}
+
+test('a file nested deeply enough to exhaust the scan stack is reported without a crash', () => {
+  const nested = `${'`${'.repeat(20000)}x${'}`'.repeat(20000)};\n`;
+  const root = buildFixture((files) =>
+    files.set('src/main.mts', `${nested}import bare from 'yaml';\n`),
+  );
+  const { stderr } = runCli(['--root', root]);
+  const lines = nodeImportLines(stderr);
+  assert.ok(
+    lines.includes(
+      'NODE-IMPORT-BOUNDARY-INSPECTION src/main.mts: nesting too deep to scan',
+    ),
+    lines.join('\n'),
+  );
+  assert.doesNotMatch(stderr, /^\s+at /m);
+  assert.doesNotMatch(stderr, /file:\/\//);
+});
+
+for (const [label, unit] of [
+  ['a<', 'a<'],
+  ['a<b ', 'a<b '],
+] as const) {
+  test(`a same-line ${label} run of 40,000 repetitions finishes quickly and still reports the import`, () => {
+    const root = buildFixture((files) =>
+      files.set(
+        'src/main.mts',
+        `${unit.repeat(40000)}\nimport bare from 'yaml';\n`,
+      ),
+    );
+    const started = Date.now();
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.ok(Date.now() - started < 15000, 'scan took too long');
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /yaml$/);
+  });
+}
+
+// Review follow-ups on #3852: a spaced comparison must not open a multi-line
+// type-parameter list for a later `>`, a statement end must clear any pending
+// opener, and `??` must not leave a conditional colon pending.
+const reviewFollowUpRows: { name: string; source: string }[] = [
+  {
+    name: 'a spaced comparison followed by a line break, then a comparison with an object literal',
+    source: "const v = a < b ||\n  c > {} / /* import('left-pad') */ 2;\n",
+  },
+  {
+    name: 'a spaced comparison before a multi-line type-parameter list and a later comparison',
+    source:
+      'const x = a < b;\ninterface A<\n  T\n> {}\nconst y = c > {} / 2; // a ` b\n',
+  },
+  {
+    name: 'a nullish coalescing operator before a label block',
+    source: 'const v = a ?? b;\nlbl: {}\n/`/.test(x);\n',
+  },
+];
+
+for (const row of reviewFollowUpRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+
+  test(`the standalone-mirror rule reads ${row.name}`, () => {
+    const mirror = row.source.replaceAll("'left-pad'", "'./helper.mjs'");
+    const root = buildFixture((files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        `${mirror}import bare from './helper.mjs';\n`,
+      ),
+    );
+    const lines = mirrorImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /found: \.\/helper\.mjs$/);
+  });
+}
+
+test('a deeply nested mirror source is reported through the standalone-mirror rule without a stack trace', () => {
+  const nested = `${'`${'.repeat(20000)}x${'}`'.repeat(20000)};\n`;
+  const root = buildFixture((files) =>
+    files.set(
+      'scripts/mirror.mjs',
+      `${nested}import bare from './helper.mjs';\n`,
+    ),
+  );
+  const { stderr } = runCli(['--root', root]);
+  assert.ok(
+    mirrorImportLines(stderr).includes(
+      'STANDALONE-MIRROR-IMPORTS-INSPECTION scripts/mirror.mjs: nesting too deep to scan',
+    ),
+    mirrorImportLines(stderr).join('\n'),
+  );
+  assert.doesNotMatch(stderr, /^\s+at /m);
+  assert.doesNotMatch(stderr, /file:\/\//);
+});
+
+// Second review pass on #3852: `of` is a for-of operator only after a binding,
+// so an identifier named `of` in a for header keeps its division; a real for-of
+// regular expression still works; and the multi-line type-list opener has no
+// fixed whitespace cutoff.
+const reviewSecondRows: { name: string; source: string }[] = [
+  {
+    name: 'an identifier named of in a for header before a division',
+    source: "for (const q = of / /* import('left-pad') */ 2; ; ) {}\n",
+  },
+  {
+    name: 'a for-of header whose right side is a regular expression containing a backtick',
+    source: 'for (const m of /`/.source) {}\n/`/.test(x);\n',
+  },
+  {
+    name: 'a multi-line type-parameter list opened after more than sixty-four spaces',
+    source: `class A<${' '.repeat(80)}\n  T\n> {}\n/\`/.test(x);\n`,
+  },
+];
+
+for (const row of reviewSecondRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
+
+// Third review pass on #3852: a for-of operator after a Unicode binding.
+const reviewThirdRows: { name: string; source: string }[] = [
+  {
+    name: 'a for-of regular expression after a Unicode binding',
+    source: 'for (const é of /a`b/) {}\n/`/.test(x);\n',
+  },
+];
+
+for (const row of reviewThirdRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
+
+// Fourth review pass on #3852: the backward search for a block comment's opener
+// must skip string and template literals, so a `/*` inside a literal is text.
+const commentMarkerInLiteralShapes: { name: string; source: string }[] = [
+  {
+    name: 'a comment marker inside a string literal in a type-argument lookahead',
+    source: "const v = a<[ '/*', (b) /* c */ (y)] > /[/*]/.test(s);\n",
+  },
+  {
+    name: 'a comment marker inside a template literal in a type-argument lookahead',
+    source: 'const v = a<[ `/*`, (b) /* c */ (y)] > /[/*]/.test(s);\n',
+  },
+];
+
+for (const row of commentMarkerInLiteralShapes) {
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
+
+// Fifth review pass on #3852: a comparison chain whose `<` ends a line is not a
+// multi-line type-parameter list, because its `>` does not start its own line.
+const multilineComparisonShapes: { name: string; source: string }[] = [
+  {
+    name: 'a comparison chain whose less-than sign ends a line',
+    source: "const v = a<\n  b > {} / /* import('left-pad') */ 2;\n",
+  },
+];
+
+for (const row of multilineComparisonShapes) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
+
+// Sixth review pass on #3852: a statement end or a closing block makes an
+// earlier comparison opener stale, and the rows of the second and third passes
+// must hold under the standalone-mirror rule too.
+const statementBoundaryRows: { name: string; source: string }[] = [
+  {
+    name: 'a statement ended by a semicolon before a comparison chain',
+    source: "const x = a<\n  b;\n> {} / /* import('left-pad') */ 2;\n",
+  },
+  {
+    name: 'a closing block before a comparison chain',
+    source:
+      "function f() {\n  const x = a<\n    b\n  }\n}\n> {} / /* import('left-pad') */ 2;\n",
+  },
+];
+
+for (const row of statementBoundaryRows) {
+  test(`the node-import rule reads ${row.name}`, () => {
+    const root = buildFixture((files) => files.set('src/main.mts', row.source));
+    assert.deepEqual(nodeImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}
+
+const mirrorOfRow = (source: string): string =>
+  source
+    .replaceAll("'yaml'", "'./helper.mjs'")
+    .replaceAll("'left-pad'", "'./helper.mjs'");
+
+for (const row of [
+  ...statementBoundaryRows,
+  ...reviewSecondRows,
+  ...reviewThirdRows,
+]) {
+  test(`the standalone-mirror rule reads ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('scripts/mirror.mjs', mirrorOfRow(row.source)),
+    );
+    assert.deepEqual(mirrorImportLines(runCli(['--root', root]).stderr), []);
+  });
+
+  test(`the standalone-mirror rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set(
+        'scripts/mirror.mjs',
+        `${mirrorOfRow(row.source)}import bare from './helper.mjs';\n`,
+      ),
+    );
+    const lines = mirrorImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /found: \.\/helper\.mjs$/);
+  });
+}

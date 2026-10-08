@@ -80,31 +80,6 @@ export function isRelativeSpecifier(specifier: string): boolean {
   return specifier.startsWith('./') || specifier.startsWith('../');
 }
 
-/**
- * Extracts the module specifier of every static `import` / `export … from`
- * declaration in `source` — including side-effect `import 'x'` and
- * `export * from 'x'` / `export { a } from 'x'` re-exports — plus every
- * dynamic `import('x')` call (with or without a second import-attributes
- * argument, e.g. `import('x', { with: { type: 'json' } })`, and whether the
- * specifier is quoted or written as a no-substitution template literal,
- * e.g. `` import(`x`) ``), while ignoring anything that appears only inside
- * a `//` or `/* … *\/`-style comment.
- *
- * The clause between the keyword and the specifier is restricted to the
- * characters an import/export clause can actually contain (identifiers,
- * commas, `*`, braces, whitespace). This is deliberately a *positive* class
- * rather than "anything but a quote or semicolon": a plain `export function
- * f(x) {` or `export const x = 'literal';` contains a `(` or `=` before any
- * quote, which this class excludes, so scanning stops there instead of
- * misreading an unrelated string literal deeper in the function body as an
- * import specifier.
- *
- * The dynamic-import pattern's template-literal branch excludes `$` from
- * the backtick-delimited content, which rejects `${…}` interpolation (an
- * expression, not a static specifier) while still matching every realistic
- * no-substitution specifier — no valid `node:` builtin, relative path, or
- * npm package name contains a literal `$`.
- */
 interface ImportScanResult {
   specifiers: string[];
   inspectionError?: string;
@@ -120,7 +95,6 @@ const REGEX_PRECEDING_KEYWORDS = new Set([
   'typeof',
   'case',
   'in',
-  'of',
   'delete',
   'void',
   'instanceof',
@@ -143,6 +117,9 @@ const CONTROL_FLOW_PAREN_KEYWORDS = new Set([
   'switch',
   'catch',
 ]);
+// The same-line type-argument lookahead gives up after this many characters, so a
+// long line of `a<` cannot make every `<` scan to the end of the line.
+const TYPE_ARGUMENT_LOOKAHEAD_LIMIT = 2048;
 const UNICODE_IDENTIFIER_PART = /(?:[$\p{ID_Continue}]|\u200c|\u200d)/u;
 const UNICODE_IDENTIFIER_START = /(?:[$_\p{ID_Start}])/u;
 const BLOCK_PRECEDING_KEYWORDS = new Set(['else', 'do']);
@@ -151,6 +128,24 @@ const RESTRICTED_STATEMENT_KEYWORDS = new Set([
   'continue',
   'debugger',
 ]);
+
+/** Whether only horizontal blanks come before `index` on its line. */
+function onlyBlanksBeforeOnLine(source: string, index: number): boolean {
+  let start = index - 1;
+  while (start >= 0 && (source[start] === ' ' || source[start] === '\t')) {
+    start -= 1;
+  }
+  return start < 0 || isLineTerminator(source[start]);
+}
+
+/** Whether the first character after horizontal blanks from `from` ends a line. */
+function lineEndsAfterBlanks(source: string, from: number): boolean {
+  let index = from;
+  while (source[index] === ' ' || source[index] === '\t') {
+    index += 1;
+  }
+  return index < source.length && isLineTerminator(source[index]);
+}
 
 /** ECMAScript line terminators, including the Unicode separators. */
 function isLineTerminator(ch: string | undefined): boolean {
@@ -254,6 +249,7 @@ function regexCanStartAfter(
   postfixUpdateOperator: boolean,
   postfixNonNullAssertion: boolean,
   regexAfterRestrictedStatementLineBreak: boolean,
+  insideForHeader: boolean,
 ): boolean {
   if (lastCodeChar === '') {
     return true;
@@ -262,6 +258,7 @@ function regexCanStartAfter(
     controlFlowClosingParenthesis ||
     regexAfterRestrictedStatementLineBreak ||
     (!lastWordIsPropertyName && REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
+    (!lastWordIsPropertyName && insideForHeader && lastWord === 'of') ||
     (!lastWordIsPropertyName &&
       lastWord === 'default' &&
       previousWord === 'export' &&
@@ -290,6 +287,13 @@ function scanComments(source: string): {
   inspectionError?: string;
 } {
   const output = source.split('');
+  // A byte-order mark is not source text. Mask it so a line-start import on
+  // the first line still matches, and start the scan after it so a hashbang
+  // there is still recognized.
+  const bomLength = source.charCodeAt(0) === 0xfeff ? 1 : 0;
+  if (bomLength === 1) {
+    output[0] = ' ';
+  }
 
   function scanTemplate(start: number): CodeScanResult {
     let index = start + 1;
@@ -347,7 +351,16 @@ function scanComments(source: string): {
     let arrowTypeHoldNewline = false;
     let postfixUpdateOperator = false;
     let postfixNonNullAssertion = false;
+    let codeBeforeLastWordEndsBinding = false;
+    let lastCodeCharIsComparisonAngle = false;
+    let lastCodeCharIsConditionalColon = false;
+    let codeNestingDepth = 0;
+    const pendingConditionalDepths: number[] = [];
+    const openComparisonAngles: number[] = [];
+    // The nesting depth at which each opener above was recorded.
+    const openComparisonAngleDepths: number[] = [];
     let possiblePostfixUpdate = false;
+    let lineBreakSinceCode = false;
     let pendingClassExpressionBody: boolean | null = null;
     let pendingFunctionExpression: boolean | null = null;
     let pendingFunctionExpressionBody = false;
@@ -365,6 +378,19 @@ function scanComments(source: string): {
     const functionParameterExpressions: (boolean | null)[] = [];
     const expressionEndingBraces: boolean[] = [];
     const objectLiteralBraces: boolean[] = [];
+    const parenIsForHeader: boolean[] = [];
+
+    // `of` is the for-of operator only directly after a binding or a closing
+    // bracket inside a for header. After `=` it is an identifier, as in
+    // `for (const q = of / 2; ; )`.
+    function forOfKeywordActive(): boolean {
+      return (
+        !lastWordIsPropertyName &&
+        lastWord === 'of' &&
+        parenIsForHeader.at(-1) === true &&
+        codeBeforeLastWordEndsBinding
+      );
+    }
 
     function wordContinuesAt(ch: string, sourceIndex: number): boolean {
       return (
@@ -457,7 +483,7 @@ function scanComments(source: string): {
       numericExponentTail = false;
       if (hasLineTerminator) {
         possiblePostfixUpdate = false;
-        postfixNonNullAssertion = false;
+        lineBreakSinceCode = true;
       }
     }
 
@@ -468,6 +494,8 @@ function scanComments(source: string): {
       }
       const previousCodeChar = lastCodeChar;
       const previousCodeCharIsIdentifierPart = lastCodeCharIsIdentifierPart;
+      const lineBreakBeforeCode = lineBreakSinceCode;
+      lineBreakSinceCode = false;
       if (pendingRestrictedStatement !== null) {
         const isBreakOrContinue =
           pendingRestrictedStatement === 'break' ||
@@ -494,6 +522,7 @@ function scanComments(source: string): {
       const startsPostfixUpdate =
         (ch === '+' || ch === '-') &&
         previousCodeChar === ch &&
+        source[sourceIndex - 1] === ch &&
         possiblePostfixUpdate;
       const startsPostfixNonNullAssertion =
         ch === '!' &&
@@ -509,6 +538,7 @@ function scanComments(source: string): {
           postfixUpdateOperator,
           postfixNonNullAssertion,
           regexAfterRestrictedStatementLineBreak,
+          forOfKeywordActive(),
         );
       noteNumericLiteralChar(ch, sourceIndex);
       const startsWord = wordBoundary || lastWord === '';
@@ -529,11 +559,14 @@ function scanComments(source: string): {
       postfixNonNullAssertion = startsPostfixNonNullAssertion;
       possiblePostfixUpdate =
         (ch === '+' || ch === '-') &&
+        !lineBreakBeforeCode &&
         (previousCodeCharIsIdentifierPart || /[)\]}]/.test(previousCodeChar));
       if (/[A-Za-z0-9_$]/.test(ch)) {
         if (startsWord) {
           previousWord = lastWord;
           previousWordIsPropertyName = lastWordIsPropertyName;
+          codeBeforeLastWordEndsBinding =
+            previousCodeCharIsIdentifierPart || /[)\]}]/.test(previousCodeChar);
           lastWord = ch;
           lastWordIsPropertyName =
             previousCodeChar === '.' || previousCodeChar === '#';
@@ -744,6 +777,28 @@ function scanComments(source: string): {
             let look = from + 1;
             let opener = -1;
             while (look < closer && !isLineTerminator(source[look])) {
+              if (
+                source[look] === "'" ||
+                source[look] === '"' ||
+                source[look] === '`'
+              ) {
+                // A literal's `/*` is text, not a comment opener: skip the
+                // literal to its closing quote, as the main scan does.
+                const quote = source[look];
+                let literalEnd = look + 1;
+                while (
+                  literalEnd < closer &&
+                  !isLineTerminator(source[literalEnd]) &&
+                  source[literalEnd] !== quote
+                ) {
+                  literalEnd += source[literalEnd] === '\\' ? 2 : 1;
+                }
+                if (source[literalEnd] !== quote) {
+                  break;
+                }
+                look = literalEnd + 1;
+                continue;
+              }
               if (source[look] === '/' && source[look + 1] === '*') {
                 const after = skipBlockCommentForward(look);
                 if (after === undefined || after > closer + 1) {
@@ -769,6 +824,9 @@ function scanComments(source: string): {
         return previous;
       };
       for (let cursor = from; cursor < source.length; cursor += 1) {
+        if (cursor - from > TYPE_ARGUMENT_LOOKAHEAD_LIMIT) {
+          return false;
+        }
         const typeChar = source[cursor];
         if (isLineTerminator(typeChar)) {
           return false;
@@ -1091,6 +1149,8 @@ function scanComments(source: string): {
     while (index < source.length) {
       const ch = source[index];
       const next = source[index + 1];
+      let angleIsComparison = false;
+      let colonIsConditional = false;
 
       const startsComment = ch === '/' && (next === '/' || next === '*');
       if (!/\s/.test(ch) && !startsComment && assertionAngleMayContinue) {
@@ -1179,6 +1239,7 @@ function scanComments(source: string): {
           postfixUpdateOperator,
           postfixNonNullAssertion,
           regexAfterRestrictedStatementLineBreak,
+          forOfKeywordActive(),
         )
       ) {
         let end = index + 1;
@@ -1271,6 +1332,13 @@ function scanComments(source: string): {
                 previousWord === 'for' &&
                 !previousWordIsPropertyName)),
         );
+        parenIsForHeader.push(
+          !lastWordIsPropertyName &&
+            (lastWord === 'for' ||
+              (lastWord === 'await' &&
+                previousWord === 'for' &&
+                !previousWordIsPropertyName)),
+        );
         functionParameterExpressions.push(pendingFunctionExpression);
         pendingFunctionExpression = null;
       }
@@ -1322,6 +1390,18 @@ function scanComments(source: string): {
         ) {
           typescriptAssertionTypeContext = true;
           typescriptAssertionTypeDepth = 1;
+        } else {
+          angleIsComparison = true;
+          // Only `Name<` whose type-parameter list starts on the next line can
+          // close on a later line. A spaced comparison never opens one.
+          if (
+            index > 0 &&
+            isIdentifierPartAt(source, index - 1) &&
+            lineEndsAfterBlanks(source, index + 1)
+          ) {
+            openComparisonAngles.push(index);
+            openComparisonAngleDepths.push(codeNestingDepth);
+          }
         }
         if (scanningFunctionReturnType) {
           functionReturnTypeAngleDepth += 1;
@@ -1345,6 +1425,21 @@ function scanComments(source: string): {
         if (typescriptAssertionTypeDepth === 0 && assertionParenDepth === 0) {
           assertionAngleMayContinue = true;
         }
+      }
+      if (
+        ch === '>' &&
+        lastCodeChar !== '=' &&
+        !closesTypescriptAssertionType
+      ) {
+        // A `>` whose `<` sits on an earlier line closes a multi-line
+        // type-parameter list (`class A<\n  T,\n  U\n> {}`), which the
+        // same-line lookahead cannot close. On one line it is a comparison.
+        const opener = openComparisonAngles.pop();
+        openComparisonAngleDepths.pop();
+        angleIsComparison =
+          opener === undefined ||
+          !/[\n\r\u2028\u2029]/.test(source.slice(opener, index)) ||
+          !onlyBlanksBeforeOnLine(source, index);
       }
       if (ch === '{') {
         // A value-position arrow block (`() => {}`) is not an expression,
@@ -1376,9 +1471,13 @@ function scanComments(source: string): {
             lastCodeChar === ',' ||
             (lastCodeChar !== '' && '&|?+-*/%^~'.includes(lastCodeChar)) ||
             (lastCodeChar === ':' && objectLiteralBraces.at(-1) === true) ||
+            (lastCodeChar === ':' && lastCodeCharIsConditionalColon) ||
+            (lastCodeCharIsComparisonAngle &&
+              (lastCodeChar === '<' || lastCodeChar === '>')) ||
             (!lastWordIsPropertyName &&
               !BLOCK_PRECEDING_KEYWORDS.has(lastWord) &&
               REGEX_PRECEDING_KEYWORDS.has(lastWord)) ||
+            forOfKeywordActive() ||
             (!lastWordIsPropertyName &&
               lastWord === 'default' &&
               previousWord === 'export' &&
@@ -1406,9 +1505,55 @@ function scanComments(source: string): {
         }
         objectLiteralBraces.pop();
       }
+      if (ch === ')') {
+        parenIsForHeader.pop();
+      }
       const closesControlFlowParenthesis =
         ch === ')' && controlFlowParentheses.pop() === true;
+      if (ch === ';') {
+        // A statement ends every pending multi-line type-parameter opener.
+        openComparisonAngles.length = 0;
+        openComparisonAngleDepths.length = 0;
+      }
+      if (ch === '?') {
+        const afterQuestion = source[index + 1];
+        if (
+          afterQuestion !== undefined &&
+          source[index - 1] !== '?' &&
+          !'.?:),=];}'.includes(afterQuestion)
+        ) {
+          pendingConditionalDepths.push(codeNestingDepth);
+        }
+      }
+      if (ch === ':') {
+        colonIsConditional =
+          pendingConditionalDepths.at(-1) === codeNestingDepth;
+        if (colonIsConditional) {
+          pendingConditionalDepths.pop();
+        }
+      }
+      if (ch === '(' || ch === '[' || ch === '{') {
+        codeNestingDepth += 1;
+      } else if (ch === ')' || ch === ']' || ch === '}') {
+        codeNestingDepth = Math.max(0, codeNestingDepth - 1);
+        if (ch === '}') {
+          // A closing block ends the statements it held, so openers recorded
+          // inside it are stale. Openers outside it, such as one inside a
+          // type list that holds an object type, stay.
+          while (
+            openComparisonAngleDepths.length > 0 &&
+            (openComparisonAngleDepths.at(-1) ?? -1) > codeNestingDepth
+          ) {
+            openComparisonAngleDepths.pop();
+            openComparisonAngles.pop();
+          }
+        }
+      }
       recordCodeChar(ch, index);
+      if (!/\s/.test(ch)) {
+        lastCodeCharIsComparisonAngle = angleIsComparison;
+        lastCodeCharIsConditionalColon = colonIsConditional;
+      }
       if (closesTypescriptAssertionType && typescriptAssertionTypeDepth === 0) {
         lastCodeCharIsIdentifierPart = true;
       }
@@ -1429,7 +1574,21 @@ function scanComments(source: string): {
       : { index };
   }
 
-  const code = scanCode(0, false);
+  let code: CodeScanResult;
+  try {
+    code = scanCode(bomLength, false);
+  } catch (error) {
+    if (!(error instanceof RangeError)) {
+      throw error;
+    }
+    // Template nesting recurses once per level, so input nested deeply
+    // enough exhausts the stack. Report the file as not scannable instead of
+    // letting the rule crash.
+    return {
+      text: output.join(''),
+      inspectionError: 'nesting too deep to scan',
+    };
+  }
   return { text: output.join(''), inspectionError: code.inspectionError };
 }
 
@@ -1456,6 +1615,31 @@ function scanImportSpecifiers(source: string): ImportScanResult {
   return { specifiers, inspectionError: comments.inspectionError };
 }
 
+/**
+ * Extracts the module specifier of every static `import` / `export … from`
+ * declaration in `source` — including side-effect `import 'x'` and
+ * `export * from 'x'` / `export { a } from 'x'` re-exports — plus every
+ * dynamic `import('x')` call (with or without a second import-attributes
+ * argument, e.g. `import('x', { with: { type: 'json' } })`, and whether the
+ * specifier is quoted or written as a no-substitution template literal,
+ * e.g. `` import(`x`) ``), while ignoring anything that appears only inside
+ * a `//` or `/* … *\/`-style comment.
+ *
+ * The clause between the keyword and the specifier is restricted to the
+ * characters an import/export clause can actually contain (identifiers,
+ * commas, `*`, braces, whitespace). This is deliberately a *positive* class
+ * rather than "anything but a quote or semicolon": a plain `export function
+ * f(x) {` or `export const x = 'literal';` contains a `(` or `=` before any
+ * quote, which this class excludes, so scanning stops there instead of
+ * misreading an unrelated string literal deeper in the function body as an
+ * import specifier.
+ *
+ * The dynamic-import pattern's template-literal branch excludes `$` from
+ * the backtick-delimited content, which rejects `${…}` interpolation (an
+ * expression, not a static specifier) while still matching every realistic
+ * no-substitution specifier — no valid `node:` builtin, relative path, or
+ * npm package name contains a literal `$`.
+ */
 export function extractImportSpecifiers(source: string): string[] {
   return scanImportSpecifiers(source).specifiers;
 }
