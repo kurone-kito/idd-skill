@@ -3410,10 +3410,13 @@ test('the workflow audit CLI reports one violation from each rule family by rule
     'RWA007',
   ] as const;
   for (const ruleId of ruleIds) {
-    const scenario = RULE_CASES.find(
+    // The last violating fixture of each family, so the newest rows, which exercise
+    // the checks changed in this round, are the ones that run through the CLI.
+    const matching = RULE_CASES.filter(
       (candidate) =>
         candidate.ruleId === ruleId && candidate.mutation !== undefined,
     );
+    const scenario = matching[matching.length - 1];
     assert.ok(scenario?.mutation, `no violating fixture for ${ruleId}`);
     const root = fixtureRoot({ [scenario.path]: scenario.mutation });
     withRoot(root, () => {
