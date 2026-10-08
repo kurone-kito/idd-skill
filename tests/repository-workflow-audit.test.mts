@@ -3258,6 +3258,36 @@ const RULE_CASES: readonly RuleCase[] = [
       { message: 'no longer declares the expected self-waiver job id' },
     ],
   },
+  {
+    ruleId: 'RWA006',
+    name: 'a second self-waiver step that carries the expected post-step name',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const anchor = `      - name: Record the posted marker's provenance\n`;
+        const decoy = `      - name: Post the self-referential-bootstrap-auto waiver\n        run: echo "decoy"\n`;
+        anchored(text, anchor);
+        return text.split(anchor).join(decoy + anchor);
+      },
+    },
+    expected: [
+      { message: 'must declare the expected post-step name exactly once' },
+    ],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'a post step with the expected name that no longer runs the waiver poster',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: 'node scripts/external-check-waiver.mjs \\\n',
+      to: 'node scripts/echo-check-waiver.mjs \\\n',
+    },
+    expected: [
+      {
+        message: 'the post step must run scripts/external-check-waiver.mjs',
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

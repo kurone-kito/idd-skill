@@ -471,6 +471,8 @@ function declaresArtifactName(jobBody, prefix) {
   const names = children.filter((line) => /^ {10}name:/.test(line));
   return names.length === 1 && names[0].startsWith(`          name: ${prefix}`);
 }
+// The waiver poster the self-waiver post step must run.
+const WAIVER_POSTER = 'scripts/external-check-waiver.mjs';
 // Both copies must keep the self-waiver job id, post-step name, and artifact
 // prefix that the waiver provenance verifier reads, so a rename in one copy
 // cannot silently break the waiver check.
@@ -529,12 +531,25 @@ function checkSelfReferentialWaiverConstants(root, report) {
       );
       continue;
     }
-    if (
-      !structuralLines(jobBody).some(
-        (line) => line.trimEnd() === `      - name: ${postStepName}`,
+    // The name labels exactly one step, and that step runs the waiver poster, so a
+    // second step with the same name, or a renamed poster, cannot satisfy the check.
+    const labelled = structuralLines(jobBody).filter(
+      (line) => line.trimEnd() === `      - name: ${postStepName}`,
+    ).length;
+    if (labelled === 0) {
+      report(RWA006, path, 'no longer declares the expected post-step name');
+    } else if (labelled > 1) {
+      report(
+        RWA006,
+        path,
+        'must declare the expected post-step name exactly once',
+      );
+    } else if (
+      !(stepTextNamed(tokenText(jobBody), postStepName) ?? '').includes(
+        WAIVER_POSTER,
       )
     ) {
-      report(RWA006, path, 'no longer declares the expected post-step name');
+      report(RWA006, path, `the post step must run ${WAIVER_POSTER}`);
     }
     if (!declaresArtifactName(jobBody, artifactNamePrefix)) {
       report(
