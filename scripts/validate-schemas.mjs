@@ -12,7 +12,7 @@
  * Supported enforcement keywords:
  *   type, required, properties, patternProperties, additionalProperties,
  *   minLength, minimum, exclusiveMinimum, pattern, format (date-time only),
- *   minItems, items, enum, oneOf, and constrained local `$ref`
+ *   minItems, items, enum, oneOf, `$defs`, and constrained local `$ref`
  *
  * Any other keyword in a schema triggers an error, preventing false
  * confidence from silently-ignored constraints.
@@ -55,6 +55,7 @@ const ENFORCED_KEYWORDS = new Set([
   'enum',
   '$ref',
   'oneOf',
+  '$defs',
 ]);
 const ALLOWED_KEYWORDS = new Set([
   ...ANNOTATION_KEYWORDS,
@@ -93,7 +94,7 @@ function checkSchemaKeywordsWithRefs(schema, path, context, activeRefs) {
     } else if (activeRefs.has(s.$ref)) {
       errors.push(`${path}: cyclic $ref "${s.$ref}"`);
     } else {
-      const resolved = resolveUserGlobalPolicyFieldRef(s.$ref, context);
+      const resolved = resolveUserGlobalConfigRef(s.$ref, context);
       if (typeof resolved === 'string') {
         errors.push(`${path}: ${resolved}`);
       } else {
@@ -109,6 +110,16 @@ function checkSchemaKeywordsWithRefs(schema, path, context, activeRefs) {
         );
       }
     }
+  }
+  for (const [name, definition] of Object.entries(s.$defs ?? {})) {
+    errors.push(
+      ...checkSchemaKeywordsWithRefs(
+        definition,
+        `${path}.$defs.${name}`,
+        context,
+        activeRefs,
+      ),
+    );
   }
   for (const [prop, propSchema] of Object.entries(s.properties ?? {})) {
     errors.push(
@@ -173,22 +184,61 @@ function checkSchemaKeywordsWithRefs(schema, path, context, activeRefs) {
   }
   return errors;
 }
-/** Resolve only exact same-bundle policy-property refs used by user config. */
-function resolveUserGlobalPolicyFieldRef(reference, context) {
+/** Resolve only exact user-global definitions and same-bundle policy refs. */
+function resolveUserGlobalConfigRef(reference, context) {
   if (context.schemaPath !== 'schemas/user-global-config.schema.json') {
     return `unsupported $ref source "${context.schemaPath}"`;
   }
-  const match = /^policy\.schema\.json#\/properties\/([A-Za-z0-9_$-]+)$/u.exec(
-    reference,
-  );
-  if (!match) {
+  const definitionMatch = /^#\/\$defs\/([A-Za-z0-9_$-]+)$/u.exec(reference);
+  if (definitionMatch) {
+    const definitionName = definitionMatch[1];
+    if (!definitionName) return `unresolved $ref "${reference}"`;
+    try {
+      const userGlobalSchema = loadJson(context.schemaPath, context.root);
+      const definitions = userGlobalSchema.$defs;
+      if (!definitions || !Object.hasOwn(definitions, definitionName)) {
+        return `unresolved $ref "${reference}"`;
+      }
+      return definitions[definitionName] ?? `unresolved $ref "${reference}"`;
+    } catch (error) {
+      return `cannot load local $ref "${reference}": ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  if (
+    !/^policy\.schema\.json#\/properties\/[A-Za-z0-9_$-]+(?:\/properties\/[A-Za-z0-9_$-]+)*$/u.test(
+      reference,
+    )
+  ) {
     return `unsupported or non-local $ref "${reference}"`;
   }
-  const propertyName = match[1];
-  if (!propertyName) return `unresolved $ref "${reference}"`;
+  const pointer = reference.slice('policy.schema.json#/'.length);
+  const segments = pointer.split('/');
   try {
     const policySchema = loadJson('schemas/policy.schema.json', context.root);
-    const target = policySchema.properties?.[propertyName];
+    let target = policySchema;
+    for (let index = 0; index < segments.length; index += 2) {
+      const keyword = segments[index];
+      const propertyName = segments[index + 1];
+      if (
+        keyword !== 'properties' ||
+        !propertyName ||
+        typeof target !== 'object' ||
+        target === null ||
+        Array.isArray(target)
+      ) {
+        return `unresolved $ref "${reference}"`;
+      }
+      const properties = target.properties;
+      if (
+        typeof properties !== 'object' ||
+        properties === null ||
+        Array.isArray(properties) ||
+        !Object.hasOwn(properties, propertyName)
+      ) {
+        return `unresolved $ref "${reference}"`;
+      }
+      target = properties[propertyName];
+    }
     return target ?? `unresolved $ref "${reference}"`;
   } catch (error) {
     return `cannot load local $ref "${reference}": ${error instanceof Error ? error.message : String(error)}`;
@@ -221,7 +271,7 @@ export function validate(
     } else if (activeRefs.has(s.$ref)) {
       errors.push(`${path}: cyclic $ref "${s.$ref}"`);
     } else {
-      const resolved = resolveUserGlobalPolicyFieldRef(s.$ref, context);
+      const resolved = resolveUserGlobalConfigRef(s.$ref, context);
       if (typeof resolved === 'string') {
         errors.push(`${path}: ${resolved}`);
       } else {

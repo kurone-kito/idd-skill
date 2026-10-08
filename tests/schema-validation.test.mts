@@ -122,6 +122,82 @@ test('user-global config schema uses only supported local refs and oneOf', () =>
   );
 });
 
+test('user-global partial object definitions preserve policy leaf constraints', () => {
+  const policy = loadJson('schemas/policy.schema.json') as {
+    properties: Record<string, unknown>;
+  };
+  const userGlobal = loadJson('schemas/user-global-config.schema.json') as {
+    $defs: Record<string, unknown>;
+  };
+  const partialFields = [
+    'claimTiming',
+    'commands',
+    'helperRuntime',
+    'critiqueLoop',
+    'issueAuthoring',
+  ];
+
+  function expectedPartialShape(
+    value: unknown,
+    field: string,
+    nestedPath: string[] = [],
+  ): unknown {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+      return value;
+    const node = value as Record<string, unknown>;
+    const expected: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'required' || key === 'description') continue;
+      if (key !== 'properties' || typeof child !== 'object' || child === null) {
+        expected[key] = child;
+        continue;
+      }
+      expected.properties = Object.fromEntries(
+        Object.entries(child).map(([name, propertySchema]) => {
+          const path = [...nestedPath, name];
+          const property = propertySchema as Record<string, unknown>;
+          if (property.properties && typeof property.properties === 'object') {
+            return [name, expectedPartialShape(propertySchema, field, path)];
+          }
+          const tokens = [field, ...path].map((token) =>
+            token.replaceAll('~', '~0').replaceAll('/', '~1'),
+          );
+          return [
+            name,
+            {
+              $ref: `policy.schema.json#/properties/${tokens.join('/properties/')}`,
+            },
+          ];
+        }),
+      );
+    }
+    return expected;
+  }
+
+  function withoutDescriptions(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(withoutDescriptions);
+    if (typeof value !== 'object' || value === null) return value;
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => key !== 'description')
+        .map(([key, child]) => [key, withoutDescriptions(child)]),
+    );
+  }
+
+  for (const field of partialFields) {
+    const definitionName = `partial${field[0]?.toUpperCase()}${field.slice(1)}`;
+    const source = policy.properties[field];
+    const partial = userGlobal.$defs[definitionName];
+    assert.ok(source, `policy schema must declare ${field}`);
+    assert.ok(partial, `user-global schema must define ${definitionName}`);
+    assert.deepEqual(
+      withoutDescriptions(partial),
+      expectedPartialShape(source, field),
+      field,
+    );
+  }
+});
+
 test('schema refs validate policy property targets and reject remote or escaping refs', () => {
   const context = {
     root: REPO_ROOT,
@@ -135,14 +211,73 @@ test('schema refs validate policy property targets and reject remote or escaping
     'https://example.test/schema.json',
     '../policy.schema.json#/properties/markerPrefix',
     'policy.schema.json#/properties/not-a-policy-field',
+    'policy.schema.json#/properties/constructor',
+    'policy.schema.json#/properties/toString',
   ]) {
     const errors = checkSchemaKeywords({ $ref: ref }, '$', context);
     assert.ok(errors.length > 0, `expected ${ref} to be rejected`);
   }
   assert.ok(
+    validate(
+      42,
+      { $ref: 'policy.schema.json#/properties/constructor' },
+      '$',
+      context,
+    ).some((error) => error.includes('unresolved $ref')),
+  );
+  assert.ok(
     checkSchemaKeywords({ $ref: reference.$ref }).some((error) =>
       error.includes('without schema source context'),
     ),
+  );
+});
+
+test('policy schema accepts distinct dotted x-extension keys', () => {
+  const policy = loadJson('fixtures/schemas/policy.valid.json') as JsonRecord;
+  policy['x-a.b'] = 'literal extension';
+  policy['x-a'] = { b: 'nested extension' };
+  assert.deepEqual(
+    validate(policy, loadJson('schemas/policy.schema.json')),
+    [],
+  );
+});
+
+test('user-global nested policy fields are partial while array entries stay complete', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+
+  assert.deepEqual(
+    validate(
+      {
+        claimTiming: { staleAge: 'PT24H' },
+        helperRuntime: { packageSpec: 'idd-skill@^1.0.0' },
+        overrides: [
+          {
+            match: { repo: 'owner/repo' },
+            config: { commands: { 'install-deps': 'pnpm install' } },
+          },
+        ],
+      },
+      schema,
+      '$',
+      context,
+    ),
+    [],
+  );
+  assert.ok(
+    validate({ claimTiming: { staleAge: 24 } }, schema, '$', context).length >
+      0,
+  );
+  assert.ok(
+    validate(
+      { ciGate: { externalChecks: { advisory: [{}] } } },
+      schema,
+      '$',
+      context,
+    ).some((error) => error.includes('missing required property "selector"')),
   );
 });
 
