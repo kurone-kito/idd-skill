@@ -229,8 +229,8 @@ template into `kurone-kito/kurone-kito` (`kurone-kito/kurone-kito#18` ->
 `#29`, merged; tracked upstream via issue `#2973` item 14): an adopter
 completed the whole hearing/import/substitute/record-policy sequence
 with `ephemeral-npx` or `package-manager` selected and simply never set
-`helperRuntime.packageSpec`, silently leaving every helper invocation
-backed by the mutable default archive URL — embedded directly in the
+`helperRuntime.packageSpec`, silently leaving helper calls
+on the mutable default archive URL — embedded directly in the
 `ephemeral-npx` invocation string, or resolved through
 `package-manager`'s installed dependency (see
 [Helper Runtime Profile](../idd-helper-scripts.md#profile-wiring-surface)
@@ -240,8 +240,9 @@ own header comment about this same gap. The
 2026-09-15 Groom hearing for issue `#2987` chose to surface this as a
 non-blocking advisory rather than a blocking check: `idd-onboard.mjs
 --verify` (and its underlying `runVerify` / `checkPackagePinWarning`
-API) reports a stable, non-blocking warning whenever the effective
-`helperRuntime.profile` is `ephemeral-npx` or `package-manager` and no
+API) warns without blocking whenever the effective
+`helperRuntime.profile` is `ephemeral-npx`, `package-manager`, or `user-global`
+and no
 `helperRuntime.packageSpec` is configured, naming the mutable default
 archive URL and pointing back to this section — but it never fails
 `--verify` or changes its exit code, since a repository may deliberately

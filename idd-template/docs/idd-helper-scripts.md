@@ -3406,7 +3406,7 @@ other case leaves the PR `in-loop`:
 
 Post it with the profile-selected `post-idd-marker` command -- see
 [Post operational markers](#post-operational-markers-write-side) above
-for the source-repo / package-manager / ephemeral-npx forms;
+for the source-repo / package-manager / ephemeral-npx / user-global forms;
 source-repo example: `node scripts/post-idd-marker.mjs --type
 out-of-loop --target pr <n> --agent-id <id> --timestamp <iso8601>
 --apply`. `pr:` is derived from `--target pr <n>`'s own positional

@@ -659,14 +659,6 @@ const HELPER_COMMANDS = [
  * an unrecognized helper `id`, or an unrecognized `profile` -- callers
  * fall back to a documentation pointer alone in all three cases.
  */
-/**
- * Bin names of every helper this build ships, in HELPER_COMMANDS order. The
- * user-global doctor check resolves exactly this set over PATH, so the bin
- * list is never maintained a second time.
- */
-export function listHelperBinNames() {
-  return HELPER_COMMANDS.map((command) => command.binName);
-}
 export function resolveHelperCommandForProfile({
   helperId,
   profile,
@@ -698,6 +690,14 @@ export function resolveHelperCommandForProfile({
     default:
       return null;
   }
+}
+/**
+ * Bin names of every helper this build ships, in HELPER_COMMANDS order. The
+ * user-global doctor check resolves exactly this set over PATH, so the bin
+ * list is never maintained a second time.
+ */
+export function listHelperBinNames() {
+  return HELPER_COMMANDS.map((command) => command.binName);
 }
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `profile:`): tests/flag-name-matrix.test.mts scans this file's *compiled*

@@ -408,7 +408,7 @@ not yet wired", `docs/idd-workflow.md`): without lite tier, hold them out.
       repository.
 - [ ] The selected helper runtime profile is recorded, including whether
       the repository stays on `instructions-only` or opted into
-      `package-manager`, `vendored-node`, or `ephemeral-npx`.
+      `package-manager`, `vendored-node`, `ephemeral-npx`, or `user-global`.
 - [ ] If the operator opted into issue authoring, the native destination
       recorded in the policy contains `SKILL.md` and every bundled reference
       file.

@@ -1037,12 +1037,12 @@ any copied file other than those three meta-docs.
 
 Apply the confirmed helper runtime profile after placeholder replacement:
 leave `helperRuntime` absent from `.github/idd/config.json` for the
-`instructions-only` default, which means no helper command is configured.
+`instructions-only` default, which configures no helper command.
 Only when the operator explicitly selects another supported profile should
 you add the object below, replacing the example value with
-`package-manager`, `vendored-node`, or `ephemeral-npx` as appropriate.
-Merge it into the top-level object in `.github/idd/config.json` and keep the
-surrounding member commas valid.
+`package-manager`, `vendored-node`, `ephemeral-npx`, or `user-global`.
+Merge it into the top-level object in `.github/idd/config.json` and keep member
+commas valid.
 
 ```json
 {
