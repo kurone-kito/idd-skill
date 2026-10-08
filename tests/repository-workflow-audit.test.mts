@@ -61,11 +61,14 @@ const FULL_INPUTS: readonly string[] = [
 
 // A mutation rewrites one copy. `from`/`to` replace the first occurrence, or
 // every occurrence when `all` is set. `truncateAfter` keeps the copy only up
-// to and including its anchor. `replaceWith` substitutes the whole copy.
+// to and including its anchor. `replaceWith` substitutes the whole copy, and
+// `transform` computes the new copy from the real one (for moves and inserts
+// that a plain replacement cannot express).
 type Mutation =
   | { from: string; to: string; all?: boolean }
   | { truncateAfter: string }
-  | { replaceWith: string };
+  | { replaceWith: string }
+  | { transform: (text: string) => string };
 
 function realText(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, relativePath), 'utf8');
@@ -74,6 +77,9 @@ function realText(relativePath: string): string {
 function applyMutation(text: string, mutation: Mutation): string {
   if ('replaceWith' in mutation) {
     return mutation.replaceWith;
+  }
+  if ('transform' in mutation) {
+    return mutation.transform(text);
   }
   if ('truncateAfter' in mutation) {
     const end = text.indexOf(mutation.truncateAfter);
@@ -1818,6 +1824,339 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe query whose jq filter no longer tests for a CheckRun',
+    path: ROOT_PROBE,
+    mutation: {
+      from: '.__typename == "CheckRun"',
+      to: '.__typename == "CheckRunX"',
+    },
+    expected: [
+      {
+        message:
+          'probe must verify Actions, legacy status, and a linked issue exercise all read scopes',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that no longer reports a missing Actions check run',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'has no Actions check run',
+      to: 'has an Actions check run',
+    },
+    expected: [
+      { message: 'probe must report when it has no Actions check run' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that no longer reports a missing legacy status context',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'has no legacy status context',
+      to: 'has a legacy status context',
+    },
+    expected: [
+      { message: 'probe must report when it has no legacy status context' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe without a permissions block to bound its trigger',
+    path: ROOT_PROBE,
+    mutation: { from: '\npermissions:', to: '\npermissions_x:' },
+    expected: [{ message: 'on:/permissions: block not found' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a waiver-invoking copy whose helper is no longer named',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: 'external-check-waiver',
+      to: 'external-check-renamed',
+      all: true,
+    },
+    expected: [
+      {
+        includes:
+          'must find idd-advisory-convergence-self-waiver as an external-check-waiver invoker',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a waiver-invoking job without checks: read (kurone-kito/idd-skill#3683)',
+    path: TEMPLATE_ADVISORY,
+    mutation: { from: 'checks: read', to: 'checks: none', all: true },
+    expected: [
+      { includes: 'must keep checks: read (kurone-kito/idd-skill#3683' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a waiver-invoking job without statuses: read (kurone-kito/idd-skill#3683)',
+    path: TEMPLATE_ADVISORY,
+    mutation: { from: 'statuses: read', to: 'statuses: none', all: true },
+    expected: [
+      { includes: 'must keep statuses: read (kurone-kito/idd-skill#3683' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a required gate that references the token-scope probe',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '  pull_request_target:',
+      to: '  pull_request_target:\n  # probe_token_scopes',
+    },
+    expected: [{ message: 'must not reference the token-scope probe' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template comment-refresh rerun that no longer excludes an ambiguous package manager',
+    path: TEMPLATE_COMMENT,
+    mutation: {
+      from: "steps.manager.outputs.manager != 'ambiguous'",
+      to: "steps.manager.outputs.manager != 'other'",
+      all: true,
+    },
+    expected: [
+      {
+        message:
+          "rerun step's if: must still exclude an ambiguous package manager",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step whose review branch is gated by success() in the opposite order',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "if: github.event_name == 'pull_request_review' ||",
+      to: "if: github.event_name == 'pull_request_review' && success() ||",
+    },
+    expected: [
+      {
+        message:
+          "rerun step's pull_request_review branch must not itself be gated by success()",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step whose review branch is gated by the debounce skip output after it',
+    path: ROOT_COMMENT,
+    mutation: {
+      from: "steps.debounce.outputs.skip != 'true')",
+      to: "steps.debounce.outputs.skip != 'true' && github.event_name == 'pull_request_review')",
+    },
+    expected: [
+      {
+        message:
+          "rerun step's pull_request_review branch must not be gated by debounce.outputs.skip",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose debounce step runs after the rerun step',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const debounce = text.indexOf(
+          '      - name: Check for newer qualifying event',
+        );
+        const rerun = text.indexOf('      - name: Rerun required HEAD check');
+        const after = text.indexOf('\n      - ', rerun + 1);
+        const end = after === -1 ? text.length : after;
+        const debounceBlock = text.slice(debounce, rerun).replace(/\n$/, '');
+        const rerunBlock = text.slice(rerun, end);
+        return (
+          text.slice(0, debounce) +
+          rerunBlock +
+          '\n' +
+          debounceBlock +
+          text.slice(end)
+        );
+      },
+    },
+    expected: [
+      { message: 'steps must run in order: classify, debounce, rerun' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose rerun step is renamed and whose review trigger is removed',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) =>
+        text
+          .replace('- name: Rerun required HEAD check', '- name: Rerun renamed')
+          .replace('  pull_request_review:', '  pull_request_review_removed:'),
+    },
+    expected: [
+      { message: 'must have a "Rerun required HEAD check" step' },
+      { message: 'on: must include pull_request_review' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step without its own PR_NUMBER while a later step has one',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const rerun = text.indexOf('- name: Rerun required HEAD check');
+        const after = text.indexOf('\n      - ', rerun + 1);
+        const end = after === -1 ? text.length : after;
+        const body = text.slice(rerun, end).replace(/\n {10}PR_NUMBER: .*/, '');
+        const extra = `\n      - name: Extra step\n        env:\n          PR_NUMBER: \${{ github.event.pull_request.number || github.event.issue.number }}\n        run: echo ok`;
+        return text.slice(0, rerun) + body + extra + text.slice(end);
+      },
+    },
+    expected: [
+      { message: 'Rerun required HEAD check step must assign PR_NUMBER' },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a checkout step without fetch-depth while a later step sets it',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const removed = text.replace('          fetch-depth: 1\n', '');
+        const later = removed.indexOf(
+          '      - name: Post cleanup evidence comment',
+        );
+        return (
+          removed.slice(0, later) +
+          '      - name: Extra step\n        with:\n          fetch-depth: 1\n        run: echo ok\n' +
+          removed.slice(later)
+        );
+      },
+    },
+    expected: [{ message: 'checkout step must keep its fetch-depth: input' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a missing onboarding guide',
+    path: ONBOARDING_GUIDE,
+    omit: [ONBOARDING_GUIDE],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'a missing self-waiver constants source',
+    path: SELF_WAIVER_CONSTANTS,
+    omit: [SELF_WAIVER_CONSTANTS],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA006',
+    name: 'a missing template advisory-convergence copy',
+    path: TEMPLATE_ADVISORY,
+    omit: [TEMPLATE_ADVISORY],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a missing template comment-refresh copy',
+    path: TEMPLATE_COMMENT,
+    omit: [TEMPLATE_COMMENT],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a missing template token-scope probe',
+    path: TEMPLATE_PROBE,
+    omit: [TEMPLATE_PROBE],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a missing pnpm-boundary workflow',
+    path: '.github/workflows/pnpm-boundary.yml',
+    omit: ['.github/workflows/pnpm-boundary.yml'],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a missing Node 22 floor workflow',
+    path: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    omit: ['.github/workflows/pnpm-boundary-node22-floor.yml'],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a missing lint workflow',
+    path: '.github/workflows/lint.yml',
+    omit: ['.github/workflows/lint.yml'],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check without a permissions block to bound its trigger',
+    path: '.github/workflows/lint.yml',
+    mutation: { from: '\npermissions:', to: '\npermissions_x:' },
+    expected: [{ message: 'on:/permissions: block not found' }],
+  },
+  {
+    ruleId: 'RWA002',
+    name: 'a reusable-workflow caller without a jobs mapping',
+    path: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    mutation: { from: '\njobs:\n', to: '\njobs_x:\n' },
+    expected: [{ message: 'jobs: block not found' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a required check whose job key is renamed away',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: { from: '\n  pnpm-boundary:\n', to: '\n  pnpm-boundary-x:\n' },
+    expected: [
+      { message: 'job pnpm-boundary not found' },
+      { message: 'must keep required job id pnpm-boundary' },
+    ],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a Node 22 floor job whose key is renamed away',
+    path: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    mutation: {
+      from: '\n  pnpm-boundary-node22-floor:\n',
+      to: '\n  pnpm-boundary-node22-floor-x:\n',
+    },
+    expected: [{ message: 'job pnpm-boundary-node22-floor not found' }],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a Node 22 floor job without its with block',
+    path: '.github/workflows/pnpm-boundary-node22-floor.yml',
+    mutation: { from: '\n    with:\n', to: '\n    with_x:\n' },
+    expected: [{ message: 'with: block not found at indent 4' }],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a pnpm-boundary workflow without its workflow_call block',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: { from: '\n  workflow_call:', to: '\n  workflow_call_x:' },
+    expected: [{ message: 'workflow_call: block not found at indent 2' }],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a pnpm-boundary workflow without its inputs block',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: { from: '\n    inputs:', to: '\n    inputs_x:' },
+    expected: [{ message: 'inputs: block not found at indent 4' }],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a pnpm-boundary workflow without its runner input',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: { from: '\n      runner:\n', to: '\n      runner_x:\n' },
+    expected: [{ message: 'runner: block not found at indent 6' }],
+  },
   // RWA006: self-waiver constants across both advisory-convergence copies.
   {
     ruleId: 'RWA006',
@@ -2141,5 +2480,29 @@ test('a missing copy is recorded once per rule, however many checks read it', ()
         message: 'required input is missing or unreadable',
       },
     ]);
+  });
+});
+
+test('an unnamed step after the template notice step is not part of that step', () => {
+  const root = fixtureRoot({
+    [TEMPLATE_ADVISORY]: {
+      transform: (text: string) => {
+        const notice = text.indexOf(
+          '- name: Notice when no helper runtime is configured',
+        );
+        const after = text.indexOf('\n      - ', notice + 1);
+        return `${text.slice(0, after)}\n      - run: exit 1${text.slice(after)}`;
+      },
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some((violation) =>
+        violation.message.startsWith('notice step must not fail the job'),
+      ),
+      false,
+      JSON.stringify(violations),
+    );
   });
 });
