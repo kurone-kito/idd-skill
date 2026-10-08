@@ -794,7 +794,9 @@ export function selectNonOverlappingBatch(input) {
  * The first thing `candidate` collides with, in a fixed precedence: an
  * in-flight issue (ascending number), then an already-picked batch member
  * (pick order), then a claim or open-PR overlap from the analysis (ascending
- * number). Only the first hit is reported, with its shared paths sorted.
+ * number). Only the first hit is reported, with its shared paths in the order
+ * the evidence or analysis lists them; the caller sorts them when it emits
+ * `batchSkipped`.
  */
 function findBatchCollision(candidate, inFlight, picked) {
   const touched = new Set(candidate.highContentionTouched);

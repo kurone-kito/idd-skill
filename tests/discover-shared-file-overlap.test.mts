@@ -1321,36 +1321,36 @@ test('selectNonOverlappingBatch unions the files of an in-flight number listed t
 
 test('selectNonOverlappingBatch sorts shared paths itself for a caller-built analysis', () => {
   // The analysis is hand-built with reversed path lists, so a sort that
-  // relied on analyzeSharedFileOverlap having run would leave them reversed.
+  // relied on analyzeSharedFileOverlap having run would leave the batch and
+  // claim collisions reversed. (An in-flight collision is already sorted by
+  // the evidence's own intersect; that case is a pass-through check.)
   const reversed = [REVIEW_FIX_FILE, MERGE_FILE];
   const sorted = [...reversed].sort();
   assert.notDeepEqual(reversed, sorted);
   const entry = (
     number: number,
-    touched: string[],
     overlaps: OverlapHit[] = [],
   ): OverlapCandidateResult => ({
     number,
     score: 4,
     effectiveScore: 4,
-    candidateFiles: touched,
-    highContentionTouched: touched,
+    candidateFiles: [...reversed],
+    highContentionTouched: [...reversed],
     overlaps,
     overlapFlag: overlaps.length > 0,
   });
+  // 3 is flagged by a claim, so it is walked first and dropped by that claim;
+  // 1 is then picked and 2 collides with it.
   const analysis: OverlapAnalysis = {
     candidates: [
-      entry(1, reversed),
-      entry(2, reversed),
-      entry(
-        3,
-        [ADVISORY_FILE],
-        [{ number: 991, reason: 'claim', files: reversed }],
-      ),
+      entry(1),
+      entry(2),
+      entry(3, [{ number: 991, reason: 'claim', files: [...reversed] }]),
     ],
-    recommendedOrder: [1, 2, 3],
+    recommendedOrder: [3, 1, 2],
     summary: { candidateCount: 3, flaggedCount: 1, activeIssueCount: 1 },
   };
+  const claimHitFiles = analysis.candidates[2].overlaps[0].files;
   const select = (inFlight: InFlightIssueInput[]) =>
     selectNonOverlappingBatch({
       analysis,
@@ -1360,18 +1360,21 @@ test('selectNonOverlappingBatch sorts shared paths itself for a caller-built ana
     });
   const batchRun = select([]);
   assert.deepEqual(batchRun.batchSkipped, [
-    { number: 2, collidedWith: 1, reason: 'batch', files: sorted },
     { number: 3, collidedWith: 991, reason: 'claim', files: sorted },
+    { number: 2, collidedWith: 1, reason: 'batch', files: sorted },
   ]);
-  const inFlightRun = select([{ number: 900, candidateFiles: reversed }]);
+  assert.deepEqual(batchRun.batch, [1]);
+  const inFlightRun = select([{ number: 900, candidateFiles: [...reversed] }]);
   assert.deepEqual(inFlightRun.batchSkipped[0], {
-    number: 1,
+    number: 3,
     collidedWith: 900,
     reason: 'in-flight',
     files: sorted,
   });
-  // The emitted list is a copy: sorting it never reorders the caller's input.
-  assert.deepEqual(analysis.candidates[2].overlaps[0].files, reversed);
+  // The emitted list is a copy: sorting it never reorders the caller's input,
+  // and the output never aliases the analysis's own array.
+  assert.deepEqual(claimHitFiles, [REVIEW_FIX_FILE, MERGE_FILE]);
+  assert.notStrictEqual(batchRun.batchSkipped[0].files, claimHitFiles);
 });
 
 test('selectNonOverlappingBatch keeps a candidate with only non-high-contention files in the known group', () => {
