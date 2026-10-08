@@ -394,10 +394,17 @@ const SELF_WAIVER_CONSTANTS_PATH = 'src/scripts/advisory-convergence.mts';
 // Reads one string constant from the verifier's source text. Importing the
 // verifier would run its module graph, which loads the schema validator and
 // resolves the repository layout, so the audit reads the declaration instead.
-// A declaration that does not match fails closed.
+// A declaration that does not match fails closed. Only a declaration that starts
+// a line counts, so a comment that repeats it cannot supply the value, and a
+// repeated declaration makes the constant unreadable instead of letting one copy
+// win.
 function readStringConstant(source: string, name: string): string | undefined {
-  const match = new RegExp(`export const ${name} =\\s*'([^']*)';`).exec(source);
-  return match?.[1];
+  const matches = [
+    ...source.matchAll(
+      new RegExp(`^export const ${name} =\\s*'([^']*)';`, 'gm'),
+    ),
+  ];
+  return matches.length === 1 ? matches[0][1] : undefined;
 }
 
 // Structure only: the lines of a workflow with comment lines removed, and the

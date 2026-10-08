@@ -3230,6 +3230,34 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ prefix: 'checkout must pin ref:' }],
   },
+  {
+    ruleId: 'RWA006',
+    name: 'a waiver job id whose exported constant changes while a comment keeps the old declaration',
+    path: SELF_WAIVER_CONSTANTS,
+    violationPath: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const head = 'export const SELF_REFERENTIAL_WAIVER_JOB_ID =\n';
+        const old = "  'idd-advisory-convergence-self-waiver';";
+        anchored(text, head);
+        assert.equal(
+          text.split(old).length - 1,
+          1,
+          'fixture anchor is not unique',
+        );
+        return text
+          .split(head)
+          .join(
+            `// export const SELF_REFERENTIAL_WAIVER_JOB_ID = 'idd-advisory-convergence-self-waiver';\n${head}`,
+          )
+          .split(old)
+          .join("  'renamed-self-waiver';");
+      },
+    },
+    expected: [
+      { message: 'no longer declares the expected self-waiver job id' },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
