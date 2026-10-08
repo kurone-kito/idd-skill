@@ -4,6 +4,7 @@
 // The scripts/helper-runtime-manifest.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
@@ -14,7 +15,10 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { inspectHelperRuntimeConfig } from './policy-helpers.mjs';
+import {
+  HELPER_RUNTIME_LAUNCHERS,
+  inspectHelperRuntimeConfig,
+} from './policy-helpers.mjs';
 
 // Resolve the package/bundle root via the shared resolveBundleRoot (issue
 // #3238): the nearest ancestor containing schemas/policy.schema.json,
@@ -673,6 +677,7 @@ export function resolveHelperCommandForProfile({
   helperId,
   profile,
   packageSpec = '',
+  launcher = 'npx',
 }) {
   const command = HELPER_COMMANDS.find((entry) => entry.id === helperId);
   if (!command) {
@@ -696,10 +701,105 @@ export function resolveHelperCommandForProfile({
       // package-manager (no repository-local node_modules is involved).
       return command.binName;
     case 'ephemeral-npx':
-      return `npx --yes --package ${normalizePackageSpec(packageSpec)} ${command.binName}`;
+      return ephemeralLauncherCommand(
+        launcher,
+        normalizePackageSpec(packageSpec),
+        command.binName,
+      );
     default:
       return null;
   }
+}
+/**
+ * Lowest pnpm major the `pnpm dlx --package <git-hosted spec>` acceptance
+ * runs covered (#3830): the codeload runs on the merge commit of #3829
+ * passed on pnpm 10, 11 and 12. Older majors were not tested, so the floor
+ * does not go below 10.
+ */
+export const PNPM_DLX_MIN_MAJOR = 10;
+/** Upper bound on the `pnpm --version` probe, so a hung binary cannot stall the manifest. */
+const PNPM_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * Resolve the configured ephemeral-npx launcher (#3830). `auto` picks
+ * `pnpm-dlx` only when the target pnpm major is at least
+ * PNPM_DLX_MIN_MAJOR; an unset value keeps `npx`, the historical form.
+ */
+export function resolveLauncher(configured, pnpmMajor) {
+  if (configured === undefined || configured === '') {
+    return {
+      configured: null,
+      resolved: 'npx',
+      reason: 'no launcher is configured; npx is the default',
+    };
+  }
+  if (configured === 'npx' || configured === 'pnpm-dlx') {
+    return {
+      configured,
+      resolved: configured,
+      reason: `launcher ${configured} is set explicitly`,
+    };
+  }
+  if (configured === 'auto') {
+    if (pnpmMajor === null) {
+      return {
+        configured,
+        resolved: 'npx',
+        reason: 'auto: the pnpm version could not be detected, so npx is used',
+      };
+    }
+    if (pnpmMajor >= PNPM_DLX_MIN_MAJOR) {
+      return {
+        configured,
+        resolved: 'pnpm-dlx',
+        reason: `auto: pnpm ${pnpmMajor} is at least ${PNPM_DLX_MIN_MAJOR}`,
+      };
+    }
+    return {
+      configured,
+      resolved: 'npx',
+      reason: `auto: pnpm ${pnpmMajor} is below ${PNPM_DLX_MIN_MAJOR}, so npx is used`,
+    };
+  }
+  return {
+    configured,
+    resolved: 'npx',
+    reason: `unsupported launcher ${JSON.stringify(configured)}; npx is used`,
+  };
+}
+/**
+ * The real probe. It runs without a shell, as the #3830 decision records: a
+ * pnpm installed as a `.cmd` shim on native Windows cannot be spawned that
+ * way, so the probe fails there and `auto` resolves to `npx`.
+ */
+function defaultPnpmVersionProbe(cwd, timeoutMs) {
+  return execFileSync('pnpm', ['--version'], {
+    cwd,
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+}
+/**
+ * The pnpm major that `pnpm --version` reports in `cwd`, the target root.
+ * Returns `null` on any failure (missing binary, timeout, non-zero exit,
+ * unparseable output) and never throws (#3830).
+ */
+export function detectPnpmMajor({
+  probe = defaultPnpmVersionProbe,
+  cwd,
+  timeoutMs = PNPM_PROBE_TIMEOUT_MS,
+}) {
+  try {
+    const match = /^\s*(\d+)/.exec(probe(cwd, timeoutMs));
+    return match ? Number(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+function ephemeralLauncherCommand(launcher, packageSpec, binName) {
+  return launcher === 'pnpm-dlx'
+    ? `pnpm dlx --package ${packageSpec} ${binName}`
+    : `npx --yes --package ${packageSpec} ${binName}`;
 }
 /**
  * Bin names of every helper this build ships, in HELPER_COMMANDS order. The
@@ -724,6 +824,7 @@ const HELPER_RUNTIME_MANIFEST_FLAG_SPEC = {
   '--from-profile': { type: 'string' },
   '--package-manager': { type: 'string' },
   '--package-spec': { type: 'string' },
+  '--launcher': { type: 'string' },
   '--target-root': { type: 'string' },
 };
 if (import.meta.main) {
@@ -745,6 +846,7 @@ function main() {
     packageManager: args.packageManager,
     packageSpec: args.packageSpec,
     targetRoot: args.targetRoot,
+    launcher: args.launcher,
   });
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
   return 0;
@@ -779,18 +881,74 @@ function resolveConfiguredPackageSpec(targetRoot) {
   }
   return '';
 }
+/**
+ * Resolve `targetRoot`s configured `helperRuntime.launcher` (#3830) with the
+ * same fail-closed rules as resolveConfiguredPackageSpec. Returns `""` when
+ * unset or invalid.
+ */
+function resolveConfiguredLauncher(targetRoot) {
+  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
+    const absolutePath = resolve(targetRoot, file);
+    if (!existsSync(absolutePath)) {
+      continue;
+    }
+    let config;
+    try {
+      config = JSON.parse(readFileSync(absolutePath, 'utf8'));
+    } catch {
+      return '';
+    }
+    const helperRuntime = inspectHelperRuntimeConfig(config);
+    return helperRuntime.status === 'ok' ? (helperRuntime.launcher ?? '') : '';
+  }
+  return '';
+}
+/**
+ * Validate a `--launcher` value (#3830). An empty value means unset and passes
+ * through; any other value outside the three launchers is a usage error, the
+ * same as an unsupported `--profile`.
+ */
+function normalizeLauncher(launcher) {
+  if (!launcher || HELPER_RUNTIME_LAUNCHERS.has(launcher)) {
+    return launcher;
+  }
+  throw markCliUsageError(new Error(`unsupported launcher: ${launcher}`));
+}
 export function buildHelperRuntimeManifest({
   profile = '',
   fromProfile = '',
   packageManager = '',
   packageSpec = '',
   targetRoot = process.cwd(),
+  launcher = '',
+  probe,
 } = {}) {
   const packageRoot = PACKAGE_ROOT;
   const packageMetadata = resolveSourcePackageMetadata(packageRoot);
   const normalizedProfile = normalizeProfile(profile);
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
   const normalizedTargetRoot = targetRoot || process.cwd();
+  // Precedence: explicit --launcher > configured helperRuntime.launcher >
+  // unset (npx). The pnpm probe runs only when `auto` could change the
+  // output, that is when the ephemeral-npx entry is emitted (no --profile,
+  // or --profile ephemeral-npx).
+  const configuredLauncher =
+    normalizeLauncher(launcher) ||
+    resolveConfiguredLauncher(normalizedTargetRoot);
+  const emitsEphemeral =
+    normalizedProfile === '' || normalizedProfile === 'ephemeral-npx';
+  const pnpmMajor =
+    configuredLauncher === 'auto' && emitsEphemeral
+      ? detectPnpmMajor({
+          probe,
+          cwd: normalizedTargetRoot,
+          timeoutMs: PNPM_PROBE_TIMEOUT_MS,
+        })
+      : null;
+  const launcherResolution = resolveLauncher(
+    configuredLauncher || undefined,
+    pnpmMajor,
+  );
   // Precedence: explicit --package-spec > configured helperRuntime.packageSpec
   // > DEFAULT_PACKAGE_SPEC (idd-skill#1731). normalizePackageSpec's own `||
   // DEFAULT_PACKAGE_SPEC` fallback is unchanged; this only widens what feeds
@@ -810,6 +968,7 @@ export function buildHelperRuntimeManifest({
     managedFiles,
     packageManager: normalizedPackageManager,
     packageSpec: normalizedPackageSpec,
+    launcherResolution,
     yarnFlavor: detectYarnFlavor(normalizedTargetRoot),
   });
   const selectedProfiles = normalizedProfile
@@ -1036,6 +1195,7 @@ function buildProfileCatalog({
   packageManager,
   packageSpec,
   yarnFlavor,
+  launcherResolution,
 }) {
   const packageManagerScripts = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [command.scriptName, command.binName]),
@@ -1053,7 +1213,11 @@ function buildProfileCatalog({
   const ephemeralCommands = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [
       command.scriptName,
-      `npx --yes --package ${packageSpec} ${command.binName}`,
+      ephemeralLauncherCommand(
+        launcherResolution.resolved,
+        packageSpec,
+        command.binName,
+      ),
     ]),
   );
   return {
@@ -1102,7 +1266,9 @@ function buildProfileCatalog({
     'ephemeral-npx': {
       profile: 'ephemeral-npx',
       description:
-        'Resolve helper commands one-shot through npx without copying files into the repository.',
+        launcherResolution.resolved === 'pnpm-dlx'
+          ? 'Resolve helper commands one-shot through pnpm dlx without copying files into the repository.'
+          : 'Resolve helper commands one-shot through npx without copying files into the repository.',
       packageManager: '',
       installCommand: '',
       managedDependencies: {
@@ -1112,9 +1278,12 @@ function buildProfileCatalog({
       managedFiles: [],
       commands: ephemeralCommands,
       notes: [
-        'This profile requires Node.js and npm with npx available at execution time.',
+        launcherResolution.resolved === 'pnpm-dlx'
+          ? 'This profile requires Node.js and pnpm 10 or later with pnpm dlx available at execution time.'
+          : 'This profile requires Node.js and npm with npx available at execution time.',
         PACKAGE_SPEC_PIN_HINT,
       ],
+      launcher: launcherResolution,
     },
     'user-global': {
       profile: 'user-global',
@@ -1299,6 +1468,7 @@ function parseArgs(argv) {
   return {
     help,
     profile: values.profile ?? '',
+    launcher: values.launcher ?? '',
     fromProfile: values['from-profile'] ?? '',
     packageManager: values['package-manager'] ?? '',
     packageSpec: values['package-spec'] ?? '',
@@ -1312,6 +1482,9 @@ Options:
   --profile <package-manager|vendored-node|ephemeral-npx|instructions-only|user-global>
   --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only|user-global>
   --package-manager <npm|pnpm|yarn>
+  --launcher <auto|npx|pnpm-dlx>
+                        ephemeral-npx only: the command launcher. auto picks
+                        pnpm dlx on pnpm 10 or later (#3830).
   --package-spec <npm-spec-or-tarball-url>
                         Affects package-spec-derived output only (each
                         profile's composed install/invocation strings, the
