@@ -3306,6 +3306,27 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ prefix: 'expected exactly 4 actions/setup-node steps' }],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a name-first checkout that keeps an unpinned ref beside the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const legacy = [
+          `      - name: Checkout legacy`,
+          `        uses: actions/checkout@v4`,
+          `        with:`,
+          `          ref: \${{ github.event.pull_request.head.sha }}`,
+          `          fetch-depth: 1`,
+          '',
+        ].join('\n');
+        anchored(text, checkout);
+        return text.split(checkout).join(legacy + checkout);
+      },
+    },
+    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
