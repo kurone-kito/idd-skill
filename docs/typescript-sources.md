@@ -211,7 +211,23 @@ also use the preload. This guard addresses the observed 2026-10-04 probe
 leak in issue kurone-kito/idd-skill#3755, where unexpected real `gh`
 commands were caught but the parent probe still passed. Running one file
 with plain `node --test` bypasses both guards (preventive; no observed
-incident yet). Unit tests import the typed `src/scripts/*.mts`
+incident yet).
+
+The guard also puts a PATH shim first on `PATH`, so a shell launch the
+in-process parser misses (for example `g""h`, `$(printf gh)`, or `gh${IFS}`)
+still never reaches the real CLI (kurone-kito/idd-skill#3841). The owner
+process writes two launchers into `<guard root>/bin`: a POSIX `gh` (mode
+`0o755`) or, on Windows, `gh.cmd`. Each runs `tests/isolate-gh-shim.cjs`
+under the same Node binary, with `NODE_OPTIONS` cleared. The shim records
+one ledger entry with `api` `path-shim`, prints `IDD_UNEXPECTED_REAL_GH`,
+and exits 1. It never starts a real `gh`. The launchers are generated per
+guard root, so nothing executable is committed. A `stubExecutable` fixture
+is prepended later and stays ahead of the shim. Its path is registered, so
+a fixture still runs as before. Residuals the shim cannot see: an absolute
+path to the real `gh` inside a script a payload runs, a script that rewrites
+`PATH` first, and a launch whose explicit environment drops the guard
+directory or leaves `PATH` unset. The `Windows platform tests` job runs the
+two `path shim: windows` cases by name pattern. Unit tests import the typed `src/scripts/*.mts`
 sources so assertions are checked against the real signatures;
 CLI/integration tests keep spawning the emitted `scripts/*.mjs` /
 `bin/*.mjs` artifacts, which is exactly what adopters execute.
