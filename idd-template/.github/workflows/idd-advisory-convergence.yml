@@ -249,13 +249,6 @@ jobs:
               fi
             done
           fi
-          if [ "$PROFILE" = "user-global" ]; then
-            # user-global is an operator-local install. CI runners do not have it,
-            # and this workflow does not dispatch it, so stop here rather than
-            # falling back to instructions-only silently.
-            echo "::error::helperRuntime.profile is user-global, an operator-local install that CI runners do not have. This workflow cannot dispatch it. Use package-manager, vendored-node, or ephemeral-npx in .github/idd/config.json to run this check in CI."
-            exit 1
-          fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
       - name: Fail closed when no helper runtime is configured
@@ -415,14 +408,14 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-advisory-convergence --pr "$PR_NUMBER" --assert
               ;;
             *)
               # Unreachable by construction (the profile-resolution step
               # only ever emits one of the five known profile values, and
-              # instructions-only and user-global already stopped the job above), but a
+              # instructions-only already stopped the job above), but a
               # required check must never silently no-op and report
               # success on an unexpected profile value.
               echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
@@ -537,13 +530,6 @@ jobs:
                 break
               fi
             done
-          fi
-          if [ "$PROFILE" = "user-global" ]; then
-            # user-global is an operator-local install. CI runners do not have it,
-            # and this workflow does not dispatch it, so stop here rather than
-            # falling back to instructions-only silently.
-            echo "::error::helperRuntime.profile is user-global, an operator-local install that CI runners do not have. This workflow cannot dispatch it. Use package-manager, vendored-node, or ephemeral-npx in .github/idd/config.json to run this check in CI."
-            exit 1
           fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
@@ -883,7 +869,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
               ;;
