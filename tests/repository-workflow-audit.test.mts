@@ -2399,6 +2399,71 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA005',
+    name: 'a lone carriage return inside a checkout step',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+      to: '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\r\n',
+    },
+    expected: [{ message: 'a carriage return cannot be read by this audit' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an alias value spaced after its key so that a checkout cannot be read',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const job = anchored(
+          text,
+          '\n  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${text.slice(0, job)}\n    PROBE:  &probe uses${text.slice(job)}`;
+      },
+    },
+    expected: [
+      {
+        message:
+          'workflow syntax outside plain keys and values cannot be read by this audit',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'an alias key spaced after its dash so that a checkout cannot be read',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const job = anchored(
+          text,
+          '\n  idd-advisory-convergence-self-waiver:\n',
+        );
+        return `${text.slice(0, job)}\n      -  *probe: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1${text.slice(job)}`;
+      },
+    },
+    expected: [
+      {
+        message:
+          'workflow syntax outside plain keys and values cannot be read by this audit',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a gate trigger for the companion workflow spaced before its colon',
+    path: ROOT_ADVISORY,
+    mutation: {
+      from: '\non:\n',
+      to: '\non:\n  pull_request_review :\n',
+    },
+    expected: [
+      {
+        message:
+          'on: must not include pull_request_review (moved to the companion workflow)',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
     name: 'a checkout written as a complex mapping key',
     path: ROOT_ADVISORY,
     mutation: {

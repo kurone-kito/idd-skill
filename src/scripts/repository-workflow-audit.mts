@@ -1646,24 +1646,24 @@ function checkRequiredGateTriggers(root: string, report: Report): void {
     if (/issue_comment/.test(onBlock)) {
       report(RWA005, path, 'on: must not include issue_comment');
     }
-    if (/^\s*pull_request:\s*$/m.test(onBlock)) {
+    if (/^\s*pull_request\s*:\s*$/m.test(onBlock)) {
       report(
         RWA005,
         path,
         'on: must no longer include the transitional pull_request trigger',
       );
     }
-    if (!/^\s*pull_request_target:\s*$/m.test(onBlock)) {
+    if (!/^\s*pull_request_target\s*:\s*$/m.test(onBlock)) {
       report(RWA005, path, 'on: must still include pull_request_target');
     }
-    if (/(?<!_)pull_request_review:/.test(onBlock)) {
+    if (/(?<!_)pull_request_review\s*:/.test(onBlock)) {
       report(
         RWA005,
         path,
         'on: must not include pull_request_review (moved to the companion workflow)',
       );
     }
-    if (!/pull_request_target:/.test(onBlock)) {
+    if (!/pull_request_target\s*:/.test(onBlock)) {
       report(RWA005, path, 'on: must include pull_request_target');
     }
     checkCheckoutSurface(path, text, report);
@@ -2446,9 +2446,9 @@ function checkTemplateSelfWaiverPostGuard(root: string, report: Report): void {
 // an alias, a tag, a complex or quoted key, a continuation line) is outside the
 // grammar, so it fails the audit instead of hiding a step.
 const GRAMMAR_KEY =
-  /^\s*(?:- +)?[A-Za-z_][\w-]*\s*:(?:\s+(?![{[&*!?:%@`|>]).*)?$/;
+  /^\s*(?:- +)?[A-Za-z_][\w-]*\s*:(?:\s*$|\s+(?=[^\s{[&*!?:%@`|>]).*$)/;
 const GRAMMAR_BLOCK_HEADER = /^\s*(?:- +)?[A-Za-z_][\w-]*\s*:\s+[|>][-+0-9]*$/;
-const GRAMMAR_ITEM = /^\s*(?:-\s*|- +(?![{[&*!?:%@`"'|>]).*)$/;
+const GRAMMAR_ITEM = /^\s*(?:-\s*$|- +(?=[^\s{[&*!?:%@`"'|>]).*$)/;
 const GRAMMAR_TYPES = /^\s*types: \[[\w ,-]*\]$/;
 
 // Whether a line is in the grammar. A trailing comment is not part of the line.
@@ -2468,6 +2468,10 @@ function checkWorkflowGrammar(root: string, report: Report): void {
   for (const path of [...ADVISORY_REQUIRED_PATHS, ...COMMENT_WORKFLOW_PATHS]) {
     const text = readRequiredText(root, path, RWA005, report);
     if (text === undefined) {
+      continue;
+    }
+    if (text.includes('\r')) {
+      report(RWA005, path, 'a carriage return cannot be read by this audit');
       continue;
     }
     if (structuralLines(text).some((line) => !isGrammarLine(line))) {
