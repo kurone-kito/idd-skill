@@ -6937,14 +6937,18 @@ same as `AW4`/`AW5`.
   with `O_EXCL`). A waiter retries for up to ten seconds; a lock older than
   five seconds is treated as left by a dead holder and taken over by
   renaming it aside. The waiter then checks that the moved file is the lock
-  it judged stale, by its token, and puts a fresh lock back if the holder
-  changed in between. The holder refreshes the lock's age before it writes.
+  it judged stale, by its inode, modification time, and token, and puts a
+  fresh lock back if the holder changed in between. The holder refreshes
+  the lock's age before it reads the store.
   A store whose last line has no trailing newline gets a newline first, so
   a new record is never glued onto a torn one. The record is one `O_APPEND`
   write. Residual risk: if two writers ever hold the lock together (a
   process suspended past the stale age, or a new lock created in the
   instant between the rename and the restore), the worst outcome is a
-  duplicate row, never a torn line.
+  duplicate row, never a torn line. Two delays are bounded: a restored lock
+  whose holder had already released lingers until it ages out (at most five
+  seconds), and on a filesystem whose inode changes across a rename a waiter
+  times out with `could not acquire the lock` instead of taking over.
 - In this source repository, `vendorSessionId` joins the token-cost events
   (`schemas/token-cost-event.schema.json`), matched on `claimId`; elsewhere
   it is informational.

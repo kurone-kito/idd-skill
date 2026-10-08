@@ -937,6 +937,11 @@ test('a stale lock with an empty body is taken over by an append', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(storeLines(sandbox).length, 1);
     assert.equal(existsSync(lock), false);
+    assert.deepEqual(
+      readdirSync(sandbox.storeDirectory).sort(),
+      ['reports.jsonl'],
+      'no graveyard file is left behind',
+    );
   } finally {
     cleanup(sandbox);
   }

@@ -21,12 +21,17 @@
 // the waiter renames the lock aside, confirms the moved file is the very lock
 // it judged stale (same inode, modification time, and token), and puts a
 // fresh lock back when it is not. The holder also refreshes the lock's age
-// before the duplicate scan and the write, so a slow scan of a large store
-// cannot age it out. Residual risk: between the rename and the
-// restore another writer can create a lock, and a process suspended for longer
-// than `LOCK_STALE_MS` can wake up after its lock was taken over. Either way
-// two writers hold the lock at once; the line is a single `O_APPEND` write, so
-// the worst outcome is a duplicate row, never a torn line.
+// before it reads the store, so a slow scan of a large store is less likely to
+// age it out. Residual risks: between the rename and the restore another
+// writer can create a lock, and a process suspended for longer than
+// `LOCK_STALE_MS` can wake up after its lock was taken over. Either way two
+// writers hold the lock at once; the line is a single `O_APPEND` write, so the
+// worst outcome is a duplicate row, never a torn line. Two bounded delays:
+// a holder that releases while its lock is parked aside finds nothing to
+// remove, so the restored lock lingers until it ages out (at most
+// `LOCK_STALE_MS`, below the acquire timeout); and on a filesystem whose inode
+// changes across a rename, every takeover mismatches and a waiter times out
+// with "could not acquire the lock" instead of proceeding.
 
 import { randomUUID } from 'node:crypto';
 import {
@@ -334,7 +339,9 @@ interface LockObservation {
 }
 
 /**
- * Inspect the lock once: its identity and whether it is older than `staleMs`.
+ * Inspect the lock (one stat, then one read of its body): its identity and
+ * whether it is older than `staleMs`. If the lock is replaced between the two
+ * calls the identity mixes both files, which can only cause a mismatch.
  * `undefined` when there is no lock. An unidentifiable body (empty or
  * garbled) still has an inode and a modification time, so a fresh lock never
  * shares its identity with a stale one.
@@ -581,9 +588,9 @@ export function appendWorkerReport(
   const lockPath = `${file}.lock`;
   const token = acquireLock(lockPath, options);
   try {
+    refreshLock(lockPath);
     const content = readStore(file);
     if (existsSync(file)) ensurePrivate(file, FILE_MODE);
-    refreshLock(lockPath);
     const wanted = duplicateKey(record as WorkerReport);
     for (const existing of parseLines(content)) {
       if (
