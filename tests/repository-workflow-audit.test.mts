@@ -3343,6 +3343,39 @@ test('the workflow audit CLI reports the rule ID and relative path of a violatio
   });
 });
 
+// Issue #3752: a violating fixture from each rule family must fail through the CLI
+// with its rule ID and relative path, not only when the detector is called directly.
+test('the workflow audit CLI reports one violation from each rule family by rule ID and path', () => {
+  const ruleIds = [
+    'RWA001',
+    'RWA002',
+    'RWA003',
+    'RWA004',
+    'RWA005',
+    'RWA006',
+    'RWA007',
+  ] as const;
+  for (const ruleId of ruleIds) {
+    const scenario = RULE_CASES.find(
+      (candidate) =>
+        candidate.ruleId === ruleId && candidate.mutation !== undefined,
+    );
+    assert.ok(scenario?.mutation, `no violating fixture for ${ruleId}`);
+    const root = fixtureRoot({ [scenario.path]: scenario.mutation });
+    withRoot(root, () => {
+      const result = runCli(root);
+      const reported = scenario.violationPath ?? scenario.path;
+      assert.equal(result.status, 1, `${ruleId}: ${result.stderr}`);
+      assert.ok(
+        result.stderr.includes(
+          `repository-workflow-audit/${ruleId}: ${reported}: `,
+        ),
+        `${ruleId}: ${result.stderr}`,
+      );
+    });
+  }
+});
+
 for (const scenario of RULE_CASES) {
   test(`${scenario.ruleId} flags ${scenario.name}`, () => {
     const root = fixtureRoot(
