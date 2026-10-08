@@ -224,12 +224,14 @@ Before you publish a `ready` issue, confirm:
 ## Rule-change candidate-file example
 
 A rule change names the code and the main paragraph, then adds each
-restating site the search finds. Here the old phrase is "measured from
-the head"; the search runs over every documented location:
+restating site the search finds. Two phrases of the old statement are
+selected here. The first is "measured from the head"; the same command
+runs again for the second phrase, and the hits of both are merged:
 
 ```text
 git grep -n -F "measured from the head" -- docs idd-template .github \
-  schemas skills src tests AGENTS.md CLAUDE.md GEMINI.md
+  schemas skills src tests AGENTS.md CLAUDE.md GEMINI.md \
+  .github/copilot-instructions.md
 ```
 
 Its hits become the candidate-file list:
