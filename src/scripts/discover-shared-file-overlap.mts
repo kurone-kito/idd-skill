@@ -13,6 +13,12 @@
 // emits a soft de-prioritization order for A4 Step 2. It is the
 // file-contention companion to the #1008 `--with-claim-state` claim-eligibility
 // annotation. Evidence-only: it claims nothing and mutates no state.
+//
+// `--batch` (#3838) extends it for an orchestrator that fills several worker
+// slots at once: it walks the same recommended order and keeps only
+// candidates whose high-contention files do not intersect each other or an
+// in-flight issue (and, with `--check-overlap`, an actively-claimed or
+// open-PR issue).
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -30,7 +36,10 @@ import {
   findMarkdownCodeRanges,
   maskMarkdownForScan,
 } from './markdown-code.mts';
-import { parseIsoDurationToMs } from './policy-helpers.mts';
+import {
+  parseIsoDurationToMs,
+  selectDesyncedIndex,
+} from './policy-helpers.mts';
 import {
   DEFAULT_STALE_AGE_MS,
   resolveActiveClaim,
@@ -225,6 +234,9 @@ const DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC = {
   '--manifest': { type: 'string', default: DEFAULT_MANIFEST_PATH },
   '--bundles': { type: 'string' },
   '--check-overlap': { type: 'boolean', default: false },
+  '--batch': { type: 'string' },
+  '--in-flight': { type: 'string', multiple: true },
+  '--desync-token': { type: 'string' },
   '--now': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -280,6 +292,45 @@ export interface RankableCandidate {
   number: number;
   effectiveScore: number;
   overlapFlag: boolean;
+}
+
+/** The result of {@link analyzeSharedFileOverlap}. */
+export interface OverlapAnalysis {
+  candidates: OverlapCandidateResult[];
+  recommendedOrder: number[];
+  summary: {
+    candidateCount: number;
+    flaggedCount: number;
+    activeIssueCount: number;
+  };
+}
+
+/** An issue an orchestrator's worker is already running (`--in-flight`). */
+export interface InFlightIssueInput {
+  number: number;
+  candidateFiles: string[];
+}
+
+/** What the batch walk learned about one in-flight issue. */
+export interface InFlightEvidence {
+  number: number;
+  filesUnknown: boolean;
+  highContentionTouched: string[];
+}
+
+/** One candidate the batch walk dropped, and what it collided with. */
+export interface BatchSkipped {
+  number: number;
+  collidedWith: number;
+  reason: 'in-flight' | 'batch' | 'claim' | 'pr';
+  files: string[];
+}
+
+/** The result of {@link selectNonOverlappingBatch}. */
+export interface BatchSelection {
+  batch: number[];
+  batchSkipped: BatchSkipped[];
+  inFlight: InFlightEvidence[];
 }
 
 /**
@@ -664,15 +715,7 @@ export function analyzeSharedFileOverlap(input: {
   highContentionFiles: Iterable<string>;
   floor?: number;
   suitabilityEnabled?: boolean;
-}): {
-  candidates: OverlapCandidateResult[];
-  recommendedOrder: number[];
-  summary: {
-    candidateCount: number;
-    flaggedCount: number;
-    activeIssueCount: number;
-  };
-} {
+}): OverlapAnalysis {
   const floor = input.floor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
   // When the autopilot-suitability kill switch is off (A4 Step 2 ignores the
   // score and selects by lowest issue number), equalize every effectiveScore so
@@ -781,6 +824,212 @@ export function applyOverlapTieBreaker<T extends RankableCandidate>(
   return out;
 }
 
+/**
+ * Move one candidate to the front of `group` when a desync token is given.
+ * The band is the group's top-`effectiveScore` candidates, taken only when
+ * that score is at or above `floor`, sorted by ascending issue number so
+ * every orchestrator indexes the same list; `selectDesyncedIndex` picks the
+ * offset. A band of fewer than two candidates, a below-floor top score (which
+ * includes the suitability kill switch being off, since every
+ * `effectiveScore` is then 0), or no token leaves the group in
+ * `recommendedOrder`, the deterministic pick.
+ */
+function promoteDesyncedCandidate<T extends RankableCandidate>(
+  group: T[],
+  token: string | undefined,
+  floor: number,
+): T[] {
+  if (!token || group.length < 2) {
+    return group;
+  }
+  const top = Math.max(...group.map((candidate) => candidate.effectiveScore));
+  if (top < floor) {
+    return group;
+  }
+  const band = group
+    .filter((candidate) => candidate.effectiveScore === top)
+    .sort((left, right) => left.number - right.number);
+  const picked = band[selectDesyncedIndex(token, band.length)];
+  return [picked, ...group.filter((candidate) => candidate !== picked)];
+}
+
+/**
+ * Build a batch of up to `batchSize` candidates whose high-contention files
+ * do not intersect each other, an in-flight issue, or (when the analysis ran
+ * with `--check-overlap`) an actively-claimed or open-PR issue. It walks the
+ * analysis's `recommendedOrder`, with two refinements: candidates with no
+ * known candidate files go behind every candidate with known files, and a
+ * desync token, when given, moves one band member to the front of the first
+ * non-empty group (known files first) so concurrent orchestrators stop
+ * converging on the same head. A dropped candidate is reported, never
+ * excluded: it stays in the graph for the next refill. Evidence-only, like
+ * the rest of this helper.
+ */
+export function selectNonOverlappingBatch(input: {
+  analysis: OverlapAnalysis;
+  inFlight: InFlightIssueInput[];
+  highContentionFiles: Iterable<string>;
+  batchSize: number;
+  desyncToken?: string;
+  floor?: number;
+}): BatchSelection {
+  if (!Number.isInteger(input.batchSize) || input.batchSize < 1) {
+    throw new RangeError('batchSize must be a positive integer');
+  }
+  const floor = input.floor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
+  const highContention = new Set(input.highContentionFiles);
+  const byNumber = new Map(
+    input.analysis.candidates.map((candidate) => [candidate.number, candidate]),
+  );
+
+  const inFlightByNumber = new Map<number, InFlightIssueInput>();
+  for (const issue of input.inFlight) {
+    if (!inFlightByNumber.has(issue.number)) {
+      inFlightByNumber.set(issue.number, issue);
+    }
+  }
+  const inFlightEvidence: InFlightEvidence[] = [...inFlightByNumber.values()]
+    .sort((left, right) => left.number - right.number)
+    .map((issue) => ({
+      number: issue.number,
+      filesUnknown: issue.candidateFiles.length === 0,
+      highContentionTouched: intersect(issue.candidateFiles, highContention),
+    }));
+
+  // A candidate that is already running is not pickable: report it first.
+  const batchSkipped: BatchSkipped[] = inFlightEvidence
+    .filter((issue) => byNumber.has(issue.number))
+    .map((issue) => ({
+      number: issue.number,
+      collidedWith: issue.number,
+      reason: 'in-flight' as const,
+      files: [],
+    }));
+
+  const seen = new Set<number>();
+  const walkable: OverlapCandidateResult[] = [];
+  for (const number of input.analysis.recommendedOrder) {
+    const candidate = byNumber.get(number);
+    if (!candidate || seen.has(number) || inFlightByNumber.has(number)) {
+      continue;
+    }
+    seen.add(number);
+    walkable.push(candidate);
+  }
+  const known = walkable.filter(
+    (candidate) => candidate.candidateFiles.length > 0,
+  );
+  const unknown = walkable.filter(
+    (candidate) => candidate.candidateFiles.length === 0,
+  );
+  const ordered =
+    known.length > 0
+      ? [
+          ...promoteDesyncedCandidate(known, input.desyncToken, floor),
+          ...unknown,
+        ]
+      : promoteDesyncedCandidate(unknown, input.desyncToken, floor);
+
+  const picked: OverlapCandidateResult[] = [];
+  for (const candidate of ordered) {
+    if (picked.length >= input.batchSize) {
+      break;
+    }
+    const collision = findBatchCollision(candidate, inFlightEvidence, picked);
+    if (collision) {
+      batchSkipped.push({ number: candidate.number, ...collision });
+    } else {
+      picked.push(candidate);
+    }
+  }
+
+  return {
+    batch: picked.map((candidate) => candidate.number),
+    batchSkipped,
+    inFlight: inFlightEvidence,
+  };
+}
+
+/**
+ * The first thing `candidate` collides with, in a fixed precedence: an
+ * in-flight issue (ascending number), then an already-picked batch member
+ * (pick order), then a claim or open-PR overlap from the analysis (ascending
+ * number). Only the first hit is reported, with its shared paths sorted.
+ */
+function findBatchCollision(
+  candidate: OverlapCandidateResult,
+  inFlight: InFlightEvidence[],
+  picked: OverlapCandidateResult[],
+): Omit<BatchSkipped, 'number'> | null {
+  const touched = new Set(candidate.highContentionTouched);
+  for (const issue of inFlight) {
+    const files = issue.highContentionTouched.filter((file) =>
+      touched.has(file),
+    );
+    if (files.length > 0) {
+      return { collidedWith: issue.number, reason: 'in-flight', files };
+    }
+  }
+  for (const member of picked) {
+    const files = member.highContentionTouched.filter((file) =>
+      touched.has(file),
+    );
+    if (files.length > 0) {
+      return { collidedWith: member.number, reason: 'batch', files };
+    }
+  }
+  const [overlap] = candidate.overlaps;
+  if (overlap) {
+    return {
+      collidedWith: overlap.number,
+      reason: overlap.reason,
+      files: overlap.files,
+    };
+  }
+  return null;
+}
+
+/**
+ * Assemble the helper's JSON output. Without a batch selection the keys and
+ * their order are exactly the pre-batch shape (repository, checkedOverlap,
+ * manifestMissing, highContentionFiles, then the analysis); with one, each
+ * candidate gains a boolean `filesUnknown` and the output gains `batch`,
+ * `batchSkipped`, and `inFlight`. Kept pure so a test can pin both shapes
+ * without a network call.
+ */
+export function buildOverlapOutput(input: {
+  repository: { owner: string; repo: string };
+  checkedOverlap: boolean;
+  manifestMissing: boolean;
+  highContentionFiles: Iterable<string>;
+  analysis: OverlapAnalysis;
+  batchSelection?: BatchSelection | null;
+}): Record<string, unknown> {
+  const base = {
+    repository: input.repository,
+    checkedOverlap: input.checkedOverlap,
+    manifestMissing: input.manifestMissing,
+    highContentionFiles: [...input.highContentionFiles].sort(),
+  };
+  if (!input.batchSelection) {
+    return { ...base, ...input.analysis };
+  }
+  // Spread the whole analysis and override only `candidates`, so a field the
+  // analysis gains later reaches both shapes; the override keeps the key's
+  // position, which the output tests pin.
+  return {
+    ...base,
+    ...input.analysis,
+    candidates: input.analysis.candidates.map((candidate) => ({
+      ...candidate,
+      filesUnknown: candidate.candidateFiles.length === 0,
+    })),
+    batch: input.batchSelection.batch,
+    batchSkipped: input.batchSelection.batchSkipped,
+    inFlight: input.batchSelection.inFlight,
+  };
+}
+
 function intersect(files: string[], highContention: Set<string>): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -807,6 +1056,9 @@ interface ParsedArgs {
   manifest: string;
   bundles: string[] | null;
   checkOverlap: boolean;
+  batch: number | null;
+  inFlight: number[] | null;
+  desyncToken: string | null;
   now: string;
   help: boolean;
 }
@@ -877,15 +1129,54 @@ function runCli(): HelperCliResult {
     suitabilityEnabled: policy.autopilotSuitabilityEnabled,
   });
 
-  const output = {
+  const batchSelection =
+    args.batch === null
+      ? null
+      : selectNonOverlappingBatch({
+          analysis,
+          inFlight: resolveInFlightIssues(
+            port,
+            args.inFlight ?? [],
+            candidates,
+          ),
+          highContentionFiles,
+          batchSize: args.batch,
+          desyncToken: args.desyncToken ?? undefined,
+          floor: policy.autopilotSuitabilityFloor,
+        });
+
+  const output = buildOverlapOutput({
     repository: { owner, repo },
     checkedOverlap: args.checkOverlap,
     manifestMissing,
-    highContentionFiles: [...highContentionFiles].sort(),
-    ...analysis,
-  };
+    highContentionFiles,
+    analysis,
+    batchSelection,
+  });
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   return 0;
+}
+
+/**
+ * Resolve each `--in-flight` issue's candidate files. An issue that is also a
+ * candidate reuses the files already parsed for it instead of a second fetch;
+ * any other is fetched with the same fail-closed `fetchIssue` the candidates
+ * use, so an unreadable in-flight issue stops the run rather than silently
+ * dropping out of the comparison set.
+ */
+function resolveInFlightIssues(
+  port: ProviderPort,
+  numbers: number[],
+  candidates: OverlapCandidateInput[],
+): InFlightIssueInput[] {
+  const known = new Map(
+    candidates.map((candidate) => [candidate.number, candidate.candidateFiles]),
+  );
+  return numbers.map((number) => ({
+    number,
+    candidateFiles:
+      known.get(number) ?? parseCandidateFiles(fetchIssue(port, number).body),
+  }));
 }
 
 /**
@@ -1169,6 +1460,42 @@ export function parseArgs(argv: string[]): ParsedArgs {
       .filter(Boolean)
       .map((trimmed) => parsePositiveInt(trimmed, occurrence.flag));
   });
+  const batchValue = values.batch as string | undefined;
+  const batch =
+    batchValue === undefined
+      ? null
+      : parseStrictPositiveInt(batchValue, '--batch');
+  const inFlightOccurrences = collectOrderedOccurrences(argv, ['--in-flight']);
+  const inFlight =
+    inFlightOccurrences.length === 0
+      ? null
+      : [
+          ...new Set(
+            inFlightOccurrences.flatMap((occurrence) =>
+              occurrence.value
+                .split(',')
+                .map((part) => part.trim())
+                .filter(Boolean)
+                .map((trimmed) =>
+                  parseStrictPositiveInt(trimmed, occurrence.flag),
+                ),
+            ),
+          ),
+        ];
+  const desyncToken = (values['desync-token'] as string | undefined) ?? null;
+  if (!help) {
+    if (desyncToken === '') {
+      throw markCliUsageError(new Error('--desync-token must not be empty'));
+    }
+    for (const [flag, given] of [
+      ['--in-flight', inFlight !== null],
+      ['--desync-token', desyncToken !== null],
+    ] as const) {
+      if (given && batch === null) {
+        throw markCliUsageError(new Error(`${flag} requires --batch <k>`));
+      }
+    }
+  }
   return {
     candidates,
     owner: values.owner as string,
@@ -1183,6 +1510,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
             .map((part) => part.trim())
             .filter(Boolean),
     checkOverlap: values['check-overlap'] as boolean,
+    batch,
+    inFlight,
+    desyncToken,
     now: values.now as string,
     help,
   };
@@ -1196,21 +1526,58 @@ function parsePositiveInt(value: string | undefined, flag: string): number {
   return parsed;
 }
 
+/**
+ * Strict positive-integer coercion for the batch flags: only plain decimal
+ * digits count, unlike {@link parsePositiveInt}, whose `parseInt` reading
+ * would turn `2x` into 2 and `1.5` into 1 and so size a batch the caller
+ * never asked for.
+ */
+function parseStrictPositiveInt(
+  value: string | undefined,
+  flag: string,
+): number {
+  const text = String(value ?? '').trim();
+  const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw markCliUsageError(new Error(`invalid ${flag} value: ${value ?? ''}`));
+  }
+  return parsed;
+}
+
 function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/discover-shared-file-overlap.mjs --issue <number> [--issue <number> ...]
   node scripts/discover-shared-file-overlap.mjs --issues <n1,n2,...>
   (compatibility aliases: --candidate <number> and --candidates <n1,n2>)
     [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>]
-    [--bundles <id1,id2,...>] [--check-overlap] [--now <ISO8601>] [--help]
+    [--bundles <id1,id2,...>] [--check-overlap] [--now <ISO8601>]
+    [--batch <k> [--in-flight <n1,n2,...> ...] [--desync-token <token>]]
+    [--help]
 
 Reports, per candidate, the high-contention shared files it would touch (from
 its '## Candidate files' section) and — with --check-overlap — whether any
 overlap an actively-claimed or open-PR issue. recommendedOrder applies the soft
 A4 Step 2 de-prioritization tie-breaker (score desc, then non-overlapping
 first within a score band, then issue number); it does NOT apply
-discover.selectionDesync — the agent layers the overlap nudge after its own
-desync pick. Evidence-only: never a hard gate.
+discover.selectionDesync — outside batch mode the agent layers the overlap
+nudge after its own desync pick. Evidence-only: never a hard gate.
+
+--batch <k> additionally builds "batch": up to k candidates, walked in
+recommendedOrder, whose high-contention files do not intersect each other, an
+--in-flight issue (repeatable; issues the orchestrator's workers already run,
+whether or not their branches are pushed), or — with --check-overlap — an
+actively-claimed or open-PR issue. A dropped candidate is reported in
+"batchSkipped" with the issue it collided with and the shared paths; it is not
+excluded and stays available for the next refill. A candidate with no parseable
+candidate files is reported as filesUnknown and joins the batch only after every
+candidate with known files, so the walk has two groups: known files first, then
+unknown. --desync-token <token> moves one member of the first non-empty group's
+top-score band (at or above the suitability floor, ascending issue number, the
+index from the select-desynced-index rule) to the front of the walk so
+concurrent orchestrators do not all batch the same head; it is ignored when that
+band is below the floor (including suitability disabled), and an orchestrator
+omits it when discover.selectionDesync is off. --in-flight and --desync-token
+require --batch. Without --batch the output is unchanged.
 
 Without --check-overlap no active-set discovery runs (no extra GitHub API
 cost); each candidate's high-contention files are still reported.
