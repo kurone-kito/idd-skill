@@ -37,7 +37,7 @@ floor in `package.json`).
 ```sh
 corepack enable
 pnpm install
-pnpm run setup:hooks # one-time step that enables the Git hooks
+pnpm run setup:hooks # enables the Git hooks; run once per clone and once per new worktree
 pnpm run lint
 pnpm run test
 ```

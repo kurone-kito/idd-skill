@@ -38,7 +38,7 @@ Node.js `^22.23.2 || ^24.2.0 || >=26.0.0`(このリポジトリの `package.json
 ```sh
 corepack enable
 pnpm install
-pnpm run setup:hooks # Git hook を有効にする一度きりの手順
+pnpm run setup:hooks # Git hook を有効にする。clone ごと・新しい worktree ごとに 1 回実行
 pnpm run lint
 pnpm run test
 ```
