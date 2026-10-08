@@ -1177,15 +1177,35 @@ function declarationText(text: string): string {
     .join('\n');
 }
 
-// The workflow with full-line comments dropped and trailing comments cut, but
-// block-scalar bodies kept. A token that lives in a run: body reads from this
-// view, so a comment cannot supply it.
+// The workflow with full-line comments dropped and trailing comments cut from key
+// lines. Block-scalar bodies keep their text, because a `#` inside a run: body can
+// sit inside shell quotes, so cutting it could hide a command that still runs. Only
+// the full-line comments of a body are dropped. A token that lives in a run: body
+// reads from this view, so a comment cannot supply it.
 function tokenText(text: string): string {
-  return text
-    .split('\n')
-    .filter((line) => !/^\s*#/.test(line))
-    .map((line) => line.replace(/\s+#.*$/, ''))
-    .join('\n');
+  const out: string[] = [];
+  let blockColumn: number | undefined;
+  for (const line of text.split('\n')) {
+    if (
+      blockColumn !== undefined &&
+      (line.trim() === '' || indentOf(line) > blockColumn)
+    ) {
+      if (!/^\s*#/.test(line)) {
+        out.push(line);
+      }
+      continue;
+    }
+    blockColumn = undefined;
+    if (/^\s*#/.test(line)) {
+      continue;
+    }
+    const key = line.replace(/\s+#.*$/, '');
+    if (/:\s*[|>][-+0-9]*\s*$/.test(key)) {
+      blockColumn = line.search(/[^\s-]/);
+    }
+    out.push(key);
+  }
+  return out.join('\n');
 }
 
 // The top-level on: block of a declaration view, from `on:` up to `permissions:`.

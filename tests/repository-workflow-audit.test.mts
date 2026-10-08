@@ -3189,6 +3189,21 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ message: 'on: must include pull_request_target' }],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a notice step whose exit 1 follows a quoted # on the same line',
+    path: TEMPLATE_ADVISORY,
+    mutation: {
+      from: '::notice::helperRuntime.profile',
+      to: '::notice::see #1"; exit 1; echo "helperRuntime.profile',
+    },
+    expected: [
+      {
+        message:
+          'notice step must not fail the job (exit 1) for an unconfigured helper runtime',
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
