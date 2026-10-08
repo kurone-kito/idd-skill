@@ -46,7 +46,7 @@ import type {
   ProviderGovernanceReadOutcome,
   ProviderPort,
 } from './provider-port.mts';
-import { CLOSING_KEYWORD_ALTERNATION } from './supersession-detection.mts';
+import { CLOSING_KEYWORD_PATTERN } from './supersession-detection.mts';
 
 /** A GitHub task-list checkbox after a list marker, with its padding. */
 const TASK_CHECKBOX_PREFIX = /^\[[ xX]\][ \t]+/u;
@@ -645,7 +645,7 @@ function findIssueRelatedOpenPrs({
       pr.body,
     );
     const d35ClosingKeyword = new RegExp(
-      `\\b(${CLOSING_KEYWORD_ALTERNATION})(\\s+)(#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
+      `\\b(${CLOSING_KEYWORD_PATTERN})(\\s+)(#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
       'gi',
     );
     const maskedBody = maskMarkdownForScan(bodyWithoutBlockQuotes);

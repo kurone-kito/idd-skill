@@ -469,17 +469,47 @@ test('collector recognizes repeated closing keywords for multiple targets', () =
   assert.equal(input.prNumber, 3150);
 });
 
-test('collector follows D3.5 keyword spacing instead of accepting a colon form', () => {
+test('collector counts the colon form GitHub links (Closes: #N)', () => {
+  // #3877: GitHub links `Closes: #N` and `CLOSES: #N` the same as `Closes #N`,
+  // so Resume must not miss the PR that backs the claim.
   const input = collectResumePrInput([
     {
       number: 3150,
-      title: 'unrelated PR',
+      title: 'implementation PR',
       body: 'Closes: #3145',
       url: 'https://example.test/pr/3150',
     },
   ]);
 
   assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector counts an uppercase colon form (CLOSES: #N)', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'implementation PR',
+      body: 'CLOSES: #3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 3150);
+});
+
+test('collector still rejects a keyword glued to the reference (closes#N)', () => {
+  const input = collectResumePrInput([
+    {
+      number: 3150,
+      title: 'unrelated PR',
+      body: 'closes#3145',
+      url: 'https://example.test/pr/3150',
+    },
+  ]);
+
   assert.equal(input.prCount, 0);
   assert.equal(input.prNumber, null);
 });
