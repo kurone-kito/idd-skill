@@ -217,6 +217,31 @@ Before you publish a `ready` issue, confirm:
   [contract.md's worked example](contract.md#codebase-fidelity-validation))
 - values that are mutable at runtime are flagged to specify a live read
   at the point of use rather than a one-time capture at construction
+- when a draft changes a documented rule, its candidate-file list names
+  every restating site of the old statement, found by `git grep -n -F`;
+  remedy: see the worked example below
+
+## Rule-change candidate-file example
+
+A rule change names the code and the main paragraph, then adds each
+restating site the search finds. Two phrases of the old statement are
+selected here. The first is "measured from the head"; the same command
+runs again for the second phrase, and the hits of both are merged:
+
+```text
+git grep -n -F "measured from the head" -- docs idd-template .github \
+  schemas skills src tests AGENTS.md CLAUDE.md GEMINI.md \
+  .github/copilot-instructions.md
+```
+
+Its hits become the candidate-file list:
+
+- `src/scripts/example-deadline.mts` (the code)
+- `docs/policy-constants.md` (the main paragraph)
+- `docs/example-helper-reference.md` (restating site: the helper reference
+  still gives the old anchor)
+- `schemas/example.schema.json` (restating site: the description still
+  gives the old anchor)
 
 ## Example orphan issue
 

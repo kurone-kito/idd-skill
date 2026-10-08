@@ -596,6 +596,25 @@ Ask these checks:
    [Context ceiling](https://github.com/kurone-kito/idd-skill/blob/main/docs/policy-constants.md#context-ceiling)
    section as the authoritative policy reference instead of copying its
    mechanics into the issue.
+7. When a draft changes a documented rule, default, threshold, name, or
+   behavior, find every restating site of the old statement, not only the
+   code and the main paragraph the issue names. Pick two or three
+   distinctive phrases of the old statement and run `git grep -n -F` once
+   per phrase across the directories and agent entry files the checkout
+   has (in this repository: `docs/`, `idd-template/`, `.github/`,
+   `schemas/`, `skills/`, `src/`, `tests/`, `AGENTS.md`, `CLAUDE.md`,
+   `GEMINI.md`, `.github/copilot-instructions.md`). `git grep` ignores a
+   path the checkout lacks, so the list may be trimmed to what exists, but
+   a directory left out is a restating site the search cannot find.
+   `git grep` cannot tell a comment from a rule, so judge each hit. List
+   every restating site that still states the old rule under
+   `## Candidate files`, or give a one-line reason in the body for leaving
+   it. Where a phrase is distinctive enough that its
+   return would be a regression, add an acceptance criterion that it
+   cannot return, such as a data-only `forbiddenPatterns` entry in
+   `audit/sync-manifest.json` enforced by `audit-docs --check`. A
+   restating site outside the issue's scope is filed as its own issue,
+   not left in a pull request description.
 
 ## Live-observed claim citation
 
