@@ -19,9 +19,10 @@
 // exclusive lock file next to the store (`O_EXCL`). A holder that dies leaves
 // a lock that goes stale after `LOCK_STALE_MS` and is taken over by a waiter:
 // the waiter renames the lock aside, confirms the moved file is the very lock
-// it judged stale (by its token), and puts a fresh lock back when it is not.
-// The holder also refreshes the lock's age before the write, so a long read of
-// a large store cannot age it out. Residual risk: between the rename and the
+// it judged stale (same inode, modification time, and token), and puts a
+// fresh lock back when it is not. The holder also refreshes the lock's age
+// before the duplicate scan and the write, so a slow scan of a large store
+// cannot age it out. Residual risk: between the rename and the
 // restore another writer can create a lock, and a process suspended for longer
 // than `LOCK_STALE_MS` can wake up after its lock was taken over. Either way
 // two writers hold the lock at once; the line is a single `O_APPEND` write, so
@@ -31,6 +32,8 @@ import {
   appendFileSync,
   chmodSync,
   closeSync,
+  constants,
+  copyFileSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -209,14 +212,6 @@ function errorCode(error) {
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function lockIsStale(lockPath, staleMs) {
-  try {
-    return Date.now() - statSync(lockPath).mtimeMs > staleMs;
-  } catch {
-    // Gone or unreadable: not stale, so the caller retries the create.
-    return false;
-  }
-}
 /**
  * The token a lock file carries: `undefined` when there is no file, `''` when
  * the body is empty or garbled (a holder that died between creating the file
@@ -231,8 +226,45 @@ function readLockToken(lockPath) {
   }
 }
 /**
+ * Inspect the lock once: its identity and whether it is older than `staleMs`.
+ * `undefined` when there is no lock. An unidentifiable body (empty or
+ * garbled) still has an inode and a modification time, so a fresh lock never
+ * shares its identity with a stale one.
+ */
+// audit:ignore-dead-export: reached in production through acquireLock; exported so the takeover cases are unit-tested (issue #3836)
+export function observeLock(lockPath, staleMs) {
+  try {
+    const stats = statSync(lockPath);
+    return {
+      identity: `${stats.ino}:${stats.mtimeMs}:${readLockToken(lockPath) ?? ''}`,
+      stale: Date.now() - stats.mtimeMs > staleMs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+/**
+ * Put a lock that was moved aside by mistake back. A hard link cannot
+ * clobber, so `EEXIST` means a newer lock exists and is left alone; on a
+ * filesystem without hard links, fall back to an exclusive copy.
+ */
+function restoreLock(from, to) {
+  try {
+    linkSync(from, to);
+    return;
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') return;
+  }
+  try {
+    copyFileSync(from, to, constants.COPYFILE_EXCL);
+  } catch {
+    // Either a newer lock exists, or nothing can restore this one; the
+    // stale-age takeover covers whatever is left.
+  }
+}
+/**
  * Move the stale lock aside, then delete it, but only if what was moved is the
- * lock `observed` (its token) that the caller judged stale. The lock can be
+ * lock the caller judged stale (`identity` from `observeLock`). The lock can be
  * released and a fresh one created between the staleness check and the
  * rename; renaming would then steal a live lock, so a mismatch puts the moved
  * file back and reports failure. Only one waiter's rename can succeed.
@@ -240,20 +272,15 @@ function readLockToken(lockPath) {
  * the caller falls back to the bounded wait instead of spinning.
  */
 // audit:ignore-dead-export: reached in production through acquireLock; exported so the ownership-mismatch case is unit-tested (issue #3836)
-export function takeOverLock(lockPath, observed) {
+export function takeOverLock(lockPath, identity) {
   const graveyard = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
   try {
     renameSync(lockPath, graveyard);
   } catch (error) {
     return errorCode(error) === 'ENOENT';
   }
-  const moved = readLockToken(graveyard);
-  if (moved !== observed) {
-    try {
-      linkSync(graveyard, lockPath);
-    } catch {
-      // A newer lock already exists; the holder we moved lost its lock.
-    }
+  if (observeLock(graveyard, 0)?.identity !== identity) {
+    restoreLock(graveyard, lockPath);
     try {
       unlinkSync(graveyard);
     } catch {
@@ -268,7 +295,7 @@ export function takeOverLock(lockPath, observed) {
   }
   return true;
 }
-/** Keep the lock's age young while its holder works. */
+/** Keep the lock's age young while its holder works (best effort). */
 function refreshLock(lockPath) {
   try {
     const now = new Date();
@@ -317,12 +344,8 @@ function acquireLock(lockPath, options) {
       closeSync(fd);
       return token;
     }
-    const observed = readLockToken(lockPath);
-    if (
-      observed !== undefined &&
-      lockIsStale(lockPath, options.staleMs) &&
-      takeOverLock(lockPath, observed)
-    ) {
+    const seen = observeLock(lockPath, options.staleMs);
+    if (seen?.stale && takeOverLock(lockPath, seen.identity)) {
       continue;
     }
     if (Date.now() >= deadline) {
@@ -370,10 +393,18 @@ function ensurePrivate(path, mode) {
   const stats = statSync(path);
   const uid = process.getuid?.();
   if (uid !== undefined && stats.uid !== uid) {
-    throw new Error(`refusing to use ${path}: it is owned by another user`);
+    throw new Error(
+      `refusing to use ${path}: it is owned by another user (point XDG_STATE_HOME at a directory you own)`,
+    );
   }
   if ((stats.mode & 0o077) !== 0) {
-    chmodSync(path, mode);
+    try {
+      chmodSync(path, mode);
+    } catch (error) {
+      throw new Error(
+        `cannot restrict ${path} to mode ${mode.toString(8)}: ${error.message} (set the mode by hand or point XDG_STATE_HOME elsewhere)`,
+      );
+    }
   }
 }
 function readStore(file) {
@@ -606,12 +637,12 @@ function printHelp() {
 Local store for a worker's final report. Nothing is posted to GitHub.
 
   append             Validate one JSON record against
-                     schemas/worker-report.schema.json (it must carry
-                     schemaVersion 1 and every other required field; it is
-                     stored verbatim, nothing is stamped; verifiedAt and
-                     recordedAt must be real calendar date-times), then append it as one
+                     schemas/worker-report.schema.json, then append it as one
                      line to idd-skill/worker-reports/reports.jsonl under the
-                     per-user state root. Invalid input exits 1 and writes
+                     per-user state root. The record must carry schemaVersion 1
+                     and every other required field; it is stored verbatim and
+                     nothing is stamped. verifiedAt and recordedAt must be real
+                     calendar date-times. Invalid input exits 1 and writes
                      nothing. A record with the same claimId, workerHandle and
                      terminalPhase as an existing line is reported as
                      {"status":"duplicate"} (exit 0) and not appended.

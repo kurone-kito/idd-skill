@@ -9,6 +9,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { defaultLoadControlDirectory } from '../src/scripts/github-api-load-control.mts';
 import {
   appendWorkerReport,
+  observeLock,
   resolveStateBase,
   resolveWorkerReportStore,
   summarizeWorkerReports,
@@ -867,28 +869,74 @@ test('stale takeover moves only the lock it judged stale', () => {
       readdirSync(sandbox.storeDirectory).filter(
         (name) => name !== 'reports.jsonl.lock',
       );
+    const age = (seconds: number): void => {
+      const when = new Date(Date.now() - seconds * 1000);
+      utimesSync(lock, when, when);
+    };
 
     // The lock is the one that was inspected: it is removed.
     writeFileSync(lock, '{"pid":1,"token":"stale"}');
-    assert.equal(takeOverLock(lock, 'stale'), true);
+    age(60);
+    const stale = observeLock(lock, 5_000);
+    assert.equal(stale?.stale, true);
+    assert.equal(takeOverLock(lock, stale?.identity ?? ''), true);
     assert.equal(existsSync(lock), false);
     assert.deepEqual(leftovers(), []);
 
     // A fresh lock replaced it before the rename: it is put back untouched.
+    writeFileSync(lock, '{"pid":1,"token":"stale"}');
+    age(60);
+    const judged = observeLock(lock, 5_000);
+    unlinkSync(lock);
     const fresh = '{"pid":2,"token":"fresh"}';
     writeFileSync(lock, fresh);
-    assert.equal(takeOverLock(lock, 'stale'), false);
+    assert.equal(observeLock(lock, 5_000)?.stale, false);
+    assert.equal(takeOverLock(lock, judged?.identity ?? ''), false);
     assert.equal(readFileSync(lock, 'utf8'), fresh);
     assert.deepEqual(leftovers(), []);
+    unlinkSync(lock);
 
-    // A holder that died before writing its body leaves an unidentifiable lock.
+    // An empty body (a holder that died before writing) has no token to tell
+    // it apart, yet a fresh empty lock still differs by its modification time.
     writeFileSync(lock, '');
-    assert.equal(takeOverLock(lock, ''), true);
+    age(60);
+    const emptyStale = observeLock(lock, 5_000);
+    unlinkSync(lock);
+    writeFileSync(lock, '');
+    assert.equal(takeOverLock(lock, emptyStale?.identity ?? ''), false);
+    assert.equal(existsSync(lock), true, 'the fresh empty lock is restored');
+    age(60);
+    assert.equal(
+      takeOverLock(lock, observeLock(lock, 5_000)?.identity ?? ''),
+      true,
+    );
     assert.equal(existsSync(lock), false);
 
     // Already gone (another waiter took it over): nothing left in the way.
-    assert.equal(takeOverLock(lock, 'stale'), true);
+    assert.equal(observeLock(lock, 5_000), undefined);
+    assert.equal(takeOverLock(lock, 'anything'), true);
     assert.deepEqual(leftovers(), []);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a stale lock with an empty body is taken over by an append', () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    writeFileSync(lock, '');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(storeLines(sandbox).length, 1);
+    assert.equal(existsSync(lock), false);
   } finally {
     cleanup(sandbox);
   }

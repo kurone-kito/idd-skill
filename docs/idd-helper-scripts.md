@@ -6914,9 +6914,10 @@ same as `AW4`/`AW5`.
   string is length-bounded. The helper stores the
   record verbatim: it stamps no timestamp and adds no field, so the caller
   supplies `schemaVersion` and both timestamps. `verifiedAt` and
-  `recordedAt` must be RFC 3339 date-times with an offset that name a real
-  instant: a day that does not exist (`2026-02-30`), hour 24, or an
-  out-of-range offset is rejected rather than silently normalized.
+  `recordedAt` must be RFC 3339 date-times with an uppercase `T`, a `Z` or
+  numeric offset, and seconds `00` to `59`, that name a real instant: a day
+  that does not exist (`2026-02-30`), hour 24, or an out-of-range offset is
+  rejected rather than silently normalized.
 - `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
   record. An invalid record exits `1`, writes nothing, and creates no
   directory. A record whose `claimId`, `workerHandle`, and `terminalPhase`
