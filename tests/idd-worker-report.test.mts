@@ -9,6 +9,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -993,4 +994,100 @@ test('the duplicate scan renews the lock lease while it works', () => {
     0,
     'a scan that takes no time does not need to renew',
   );
+});
+
+test('a symlinked store directory or file is refused before anything is written', {
+  skip: process.platform === 'win32',
+}, () => {
+  const sandbox = makeSandbox();
+  try {
+    const payload = JSON.stringify(report());
+    const base = join(sandbox.state, 'idd-skill');
+
+    // A symlinked store directory: refused, and nothing behind it is touched
+    // (not written to, not chmodded).
+    mkdirSync(base, { recursive: true });
+    const elsewhere = join(sandbox.root, 'elsewhere');
+    mkdirSync(elsewhere);
+    chmodSync(elsewhere, 0o755);
+    symlinkSync(elsewhere, sandbox.storeDirectory);
+    const viaDirectory = runCli(sandbox, ['append', '--stdin'], payload);
+    assert.notEqual(viaDirectory.status, 0);
+    assert.match(viaDirectory.stderr, /symbolic link/);
+    assert.deepEqual(
+      readdirSync(elsewhere),
+      [],
+      'the link target stays untouched',
+    );
+    assert.equal(
+      statSync(elsewhere).mode & 0o777,
+      0o755,
+      'no chmod through the link',
+    );
+    unlinkSync(sandbox.storeDirectory);
+
+    // A dangling store directory link also fails closed.
+    symlinkSync(join(sandbox.root, 'nowhere'), sandbox.storeDirectory);
+    const viaDanglingDirectory = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      payload,
+    );
+    assert.notEqual(viaDanglingDirectory.status, 0);
+    assert.equal(existsSync(join(sandbox.root, 'nowhere')), false);
+    unlinkSync(sandbox.storeDirectory);
+
+    // A symlinked store file, existing and dangling.
+    mkdirSync(sandbox.storeDirectory);
+    const target = join(sandbox.root, 'target.jsonl');
+    writeFileSync(target, 'keep\n');
+    chmodSync(target, 0o644);
+    symlinkSync(target, sandbox.store);
+    const viaFile = runCli(sandbox, ['append', '--stdin'], payload);
+    assert.notEqual(viaFile.status, 0);
+    assert.match(viaFile.stderr, /symbolic link/);
+    assert.equal(readFileSync(target, 'utf8'), 'keep\n');
+    assert.equal(
+      statSync(target).mode & 0o777,
+      0o644,
+      'no chmod through the link',
+    );
+    unlinkSync(sandbox.store);
+    const missing = join(sandbox.root, 'missing.jsonl');
+    symlinkSync(missing, sandbox.store);
+    const viaDangling = runCli(sandbox, ['append', '--stdin'], payload);
+    assert.notEqual(viaDangling.status, 0);
+    assert.equal(existsSync(missing), false, 'a dangling link is not followed');
+    unlinkSync(sandbox.store);
+    assert.deepEqual(readdirSync(sandbox.storeDirectory), []);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a symlinked parent of the store directory is allowed', {
+  skip: process.platform === 'win32',
+}, () => {
+  const sandbox = makeSandbox();
+  try {
+    const realBase = join(sandbox.root, 'real-idd-skill');
+    mkdirSync(realBase);
+    mkdirSync(sandbox.state, { recursive: true });
+    symlinkSync(realBase, join(sandbox.state, 'idd-skill'));
+    const result = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      readFileSync(
+        join(realBase, 'worker-reports', 'reports.jsonl'),
+        'utf8',
+      ).trim().length > 0,
+      true,
+    );
+  } finally {
+    cleanup(sandbox);
+  }
 });

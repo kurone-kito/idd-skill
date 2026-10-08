@@ -6898,7 +6898,11 @@ same as `AW4`/`AW5`.
   `0600`, because records can hold friction text and session ids. On POSIX, a
   directory or store that already exists with group or world access is
   tightened to those modes before the append, and one owned by another user
-  is refused; on Windows the profile's own access control applies.
+  is refused; on Windows the profile's own access control applies. `append` also
+  requires the store directory and the store file to be real, not symbolic
+  links: a link is refused before it reads or writes the store (parent
+  directories may be links). `summary` only reads, so it never changes a
+  mode and does not apply this check.
 - Record: `schemas/worker-report.schema.json` (schema version 1). Required
   are `schemaVersion` (always `1`), `issue` and `pullRequest`
   (`owner/repo#number`, the latter or `null`),

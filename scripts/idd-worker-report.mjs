@@ -42,8 +42,8 @@ import {
   closeSync,
   constants,
   copyFileSync,
-  existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -394,15 +394,26 @@ function duplicateKey(record) {
   ]);
 }
 /**
- * `mkdirSync` and `appendFileSync` apply their mode only when they create the
- * entry, so a directory or store that already exists keeps its old mode. On
- * POSIX, tighten one that grants group or world access (the records can hold
+ * Refuse a store path that is a symbolic link: a link planted at the store
+ * directory or file would send the chmod and the append to some other
+ * target. Parent directories may be links (a state root on another disk is
+ * common); only the store directory and the store file are checked. Uses
+ * `lstat`, so the link itself is inspected, never its target.
+ *
+ * Then, on POSIX: `mkdirSync` and `appendFileSync` apply their mode only when
+ * they create the entry, so one that already exists keeps its old mode.
+ * Tighten one that grants group or world access (the records can hold
  * session ids and free-form friction text) and refuse one owned by another
  * user. On Windows the per-user profile's access control applies instead.
  */
 function ensurePrivate(path, mode) {
+  const stats = lstatSync(path);
+  if (stats.isSymbolicLink()) {
+    throw new Error(
+      `refusing to use ${path}: it is a symbolic link (the store directory and file must be real, not links)`,
+    );
+  }
   if (process.platform === 'win32') return;
-  const stats = statSync(path);
   const uid = process.getuid?.();
   if (uid !== undefined && stats.uid !== uid) {
     throw new Error(
@@ -417,6 +428,16 @@ function ensurePrivate(path, mode) {
         `cannot restrict ${path} to mode ${mode.toString(8)}: ${error.message} (set the mode by hand or point XDG_STATE_HOME elsewhere)`,
       );
     }
+  }
+}
+/** True when anything, including a dangling symlink, sits at `path`. */
+function isPresent(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return false;
+    throw error;
   }
 }
 function readStore(file) {
@@ -499,8 +520,9 @@ export function appendWorkerReport(file, record, lockOptions = {}) {
   const token = acquireLock(lockPath, options);
   try {
     refreshLock(lockPath);
+    // Checked before the read, so a symlinked store fails closed untouched.
+    if (isPresent(file)) ensurePrivate(file, FILE_MODE);
     const content = readStore(file);
-    if (existsSync(file)) ensurePrivate(file, FILE_MODE);
     refreshLock(lockPath);
     const wanted = duplicateKey(record);
     const renewEveryMs = Math.min(
