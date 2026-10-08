@@ -129,7 +129,6 @@ const RESTRICTED_STATEMENT_KEYWORDS = new Set([
   'debugger',
 ]);
 
-/** ECMAScript line terminators, including the Unicode separators. */
 /** Whether only horizontal blanks come before `index` on its line. */
 function onlyBlanksBeforeOnLine(source: string, index: number): boolean {
   let start = index - 1;
@@ -148,6 +147,7 @@ function lineEndsAfterBlanks(source: string, from: number): boolean {
   return index < source.length && isLineTerminator(source[index]);
 }
 
+/** ECMAScript line terminators, including the Unicode separators. */
 function isLineTerminator(ch: string | undefined): boolean {
   return ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
 }
