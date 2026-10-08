@@ -120,16 +120,27 @@ function fixtureRoot(
   omit: readonly string[] = [],
 ): string {
   const root = mkdtempSync(join(tmpdir(), 'idd-repository-workflow-audit-'));
-  for (const path of FULL_INPUTS) {
-    if (omit.includes(path)) {
-      continue;
+  try {
+    for (const path of FULL_INPUTS) {
+      if (omit.includes(path)) {
+        continue;
+      }
+      const mutation = mutations[path];
+      const text = mutation
+        ? applyMutation(realText(path), mutation)
+        : realText(path);
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), text);
     }
-    const mutation = mutations[path];
-    const text = mutation
-      ? applyMutation(realText(path), mutation)
-      : realText(path);
-    mkdirSync(dirname(join(root, path)), { recursive: true });
-    writeFileSync(join(root, path), text);
+  } catch (error) {
+    // A mutation that throws must not leave its scratch root behind. A cleanup
+    // failure must not replace the mutation error the test should report.
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // Ignored: the mutation error is the one worth reporting.
+    }
+    throw error;
   }
   return root;
 }
@@ -2186,11 +2197,8 @@ const RULE_CASES: readonly RuleCase[] = [
         const condition =
           "        if: steps.origin.outputs.idd_originated == 'true' && github.event_name != 'pull_request_review'\n";
         const rerun = '      - name: Rerun required HEAD check';
-        assert.ok(
-          text.includes(condition),
-          'fixture anchor not found: debounce condition',
-        );
-        assert.ok(text.includes(rerun), 'fixture anchor not found: rerun step');
+        anchored(text, condition);
+        anchored(text, rerun);
         const without = text.replace(condition, '');
         const at = without.indexOf(rerun);
         return `${without.slice(0, at)}      - name: Intervening step\n        if: github.event_name != 'pull_request_review'\n        run: echo ok\n${without.slice(at)}`;
@@ -2547,6 +2555,11 @@ test('an unnamed step after the template notice step is not part of that step', 
           '- name: Notice when no helper runtime is configured',
         );
         const after = text.indexOf('\n      - ', notice + 1);
+        assert.notEqual(
+          after,
+          -1,
+          'fixture anchor not found: the step after the notice',
+        );
         return `${text.slice(0, after)}\n      - run: exit 1${text.slice(after)}`;
       },
     },
