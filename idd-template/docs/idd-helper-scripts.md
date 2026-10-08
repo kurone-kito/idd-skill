@@ -6946,7 +6946,9 @@ same as `AW4`/`AW5`.
   fresh lock back if the holder changed in between. The holder refreshes
   the lock's age before it reads the store and about every second between
   lines while it scans them (the read, the split into lines, and one very
-  long line cannot be interrupted).
+  long line cannot be interrupted). The holder releases the lock the same
+  way a waiter takes one over: it renames the lock aside, checks the token,
+  and restores a lock that is not its own.
   A store whose last line has no trailing newline gets a newline first, so
   a new record is never glued onto a torn one. The record is one `O_APPEND`
   write. Residual risk: if two writers ever hold the lock together (a

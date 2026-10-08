@@ -496,18 +496,36 @@ function acquireLock(lockPath: string, options: LockOptions): string {
   }
 }
 
-/** Remove the lock only while it is still ours. */
-function releaseLock(lockPath: string, token: string): void {
+/**
+ * Remove the lock only while it is still ours. Checking the token and then
+ * unlinking leaves a gap in which a holder that was suspended past the stale
+ * age, taken over, and resumed could delete the replacement lock another
+ * writer created meanwhile. So the lock is first renamed aside (one atomic
+ * step), the moved file's token is checked, and a lock that turns out not to
+ * be ours is linked back. Only the short window between that rename and the
+ * restore remains, the same window the stale takeover has.
+ */
+// audit:ignore-dead-export: reached in production through appendWorkerReport; exported so the ownership-mismatch case is unit-tested (issue #3836)
+export function releaseLock(lockPath: string, token: string): void {
+  const graveyard = `${lockPath}.release-${process.pid}-${randomUUID()}`;
   try {
-    // Through readLockToken, so a special file is never opened here either.
-    if (readLockToken(lockPath) !== token) return;
-    unlinkSync(lockPath);
-  } catch (error) {
-    // Already gone, replaced, or briefly held open by another process on
-    // Windows: the stale-age takeover covers anything left behind.
-    const code = errorCode(error);
-    if (code === 'ENOENT' || code === 'EPERM' || code === 'EBUSY') return;
-    throw error;
+    renameSync(lockPath, graveyard);
+  } catch {
+    // Best effort, like the stale takeover: release runs from a `finally`, so
+    // it must not replace the append's own outcome with an error. The lock is
+    // already gone, or briefly held open by another process on Windows, or
+    // the path was too long for the aside name; the stale-age takeover covers
+    // anything left behind.
+    return;
+  }
+  if (readLockToken(graveyard) !== token) {
+    // A replacement lock was sitting there; it is not ours to remove.
+    restoreLock(graveyard, lockPath);
+  }
+  try {
+    unlinkSync(graveyard);
+  } catch {
+    // A leftover graveyard file is harmless.
   }
 }
 

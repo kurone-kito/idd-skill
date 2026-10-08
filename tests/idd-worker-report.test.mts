@@ -25,6 +25,7 @@ import {
   hasDuplicate,
   observeLock,
   refreshLock,
+  releaseLock,
   resolveStateBase,
   resolveWorkerReportStore,
   summarizeWorkerReports,
@@ -1210,6 +1211,47 @@ test('a FIFO at the lock path neither blocks the wait nor survives its stale age
     assert.deepEqual(readdirSync(sandbox.storeDirectory).sort(), [
       'reports.jsonl',
     ]);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test("releasing a lock removes only the holder's own lock", () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    const leftovers = (): string[] =>
+      readdirSync(sandbox.storeDirectory).filter(
+        (name) => name !== 'reports.jsonl.lock',
+      );
+
+    // The holder's own lock is removed and nothing is left behind.
+    writeFileSync(lock, '{"pid":1,"token":"mine"}');
+    releaseLock(lock, 'mine');
+    assert.equal(existsSync(lock), false);
+    assert.deepEqual(leftovers(), []);
+
+    // A replacement lock (a holder that was taken over and then resumed):
+    // it is put back untouched and nothing is left behind.
+    const replacement = '{"pid":2,"token":"replacement"}';
+    writeFileSync(lock, replacement);
+    const before = statSync(lock);
+    releaseLock(lock, 'mine');
+    assert.equal(readFileSync(lock, 'utf8'), replacement);
+    const after = statSync(lock);
+    assert.equal(after.ino, before.ino, 'restored by link, not copied');
+    assert.equal(after.mtimeMs, before.mtimeMs, 'its age is preserved');
+    assert.deepEqual(leftovers(), []);
+    unlinkSync(lock);
+
+    // A garbled lock is not ours either; a missing one is not an error.
+    writeFileSync(lock, 'not json');
+    releaseLock(lock, 'mine');
+    assert.equal(readFileSync(lock, 'utf8'), 'not json');
+    unlinkSync(lock);
+    assert.doesNotThrow(() => releaseLock(lock, 'mine'));
+    assert.deepEqual(leftovers(), []);
   } finally {
     cleanup(sandbox);
   }
