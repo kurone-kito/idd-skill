@@ -37,6 +37,7 @@ floor in `package.json`).
 ```sh
 corepack enable
 pnpm install
+pnpm run setup:hooks # one-time step that enables the Git hooks
 pnpm run lint
 pnpm run test
 ```

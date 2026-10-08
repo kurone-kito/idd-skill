@@ -30,6 +30,7 @@ autopilot 运行能够在提交前强制执行最低限度的 lint 门槛。模�
 ```sh
 corepack enable
 pnpm install
+pnpm run setup:hooks # 启用 Git 钩子的一次性步骤
 pnpm run lint
 pnpm run test
 ```
