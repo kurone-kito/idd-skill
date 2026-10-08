@@ -307,9 +307,16 @@ export function takeOverLock(lockPath, identity) {
   }
   return true;
 }
-/** Keep the lock's age young while its holder works (best effort). */
-function refreshLock(lockPath) {
+/**
+ * Keep the lock's age young while its holder works (best effort). Only a lock
+ * that still carries this holder's token is touched: a process that was
+ * suspended past the stale age and then resumed must not keep a replacement
+ * lock, taken over and recreated by another writer, artificially fresh.
+ */
+// audit:ignore-dead-export: reached in production through appendWorkerReport; exported so the ownership check is unit-tested (issue #3836)
+export function refreshLock(lockPath, token) {
   try {
+    if (readLockToken(lockPath) !== token) return;
     const now = new Date();
     utimesSync(lockPath, now, now);
   } catch {
@@ -394,7 +401,9 @@ function duplicateKey(record) {
   ]);
 }
 /**
- * Refuse a store path that is a symbolic link: a link planted at the store
+ * Refuse a store path that is a symbolic link, or is not a regular
+ * `kind` ('directory' or 'file'; a FIFO or device would block the read and a
+ * directory would be chmodded as a file): a link planted at the store
  * directory or file would send the chmod and the append to some other
  * target. Parent directories may be links (a state root on another disk is
  * common); only the store directory and the store file are checked. Uses
@@ -406,12 +415,15 @@ function duplicateKey(record) {
  * session ids and free-form friction text) and refuse one owned by another
  * user. On Windows the per-user profile's access control applies instead.
  */
-function ensurePrivate(path, mode) {
+function ensurePrivate(path, mode, kind) {
   const stats = lstatSync(path);
   if (stats.isSymbolicLink()) {
     throw new Error(
       `refusing to use ${path}: it is a symbolic link (the store directory and file must be real, not links)`,
     );
+  }
+  if (kind === 'directory' ? !stats.isDirectory() : !stats.isFile()) {
+    throw new Error(`refusing to use ${path}: it is not a regular ${kind}`);
   }
   if (process.platform === 'win32') return;
   const uid = process.getuid?.();
@@ -442,6 +454,11 @@ function isPresent(path) {
 }
 function readStore(file) {
   try {
+    // Stat first: reading a FIFO or a device would block, and a directory
+    // fails late. A link to a regular file is fine for the read-only summary.
+    if (!statSync(file).isFile()) {
+      throw new Error(`refusing to read ${file}: it is not a regular file`);
+    }
     return readFileSync(file, 'utf8');
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return '';
@@ -515,15 +532,15 @@ export function appendWorkerReport(file, record, lockOptions = {}) {
     recursive: true,
     mode: DIRECTORY_MODE,
   });
-  ensurePrivate(dirname(file), DIRECTORY_MODE);
+  ensurePrivate(dirname(file), DIRECTORY_MODE, 'directory');
   const lockPath = `${file}.lock`;
   const token = acquireLock(lockPath, options);
   try {
-    refreshLock(lockPath);
+    refreshLock(lockPath, token);
     // Checked before the read, so a symlinked store fails closed untouched.
-    if (isPresent(file)) ensurePrivate(file, FILE_MODE);
+    if (isPresent(file)) ensurePrivate(file, FILE_MODE, 'file');
     const content = readStore(file);
-    refreshLock(lockPath);
+    refreshLock(lockPath, token);
     const wanted = duplicateKey(record);
     const renewEveryMs = Math.min(
       LOCK_REFRESH_MS,
@@ -533,7 +550,7 @@ export function appendWorkerReport(file, record, lockOptions = {}) {
       hasDuplicate(
         content,
         wanted,
-        () => refreshLock(lockPath),
+        () => refreshLock(lockPath, token),
         Date.now,
         renewEveryMs,
       )

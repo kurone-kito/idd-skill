@@ -24,6 +24,7 @@ import {
   appendWorkerReport,
   hasDuplicate,
   observeLock,
+  refreshLock,
   resolveStateBase,
   resolveWorkerReportStore,
   summarizeWorkerReports,
@@ -1087,6 +1088,85 @@ test('a symlinked parent of the store directory is allowed', {
       ).trim().length > 0,
       true,
     );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a FIFO or a directory at the store path is refused without blocking or chmod', {
+  skip: process.platform === 'win32',
+}, () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const made = spawnSync('mkfifo', [sandbox.store]);
+    if (made.status !== 0) {
+      // No mkfifo on this host: the directory case below still runs.
+      mkdirSync(sandbox.store, { mode: 0o755 });
+      chmodSync(sandbox.store, 0o755);
+    }
+    const isFifo = made.status === 0;
+    const append = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(report()),
+    );
+    assert.notEqual(
+      append.status,
+      null,
+      'must fail fast, not block until the timeout',
+    );
+    assert.notEqual(append.status, 0);
+    assert.match(append.stderr, /not a regular file/);
+    const summary = runCli(sandbox, ['summary']);
+    assert.notEqual(summary.status, null, 'summary must not block either');
+    assert.notEqual(summary.status, 0);
+    assert.match(summary.stderr, /not a regular file/);
+    if (!isFifo) {
+      assert.equal(
+        statSync(sandbox.store).mode & 0o777,
+        0o755,
+        'no chmod of a directory',
+      );
+    }
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('a lock that is no longer ours is not kept fresh by a resumed holder', () => {
+  const sandbox = makeSandbox();
+  try {
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    const lock = `${sandbox.store}.lock`;
+    const age = (): void => {
+      const old = new Date(Date.now() - 10_000);
+      utimesSync(lock, old, old);
+    };
+    const ageMs = (): number => Date.now() - statSync(lock).mtimeMs;
+
+    // Another writer owns the lock now (the holder was taken over while it
+    // slept): its resumed refresh leaves the replacement's age alone.
+    writeFileSync(lock, '{"pid":2,"token":"someone-else"}');
+    age();
+    refreshLock(lock, 'resumed-holder');
+    assert.ok(ageMs() >= 9_000, 'a foreign lock is not refreshed');
+
+    // The holder's own lock is refreshed, so the guard is not always bailing.
+    writeFileSync(lock, '{"pid":1,"token":"mine"}');
+    age();
+    refreshLock(lock, 'mine');
+    assert.ok(ageMs() < 5_000, 'the holder refreshes its own lock');
+
+    // An unreadable or garbled body never matches a real token.
+    writeFileSync(lock, 'not json');
+    age();
+    refreshLock(lock, 'mine');
+    assert.ok(ageMs() >= 9_000, 'a garbled lock is not refreshed');
+
+    // A missing lock is not an error.
+    unlinkSync(lock);
+    assert.doesNotThrow(() => refreshLock(lock, 'mine'));
   } finally {
     cleanup(sandbox);
   }
