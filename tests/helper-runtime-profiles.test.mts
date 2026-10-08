@@ -997,3 +997,95 @@ test('idd-doctor leaves the user-global bin check out of other helper runtime pr
     !report.passes.some((pass) => pass.includes('user-global helper runtime')),
   );
 });
+
+test('user-global bin inspection reads the owning package through a pnpm shim', (t) => {
+  // pnpm writes a regular shell shim, not a symlink, and names the real bin on
+  // a cmd-shim-target line. Nothing about the shim itself is package metadata.
+  const base = mkdtempSync(join(tmpdir(), 'idd-user-global-shim-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const packageRoot = join(
+    base,
+    'global',
+    'node_modules',
+    '@kurone-kito',
+    'idd-skill',
+  );
+  mkdirSync(join(packageRoot, 'bin'), { recursive: true });
+  writeFileSync(
+    join(packageRoot, 'package.json'),
+    JSON.stringify({
+      name: '@kurone-kito/idd-skill',
+      version: USER_GLOBAL_TEST_VERSION,
+    }),
+  );
+  const realBin = join(packageRoot, 'bin', 'idd-doctor.mjs');
+  writeFileSync(realBin, '#!/usr/bin/env node\n');
+  const pathDir = join(base, 'bin');
+  mkdirSync(pathDir, { recursive: true });
+  const shim = join(pathDir, 'idd-doctor');
+  writeFileSync(
+    shim,
+    `#!/bin/sh\n# cmd-shim-target=${realBin}\nexec node "${realBin}" "$@"\n`,
+  );
+  chmodSync(shim, 0o755);
+
+  const [entry] = inspectUserGlobalHelperBins({
+    pathValue: pathDir,
+    binNames: ['idd-doctor'],
+  });
+  assert.equal(entry.resolvedPath, shim);
+  assert.equal(entry.version, USER_GLOBAL_TEST_VERSION);
+});
+
+test('idd-doctor warns instead of passing when user-global helper bins report different versions', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('symlink and executable-bit fixtures are POSIX-only');
+    return;
+  }
+  // Each bin gets its own package root, and the roots carry different versions.
+  const base = mkdtempSync(join(tmpdir(), 'idd-user-global-mixed-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const pathDir = join(base, 'bin');
+  mkdirSync(pathDir, { recursive: true });
+  listHelperBinNames().forEach((bin, index) => {
+    const packageRoot = join(
+      base,
+      `install-${index}`,
+      'lib',
+      'node_modules',
+      '@kurone-kito',
+      'idd-skill',
+    );
+    mkdirSync(join(packageRoot, 'bin'), { recursive: true });
+    writeFileSync(
+      join(packageRoot, 'package.json'),
+      JSON.stringify({
+        name: '@kurone-kito/idd-skill',
+        version: index === 0 ? '1.0.0' : '2.0.0',
+      }),
+    );
+    const target = join(packageRoot, 'bin', `${bin}.mjs`);
+    writeFileSync(target, '#!/usr/bin/env node\n');
+    chmodSync(target, 0o755);
+    symlinkSync(target, join(pathDir, bin));
+  });
+  const root = createDoctorFixtureRepoFromConfig({
+    ...REQUIRED_CONFIG_BASE,
+    helperRuntime: { profile: 'user-global' },
+  });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const report = runDoctor({ root, requireGithub: false, pathValue: pathDir });
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes('helper bins report different versions (1.0.0, 2.0.0)'),
+    ),
+    report.warnings.join('\n'),
+  );
+  assert.ok(
+    !report.passes.some((pass) =>
+      pass.startsWith('user-global helper runtime: all '),
+    ),
+    report.passes.join('\n'),
+  );
+});

@@ -10,6 +10,7 @@ import {
   accessSync,
   existsSync,
   constants as fsConstants,
+  lstatSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -1287,11 +1288,59 @@ function isExecutableFile(path: string): boolean {
   }
 }
 
-function readOwningPackageVersion(binPath: string): string | null {
-  let realBinPath: string;
+// pnpm writes a regular shell shim instead of a symlink, and the shim names
+// its real bin on a `# cmd-shim-target=<absolute path>` line. Reading that line
+// lets the owning package be found. The shim is read only when it is small,
+// and the path it names is trusted only to locate package metadata.
+const CMD_SHIM_TARGET_PATTERN = /^# cmd-shim-target=(.+)$/mu;
+const MAX_CMD_SHIM_BYTES = 64 * 1024;
+
+/**
+ * The real file behind a PATH-resolved bin: the symlink target for an npm
+ * symlink, the `cmd-shim-target` path for a pnpm shim, or the bin's own real
+ * path otherwise. Returns null when nothing can be read.
+ */
+function resolveRealBinPath(binPath: string): string | null {
+  let entry: ReturnType<typeof lstatSync>;
   try {
-    realBinPath = realpathSync(binPath);
+    entry = lstatSync(binPath);
   } catch {
+    return null;
+  }
+  if (!entry.isSymbolicLink() && entry.size <= MAX_CMD_SHIM_BYTES) {
+    const shimTarget = readCmdShimTarget(binPath);
+    if (shimTarget !== null) {
+      return shimTarget;
+    }
+  }
+  try {
+    return realpathSync(binPath);
+  } catch {
+    return null;
+  }
+}
+
+function readCmdShimTarget(binPath: string): string | null {
+  let contents: string;
+  try {
+    contents = readFileSync(binPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const target = CMD_SHIM_TARGET_PATTERN.exec(contents)?.[1]?.trim() ?? '';
+  if (target === '' || !isAbsolute(target) || !exists(target)) {
+    return null;
+  }
+  try {
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+function readOwningPackageVersion(binPath: string): string | null {
+  const realBinPath = resolveRealBinPath(binPath);
+  if (realBinPath === null) {
     return null;
   }
   const packageJsonPath = findNearestPackageJson(dirname(realBinPath));
@@ -1361,7 +1410,7 @@ function checkUserGlobalHelperBins(
   }
   if (unreadable.length > 0) {
     report.warnings.push(
-      `user-global helper runtime: version could not be read for ${unreadable.join(', ')}; these bins are not owned by ${IDD_PACKAGE_NAME}`,
+      `user-global helper runtime: version could not be read for ${unreadable.join(', ')}; ownership by ${IDD_PACKAGE_NAME} could not be verified for these bins`,
     );
   }
   if (versions.length > 1) {
