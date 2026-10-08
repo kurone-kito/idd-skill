@@ -776,6 +776,32 @@ test('eval Worker bridge preserves a leading strict-mode directive', async () =>
   assert.equal(result, true);
 });
 
+test('eval Worker bridge scans a comment-heavy source prefix in linear time', async () => {
+  // An unterminated comment opener followed by many adjacent closer-and-opener
+  // pairs made the earlier regular-expression scan backtrack exponentially
+  // (CodeQL js/redos); the hand-written scan must return at once.
+  const source = `/*${'*//*'.repeat(20_000)}`;
+  const started = performance.now();
+  const worker = new Worker(source, { eval: true, execArgv: [] });
+  const elapsed = performance.now() - started;
+  worker.on('error', () => {});
+  await worker.terminate();
+  assert.ok(elapsed < 5_000, `constructing the Worker took ${elapsed}ms`);
+});
+
+test('eval Worker bridge keeps directives that follow comments and blank lines', async () => {
+  const worker = new Worker(
+    `/* block */ // line\r\n\n  "use strict"\n;const { parentPort } = require('node:worker_threads');\nparentPort.postMessage((function () { return this; })() === undefined);`,
+    { eval: true, execArgv: [] },
+  );
+  const result = await new Promise<boolean>((resolve, reject) => {
+    worker.once('message', resolve);
+    worker.once('error', reject);
+  });
+  await worker.terminate();
+  assert.equal(result, true);
+});
+
 test('an explicit empty NODE_OPTIONS cannot bypass the child GH guard', () => {
   const guardRoot = mkdtempSync(join(tmpdir(), 'idd-gh-guard-owner-test-'));
   const ledgerPath = join(guardRoot, 'attempts.jsonl');

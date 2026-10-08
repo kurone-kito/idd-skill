@@ -2294,6 +2294,47 @@ wrap(
 );
 
 const OriginalWorker = workerThreads.Worker;
+/**
+ * The leading `'use strict'` directive of a CommonJS eval Worker source,
+ * including the whitespace and comments before it, or an empty string.
+ * Scanned by hand in linear time: a regular expression that alternates `\s`
+ * with a lazy block-comment body backtracks exponentially on a comment opener
+ * followed by many adjacent closer-and-opener pairs (CodeQL `js/redos`).
+ */
+function leadingStrictDirective(source: string): string {
+  let index = 0;
+  for (;;) {
+    const char = source[index];
+    if (char !== undefined && /\s/u.test(char)) {
+      index += 1;
+    } else if (source.startsWith('/*', index)) {
+      const end = source.indexOf('*/', index + 2);
+      if (end === -1) return '';
+      index = end + 2;
+    } else if (source.startsWith('//', index)) {
+      let end = index + 2;
+      while (
+        end < source.length &&
+        source[end] !== '\n' &&
+        source[end] !== '\r'
+      ) {
+        end += 1;
+      }
+      index = end;
+    } else {
+      break;
+    }
+  }
+  const literal = ["'use strict'", '"use strict"'].find((candidate) =>
+    source.startsWith(candidate, index),
+  );
+  if (literal === undefined) return '';
+  index += literal.length;
+  while (index < source.length && /\s/u.test(source[index] ?? '')) index += 1;
+  if (source[index] === ';') index += 1;
+  return source.slice(0, index);
+}
+
 class GuardedWorker extends OriginalWorker {
   constructor(filename: string | URL, options: WorkerOptions = {}) {
     const env =
@@ -2356,9 +2397,7 @@ class GuardedWorker extends OriginalWorker {
     const workerSource = String(filename);
     const strictDirective =
       options.eval === true && !moduleEval
-        ? (/^((?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*(?:'use strict'|"use strict")\s*;?)/u.exec(
-            workerSource,
-          )?.[1] ?? '')
+        ? leadingStrictDirective(workerSource)
         : '';
     const source =
       options.eval === true && !moduleEval
