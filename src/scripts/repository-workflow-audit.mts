@@ -547,10 +547,16 @@ function declaresArtifactName(jobBody: string, prefix: string): boolean {
   return names.length === 1 && names[0].startsWith(`          name: ${prefix}`);
 }
 
-// The run: body of a step, from its run: key on. A name in env: or if: does not run.
+// The run: body of a step: from its run: key to the next key at the step's own
+// indentation. A poster name in an env: or if: key, before or after run:, does not run.
 function runBodyOf(stepText: string): string {
-  const start = stepText.search(/^ {8}run: /m);
-  return start === -1 ? '' : stepText.slice(start);
+  const start = stepText.search(/^ {8}run:(?: |$)/m);
+  if (start === -1) {
+    return '';
+  }
+  const rest = stepText.slice(start);
+  const next = rest.search(/\n {8}\S/);
+  return next === -1 ? rest : rest.slice(0, next);
 }
 
 // The waiver poster the self-waiver post step must run.

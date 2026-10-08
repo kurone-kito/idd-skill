@@ -3360,6 +3360,39 @@ const RULE_CASES: readonly RuleCase[] = [
       { message: 'the post step must run scripts/external-check-waiver.mjs' },
     ],
   },
+  {
+    ruleId: 'RWA006',
+    name: 'a post step whose poster is replaced in run: while a later key names it',
+    path: ROOT_ADVISORY,
+    mutation: {
+      transform: (text: string) => {
+        const name =
+          '      - name: Post the self-referential-bootstrap-auto waiver\n';
+        const start = anchored(text, name);
+        const next = text.indexOf('\n      - ', start + name.length);
+        assert.notEqual(
+          next,
+          -1,
+          'fixture anchor not found: step after the post step',
+        );
+        const run = '          node scripts/external-check-waiver.mjs \\\n';
+        const step = text.slice(start, next);
+        assert.ok(step.includes(run), 'fixture anchor not found: poster line');
+        const moved = step
+          .split(run)
+          .join('          node scripts/echo-check-waiver.mjs \\\n');
+        return (
+          text.slice(0, start) +
+          moved +
+          '\n        with:\n          poster: scripts/external-check-waiver.mjs' +
+          text.slice(next)
+        );
+      },
+    },
+    expected: [
+      { message: 'the post step must run scripts/external-check-waiver.mjs' },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
@@ -3688,6 +3721,37 @@ test('RWA007 does not count a commented-out setup-node use', () => {
     const violations = collectRepositoryWorkflowViolations(root);
     assert.equal(
       violations.some((violation) => violation.ruleId === 'RWA007'),
+      false,
+      JSON.stringify(violations),
+    );
+  });
+});
+
+test('RWA006 reads a poster whose run: value starts on the next line', () => {
+  // run: may carry its value on the following line. The poster it runs still
+  // counts, so that spelling must not be reported as a missing poster.
+  const name =
+    '      - name: Post the self-referential-bootstrap-auto waiver\n';
+  const root = fixtureRoot({
+    [ROOT_ADVISORY]: {
+      transform: (text: string) => {
+        const start = anchored(text, name);
+        const run = '        run: |\n';
+        const at = text.indexOf(run, start);
+        assert.notEqual(at, -1, 'fixture anchor not found: post step run key');
+        return `${text.slice(0, at)}        run:\n${text.slice(at + run.length)}`;
+      },
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some(
+        (violation) =>
+          violation.ruleId === 'RWA006' &&
+          violation.message ===
+            'the post step must run scripts/external-check-waiver.mjs',
+      ),
       false,
       JSON.stringify(violations),
     );
