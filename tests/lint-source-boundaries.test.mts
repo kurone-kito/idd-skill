@@ -2721,3 +2721,27 @@ for (const row of reviewThirdRows) {
     assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
   });
 }
+
+// Fourth review pass on #3852: the backward search for a block comment's opener
+// must skip string and template literals, so a `/*` inside a literal is text.
+const commentMarkerInLiteralShapes: { name: string; source: string }[] = [
+  {
+    name: 'a comment marker inside a string literal in a type-argument lookahead',
+    source: "const v = a<[ '/*', (b) /* c */ (y)] > /[/*]/.test(s);\n",
+  },
+  {
+    name: 'a comment marker inside a template literal in a type-argument lookahead',
+    source: 'const v = a<[ `/*`, (b) /* c */ (y)] > /[/*]/.test(s);\n',
+  },
+];
+
+for (const row of commentMarkerInLiteralShapes) {
+  test(`the node-import rule sees an import after ${row.name}`, () => {
+    const root = buildFixture((files) =>
+      files.set('src/main.mts', `${row.source}import bare from 'yaml';\n`),
+    );
+    const lines = nodeImportLines(runCli(['--root', root]).stderr);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /^NODE-IMPORT-BOUNDARY src\/main\.mts: .*yaml$/);
+  });
+}

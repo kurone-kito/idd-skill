@@ -709,6 +709,28 @@ function scanComments(source) {
             let look = from + 1;
             let opener = -1;
             while (look < closer && !isLineTerminator(source[look])) {
+              if (
+                source[look] === "'" ||
+                source[look] === '"' ||
+                source[look] === '`'
+              ) {
+                // A literal's `/*` is text, not a comment opener: skip the
+                // literal to its closing quote, as the main scan does.
+                const quote = source[look];
+                let literalEnd = look + 1;
+                while (
+                  literalEnd < closer &&
+                  !isLineTerminator(source[literalEnd]) &&
+                  source[literalEnd] !== quote
+                ) {
+                  literalEnd += source[literalEnd] === '\\' ? 2 : 1;
+                }
+                if (source[literalEnd] !== quote) {
+                  break;
+                }
+                look = literalEnd + 1;
+                continue;
+              }
               if (source[look] === '/' && source[look + 1] === '*') {
                 const after = skipBlockCommentForward(look);
                 if (after === undefined || after > closer + 1) {
