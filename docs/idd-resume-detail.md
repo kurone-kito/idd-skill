@@ -15,10 +15,12 @@ provides the detail needed when a branch requires careful judgment.
 ## §FH — Forced-Handoff Recovery
 
 A forced-handoff recovery path applies when the repository records
-`forced-handoff: human-gated` and valid trusted evidence exists for the
-selected issue. Collect evidence under the contract in `docs/customization.md`:
-record the approving human, old claim ID, branch, linked PR (if any), and
-evidence URL.
+`forcedHandoff.mode: human-gated` on the PR base branch and on the claim
+branch, committed before the incident, and valid trusted evidence exists for
+the selected issue. The copies and the recovery sequence are described in
+[customization](customization.md#forced-handoff-copies-and-recovery). Collect
+evidence under the contract in `docs/customization.md`: record the approving
+human, old claim ID, branch, linked PR (if any), and evidence URL.
 
 The recommended operator path for collecting that evidence is the
 interactive `idd-force-handoff` helper. It asks for the issue number
