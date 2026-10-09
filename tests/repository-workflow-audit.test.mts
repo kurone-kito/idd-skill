@@ -221,6 +221,25 @@ function removeJobCheckout(text: string, jobId: string): string {
   return text.slice(0, step) + text.slice(end);
 }
 
+// Replaces one line inside a single named step, so a fixture cannot touch another step.
+function replaceInStep(
+  text: string,
+  stepName: string,
+  from: string,
+  to: string,
+): string {
+  const name = `      - name: ${stepName}\n`;
+  const start = anchored(text, name);
+  const next = text.indexOf('\n      - ', start + name.length);
+  const end = next === -1 ? text.length : next;
+  const step = text.slice(start, end);
+  assert.ok(
+    step.includes(from),
+    `fixture anchor not found in ${stepName}: ${JSON.stringify(from)}`,
+  );
+  return text.slice(0, start) + step.split(from).join(to) + text.slice(end);
+}
+
 // Each case mutates one copy and names the messages its rule must raise, so
 // every assertion of the replaced tests has a violating fixture. Every anchor
 // is checked against the real file when the fixture is built.
@@ -3391,6 +3410,56 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       { message: 'the post step must run scripts/external-check-waiver.mjs' },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a merged-PR guard whose gate is commented out',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) =>
+        replaceInStep(
+          text,
+          'Require a merged PR for workflow_dispatch',
+          "        if: github.event_name == 'workflow_dispatch'\n",
+          "        # if: github.event_name == 'workflow_dispatch'\n",
+        ),
+    },
+    expected: [{ message: 'guard step must be gated on workflow_dispatch' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup step whose timeout is commented out',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) =>
+        replaceInStep(
+          text,
+          'Run F4 cleanup (server-side fallback)',
+          '        timeout-minutes: 8\n',
+          '        # timeout-minutes: 8\n',
+        ),
+    },
+    expected: [{ message: 'cleanup step must set timeout-minutes' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'an evidence step whose always() gate is commented out',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) =>
+        replaceInStep(
+          text,
+          'Post cleanup evidence comment',
+          "        if: always() && steps.cleanup.outcome != 'skipped'\n",
+          "        # if: always() && steps.cleanup.outcome != 'skipped'\n",
+        ),
+    },
+    expected: [
+      {
+        message:
+          'evidence step must run on always() unless cleanup was skipped',
+      },
     ],
   },
 ];

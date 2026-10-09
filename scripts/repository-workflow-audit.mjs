@@ -101,11 +101,17 @@ function checkDuplicateEvidenceSkipBlock(path, text, report) {
     );
   }
 }
+// A declared step, read twice: its keys from the declaration view and its run body
+// from the token view. A comment cannot supply either, and the step text ends at the
+// next step bullet, so text in a neighboring step cannot satisfy these checks.
+function declaredStep(text, name) {
+  const keys = stepTextNamed(declarationText(text), name);
+  const run = stepTextNamed(tokenText(text), name);
+  return keys === undefined || run === undefined ? undefined : { keys, run };
+}
 function checkWorkflowDispatchMergedGuard(path, text, report) {
-  const guardStart = text.indexOf(
-    'name: Require a merged PR for workflow_dispatch',
-  );
-  if (guardStart === -1) {
+  const guard = declaredStep(text, 'Require a merged PR for workflow_dispatch');
+  if (guard === undefined) {
     report(
       RWA004,
       path,
@@ -113,23 +119,27 @@ function checkWorkflowDispatchMergedGuard(path, text, report) {
     );
     return;
   }
-  const cleanupStepStart = text.indexOf(
-    'name: Run F4 cleanup (server-side fallback)',
-  );
-  if (cleanupStepStart === -1) {
+  const cleanup = declaredStep(text, 'Run F4 cleanup (server-side fallback)');
+  if (cleanup === undefined) {
     report(RWA004, path, 'must still define the F4 cleanup step');
     return;
   }
-  if (guardStart >= cleanupStepStart) {
+  const declared = declarationText(text);
+  if (
+    stepOffset(declared, 'Require a merged PR for workflow_dispatch') >=
+    stepOffset(declared, 'Run F4 cleanup (server-side fallback)')
+  ) {
     report(RWA004, path, 'guard step must run before the F4 cleanup step');
     return;
   }
-  const guardBlock = text.slice(guardStart, cleanupStepStart);
+  // The gate is a declaration, so it is read from the step's keys.
+  if (!/if: github\.event_name == 'workflow_dispatch'/.test(guard.keys)) {
+    report(RWA004, path, 'guard step must be gated on workflow_dispatch');
+  }
+  // The checks below read the guard step's own run body, so text in another step
+  // cannot satisfy them.
+  const guardBlock = guard.run;
   const requirements = [
-    [
-      /if: github\.event_name == 'workflow_dispatch'/,
-      'guard step must be gated on workflow_dispatch',
-    ],
     [
       /''\|\*\[!0-9\]\*\)\s*\n\s*echo "::error::[^\n]*"\s*\n\s*exit 1\s*\n\s*;;/,
       'guard step must reject a non-numeric PR_NUMBER with an ::error:: message and exit non-zero, not merely match the glob (#2979 review, Copilot)',
@@ -242,23 +252,25 @@ function checkEmptyStatusBranch(path, evidence, report) {
   }
 }
 function checkCleanupTimeoutAndEvidence(path, text, report) {
-  const cleanupStart = text.indexOf(
-    'name: Run F4 cleanup (server-side fallback)',
-  );
-  if (cleanupStart === -1) {
+  const cleanup = declaredStep(text, 'Run F4 cleanup (server-side fallback)');
+  if (cleanup === undefined) {
     report(RWA004, path, 'must define the cleanup step');
     return;
   }
-  const evidenceStart = text.indexOf(
-    'name: Post cleanup evidence comment',
-    cleanupStart,
-  );
-  if (evidenceStart === -1) {
+  const evidence = declaredStep(text, 'Post cleanup evidence comment');
+  const declared = declarationText(text);
+  if (
+    evidence === undefined ||
+    stepOffset(declared, 'Post cleanup evidence comment') <=
+      stepOffset(declared, 'Run F4 cleanup (server-side fallback)')
+  ) {
     report(RWA004, path, 'must define the evidence step after cleanup');
     return;
   }
   const jobTimeouts = [
-    ...text.slice(0, cleanupStart).matchAll(/timeout-minutes:\s*(\d+)/g),
+    ...declared
+      .slice(0, stepOffset(declared, 'Run F4 cleanup (server-side fallback)'))
+      .matchAll(/timeout-minutes:\s*(\d+)/g),
   ];
   if (jobTimeouts.length !== 1) {
     report(
@@ -269,8 +281,7 @@ function checkCleanupTimeoutAndEvidence(path, text, report) {
     return;
   }
   const jobTimeout = Number(jobTimeouts[0]?.[1]);
-  const cleanupBlock = text.slice(cleanupStart, evidenceStart);
-  const stepTimeoutMatch = cleanupBlock.match(/timeout-minutes:\s*(\d+)/);
+  const stepTimeoutMatch = cleanup.keys.match(/timeout-minutes:\s*(\d+)/);
   if (!stepTimeoutMatch) {
     report(RWA004, path, 'cleanup step must set timeout-minutes');
     return;
@@ -289,7 +300,7 @@ function checkCleanupTimeoutAndEvidence(path, text, report) {
   if (
     path.startsWith('idd-template/') &&
     !/if: steps\.profile\.outputs\.profile != 'instructions-only' && steps\.manager\.outputs\.manager != 'ambiguous'/.test(
-      cleanupBlock,
+      cleanup.keys,
     )
   ) {
     report(
@@ -298,9 +309,10 @@ function checkCleanupTimeoutAndEvidence(path, text, report) {
       'cleanup step must keep the profile/manager skip guard',
     );
   }
-  const evidence = text.slice(evidenceStart);
   if (
-    !/if: always\(\) && steps\.cleanup\.outcome != 'skipped'/.test(evidence)
+    !/if: always\(\) && steps\.cleanup\.outcome != 'skipped'/.test(
+      evidence.keys,
+    )
   ) {
     report(
       RWA004,
@@ -308,12 +320,15 @@ function checkCleanupTimeoutAndEvidence(path, text, report) {
       'evidence step must run on always() unless cleanup was skipped',
     );
   }
-  const evidenceRun = evidence.indexOf('run: |');
+  const evidenceRun = evidence.run.indexOf('run: |');
   if (evidenceRun === -1) {
     report(RWA004, path, 'evidence step must have a run script');
     return;
   }
-  const evidenceHeader = evidence.slice(0, evidenceRun);
+  const evidenceHeader = evidence.keys.slice(
+    0,
+    evidence.keys.indexOf('run: |'),
+  );
   if (
     !/PR_NUMBER: \$\{\{ steps\.cleanup\.outputs\.pr_number \|\| github\.event\.pull_request\.number \|\| github\.event\.inputs\.pr_number \}\}/.test(
       evidenceHeader,
@@ -325,7 +340,7 @@ function checkCleanupTimeoutAndEvidence(path, text, report) {
       'evidence PR_NUMBER must fall back to the event expression',
     );
   }
-  checkEmptyStatusBranch(path, evidence, report);
+  checkEmptyStatusBranch(path, evidence.run, report);
 }
 function checkPostMergeCleanupWorkflows(root, report) {
   for (const path of POST_MERGE_CLEANUP_PATHS) {
@@ -1148,8 +1163,11 @@ function concurrencyOf(declared) {
 }
 // The character offset of the `- name:` line of the named step in a view, or -1.
 // The step names passed here contain no regular-expression metacharacters.
+// The character offset of the `- name:` line of the named step in a view, or -1.
+// The name is escaped, so a step name may carry parentheses or other punctuation.
 function stepOffset(view, name) {
-  return view.search(new RegExp(`^ {6}- name: ${name}\\s*$`, 'm'));
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return view.search(new RegExp(`^ {6}- name: ${escaped}\\s*$`, 'm'));
 }
 // The text of the named step in a view, or undefined when no step has that name.
 function stepTextNamed(view, name) {
