@@ -451,182 +451,214 @@ test('fixture commits ignore a signing-enabled global git config', () => {
   }
 });
 
-// Ref lines as git's pre-push passes them on stdin (#3854).
+// Ref lines as git's pre-push passes them on stdin (#3854). Every case runs
+// against the repository copy and the distributed template copy of the hook,
+// so a template-only regression cannot pass.
 const ZERO_SHA = '0'.repeat(40);
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 const SHA_C = 'c'.repeat(40);
+const HOOK_COPIES = [
+  ['repository', HOOKS_DIR],
+  ['distributed template', TEMPLATE_HOOKS_DIR],
+] as const;
+
+const GUARDED_CONFIG = {
+  worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
+  developmentBranch: 'main',
+};
 
 test('refuseBaseBranchCommits allows pushes of other refs from the base branch in the primary worktree (#3854)', () => {
-  const repo = setupRepo({
-    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
-    developmentBranch: 'main',
-  });
-  try {
-    // Deleting a merged feature branch and pushing a feature ref both leave
-    // the base branch untouched, so both pass from the base-branch worktree.
-    assert.equal(
-      runHook(
-        repo,
-        'pre-push',
-        repo,
-        `(delete) ${ZERO_SHA} refs/heads/feature/x ${SHA_A}\n`,
-      ),
-      0,
-    );
-    assert.equal(
-      runHook(
-        repo,
-        'pre-push',
-        repo,
-        `${SHA_B} ${SHA_B} refs/heads/feature/y ${ZERO_SHA}\n`,
-      ),
-      0,
-    );
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
+  for (const [copy, hooksSource] of HOOK_COPIES) {
+    const repo = setupRepo(GUARDED_CONFIG, hooksSource);
+    try {
+      // Deleting a merged feature branch and pushing a feature ref both leave
+      // the base branch untouched, so both pass from the base-branch worktree.
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `(delete) ${ZERO_SHA} refs/heads/feature/x ${SHA_A}\n`,
+        ),
+        0,
+        `${copy}: deleting another ref must be allowed`,
+      );
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `${SHA_B} ${SHA_B} refs/heads/feature/y ${ZERO_SHA}\n`,
+        ),
+        0,
+        `${copy}: pushing a feature ref must be allowed`,
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   }
 });
 
 test('refuseBaseBranchCommits refuses a push that updates or deletes the base branch (#3854)', () => {
-  const repo = setupRepo({
-    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
-    developmentBranch: 'main',
-  });
-  try {
-    assert.equal(
-      runHook(
-        repo,
-        'pre-push',
-        repo,
-        `${SHA_B} ${SHA_C} refs/heads/main ${SHA_A}\n`,
-      ),
-      1,
-    );
-    assert.equal(
-      runHook(
-        repo,
-        'pre-push',
-        repo,
-        `(delete) ${ZERO_SHA} refs/heads/main ${SHA_A}\n`,
-      ),
-      1,
-    );
-    assert.equal(
-      runHook(
-        repo,
-        'pre-push',
-        repo,
-        `(delete) ${ZERO_SHA} refs/heads/feature/x ${SHA_A}\n${SHA_B} ${SHA_C} refs/heads/main ${SHA_A}\n`,
-      ),
-      1,
-    );
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
+  for (const [copy, hooksSource] of HOOK_COPIES) {
+    const repo = setupRepo(GUARDED_CONFIG, hooksSource);
+    try {
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `${SHA_B} ${SHA_C} refs/heads/main ${SHA_A}\n`,
+        ),
+        1,
+        `${copy}: updating main must be refused`,
+      );
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `(delete) ${ZERO_SHA} refs/heads/main ${SHA_A}\n`,
+        ),
+        1,
+        `${copy}: deleting main must be refused`,
+      );
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `(delete) ${ZERO_SHA} refs/heads/feature/x ${SHA_A}\n${SHA_B} ${SHA_C} refs/heads/main ${SHA_A}\n`,
+        ),
+        1,
+        `${copy}: mixed lines that include main must be refused`,
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   }
 });
 
 test('refuseBaseBranchCommits keeps the HEAD-based refusal without ref lines or with stdin closed (#3854)', () => {
-  const repo = setupRepo({
-    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
-    developmentBranch: 'main',
-  });
-  try {
-    // An empty stream is what an up-to-date push gives the hook.
-    assert.equal(runHook(repo, 'pre-push', repo, ''), 1);
-    assert.equal(runHook(repo, 'pre-push', repo, 'closed'), 1);
-    assert.equal(runHook(repo, 'pre-commit'), 1);
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
+  for (const [copy, hooksSource] of HOOK_COPIES) {
+    const repo = setupRepo(GUARDED_CONFIG, hooksSource);
+    try {
+      // An empty stream is what an up-to-date push gives the hook.
+      assert.equal(
+        runHook(repo, 'pre-push', repo, ''),
+        1,
+        `${copy}: empty stdin`,
+      );
+      assert.equal(
+        runHook(repo, 'pre-push', repo, 'closed'),
+        1,
+        `${copy}: closed stdin`,
+      );
+      assert.equal(runHook(repo, 'pre-commit'), 1, `${copy}: commit`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   }
 });
 
 test('refuseBaseBranchCommits off leaves base-branch pushes and commits allowed (#3854)', () => {
-  const repo = setupRepo({
-    worktreeGuard: { enabled: true },
-    developmentBranch: 'main',
-  });
-  try {
-    assert.equal(
-      runHook(
-        repo,
-        'pre-push',
-        repo,
-        `${SHA_B} ${SHA_C} refs/heads/main ${SHA_A}\n`,
-      ),
-      0,
+  for (const [copy, hooksSource] of HOOK_COPIES) {
+    const repo = setupRepo(
+      { worktreeGuard: { enabled: true }, developmentBranch: 'main' },
+      hooksSource,
     );
-    assert.equal(runHook(repo, 'pre-commit'), 0);
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
+    try {
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `${SHA_B} ${SHA_C} refs/heads/main ${SHA_A}\n`,
+        ),
+        0,
+        `${copy}: push with the opt-in off`,
+      );
+      assert.equal(
+        runHook(repo, 'pre-commit'),
+        0,
+        `${copy}: commit with the opt-in off`,
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   }
 });
 
 test('a merged feature branch is deleted from the primary worktree on the base branch, and a base update stays refused (#3854)', () => {
-  const remoteRoot = mkdtempSync(join(tmpdir(), 'idd-hook-remote-'));
-  const remote = join(remoteRoot, 'origin.git');
-  const repo = setupRepo({
-    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
-    developmentBranch: 'main',
-  });
-  try {
-    git(remoteRoot, ['init', '--bare', '-b', 'main', remote]);
-    git(repo, ['remote', 'add', 'origin', remote]);
-    git(repo, ['config', 'core.hooksPath', '.githooks']);
-    // Publish main and two feature branches with the guard skipped, so the
-    // fixture does not depend on the behaviour under test.
-    git(repo, ['push', '--no-verify', 'origin', 'main']);
-    git(repo, [
-      'push',
-      '--no-verify',
-      'origin',
-      'main:refs/heads/feature/merged',
-    ]);
-    git(repo, [
-      'push',
-      '--no-verify',
-      'origin',
-      'main:refs/heads/feature/helper',
-    ]);
-    const tip = gitOut(repo, ['rev-parse', 'HEAD']);
+  const helper = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'delete-remote-branch.mjs',
+  );
+  for (const [copy, hooksSource] of HOOK_COPIES) {
+    const remoteRoot = mkdtempSync(join(tmpdir(), 'idd-hook-remote-'));
+    const remote = join(remoteRoot, 'origin.git');
+    const repo = setupRepo(GUARDED_CONFIG, hooksSource);
+    try {
+      git(remoteRoot, ['init', '--bare', '-b', 'main', remote]);
+      git(repo, ['remote', 'add', 'origin', remote]);
+      git(repo, ['config', 'core.hooksPath', '.githooks']);
+      // Publish main and two feature branches with the guard skipped, so the
+      // fixture does not depend on the behaviour under test.
+      git(repo, ['push', '--no-verify', 'origin', 'main']);
+      git(repo, [
+        'push',
+        '--no-verify',
+        'origin',
+        'main:refs/heads/feature/merged',
+      ]);
+      git(repo, [
+        'push',
+        '--no-verify',
+        'origin',
+        'main:refs/heads/feature/helper',
+      ]);
+      const tip = gitOut(repo, ['rev-parse', 'HEAD']);
 
-    // git push --delete from the primary worktree on the base branch.
-    git(repo, ['push', 'origin', '--delete', 'feature/merged']);
-    assert.equal(
-      gitOut(repo, ['ls-remote', '--heads', 'origin', 'feature/merged']),
-      '',
-    );
+      // git push --delete from the primary worktree on the base branch.
+      git(repo, ['push', 'origin', '--delete', 'feature/merged']);
+      assert.equal(
+        gitOut(repo, ['ls-remote', '--heads', 'origin', 'feature/merged']),
+        '',
+        `${copy}: merged feature branch must be gone`,
+      );
 
-    // The helper's own deletion path, which F4 step 6 relies on.
-    const helper = join(
-      dirname(fileURLToPath(import.meta.url)),
-      '..',
-      'scripts',
-      'delete-remote-branch.mjs',
-    );
-    const verdict = JSON.parse(
-      execFileSync(
-        'node',
-        [
-          helper,
-          '--branch',
-          'feature/helper',
-          '--expected-sha',
-          tip,
-          '--apply',
-        ],
-        { cwd: repo, env: fixtureEnv(), encoding: 'utf8', stdio: 'pipe' },
-      ),
-    ) as { status: string; action: string };
-    assert.equal(verdict.status, 'complete');
-    assert.equal(verdict.action, 'deleted');
+      // The helper's own deletion path, which F4 step 6 relies on.
+      const verdict = JSON.parse(
+        execFileSync(
+          'node',
+          [
+            helper,
+            '--branch',
+            'feature/helper',
+            '--expected-sha',
+            tip,
+            '--apply',
+          ],
+          { cwd: repo, env: fixtureEnv(), encoding: 'utf8', stdio: 'pipe' },
+        ),
+      ) as { status: string; action: string };
+      assert.equal(verdict.status, 'complete', `${copy}: helper completes`);
+      assert.equal(verdict.action, 'deleted', `${copy}: helper deletes`);
 
-    // A real base update from the same worktree is still refused.
-    writeFileSync(join(repo, 'README.md'), 'changed\n');
-    git(repo, ['commit', '--no-verify', '-am', 'local base commit']);
-    assert.throws(() => git(repo, ['push', 'origin', 'main']));
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(remoteRoot, { recursive: true, force: true });
+      // A real base update from the same worktree is still refused.
+      writeFileSync(join(repo, 'README.md'), 'changed\n');
+      git(repo, ['commit', '--no-verify', '-am', 'local base commit']);
+      assert.throws(
+        () => git(repo, ['push', 'origin', 'main']),
+        Error,
+        `${copy}: base update must be refused`,
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(remoteRoot, { recursive: true, force: true });
+    }
   }
 });
