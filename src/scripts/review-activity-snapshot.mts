@@ -307,8 +307,11 @@ function buildLatestPrimaryBotReview(
   if (typeof fetchReviewsWithHead !== 'function') {
     return null;
   }
+  // Only the fetch is guarded: a failed fetch is evidence-absent, while a
+  // logic error in the selection should surface rather than read as null.
+  let reviews: ReturnType<typeof fetchReviewsAndHeadCommit>['reviews'];
   try {
-    const { reviews } = fetchReviewsAndHeadCommit(
+    ({ reviews } = fetchReviewsAndHeadCommit(
       input.owner,
       input.repo,
       input.prNumber,
@@ -316,19 +319,19 @@ function buildLatestPrimaryBotReview(
         getChangeRequestReviewsWithHeadCommitDate: (prNumber: number) =>
           fetchReviewsWithHead.call(port, prNumber),
       },
-    );
-    return resolveLatestPrimaryBotReviewEvidence({
-      reviews,
-      prHeadSha: input.headSha,
-      primaryBotLogin: advisoryWaitSectionIsValid(input.iddConfig)
-        ? resolveAdvisoryPrimaryBotLogin(input.iddConfig)
-        : DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
-      comments: input.normalizedComments,
-      trustedMarkerLogins: input.trustedMarkerLogins,
-    });
+    ));
   } catch {
     return null;
   }
+  return resolveLatestPrimaryBotReviewEvidence({
+    reviews,
+    prHeadSha: input.headSha,
+    primaryBotLogin: advisoryWaitSectionIsValid(input.iddConfig)
+      ? resolveAdvisoryPrimaryBotLogin(input.iddConfig)
+      : DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+    comments: input.normalizedComments,
+    trustedMarkerLogins: input.trustedMarkerLogins,
+  });
 }
 
 // The CLI body. Guarded behind `import.meta.main` so importing this

@@ -690,12 +690,13 @@ const LATEST_COPILOT = 'copilot-pull-request-reviewer[bot]';
 function latestPort(options: {
   fetchReviews?: () => unknown;
   comments?: object[];
+  viewerLogin?: string;
 }) {
   const port: Record<string, unknown> = {
-    resolveViewerLoginSafe: () => ({
-      viewerLogin: '',
-      viewerLoginUnavailable: true,
-    }),
+    resolveViewerLoginSafe: () =>
+      options.viewerLogin === undefined
+        ? { viewerLogin: '', viewerLoginUnavailable: true }
+        : { viewerLogin: options.viewerLogin, viewerLoginUnavailable: false },
     getChangeRequestHeadShaAndAuthor: () => ({
       headSha: LATEST_HEAD,
       authorLogin: 'someone',
@@ -931,6 +932,40 @@ test('a trusted, unedited review-ack after the review sets reviewAckCovers (#390
     reviewAckCovers: boolean | null;
   } | null;
   assert.equal(evidence?.reviewAckCovers, true);
+});
+
+test('a review-ack from the viewer login is not a trusted ack (#3907)', () => {
+  const snapshot = latestSnapshot({
+    include: true,
+    trustedMarkerLoginsFlag: 'kurone-kito',
+    viewerLogin: 'viewer-bot',
+    comments: [
+      {
+        id: 'ACK2',
+        authorLogin: 'viewer-bot',
+        body: `review-ack: claude-f3ef1280 ${LATEST_HEAD} 2026-10-09T02:00:00Z`,
+        createdAt: '2026-10-09T02:00:00Z',
+        updatedAt: '2026-10-09T02:00:00Z',
+        lastEditedAt: null,
+      },
+    ],
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_viewer',
+          corpusEntryBody('copilot-v2-previously-missed-3196'),
+        ),
+      ],
+    }),
+  });
+  // The reported trust set is the configured one, not the viewer-augmented
+  // activity set, so the viewer's ack must not satisfy reviewAckCovers.
+  assert.deepEqual(snapshot.trustedMarkerActors, ['kurone-kito']);
+  const evidence = snapshot.latestPrimaryBotReview as {
+    reviewAckCovers: boolean | null;
+  } | null;
+  assert.equal(evidence?.reviewAckCovers, false);
 });
 
 function latestPrimaryBotGraphql(reviewBody: string): string {
