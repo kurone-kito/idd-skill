@@ -143,10 +143,12 @@ The placeholders below are not all the same name:
    - `scripts/<stem>.mjs` in `DOGFOOD_ONLY_TOOLS`, if an instruction file under
      `.github/instructions/` invokes it. Without it, the check fails with
      `instruction-helper-registration`.
-     Any bare `node scripts/<stem>.mjs` in an instruction file also needs the
-     words `profile-selected` in the same paragraph, or earlier in that file, and
-     this applies even when the helper has a catalog entry. Without them, the
-     audit fails with `unpointed-source-form`. This check does not scan `docs/`.
+
+   Unless the helper is listed in one of those two tables, any bare
+   `node scripts/<stem>.mjs` in an instruction file also needs the words
+   `profile-selected` in the same paragraph, or earlier in that file. This
+   applies even when the helper has a catalog entry. Without them, the audit
+   fails with `unpointed-source-form`. This check does not scan `docs/`.
 4. If the helper ships to adopters, make it a packaged helper.
    - Add an entry to the `HELPER_COMMANDS` array in
      `src/scripts/helper-runtime-manifest.mts`, with `id` (`<id>`), `scriptName`
