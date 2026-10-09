@@ -2871,6 +2871,12 @@ The adopted helper boundaries are intentionally narrow:
   - prints the resolved successor IDs and marker preview -- with a
     warning when the resolved successor still matches the displaced
     agent-id -- before the final confirmation
+  - before the final confirmation, reads `forcedHandoff.mode` at each
+    trusted copy that Resume and F2 read, and refuses, posting nothing,
+    unless every copy confirms `human-gated`: the base branch of each open
+    PR on the claim branch (or the live default branch when no PR is
+    open), and the claim branch itself when a PR head or a remote branch
+    exists; a refusal names the copy and any read error
   - posts nothing unless the final confirmation is exactly `y`
 
 - Command: `node scripts/forced-handoff-marker.mjs --issue <number> --plan ...`
@@ -2881,11 +2887,30 @@ The adopted helper boundaries are intentionally narrow:
   - render or inspect canonical forced-handoff marker payloads
   - support audited debugging or manual review of the exact body
   - stay distinct from the interactive operator facade above
+- Preflight: with an open PR on the claim branch, a non-plan run needs
+  `--pr <number>`. Before it renders, the run refuses (non-zero exit,
+  empty stdout) unless every copy that the facade's preflight reads
+  confirms `human-gated`. `--plan` reports the same check as a read-only
+  `preflight` field and omits `markerBody` when it would refuse; it still
+  exits `0`.
 
 The references in this subsection apply only when a repository
-explicitly installs the matching helpers and records a human-gated
-forced-handoff policy. Repositories that stay on the default disabled
-policy must not expose either helper as an active recovery path.
+explicitly installs the matching helpers and records
+`forcedHandoff.mode: human-gated` in `.github/idd/config.json` on the PR
+base branch and on the claim branch. The operator commits the opt-in to
+the base branch through its normal pull-request path, then merges that
+branch into the PR branch and pushes the merge. A pull request cannot
+enable the mode for itself, because the merge gate reads the base-branch
+config and the preflight reads the remote copies. Repositories that stay
+on the default disabled policy must not expose either helper as an
+active recovery path.
+
+Observed 2026-10-04 in a private downstream adopter (pinned v0.11.0): the
+opt-in was enabled in the primary checkout only and left uncommitted. The
+helper posted a valid marker, but Resume from the claimed branch's
+worktree refused it with `forced-handoff mode is not enabled`, and the
+merge gate refused it with `claim-id-mismatch`. The report is recorded in
+issue `#3872`.
 
 The references in this section apply only when a repository explicitly
 installs the matching helper scripts. Repositories that stay on the
