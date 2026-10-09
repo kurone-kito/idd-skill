@@ -797,6 +797,17 @@ interface ClaimResolutionOptions {
     forcedHandoff: ParsedForcedHandoffMarker;
     event: CommentLike;
   }) => void;
+  /**
+   * Explain a refused forced-handoff marker (#3873). When supplied, a refused
+   * marker is reported with the author and authorization reason of any check
+   * this caller enabled, and otherwise with this explanation; a `null`
+   * explanation keeps `mode-disabled`. Absent, every refusal is reported as
+   * `mode-disabled`, as before.
+   */
+  explainForcedHandoffRefusal?: (
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentLike,
+  ) => string | null;
 }
 
 /** Fully-defaulted form of {@link ClaimResolutionOptions}. */
@@ -10654,25 +10665,80 @@ export function buildForcedHandoffEnableGate(options: {
   expectedLinkedPrReferences: Set<string>;
   prFirstCommitAt?: string | null;
 }): (forcedHandoff: ParsedForcedHandoffMarker) => boolean {
+  const explain = buildForcedHandoffRefusalExplainer(options);
+  return (forcedHandoff: ParsedForcedHandoffMarker) =>
+    explain(forcedHandoff) === null;
+}
+
+/**
+ * Why a forced-handoff marker is not honored (#3873). The closed set the
+ * Resume and merge-gate readers report instead of one generic reason.
+ */
+export type ForcedHandoffRefusalCause =
+  | 'mode-disabled'
+  | 'linked-pr-lookup-failed'
+  | 'pr-scope-mismatch'
+  | 'issue-only-not-before-first-commit'
+  | 'first-commit-time-unknown';
+
+/**
+ * Explain why {@link buildForcedHandoffEnableGate} refuses a marker. It takes
+ * the same inputs and returns the cause of a refusal, or `null` when the gate
+ * honors the marker. The checks run in this order, so the gate and the
+ * explanation cannot disagree:
+ *
+ * 1. forced-handoff mode disabled → `mode-disabled`;
+ * 2. linked-PR lookup failed, for a marker that is not `issue-plus-pr` →
+ *    `linked-pr-lookup-failed` (checked before the first-commit time, because
+ *    a failed commit read also leaves that time unknown, and the #3276
+ *    override depends on the lookup cause);
+ * 3. no open linked PR backs the claim → honored;
+ * 4. `issue-plus-pr` marker whose `linkedPr` is not an expected PR →
+ *    `pr-scope-mismatch`;
+ * 5. `issue-only` marker that predates the PR's first commit → honored;
+ *    with no first-commit time supplied → `first-commit-time-unknown`;
+ *    otherwise → `issue-only-not-before-first-commit`.
+ */
+export function buildForcedHandoffRefusalExplainer(options: {
+  forcedHandoffEnabled: boolean;
+  expectedLinkedPrReferences: Set<string>;
+  prFirstCommitAt?: string | null;
+  linkedPrLookupFailed?: boolean;
+}): (
+  forcedHandoff: ParsedForcedHandoffMarker,
+) => ForcedHandoffRefusalCause | null {
   const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
   const prFirstCommitAt =
     typeof options.prFirstCommitAt === 'string' ? options.prFirstCommitAt : '';
   return (forcedHandoff: ParsedForcedHandoffMarker) => {
     if (!forcedHandoffEnabled) {
-      return false;
+      return 'mode-disabled';
+    }
+    if (
+      options.linkedPrLookupFailed === true &&
+      forcedHandoff.contextScope !== 'issue-plus-pr'
+    ) {
+      return 'linked-pr-lookup-failed';
     }
     if (expectedLinkedPrReferences.size === 0) {
-      return true;
+      return null;
     }
     if (forcedHandoff.contextScope === 'issue-plus-pr') {
       return expectedLinkedPrReferences.has(
         normalizeLinkedPrReference(forcedHandoff.linkedPr),
-      );
+      )
+        ? null
+        : 'pr-scope-mismatch';
     }
     // issue-only handoff against a PR-backed claim: accept only when it
     // predates the PR's first commit (a robust ISO compare; either side
     // unparseable → fail closed = reject).
-    return isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt);
+    if (isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt)) {
+      return null;
+    }
+    return prFirstCommitAt === ''
+      ? 'first-commit-time-unknown'
+      : 'issue-only-not-before-first-commit';
   };
 }
 
@@ -13745,6 +13811,15 @@ export function applyClaimEvent(
 ): ParsedClaimMarker | null {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
+  // The explanation path (#3873) needs to know which checks this caller
+  // enabled, which the normalized options cannot show: an absent authorization
+  // function defaults to "always refuse", not to "no check".
+  const callerOptions =
+    typeof options === 'object' && options !== null ? options : {};
+  const explainsRefusal =
+    typeof callerOptions.explainForcedHandoffRefusal === 'function';
+  const authorizationEnabled =
+    typeof callerOptions.isAuthorizedForcedHandoff === 'function';
   // kurone-kito/idd-skill#3248: defense in depth for a direct caller that
   // bypasses `resolveActiveClaimWithForcedHandoffTrace`'s own pre-filter --
   // every event reaching this point from that trace has already passed the
@@ -13820,8 +13895,39 @@ export function applyClaimEvent(
     forcedHandoff.branch === activeClaim.branch
   ) {
     if (!normalizedOptions.isForcedHandoffEnabled(forcedHandoff, event)) {
+      // A marker that fails a check this caller enabled is reported with that
+      // check's reason, not with the gate's cause (#3873). Without the
+      // explanation option the reason stays `mode-disabled`, as before.
+      let refusalReason = 'mode-disabled';
+      if (explainsRefusal) {
+        const authorLoginLower = String(authorLogin).trim().toLowerCase();
+        const forcedByLower = String(forcedHandoff.forcedBy ?? '')
+          .trim()
+          .toLowerCase();
+        if (
+          normalizedOptions.requireAuthorMatchesForcedBy &&
+          (!authorLoginLower || authorLoginLower !== forcedByLower)
+        ) {
+          refusalReason = 'author-forced-by-mismatch';
+        } else if (
+          authorizationEnabled &&
+          !normalizedOptions.isAuthorizedForcedHandoff(
+            forcedHandoff.forcedBy,
+            forcedHandoff,
+            event,
+          )
+        ) {
+          refusalReason = 'forced-by-unauthorized';
+        } else {
+          refusalReason =
+            normalizedOptions.explainForcedHandoffRefusal(
+              forcedHandoff,
+              event,
+            ) ?? 'mode-disabled';
+        }
+      }
       normalizedOptions.onIgnoredForcedHandoff({
-        reason: 'mode-disabled',
+        reason: refusalReason,
         forcedHandoff,
         event,
       });
@@ -13891,6 +13997,7 @@ function normalizeClaimResolutionOptions(
       requireAuthorMatchesForcedBy: false,
       onAnomalousHeartbeat: () => {},
       onIgnoredForcedHandoff: () => {},
+      explainForcedHandoffRefusal: () => null,
     };
   }
 
@@ -13919,6 +14026,10 @@ function normalizeClaimResolutionOptions(
       typeof options.onIgnoredForcedHandoff === 'function'
         ? options.onIgnoredForcedHandoff
         : () => {},
+    explainForcedHandoffRefusal:
+      typeof options.explainForcedHandoffRefusal === 'function'
+        ? options.explainForcedHandoffRefusal
+        : () => null,
   };
 }
 

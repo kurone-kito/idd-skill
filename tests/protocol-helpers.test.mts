@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseClaimComment } from '../src/scripts/marker-helpers.mts';
 import {
+  parseClaimComment,
+  parseForcedHandoffComment,
+  renderForcedHandoffComment,
+} from '../src/scripts/marker-helpers.mts';
+import {
+  applyClaimEvent,
   buildActivitySnapshotSummary,
+  buildForcedHandoffEnableGate,
+  buildForcedHandoffRefusalExplainer,
   classifyCommentEditState,
   classifyThreadAckOnlyPostDisposition,
   compareClaimEventOrder,
@@ -19,6 +26,7 @@ import {
   LIVE_STATUS_DIGEST_MARKER,
   listBlockingPresentRunNames,
   MALFORMED_DISPOSITION_PREFIX_HINT,
+  normalizeLinkedPrReference,
   orderClaimEvents,
   resolveActiveClaim,
   resolveActiveClaimForWriteGate,
@@ -5450,4 +5458,214 @@ test('isDispositionComment credits an urgency deferral reply that carries the st
     true,
   );
   assert.equal(isDispositionComment({ body: `Not a marker: ${reply}` }), false);
+});
+
+// Forced-handoff refusal causes (kurone-kito/idd-skill#3873). The explainer
+// and the boolean gate share one check order, so these tests pin both.
+const REFUSAL_ACTIVE_CLAIM = {
+  agentId: 'old-agent',
+  claimId: 'old-claim',
+  supersedes: 'none',
+  branch: 'issue/1-task',
+  createdAt: '2026-05-12T09:00:00Z',
+};
+
+function refusalMarker(
+  contextScope: 'issue-plus-pr' | 'issue-only',
+  createdAt: string,
+  linkedPr = '341',
+) {
+  const payload: Record<string, unknown> = {
+    oldAgentId: REFUSAL_ACTIVE_CLAIM.agentId,
+    oldClaimId: REFUSAL_ACTIVE_CLAIM.claimId,
+    newAgentId: 'new-agent',
+    newClaimId: 'new-claim',
+    branch: REFUSAL_ACTIVE_CLAIM.branch,
+    forcedBy: 'maintainer',
+    reason: 'operator-approved-recovery',
+    timestamp: createdAt,
+    contextScope,
+  };
+  if (contextScope === 'issue-plus-pr') payload.linkedPr = linkedPr;
+  const marker = parseForcedHandoffComment(
+    renderForcedHandoffComment(payload),
+    createdAt,
+  );
+  assert.ok(marker, 'the rendered forced-handoff marker must parse');
+  return marker;
+}
+
+const REFUSAL_EXPECTED_PRS = new Set([normalizeLinkedPrReference('341')]);
+const REFUSAL_PR_FIRST_COMMIT = '2026-05-12T11:00:00Z';
+
+test('refusal explainer names the cause of each refusal, and null when the gate honors the marker', () => {
+  const issuePlus = refusalMarker('issue-plus-pr', '2026-05-12T11:30:00Z');
+  const onlyBefore = refusalMarker('issue-only', '2026-05-12T10:00:00Z');
+  const onlyAfter = refusalMarker('issue-only', '2026-05-12T12:00:00Z');
+  const explain = (overrides: Record<string, unknown>) =>
+    buildForcedHandoffRefusalExplainer({
+      forcedHandoffEnabled: true,
+      expectedLinkedPrReferences: REFUSAL_EXPECTED_PRS,
+      prFirstCommitAt: REFUSAL_PR_FIRST_COMMIT,
+      ...overrides,
+    });
+
+  assert.equal(
+    explain({ forcedHandoffEnabled: false })(issuePlus),
+    'mode-disabled',
+  );
+  assert.equal(
+    explain({ forcedHandoffEnabled: false })(onlyBefore),
+    'mode-disabled',
+  );
+  assert.equal(
+    explain({ linkedPrLookupFailed: true })(onlyBefore),
+    'linked-pr-lookup-failed',
+  );
+  assert.equal(
+    explain({ linkedPrLookupFailed: true, prFirstCommitAt: null })(onlyBefore),
+    'linked-pr-lookup-failed',
+    'a failed commit read must be reported as the lookup failure, not as an unknown first-commit time',
+  );
+  assert.equal(explain({ linkedPrLookupFailed: true })(issuePlus), null);
+  assert.equal(explain({})(issuePlus), null);
+  assert.equal(
+    explain({ expectedLinkedPrReferences: new Set(['999']) })(issuePlus),
+    'pr-scope-mismatch',
+  );
+  assert.equal(explain({})(onlyBefore), null);
+  assert.equal(explain({})(onlyAfter), 'issue-only-not-before-first-commit');
+  assert.equal(
+    explain({ prFirstCommitAt: null })(onlyBefore),
+    'first-commit-time-unknown',
+  );
+  assert.equal(
+    explain({ expectedLinkedPrReferences: new Set() })(onlyAfter),
+    null,
+    'with no open linked PR backing the claim, every marker is honored',
+  );
+});
+
+test('the boolean gate honors exactly the markers the refusal explainer does not refuse', () => {
+  const markers = [
+    refusalMarker('issue-plus-pr', '2026-05-12T11:30:00Z'),
+    refusalMarker('issue-plus-pr', '2026-05-12T11:30:00Z', '999'),
+    refusalMarker('issue-only', '2026-05-12T10:00:00Z'),
+    refusalMarker('issue-only', '2026-05-12T12:00:00Z'),
+  ];
+  for (const enabled of [true, false]) {
+    for (const refs of [REFUSAL_EXPECTED_PRS, new Set<string>()]) {
+      for (const prFirstCommitAt of [REFUSAL_PR_FIRST_COMMIT, null]) {
+        const options = {
+          forcedHandoffEnabled: enabled,
+          expectedLinkedPrReferences: refs,
+          prFirstCommitAt,
+        };
+        const gate = buildForcedHandoffEnableGate(options);
+        const explain = buildForcedHandoffRefusalExplainer(options);
+        for (const marker of markers) {
+          assert.equal(gate(marker), explain(marker) === null);
+        }
+      }
+    }
+  }
+});
+
+function refusalEvent(body: string) {
+  return {
+    author: { login: 'maintainer' },
+    body,
+    createdAt: '2026-05-12T11:30:00Z',
+    lastEditedAt: null,
+  };
+}
+
+function refusalEventBody(scope: 'issue-plus-pr', linkedPr: string) {
+  return renderForcedHandoffComment({
+    oldAgentId: REFUSAL_ACTIVE_CLAIM.agentId,
+    oldClaimId: REFUSAL_ACTIVE_CLAIM.claimId,
+    newAgentId: 'new-agent',
+    newClaimId: 'new-claim',
+    branch: REFUSAL_ACTIVE_CLAIM.branch,
+    linkedPr,
+    forcedBy: 'maintainer',
+    reason: 'operator-approved-recovery',
+    timestamp: '2026-05-12T11:30:00Z',
+    contextScope: scope,
+  });
+}
+
+test('applyClaimEvent reports the explained cause of a refused marker, and mode-disabled without the option', () => {
+  const body = refusalEventBody('issue-plus-pr', '341');
+  const reasons: string[] = [];
+  const onIgnoredForcedHandoff = ({ reason }: { reason: string }) => {
+    reasons.push(reason);
+  };
+  const base = {
+    isTrustedAuthor: () => true,
+    isForcedHandoffEnabled: () => false,
+    onIgnoredForcedHandoff,
+  };
+
+  assert.deepEqual(
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), base),
+    REFUSAL_ACTIVE_CLAIM,
+  );
+  assert.deepEqual(
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+      ...base,
+      explainForcedHandoffRefusal: () => 'pr-scope-mismatch',
+    }),
+    REFUSAL_ACTIVE_CLAIM,
+  );
+  assert.deepEqual(
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+      ...base,
+      explainForcedHandoffRefusal: () => null,
+    }),
+    REFUSAL_ACTIVE_CLAIM,
+  );
+  assert.deepEqual(reasons, [
+    'mode-disabled',
+    'pr-scope-mismatch',
+    'mode-disabled',
+  ]);
+});
+
+test('applyClaimEvent reports a failed check the caller enabled, not the gate cause', () => {
+  const body = refusalEventBody('issue-plus-pr', '341');
+  const reasons: string[] = [];
+  const base = {
+    isTrustedAuthor: () => true,
+    isForcedHandoffEnabled: () => false,
+    onIgnoredForcedHandoff: ({ reason }: { reason: string }) => {
+      reasons.push(reason);
+    },
+    explainForcedHandoffRefusal: () => 'mode-disabled',
+  };
+
+  // The marker names 'maintainer' as forcedBy. An author who is not
+  // 'maintainer' fails the enabled author-match check, so that reason wins.
+  applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+    ...base,
+    requireAuthorMatchesForcedBy: true,
+    isAuthorizedForcedHandoff: () => true,
+  });
+  applyClaimEvent(
+    REFUSAL_ACTIVE_CLAIM,
+    { ...refusalEvent(body), author: { login: 'someone-else' } },
+    { ...base, requireAuthorMatchesForcedBy: true },
+  );
+  // An enabled authorization check that refuses wins over the gate cause,
+  // even while the mode is off.
+  applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+    ...base,
+    isAuthorizedForcedHandoff: () => false,
+  });
+
+  assert.deepEqual(reasons, [
+    'mode-disabled',
+    'author-forced-by-mismatch',
+    'forced-by-unauthorized',
+  ]);
 });

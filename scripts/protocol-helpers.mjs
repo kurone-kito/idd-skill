@@ -8588,25 +8588,60 @@ export function resolvePrFirstCommitAt(commits) {
  * `issue-only` handoff against a PR-backed claim is rejected.
  */
 export function buildForcedHandoffEnableGate(options) {
+  const explain = buildForcedHandoffRefusalExplainer(options);
+  return (forcedHandoff) => explain(forcedHandoff) === null;
+}
+/**
+ * Explain why {@link buildForcedHandoffEnableGate} refuses a marker. It takes
+ * the same inputs and returns the cause of a refusal, or `null` when the gate
+ * honors the marker. The checks run in this order, so the gate and the
+ * explanation cannot disagree:
+ *
+ * 1. forced-handoff mode disabled → `mode-disabled`;
+ * 2. linked-PR lookup failed, for a marker that is not `issue-plus-pr` →
+ *    `linked-pr-lookup-failed` (checked before the first-commit time, because
+ *    a failed commit read also leaves that time unknown, and the #3276
+ *    override depends on the lookup cause);
+ * 3. no open linked PR backs the claim → honored;
+ * 4. `issue-plus-pr` marker whose `linkedPr` is not an expected PR →
+ *    `pr-scope-mismatch`;
+ * 5. `issue-only` marker that predates the PR's first commit → honored;
+ *    with no first-commit time supplied → `first-commit-time-unknown`;
+ *    otherwise → `issue-only-not-before-first-commit`.
+ */
+export function buildForcedHandoffRefusalExplainer(options) {
   const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
   const prFirstCommitAt =
     typeof options.prFirstCommitAt === 'string' ? options.prFirstCommitAt : '';
   return (forcedHandoff) => {
     if (!forcedHandoffEnabled) {
-      return false;
+      return 'mode-disabled';
+    }
+    if (
+      options.linkedPrLookupFailed === true &&
+      forcedHandoff.contextScope !== 'issue-plus-pr'
+    ) {
+      return 'linked-pr-lookup-failed';
     }
     if (expectedLinkedPrReferences.size === 0) {
-      return true;
+      return null;
     }
     if (forcedHandoff.contextScope === 'issue-plus-pr') {
       return expectedLinkedPrReferences.has(
         normalizeLinkedPrReference(forcedHandoff.linkedPr),
-      );
+      )
+        ? null
+        : 'pr-scope-mismatch';
     }
     // issue-only handoff against a PR-backed claim: accept only when it
     // predates the PR's first commit (a robust ISO compare; either side
     // unparseable → fail closed = reject).
-    return isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt);
+    if (isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt)) {
+      return null;
+    }
+    return prFirstCommitAt === ''
+      ? 'first-commit-time-unknown'
+      : 'issue-only-not-before-first-commit';
   };
 }
 /**
@@ -11067,6 +11102,15 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
 export function applyClaimEvent(activeClaim, event, options = {}) {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
+  // The explanation path (#3873) needs to know which checks this caller
+  // enabled, which the normalized options cannot show: an absent authorization
+  // function defaults to "always refuse", not to "no check".
+  const callerOptions =
+    typeof options === 'object' && options !== null ? options : {};
+  const explainsRefusal =
+    typeof callerOptions.explainForcedHandoffRefusal === 'function';
+  const authorizationEnabled =
+    typeof callerOptions.isAuthorizedForcedHandoff === 'function';
   // kurone-kito/idd-skill#3248: defense in depth for a direct caller that
   // bypasses `resolveActiveClaimWithForcedHandoffTrace`'s own pre-filter --
   // every event reaching this point from that trace has already passed the
@@ -11136,8 +11180,39 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
     forcedHandoff.branch === activeClaim.branch
   ) {
     if (!normalizedOptions.isForcedHandoffEnabled(forcedHandoff, event)) {
+      // A marker that fails a check this caller enabled is reported with that
+      // check's reason, not with the gate's cause (#3873). Without the
+      // explanation option the reason stays `mode-disabled`, as before.
+      let refusalReason = 'mode-disabled';
+      if (explainsRefusal) {
+        const authorLoginLower = String(authorLogin).trim().toLowerCase();
+        const forcedByLower = String(forcedHandoff.forcedBy ?? '')
+          .trim()
+          .toLowerCase();
+        if (
+          normalizedOptions.requireAuthorMatchesForcedBy &&
+          (!authorLoginLower || authorLoginLower !== forcedByLower)
+        ) {
+          refusalReason = 'author-forced-by-mismatch';
+        } else if (
+          authorizationEnabled &&
+          !normalizedOptions.isAuthorizedForcedHandoff(
+            forcedHandoff.forcedBy,
+            forcedHandoff,
+            event,
+          )
+        ) {
+          refusalReason = 'forced-by-unauthorized';
+        } else {
+          refusalReason =
+            normalizedOptions.explainForcedHandoffRefusal(
+              forcedHandoff,
+              event,
+            ) ?? 'mode-disabled';
+        }
+      }
       normalizedOptions.onIgnoredForcedHandoff({
-        reason: 'mode-disabled',
+        reason: refusalReason,
         forcedHandoff,
         event,
       });
@@ -11199,6 +11274,7 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       requireAuthorMatchesForcedBy: false,
       onAnomalousHeartbeat: () => {},
       onIgnoredForcedHandoff: () => {},
+      explainForcedHandoffRefusal: () => null,
     };
   }
   const options = optionsOrPredicate ?? {};
@@ -11226,6 +11302,10 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       typeof options.onIgnoredForcedHandoff === 'function'
         ? options.onIgnoredForcedHandoff
         : () => {},
+    explainForcedHandoffRefusal:
+      typeof options.explainForcedHandoffRefusal === 'function'
+        ? options.explainForcedHandoffRefusal
+        : () => null,
   };
 }
 export function normalizeLinkedPrReference(value) {
