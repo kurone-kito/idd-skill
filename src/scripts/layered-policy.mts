@@ -52,7 +52,11 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
     'pre-merge-readiness.mts and external-check-waiver.mts',
   'forced-handoff-authority':
     'pre-merge-readiness.mts and external-check-waiver.mts',
-  /** `issueAuthoring` supplies the authoring guard label used by readiness. */
+  /**
+   * `issueAuthoring` supplies the authoring guard label used by readiness.
+   * Its `adversarialReview` fragment is operator-owned and still inherits from
+   * the user-global layer (see overlayGlobalLayer).
+   */
   issueAuthoring: 'pre-merge-readiness.mts',
   /** `markerTrust` controls whether collaborator-authored markers are trusted. */
   markerTrust:
@@ -72,8 +76,12 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
 /** Local delegate objects are validated as a whole by their consumers. */
 const ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS = new Set([
   'critiqueLoop.delegate',
+  'critiqueLoop.telemetryHook',
   'issueAuthoring.adversarialReview.delegate',
 ]);
+
+/** Keys a valid `issueAuthoring.adversarialReview` container may hold. */
+const ADVERSARIAL_REVIEW_KEYS = new Set(['waitCeiling', 'delegate']);
 
 export type PolicyLayerSource =
   | 'repository-local'
@@ -321,9 +329,19 @@ function overlayGlobalLayer(
   sourceMap: Record<string, PolicyLayerSource>,
 ): unknown {
   const filtered = Object.fromEntries(
-    Object.entries(layer).filter(
-      ([key]) => !(localExists && Object.hasOwn(REPOSITORY_POLICY_FIELDS, key)),
-    ),
+    Object.entries(layer).flatMap(([key, value]) => {
+      if (!localExists || !Object.hasOwn(REPOSITORY_POLICY_FIELDS, key))
+        return [[key, value]];
+      // A local document owns the repository children of `issueAuthoring`, but
+      // the adversarial-review fragment stays inheritable from the global layer.
+      if (
+        key === 'issueAuthoring' &&
+        isPlainObject(value) &&
+        Object.hasOwn(value, 'adversarialReview')
+      )
+        return [[key, { adversarialReview: value.adversarialReview }]];
+      return [];
+    }),
   );
   return overlayPolicyLayer(base, filtered, source, '', sourceMap);
 }
@@ -352,7 +370,9 @@ function overlayPolicyLayer(
       isPlainObject(baseValue) &&
       !(
         source === 'repository-local' &&
-        ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS.has(childPath)
+        (ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS.has(childPath) ||
+          (childPath === 'issueAuthoring.adversarialReview' &&
+            hasUnknownKeys(value, ADVERSARIAL_REVIEW_KEYS)))
       )
     ) {
       const mergedChild = overlayPolicyLayer(
@@ -679,4 +699,8 @@ function isEnoent(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function hasUnknownKeys(value: object, known: ReadonlySet<string>): boolean {
+  return Object.keys(value).some((key) => !known.has(key));
 }

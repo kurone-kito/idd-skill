@@ -1974,3 +1974,78 @@ test('evaluateForcedHandoffPreflight refuses when the live default branch cannot
     result.refusal ?? 'no refusal',
   );
 });
+
+const LAYERED_TEST_IDENTITY = {
+  githubSlug: 'owner/repo',
+  hasGithubOrigin: true,
+  mainWorktreeRoot: '/srv/repo',
+};
+
+test('a malformed local telemetry hook does not inherit a global command', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: { critiqueLoop: { telemetryHook: {} } },
+    },
+    identity: LAYERED_TEST_IDENTITY,
+    userGlobalConfig: {
+      critiqueLoop: { telemetryHook: { command: 'global-hook' } },
+    },
+  });
+
+  assert.deepEqual(result.config.critiqueLoop, { telemetryHook: {} });
+  assert.equal(
+    result.sourceMap['critiqueLoop.telemetryHook.command'],
+    undefined,
+  );
+});
+
+test('a local document keeps inheriting the global adversarial-review delegate', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: { issueAuthoring: { authoringLabelName: 'status:drafting' } },
+    },
+    identity: LAYERED_TEST_IDENTITY,
+    userGlobalConfig: {
+      issueAuthoring: {
+        authoringLabelName: 'global-label',
+        adversarialReview: {
+          delegate: { command: 'global-reviewer', mode: 'combined' },
+        },
+      },
+    },
+  });
+  const issueAuthoring = result.config.issueAuthoring as {
+    authoringLabelName: unknown;
+    adversarialReview: unknown;
+  };
+
+  assert.equal(issueAuthoring.authoringLabelName, 'status:drafting');
+  assert.deepEqual(issueAuthoring.adversarialReview, {
+    delegate: { command: 'global-reviewer', mode: 'combined' },
+  });
+});
+
+test('a malformed local adversarialReview container blocks the global delegate', () => {
+  const result = resolveLayeredPolicy({
+    localDocument: {
+      exists: true,
+      config: { issueAuthoring: { adversarialReview: { typo: true } } },
+    },
+    identity: LAYERED_TEST_IDENTITY,
+    userGlobalConfig: {
+      issueAuthoring: {
+        adversarialReview: {
+          delegate: { command: 'global-reviewer', mode: 'combined' },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    (result.config.issueAuthoring as { adversarialReview: unknown })
+      .adversarialReview,
+    { typo: true },
+  );
+});
