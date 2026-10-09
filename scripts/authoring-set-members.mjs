@@ -14,7 +14,7 @@
 // unfinished listing, exits non-zero and never reports `soleMember: true`.
 import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghApiJson } from './gh-exec.mjs';
+import { ghTextUnbounded } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -355,8 +355,24 @@ export function collectIndexLagIssueNumbers(items, pageFull) {
   ].sort((left, right) => left - right);
   return { complete: true, numbers, reason: '' };
 }
+/**
+ * Read one REST page through the unbounded `gh` reader (#3901). A page of
+ * full issue resources can be larger than the 1 MiB buffer that ghApiJson
+ * gives its child process, so the response goes to a temporary file, as the
+ * sibling authoring helpers read theirs. An empty response parses as `{}`,
+ * and an unparseable one as `undefined`, so the caller shape check reports
+ * either as an unreadable page.
+ */
+function ghApiPageUnbounded(apiPath) {
+  const raw = ghTextUnbounded(['api', apiPath]);
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    return undefined;
+  }
+}
 function fetchIndexLagIssues(owner, repo, sinceIso) {
-  const payload = ghApiJson(
+  const payload = ghApiPageUnbounded(
     `repos/${owner}/${repo}/issues?state=all&since=${encodeURIComponent(sinceIso)}&per_page=${INDEX_LAG_PAGE_SIZE}&page=1`,
   );
   if (!Array.isArray(payload)) {
@@ -432,7 +448,7 @@ function parseArgs(argv) {
 function fetchSearchPages(query) {
   const pages = [];
   for (let page = 1; page <= SEARCH_MAX_PAGES; page += 1) {
-    const payload = ghApiJson(
+    const payload = ghApiPageUnbounded(
       `search/issues?q=${encodeURIComponent(query)}&per_page=${SEARCH_PAGE_SIZE}&page=${page}`,
     );
     const parsed = parseIssueSearchPage(payload);
