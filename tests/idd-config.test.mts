@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -395,6 +396,39 @@ test('the legacy idd-policy.json is never read as the local policy (#3820)', () 
       assert.equal(loadIddConfig(), null);
       assert.equal(loadPolicyConfig().config, null);
     });
+  });
+});
+
+// #3820: a legacy file that exists but cannot be inspected still blocks the
+// user-global repository fields. The symlink target sits in a directory with no
+// search permission, so stat fails with EACCES rather than ENOENT. POSIX
+// permissions do not apply on Windows, and root ignores them.
+const canLockDirectories =
+  platform !== 'win32' &&
+  typeof process.getuid === 'function' &&
+  process.getuid() !== 0;
+test('an uninspectable legacy idd-policy.json still blocks user-global repository fields (#3820)', {
+  skip: !canLockDirectories,
+}, () => {
+  withSandboxCwd((sandbox) => {
+    const locked = join(sandbox, 'locked');
+    mkdirSync(locked);
+    writeFileSync(join(locked, 'policy.json'), '{"reviewPolicy":"legacy"}');
+    symlinkSync(join(locked, 'policy.json'), join(sandbox, 'idd-policy.json'));
+    chmodSync(locked, 0o000);
+    try {
+      withUserGlobal(
+        '{"trustedMarkerActors":["global-login"],"threadResolutionPolicy":"fast-agent-resolve"}',
+        undefined,
+        () => {
+          assert.deepEqual(loadIddConfig(), {
+            threadResolutionPolicy: 'fast-agent-resolve',
+          });
+        },
+      );
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 });
 

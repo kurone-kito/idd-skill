@@ -117,6 +117,23 @@ test('--no-user-global skips the user-global layers entirely (#3820)', () => {
   }
 });
 
+// #3820: the flag follows the leaves that came from the user-global layers. A
+// user-global file whose only field a repository file filters out did not
+// contribute, even though the file exists.
+test('userGlobalContributed is false when a repository file filters out every user-global field (#3820)', () => {
+  const f = fixture({
+    local: '{"reviewPolicy":"repo-choice"}',
+    global: '{"trustedMarkerActors":["global-login"]}',
+  });
+  try {
+    const loaded = loadLayeredLocalPolicy({ cwd: f.cwd, env: f.env });
+    assert.equal(loaded.userGlobalContributed, false);
+    assert.deepEqual(loaded.config, { reviewPolicy: 'repo-choice' });
+  } finally {
+    f.cleanup();
+  }
+});
+
 test('the CLI reports a canonical default with source "default" (#3820)', () => {
   const f = fixture({ local: null, global: null });
   try {

@@ -31,7 +31,7 @@
 // blast radius to match `loadPolicyConfig()`'s stricter rules is a separate,
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
@@ -113,6 +113,21 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error);
 }
 /**
+ * Whether the legacy repository policy file exists, for the blocking check
+ * only. Any stat failure other than ENOENT counts as present, so a legacy file
+ * that cannot be inspected still blocks user-global repository fields. That is
+ * the fail-closed direction: the operator's global value must not win over a
+ * repository whose own policy cannot be read.
+ */
+function legacyPolicyFilePresent(path) {
+  try {
+    statSync(path);
+    return true;
+  } catch (error) {
+    return !isEnoentError(error);
+  }
+}
+/**
  * Repository identity for override matching. Git is consulted only when a
  * user-global file actually carries overrides; a non-git directory falls back
  * to a path-only identity, so no override matches by repository slug.
@@ -144,7 +159,8 @@ export function loadLayeredLocalPolicy(options = {}) {
   const env = options.env ?? process.env;
   const local = readCanonicalRepositoryPolicy(cwd);
   const legacyPath = join(cwd, LEGACY_POLICY_FILENAME);
-  const legacyBlocksGlobal = !local.exists && existsSync(legacyPath);
+  const legacyBlocksGlobal =
+    !local.exists && legacyPolicyFilePresent(legacyPath);
   const userGlobal =
     env.GITHUB_ACTIONS === 'true' || options.noUserGlobal === true
       ? undefined
@@ -175,7 +191,12 @@ export function loadLayeredLocalPolicy(options = {}) {
       options.defaults !== undefined
         ? resolution.config
         : null,
-    userGlobalContributed: globalConfig !== undefined,
+    // Derived from the leaves, not from file presence: a user-global file whose
+    // only fields are repository-owned, filtered out by a repository file, did
+    // not contribute to the config.
+    userGlobalContributed: Object.values(resolution.sourceMap).some(
+      (source) => source === 'user-global' || source === 'user-global-override',
+    ),
     sourceMap: resolution.sourceMap,
     selectedOverrideIndex: resolution.selectedOverrideIndex,
     diagnostics: resolution.diagnostics,
