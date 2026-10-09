@@ -8,7 +8,7 @@
 // It makes no network calls and writes nothing.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mts';
 import {
@@ -106,10 +106,19 @@ function readyPayloadRoot(options: {
 }): { root: string } | { reason: string } {
   const root = resolveInstalledPayloadRoot(options);
   if (root === undefined) return { reason: 'payload-root-unresolved' };
-  if (!existsSync(join(root, INSTRUCTION_ENTRY))) {
+  if (!isRegularFile(join(root, INSTRUCTION_ENTRY))) {
     return { reason: 'payload-not-installed' };
   }
   return { root };
+}
+
+/** A directory at the instruction path cannot be opened as the overview. */
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function inactive(reason: string): ActivationResult {
@@ -133,7 +142,7 @@ export function computeActivation(
   }
   if (topLevel.length === 0) return inactive('not-a-git-work-tree');
 
-  if (existsSync(join(topLevel, INSTRUCTION_ENTRY))) {
+  if (isRegularFile(join(topLevel, INSTRUCTION_ENTRY))) {
     return {
       active: true,
       tier: 'repository-local',

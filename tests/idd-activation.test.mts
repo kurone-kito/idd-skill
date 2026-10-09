@@ -404,3 +404,41 @@ test('inherited GIT_* variables do not redirect the repository lookup', () => {
     box.cleanup();
   }
 });
+
+test('a directory at the instruction path does not count as instruction files', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    mkdirSync(
+      join(repo, '.github/instructions/idd-overview-core.instructions.md'),
+      { recursive: true },
+    );
+    const result = computeActivation({ cwd: repo, env: box.env });
+    assert.equal(result.active, false);
+    assert.equal(result.reason, 'no-activation-rule');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('a directory at the installed instruction path reports a payload that is not installed', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(join(repo, '.github/idd/config.json'), '{}\n');
+    mkdirSync(
+      join(
+        box.env.XDG_DATA_HOME as string,
+        'idd-skill',
+        'current',
+        '.github/instructions/idd-overview-core.instructions.md',
+      ),
+      { recursive: true },
+    );
+    const result = computeActivation({ cwd: repo, env: box.env });
+    assert.equal(result.active, false);
+    assert.equal(result.reason, 'payload-not-installed');
+  } finally {
+    box.cleanup();
+  }
+});

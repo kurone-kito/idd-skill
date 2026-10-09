@@ -6,7 +6,7 @@
 // Read-only activation gate for the user-global IDD entry text (#3821).
 // It makes no network calls and writes nothing.
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -74,10 +74,18 @@ function defaultGitRunner(args, cwd) {
 function readyPayloadRoot(options) {
   const root = resolveInstalledPayloadRoot(options);
   if (root === undefined) return { reason: 'payload-root-unresolved' };
-  if (!existsSync(join(root, INSTRUCTION_ENTRY))) {
+  if (!isRegularFile(join(root, INSTRUCTION_ENTRY))) {
     return { reason: 'payload-not-installed' };
   }
   return { root };
+}
+/** A directory at the instruction path cannot be opened as the overview. */
+function isRegularFile(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 function inactive(reason) {
   return { active: false, tier: 'none', instructionsRoot: null, reason };
@@ -95,7 +103,7 @@ export function computeActivation(options) {
     return inactive('not-a-git-work-tree');
   }
   if (topLevel.length === 0) return inactive('not-a-git-work-tree');
-  if (existsSync(join(topLevel, INSTRUCTION_ENTRY))) {
+  if (isRegularFile(join(topLevel, INSTRUCTION_ENTRY))) {
     return {
       active: true,
       tier: 'repository-local',
