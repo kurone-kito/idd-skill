@@ -541,30 +541,41 @@ test('extractKeywordReferences drops a negated closing-keyword mention (#1964)',
 
 test('extractKeywordReferences keeps both targets in a "not only ... but also ..." construction (#1968 review)', () => {
   // Copilot/Codex review on #1968: "not only" is an additive correlative
-  // construction, not a real negation. Before this guard, KEYWORD_NEGATION_PATTERN
-  // treated "not" in "not only closes #42" as negating #42, dropping a
-  // genuine edge — a regression this fix must not introduce.
-  const body = 'This not only closes #42 but also fixes #43';
+  // construction, not a real negation, so the Refs form of the sentence keeps
+  // both edges. The closing form is prose, not a standalone declaration, so it
+  // yields no closing edge (#3876).
+  const body = 'This not only refs #42 but also refs #43';
   assert.deepEqual(extractKeywordReferences(body), [
-    { target: 42, relationship: 'closing-keyword', evidence: body },
-    { target: 43, relationship: 'closing-keyword', evidence: body },
+    { target: 42, relationship: 'reference', evidence: body },
+    { target: 43, relationship: 'reference', evidence: body },
   ]);
+  assert.deepEqual(
+    extractKeywordReferences('This not only closes #42 but also fixes #43'),
+    [],
+  );
 });
 
 test('extractKeywordReferences keeps genuine edges in "not merely/just/simply ... but also ..." constructions (own E2 critique pass)', () => {
   // A same-claim E2 critique pass on PR #1968 generalized the "not only"
   // finding above: "merely", "just", and "simply" are the same additive
-  // correlative family and reproduced the identical false-negative before
-  // this widened guard.
+  // correlative family. The Refs form keeps both edges; the closing form is
+  // prose and yields none (#3876).
   for (const adverb of ['merely', 'just', 'simply']) {
-    const body = `This not ${adverb} closes #37 but also fixes #38`;
+    const body = `This not ${adverb} refs #37 but also refs #38`;
     assert.deepEqual(
       extractKeywordReferences(body),
       [
-        { target: 37, relationship: 'closing-keyword', evidence: body },
-        { target: 38, relationship: 'closing-keyword', evidence: body },
+        { target: 37, relationship: 'reference', evidence: body },
+        { target: 38, relationship: 'reference', evidence: body },
       ],
       `adverb: ${adverb}`,
+    );
+    assert.deepEqual(
+      extractKeywordReferences(
+        `This not ${adverb} closes #37 but also fixes #38`,
+      ),
+      [],
+      `closing prose, adverb: ${adverb}`,
     );
   }
 });
@@ -585,52 +596,57 @@ test('extractKeywordReferences still negates across long intervening words (#196
 });
 
 test('extractKeywordReferences negates across 1-2 intervening word tokens, not just directly adjacent (#1964)', () => {
-  // KEYWORD_NEGATION_PATTERN allows up to two intervening word tokens
-  // between the negation term and the matched keyword
-  // (`\s+(?:\w+\s+){0,2}$`) so phrasing like "not going to close" or "not
-  // really close" is still recognized, not just the zero-intervening-word
-  // case the other tests use.
+  // KEYWORD_NEGATION_PATTERN allows up to two intervening word tokens between
+  // the negation term and the matched keyword (`\s+(?:\w+\s+){0,2}$`), so
+  // phrasing like "not going to" or "not really" still negates. Checked on Refs
+  // because the closing keywords now need a standalone line (#3876).
   assert.deepEqual(
-    extractKeywordReferences('This is not going to close #21 on its own'),
+    extractKeywordReferences('This is not going to refs #21 on its own'),
     [],
   );
   assert.deepEqual(
-    extractKeywordReferences('This PR does not really fix #22 either'),
+    extractKeywordReferences('This PR does not really refs #22 either'),
     [],
   );
   // Three intervening words falls outside the window and is treated as a
-  // genuine (non-negated) match — the window is deliberately short.
+  // genuine (non-negated) match -- the window is deliberately short.
   assert.deepEqual(
-    extractKeywordReferences('This is not even remotely going to close #23'),
+    extractKeywordReferences('This is not even remotely going to refs #23'),
     [
       {
         target: 23,
-        relationship: 'closing-keyword',
-        evidence: 'This is not even remotely going to close #23',
+        relationship: 'reference',
+        evidence: 'This is not even remotely going to refs #23',
       },
     ],
   );
 });
 
-test('extractKeywordReferences keeps a genuine close when "not" sits earlier but does not negate it (#1964)', () => {
-  // "not" is within the scan window of "closes" but a clause boundary (the
-  // semicolon) sits between them, so this is NOT a negated closing keyword —
-  // the real edge must still be recorded. Guards against an over-broad
-  // negation window silently dropping genuine closing keywords.
-  assert.deepEqual(extractKeywordReferences('did not work; closes #42'), [
+test('extractKeywordReferences keeps a genuine reference when "not" sits earlier but does not negate it (#1964)', () => {
+  // "not" is within the scan window of "refs" but a clause boundary (the
+  // semicolon) sits between them, so this is NOT a negated keyword and the
+  // reference edge must still be recorded. The closing form of the same
+  // clause is prose after a clause, so it yields no closing edge (#3876).
+  assert.deepEqual(extractKeywordReferences('did not work; refs #42'), [
     {
       target: 42,
-      relationship: 'closing-keyword',
-      evidence: 'did not work; closes #42',
+      relationship: 'reference',
+      evidence: 'did not work; refs #42',
     },
   ]);
+  assert.deepEqual(extractKeywordReferences('did not work; closes #42'), []);
 });
 
 test('extractKeywordReferences keeps a non-negated match and drops only the negated one on the same line (#1964)', () => {
-  const body = 'Closes #42 but does not close #43';
+  const body = 'Refs #42 but does not refs #43';
   assert.deepEqual(extractKeywordReferences(body), [
-    { target: 42, relationship: 'closing-keyword', evidence: body },
+    { target: 42, relationship: 'reference', evidence: body },
   ]);
+  // The closing form is prose (not a standalone declaration), so no edge.
+  assert.deepEqual(
+    extractKeywordReferences('Closes #42 but does not close #43'),
+    [],
+  );
 });
 
 test('extractKeywordReferences drops a negated dependency/sub-issue/reference keyword (#1964)', () => {
@@ -698,16 +714,20 @@ test('extractKeywordReferences recognizes "mustn\'t"/"mightn\'t"/"shan\'t" negat
 });
 
 test('extractKeywordReferences preserves additive clauses after a negative contraction (#1968 review round 2)', () => {
-  // Codex review on #1968: the "not only/merely/just/simply … but also …"
+  // Codex review on #1968: the "not only/merely/just/simply ... but also ..."
   // additive-correlative guard was attached only to the bare "not"
-  // alternative, so the identical construction using a contraction ("This
-  // doesn't just fix #42 but also resolves #43") still dropped the genuine
-  // edge to #42 after the bare-"not" case was already fixed.
-  const body = "This doesn't just fix #42 but also resolves #43";
+  // alternative, so the same construction with a contraction still dropped the
+  // genuine edge. The Refs form keeps both edges; the closing form is prose and
+  // yields none (#3876).
+  const body = "This doesn't just refs #42 but also refs #43";
   assert.deepEqual(extractKeywordReferences(body), [
-    { target: 42, relationship: 'closing-keyword', evidence: body },
-    { target: 43, relationship: 'closing-keyword', evidence: body },
+    { target: 42, relationship: 'reference', evidence: body },
+    { target: 43, relationship: 'reference', evidence: body },
   ]);
+  assert.deepEqual(
+    extractKeywordReferences("This doesn't just fix #42 but also resolves #43"),
+    [],
+  );
 });
 
 test('extractKeywordReferences negates across the maximal "no longer" + 2-intervening-word span, at a non-zero token offset (#1970)', () => {
@@ -731,25 +751,34 @@ test('extractKeywordReferences recognizes a negation term glued to preceding pun
   assert.deepEqual(extractKeywordReferences('per the note,not close #9'), []);
 });
 
-test('extractKeywordReferences stays linear-time and correct on a large keyword-dense line (#1970)', () => {
-  // #1970: Codex found `extractKeywordReferences` quadratic in the number of
-  // keyword occurrences on one line (re-slicing from line start and
-  // re-running an unanchored regex for every match). Repro: a several-KB
-  // line with several thousand keyword occurrences (matching the issue's
-  // own 56 KB / 8,000-occurrence repro, measured at ~2.4s there and ~1970ms
-  // locally against the pre-fix implementation). This asserts BOTH
-  // correctness (the right reference count — catches "fast because broken")
-  // and a bounded-cost ceiling. A generous absolute ceiling (well above this
-  // fixed implementation's own ~20ms at this size, even under heavy CI/
-  // concurrent-session load) is used instead of a tight or small-magnitude
-  // ratio assertion — a same-size-comparison critique pass found a ratio
-  // check at smaller sizes has too little headroom between the old
-  // quadratic cost and the new linear one to reliably discriminate them.
+test('extractKeywordReferences stays linear-time and correct on a large keyword-dense standalone line (#1970)', () => {
+  // #1970: `extractKeywordReferences` was quadratic in the number of keyword
+  // occurrences on one line. A standalone declaration of 20,000 clauses is the
+  // dense case that must yield one reference per clause, and it must stay
+  // inside a generous ceiling. Testing once per match would blow far past it.
+  // (#3876: a dense line of prose-separated clauses is a non-standalone line,
+  // so it is covered by the next test.)
+  const clauses = Array.from({ length: 20000 }, (_, i) => `closes #${i + 1}`);
+  const line = clauses.join(', ');
+  const start = performance.now();
+  const refs = extractKeywordReferences(line);
+  const elapsed = performance.now() - start;
+  assert.equal(refs.length, 20000);
+  assert.ok(
+    elapsed < 1000,
+    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
+  );
+});
+
+test('extractKeywordReferences stays linear-time on a dense non-standalone line (#1970, #3876)', () => {
+  // Eight thousand closing keywords with no separators are prose, not a
+  // standalone declaration, so the line yields no closing edge. The scan must
+  // still finish inside the same ceiling.
   const line = 'Closes #1 '.repeat(8000);
   const start = performance.now();
   const refs = extractKeywordReferences(line);
   const elapsed = performance.now() - start;
-  assert.equal(refs.length, 8000);
+  assert.equal(refs.length, 0);
   assert.ok(
     elapsed < 1000,
     `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
@@ -5638,3 +5667,316 @@ test('CLI: the --help progress and incomplete examples are valid JSON that match
     [],
   );
 });
+
+// #3876: the closing-declaration corpus. Each entry is one body and the edges
+// the spec names for it, as [target, relationship] pairs in body order. The
+// expectations come from the spec's own list, not from the extractor's output.
+const CLOSING_DECLARATION_CORPUS: Array<{
+  name: string;
+  body: string;
+  edges: Array<[number, string]>;
+}> = [
+  // No closing edge.
+  { name: 'block quote', body: '> Closes #12', edges: [] },
+  { name: 'bold markers', body: '**Closes #12**', edges: [] },
+  { name: 'trailing prose', body: 'Closes #12 and the follow-up', edges: [] },
+  { name: 'glued keyword', body: 'Closes#12', edges: [] },
+  { name: 'glued colon', body: 'Closes:#12', edges: [] },
+  { name: 'hyphenated', body: 'auto-close #12', edges: [] },
+  { name: 'code span before', body: '`foo.mts` closes #12.', edges: [] },
+  { name: 'code span after', body: 'Closes #12 `(see below)`', edges: [] },
+  { name: 'trailing comma', body: 'Closes #12,', edges: [] },
+  { name: 'semicolon separator', body: 'Closes #12; closes #13', edges: [] },
+  { name: 'glued and', body: 'Closes #12and #13', edges: [] },
+  { name: 'and without space before', body: 'Closes #12 and#13', edges: [] },
+  { name: 'four spaces at top level', body: '    Closes #12', edges: [] },
+  { name: 'tab at top level', body: '\tCloses #12', edges: [] },
+  {
+    name: 'refs after the closing clause',
+    body: 'Closes #12 Refs #13',
+    edges: [[13, 'reference']],
+  },
+  {
+    name: 'prose line above',
+    body: 'This change lands the fix.\nCloses #12',
+    edges: [],
+  },
+  {
+    name: 'prose line below',
+    body: 'Closes #12\nThis change lands the fix.',
+    edges: [],
+  },
+  {
+    name: 'wrapped sentence',
+    body: 'This change is meant to land the\ncloses #12.',
+    edges: [],
+  },
+  {
+    name: 'wrapped numbered item',
+    body: '1. Check the ledger and then\n   close #169.',
+    edges: [],
+  },
+  {
+    name: 'refs prose beside a closing line keeps only the refs edge',
+    body: 'Closes #12\nRefs #3 explains why this was split out of the earlier work.',
+    edges: [[3, 'reference']],
+  },
+  { name: 'thematic break below', body: 'Closes #12\n---', edges: [] },
+  { name: 'block quote below', body: 'Closes #12\n> Note: x', edges: [] },
+  { name: 'spaced thematic break below', body: 'Closes #12\n* * *', edges: [] },
+  {
+    name: 'setup.windows wrapped sentence',
+    body: 'If no\nstill-present items remain, close #169 with that evidence. If any',
+    edges: [],
+  },
+  {
+    name: 'ledger stays open, wrapped list item',
+    body: '- The ledger stays open; the roadmap\n  closes #169 only after reconciliation, and\n  closes #170.',
+    edges: [],
+  },
+  {
+    name: 'fixed wording then a bare close line',
+    body: 'Fix the wording of the audit and then\nclose #169.',
+    edges: [],
+  },
+  {
+    // The dependency grammar is unchanged by #3876, so its own edge to #12
+    // stays; the bare close line yields no closing edge to #169.
+    name: 'blocked-by prose then a bare close line',
+    body: 'Blocked by #12 until the audit is done; then we\nclose #169.',
+    edges: [[12, 'dependency']],
+  },
+  {
+    name: 'previous fix mention then a bare close line',
+    body: 'The previous change was meant to\nfix #12 but it did not, so this one will\nclose #169.',
+    edges: [],
+  },
+  // One closing edge.
+  { name: 'plain', body: 'Closes #12', edges: [[12, 'closing-keyword']] },
+  { name: 'period', body: 'Closes #12.', edges: [[12, 'closing-keyword']] },
+  {
+    name: 'two trailing spaces',
+    body: 'Closes #12  ',
+    edges: [[12, 'closing-keyword']],
+  },
+  { name: 'bullet', body: '- Closes #12', edges: [[12, 'closing-keyword']] },
+  {
+    name: 'ordered item',
+    body: '1. Closes #12',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'two leading spaces',
+    body: '  Closes #12',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'three leading spaces',
+    body: '   Closes #12',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'nested bullet',
+    body: '- Parent\n    - Closes #12',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'uppercase colon',
+    body: 'CLOSES: #12',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'imperative between blank lines',
+    body: 'Intro.\n\nClose #169.\n\nOutro.',
+    edges: [[169, 'closing-keyword']],
+  },
+  {
+    name: 'refs block then closing line',
+    body: '- Refs #1\nCloses #3',
+    edges: [
+      [1, 'reference'],
+      [3, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'parent roadmap header then closing line',
+    body: 'Parent roadmap: #430\nCloses #429',
+    edges: [[429, 'closing-keyword']],
+  },
+  {
+    name: 'parent roadmap, blocked by, then closing line',
+    body: 'Parent roadmap: #430\nBlocked by #431\nCloses #429',
+    edges: [
+      [431, 'dependency'],
+      [429, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'blocked by two refs then closing line',
+    body: 'Blocked by #1 #2\nCloses #12',
+    edges: [
+      [1, 'dependency'],
+      [2, 'dependency'],
+      [12, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'marker comment beside the closing line',
+    body: 'Closes #12\n<!-- idd-skill-autopilot-suitability: 3 -->',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'indented refs and closing inside a list item',
+    body: '1. Links\n\n   Refs #1\n   Closes #3',
+    edges: [
+      [1, 'reference'],
+      [3, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'closing line inside details',
+    body: '<details>\n\nCloses #12\n\n</details>',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'non-blocking refs then closing line',
+    body: 'Refs #3223, #3258 (non-blocking)\nCloses #12',
+    edges: [
+      [3223, 'non-blocking-reference'],
+      [3258, 'non-blocking-reference'],
+      [12, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'trailing html comment',
+    body: 'Closes #12 <!-- note -->',
+    edges: [[12, 'closing-keyword']],
+  },
+  {
+    name: 'keyword hidden in a comment',
+    body: 'Closes #12 <!-- Fixes #99 -->',
+    edges: [[12, 'closing-keyword']],
+  },
+  // Two closing edges.
+  {
+    name: 'comma list',
+    body: 'Closes #12, #13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'and list',
+    body: 'Closes #12 and #13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'space before comma',
+    body: 'Closes #12 , #13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'no space after comma',
+    body: 'Closes #12,#13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'uppercase and',
+    body: 'Closes #12 AND #13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'two different closing keywords',
+    body: 'Closes #12 and Fixes #13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'resolves with a comma',
+    body: 'Resolves #10, resolves #123',
+    edges: [
+      [10, 'closing-keyword'],
+      [123, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'consecutive closing lines',
+    body: 'Closes #12\nCloses #13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'closing followed by a thank-you line keeps only the first',
+    body: 'Closes #1\nCloses #2\nThanks!',
+    edges: [[1, 'closing-keyword']],
+  },
+];
+
+test('setup.windows shape: narrative closing mentions do not make an open issue a leaf (#3876)', async () => {
+  // The roadmap's success criterion and an open child's "Close #169 only
+  // after ..." sentence name #169 in prose, and a closed Refs child says
+  // "close #169 with that evidence." Only a standalone declaration may make a
+  // closing edge, so #169 must not be enumerated. #169 is open, carries no
+  // roadmap marker, and is reached only through prose closing keywords -- the
+  // shape that made it a leaf before #3876.
+  const issues = new Map([
+    [
+      600,
+      roadmapIssue(
+        600,
+        '- [ ] #601\nRefs #602\n\nThe roadmap is done when every child is verified and closes #169 only after the audit confirms it.',
+        'root-roadmap',
+      ),
+    ],
+    [
+      601,
+      executionIssue(601, 'Close #169 only after the comment is verified.'),
+    ],
+    [
+      602,
+      executionIssue(
+        602,
+        'If no\nstill-present items remain, close #169 with that evidence. If any',
+        'closed',
+      ),
+    ],
+    [169, executionIssue(169, 'Clean up the setup.windows wording.')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(600, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.executionCandidates, [601]);
+  assert.equal(
+    graph.provenancePaths.some((path) => path.target === 169),
+    false,
+  );
+});
+
+for (const entry of CLOSING_DECLARATION_CORPUS) {
+  test(`closing-declaration corpus: ${entry.name} (#3876)`, () => {
+    const edges = extractKeywordReferences(entry.body).map((ref) => [
+      ref.target,
+      ref.relationship,
+    ]);
+    assert.deepEqual(edges, entry.edges, JSON.stringify(entry.body));
+  });
+}
