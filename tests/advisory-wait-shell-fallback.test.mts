@@ -489,7 +489,7 @@ function runAw3s(fixtures: Fixtures): {
 
 const PROOF_LISTING_BOT = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]},"timelineItems":{"nodes":[]}}}}}`;
 const PROOF_BOT_GONE = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}`;
-const PROOF_REMOVED_EVENT = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]},"timelineItems":{"nodes":[{"createdAt":"2999-01-01T00:00:00Z","requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]}}}}}`;
+const PROOF_REMOVED_EVENT = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]},"timelineItems":{"nodes":[{"id":"E-after","createdAt":"2999-01-01T00:00:00Z","requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]}}}}}`;
 
 test('AW3-S retries a failed removal three times and routes to AW4 without requesting (#3860)', {
   skip: SKIP_REASON ?? false,
@@ -597,7 +597,12 @@ test('AW3-S stops when the proof still lists the bot and shows no removal event 
 test('AW3-S accepts a review_request_removed event after the call as proof (#3860)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const run = runAw3s({ prEditExit: 0, proof: PROOF_REMOVED_EVENT });
+  // The baseline lists no removal event, so the event below is new (#3860 review).
+  const run = runAw3s({
+    prEditExit: 0,
+    proofBefore: PROOF_LISTING_BOT,
+    proof: PROOF_REMOVED_EVENT,
+  });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.registrationCalls, 1);
 });
@@ -880,4 +885,32 @@ test('F2 counts a bare Copilot thread author as the Copilot reviewer (#3860)', {
   });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.conjuncts, ['true', 'true', 'false']);
+});
+
+test('AW2 stops on a malformed comment list instead of reading it as empty (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw2({ rest: 'null' });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /AW2 comment list malformed; not trusted \(#3860\)/);
+});
+
+test('F2 stops on a malformed regular-comment list instead of reading it as empty (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2({
+    threads: threadsResponse([
+      thread([
+        finding(`${BOT_LOGIN}[bot]`, F2_FINDING_TIME),
+        disposition(F2_DISPOSITION_TIME, null),
+      ]),
+    ]),
+    edit: f2Edit([]),
+    rest: 'null',
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(
+    run.stderr,
+    /F2 regular-comment read malformed; not converged \(#3860\)/,
+  );
 });

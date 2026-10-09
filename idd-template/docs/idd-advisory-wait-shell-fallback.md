@@ -76,11 +76,22 @@ COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_rev
 # or empty on submit, so false is not idle proof.
 # LAST_COPILOT_COMMIT == PR_HEAD_SHA remains the SATISFIED signal.
 
-COPILOT_PENDING_COVERS_HEAD=$(
+COPILOT_PENDING_RAW=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/timeline" \
     -H "Accept: application/vnd.github+json" \
-    --paginate \
-    | jq -r -s --arg sha "${PR_HEAD_SHA}" '
+    --paginate
+) || {
+  echo "timeline read failed; not trusted (#3860)" >&2
+  exit 2
+}
+# At least one page must arrive, and every page must be an array (#3860
+# review): `add // []` over no input would read as an empty timeline.
+printf '%s' "$COPILOT_PENDING_RAW" | jq -e -s 'length > 0 and all(.[]; type == "array")' > /dev/null || {
+  echo "timeline read malformed; not trusted (#3860)" >&2
+  exit 2
+}
+COPILOT_PENDING_COVERS_HEAD=$(
+  printf '%s' "$COPILOT_PENDING_RAW" | jq -r -s --arg sha "${PR_HEAD_SHA}" '
         (add // [])
         | to_entries
         | (map(select(.value.event == "committed"
@@ -105,6 +116,10 @@ ADVISORY_COMMENTS_RAW=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate
 ) || {
   echo "AW2 comment list read failed; not trusted (#3860)" >&2
+  exit 2
+}
+printf '%s' "${ADVISORY_COMMENTS_RAW}" | jq -e -s 'length > 0 and all(.[]; type == "array")' > /dev/null || {
+  echo "AW2 comment list malformed; not trusted (#3860)" >&2
   exit 2
 }
 ADVISORY_COMMENTS_JSON=$(printf '%s' "${ADVISORY_COMMENTS_RAW}" | jq -s 'add // []') || exit 2
@@ -299,6 +314,7 @@ claim_revalidate() {
 head_timeline_index() {
   local result
   result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate) || return 1
+  printf '%s' "$result" | jq -e -s 'length > 0 and all(.[]; type == "array")' > /dev/null || return 1
   printf '%s' "$result" | jq -r -s --arg sha "$PR_HEAD_SHA" '
     (add // [])
     | to_entries
@@ -309,6 +325,7 @@ head_timeline_index() {
 request_event() {
   local result
   result=$(gh api repos/{owner}/{repo}/issues/{pr-number}/timeline --paginate) || return 1
+  printf '%s' "$result" | jq -e -s 'length > 0 and all(.[]; type == "array")' > /dev/null || return 1
   printf '%s' "$result" | jq -r -s '
     def matches_configured_reviewer($login):
       ($login.login // "" | ascii_downcase) as $l
@@ -894,6 +911,10 @@ COMMENTS_RAW=$(gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --pag
 }
 [ -n "$COMMENTS_RAW" ] || {
   echo "F2 regular-comment read empty; not converged (#3860)" >&2
+  exit 2
+}
+printf '%s' "$COMMENTS_RAW" | jq -e -s 'length > 0 and all(.[]; type == "array")' > /dev/null || {
+  echo "F2 regular-comment read malformed; not converged (#3860)" >&2
   exit 2
 }
 COMMENTS_JSON=$(printf '%s' "$COMMENTS_RAW" | jq -s 'add // []') || exit 2
