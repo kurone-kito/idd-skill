@@ -1307,16 +1307,19 @@ widening it to a broader mode this session never selected.
   edit (kurone-kito/idd-skill#3878); other body edits, such as a task-list,
   marker or `Blocked by` line edit, are expected to move it too. A native
   sub-issue link is expected to move the sub-issue total or the parent.
-  `updatedAt` is not polled, because a comment is expected to move it. The
-  following stay unobserved: approval comments such as `IDD ready`; changes
-  made through comments, including claim releases; the stale-claim
-  threshold, which is time-based; changes to closed issues; an issue opened
-  and closed, or closed and reopened, between two polls; changes to
-  configured label names; and title edits, which the poll sees only if they
-  also move `lastEditedAt`. Reported 2026-10-05 and replayed on `origin/main`
-  at `c9d082386` on 2026-10-08 (kurone-kito/idd-skill#3878): with the earlier
-  fields (number, state and labels), the poll values stayed identical while
-  the graph changed.
+  `updatedAt` is not polled, because comments (claim markers included) and
+  label changes are expected to move it (see kurone-kito/idd-skill#3878).
+  The following stay unobserved (each preventive; no observed incident yet):
+  approval comments such as `IDD ready`; changes made through comments,
+  including claim releases; the stale-claim threshold, which is time-based;
+  body or label changes to closed issues that the graph still traverses;
+  sub-issue links between closed issues; an unlinked issue opened and closed
+  between two polls, or an issue closed and reopened between two polls;
+  changes to configured label names; and title edits, which the poll sees
+  only if they also move `lastEditedAt`. Reported 2026-10-05 and replayed on
+  `origin/main` at `c9d082386` on 2026-10-08 (kurone-kito/idd-skill#3878):
+  with the earlier fields (number, state and labels), the poll values stayed
+  identical while the graph changed.
 
   The poll interval is deliberately shorter than the roughly 4-minute race seen
   in a downstream adopter's run (reported 2026-09-30,
