@@ -15,6 +15,8 @@ Activate fan-out only when every condition holds:
 
 - the harness has an eligible row in the
   [worker mechanism table](../../docs/idd-workflow.md#worker-delegation);
+- helper support is installed, so the profile-selected `idd-worker-budget`
+  command exists (`instructions-only` has none);
 - the effective `orchestrator.maxWorkers` is at least 2 (run
   `idd-worker-budget --running 0 --startable 0` and read `maxWorkers` from its
   output);
@@ -42,10 +44,11 @@ The roster lives in the orchestrating session. Workers do not read it.
 
 1. Run Discover A0 through A4 Step 1.5 as written. The startable candidates
    are the survivors of A4 Step 1.5.
-2. Call `idd-worker-budget` with `--running <roster count>`,
-   `--startable <candidate count>`, and `--harness-limit <limit>` from the
-   worker mechanism table's row for this harness. Its `slots` field is the
-   number of workers to start now.
+2. Call `idd-worker-budget` with `--running <roster count>` and
+   `--startable <candidate count>`. Add `--harness-limit <limit>` from the
+   worker mechanism table's row for this harness when that row gives a numeric
+   limit, and omit it otherwise. Its `slots` field is the number of workers to
+   start now.
 3. Pick that many candidates with `discover-shared-file-overlap`, passing the
    survivors with `--issues`, `--batch <slots>`, one `--in-flight` per roster
    issue, and `--check-overlap`. When `discover.selectionDesync` is
