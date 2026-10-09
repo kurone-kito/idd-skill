@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import { SKIP_REASON_CODES } from '../src/scripts/audit-pr-cleanup.mts';
 import {
   type CleanupReport,
   computeReportSummary,
@@ -419,4 +421,40 @@ test('computeReportSummary counts a missing or malformed reason code as unknown 
   assert.deepEqual(report.skipReasonCounts, { 'pr-not-merged': 1, unknown: 4 });
   assert.equal(report.skipReasonSummary, 'pr-not-merged 1, unknown 4');
   assert.doesNotMatch(report.skipReasonSummary ?? '', /[\n,]\s*[\n,]/);
+});
+
+// kurone-kito/idd-skill#3857: the evidence docs list the closed reason codes
+// with one row each. The table and the exported list must agree both ways.
+test('the minimization doc lists exactly the closed skip reason codes (#3857)', () => {
+  const doc = readFileSync(
+    new URL('../docs/idd-comment-minimization.md', import.meta.url),
+    'utf8',
+  );
+  const heading = '### Skip reason codes';
+  const start = doc.indexOf(heading);
+  assert.notStrictEqual(
+    start,
+    -1,
+    'the doc must have a Skip reason codes section',
+  );
+  const rest = doc.slice(start + heading.length);
+  const nextHeading = rest.search(/\n#{1,3} /);
+  const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+  const documented = [...section.matchAll(/^\| `([a-z0-9-]+)` \|/gm)].map(
+    (match) => match[1] ?? '',
+  );
+  assert.equal(
+    new Set(documented).size,
+    documented.length,
+    'no code is documented twice',
+  );
+  for (const code of SKIP_REASON_CODES) {
+    assert.ok(documented.includes(code), `the doc omits ${code}`);
+  }
+  for (const code of documented) {
+    assert.ok(
+      (SKIP_REASON_CODES as readonly string[]).includes(code),
+      `the doc names an unlisted code ${code}`,
+    );
+  }
 });
