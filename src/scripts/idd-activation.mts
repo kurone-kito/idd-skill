@@ -78,12 +78,38 @@ export function resolveInstalledPayloadRoot(options?: {
   return join(home, '.local', 'share', 'idd-skill', 'current');
 }
 
+/**
+ * Run git from `cwd` with inherited `GIT_*` variables removed. A variable
+ * such as `GIT_DIR` would redirect every query to another repository, so the
+ * repository must be found from the working directory alone.
+ */
 function defaultGitRunner(args: string[], cwd: string): string {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+  );
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
+    env,
     stdio: ['ignore', 'pipe', 'ignore'],
   });
+}
+
+/**
+ * Resolve the installed payload and confirm it holds the core instruction
+ * file. A missing install fails closed rather than naming a directory that
+ * does not exist.
+ */
+function readyPayloadRoot(options: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: string;
+}): { root: string } | { reason: string } {
+  const root = resolveInstalledPayloadRoot(options);
+  if (root === undefined) return { reason: 'payload-root-unresolved' };
+  if (!existsSync(join(root, INSTRUCTION_ENTRY))) {
+    return { reason: 'payload-not-installed' };
+  }
+  return { root };
 }
 
 function inactive(reason: string): ActivationResult {
@@ -116,13 +142,13 @@ export function computeActivation(
     };
   }
 
-  const payloadRoot = resolveInstalledPayloadRoot(options);
   if (loadRepositoryPolicyDocument(topLevel).exists) {
-    if (payloadRoot === undefined) return inactive('payload-root-unresolved');
+    const payload = readyPayloadRoot(options);
+    if (!('root' in payload)) return inactive(payload.reason);
     return {
       active: true,
       tier: 'repository-local',
-      instructionsRoot: payloadRoot,
+      instructionsRoot: payload.root,
       reason: 'repository-policy-minimal-import',
     };
   }
@@ -136,11 +162,12 @@ export function computeActivation(
       userGlobalConfig: userGlobal.config,
     });
     if (resolved.selectedOverrideIndex !== null) {
-      if (payloadRoot === undefined) return inactive('payload-root-unresolved');
+      const payload = readyPayloadRoot(options);
+      if (!('root' in payload)) return inactive(payload.reason);
       return {
         active: true,
         tier: 'user-global-override',
-        instructionsRoot: payloadRoot,
+        instructionsRoot: payload.root,
         reason: 'user-global-override-match',
       };
     }

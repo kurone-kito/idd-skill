@@ -73,6 +73,18 @@ function writeFile(path: string, contents: string): void {
   writeFileSync(path, contents);
 }
 
+function installPayload(env: NodeJS.ProcessEnv): void {
+  writeFile(
+    join(
+      env.XDG_DATA_HOME as string,
+      'idd-skill',
+      'current',
+      '.github/instructions/idd-overview-core.instructions.md',
+    ),
+    '# core\n',
+  );
+}
+
 function writeUserGlobal(env: NodeJS.ProcessEnv, document: unknown): void {
   const dir = join(env.XDG_CONFIG_HOME as string, 'idd-skill');
   writeFile(join(dir, 'config.json'), JSON.stringify(document));
@@ -94,25 +106,28 @@ function listTree(dir: string): string[] {
 test('payload root prefers a qualified XDG_DATA_HOME', () => {
   assert.equal(
     resolveInstalledPayloadRoot({
-      env: { XDG_DATA_HOME: '/data', HOME: '/home/u' },
+      env: {
+        XDG_DATA_HOME: resolve('activation-xdg-data'),
+        HOME: resolve('activation-home'),
+      },
     }),
-    join('/data', 'idd-skill', 'current'),
+    join(resolve('activation-xdg-data'), 'idd-skill', 'current'),
   );
 });
 
 test('payload root falls back to HOME when XDG_DATA_HOME is unset', () => {
   assert.equal(
-    resolveInstalledPayloadRoot({ env: { HOME: '/home/u' } }),
-    join('/home/u', '.local', 'share', 'idd-skill', 'current'),
+    resolveInstalledPayloadRoot({ env: { HOME: resolve('activation-home') } }),
+    join(resolve('activation-home'), '.local', 'share', 'idd-skill', 'current'),
   );
 });
 
 test('payload root ignores a relative XDG_DATA_HOME', () => {
   assert.equal(
     resolveInstalledPayloadRoot({
-      env: { XDG_DATA_HOME: 'relative/data', HOME: '/home/u' },
+      env: { XDG_DATA_HOME: 'relative/data', HOME: resolve('activation-home') },
     }),
-    join('/home/u', '.local', 'share', 'idd-skill', 'current'),
+    join(resolve('activation-home'), '.local', 'share', 'idd-skill', 'current'),
   );
 });
 
@@ -181,6 +196,7 @@ test('a repository with only a policy document is a minimal import', () => {
   try {
     const repo = makeRepo(join(box.root, 'repo'));
     writeFile(join(repo, '.github/idd/config.json'), '{}\n');
+    installPayload(box.env);
     const result = computeActivation({ cwd: repo, env: box.env });
     assert.deepEqual(result, {
       active: true,
@@ -235,6 +251,7 @@ test('a matching user-global override activates with the installed payload', () 
   const box = sandbox();
   try {
     const repo = makeRepo(join(box.root, 'repo'));
+    installPayload(box.env);
     writeUserGlobal(box.env, {
       overrides: [
         { match: { path: basename(repo) }, config: { issueScope: 'roadmap' } },
@@ -337,6 +354,53 @@ test('the activation CLI prints the JSON verdict for a directory', () => {
     assert.equal(verdict.active, true);
     assert.equal(verdict.tier, 'repository-local');
   } finally {
+    box.cleanup();
+  }
+});
+
+test('a legacy idd-policy.json also makes a minimal import', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(join(repo, 'idd-policy.json'), '{}\n');
+    installPayload(box.env);
+    const result = computeActivation({ cwd: repo, env: box.env });
+    assert.equal(result.tier, 'repository-local');
+    assert.equal(result.reason, 'repository-policy-minimal-import');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('a policy-only repository reports a payload that is not installed', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(join(repo, '.github/idd/config.json'), '{}\n');
+    const result = computeActivation({ cwd: repo, env: box.env });
+    assert.equal(result.active, false);
+    assert.equal(result.reason, 'payload-not-installed');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('inherited GIT_* variables do not redirect the repository lookup', () => {
+  const box = sandbox();
+  const saved = process.env.GIT_DIR;
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(
+      join(repo, '.github/instructions/idd-overview-core.instructions.md'),
+      '# core\n',
+    );
+    process.env.GIT_DIR = join(box.root, 'not-a-git-dir');
+    const result = computeActivation({ cwd: repo, env: box.env });
+    assert.equal(result.tier, 'repository-local');
+    assert.equal(result.instructionsRoot, repo);
+  } finally {
+    if (saved === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = saved;
     box.cleanup();
   }
 });
