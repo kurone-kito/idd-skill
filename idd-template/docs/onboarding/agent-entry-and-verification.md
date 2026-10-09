@@ -352,9 +352,9 @@ mirror-path content or mode mismatches fail.
 kurone-kito/setup.ubuntu#201 (2026-10-05): a forced re-import erased overlays
 and its mirror check passed. Order:
 
-1. Record pre-import ref, old upstream tag/commit and target commit in policy
-   record; classify each retained difference by the target-side rule in
-   `idd-helper-scripts.md` first. Check out a clean worktree: the
+1. Record pre-import ref, old upstream tag/commit and upstream target commit
+   in policy record; classify each retained difference by the target-side rule
+   in `idd-helper-scripts.md` first. Check out a clean worktree: the
    `--upstream-base-path` source.
 2. On a fresh branch run `idd-onboard --import --force` (Step 2; same
    `--profile`; `--allow-root` if `--source` is outside cwd) and one
