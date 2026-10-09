@@ -964,6 +964,127 @@ test('buildPreMergeReadinessSummary: no watermark-shaped comment at all stays mi
   assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
 });
 
+// #3950: a missing watermark names its next step in `hint`, and the
+// readiness summary (and its schema) carries that hint. `detail` keeps its
+// existing text so consumers that match it still work.
+test('buildPreMergeReadinessSummary: missing-watermark review-currency blocker carries the E1 hint', () => {
+  const prHeadSha = '9999999999999999999999999999999999999999';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: 'just an ordinary regular comment, not marker-shaped at all',
+          createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const blockers = summary.blockers as Array<Record<string, unknown>>;
+  const blocker = blockers.find((b) => b.gate === 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(
+    blocker.detail,
+    'comparisonRoute is "return-to-e1" (expected "proceed"): missing-watermark',
+  );
+  const hint = String(blocker.hint);
+  for (const token of [
+    'E1',
+    'Step 1',
+    'Step 2',
+    '--type watermark',
+    '--expected-head-sha',
+    '--apply',
+  ]) {
+    assert.ok(hint.includes(token), `hint should name ${token}`);
+  }
+  // Validate only the blocker item: this minimal fixture does not satisfy
+  // every unrelated summary field, but the item schema must accept `hint`.
+  const blockerItemSchema = (
+    readinessSchema as { properties: { blockers: { items: unknown } } }
+  ).properties.blockers.items;
+  assert.deepEqual(validate(blocker, blockerItemSchema), []);
+});
+
+// #3950 regression guard: a malformed watermark keeps its own reason and
+// gets no hint, because the E1 next step is written for the missing case only.
+test('buildPreMergeReadinessSummary: malformed-watermark review-currency blocker has no hint', () => {
+  const prHeadSha = '7777777777777777777777777777777777777777';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: [
+            `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->`,
+            '_IDD note glued directly to the leading underscore, no space before it_',
+          ].join('\n'),
+          createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const blockers = summary.blockers as Array<Record<string, unknown>>;
+  const blocker = blockers.find((b) => b.gate === 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.match(String(blocker.detail), /malformed-watermark$/);
+  assert.equal(blocker.hint, undefined);
+});
+
+// #3950 regression guard: a fully current review produces no review-currency
+// blocker at all, so the hint cannot leak into a passing summary.
+test('buildPreMergeReadinessSummary: a proceed review-currency route adds no review-currency blocker', () => {
+  const prHeadSha = '5555555555555555555555555555555555555555';
+  const summary = buildPreMergeReadinessSummary(
+    {
+      prHeadSha,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `<!-- review-watermark: claude-x claim-1 ${prHeadSha} none 0 none -->\n\n_claude-x: review watermark — IDD automation marker. Do not edit._`,
+          createdAt: '2026-08-02T00:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    {
+      now: '2026-08-02T00:05:00Z',
+      trustedMarkerLogins: ['kurone-kito'],
+      expectedClaimId: 'claim-1',
+    },
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  if (reviewCurrency.comparisonRoute !== 'proceed') {
+    // The fixture is only a regression guard; a non-proceed route here means
+    // the watermark fixture drifted, so fail loudly instead of passing.
+    assert.fail(
+      `fixture did not reach proceed: ${String(reviewCurrency.comparisonReason)}`,
+    );
+  }
+  const blockers = summary.blockers as Array<Record<string, unknown>>;
+  assert.equal(
+    blockers.some((b) => b.gate === 'review-currency'),
+    false,
+  );
+});
+
 // #3249: a body-edited watermark is not merely a different kind of
 // malformed -- it must read as though no watermark exists at all (the
 // shape was never wrong, only its current trustworthiness), so the route

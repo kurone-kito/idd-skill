@@ -11072,10 +11072,31 @@ export function summarizeClaimValidationForWriteGate(
   return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
 
+/**
+ * #3950: fixed next-step text for a `review-currency` blocker whose
+ * `comparisonReason` is `missing-watermark`. Single-sourced so the wording
+ * stays identical across pre-merge-readiness and idd-merge-execute. It names
+ * the E1 steps in order and needs no PR number or claim id, so the blocker
+ * builder needs no new input. Diagnostic only: `detail` is left unchanged and
+ * the hint never feeds the gate decision.
+ */
+export const MISSING_WATERMARK_HINT =
+  'return to E1 and take a fresh snapshot (E1 Step 1); then record the review ' +
+  'watermark for the current head (E1 Step 2) with post-idd-marker.mjs ' +
+  '--type watermark --from-pr <pr-number> --expected-head-sha <head-SHA from ' +
+  'Step 1> --apply, passing the agent and claim ids that Step 2 names; then ' +
+  're-run the readiness check. See the E1 section of ' +
+  '.github/instructions/idd-review-snapshot.instructions.md.';
+
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
 export interface PreMergeBlocker {
   gate: string;
   detail: string;
+  /**
+   * #3950: optional next-step text, present only when a gate can name one
+   * (currently `review-currency` / `missing-watermark`). Diagnostic only.
+   */
+  hint?: string;
 }
 
 function preMergeAsRecord(value: unknown): Record<string, unknown> {
@@ -11185,12 +11206,16 @@ export function computePreMergeReadinessBlockers(
       comparisonReason === 'ack-only-post-disposition'
     )
   ) {
-    blockers.push({
+    const reviewCurrencyBlocker: PreMergeBlocker = {
       gate: 'review-currency',
       detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${
         comparisonReason || 'unknown'
       }`,
-    });
+    };
+    if (comparisonReason === 'missing-watermark') {
+      reviewCurrencyBlocker.hint = MISSING_WATERMARK_HINT;
+    }
+    blockers.push(reviewCurrencyBlocker);
   }
 
   const threads = preMergeAsRecord(report.threads);

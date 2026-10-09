@@ -143,6 +143,36 @@ test('evaluateMergeGates returns no blockers for a fully ready report', () => {
   assert.deepEqual(evaluateMergeGates(readyReport()), []);
 });
 
+// #3950: only a missing watermark gets the E1 hint; `detail` is unchanged and
+// other review-currency reasons stay hint-free.
+test('evaluateMergeGates adds the E1 hint only for a missing watermark', () => {
+  const missing = readyReport();
+  missing.reviewCurrency = {
+    comparisonRoute: 'return-to-e1',
+    comparisonReason: 'missing-watermark',
+  };
+  const missingBlocker = evaluateMergeGates(missing).find(
+    (b) => b.gate === 'review-currency',
+  );
+  assert.ok(missingBlocker, 'expected a review-currency blocker');
+  assert.equal(
+    missingBlocker.detail,
+    'comparisonRoute is "return-to-e1" (expected "proceed"): missing-watermark',
+  );
+  assert.match(String(missingBlocker.hint), /E1 Step 1/);
+
+  const headChanged = readyReport();
+  headChanged.reviewCurrency = {
+    comparisonRoute: 'return-to-e1',
+    comparisonReason: 'head-changed',
+  };
+  const headBlocker = evaluateMergeGates(headChanged).find(
+    (b) => b.gate === 'review-currency',
+  );
+  assert.ok(headBlocker, 'expected a review-currency blocker');
+  assert.equal(headBlocker.hint, undefined);
+});
+
 test('a missing or invalid prHeadSha fails closed as a head-sha blocker', () => {
   for (const bad of ['', 'not-a-sha', 'ABCDEF', `${HEAD}extra`]) {
     const report = readyReport();

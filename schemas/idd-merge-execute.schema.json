@@ -62,6 +62,10 @@
           "detail": {
             "type": "string",
             "description": "Evidence or explanation for the blocking gate."
+          },
+          "hint": {
+            "type": "string",
+            "description": "Optional next-step text, present only when the blocking gate can name one (currently review-currency with a missing watermark). Diagnostic only; detail is unchanged and no routing decision reads it."
           }
         },
         "additionalProperties": false

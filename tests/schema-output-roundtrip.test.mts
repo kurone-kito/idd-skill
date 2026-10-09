@@ -441,6 +441,63 @@ test('idd-merge-execute: runMergeExecute output validates against schema', () =>
   assertRoundtrip(verdict, loadJson('schemas/idd-merge-execute.schema.json'));
 });
 
+// #3950: a blocked verdict whose review-currency blocker carries the E1 hint
+// must still validate, so the optional `hint` field is accepted by the schema.
+test('idd-merge-execute: a missing-watermark blocker with a hint validates against schema (#3950)', () => {
+  const HEAD = '1111111111111111111111111111111111111111';
+  const report: Record<string, unknown> = {
+    prHeadSha: HEAD,
+    reviewCurrency: {
+      comparisonRoute: 'return-to-e1',
+      comparisonReason: 'missing-watermark',
+    },
+    threads: { actionableCount: 0 },
+    advisoryWait: { f3Outcome: 'SATISFIED' },
+    ci: {
+      status: 'success',
+      requiredChecksPassing: true,
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'all-passing',
+    },
+    reviewerStates: {
+      requiredApprovalsSatisfied: true,
+      codeownerApprovalSatisfied: true,
+      codeownerSelfApproval: { status: 'not_applicable' },
+    },
+    claim: { matchesExpectedClaim: true, reason: 'match' },
+    dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
+  };
+  const deps: MergeExecuteDeps = {
+    collect: () => report,
+    fetchHeadSha: () => HEAD,
+    fetchMergeState: () => ({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN',
+    }),
+    mergePr: () => 'Merged PR.',
+    mergePrAdmin: () => 'Merged PR (admin).',
+    resolveSoloCodeownerAdminFallbackMode: () => 'auto-admin-retry',
+    getLocalHeadState: () => ({ branch: null, headSha: null }),
+    fetchHeadRefName: () => '',
+  };
+  const { verdict } = runMergeExecute(
+    ['--pr', '994', '--claim-issue', '309', '--claim-id', 'c-1'],
+    deps,
+  );
+  const reviewBlocker = verdict.blockers.find(
+    (b) => b.gate === 'review-currency',
+  );
+  assert.ok(reviewBlocker, 'expected a review-currency blocker');
+  assert.equal(typeof reviewBlocker.hint, 'string');
+  assertRoundtrip(verdict, loadJson('schemas/idd-merge-execute.schema.json'));
+});
+
 test('idd-merge-execute: a non-null localHeadDrift verdict validates against schema (#2453)', () => {
   const HEAD = '1111111111111111111111111111111111111111';
   const DRIFTED = '2222222222222222222222222222222222222222';
