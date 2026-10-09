@@ -432,6 +432,29 @@ test('an uninspectable legacy idd-policy.json still blocks user-global repositor
   });
 });
 
+// #3820: a dangling canonical symlink is an existing repository file that cannot
+// be read. The user-global layers must not stand in for it.
+test('a dangling canonical policy symlink fails closed and never falls back to user-global fields (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
+    symlinkSync(
+      join(sandbox, 'missing-target.json'),
+      join(sandbox, '.github', 'idd', 'config.json'),
+    );
+    withUserGlobal(
+      '{"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.equal(loadIddConfig(), null);
+        assert.throws(
+          () => loadPolicyConfig(),
+          /failed to load policy from .*config\.json/,
+        );
+      },
+    );
+  });
+});
+
 // #3820: a dangling symlink is still a legacy entry, so it blocks the
 // user-global repository fields too. Only a missing entry counts as absent.
 test('a dangling legacy idd-policy.json symlink still blocks user-global repository fields (#3820)', () => {

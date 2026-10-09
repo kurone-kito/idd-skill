@@ -115,7 +115,12 @@ function readCanonicalRepositoryPolicy(cwd: string): RepositoryPolicyDocument {
   try {
     text = readFileSync(path, 'utf8');
   } catch (error) {
-    if (isEnoentError(error)) return { exists: false, path };
+    // A dangling symlink also reads as ENOENT, so the entry itself decides
+    // whether the file is absent. A present entry that cannot be read is an
+    // existing document with a diagnostic, which fails closed.
+    if (isEnoentError(error) && !policyEntryPresent(path)) {
+      return { exists: false, path };
+    }
     return {
       exists: true,
       path,
@@ -149,14 +154,15 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Whether the legacy repository policy entry exists, for the blocking check
- * only. `lstat` does not follow a symlink, so a dangling link still counts as
- * present. Any failure other than ENOENT also counts as present, so a legacy
- * entry that cannot be inspected still blocks user-global repository fields.
- * That is the fail-closed direction: the operator's global value must not win
- * over a repository whose own policy cannot be read.
+ * Whether a repository policy directory entry exists, for the presence checks
+ * only (the canonical file and the legacy file). `lstat` does not follow a
+ * symlink, so a dangling link still counts as present. Any failure other than
+ * ENOENT also counts as present, so an entry that cannot be inspected still
+ * blocks user-global repository fields. That is the fail-closed direction: the
+ * operator's global value must not win over a repository whose own policy
+ * cannot be read.
  */
-function legacyPolicyFilePresent(path: string): boolean {
+function policyEntryPresent(path: string): boolean {
   try {
     lstatSync(path);
     return true;
@@ -237,8 +243,7 @@ export function loadLayeredLocalPolicy(
   const env = options.env ?? process.env;
   const local = readCanonicalRepositoryPolicy(cwd);
   const legacyPath = join(cwd, LEGACY_POLICY_FILENAME);
-  const legacyBlocksGlobal =
-    !local.exists && legacyPolicyFilePresent(legacyPath);
+  const legacyBlocksGlobal = !local.exists && policyEntryPresent(legacyPath);
   const userGlobal =
     env.GITHUB_ACTIONS === 'true' || options.noUserGlobal === true
       ? undefined
