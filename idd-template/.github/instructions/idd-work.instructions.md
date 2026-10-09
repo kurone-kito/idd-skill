@@ -159,7 +159,7 @@ If WorkTrunk is unavailable, choose the correct case:
 <!-- dprint-ignore-start -->
 | Case | Command |
 | --- | --- |
-| Fresh claim | `git worktree add <path> -b <branch-name> origin/{development-branch}` |
+| Fresh claim | `git worktree add --no-track <path> -b <branch-name> origin/{development-branch}` |
 | Takeover — local branch exists | `git worktree add <path> <branch-name>` |
 | Takeover — remote branch only | `git fetch origin && git worktree add <path> -b <branch-name> origin/<branch-name>` |
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |

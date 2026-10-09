@@ -135,7 +135,8 @@ worktree removal) behind the
 20. If the hook cannot acquire the lock or record tokens, create the
     worktree without the hook.
 21. If WorkTrunk is unavailable, use
-    `git worktree add <path> -b <branch-name> origin/main` for a fresh claim.
+    `git worktree add --no-track <path> -b <branch-name> origin/main`
+    for a fresh claim.
 22. If WorkTrunk is unavailable and this is a takeover, use
     `git worktree add <path> <branch-name>` with the local branch.
 23. If WorkTrunk is unavailable and only the remote branch exists, run

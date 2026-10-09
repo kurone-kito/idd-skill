@@ -275,13 +275,13 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-First record `{agent-id}`/`{claim-id}` via
-`<profile-selected-claim-lock-command> --record-tokens --worktree
-<path> --agent-id {agent-id} --claim-id {claim-id}` (resolve the same
-way as A5(a) above); then post the claim comment using the exact
-format and posting mechanics already defined in
-[Claim format](idd-overview-core.instructions.md#claim-format) — do not
-re-derive them here.
+Fresh-claim order, worktree first: (1) `git worktree add --no-track`
+(fresh-claim row of `idd-work.instructions.md`); (2) `--record-tokens
+--worktree <path>`; (3) claim comment per
+[Claim format](idd-overview-core.instructions.md#claim-format), then
+activation nonce; (4) `--acquire --worktree <path>`; (5) after the settle
+delay, `--assert --worktree <path>`, which alone counts. Resolve commands
+as A5(a) does.
 
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
 marker body must be exactly the HTML comment token followed by, at
