@@ -325,3 +325,29 @@ test('worker budget admits slots at each exact threshold', () => {
     assert.equal(result.limitingFactor, 'candidates', scenario.name);
   }
 });
+
+test('worker budget reads an idle Linux load as zero, not unavailable', () => {
+  assert.equal(readOneMinuteLoad([0, 0, 0], 'linux'), 0);
+  const result = computeWorkerBudget(
+    request(),
+    readers({ load1m: () => readOneMinuteLoad([0, 0, 0], 'linux') }),
+  );
+  assert.equal(result.limitingFactor, 'candidates');
+  assert.equal(result.slots, 2);
+});
+
+test('worker budget fails closed on a fractional core count and admits a single-core host', () => {
+  const fractional = computeWorkerBudget(
+    request(),
+    readers({ coreCount: () => 2.5 }),
+  );
+  assert.equal(fractional.limitingFactor, 'host-load');
+  assert.equal(fractional.slots, 0);
+
+  const singleCore = computeWorkerBudget(
+    request(),
+    readers({ coreCount: () => 1, load1m: () => 0.5 }),
+  );
+  assert.equal(singleCore.limitingFactor, 'candidates');
+  assert.equal(singleCore.slots, 2);
+});
