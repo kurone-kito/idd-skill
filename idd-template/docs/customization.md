@@ -2104,9 +2104,11 @@ The readers that take `forcedHandoff.mode` take it from one of the copies of
   trusted-author handoff as honored once the mode is on.
 - `pre-merge-readiness` and `idd-merge-execute` read the copy at the PR base
   branch through the trusted loader.
-- The required `idd-advisory-convergence` check reads the checkout of `main`,
-  the default branch, whatever the PR base is. It honors a forced handoff only
-  when `main` carries the opt-in.
+- The required `idd-advisory-convergence` check reads the checkout of the
+  default branch, whatever the PR base is. The shipped workflow pins that
+  checkout to `main`, so an adopter whose default branch differs sets the
+  checkout `ref:` to it. The check honors a forced handoff only when the
+  default branch carries the opt-in.
 - The external-check waiver honors a forced handoff whatever the mode says.
 - `idd-roadmap-audit-execute`, `suitability-close-execute` and
   `discover-shared-file-overlap` never read the mode, so they never honor a
@@ -2135,14 +2137,15 @@ takeover after `claimTiming.staleAge` (default `PT24H`) needs no opt-in. The
 authorized actor (the authenticated `gh` login). It posts an `unclaimed-by`
 marker that no gate conditions on the mode. A checkout of the PR branch that
 commits the opt-in has that copy, so it can release. Other checkouts can
-release once they pull the change after it merges to `main`.
+release once they pull the change after it merges to the default branch.
 
 Every reader that consults the mode evaluates it each time it reads a marker,
 not when the marker was posted. Enabling `human-gated` on the default branch
 therefore lifts the mode gate for every earlier forced-handoff marker that a
 reader of the default-branch copy checks: the working-directory readers, once
 each working directory pulls the change, and the required check, once the
-change merges to `main`. A pull request into another base reads that base's
+change merges to the default branch. A pull request into another base reads
+that base's
 copy, so its gate stays closed until that copy carries the opt-in. Find those
 markers as the issue comments whose body starts with `<!-- forced-handoff:`,
 and review them before enabling the mode. A private downstream adopter reported
@@ -2157,10 +2160,10 @@ default branch, also commit the opt-in to the default branch through a normal
 pull request, because the required check reads that copy. A claim branch that
 has set its own `forcedHandoff.mode` needs `human-gated` set on that branch by
 an edit, because a merge keeps a change the branch made itself; a block the
-branch inherited unchanged takes main's new value on merge. For a claim with no
-open PR, commit the opt-in to the default branch through a normal pull request,
-then, once that pull request has merged, merge the default branch into the
-claim branch and push the merge.
+branch inherited unchanged takes the default branch's new value on merge. For
+a claim with no open PR, commit the opt-in to the default branch through a
+normal pull request, then, once that pull request has merged, merge the
+default branch into the claim branch and push the merge.
 
 `--import --force` overwrites `.github/idd/config.json`, including
 `forcedHandoff`, and only the `commands` table is restored afterwards. The
