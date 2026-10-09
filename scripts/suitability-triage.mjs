@@ -1989,17 +1989,41 @@ function isCodeIdentifierProcessMention(rawSource, matchIndex) {
 const STDIO_OPTION_KEY_PATTERN = /(?<![\w-])(?:stdio|stdin|stdout|stderr)\s*:/g;
 const STDIO_OPTION_MAX_RANGE_CHARS = 4096;
 const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
-// Marks each character of `source` that sits inside a single- or
-// double-quoted string, so a key or literal inside another string is not read
-// as code. An unclosed quote marks the rest of the source as inside, which only
-// makes the exemption fail closed.
-function findQuotedStringMask(source) {
-  const inside = [];
+// Marks each UTF-16 code unit of `source` that is not code: the inside of a
+// single-, double- or backtick-quoted string, a `//` line comment, or a `/* */`
+// block comment. The opening quote of a string is code, so a literal can be
+// checked for sitting outside any other string. Indices are code units, the
+// same units as string and regex indices, so an astral character cannot shift
+// the mask. An unclosed string or comment marks the rest of the source as not
+// code, which only makes the exemption fail closed.
+function findNonCodeMask(source) {
+  const masked = new Array(source.length).fill(false);
   let quote = null;
   let escaped = false;
-  for (const character of source) {
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+      } else {
+        masked[index] = true;
+      }
+      continue;
+    }
+    if (blockComment) {
+      masked[index] = true;
+      if (character === '*' && next === '/') {
+        masked[index + 1] = true;
+        index += 1;
+        blockComment = false;
+      }
+      continue;
+    }
     if (quote !== null) {
-      inside.push(true);
+      masked[index] = true;
       if (escaped) {
         escaped = false;
       } else if (character === '\\') {
@@ -2009,12 +2033,21 @@ function findQuotedStringMask(source) {
       }
       continue;
     }
-    inside.push(false);
-    if (character === "'" || character === '"') {
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      masked[index] = true;
+      masked[index + 1] = true;
+      index += 1;
+    } else if (character === '/' && next === '*') {
+      blockComment = true;
+      masked[index] = true;
+      masked[index + 1] = true;
+      index += 1;
+    } else if (character === "'" || character === '"' || character === '`') {
       quote = character;
     }
   }
-  return inside;
+  return masked;
 }
 function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt) {
   if (verb !== 'ignore') {
@@ -2034,10 +2067,15 @@ function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt) {
   if (codeRange.end - codeRange.start > STDIO_OPTION_MAX_RANGE_CHARS) {
     return false;
   }
-  // Scan from the code range start through the opening quote of the literal.
-  const scanned = text.slice(codeRange.start, index);
-  const inside = findQuotedStringMask(scanned);
-  if (inside[scanned.length - 1]) {
+  // Skip the range's own opening backticks, which delimit the span or fence.
+  let openerEnd = codeRange.start;
+  while (text[openerEnd] === '`') {
+    openerEnd += 1;
+  }
+  // Scan from the opener through the opening quote of the literal.
+  const scanned = text.slice(openerEnd, index);
+  const masked = findNonCodeMask(scanned);
+  if (masked[scanned.length - 1]) {
     return false;
   }
   const before = scanned.slice(0, -1);
@@ -2048,7 +2086,7 @@ function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt) {
     found !== null;
     found = keyPattern.exec(before)
   ) {
-    if (!inside[found.index]) {
+    if (!masked[found.index]) {
       lastKey = found;
     }
   }
