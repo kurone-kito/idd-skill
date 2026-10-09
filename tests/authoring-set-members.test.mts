@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -148,7 +149,7 @@ test('an edited trusted marker that no longer parses fails closed', () => {
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    'edited trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 8675)',
+    'edited trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 8675); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan',
   );
 });
 
@@ -192,7 +193,7 @@ test('an unedited unparseable trusted marker fails closed', () => {
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    'unparseable trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 9142)',
+    'unparseable trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 9142); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan',
   );
 });
 
@@ -214,7 +215,7 @@ test('a trusted marker whose target is a different issue fails closed', () => {
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    'authoring-owner marker target does not match its host issue (kurone-kito/idd-skill#3468, comment id 7301)',
+    'authoring-owner marker target does not match its host issue (kurone-kito/idd-skill#3468, comment id 7301); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan',
   );
 });
 
@@ -732,7 +733,7 @@ test('a parseable marker minimized as outdated is not a set member, and fails th
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#3468, comment id 1)",
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#3468, comment id 1); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
   );
   assert.deepEqual(result.skippedMarkers, [
     { issueNumber: 3468, commentId: 1, kind: 'requested-set', mode: 'acquire' },
@@ -809,7 +810,7 @@ test('#3880: a lone hidden marker on a sibling fails the scan and names the sibl
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 2)",
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 2); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
   );
 });
 
@@ -844,7 +845,7 @@ test('#3880: the lost-race shape (hidden acquire and heartbeat, then a visible m
   assert.equal(result.complete, false);
   assert.equal(
     result.reason,
-    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 2)",
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 2); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
   );
   assert.deepEqual(result.skippedMarkers, [
     { issueNumber: 20, commentId: 1, kind: 'requested-set', mode: 'acquire' },
@@ -972,7 +973,7 @@ test('#3880: the verdict and the sorted skipped list do not depend on the order 
   assert.equal(forward.complete, false);
   assert.equal(
     forward.reason,
-    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 3)",
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 3); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
   );
 });
 
@@ -1079,7 +1080,7 @@ test('#3880 CLI: a hidden requested-set marker fails the run and prints both fie
     assert.equal(failure.status, 1);
     const output = JSON.parse(failure.stdout ?? '');
     assert.equal(output.complete, false);
-    assert.match(output.reason, /#3469, comment id 9\)$/);
+    assert.match(output.reason, /#3469, comment id 9\)/);
     assert.deepEqual(output.skippedMarkers, [
       {
         issueNumber: 3469,
@@ -1131,4 +1132,12 @@ test('#3880 CLI: --help lists the skip fields in its output schema', () => {
   const help = runSetMembers(['--help']);
   assert.match(help, /"skippedMarkers"/);
   assert.match(help, /"skippedElsewhere"/);
+});
+
+test('#3881: the heading that the fail-closed reasons point to exists in the docs', () => {
+  const docs = readFileSync(
+    join(REPO_ROOT, 'docs/idd-comment-minimization.md'),
+    'utf8',
+  );
+  assert.match(docs, /^### Clearing a comment that blocks the scan$/m);
 });

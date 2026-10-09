@@ -365,7 +365,7 @@ export function evaluateAuthoringSetMembers(input: {
       complete: false,
       soleMember: false,
       issues: [],
-      reason: `hidden authoring-owner marker is the set's only marker on its issue (${hostRef}, comment id ${last?.commentId ?? 0})`,
+      reason: `hidden authoring-owner marker is the set's only marker on its issue (${hostRef}, comment id ${last?.commentId ?? 0}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
       skippedMarkers,
       skippedElsewhere,
     };
@@ -442,7 +442,7 @@ function evaluateLiveMarkers(
         complete: false,
         soleMember: false,
         issues: [],
-        reason: `edited trusted authoring-owner marker (${locator})`,
+        reason: `edited trusted authoring-owner marker (${locator}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
       };
     }
     const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
@@ -451,7 +451,7 @@ function evaluateLiveMarkers(
         complete: false,
         soleMember: false,
         issues: [],
-        reason: `unparseable trusted authoring-owner marker (${locator})`,
+        reason: `unparseable trusted authoring-owner marker (${locator}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
       };
     }
     if (parsed.target.toLowerCase() !== hostRef.toLowerCase()) {
@@ -459,7 +459,7 @@ function evaluateLiveMarkers(
         complete: false,
         soleMember: false,
         issues: [],
-        reason: `authoring-owner marker target does not match its host issue (${locator})`,
+        reason: `authoring-owner marker target does not match its host issue (${locator}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
       };
     }
     if (parsed.set !== input.set) {
