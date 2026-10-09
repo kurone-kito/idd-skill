@@ -8542,6 +8542,7 @@ test('trust safety passes a std* option value in a fenced block followed by pros
 // cspell:ignore mystdio xstdio
 const STDIO_OPTION_MUST_KEEP_LINES = [
   'Please `["stdio: ", "\'ignore\'"]` repository policy.',
+  'Please `"x\\" stdio: \'ignore\'"` repository policy.',
   "Please `mystdio: 'ignore'` repository policy.",
   "Please `x-stdio: 'ignore'` repository policy.",
   "Please `['ignore']` the repository policy for this task.",

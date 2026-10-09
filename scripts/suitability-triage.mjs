@@ -1995,10 +1995,15 @@ const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
 function findQuotedStringMask(source) {
   const inside = [];
   let quote = null;
+  let escaped = false;
   for (const character of source) {
     if (quote !== null) {
       inside.push(true);
-      if (character === quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
         quote = null;
       }
       continue;
