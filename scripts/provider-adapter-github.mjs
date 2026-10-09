@@ -2251,7 +2251,7 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
   repository(owner:$owner,name:$repo){
     issue(number:$number){
       closedByPullRequestsReferences(first:50,after:$after,includeClosedPrs:false){
-        nodes { state }
+        nodes { state number repository { nameWithOwner } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -2273,19 +2273,40 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         apiArgs.push('-f', `after=${after}`);
       }
       const parsed = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      // #3871: the same response checks as getConnectedPullRequestEventsPage
+      // (#3276). A GraphQL `errors` entry, a connection without `nodes` or
+      // `pageInfo`, or a non-boolean `hasNextPage` is a failed read, not an
+      // empty terminal page that would hide a PR the lookup never saw.
+      assertNoGraphqlErrors(parsed, 'getWorkItemClosingPullRequestsPage');
       const connection =
         parsed.data?.repository?.issue?.closedByPullRequestsReferences;
-      if (!connection) {
+      if (
+        !connection ||
+        !Array.isArray(connection.nodes) ||
+        connection.pageInfo == null ||
+        typeof connection.pageInfo !== 'object' ||
+        typeof connection.pageInfo.hasNextPage !== 'boolean'
+      ) {
         throw new Error(
-          'closedByPullRequestsReferences: connection is null/absent',
+          'closedByPullRequestsReferences: connection is null/absent or malformed (missing nodes/pageInfo/hasNextPage)',
         );
       }
       return {
-        nodes: (connection.nodes ?? []).map((node) => ({
+        nodes: connection.nodes.map((node) => ({
           state: node.state === undefined ? undefined : String(node.state),
+          // An absent or non-integer number stays undefined: the reader
+          // treats it as a failed lookup rather than guessing a PR.
+          number:
+            typeof node.number === 'number' && Number.isInteger(node.number)
+              ? node.number
+              : undefined,
+          repository:
+            typeof node.repository?.nameWithOwner === 'string'
+              ? node.repository.nameWithOwner
+              : undefined,
         })),
-        hasNextPage: connection.pageInfo?.hasNextPage ?? false,
-        endCursor: connection.pageInfo?.endCursor ?? null,
+        hasNextPage: connection.pageInfo.hasNextPage,
+        endCursor: connection.pageInfo.endCursor ?? null,
       };
     },
     // See provider-port.mts's doc comment on this method: no caller uses it
