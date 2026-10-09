@@ -3574,6 +3574,54 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a second cleanup checkout whose uses key is quoted, beside the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const legacy = [
+          `      - "uses": actions/checkout@v4`,
+          `        with:`,
+          `          ref: \${{ github.event.pull_request.head.sha }}`,
+          `          fetch-depth: 1`,
+          '',
+        ].join('\n');
+        anchored(text, checkout);
+        return text.split(checkout).join(legacy + checkout);
+      },
+    },
+    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a second cleanup checkout written as a flow mapping, beside the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const flow = `      - { uses: actions/checkout@v4, with: { fetch-depth: 1 } }\n`;
+        anchored(text, checkout);
+        return text.split(checkout).join(flow + checkout);
+      },
+    },
+    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a second cleanup checkout whose action name is in another letter case',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const cased = `      - uses: Actions/Checkout@v4\n        with:\n          fetch-depth: 1\n`;
+        anchored(text, checkout);
+        return text.split(checkout).join(cased + checkout);
+      },
+    },
+    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

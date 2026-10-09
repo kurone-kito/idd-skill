@@ -254,17 +254,18 @@ function checkWorkflowDispatchCheckoutRef(
 ): void {
   // Read as declarations: a commented-out checkout cannot stand in for the real one.
   const declared = declarationText(text);
-  // Every checkout counts, in either spelling of a step, so a name-first checkout
-  // cannot sit beside the real one unchecked.
+  // Every line that names actions/checkout counts, whatever the key spelling,
+  // quoting, letter case, or step style, so a second checkout cannot sit beside
+  // the real one unchecked.
   const checkouts = declared
     .split('\n')
-    .filter((line) => /^[ \t]*(?:- )?uses: actions\/checkout@/.test(line));
+    .filter((line) => /actions\/checkout@/i.test(line));
   if (checkouts.length > 1) {
     report(RWA004, path, 'must declare exactly one actions/checkout step');
     return;
   }
   const checkoutStart = declared.search(
-    /^[ \t]*(?:- )?uses: actions\/checkout@/m,
+    /^[ \t]*(?:- )?["']?uses["']?\s*:\s*["']?actions\/checkout@/im,
   );
   if (checkoutStart === -1) {
     report(RWA004, path, 'must keep its actions/checkout step');
