@@ -69,10 +69,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || format('{0}-{1}', github.event_name, github.event.pull_request.number || inputs.pr_number) }}
 on:
   # Trigger-migration finished state (kurone-kito/idd-skill#2764 Phase
-  # 2): only pull_request_target is declared below. GitHub always
-  # evaluates it against the BASE branch's own workflow YAML, never the
-  # pull request's own merge ref, so a same-repository PR cannot edit
-  # its own copy of this file to force its required check green.
+  # 2): pull_request_target is the only pull-request trigger declared
+  # below. GitHub always evaluates it against the BASE branch's own
+  # workflow YAML, never the pull request's own merge ref, so a
+  # same-repository PR cannot edit its own copy of this file to force its
+  # required check green.
   # Trade-off, accepted (kurone-kito/idd-skill Groom hearing,
   # 2026-09-24): a PR that edits this workflow is itself checked by the
   # base branch's unmodified copy, so its own workflow changes are never
