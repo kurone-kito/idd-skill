@@ -361,7 +361,7 @@ PATH B — Advisory items (completed review of current HEAD):
 `**Rejected**` above satisfies advisory-convergence's Clause 2 (thread/ comment
 disposition) only. When the latest primary bot review on current HEAD also needs
 an ack (the snapshot's `latestPrimaryBotReview.reviewAckNeeded`: a thread-less
-finding in any review body shape, or, for the default Copilot bot, an
+finding in a recognized review body shape, or, for the default Copilot bot, an
 unrecognized body; see `docs/idd-helper-scripts.md`), Clause 1 needs
 `latestPrimaryBotReview.reviewAckCovers === true` regardless of any Clause 2
 disposition elsewhere in the review. After confirming the suppressed finding(s)
