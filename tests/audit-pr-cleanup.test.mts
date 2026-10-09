@@ -2341,6 +2341,15 @@ test('each thread-freshness shape reports its own cause code and text (#3856)', 
       text: SUPERSEDED_BY_REPLY_TEXT,
     },
     {
+      name: 'an unedited IDD disposition with no readable time',
+      nodes: [
+        FINDING_3856,
+        { ...DISPOSITION_3856, createdAt: undefined, updatedAt: undefined },
+      ],
+      code: 'thread-disposition-time-unreadable',
+      text: "the thread's IDD disposition has no readable time",
+    },
+    {
       name: 'no IDD disposition at all',
       nodes: [FINDING_3856, REPLY_3856],
       code: 'thread-no-disposition',
