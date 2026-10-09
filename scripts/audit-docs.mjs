@@ -29,6 +29,7 @@ import {
   isBannerScopedInstructionTarget,
   normalizeNonNegativeNumber,
   parseGeneratedFromBannerSource,
+  parseNearCeilingRaiseApprovals,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   resolveInstructionSizeBudgetConfig,
@@ -1576,6 +1577,7 @@ function checkNearCeilingRatchet(
       effectiveNoticeUtilizationPct,
       currentBundleStats,
       baseBundleStats,
+      parseNearCeilingRaiseApprovals(config.nearCeilingRaiseApprovals),
     ),
   );
   // Per-file instructionSizeBudgets ratchet (#3028): same base ref and the

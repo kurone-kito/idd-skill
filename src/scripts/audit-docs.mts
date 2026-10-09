@@ -44,6 +44,7 @@ import {
   isBannerScopedInstructionTarget,
   normalizeNonNegativeNumber,
   parseGeneratedFromBannerSource,
+  parseNearCeilingRaiseApprovals,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   resolveInstructionSizeBudgetConfig,
@@ -1801,6 +1802,7 @@ function checkNearCeilingRatchet(
       effectiveNoticeUtilizationPct,
       currentBundleStats,
       baseBundleStats,
+      parseNearCeilingRaiseApprovals(config.nearCeilingRaiseApprovals),
     ),
   );
 
