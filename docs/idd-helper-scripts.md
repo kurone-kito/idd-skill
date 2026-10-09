@@ -2312,6 +2312,34 @@ non-paginated `ghApiJson`, the same additive mode as
 `githubApi.telemetry`. The generic `ghText` and `ghTextAsync` runners
 cannot add it, so they fall back to the 60-second backoff.
 
+## Effective layered policy (kurone-kito/idd-skill#3820)
+
+`scripts/idd-effective-config.mjs` is a read-only diagnostic for the layered
+policy. It prints the effective local policy as JSON, with the layer each
+leaf came from, the selected user-global override, and layering
+diagnostics. It never writes, claims, or posts.
+
+```sh
+node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
+```
+
+- **Layers, highest first**: the repository's `.github/idd/config.json`, the
+  user-global override selected for this repository, the user-global base,
+  and the built-in defaults. A repository-owned field from a user-global
+  layer is ignored once a repository file exists.
+- **Output**: `repository`, `userGlobalContributed`, `selectedOverrideIndex`,
+  `config`, `sourceMap`, and `diagnostics`. `--key` prints only that value,
+  `found`, and the layer that supplied it.
+- **`--no-user-global`** skips the user-global layers entirely.
+- **CI**: under `GITHUB_ACTIONS=true` the shared loaders and the fragment
+  resolvers never read the user-global file, so a CI helper sees the
+  repository file alone.
+- **Trusted reads** (the gate trusted-actor lists) fall back to the
+  user-global layers only when the base file and the legacy
+  `idd-policy.json` are both confirmed absent (HTTP 404) at the trusted
+  ref. The working tree is never read there, and a path override cannot
+  match, only a repository-slug override can.
+
 ## Helper Runtime Profiles
 
 When a repository imports the IDD template, helper support should be

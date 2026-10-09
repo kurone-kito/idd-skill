@@ -43,6 +43,7 @@ import {
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import {
   deriveRepositoryIdentity,
+  type PolicyLayerSource,
   type RepositoryIdentity,
   type RepositoryPolicyDocument,
   resolveLayeredPolicy,
@@ -172,6 +173,10 @@ export interface LayeredLocalPolicyLoad {
   config: Record<string, unknown> | null;
   /** Whether a user-global file (tier 2 or 3) contributed to `config`. */
   userGlobalContributed: boolean;
+  /** The layer each leaf came from, keyed by dotted path. */
+  sourceMap: Record<string, PolicyLayerSource>;
+  /** Index of the selected user-global override, or `null` when none matched. */
+  selectedOverrideIndex: number | null;
   /** Non-fatal layering notes, such as a malformed override selector. */
   diagnostics: string[];
 }
@@ -183,6 +188,8 @@ export interface LoadLayeredLocalPolicyOptions {
   env?: NodeJS.ProcessEnv;
   /** Explicit `$HOME` override, consulted after `XDG_CONFIG_HOME`. */
   homedir?: string;
+  /** Skip tiers 2 and 3 even when a user-global file exists (`--no-user-global`). */
+  noUserGlobal?: boolean;
 }
 
 /**
@@ -201,7 +208,7 @@ export function loadLayeredLocalPolicy(
   const env = options.env ?? process.env;
   const local = readCanonicalRepositoryPolicy(cwd);
   const userGlobal =
-    env.GITHUB_ACTIONS === 'true'
+    env.GITHUB_ACTIONS === 'true' || options.noUserGlobal === true
       ? undefined
       : loadUserGlobalPolicyDocument({ env, homedir: options.homedir });
   const globalConfig =
@@ -222,6 +229,8 @@ export function loadLayeredLocalPolicy(
     config:
       local.exists || globalConfig !== undefined ? resolution.config : null,
     userGlobalContributed: globalConfig !== undefined,
+    sourceMap: resolution.sourceMap,
+    selectedOverrideIndex: resolution.selectedOverrideIndex,
     diagnostics: resolution.diagnostics,
   };
 }

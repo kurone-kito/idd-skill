@@ -138,7 +138,7 @@ export function loadLayeredLocalPolicy(options = {}) {
   const env = options.env ?? process.env;
   const local = readCanonicalRepositoryPolicy(cwd);
   const userGlobal =
-    env.GITHUB_ACTIONS === 'true'
+    env.GITHUB_ACTIONS === 'true' || options.noUserGlobal === true
       ? undefined
       : loadUserGlobalPolicyDocument({ env, homedir: options.homedir });
   const globalConfig =
@@ -159,6 +159,8 @@ export function loadLayeredLocalPolicy(options = {}) {
     config:
       local.exists || globalConfig !== undefined ? resolution.config : null,
     userGlobalContributed: globalConfig !== undefined,
+    sourceMap: resolution.sourceMap,
+    selectedOverrideIndex: resolution.selectedOverrideIndex,
     diagnostics: resolution.diagnostics,
   };
 }

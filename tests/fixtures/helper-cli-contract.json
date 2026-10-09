@@ -289,6 +289,18 @@
         }
       }
     },
+    "idd-effective-config.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 0,
+          "kind": null
+        }
+      }
+    },
     "idd-emit-marker.mjs": {
       "runs": {
         "unknownFlag": {

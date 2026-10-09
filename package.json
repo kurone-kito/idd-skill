@@ -41,6 +41,7 @@
     "idd-discover-viability-gate": "./bin/idd-discover-viability-gate.mjs",
     "idd-disposition-non-review-notices": "./bin/idd-disposition-non-review-notices.mjs",
     "idd-doctor": "./bin/idd-doctor.mjs",
+    "idd-effective-config": "./bin/idd-effective-config.mjs",
     "idd-emit-marker": "./bin/idd-emit-marker.mjs",
     "idd-external-check-waiver": "./bin/idd-external-check-waiver.mjs",
     "idd-force-handoff": "./bin/idd-force-handoff.mjs",
