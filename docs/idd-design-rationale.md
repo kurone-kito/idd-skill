@@ -370,7 +370,7 @@ reference and stays exposed on the Resume side. Resume now applies the same
 first-commit time rule as the merge gate, and a time that cannot be read rejects
 the handoff. This overturns the time half of the note recorded under
 kurone-kito/idd-skill#1155 (that the allowance is "applied by pre-merge but not
-by resume routing"); the author binding of #1155
+by resume routing"); the author binding of kurone-kito/idd-skill#1155
 (`requireAuthorMatchesForcedBy`) is unchanged.
 
 ### Activation-nonce: why a separate marker, and what stays deferred

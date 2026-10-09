@@ -41,7 +41,8 @@ forced-handoff if:
   contradictory.
 - An open PR exists and the approval text does not name that PR (an
   issue-only approval is insufficient for PR-scoped recovery unless it
-  predates that PR's first commit, kurone-kito/idd-skill#3871).
+  predates the first commit of every open PR that backs the claim, the
+  earliest one when several do, kurone-kito/idd-skill#3871).
 - The evidence `{claim-id}`, branch, or linked PR does not match the live
   active claim or inheritable released branch/PR state — stop and report
   the mismatch; do not claim, push, or mutate review state.
