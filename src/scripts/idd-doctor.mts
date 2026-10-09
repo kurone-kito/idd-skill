@@ -51,6 +51,7 @@ import {
   isValidIsoTimestamp,
   parseAuthoringBucketMarker,
 } from './marker-helpers.mts';
+import { payloadPolicyCoverageWarnings } from './payload-placeholders.mts';
 import {
   inspectHelperRuntimeConfig,
   POLICY_DEFAULTS,
@@ -214,6 +215,7 @@ export function runDoctor({
     report,
   );
   checkWorkshopExampleRepoBackLink(root, { requireGithub }, report);
+  checkPayloadPolicyCoverage(root, report);
   checkGithubReadiness(root, requireGithub, strict, report);
   const openIssuesForConsistencyChecks = checkAutopilotSuitabilityConsistency(
     root,
@@ -378,6 +380,16 @@ function fetchOpenIssuesForConsistencyChecks(
     return null;
   }
   return Array.isArray(issues) && issues.length > 0 ? issues : null;
+}
+
+/**
+ * #3822: a payload-served repository must have every field its placeholders
+ * need. A repository served from its own instruction files is not checked.
+ */
+function checkPayloadPolicyCoverage(root: string, report: DoctorReport): void {
+  for (const warning of payloadPolicyCoverageWarnings(root)) {
+    report.warnings.push(warning);
+  }
 }
 
 function checkAutopilotSuitabilityConsistency(
