@@ -207,7 +207,7 @@ function checkWorkflowDispatchMergedGuard(path, text, report) {
 // at the step's indentation. A duplicated or missing with: key, quoted or not,
 // yields '' so that no ref can satisfy the check from outside the block.
 function withBlockOf(stepText) {
-  const keys = stepText.match(/^ {8}["']?with["']?\s*:/gm) ?? [];
+  const keys = stepText.match(/^ {8}["']?with["']?\s*:/gim) ?? [];
   const start = stepText.search(/^ {8}with:[ \t]*$/m);
   if (keys.length !== 1 || start === -1) {
     return '';
@@ -252,7 +252,7 @@ function checkWorkflowDispatchCheckoutRef(path, text, report) {
     return;
   }
   const checkoutWith = withBlockOf(checkoutStep);
-  const refLines = checkoutWith.match(/^ {10}["']?ref["']?\s*:.*$/gm) ?? [];
+  const refLines = checkoutWith.match(/^ {10}["']?ref["']?\s*:.*$/gim) ?? [];
   if (
     refLines.length !== 1 ||
     !/^ {10}ref: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.event\.repository\.default_branch \|\| github\.sha \}\}$/m.test(
@@ -2175,7 +2175,7 @@ function checkCommentRefreshTriggers(root, report) {
     // fails closed.
     const refreshJob =
       jobBlocks(declared)?.get('refresh-if-idd-originated') ?? '';
-    const refreshIfKeys = refreshJob.match(/^ {4}["']?if["']?[ \t]*:/gm) ?? [];
+    const refreshIfKeys = refreshJob.match(/^ {4}["']?if["']?[ \t]*:/gim) ?? [];
     const refreshIf = (
       refreshJob.match(/^ {4}["']?if["']?[ \t]*:[ \t]*(.*)$/m)?.[1] ?? ''
     )

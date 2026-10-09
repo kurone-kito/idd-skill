@@ -3874,6 +3874,52 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose ref input has an upper-case key beside the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(
+            `${ref}          REF: \${{ github.event.pull_request.head.sha }}\n`,
+          );
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout that declares an upper-case WITH block after the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        const fetch = '          fetch-depth: 1\n';
+        anchored(text, ref + fetch);
+        return text
+          .split(ref + fetch)
+          .join(`${ref}${fetch}        WITH:\n          ref: main\n`);
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a refresh job that declares an upper-case IF key after its guard',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const job = `    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`;
+        anchored(text, job);
+        return text.split(job).join(`${job}    IF: true\n`);
+      },
+    },
+    expected: [{ message: 'refresh job must declare exactly one if: key' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
