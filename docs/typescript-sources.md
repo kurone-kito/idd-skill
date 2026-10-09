@@ -174,9 +174,10 @@ runtime-file lists in item 4, which were checked against the source.
      (`scripts/<stem>.mjs`), `vendoredCommand` (`node scripts/<stem>.mjs`) and
      `description`. Keep the `id` values in ascending order
      (`helper-command-order`).
-   - If the helper reads files that its imports do not reach, list them. A
-     schema goes into `contractPaths` on this entry. Any other file goes into
-     `EXTRA_RUNTIME_FILES` in the same file, keyed by `scripts/<stem>.mjs`. The
+   - `contractPaths` on this entry lists the schemas that are the command's own
+     contract. If a module reads a file that its imports do not reach, a schema
+     included, list that file in `EXTRA_RUNTIME_FILES` in the same file, keyed by
+     the module that reads it, `scripts/<stem>.mjs`. The
      drift guard in `tests/helper-runtime-manifest.test.mts` compares the
      manifest with these lists, and it checks the files that `validate-schemas`
      reads. It does not find a missing data file for another helper. To check
@@ -227,7 +228,10 @@ runtime-file lists in item 4, which were checked against the source.
    `idd-generated-from` banner removed, and compare the total with `limitBytes`.
    - From the notice level up to the limit, follow the near-ceiling exception in
      `docs/policy-constants.md`: prefer trimming or splitting the net addition
-     over a ratchet bump.
+     over a ratchet bump. The audit enforces this against the base ref. If the
+     base bundle is already at or above the notice level, raising its
+     `limitBytes` fails with `near-ceiling-ratchet`, even when the new content
+     fits. A budget bump cannot pass in that case.
    - If the change would take a bundle above the limit, it cannot land until the
      budget is decided. Record the options for the maintainer (split, raise
      with a callout, or exemption), and stop. Do not trim instruction text in
