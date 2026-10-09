@@ -5670,3 +5670,20 @@ test('#3871: a failed connected read still reads the closing references, which a
   assert.equal(result.lookupFailed, true);
   assert.deepEqual([...result.references], ['77']);
 });
+
+test('#3871: a blank repository fails the closing-reference read instead of matching blank values', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', '')],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, '  ');
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], []);
+});

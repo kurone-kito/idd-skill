@@ -105,10 +105,12 @@ if (import.meta.main) {
  *   lookup itself failed, so PR state is unknown rather than genuinely
  *   empty. An `issue-plus-pr` handoff still delegates to the shared gate
  *   above unchanged -- this decision covers `issue-only` handoffs only,
- *   and `expectedLinkedPrReferences` is empty either way on a failed
- *   lookup, so an `issue-plus-pr` marker naming any PR would fail to
- *   match a real backing PR regardless; that pre-existing shortcut is
- *   left as-is rather than widened or narrowed here. An `issue-only`
+ *   and, when the failed read was the only signal that could name a PR,
+ *   `expectedLinkedPrReferences` is empty, so an `issue-plus-pr` marker
+ *   naming any PR passes the shared shortcut for an empty set (#3871 keeps
+ *   the other signal's references, so the shortcut applies only when that
+ *   signal found nothing); that pre-existing shortcut is left as-is rather
+ *   than widened or narrowed here. An `issue-only`
  *   handoff against an enabled mode is rejected outright instead of
  *   falling into the empty-set-means-honor-it shortcut.
  */
@@ -1377,6 +1379,11 @@ export function fetchOpenLinkedPrReferences(port, issueNumber, repository) {
   }
   let closingFailed = false;
   try {
+    // A blank repository cannot tell this repository's closing references from
+    // another's, so the closing read fails rather than matching blank values.
+    if (issueRepository.length === 0) {
+      throw new Error('blank repository for the closing-reference match');
+    }
     readAllPages(
       (after) => port.getWorkItemClosingPullRequestsPage(issueNumber, after),
       (page) => {
