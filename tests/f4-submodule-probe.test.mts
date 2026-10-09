@@ -7,10 +7,11 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { fixtureEnv } from './test-utils.mts';
 
 // The F4 pre-removal submodule probe, as the four files that carry it
 // print it: two distributed copies and their generated mirrors. See
@@ -25,9 +26,14 @@ const PROBE_FILES = [
   'docs/idd-resume-detail.md',
 ];
 
-// A git-config-file-safe null-device path, as in
-// tests/worktree-guard-hook.test.mts.
-const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+// The shared fixtureEnv() sets no commit identity, so the fixture commits
+// spread these in at each call site.
+const FIXTURE_IDENTITY = {
+  GIT_AUTHOR_NAME: 'probe fixture',
+  GIT_AUTHOR_EMAIL: 'probe@example.invalid',
+  GIT_COMMITTER_NAME: 'probe fixture',
+  GIT_COMMITTER_EMAIL: 'probe@example.invalid',
+};
 
 const tempRoots: string[] = [];
 
@@ -37,36 +43,11 @@ after(() => {
   }
 });
 
-/**
- * Fixture git processes never read the ambient git configuration, so the
- * result does not depend on the developer's own identity or settings.
- */
-function fixtureEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_CONFIG')) {
-      delete env[key];
-    }
-  }
-  delete env.GIT_DIR;
-  delete env.GIT_INDEX_FILE;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_COMMON_DIR;
-  delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
-  env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
-  env.GIT_AUTHOR_NAME = 'probe fixture';
-  env.GIT_AUTHOR_EMAIL = 'probe@example.invalid';
-  env.GIT_COMMITTER_NAME = 'probe fixture';
-  env.GIT_COMMITTER_EMAIL = 'probe@example.invalid';
-  return env;
-}
-
 /** Run git in a fixture repository and return its trimmed stdout. */
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd,
-    env: fixtureEnv(),
+    env: { ...fixtureEnv(), ...FIXTURE_IDENTITY },
     encoding: 'utf8',
     stdio: 'pipe',
   }).trim();
@@ -152,7 +133,7 @@ function runProbe(
   // the command, so a path containing quotes cannot change the command.
   const command = probe.replace('<path>', '"$1"');
   const result = spawnSync('sh', ['-c', command, 'probe', superRepo], {
-    env: fixtureEnv(),
+    env: { ...fixtureEnv(), ...FIXTURE_IDENTITY },
     encoding: 'utf8',
     stdio: 'pipe',
   });
