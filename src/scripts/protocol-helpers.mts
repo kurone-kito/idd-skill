@@ -10923,7 +10923,11 @@ export function summarizeClaimValidation(
     expectedLinkedPrReferences,
     prFirstCommitAt: options.prFirstCommitAt ?? null,
   };
-  const ignoredForcedHandoffs: IgnoredForcedHandoffEntry[] = [];
+  // The old agent id is kept here, not in the report entry, so the filter
+  // below can match the full claim identity that applyClaimEvent matched.
+  const ignoredForcedHandoffs: Array<
+    IgnoredForcedHandoffEntry & { oldAgentId: string }
+  > = [];
   const { activeClaim, activeSince } = resolveActiveClaimWithForcedHandoffTrace(
     claimEvents,
     {
@@ -10938,6 +10942,7 @@ export function summarizeClaimValidation(
           : buildForcedHandoffRefusalExplainer(defaultGateInputs),
       onIgnoredForcedHandoff: ({ reason, forcedHandoff }) => {
         ignoredForcedHandoffs.push({
+          oldAgentId: forcedHandoff.oldAgentId,
           oldClaimId: forcedHandoff.oldClaimId,
           newClaimId: forcedHandoff.newClaimId,
           cause: reason,
@@ -10964,9 +10969,17 @@ export function summarizeClaimValidation(
     // Only refusals of a marker whose old claim is the claim this evaluation
     // resolved as active belong in the report (#3873).
     const ignoredForActive = activeClaim
-      ? ignoredForcedHandoffs.filter(
-          (entry) => entry.oldClaimId === activeClaim.claimId,
-        )
+      ? ignoredForcedHandoffs
+          .filter(
+            (entry) =>
+              entry.oldAgentId === activeClaim.agentId &&
+              entry.oldClaimId === activeClaim.claimId,
+          )
+          .map(({ oldClaimId, newClaimId, cause }) => ({
+            oldClaimId,
+            newClaimId,
+            cause,
+          }))
       : [];
     if (ignoredForActive.length > 0) {
       captureTraceInto.ignoredForcedHandoffs = ignoredForActive;

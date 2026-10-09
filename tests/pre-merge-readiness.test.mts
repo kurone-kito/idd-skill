@@ -17279,3 +17279,28 @@ test('claim-ownership blocker names the ignored-handoff cause only when the fiel
     'claim ownership does not match (reason="claim-id-mismatch"); ignored forced-handoff: pr-scope-mismatch',
   );
 });
+
+test('merge-side summary does not report a refused handoff whose old agent differs from the active claim', () => {
+  // Same claim id, different old agent: not the active claim's identity, so
+  // the marker is never a refusal of the active claim and must not be listed.
+  const event = wgHandoffEvent();
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([
+      wgClaimEvent(),
+      {
+        ...event,
+        body: event.body.replace(
+          '"old-agent-id":"cli-old"',
+          '"old-agent-id":"someone-else"',
+        ),
+      },
+    ]) as Parameters<typeof summarizeClaimValidationImpl>[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.equal('ignoredForcedHandoffs' in capture, false);
+});
