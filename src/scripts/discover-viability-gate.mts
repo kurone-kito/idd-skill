@@ -501,8 +501,14 @@ export interface BareNounDependencyRule {
 // non-word character, so the lookbehind is `(?<=\W)` rather than `\b`: a window
 // cut inside a longer word (`passkey`) starts at index 0, where `\b` would match
 // and wrongly read `key` as a bare noun. `replace` resets a global pattern's
-// `lastIndex` itself, so these carry the `g` flag, which the two-sentence test
-// row needs in order to remove both verbs.
+// `lastIndex` itself, so these carry the `g` flag, which the two-sentence row
+// in list F needs in order to remove both verbs.
+//
+// The same refusal applies at the start of any window that begins with a real
+// word, because the window cannot tell a cut from the start of the corpus. So
+// when a later noun's window begins at a bare key that opens the corpus, that
+// key's verb stays in the window, and the later noun can fail. That fails
+// closed, and the issue prefers a false positive to a false negative.
 const BARE_NOUN_NEED_SHAPE_PATTERN =
   /(?<=\W)((?:keys?|tokens?)\s+)needs?\s+(?=(?:a|an|the)\b)/gi;
 const BARE_NOUN_REQUIRE_SHAPE_PATTERN =
