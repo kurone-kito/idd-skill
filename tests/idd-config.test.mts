@@ -914,6 +914,110 @@ test('loadTrustedIddConfig returns null on a confirmed 404 (config absent at ref
   assert.equal(config, null);
 });
 
+// #3820: a trusted read falls back to the user-global layers only when the
+// base file and the legacy idd-policy.json are both confirmed absent (404).
+const httpNotFound = (): never => {
+  throw new Error('gh: Not Found (HTTP 404)');
+};
+const httpServerError = (): never => {
+  throw new Error('gh: Internal Server Error (HTTP 500)');
+};
+const legacyPresent = (): void => undefined;
+
+test('a trusted read with the base and legacy files absent uses the user-global layers (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.deepEqual(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpNotFound),
+      { reviewPolicy: 'global-choice' },
+    );
+  });
+});
+
+test('a trusted read with the legacy idd-policy.json present does not fall back (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.equal(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, legacyPresent),
+      null,
+    );
+  });
+});
+
+test('a trusted read whose legacy probe is not a clean 404 fails closed (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.throws(
+      () =>
+        loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpServerError),
+      /cannot confirm idd-policy\.json for o\/r@main/,
+    );
+  });
+});
+
+test('a trusted read never falls back to user-global layers under GITHUB_ACTIONS=true (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', 'true', () => {
+    assert.equal(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpNotFound),
+      null,
+    );
+  });
+});
+
+test('a trusted read with no user-global file makes no legacy probe and returns null (#3820)', () => {
+  withUserGlobal(null, undefined, () => {
+    let probed = false;
+    assert.equal(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, () => {
+        probed = true;
+      }),
+      null,
+    );
+    assert.equal(probed, false);
+  });
+});
+
+test('a trusted read that finds the base file uses it and ignores the user-global layers (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    const config = loadTrustedIddConfig('o', 'r', 'main', () =>
+      Buffer.from('{"reviewPolicy":"repo-choice"}', 'utf8').toString('base64'),
+    );
+    assert.deepEqual(config, { reviewPolicy: 'repo-choice' });
+  });
+});
+
+test('a trusted read with a base-file failure other than 404 fails closed even with a user-global file (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.throws(
+      () =>
+        loadTrustedIddConfig('o', 'r', 'main', httpServerError, httpNotFound),
+      /cannot confirm \.github\/idd\/config\.json for o\/r@main/,
+    );
+  });
+});
+
+test('a trusted read applies a repository-slug override and never a path override (#3820)', () => {
+  withUserGlobal(
+    JSON.stringify({
+      threadResolutionPolicy: 'global-thread',
+      overrides: [
+        { match: { repo: 'o/r' }, config: { reviewPolicy: 'slug-choice' } },
+        {
+          match: { path: 'checkout' },
+          config: { reviewPolicy: 'path-choice' },
+        },
+      ],
+    }),
+    undefined,
+    () => {
+      assert.deepEqual(
+        loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpNotFound),
+        {
+          threadResolutionPolicy: 'global-thread',
+          reviewPolicy: 'slug-choice',
+        },
+      );
+    },
+  );
+});
+
 test('loadTrustedIddConfig rethrows (fail-closed) on a non-404 failure', () => {
   assert.throws(
     () =>

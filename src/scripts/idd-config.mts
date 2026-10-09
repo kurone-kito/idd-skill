@@ -335,6 +335,11 @@ export function loadTrustedIddConfig(
       buildIddConfigContentsArgs(fetchOwner, fetchRepo, fetchRef),
       GH_TEXT_LOOP_TIMEOUT_OPTIONS,
     ),
+  probeLegacyPolicy: (
+    probeOwner: string,
+    probeRepo: string,
+    probeRef: string,
+  ) => void = probeLegacyPolicyAtRef,
 ): IddConfig | null {
   try {
     const encoded = fetchEncodedConfig(owner, repo, ref);
@@ -354,13 +359,88 @@ export function loadTrustedIddConfig(
     return parsed as IddConfig;
   } catch (error) {
     if (deriveGhHttpStatus(error) === 404) {
-      return null;
+      return trustedUserGlobalFallback(owner, repo, ref, probeLegacyPolicy);
     }
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
       `cannot confirm .github/idd/config.json for ${owner}/${repo}@${ref}: this trusted-ref read requires the file to be readable or genuinely absent (404) at this ref, not merely unreadable -- ${message}`,
     );
   }
+}
+
+/**
+ * Build the `gh api` argv that probes the legacy `idd-policy.json` for
+ * `owner/repo` at `ref`. Only the status matters: a 404 confirms the file is
+ * absent, and a success confirms it is present.
+ */
+export function buildLegacyPolicyProbeArgs(
+  owner: string,
+  repo: string,
+  ref: string,
+): string[] {
+  return [
+    'api',
+    `repos/${owner}/${repo}/contents/idd-policy.json`,
+    '--method',
+    'GET',
+    '-f',
+    `ref=${ref}`,
+    '--jq',
+    '.content',
+  ];
+}
+
+function probeLegacyPolicyAtRef(
+  owner: string,
+  repo: string,
+  ref: string,
+): void {
+  ghText(
+    buildLegacyPolicyProbeArgs(owner, repo, ref),
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
+}
+
+/**
+ * #3820: tiers 2 and 3 for a trusted read. Reached only when the base file is
+ * confirmed absent (HTTP 404) at the trusted ref, and the legacy
+ * `idd-policy.json` is also confirmed absent. A present legacy file, or a
+ * probe that is not a clean 404, keeps the null or throw contract.
+ *
+ * The user-global file is consulted only when it exists, so a machine with
+ * none makes no legacy probe. Under `GITHUB_ACTIONS=true` tiers 2 and 3 are
+ * never read. The trusted read never touches the working tree, and its
+ * identity is the repository slug alone, so a path-based override cannot match.
+ */
+function trustedUserGlobalFallback(
+  owner: string,
+  repo: string,
+  ref: string,
+  probeLegacyPolicy: (owner: string, repo: string, ref: string) => void,
+): IddConfig | null {
+  if (process.env.GITHUB_ACTIONS === 'true') return null;
+  const global = loadUserGlobalPolicyDocument();
+  if (global.status !== 'present' || !isPlainObject(global.config)) return null;
+  try {
+    probeLegacyPolicy(owner, repo, ref);
+    return null;
+  } catch (error) {
+    if (deriveGhHttpStatus(error) !== 404) {
+      throw new Error(
+        `cannot confirm idd-policy.json for ${owner}/${repo}@${ref}: this trusted-ref read requires the legacy file to be readable or genuinely absent (404) at this ref -- ${errorText(error)}`,
+      );
+    }
+  }
+  const resolution = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    userGlobalConfig: global.config,
+    identity: {
+      githubSlug: `${owner}/${repo}`,
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '',
+    },
+  });
+  return resolution.config as IddConfig;
 }
 
 /**
