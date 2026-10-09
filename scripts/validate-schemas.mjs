@@ -11,7 +11,7 @@
  *
  * Supported enforcement keywords:
  *   type, required, properties, patternProperties, additionalProperties,
- *   minLength, minimum, exclusiveMinimum, pattern, format (date-time only),
+ *   minLength, minimum, exclusiveMinimum, pattern, format (date-time, RFC 3339),
  *   minItems, items, enum
  *
  * Any other keyword in a schema triggers an error, preventing false
@@ -59,12 +59,48 @@ const ALLOWED_KEYWORDS = new Set([
   ...ENFORCED_KEYWORDS,
 ]);
 /**
- * Format values this validator recognizes. `date-time` is actively enforced
+ * Format values this validator recognizes. `date-time` is enforced as an RFC 3339 timestamp
  * (see `validate`); `uri` is accepted as a documentation-only annotation that a
  * full JSON Schema validator enforces but this lightweight one does not, so a
  * schema may declare it without tripping the unsupported-format guard.
  */
 const SUPPORTED_FORMATS = new Set(['date-time', 'uri']);
+/** RFC 3339 `date-time` (section 5.6) with the components captured. */
+const RFC3339_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/;
+/** Gregorian month length, with the leap-year rule for February. */
+function daysInMonth(year, month) {
+  if (month === 2) {
+    return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+/**
+ * True when `value` is an RFC 3339 date-time that names a real instant (#3889).
+ * The grammar needs `YYYY-MM-DD`, a `T` or `t`, `hh:mm:ss`, an optional fraction,
+ * then `Z`/`z` or a `+hh:mm`/`-hh:mm` offset. The calendar must exist (leap years
+ * included), hours must be 0-23, minutes and seconds 0-59, and the offset within
+ * 23:59. A leap second (`:60`) is excluded on purpose: the grammar allows one, but
+ * `Date.parse` already rejects it and `Date#toISOString`, which every producer here
+ * uses, never emits one.
+ */
+export function isRfc3339DateTime(value) {
+  const match = RFC3339_DATE_TIME.exec(value);
+  if (!match) return false;
+  const [year, month, day, hour, minute, second] = match
+    .slice(1, 7)
+    .map(Number);
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (
+    match[7] !== undefined &&
+    (Number(match[7]) > 23 || Number(match[8]) > 59)
+  ) {
+    return false;
+  }
+  return true;
+}
 /**
  * Check that a schema object only uses allowed keywords, recursively.
  */
@@ -163,7 +199,7 @@ export function validate(data, schema, path = '$') {
     if (s.pattern !== undefined && !new RegExp(s.pattern).test(str)) {
       errors.push(`${path}: does not match pattern /${s.pattern}/`);
     }
-    if (s.format === 'date-time' && Number.isNaN(Date.parse(str))) {
+    if (s.format === 'date-time' && !isRfc3339DateTime(str)) {
       errors.push(`${path}: invalid date-time value "${str}"`);
     }
   }
