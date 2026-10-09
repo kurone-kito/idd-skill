@@ -3874,6 +3874,32 @@ test('#3890: known limit, an article-led external phrase after a bare key verb p
   }
 });
 
+// #3890: the window edge. A shape at index 0 of a window is refused, because
+// that window may begin inside a longer word; after a space the same shape is
+// taken out. These checks pin both sides on the rule itself, rather than through
+// the 80-character alignment that the `passkey` row depends on.
+test('#3890: the need and require entries refuse the shape at the window edge only', () => {
+  const needRule = BARE_NOUN_DEPENDENCY_RULES.find(
+    (rule) => rule.id === 'need',
+  );
+  const requireRule = BARE_NOUN_DEPENDENCY_RULES.find(
+    (rule) => rule.id === 'require',
+  );
+  assert.ok(needRule);
+  assert.ok(requireRule);
+  assert.equal(needRule.matches(' key needs a default value.', '', 0), false);
+  assert.equal(needRule.matches('key needs a default value.', '', 0), true);
+  assert.equal(needRule.matches('passkey needs a default value.', '', 0), true);
+  assert.equal(
+    requireRule.matches(' key requires a string value.', '', 0),
+    false,
+  );
+  assert.equal(
+    requireRule.matches('key requires a string value.', '', 0),
+    true,
+  );
+});
+
 test('#3721: the rule table names every cue the issue lists, once each', () => {
   const ids = BARE_NOUN_DEPENDENCY_RULES.map((rule) => rule.id);
   assert.equal(new Set(ids).size, ids.length, 'rule ids are unique');
