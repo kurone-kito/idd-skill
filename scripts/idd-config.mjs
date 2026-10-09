@@ -305,6 +305,7 @@ export function loadTrustedIddConfig(
       GH_TEXT_LOOP_TIMEOUT_OPTIONS,
     ),
   probeLegacyPolicy = probeLegacyPolicyAtRef,
+  options = {},
 ) {
   try {
     const encoded = fetchEncodedConfig(owner, repo, ref);
@@ -324,7 +325,12 @@ export function loadTrustedIddConfig(
     return parsed;
   } catch (error) {
     if (deriveGhHttpStatus(error) === 404) {
-      return trustedUserGlobalFallback(owner, repo, ref, probeLegacyPolicy);
+      // A confirmed-absent file falls back to the user-global layers, except
+      // where the caller opts out. The forced-handoff preflight opts out: a
+      // human-gated handoff authority must come from the repository alone.
+      return options.userGlobalFallback === false
+        ? null
+        : trustedUserGlobalFallback(owner, repo, ref, probeLegacyPolicy);
     }
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -437,7 +443,14 @@ export function readTrustedForcedHandoffMode(
   fetchEncodedConfig,
 ) {
   try {
-    const config = loadTrustedIddConfig(owner, repo, ref, fetchEncodedConfig);
+    const config = loadTrustedIddConfig(
+      owner,
+      repo,
+      ref,
+      fetchEncodedConfig,
+      undefined,
+      { userGlobalFallback: false },
+    );
     if (config === null) {
       return { status: 'other', ref, mode: null };
     }

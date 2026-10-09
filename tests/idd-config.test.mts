@@ -1036,6 +1036,31 @@ const httpServerError = (): never => {
 };
 const legacyPresent = (): void => undefined;
 
+// #3820: the forced-handoff authority is repository-only. A user-global
+// human-gated mode must not authorize a handoff when the repository has no file.
+test('the forced-handoff reader ignores a user-global mode when the repository file is absent (#3820)', () => {
+  withUserGlobal('{"forcedHandoff":{"mode":"human-gated"}}', undefined, () => {
+    assert.equal(
+      readTrustedForcedHandoffMode('o', 'r', 'main', httpNotFound).status,
+      'other',
+    );
+  });
+});
+
+// #3820: the CI exclusion holds for the single-file loader too, not only for
+// loadIddConfig.
+test('loadPolicyConfig default path never reads user-global layers under GITHUB_ACTIONS=true (#3820)', () => {
+  withSandboxCwd(() => {
+    withUserGlobal(
+      '{"threadResolutionPolicy":"fast-agent-resolve"}',
+      'true',
+      () => {
+        assert.equal(loadPolicyConfig().config, null);
+      },
+    );
+  });
+});
+
 test('a trusted read with the base and legacy files absent uses the user-global layers (#3820)', () => {
   withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
     assert.deepEqual(

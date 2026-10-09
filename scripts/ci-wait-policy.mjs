@@ -130,7 +130,10 @@ function readLayeredCiWaitPolicy() {
   }
 }
 export function readCiWaitPolicy(policyPath) {
-  if (!policyPath) {
+  // Only an omitted path reads the layered policy. An explicit empty path is
+  // not a request for the user-global layers: it reads that path, which is
+  // not a file, so it falls back to the defaults.
+  if (policyPath === undefined) {
     return readLayeredCiWaitPolicy();
   }
   const source = resolve(process.cwd(), policyPath);

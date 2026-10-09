@@ -310,6 +310,8 @@ test('readCiWaitPolicy with an explicit default-string path ignores the user-glo
     readCiWaitPolicy('.github/idd/config.json').runningTimeout,
     'PT45M',
   );
+  // An explicit empty path is not a request for the layered policy either.
+  assert.notEqual(readCiWaitPolicy('').runningTimeout, 'PT45M');
   assert.equal(readCiWaitPolicy().runningTimeout, 'PT45M');
 });
 
