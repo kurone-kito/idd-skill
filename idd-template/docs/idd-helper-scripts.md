@@ -5593,9 +5593,10 @@ reflexively as any other CLI option.
 - Primary bot review ack state (kurone-kito/idd-skill#3907): the snapshot
   also emits `latestPrimaryBotReview` when the CLI runs at E1. It is
   `null` when the review method is missing, the fetch fails, the HEAD is
-  not 40 lowercase hex characters, or no counted review exists. Otherwise
-  it names the review the merge gate's Clause 1 selects (the same
-  selector, `resolveLatestCopilotReviewClause`) and reports `reviewId`,
+  not 40 hexadecimal characters after lowercasing, or no counted review
+  exists. Otherwise it names the review the merge gate's Clause 1
+  selects (the same selector, `resolveLatestCopilotReviewClause`) and reports
+  `reviewId`,
   `commitId`, `matchesHead`, `bodyShape`, `suppressedCount`,
   `primaryBotLogin`, `reviewAckNeeded`, and `reviewAckCovers`. Off-HEAD,
   `reviewId` is empty, `bodyShape` is `null`, `suppressedCount` is `0`,
