@@ -141,8 +141,14 @@ runtime-file lists in item 4, which were checked against the source.
 2. Declare the flags in a `<NAME>_FLAG_SPEC = { ... } as const;` object. Without
    `as const` the build fails on the flag `type` values. Declare `--help`
    (`'--help': { type: 'boolean', short: 'h' }`) and make the `--help` output
-   document every other declared flag. Check those with
-   `node --test tests/help-text-flags.test.mts`. The test exempts `--help`
+   document every other declared flag. Check those with the command below,
+   which keeps the test on its own state root:
+
+   ```sh
+   node --test --import ./tests/isolate-state.mts tests/help-text-flags.test.mts
+   ```
+
+   The test exempts `--help`
    itself, so write its own usage line by hand. Add `<stem>` to
    `COVERED_HELPERS` in `src/scripts/repository-inventory-audit.mts`, and commit
    the regenerated `scripts/repository-inventory-audit.mjs` with it.
@@ -174,8 +180,9 @@ runtime-file lists in item 4, which were checked against the source.
      (`scripts/<stem>.mjs`), `vendoredCommand` (`node scripts/<stem>.mjs`) and
      `description`. Keep the `id` values in ascending order
      (`helper-command-order`).
-   - Put a schema that defines this command's contract in `contractPaths` on
-     this entry. Put any other file that the helper reads at runtime, and that
+   - If the command has a contract schema, put it in `contractPaths` on this
+     entry. A command without one needs no `contractPaths`. Put any other file
+     that the helper reads at runtime, and that
      its imports do not reach, in `EXTRA_RUNTIME_FILES` in the same file. Key it
      by the emitted path of the module that does the read. That is
      `scripts/<stem>.mjs` only when the entry module itself reads the file, and
@@ -197,8 +204,11 @@ runtime-file lists in item 4, which were checked against the source.
      `runHelper('../scripts/<stem>.mjs');`. The helper must call `runHelperCli(`
      or `applyHelperCliOutcomeWhenDisabled(` from
      `src/scripts/helper-cli-runner.mts`, as
-     `src/scripts/select-desynced-index.mts` does. Otherwise the audit fails
-     with `helper-cli-migration`.
+     `src/scripts/select-desynced-index.mts` does. A template mirror that must
+     stay self-contained may define a local runner with the same name instead,
+     as `src/scripts/minimize-superseded-markers.mts` does, because the audit
+     checks the call, not the import. Otherwise the audit fails with
+     `helper-cli-migration`.
    - Add `"<binName>": "./bin/<binName>.mjs"` to the `bin` object in
      `package.json`. Keep its keys in ascending order (`helper-bin-order`).
      `runtime-bin-forward` requires this exact path.
@@ -209,8 +219,7 @@ runtime-file lists in item 4, which were checked against the source.
    - Add a `"<binName>.mjs"` key to `bins` in
      `tests/fixtures/helper-cli-contract.json`, with `runs.unknownFlag` and
      `runs.noArgs`, each an object of `exitCode` and `kind`. Use the values the
-     helper actually returns. Check them with
-     `node --test tests/helper-cli-contract.test.mts`. Neither
+     helper actually returns. Check them with the command in item 6. Neither
      `audit-docs --check` nor `build:check` reads this fixture.
    - Do not hand-edit a generated `.mjs`.
 5. If the helper joins `pre-push-validate` or another command-table row, edit
@@ -242,12 +251,19 @@ runtime-file lists in item 4, which were checked against the source.
      subject to the near-ceiling ratchet. An exemption covers only a
      context-ceiling violation, so it is not an option here. Do not trim
      instruction text in this change to make room.
-6. Run `node scripts/audit-docs.mjs --check`, then
-   `node --test tests/help-text-flags.test.mts` (any helper with a flag spec)
-   and `node --test tests/helper-cli-contract.test.mts` (an adopter-shipped
-   helper). Run `pnpm run build:check` after the commit, because it compares
-   the committed tree with the generated files. `pnpm run test:scripts` runs
-   both test files as well.
+6. Run `node scripts/audit-docs.mjs --check`, then the two test files below.
+   Use the isolate-state preload on each, as `pnpm run test:scripts` does, so
+   the tests keep to their own state root and cannot launch a real `gh`. Run
+   the first for any helper with a flag spec, and the second for an
+   adopter-shipped helper:
+
+   ```sh
+   node --test --import ./tests/isolate-state.mts tests/help-text-flags.test.mts
+   node --test --import ./tests/isolate-state.mts tests/helper-cli-contract.test.mts
+   ```
+
+   Run `pnpm run build:check` after the commit, because it compares the
+   committed tree with the generated files.
 
 ## Build and verification
 
