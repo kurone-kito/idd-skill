@@ -1492,7 +1492,12 @@ export function validateAuthoringOwnerPostIdentity(
   } | null = null;
   for (const opener of openers) {
     const differences = authoringOwnerIdentityDifferences(post, opener.parsed);
-    if (closest === null || differences.length < closest.differences.length) {
+    if (
+      closest === null ||
+      differences.length < closest.differences.length ||
+      (differences.length === closest.differences.length &&
+        opener.id < closest.opener.id)
+    ) {
       closest = { opener, differences };
     }
   }

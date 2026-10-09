@@ -7400,6 +7400,33 @@ test('validateAuthoringOwnerPostIdentity names the earliest opening marker when 
   assert.doesNotMatch(refusal ?? '', /#202/);
 });
 
+test('validateAuthoringOwnerPostIdentity breaks an equal-distance tie by comment id, not array order (#3910)', () => {
+  const comments = [201, 202].map((id) => ({
+    id,
+    authorLogin: 'kurone-kito',
+    body: ownerIdBody(ownerIdFlags('acquire', { set: `set-${id}` })),
+    createdAt: TS,
+    updatedAt: TS,
+    lastEditedAt: null,
+  }));
+  const post = parseAuthoringOwnerComment(
+    ownerIdBody(ownerIdFlags('heartbeat')),
+    'idd-skill',
+  );
+  assert.ok(post);
+  const refusal = validateAuthoringOwnerPostIdentity(
+    post,
+    selectAuthoringOwnerOpeningMarkers([...comments].reverse(), {
+      target: OWNER_ID_TARGET,
+      markerPrefix: 'idd-skill',
+      trustedLogins: new Set(),
+      requireUnedited: true,
+    }),
+  );
+  assert.match(refusal ?? '', /comment #201 \(mode=acquire\)/);
+  assert.doesNotMatch(refusal ?? '', /#202/);
+});
+
 test('post-idd-marker --help describes the authoring-owner identity check (#3910)', () => {
   const help = execFileSync(
     process.execPath,
