@@ -308,7 +308,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      "<authoring label>"`, with `--repo <owner>/<repo>` outside the repository.
      The IDD template's opt-in Claude Code baseline denies the `gh api -X
      DELETE` spelling and does not allowlist `gh api`, so that spelling is not
-     used. After the final anchor label removal is verified,
+     used (observed on issue #3841, 2026-10-08; see issue #3898). After the
+     final anchor label removal is verified,
      reuse or append the anchor-only `mode=release-complete` marker and record
      its comment ID. Reconcile that ID and the paginated anchor log with
      bounded retries; a successful POST or verification timeout is

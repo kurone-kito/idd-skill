@@ -1567,8 +1567,8 @@ follows uses `gh issue edit <number> --remove-label "<authoring label>"` or `gh
 issue edit <number> --add-label "<authoring label>"`, with `--repo
 <owner>/<repo>` outside the repository. The IDD template's opt-in Claude Code
 baseline denies the `gh api -X DELETE` spelling and does not allowlist `gh api`,
-so that spelling is not used. First
-re-fetch owner comments during release-marker preflight.
+so that spelling is not used (observed on issue #3841, 2026-10-08; see
+issue #3898). First re-fetch owner comments during release-marker preflight.
 
 **Mandatory release-time hide-on-supersede sweep (#2896, #2935).** At
 this same point -- before the reuse-or-append decision below, so a

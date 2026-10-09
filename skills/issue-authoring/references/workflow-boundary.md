@@ -389,7 +389,8 @@ approval boundary that hands off to IDD execution.
   <number> --add-label "<authoring label>"`, with `--repo <owner>/<repo>`
   outside the repository. The IDD template's opt-in Claude Code baseline denies
   the `gh api -X DELETE` spelling and does not allowlist `gh api`, so that
-  spelling is not used. For every target, first
+  spelling is not used (observed on issue #3841, 2026-10-08; see issue #3898).
+  For every target, first
   re-fetch owner comments during release-marker preflight. If a valid
   current-owner/set `mode=release` marker already exists, reuse the earliest
   matching GitHub comment ID; otherwise append one with `supersedes` equal to
@@ -455,7 +456,8 @@ approval boundary that hands off to IDD execution.
   <number> --add-label "<authoring label>"`, with `--repo <owner>/<repo>`
   outside the repository. The IDD template's opt-in Claude Code baseline denies
   the `gh api -X DELETE` spelling and does not allowlist `gh api`, so that
-  spelling is not used. After the final anchor label
+  spelling is not used (observed on issue #3841, 2026-10-08; see issue #3898).
+  After the final anchor label
   removal is verified, re-fetch every target and verify its current release
   marker, absent label, and expected body snapshot; any drift leaves the set
   open and prevents completion. Then reuse the earliest
