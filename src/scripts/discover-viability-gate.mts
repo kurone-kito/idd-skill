@@ -493,8 +493,28 @@ export interface BareNounDependencyRule {
   matches(windowText: string, corpus: string, matchEnd: number): boolean;
 }
 
-function cueRule(id: string, pattern: RegExp): BareNounDependencyRule {
-  return { id, matches: (windowText) => pattern.test(windowText) };
+// #3890: a bare `key` or `token` directly followed by a present-tense `need`
+// or `require` verb and then an article is configuration prose ("The new key
+// needs a default value."). The entry for that verb takes the verb out of the
+// window before its own cue is read, and only that verb: the noun and the
+// article stay, and any other occurrence of the cue in the window still counts.
+// `replace` resets a global pattern's `lastIndex` itself, so these may carry
+// the `g` flag.
+const BARE_NOUN_NEED_SHAPE_PATTERN =
+  /\b((?:keys?|tokens?)\s+)needs?\s+(?=(?:a|an|the)\b)/gi;
+const BARE_NOUN_REQUIRE_SHAPE_PATTERN =
+  /\b((?:keys?|tokens?)\s+)requires?\s+(?=(?:a|an|the)\b)/gi;
+
+function cueRule(
+  id: string,
+  pattern: RegExp,
+  shape?: RegExp,
+): BareNounDependencyRule {
+  return {
+    id,
+    matches: (windowText) =>
+      pattern.test(shape ? windowText.replace(shape, '$1') : windowText),
+  };
 }
 
 /**
@@ -507,8 +527,12 @@ function cueRule(id: string, pattern: RegExp): BareNounDependencyRule {
  * is then stateful.
  */
 export const BARE_NOUN_DEPENDENCY_RULES: BareNounDependencyRule[] = [
-  cueRule('need', /\bneed(?:s|ed|ing)?\b/i),
-  cueRule('require', /\brequir(?:e|es|ed|ing)\b/i),
+  cueRule('need', /\bneed(?:s|ed|ing)?\b/i, BARE_NOUN_NEED_SHAPE_PATTERN),
+  cueRule(
+    'require',
+    /\brequir(?:e|es|ed|ing)\b/i,
+    BARE_NOUN_REQUIRE_SHAPE_PATTERN,
+  ),
   cueRule('wait', /\bwait(?:s|ed|ing)?\b/i),
   cueRule('await', /\bawait(?:s|ed|ing)?\b/i),
   cueRule('blocked', /\bblock(?:ed|ing)\b/i),

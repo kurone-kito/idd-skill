@@ -3634,8 +3634,9 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
   { list: 'B', body: 'Every key in config.yaml must be documented.' },
   { list: 'B', body: 'Duplicate keys are rejected by the parser.' },
   // List C: a value that someone outside the change must supply. The first
-  // five rows carry cues; the last three carry none and are denied by an
-  // early-return route, so they pin where the new route is consulted.
+  // five rows carry cues, and so do the six "added" rows after them; the last
+  // three carry none and are denied by an early-return route, so they pin
+  // where the new route is consulted.
   {
     list: 'C',
     body: 'The API key must be provided before the script runs.',
@@ -3656,6 +3657,15 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
     list: 'C',
     body: 'Obtain the API key from the vendor, then run the script.',
   },
+  // List C, added: the keep-failing lines of the replay block. Each keeps a
+  // cue the new shape does not exempt, because `to`, a gerund, `approval` or
+  // `is` follows the verb, or because the verb is not after a bare noun.
+  { list: 'C', body: 'The key needs to come from ops.' },
+  { list: 'C', body: 'The key needs creating first.' },
+  { list: 'C', body: 'The key needs approval.' },
+  { list: 'C', body: 'The deploy key needs to be obtained from ops.' },
+  { list: 'C', body: 'The key needs to come from the vendor.' },
+  { list: 'C', body: 'A key is needed from ops.' },
   { list: 'C', body: 'We cannot ship without a token.' },
   { list: 'C', body: 'Fetch the token from infra.' },
   { list: 'C', body: 'Retrieve the key from ops.' },
@@ -3746,6 +3756,13 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
   },
   { list: 'D', body: 'A deploy key is mandatory.', pins: 'mandatory' },
   { list: 'D', body: 'The staging key is essential.', pins: 'essential' },
+  // List D, added (#3890): the first sentence is exempt, so only the second
+  // sentence's `need` cue fails the line.
+  {
+    list: 'D',
+    body: 'The key needs a default. We need the deploy key from ops.',
+    pins: 'need',
+  },
   // List E, added: the route never sees these. `credential` is not a bare
   // `key` or `token`, and a security-status word in the window denies.
   { list: 'E', body: 'Leave every other credential alone.' },
@@ -3762,6 +3779,20 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
       'Leave every other key alone.\n\n---\n\n_Autopilot suitability: 4 / 5 ' +
       '-- higher is more autopilot-suitable; below the configured floor is ' +
       'human-oriented._',
+  },
+  // List F, added (#3890): a bare `key` or `token`, then `need` or `require`
+  // and an article, is configuration prose. So is the sentence quoted from the
+  // #3830 draft, and the requirement line the #3721 replay left failing.
+  { list: 'F', body: 'The new key needs a default value.' },
+  { list: 'F', body: 'Each key needs a matching entry in the schema.' },
+  { list: 'F', body: 'The config key needs a matching clause.' },
+  { list: 'F', body: 'Every key requires a default value.' },
+  { list: 'F', body: 'Each token needs a description.' },
+  { list: 'F', body: 'Every token requires a unit test.' },
+  { list: 'F', body: 'The key requires a string value.' },
+  {
+    list: 'F',
+    body: '...so the new key needs the matching enum clause there as well, not only a place in the key list.',
   },
 ];
 
@@ -3798,6 +3829,23 @@ for (const list of ['A', 'B', 'C', 'D', 'E', 'F'] as const) {
     assert.deepEqual(mismatches, []);
   });
 }
+
+// #3890 known limit: an article-led phrase after a bare `key` or `token` verb
+// now passes, because the verb is exempt. These lines name a value from outside
+// the change, and no cue or actor in the table sees them. They are recorded
+// here as a decision: a later change that catches them updates this test.
+test('#3890: known limit, an article-led external phrase after a bare key verb passes', () => {
+  const residual = [
+    'The key needs a value from Alice.',
+    'The key requires a sign-off from legal.',
+    'The new key requires an approval from legal.',
+    'The key requires an admin.',
+    'The keys need a new value from ops.',
+  ];
+  for (const body of residual) {
+    assert.equal(evaluateBareNounBody(body).pass, true, JSON.stringify(body));
+  }
+});
 
 test('#3721: the rule table names every cue the issue lists, once each', () => {
   const ids = BARE_NOUN_DEPENDENCY_RULES.map((rule) => rule.id);
