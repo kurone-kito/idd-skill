@@ -1006,12 +1006,35 @@ test('buildPreMergeReadinessSummary: missing-watermark review-currency blocker c
   ]) {
     assert.ok(hint.includes(token), `hint should name ${token}`);
   }
-  // Validate only the blocker item: this minimal fixture does not satisfy
-  // every unrelated summary field, but the item schema must accept `hint`.
+  // The blocker item must accept `hint` on its own, too.
   const blockerItemSchema = (
     readinessSchema as { properties: { blockers: { items: unknown } } }
   ).properties.blockers.items;
   assert.deepEqual(validate(blocker, blockerItemSchema), []);
+});
+
+// #3950: the full summary, not just the blocker item, must validate when the
+// watermark is missing. The clean fixture is schema-valid and carries one
+// watermark; dropping that comment leaves a missing-watermark summary built
+// from the same valid input.
+test('buildPreMergeReadinessSummary: a missing-watermark summary built from the clean fixture validates against the full schema', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonReason, 'missing-watermark');
+  const blockers = summary.blockers as Array<Record<string, unknown>>;
+  const blocker = blockers.find((b) => b.gate === 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(typeof blocker.hint, 'string');
+  assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
 // #3950 regression guard: a malformed watermark keeps its own reason and
