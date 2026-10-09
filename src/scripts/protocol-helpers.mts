@@ -13908,6 +13908,23 @@ export function applyClaimEvent(
     typeof callerOptions.explainForcedHandoffRefusal === 'function';
   const authorizationEnabled =
     typeof callerOptions.isAuthorizedForcedHandoff === 'function';
+  // The authorization lookup runs here only to report a refusal. A lookup that
+  // throws must not turn a refusal into an exception, so the gate's cause is
+  // reported instead; the marker is refused either way.
+  const isAuthorizedForReporting = (
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentLike,
+  ): boolean => {
+    try {
+      return normalizedOptions.isAuthorizedForcedHandoff(
+        forcedHandoff.forcedBy,
+        forcedHandoff,
+        event,
+      );
+    } catch {
+      return true;
+    }
+  };
   // kurone-kito/idd-skill#3248: defense in depth for a direct caller that
   // bypasses `resolveActiveClaimWithForcedHandoffTrace`'s own pre-filter --
   // every event reaching this point from that trace has already passed the
@@ -13999,11 +14016,7 @@ export function applyClaimEvent(
           refusalReason = 'author-forced-by-mismatch';
         } else if (
           authorizationEnabled &&
-          !normalizedOptions.isAuthorizedForcedHandoff(
-            forcedHandoff.forcedBy,
-            forcedHandoff,
-            event,
-          )
+          !isAuthorizedForReporting(forcedHandoff, event)
         ) {
           refusalReason = 'forced-by-unauthorized';
         } else {

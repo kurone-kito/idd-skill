@@ -29,6 +29,7 @@ import {
   inspectLocalWorktreeBranch,
   type LocalWorktreeInspection,
 } from '../src/scripts/local-worktree-occupancy.mts';
+import { parseForcedHandoffComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildForcedHandoffRefusalExplainer,
   DEFAULT_STALE_AGE_MS,
@@ -5852,5 +5853,46 @@ test('with the explainer, a lookup failure routes the same as the legacy path', 
       message.includes('linked-PR lookup failed'),
     ),
     'expected the lookup-failure warning from the explained cause',
+  );
+});
+
+// #3873: resolveResumeLinkedPrState builds the gate and the refusal cause from
+// one record, so the cause a reader reports matches the decision it made.
+test('resolveResumeLinkedPrState names the refusal cause that matches its gate', () => {
+  const marker = parseForcedHandoffComment(
+    forcedHandoffEvents({ contextScope: 'issue-only' })[1].body,
+    '2026-05-12T10:01:00Z',
+  );
+  assert.ok(marker, 'the issue-only marker must parse');
+
+  const lookupFailed = resolveResumeLinkedPrState(
+    createFakeProviderAdapter({
+      closingPullRequestPageErrors: { 11: 'closing page unavailable' },
+    }),
+    11,
+    REPO,
+    { forcedHandoffEnabled: true, hasIssueOnlyHandoff: true },
+  );
+  assert.equal(lookupFailed.lookupFailed, true);
+  assert.equal(lookupFailed.isForcedHandoffEnabled(marker), false);
+  assert.equal(
+    lookupFailed.forcedHandoffRefusalExplainer(marker),
+    'linked-pr-lookup-failed',
+  );
+
+  const unknownTime = resolveResumeLinkedPrState(
+    createFakeProviderAdapter({
+      closingPullRequestPages: { 11: [openClosingPr(77)] },
+      changeRequestCommits: { 77: [] },
+    }),
+    11,
+    REPO,
+    { forcedHandoffEnabled: true, hasIssueOnlyHandoff: true },
+  );
+  assert.equal(unknownTime.lookupFailed, false);
+  assert.equal(unknownTime.isForcedHandoffEnabled(marker), false);
+  assert.equal(
+    unknownTime.forcedHandoffRefusalExplainer(marker),
+    'first-commit-time-unknown',
   );
 });

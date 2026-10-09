@@ -5669,3 +5669,22 @@ test('applyClaimEvent reports a failed check the caller enabled, not the gate ca
     'forced-by-unauthorized',
   ]);
 });
+
+test('applyClaimEvent reports the gate cause when the authorization lookup throws for a refused marker', () => {
+  const body = refusalEventBody('issue-plus-pr', '341');
+  const reasons: string[] = [];
+  assert.doesNotThrow(() => {
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+      isTrustedAuthor: () => true,
+      isForcedHandoffEnabled: () => false,
+      isAuthorizedForcedHandoff: () => {
+        throw new Error('permission API unavailable');
+      },
+      explainForcedHandoffRefusal: () => 'pr-scope-mismatch',
+      onIgnoredForcedHandoff: ({ reason }) => {
+        reasons.push(reason);
+      },
+    });
+  });
+  assert.deepEqual(reasons, ['pr-scope-mismatch']);
+});
