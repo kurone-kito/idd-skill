@@ -172,7 +172,10 @@ item 4, which were checked against the source.
    - If the helper reads files that its imports do not reach, list them. A
      schema goes into `contractPaths` on this entry. Any other file goes into
      `EXTRA_RUNTIME_FILES` in the same file, keyed by `scripts/<stem>.mjs`. The
-     drift guard in `tests/helper-runtime-manifest.test.mts` checks this list.
+     drift guard in `tests/helper-runtime-manifest.test.mts` compares the
+     manifest with these lists, and it checks the files that `validate-schemas`
+     reads. It does not find a missing data file for another helper, so check
+     that helper's runtime files against a vendored install.
    - Write the wrapper as `src/bin/<binName>.mts`. Its first line is the shebang
      `#!/usr/bin/env node`, and its banner follows. Without the shebang,
      `bin-executable-mode` skips the file, and the installed command can fail
@@ -205,8 +208,11 @@ item 4, which were checked against the source.
    `noticeUtilizationPct` in `contextCeiling` (`audit/sync-manifest.json`), and
    fails above `maxUtilizationPct`. `bundle-work-phase` is exempt from that
    error only: it still gets the notice, and its byte total is still checked
-   against its own `limitBytes`. Read each bundle's current figure in the audit
-   output before you edit.
+   against its own `limitBytes`. Measure each bundle the change touches before
+   you edit. A successful audit prints a figure only at or above
+   `noticeUtilizationPct`. Below that, sum the byte length of each file in the
+   bundle's `bundleBudgets` entry in `audit/sync-manifest.json`, with the
+   `idd-generated-from` banner removed, and compare the total with `limitBytes`.
    - From the notice level up to the limit, follow the near-ceiling exception in
      `docs/policy-constants.md`: prefer trimming or splitting the net addition
      over a ratchet bump.
