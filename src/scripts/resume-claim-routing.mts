@@ -216,6 +216,9 @@ interface ResumeClaimRoutingArgs {
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
 // trigger fires.
+/** GraphQL PullRequestState: the only states a closing reference can carry (#3871). */
+const PULL_REQUEST_STATES: readonly string[] = ['OPEN', 'CLOSED', 'MERGED'];
+
 const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--issue': { type: 'string' },
   '--owner': { type: 'string' },
@@ -1722,8 +1725,11 @@ export function fetchOpenLinkedPrReferences(
         for (const node of page.nodes) {
           // An unknown state could be an open PR this lookup would miss, so
           // it fails the lookup instead of being skipped.
-          if (node.state === undefined) {
-            throw new Error('closing-reference node without a state');
+          if (
+            node.state === undefined ||
+            !PULL_REQUEST_STATES.includes(node.state)
+          ) {
+            throw new Error('closing-reference node without a known state');
           }
           if (node.state !== 'OPEN') {
             continue;

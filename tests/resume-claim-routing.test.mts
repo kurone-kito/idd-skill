@@ -5702,3 +5702,18 @@ test('#3871: an open closing-reference node with a blank repository fails the lo
   });
   assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
 });
+
+test('#3871: a closing-reference node with an unknown state fails the lookup instead of being skipped', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'UNKNOWN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
+});
