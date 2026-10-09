@@ -5596,8 +5596,7 @@ reflexively as any other CLI option.
   not 40 hexadecimal characters after lowercasing, or no counted review
   exists. Otherwise it names the review the merge gate's Clause 1
   selects (the same selector, `resolveLatestCopilotReviewClause`) and reports
-  `reviewId`,
-  `commitId`, `matchesHead`, `bodyShape`, `suppressedCount`,
+  `reviewId`, `commitId`, `matchesHead`, `bodyShape`, `suppressedCount`,
   `primaryBotLogin`, `reviewAckNeeded`, and `reviewAckCovers`. Off-HEAD,
   `reviewId` is empty, `bodyShape` is `null`, `suppressedCount` is `0`,
   `reviewAckNeeded` is `false`, and `reviewAckCovers` is `null`. On-HEAD,

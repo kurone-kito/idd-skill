@@ -387,8 +387,8 @@ export interface LatestPrimaryBotReviewEvidence {
  * Select the primary bot's review with the gate's own selector
  * ({@link resolveLatestCopilotReviewClause}) and report its ack state
  * (kurone-kito/idd-skill#3907). Returns `null` when there is no counted review
- * or the HEAD is not 40 hexadecimal characters after lowercasing. `comments` must be
- * normalized (`author.login`, `lastEditedAt`), and `trustedMarkerLogins` the
+ * or the HEAD is not 40 hexadecimal characters after lowercasing.
+ * `comments` must be normalized (`author.login`, `lastEditedAt`), and `trustedMarkerLogins` the
  * resolved set, not a viewer-augmented one.
  */
 export function resolveLatestPrimaryBotReviewEvidence(input: {
