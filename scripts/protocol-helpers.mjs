@@ -8822,8 +8822,12 @@ export function summarizeClaimValidation(
             cause,
           }))
       : [];
+    // Set or clear the field every time: a reused capture object must not keep
+    // the refusals of an earlier evaluation (#3873).
     if (ignoredForActive.length > 0) {
       captureTraceInto.ignoredForcedHandoffs = ignoredForActive;
+    } else {
+      delete captureTraceInto.ignoredForcedHandoffs;
     }
   }
   const expectedNonce = String(options.expectedNonce ?? '').trim();
@@ -9394,10 +9398,18 @@ export function computePreMergeReadinessBlockers(report) {
     // #3873: name the refusal cause of any forced-handoff marker that was
     // ignored for the active claim. The field is absent when there is none,
     // so the text is unchanged in that case.
+    // A malformed entry is skipped rather than read: the blocker must never
+    // throw while describing a claim that is already not owned.
     const ignoredCauses = Array.isArray(report.ignoredForcedHandoffs)
       ? [
           ...new Set(
-            report.ignoredForcedHandoffs.map((entry) => String(entry.cause)),
+            report.ignoredForcedHandoffs
+              .map((entry) =>
+                entry !== null && typeof entry === 'object'
+                  ? entry.cause
+                  : undefined,
+              )
+              .filter((cause) => typeof cause === 'string' && cause.length > 0),
           ),
         ]
       : [];

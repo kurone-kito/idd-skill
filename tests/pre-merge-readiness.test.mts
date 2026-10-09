@@ -17304,3 +17304,40 @@ test('merge-side summary does not report a refused handoff whose old agent diffe
   );
   assert.equal('ignoredForcedHandoffs' in capture, false);
 });
+
+test('claim-ownership blocker skips malformed ignored-handoff entries instead of throwing', () => {
+  const claim = { matchesExpectedClaim: false, reason: 'claim-id-mismatch' };
+  const detail = computePreMergeReadinessBlockers({
+    claim,
+    ignoredForcedHandoffs: [
+      null,
+      'not-an-entry',
+      { cause: '' },
+      { cause: 'pr-scope-mismatch' },
+    ],
+  }).find((blocker) => blocker.gate === 'claim-ownership')?.detail;
+  assert.equal(
+    detail,
+    'claim ownership does not match (reason="claim-id-mismatch"); ignored forced-handoff: pr-scope-mismatch',
+  );
+});
+
+test('a reused trace capture drops an ignored-handoff field from an earlier evaluation', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, authorizedForcedHandoffLogins: [] },
+    capture,
+  );
+  assert.ok(capture.ignoredForcedHandoffs);
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, forcedHandoffEnabled: false },
+    capture,
+  );
+  assert.equal('ignoredForcedHandoffs' in capture, false);
+});
