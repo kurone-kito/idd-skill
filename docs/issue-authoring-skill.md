@@ -2038,9 +2038,33 @@ the proposal's core nouns rather than its new framing, plus at least
 one alternative phrasing:
 
 ```sh
-gh issue list --repo <owner>/<repo> --state closed --limit 100 \
-  --search 'reason:"not planned" <core-nouns>'
+gh api -X GET search/issues --paginate \
+  -f q='repo:<owner>/<repo> is:issue is:closed reason:"not planned" <core-nouns>' \
+  -f per_page=100 \
+  --jq '(.items[] | "#\(.number) \(.title)"), "-- total=\(.total_count) incomplete=\(.incomplete_results) page=\(.items | length)"'
 ```
+
+A fixed `--limit` cannot prove that nothing was missed: it stops at the limit
+silently, and the search API caps every query at 1,000 results. The skill should
+read the output by these outcomes. Complete: every summary line says
+`incomplete=false`, the `page=` values add up to `total=`, and no `#number` line
+appears twice. GitHub does not promise a snapshot across pages, so this is a
+best-effort read: an item added and another removed during the traversal can
+keep the totals equal, and a repeated run that gives the same result confirms
+it. Search not finished: `incomplete=true` on any line, so retry once and then
+narrow the query. Over the 1,000-result ceiling: every `gh` call exited 0 with
+nothing on stderr, the `total=` values agree, and the `page=` values add up to
+fewer than `total=`. Only then split the query with a `closed:` date range (do
+not add nouns, which can hide the match). A short page sum without those guards
+is a pagination failure or a result set that moved, not the ceiling. Not a
+completed check: a non-zero exit, any stderr from `gh`, `total=` values that
+differ between lines, or a `#number` line that appears twice. An incomplete
+search is not a completed check, so the proposal is not published as `ready`
+until a narrower query completes or it is routed to `needs-decision` with the
+incompleteness recorded. Observed 2026-10-08: reproduced read-only on `cli/cli`
+with the noun `pr`, where `--limit 100` returned 100 of 288 matches with exit 0
+and empty stderr. That is a reproduction, not an incident recorded in this
+repository, so the failure mode is preventive for adopters.
 
 When the proposal changes an existing mechanism, the skill should
 identify the PR that introduced or last reshaped it (for example from
