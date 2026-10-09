@@ -25,7 +25,6 @@ import { loadJson, validateConfigSection } from './validate-schemas.mts';
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
 const DEFAULT_GENERATION_TIMEOUT = 'PT10M';
 const DEFAULT_RERUN_POLICY = 'rerun-once';
-const DEFAULT_POLICY_PATH = '.github/idd/config.json';
 const RERUN_POLICIES = new Set(['rerun-once', 'hold']);
 /** A conservative GitHub owner/repo identifier character class --
  * alphanumeric, hyphen, underscore, period. Mirrors
@@ -110,7 +109,10 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
 // trigger fires (see #1177's entry-order TDZ hardening for the same class
 // of bug in this file).
 const CI_WAIT_POLICY_FLAG_SPEC = {
-  '--policy': { type: 'string', default: DEFAULT_POLICY_PATH },
+  // No default: an omitted --policy must stay distinguishable from an explicit
+  // one. An omitted flag reads the layered policy (#3820); an explicit path,
+  // even the default string, reads only that file.
+  '--policy': { type: 'string' },
   '--rerun-count': { type: 'string' },
   '--run-id': { type: 'string' },
   '--owner': { type: 'string', default: '' },
@@ -190,10 +192,8 @@ function readLayeredCiWaitPolicy(): CiWaitPolicy {
   }
 }
 
-export function readCiWaitPolicy(
-  policyPath: string = DEFAULT_POLICY_PATH,
-): CiWaitPolicy {
-  if (!policyPath || policyPath === DEFAULT_POLICY_PATH) {
+export function readCiWaitPolicy(policyPath?: string): CiWaitPolicy {
+  if (!policyPath) {
     return readLayeredCiWaitPolicy();
   }
   const source = resolve(process.cwd(), policyPath);
@@ -605,7 +605,7 @@ function validateRunIdToken(token: string): string {
 }
 
 function parseArgs(argv: string[]): {
-  policy: string;
+  policy: string | undefined;
   rerunCount: number | null;
   runId: string | null;
   owner: string;
@@ -633,7 +633,7 @@ function parseArgs(argv: string[]): {
     );
   }
   return {
-    policy: values.policy as string,
+    policy: values.policy as string | undefined,
     // `min: 0`: --rerun-count is a non-negative counter (0 is a valid
     // "no reruns yet" value), unlike the positive-integer contracts
     // elsewhere in this file's siblings. Throws (rather than resolving to

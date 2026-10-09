@@ -173,14 +173,17 @@ function policyEntryPresent(path: string): boolean {
 
 /**
  * Repository identity for override matching. Git is consulted only when a
- * user-global file actually carries overrides; a non-git directory falls back
- * to a path-only identity, so no override matches by repository slug.
+ * user-global file actually carries overrides. An identity that cannot be read
+ * fails closed: it is reported as having a GitHub origin with no slug, so no
+ * repository override matches, and no path override matches either. A path
+ * override therefore applies only to a readable repository that has no GitHub
+ * origin, never to a checkout whose origin could not be determined.
  */
 function deriveIdentityOrFallback(cwd: string): RepositoryIdentity {
   try {
     return deriveRepositoryIdentity({ cwd });
   } catch {
-    return { githubSlug: null, hasGithubOrigin: false, mainWorktreeRoot: cwd };
+    return { githubSlug: null, hasGithubOrigin: true, mainWorktreeRoot: cwd };
   }
 }
 
