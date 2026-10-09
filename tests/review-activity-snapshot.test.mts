@@ -717,6 +717,7 @@ function latestSnapshot(
     include: boolean;
     trustedMarkerLoginsFlag?: string;
     headSha?: string;
+    config?: object;
   },
 ) {
   const port = latestPort(options) as Parameters<
@@ -737,7 +738,7 @@ function latestSnapshot(
     advisoryBotLoginsFlag: '',
     envTrustedMarkerActors: '',
     envAdvisoryBotLogins: '',
-    iddConfig: {} as never,
+    iddConfig: (options.config ?? {}) as never,
     includeLatestPrimaryBotReview: options.include,
     port,
   });
@@ -746,11 +747,15 @@ function latestSnapshot(
 function providerReviewNode(
   id: string,
   body: string,
-  overrides: { commitId?: string; replyOnly?: boolean } = {},
+  overrides: {
+    commitId?: string;
+    replyOnly?: boolean;
+    authorLogin?: string;
+  } = {},
 ) {
   return {
     id,
-    authorLogin: LATEST_COPILOT,
+    authorLogin: overrides.authorLogin ?? LATEST_COPILOT,
     authorTypename: 'Bot',
     submittedAt: '2026-10-09T01:00:00Z',
     commitId: overrides.commitId ?? LATEST_HEAD,
@@ -797,6 +802,41 @@ test('the opt-in reports the Previously-missed Copilot review with explicit valu
     bodyShape: 'overview-v2',
     suppressedCount: 1,
     reviewAckNeeded: true,
+    reviewAckCovers: false,
+  });
+});
+
+test('a configured non-default primary bot is followed, not Copilot (#3907)', () => {
+  const config = { advisoryWait: { primaryBotLogin: 'acme-review' } };
+  const snapshot = latestSnapshot({
+    include: true,
+    config,
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_acme',
+          'Something the classifier does not know.',
+          {
+            authorLogin: 'acme-review[bot]',
+          },
+        ),
+        providerReviewNode(
+          'PRR_copilot',
+          corpusEntryBody('copilot-v2-previously-missed-3196'),
+        ),
+      ],
+    }),
+  });
+  // The Copilot review is later in the list but is not this bot's review.
+  assert.deepEqual(snapshot.latestPrimaryBotReview, {
+    primaryBotLogin: 'acme-review',
+    reviewId: 'PRR_acme',
+    commitId: LATEST_HEAD,
+    matchesHead: true,
+    bodyShape: 'unrecognized',
+    suppressedCount: 0,
+    reviewAckNeeded: false,
     reviewAckCovers: false,
   });
 });
