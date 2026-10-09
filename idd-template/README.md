@@ -176,6 +176,7 @@ profiles/no-advisory/README.md
 profiles/README.md
 README.md
 scripts/minimize-superseded-markers.mjs
+user-global/entry.md
 ```
 
 <!-- /audit:generated -->
