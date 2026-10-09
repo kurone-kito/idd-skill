@@ -35,6 +35,7 @@ import {
   summarizeClaimValidation as summarizeClaimValidationImpl,
 } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
   buildForcedHandoffEnabledGate,
   evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
@@ -42,6 +43,7 @@ import {
   fetchOpenLinkedPrReferences,
   loadPolicy,
   resolveAssertOutcome,
+  resolveResumeLinkedPrState,
 } from '../src/scripts/resume-claim-routing.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -2028,7 +2030,7 @@ test('fetchOpenLinkedPrReferences walks every page and reconciles CONNECTED/DISC
       ],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, false);
   assert.deepEqual([...result.references], ['77']);
 });
@@ -2037,7 +2039,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true (not an empty succe
   const port = createFakeProviderAdapter({
     connectedPrEventPageErrors: { 11: 'simulated gh failure' },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -2048,7 +2050,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true on an incomplete pa
       11: [{ events: [], hasNextPage: true, endCursor: null }],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -2066,7 +2068,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true on an immediate rep
       ],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -2081,7 +2083,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true on a multi-cursor c
       ],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -5177,4 +5179,541 @@ process.exit(1);
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+// #3871: fetchOpenLinkedPrReferences also reads the closing references, so a
+// pull request whose body closes the issue (no ConnectedEvent) backs the claim.
+const REPO = 'kurone-kito/idd-skill';
+
+function closingNode(
+  number: number | undefined,
+  state: string | undefined,
+  repository: string | undefined,
+) {
+  return { state, number, repository };
+}
+
+test('#3871: an open closing reference of this repository backs the claim without a ConnectedEvent', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, false);
+  assert.deepEqual([...result.references], ['3875']);
+});
+
+test('#3871: a PR that is both a closing reference and a ConnectedEvent appears once', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        {
+          events: [
+            {
+              __typename: 'ConnectedEvent',
+              subject: {
+                __typename: 'PullRequest',
+                number: 3875,
+                state: 'OPEN',
+              },
+            },
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.deepEqual([...result.references], ['3875']);
+});
+
+test('#3871: a merged or closed closing reference and another repository are not expected references', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [
+            closingNode(3801, 'MERGED', REPO),
+            closingNode(3802, 'CLOSED', REPO),
+            closingNode(3803, 'OPEN', 'someone-else/other-repo'),
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, false);
+  assert.deepEqual([...result.references], []);
+});
+
+test('#3871: the repository comparison is case-insensitive', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', 'Kurone-Kito/IDD-Skill')],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.deepEqual(
+    [...fetchOpenLinkedPrReferences(port, 11, REPO).references],
+    ['3875'],
+  );
+});
+
+test('#3871: an open closing reference without a number or repository is a lookup failure', () => {
+  for (const node of [
+    closingNode(undefined, 'OPEN', REPO),
+    closingNode(3875, 'OPEN', undefined),
+  ]) {
+    const port = createFakeProviderAdapter({
+      closingPullRequestPages: {
+        11: [{ nodes: [node], hasNextPage: false, endCursor: null }],
+      },
+    });
+    const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+    assert.equal(result.lookupFailed, true);
+    assert.deepEqual([...result.references], []);
+  }
+});
+
+test('#3871: a failed closing-references read is a lookup failure, as is a closing page without a cursor or a repeated one', () => {
+  const thrown = createFakeProviderAdapter({
+    closingPullRequestPageErrors: { 11: 'closing page unavailable' },
+  });
+  assert.equal(
+    fetchOpenLinkedPrReferences(thrown, 11, REPO).lookupFailed,
+    true,
+  );
+
+  const noCursor = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [{ nodes: [], hasNextPage: true, endCursor: null }],
+    },
+  });
+  assert.equal(
+    fetchOpenLinkedPrReferences(noCursor, 11, REPO).lookupFailed,
+    true,
+  );
+
+  const repeated = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        { nodes: [], hasNextPage: true, endCursor: 'same' },
+        { nodes: [], hasNextPage: true, endCursor: 'same' },
+      ],
+    },
+  });
+  assert.equal(
+    fetchOpenLinkedPrReferences(repeated, 11, REPO).lookupFailed,
+    true,
+  );
+});
+
+test('#3871: a DISCONNECTED_EVENT removes a manually linked PR that the closing page does not list', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        {
+          events: [
+            {
+              __typename: 'ConnectedEvent',
+              subject: { __typename: 'PullRequest', number: 88, state: 'OPEN' },
+            },
+            {
+              __typename: 'DisconnectedEvent',
+              subject: { __typename: 'PullRequest', number: 88 },
+            },
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, false);
+  assert.deepEqual([...result.references], []);
+});
+
+// #3871: the first-commit time. Resume judges an issue-only handoff against
+// a PR-backed claim with the same time rule the merge gate uses (#1058), and
+// it reads the commits only when such a marker is among the fetched comments.
+const COMMIT_BEFORE_MARKER = '2026-05-12T10:00:30Z';
+const COMMIT_AFTER_MARKER = '2026-05-12T10:30:00Z';
+
+function commitAt(date: string) {
+  return { commit: { committer: { date } } };
+}
+
+function resumeWithLinkedPr(
+  port: ProviderPort,
+  events: ReturnType<typeof forcedHandoffEvents>,
+) {
+  const hasIssueOnlyHandoff = events.some((event) =>
+    event.body.includes('"contextScope":"issue-only"'),
+  );
+  const state = resolveResumeLinkedPrState(port, 11, REPO, {
+    forcedHandoffEnabled: true,
+    hasIssueOnlyHandoff,
+  });
+  return route(events, state.isForcedHandoffEnabled, state.lookupFailed);
+}
+
+function openClosingPr(number: number) {
+  return {
+    nodes: [closingNode(number, 'OPEN', REPO)],
+    hasNextPage: false,
+    endCursor: null,
+  };
+}
+
+test('#3871: an issue-only handoff that predates the first commit of a closing-reference PR is honored', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+test('#3871: an issue-only handoff posted after the first commit of a closing-reference PR is refused', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_BEFORE_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.notEqual(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: an issue-plus-pr handoff naming the backing PR is honored whatever the commit times', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_BEFORE_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+  );
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+test('#3871: an issue-plus-pr handoff naming a different PR is refused', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '88' }),
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: a failed commits read is a lookup failure and the issue-only handoff is refused', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommitErrors: { 77: 'commits unavailable' },
+  });
+  // One resolution only: the fake closing page advances on every read.
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(result.state, 'disputed');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'forced-handoff-linked-pr-lookup-failed');
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: an empty commit list makes the first-commit time unknown and refuses the issue-only handoff', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: with two backing PRs the marker must predate the earliest, so one PR that predates it refuses it', () => {
+  const both = (first: string, second: string) =>
+    createFakeProviderAdapter({
+      closingPullRequestPages: {
+        11: [
+          {
+            nodes: [
+              closingNode(77, 'OPEN', REPO),
+              closingNode(88, 'OPEN', REPO),
+            ],
+            hasNextPage: false,
+            endCursor: null,
+          },
+        ],
+      },
+      changeRequestCommits: {
+        77: [commitAt(first)],
+        88: [commitAt(second)],
+      },
+    });
+  // Both first commits follow the marker: it predates the earliest, so honored.
+  assert.equal(
+    resumeWithLinkedPr(
+      both(COMMIT_AFTER_MARKER, COMMIT_AFTER_MARKER),
+      forcedHandoffEvents({ contextScope: 'issue-only' }),
+    ).active_claim?.claim_id,
+    'claim-new',
+  );
+  // PR 88's first commit predates the marker, so the marker is refused.
+  assert.equal(
+    resumeWithLinkedPr(
+      both(COMMIT_AFTER_MARKER, COMMIT_BEFORE_MARKER),
+      forcedHandoffEvents({ contextScope: 'issue-only' }),
+    ).active_claim?.claim_id,
+    'claim-old',
+  );
+  // A PR whose first-commit time cannot be read makes the time unknown.
+  const unreadable = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(77, 'OPEN', REPO), closingNode(88, 'OPEN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    changeRequestCommits: {
+      77: [commitAt(COMMIT_AFTER_MARKER)],
+      88: [{ commit: {} }],
+    },
+  });
+  assert.equal(
+    resumeWithLinkedPr(
+      unreadable,
+      forcedHandoffEvents({ contextScope: 'issue-only' }),
+    ).active_claim?.claim_id,
+    'claim-old',
+  );
+});
+
+test('#3871: the commits are not read when no issue-only marker is among the comments', () => {
+  const base = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+  });
+  const reads: number[] = [];
+  const port: ProviderPort = {
+    ...base,
+    listChangeRequestCommits(number: number) {
+      reads.push(number);
+      return base.listChangeRequestCommits(number);
+    },
+  };
+  resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+  );
+  assert.deepEqual(reads, []);
+});
+
+test('#3871: a PR visible only as a ConnectedEvent follows the same time rule as a closing reference', () => {
+  const connectedPort = (commitDate: string) =>
+    createFakeProviderAdapter({
+      connectedPrEventPages: {
+        11: [
+          {
+            events: [
+              {
+                __typename: 'ConnectedEvent',
+                subject: {
+                  __typename: 'PullRequest',
+                  number: 77,
+                  state: 'OPEN',
+                },
+              },
+            ],
+            hasNextPage: false,
+            endCursor: null,
+          },
+        ],
+      },
+      changeRequestCommits: { 77: [commitAt(commitDate)] },
+    });
+  const before = resumeWithLinkedPr(
+    connectedPort(COMMIT_AFTER_MARKER),
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(before.state, 'already_owned');
+  const after = resumeWithLinkedPr(
+    connectedPort(COMMIT_BEFORE_MARKER),
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(after.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: a closing-reference node without a state fails the lookup instead of being skipped', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [{ number: 3875, repository: REPO }],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], []);
+});
+
+test('#3871: an open closing-reference node with a non-positive PR number fails the lookup', () => {
+  for (const number of [0, -4]) {
+    const port = createFakeProviderAdapter({
+      closingPullRequestPages: {
+        11: [
+          {
+            nodes: [closingNode(number, 'OPEN', REPO)],
+            hasNextPage: false,
+            endCursor: null,
+          },
+        ],
+      },
+    });
+    assert.equal(
+      fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed,
+      true,
+    );
+  }
+});
+
+test('#3871: a failed closing-references read keeps the connected references and still fails the lookup', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        {
+          events: [
+            {
+              __typename: 'ConnectedEvent',
+              subject: { __typename: 'PullRequest', number: 77, state: 'OPEN' },
+            },
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    closingPullRequestPageErrors: { 11: 'closing page unavailable' },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], ['77']);
+});
+
+test('#3871: a non-array commits response is a failed read, not an unknown time', () => {
+  const base = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+  });
+  const port: ProviderPort = {
+    ...base,
+    listChangeRequestCommits: () => ({}) as unknown as unknown[],
+  };
+  const state = resolveResumeLinkedPrState(port, 11, REPO, {
+    forcedHandoffEnabled: true,
+    hasIssueOnlyHandoff: true,
+  });
+  assert.equal(state.lookupFailed, true);
+  assert.equal(state.prFirstCommitAt, null);
+});
+
+test('#3871: a failed connected read still reads the closing references, which are kept, and fails the lookup', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPageErrors: { 11: 'timeline unavailable' },
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], ['77']);
+});
+
+test('#3871: a blank repository fails the closing-reference read instead of matching blank values', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', '')],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, '  ');
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], []);
+});
+
+test('#3871: an open closing-reference node with a blank repository fails the lookup instead of being skipped', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', ' ')],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
+});
+
+test('#3871: a closing-reference node with an unknown state fails the lookup instead of being skipped', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'UNKNOWN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
 });

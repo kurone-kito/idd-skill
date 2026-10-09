@@ -289,11 +289,13 @@ through the **single** shared `resolveActiveClaim`, so there is no forked
 claim-state logic. They deliberately pass **different** forced-handoff options,
 and that difference is intentional policy, not drift:
 
-- **Resume routing is strict.** It sets `requireAuthorMatchesForcedBy: true`
-  (rule 7's author/`forcedBy` binding) and never passes `prFirstCommitAt`.
-  Resume is a _takeover_ decision, so it must block the same-identity
-  self-signed hijack and reject an issue-only handoff that targets a PR-backed
-  claim.
+- **Resume routing is strict on the author binding.** It sets
+  `requireAuthorMatchesForcedBy: true` (rule 7's author/`forcedBy` binding), so
+  it blocks the same-identity self-signed hijack. Since
+  kurone-kito/idd-skill#3871 it also applies the merge gate's first-commit time
+  to an issue-only handoff that targets a PR-backed claim: honored only when the
+  handoff predates the first commit of the open PR (the earliest one, when
+  several back the claim).
 - **The merge write-gate is lenient.** It leaves `requireAuthorMatchesForcedBy`
   at its off default and passes `prFirstCommitAt`, applying the Part-B allowance
   (kurone-kito/idd-skill#1058, an issue-only handoff predating the PR). The
@@ -353,6 +355,23 @@ regardless of `linkedPrLookupFailed`, so its behavior is unchanged. The
 merge-side `summarizeClaimValidation` path (and its `prFirstCommitAt`
 Part-B allowance above) never shared this lookup either, and is untouched
 by this fix.
+
+**Linked-PR detection and the first-commit time (kurone-kito/idd-skill#3871).**
+Resume's PR-backed-claim detection now reads two provider signals and takes
+their union: the connected timeline (a manual Development link, a
+`CONNECTED_EVENT` reconciled against `DISCONNECTED_EVENT`) and the closing
+references (an open pull request of this repository whose body closes the issue
+with a closing keyword, which produces no `ConnectedEvent`). Before this change
+Resume could not see the second kind and honored an issue-only handoff that the
+merge gate then refused. One limit remains: GitHub processes a closing keyword
+only for a pull request that targets the repository's default branch, so a
+repository whose pull requests target a `developmentBranch` gets no closing
+reference and stays exposed on the Resume side. Resume now applies the same
+first-commit time rule as the merge gate, and a time that cannot be read rejects
+the handoff. This overturns the time half of the note recorded under
+kurone-kito/idd-skill#1155 (that the allowance is "applied by pre-merge but not
+by resume routing"); the author binding of kurone-kito/idd-skill#1155
+(`requireAuthorMatchesForcedBy`) is unchanged.
 
 ### Activation-nonce: why a separate marker, and what stays deferred
 

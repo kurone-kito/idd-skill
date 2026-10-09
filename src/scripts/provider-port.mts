@@ -160,9 +160,14 @@ export type ProviderCollaboratorPermissionResult =
 /** One `CONNECTED_EVENT`/`DISCONNECTED_EVENT` timeline node, GitHub-shaped. */
 export type ProviderConnectedPrEvent = Record<string, unknown>;
 
-/** One page of `closedByPullRequestsReferences`, GitHub-shaped nodes. */
+/**
+ * One page of `closedByPullRequestsReferences`. `number` and `repository`
+ * (`owner/repo`, from `nameWithOwner`) are optional so existing fixtures
+ * that carry only `state` still typecheck; a reader that needs them treats
+ * an absent value as a failed lookup (#3871).
+ */
 export interface ProviderClosingPullRequestsPage {
-  nodes: { state?: string }[];
+  nodes: { state?: string; number?: number; repository?: string }[];
   hasNextPage: boolean;
   endCursor: string | null;
 }

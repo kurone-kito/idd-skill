@@ -28,6 +28,7 @@ import {
 } from './local-worktree-occupancy.mts';
 import {
   listActivationNonces,
+  parseForcedHandoffComment,
   parseLegacyClaimComment,
   resolveLegacyClaimState,
 } from './marker-helpers.mts';
@@ -35,6 +36,7 @@ import { normalizePolicyConfig } from './policy-helpers.mts';
 import type {
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
+  PrCommitPayload,
 } from './protocol-helpers.mts';
 import {
   buildForcedHandoffEnableGate,
@@ -48,6 +50,7 @@ import {
   parseReleaseComment,
   readClaimStaleAgeMs,
   resolveActiveClaimWithForcedHandoffTrace,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
@@ -213,6 +216,9 @@ interface ResumeClaimRoutingArgs {
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
 // trigger fires.
+/** GraphQL PullRequestState: the only states a closing reference can carry (#3871). */
+const PULL_REQUEST_STATES: readonly string[] = ['OPEN', 'CLOSED', 'MERGED'];
+
 const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--issue': { type: 'string' },
   '--owner': { type: 'string' },
@@ -257,15 +263,20 @@ if (import.meta.main) {
  *   `linkedPrLookupFailed` false/omitted) → honor an `issue-only` handoff
  *   as before;
  * - an open linked PR backs the claim → require `contextScope` of
- *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs.
+ *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs, or an
+ *   `issue-only` handoff that predates the first commit of every expected PR
+ *   (#3871, the merge gate's #1058 time rule; `prFirstCommitAt` absent or
+ *   null rejects it).
  * - `linkedPrLookupFailed: true` (#3276, Groom hearing 2026-09-24): the
  *   lookup itself failed, so PR state is unknown rather than genuinely
  *   empty. An `issue-plus-pr` handoff still delegates to the shared gate
  *   above unchanged -- this decision covers `issue-only` handoffs only,
- *   and `expectedLinkedPrReferences` is empty either way on a failed
- *   lookup, so an `issue-plus-pr` marker naming any PR would fail to
- *   match a real backing PR regardless; that pre-existing shortcut is
- *   left as-is rather than widened or narrowed here. An `issue-only`
+ *   and, when the failed read was the only signal that could name a PR,
+ *   `expectedLinkedPrReferences` is empty, so an `issue-plus-pr` marker
+ *   naming any PR passes the shared shortcut for an empty set (#3871 keeps
+ *   the other signal's references, so the shortcut applies only when that
+ *   signal found nothing); that pre-existing shortcut is left as-is rather
+ *   than widened or narrowed here. An `issue-only`
  *   handoff against an enabled mode is rejected outright instead of
  *   falling into the empty-set-means-honor-it shortcut.
  */
@@ -273,14 +284,22 @@ export function buildForcedHandoffEnabledGate(options: {
   forcedHandoffEnabled: boolean;
   expectedLinkedPrReferences: Set<string>;
   linkedPrLookupFailed?: boolean;
+  /**
+   * The earliest first-commit time over the expected PRs (#3871), the same
+   * time rule the merge gate applies (#1058): an issue-only handoff against a
+   * PR-backed claim is honored only when it predates that commit. `null` or
+   * absent rejects such a handoff, so an unreadable time fails closed.
+   */
+  prFirstCommitAt?: string | null;
 }): (forcedHandoff: ParsedForcedHandoffMarker) => boolean {
   // Delegate to the shared builder so resume routing and the merge-gate /
-  // write-side helpers cannot drift. Resume routing never passes
-  // `prFirstCommitAt`, so this stays byte-identical to the prior behavior:
-  // an issue-only handoff against a PR-backed claim is rejected.
+  // write-side helpers cannot drift. Without `prFirstCommitAt` the behavior
+  // is byte-identical to the prior one: an issue-only handoff against a
+  // PR-backed claim is rejected.
   const sharedGate = buildForcedHandoffEnableGate({
     forcedHandoffEnabled: options.forcedHandoffEnabled,
     expectedLinkedPrReferences: options.expectedLinkedPrReferences,
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
   });
   if (!options.linkedPrLookupFailed) {
     return sharedGate;
@@ -834,16 +853,35 @@ function runCli(): HelperCliResult {
   const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
   const permissionCache: CollaboratorPermissionCache = new Map();
   // A forced handoff that displaces a PR-backed claim must carry
-  // issue-plus-pr evidence naming that PR; detect the open linked PR(s)
-  // so the gate below can enforce it (fail-safe to no enforcement, except
+  // issue-plus-pr evidence naming that PR, or an issue-only one that predates
+  // the PR's first commit (#3871); detect the open linked PR(s) so the gate
+  // below can enforce it (fail-safe to no enforcement, except
   // #3276's own new issue-only-on-failure rejection below). Skip the
   // lookup entirely when forced-handoff mode is off — the gate never
   // honors a handoff then, so the PR context would go unused.
-  const linkedPrLookup = forcedHandoffEnabled
-    ? fetchOpenLinkedPrReferences(port, args.issue)
-    : { references: new Set<string>(), lookupFailed: false };
-  const expectedLinkedPrReferences = linkedPrLookup.references;
-  const linkedPrLookupFailed = linkedPrLookup.lookupFailed;
+  // #3871: the first-commit time is read only when an issue-only handoff is
+  // among the fetched comments, the only marker that time can judge.
+  // The linked-PR state only judges forced-handoff markers, so it is read only
+  // when one is among the comments (a run without one makes no extra reads).
+  const forcedHandoffMarkers = comments
+    .map((comment) =>
+      parseForcedHandoffComment(comment.body ?? '', comment.created_at ?? ''),
+    )
+    .filter((marker) => marker !== null);
+  const hasIssueOnlyHandoff = forcedHandoffMarkers.some(
+    (marker) => marker.contextScope === 'issue-only',
+  );
+  const linkedPr = resolveResumeLinkedPrState(
+    port,
+    args.issue,
+    `${owner}/${repo}`,
+    {
+      forcedHandoffEnabled:
+        forcedHandoffEnabled && forcedHandoffMarkers.length > 0,
+      hasIssueOnlyHandoff,
+    },
+  );
+  const linkedPrLookupFailed = linkedPr.lookupFailed;
 
   const routingEvents = comments.map((comment) => ({
     body: comment.body ?? '',
@@ -858,11 +896,7 @@ function runCli(): HelperCliResult {
           .trim()
           .toLowerCase(),
       ),
-    isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
-      forcedHandoffEnabled,
-      expectedLinkedPrReferences,
-      linkedPrLookupFailed,
-    }),
+    isForcedHandoffEnabled: linkedPr.isForcedHandoffEnabled,
     isAuthorizedForcedHandoff: (forcedBy: string) =>
       isAuthorizedForcedHandoffActor(
         owner,
@@ -1615,27 +1649,39 @@ function applyConnectedPrEventNode(
 
 /**
  * Resolve the set of open pull requests that back this issue's claim, as
- * normalized PR references, plus whether the lookup itself failed. Uses a
- * precise signal — a PR connected to the issue via `CONNECTED_EVENT`
- * (reconciled against later `DISCONNECTED_EVENT`s) that is currently `OPEN`
- * — rather than a bare cross-reference/mention, so an unrelated open PR
- * merely mentioning the issue does not falsely block a legitimate
- * `issue-only` forced handoff.
+ * normalized PR references, plus whether the lookup itself failed. A PR
+ * counts when either provider signal shows it open and linked:
+ *
+ * - the connected timeline: a PR connected to the issue via
+ *   `CONNECTED_EVENT` (reconciled against later `DISCONNECTED_EVENT`s) that
+ *   is currently `OPEN` (a manual Development link, #3276);
+ * - the closing references: an open PR of this repository whose body closes
+ *   the issue with a closing keyword (`Closes #N`), which is how IDD pull
+ *   requests link and which produces no `ConnectedEvent` (#3871). A closing
+ *   reference naming another repository is ignored.
+ *
+ * Both signals are read to the end with the same cursor-progress checks, so a
+ * failure in either one is a lookup failure. A bare cross-reference or mention
+ * never counts, so an unrelated open PR that merely mentions the issue does
+ * not falsely block a legitimate `issue-only` forced handoff.
  *
  * #3276: paginates {@link ProviderPort.getConnectedPullRequestEventsPage}
  * (which throws on a failed or malformed page, matching
  * `idd-roadmap-audit-execute.mts`'s `hasOpenConnectedPr` precedent) instead
- * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle` --
- * removing the prior silent `last:100` truncation as a side effect. A
- * genuine lookup failure now surfaces as `lookupFailed: true` with an empty
- * `references` set, distinct from a successful lookup that legitimately
- * found no connected PR (`lookupFailed: false`, empty set). Callers must not
- * treat the two the same -- see
+ * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle`.
+ * A failed read of either signal sets `lookupFailed: true`. The failed signal
+ * contributes nothing: a failed connected read discards its partial map, and a
+ * failed closing read adds no node. The other signal's references are kept
+ * when that read succeeds (#3871), so `references` can be non-empty on a
+ * failure. A successful lookup that legitimately found no open linked PR is
+ * `lookupFailed: false` with an empty set. Callers must not treat a failure
+ * and an empty success the same way -- see
  * {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}.
  */
 export function fetchOpenLinkedPrReferences(
   port: ProviderPort,
   issueNumber: number | null,
+  repository: string,
 ): { references: Set<string>; lookupFailed: boolean } {
   const references = new Set<string>();
   if (!Number.isInteger(issueNumber)) {
@@ -1643,55 +1689,195 @@ export function fetchOpenLinkedPrReferences(
   }
   const connected = new Map<number, boolean>();
   const states = new Map<number, string>();
+  const closing = new Set<number>();
+  const issueRepository = repository.trim().toLowerCase();
+  // Each signal is read on its own, so a failed read never hides the other
+  // one (#3871). Any failure fails the lookup, but the references that each
+  // successful read found are kept. A connected map from a failed read is
+  // partial, so it is not used.
+  // Number.isInteger(issueNumber) above already excludes null; TS can't
+  // narrow a plain boolean-returning call the way a type predicate would.
+  let connectedFailed = false;
   try {
-    let after: string | null = null;
-    // #3276 (CodeRabbit review, PR #3386): the adapter returns whatever
-    // cursor the GraphQL response carries with no progress guarantee of its
-    // own -- a repeated non-empty cursor (immediate or a multi-cursor
-    // cycle) would otherwise make this loop request the same page
-    // indefinitely. Track every cursor seen and throw on a repeat rather
-    // than imposing an arbitrary page cap, which could wrongly reject a
-    // genuinely long timeline.
-    const seenCursors = new Set<string>();
-    for (;;) {
-      // Number.isInteger(issueNumber) above already excludes null; TS can't
-      // narrow a plain boolean-returning call the way a type predicate would.
-      const page = port.getConnectedPullRequestEventsPage(
-        issueNumber as number,
-        after,
-      );
-      for (const node of page.events) {
-        applyConnectedPrEventNode(node, connected, states);
-      }
-      if (!page.hasNextPage) {
-        break;
-      }
-      const nextCursor = page.endCursor ?? null;
-      if (!nextCursor) {
-        // hasNextPage with no endCursor: reconciling a truncated timeline
-        // could miss a later CONNECTED/DISCONNECTED event and silently read
-        // as a smaller, wrong PR set -- exactly the ambiguity this issue
-        // exists to close. Throw so the caller treats it as a lookup
-        // failure instead of trusting the partial stream.
-        throw new Error(
-          'incomplete connected-PR pagination: hasNextPage with no endCursor',
-        );
-      }
-      if (seenCursors.has(nextCursor)) {
-        throw new Error(
-          'non-progressing connected-PR pagination: repeated endCursor',
-        );
-      }
-      seenCursors.add(nextCursor);
-      after = nextCursor;
-    }
+    readAllPages(
+      (after) =>
+        port.getConnectedPullRequestEventsPage(issueNumber as number, after),
+      (page) => {
+        for (const node of page.events) {
+          applyConnectedPrEventNode(node, connected, states);
+        }
+      },
+    );
   } catch {
-    return { references: new Set(), lookupFailed: true };
+    connectedFailed = true;
   }
-  for (const [number, isConnected] of connected) {
-    if (isConnected && states.get(number) === 'OPEN') {
+  let closingFailed = false;
+  try {
+    // A blank repository cannot tell this repository's closing references from
+    // another's, so the closing read fails rather than matching blank values.
+    if (issueRepository.length === 0) {
+      throw new Error('blank repository for the closing-reference match');
+    }
+    readAllPages(
+      (after) =>
+        port.getWorkItemClosingPullRequestsPage(issueNumber as number, after),
+      (page) => {
+        for (const node of page.nodes) {
+          // An unknown state could be an open PR this lookup would miss, so
+          // it fails the lookup instead of being skipped.
+          if (
+            node.state === undefined ||
+            !PULL_REQUEST_STATES.includes(node.state)
+          ) {
+            throw new Error('closing-reference node without a known state');
+          }
+          if (node.state !== 'OPEN') {
+            continue;
+          }
+          // A missing number or repository must not read as "another
+          // repository" or as no PR at all: fail the lookup (#3871).
+          if (
+            typeof node.number !== 'number' ||
+            !Number.isSafeInteger(node.number) ||
+            node.number <= 0 ||
+            typeof node.repository !== 'string' ||
+            node.repository.trim().length === 0
+          ) {
+            throw new Error(
+              'open closing-reference node without a number or repository',
+            );
+          }
+          if (node.repository.trim().toLowerCase() !== issueRepository) {
+            continue;
+          }
+          closing.add(node.number);
+        }
+      },
+    );
+  } catch {
+    closingFailed = true;
+  }
+  if (!connectedFailed) {
+    for (const [number, isConnected] of connected) {
+      if (isConnected && states.get(number) === 'OPEN') {
+        references.add(normalizeLinkedPrReference(number));
+      }
+    }
+  }
+  if (!closingFailed) {
+    for (const number of closing) {
       references.add(normalizeLinkedPrReference(number));
     }
   }
-  return { references, lookupFailed: false };
+  return { references, lookupFailed: connectedFailed || closingFailed };
+}
+
+/**
+ * Walk every page of a cursor-paginated provider read, handing each page to
+ * `consume`. A page that reports more results without a cursor, or a cursor
+ * that repeats (immediately or in a cycle), throws: either would otherwise
+ * read as a smaller, wrong set (#3276, CodeRabbit review, PR #3386). No page
+ * cap is imposed, so a genuinely long timeline is still read in full.
+ */
+function readAllPages<
+  T extends { hasNextPage: boolean; endCursor: string | null },
+>(readPage: (after: string | null) => T, consume: (page: T) => void): void {
+  let after: string | null = null;
+  const seenCursors = new Set<string>();
+  for (;;) {
+    const page = readPage(after);
+    consume(page);
+    if (!page.hasNextPage) {
+      return;
+    }
+    const nextCursor = page.endCursor ?? null;
+    if (!nextCursor) {
+      // hasNextPage with no endCursor: a truncated read could miss a later
+      // event and silently read as a smaller set, which this lookup exists to
+      // rule out.
+      throw new Error('incomplete pagination: hasNextPage with no endCursor');
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error('non-progressing pagination: repeated endCursor');
+    }
+    seenCursors.add(nextCursor);
+    after = nextCursor;
+  }
+}
+
+/**
+ * The linked-PR state one Resume run judges forced handoffs against (#3871):
+ * the open PRs that back the claim, whether reading them failed, the earliest
+ * first-commit time over those PRs, and the gate built from all three.
+ */
+export interface ResumeLinkedPrState {
+  references: Set<string>;
+  lookupFailed: boolean;
+  prFirstCommitAt: string | null;
+  isForcedHandoffEnabled: (forcedHandoff: ParsedForcedHandoffMarker) => boolean;
+}
+
+/**
+ * Resolve the {@link ResumeLinkedPrState} for one `--assert` / routing run.
+ *
+ * The first-commit time is read only when it can change a decision: forced-
+ * handoff mode is on, an open PR backs the claim, and an `issue-only` marker
+ * is among the fetched comments. Every PR must report a first-commit time, and
+ * the marker must predate the earliest of them (a PR whose time cannot be read
+ * makes the whole time unknown). A failed commits read is a lookup failure,
+ * like a failed PR read (#3276), so the caller routes the blocked handoff to a
+ * stop instead of letting the displaced owner resume.
+ */
+export function resolveResumeLinkedPrState(
+  port: ProviderPort,
+  issueNumber: number | null,
+  repository: string,
+  options: { forcedHandoffEnabled: boolean; hasIssueOnlyHandoff: boolean },
+): ResumeLinkedPrState {
+  const linked = options.forcedHandoffEnabled
+    ? fetchOpenLinkedPrReferences(port, issueNumber, repository)
+    : { references: new Set<string>(), lookupFailed: false };
+  let lookupFailed = linked.lookupFailed;
+  let prFirstCommitAt: string | null = null;
+  if (
+    options.forcedHandoffEnabled &&
+    options.hasIssueOnlyHandoff &&
+    !lookupFailed &&
+    linked.references.size > 0
+  ) {
+    let earliest: string | null = null;
+    let unknown = false;
+    try {
+      for (const reference of linked.references) {
+        const commits = port.listChangeRequestCommits(Number(reference));
+        // A non-array response is a failed read, the same lookup failure as a
+        // thrown one (#3276), not an unknown time.
+        if (!Array.isArray(commits)) {
+          throw new Error('malformed commits response');
+        }
+        const first = resolvePrFirstCommitAt(commits as PrCommitPayload[]);
+        if (first === null) {
+          unknown = true;
+          break;
+        }
+        if (earliest === null || Date.parse(first) < Date.parse(earliest)) {
+          earliest = first;
+        }
+      }
+    } catch {
+      lookupFailed = true;
+    }
+    prFirstCommitAt = !lookupFailed && !unknown ? earliest : null;
+  }
+  return {
+    references: linked.references,
+    lookupFailed,
+    prFirstCommitAt,
+    isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+      forcedHandoffEnabled: options.forcedHandoffEnabled,
+      expectedLinkedPrReferences: linked.references,
+      linkedPrLookupFailed: lookupFailed,
+      prFirstCommitAt,
+    }),
+  };
 }

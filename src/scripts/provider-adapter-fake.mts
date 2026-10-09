@@ -95,6 +95,10 @@ export interface FakeProviderFixture {
   userContentEdits?: Record<number, ProviderUserContentEdit[]>;
   comments?: Record<number, ProviderComment[]>;
   closingPullRequestPages?: Record<number, ProviderClosingPullRequestsPage[]>;
+  /** Backs a thrown error from {@link ProviderPort.getWorkItemClosingPullRequestsPage}
+   * (#3871), checked before `closingPullRequestPages`, the same failure shape
+   * as `connectedPrEventPageErrors` below. */
+  closingPullRequestPageErrors?: Record<number, string>;
   connectedPrEventsSingle?: Record<number, ProviderConnectedPrEvent[]>;
   connectedPrEventPages?: Record<
     number,
@@ -213,6 +217,9 @@ export interface FakeProviderFixture {
   renamedFromPaths?: Record<number, string[]>;
   /** Backs {@link ProviderPort.listChangeRequestCommits}. */
   changeRequestCommits?: Record<number, unknown[]>;
+  /** Backs a thrown error from {@link ProviderPort.listChangeRequestCommits}
+   * (#3871), checked before `changeRequestCommits`. */
+  changeRequestCommitErrors?: Record<number, string>;
   /** Backs {@link ProviderPort.listChangeRequestReviewThreadsWithComments}. */
   reviewThreadsWithComments?: Record<
     number,
@@ -499,6 +506,10 @@ export function createFakeProviderAdapter(
     getWorkItemClosingPullRequestsPage(
       number: number,
     ): ProviderClosingPullRequestsPage {
+      const errorMessage = fixture.closingPullRequestPageErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       const pages = fixture.closingPullRequestPages?.[number] ?? [];
       const index = closingPageCallIndex[number] ?? 0;
       closingPageCallIndex[number] = index + 1;
@@ -839,6 +850,10 @@ export function createFakeProviderAdapter(
     },
 
     listChangeRequestCommits(number: number): unknown[] {
+      const errorMessage = fixture.changeRequestCommitErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       return fixture.changeRequestCommits?.[number] ?? [];
     },
 

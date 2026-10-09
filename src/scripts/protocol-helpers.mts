@@ -10823,9 +10823,9 @@ export function summarizeClaimValidation(
   // still honored — authorization rests on `isAuthorizedForcedHandoff` alone —
   // and it passes `prFirstCommitAt` so the Part-B allowance (#1058, an
   // issue-only handoff predating the PR) applies. resume-claim-routing.mts
-  // deliberately does the opposite (`requireAuthorMatchesForcedBy: true`, no
-  // `prFirstCommitAt`) because a takeover decision must block the same-identity
-  // self-signed hijack. The two callers can therefore return different verdicts
+  // keeps the stricter author binding (`requireAuthorMatchesForcedBy: true`,
+  // which blocks the same-identity self-signed hijack) and applies the same
+  // time rule since #3871. The two callers can therefore return different verdicts
   // for the same corrected-handoff state (resume `already_owned` vs. merge
   // `claimLost`) by design; both still funnel through the single
   // resolveActiveClaim resolver.

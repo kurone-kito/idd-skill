@@ -527,3 +527,29 @@ test('no other read is recorded, so readCalls stays absent until a search or sna
   port.listOpenWorkItems();
   assert.equal((fixture as { readCalls?: unknown[] }).readCalls, undefined);
 });
+
+test('closingPullRequestPageErrors throws from the closing-references page (#3871)', () => {
+  const port = createFakeProviderAdapter({
+    workItems: {},
+    closingPullRequestPageErrors: { 7: 'closing page unavailable' },
+  });
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(7, null),
+    /closing page unavailable/,
+  );
+  assert.deepEqual(port.getWorkItemClosingPullRequestsPage(8, null), {
+    nodes: [],
+    hasNextPage: false,
+    endCursor: null,
+  });
+});
+
+test('changeRequestCommitErrors throws from listChangeRequestCommits (#3871)', () => {
+  const port = createFakeProviderAdapter({
+    workItems: {},
+    changeRequestCommitErrors: { 42: 'commits unavailable' },
+    changeRequestCommits: { 43: [{ sha: 'abc' }] },
+  });
+  assert.throws(() => port.listChangeRequestCommits(42), /commits unavailable/);
+  assert.deepEqual(port.listChangeRequestCommits(43), [{ sha: 'abc' }]);
+});
