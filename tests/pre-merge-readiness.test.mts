@@ -17381,3 +17381,43 @@ test('buildPreMergeReadinessSummary carries an ignored handoff for the active cl
     true,
   );
 });
+
+test('merge-side summary reports an authorized handoff refused while the mode is disabled as mode-disabled', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      forcedHandoffEnabled: false,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['mode-disabled'],
+  );
+});
+
+test('merge-side summary reports a relayed, authorized handoff with its gate cause, not an author mismatch', () => {
+  // The merge side leaves the author-match check off (a maintainer-authorized
+  // handoff may be relayed by automation), so the gate cause is what applies.
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([
+      wgClaimEvent(),
+      wgHandoffEvent({ author: 'attacker' }),
+    ]) as Parameters<typeof summarizeClaimValidationImpl>[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['issue-only-not-before-first-commit'],
+  );
+});
