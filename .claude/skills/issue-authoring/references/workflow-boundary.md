@@ -383,7 +383,14 @@ approval boundary that hands off to IDD execution.
     a `needs-decision` body, pass `--expect-bucket needs-decision` and both
     configured labels
 - Keep the set anchor held until every other target's label removal is
-  verified, and remove the anchor label last. For every target, first
+  verified, and remove the anchor label last. Every label removal in this
+  release, the anchor label included, and every restore that follows uses `gh
+  issue edit <number> --remove-label "<authoring label>"` or `gh issue edit
+  <number> --add-label "<authoring label>"`, with `--repo <owner>/<repo>`
+  outside the repository. The IDD template's opt-in Claude Code baseline denies
+  the `gh api -X DELETE` spelling and does not allowlist `gh api`, so that
+  spelling is not used (observed on issue #3841, 2026-10-08; see issue #3898).
+  For every target, first
   re-fetch owner comments during release-marker preflight. If a valid
   current-owner/set `mode=release` marker already exists, reuse the earliest
   matching GitHub comment ID; otherwise append one with `supersedes` equal to
@@ -443,7 +450,14 @@ approval boundary that hands off to IDD execution.
   coincide), then re-fetch both and require each target's expected owner token
   independently, plus the shared set/anchor/session, recorded release-marker
   comment, and expected label/body snapshot. Remove non-anchor labels one
-  target at a time and re-fetch each result. After the final anchor label
+  target at a time and re-fetch each result. Every label removal in this
+  release, the anchor label included, and every restore that follows uses `gh
+  issue edit <number> --remove-label "<authoring label>"` or `gh issue edit
+  <number> --add-label "<authoring label>"`, with `--repo <owner>/<repo>`
+  outside the repository. The IDD template's opt-in Claude Code baseline denies
+  the `gh api -X DELETE` spelling and does not allowlist `gh api`, so that
+  spelling is not used (observed on issue #3841, 2026-10-08; see issue #3898).
+  After the final anchor label
   removal is verified, re-fetch every target and verify its current release
   marker, absent label, and expected body snapshot; any drift leaves the set
   open and prevents completion. Then reuse the earliest

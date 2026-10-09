@@ -2126,7 +2126,14 @@ only approval boundary.
   label in place until the checklist passes and the user explicitly requests
   release from the authoring hold, except for the narrow auto-release
   exception below. Keep the set anchor held until every other
-  target's label removal is verified, and remove the anchor label last. For
+  target's label removal is verified, and remove the anchor label last. Every
+  label removal in this release, the anchor label included, and every restore
+  that follows uses `gh issue edit <number> --remove-label "<authoring label>"`
+  or `gh issue edit <number> --add-label "<authoring label>"`, with `--repo
+  <owner>/<repo>` outside the repository. The IDD template's opt-in Claude Code
+  baseline denies the `gh api -X DELETE` spelling and does not allowlist `gh
+  api`, so that spelling is not used (observed on issue #3841, 2026-10-08; see
+  issue #3898). For
   every target, first re-fetch owner comments during release-marker preflight.
   **Mandatory release-time hide-on-supersede sweep (#2896, #2935).** At
   this same point -- before the reuse-or-append decision below, so a
@@ -2350,9 +2357,10 @@ only approval boundary.
   paginated log, and require the expected owner token, the shared set,
   anchor, and session, the recorded release-marker comment, and the
   expected label/body snapshot before the removal itself; (5) removing
-  that one authoring
-  label and re-fetching to verify the release marker, absent label,
-  and expected body snapshot; (6) the mandatory sweep again, against
+  that one authoring label with `gh issue edit <number> --remove-label
+  "<authoring label>"` (the release bullet above gives the reason) and
+  re-fetching to verify the release marker, absent label, and expected body
+  snapshot; (6) the mandatory sweep again, against
   the same issue and the journal issue, before the release-complete
   reuse-or-append decision; (7) the anchor-only `mode=release-complete`
   marker, verified via bounded-retry paginated re-fetch; (8) the

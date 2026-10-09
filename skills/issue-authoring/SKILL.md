@@ -302,7 +302,14 @@ needs-decision, blocked-by-human, and out-of-scope.
      and session; only then renew and verify the target heartbeat when
      distinct (one marker when they coincide; reuse applies here too).
      Remove non-anchor labels one at a time and
-     verify the whole set. After the final anchor label removal is verified,
+     verify the whole set. Every label removal in this release, the anchor label
+     included, and every restore that follows uses `gh issue edit <number>
+     --remove-label "<authoring label>"` or `gh issue edit <number> --add-label
+     "<authoring label>"`, with `--repo <owner>/<repo>` outside the repository.
+     The IDD template's opt-in Claude Code baseline denies the `gh api -X
+     DELETE` spelling and does not allowlist `gh api`, so that spelling is not
+     used (observed on issue #3841, 2026-10-08; see issue #3898). After the
+     final anchor label removal is verified,
      reuse or append the anchor-only `mode=release-complete` marker and record
      its comment ID. Reconcile that ID and the paginated anchor log with
      bounded retries; a successful POST or verification timeout is
