@@ -296,8 +296,10 @@ layered on top of the distributed IDD defaults:
   pull requests open at once had a median of 2, a 90th percentile of 4, and a
   maximum of 9. The cap is per orchestrator session, so concurrent
   orchestrator sessions multiply it, and only the host checks in
-  `idd-worker-budget` limit the total. To opt out, remove the field or set it
-  to `1` (refs `#3839`).
+  `idd-worker-budget` limit the total. To opt out, remove the
+  `orchestrator` field and the `orchestrator-worker-cap-dogfood` rule together,
+  because the rule pins the value to exactly 4 and the field alone is not
+  enough (refs `#3839`).
 
 ## Branch strategy
 
