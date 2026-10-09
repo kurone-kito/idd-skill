@@ -15,7 +15,7 @@
 
 import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { ghApiJson } from './gh-exec.mts';
+import { ghTextUnbounded } from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -501,12 +501,29 @@ export function collectIndexLagIssueNumbers(
   return { complete: true, numbers, reason: '' };
 }
 
+/**
+ * Read one REST page through the unbounded `gh` reader (#3901). A page of
+ * full issue resources can be larger than the 1 MiB buffer that ghApiJson
+ * gives its child process, so the response goes to a temporary file, as the
+ * sibling authoring helpers read theirs. An empty response parses as `{}`,
+ * and an unparseable one as `undefined`, so the caller shape check reports
+ * either as an unreadable page.
+ */
+function ghApiPageUnbounded(apiPath: string): unknown {
+  const raw = ghTextUnbounded(['api', apiPath]);
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    return undefined;
+  }
+}
+
 function fetchIndexLagIssues(
   owner: string,
   repo: string,
   sinceIso: string,
 ): { items: IndexLagIssue[]; pageFull: boolean } {
-  const payload = ghApiJson(
+  const payload = ghApiPageUnbounded(
     `repos/${owner}/${repo}/issues?state=all&since=${encodeURIComponent(sinceIso)}&per_page=${INDEX_LAG_PAGE_SIZE}&page=1`,
   );
   if (!Array.isArray(payload)) {
@@ -595,7 +612,7 @@ function parseArgs(argv: string[]): {
 function fetchSearchPages(query: string): IssueSearchPage[] {
   const pages: IssueSearchPage[] = [];
   for (let page = 1; page <= SEARCH_MAX_PAGES; page += 1) {
-    const payload = ghApiJson(
+    const payload = ghApiPageUnbounded(
       `search/issues?q=${encodeURIComponent(query)}&per_page=${SEARCH_PAGE_SIZE}&page=${page}`,
     );
     const parsed = parseIssueSearchPage(payload);

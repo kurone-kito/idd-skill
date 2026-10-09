@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1140,4 +1140,213 @@ test('#3881: the heading that the fail-closed reasons point to exists in the doc
     'utf8',
   );
   assert.match(docs, /^### Clearing a comment that blocks the scan$/m);
+});
+
+// #3901: the search and index-lag pages are read through the unbounded gh
+// reader, so a page over the 1 MiB ghApiJson buffer still yields a verdict.
+test('CLI: a search page larger than 1 MiB still yields the verdict (#3901)', () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    } else if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468, body: 'x'.repeat(1100000) }]
+      }), () => process.exit(0));
+    } else if (joined.includes('state=all')) {
+      process.stdout.write('[]');
+      process.exit(0);
+    } else if (args.includes('graphql')) {
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [{
+                  databaseId: 1,
+                  lastEditedAt: null,
+                  createdAt: '2026-09-25T18:00:00Z',
+                  updatedAt: '2026-09-25T18:00:00Z',
+                  body: ${JSON.stringify(marker(3468))},
+                  author: { login: 'kurone-kito' }
+                }],
+                pageInfo: { hasNextPage: false, endCursor: null }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    } else {
+      process.stderr.write('unexpected gh ' + joined);
+      process.exit(2);
+    }
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+          '--set',
+          SET,
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.complete, true);
+    assert.equal(output.soleMember, true);
+    assert.deepEqual(output.issues, [3468]);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: an index-lag page larger than 1 MiB still yields the verdict (#3901)', () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    } else if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468 }]
+      }));
+      process.exit(0);
+    } else if (joined.includes('state=all')) {
+      process.stdout.write(JSON.stringify([{ number: 3470, body: 'y'.repeat(1100000) }]), () => process.exit(0));
+    } else if (args.includes('graphql')) {
+      const nodes = joined.includes('number=3470')
+        ? []
+        : [{
+            databaseId: 1,
+            lastEditedAt: null,
+            createdAt: '2026-09-25T18:00:00Z',
+            updatedAt: '2026-09-25T18:00:00Z',
+            body: ${JSON.stringify(marker(3468))},
+            author: { login: 'kurone-kito' }
+          }];
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes,
+                pageInfo: { hasNextPage: false, endCursor: null }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    } else {
+      process.stderr.write('unexpected gh ' + joined);
+      process.exit(2);
+    }
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+          '--set',
+          SET,
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.complete, true);
+    assert.equal(output.soleMember, true);
+    assert.deepEqual(output.issues, [3468]);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: a failed search exits non-zero even after it wrote a valid page (#3901)', () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    } else if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468 }]
+      }), () => process.exit(1));
+    } else if (joined.includes('state=all')) {
+      process.stdout.write('[]');
+      process.exit(0);
+    } else if (args.includes('graphql')) {
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [{
+                  databaseId: 1,
+                  lastEditedAt: null,
+                  createdAt: '2026-09-25T18:00:00Z',
+                  updatedAt: '2026-09-25T18:00:00Z',
+                  body: ${JSON.stringify(marker(3468))},
+                  author: { login: 'kurone-kito' }
+                }],
+                pageInfo: { hasNextPage: false, endCursor: null }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    } else {
+      process.stderr.write('unexpected gh ' + joined);
+      process.exit(2);
+    }
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    const failure = spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+        '--set',
+        SET,
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(failure.status, 1);
+    assert.doesNotMatch(failure.stdout, /"complete": true/);
+  } finally {
+    restore();
+  }
 });
