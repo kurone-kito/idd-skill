@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -16,34 +16,12 @@ import {
   CHECK_STRAY_COMMIT_CLOSES_FLAG_SPEC,
   checkStrayCommits,
 } from '../src/scripts/check-stray-commit-closes.mts';
-import { stubExecutable } from './test-utils.mts';
+import { fixtureEnv, stubExecutable } from './test-utils.mts';
 
 const ENTRY = fileURLToPath(
   new URL('../src/scripts/check-stray-commit-closes.mts', import.meta.url),
 );
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
-
-// `node:os`'s `devNull` is `\\.\nul` on win32, which Git for Windows rejects as
-// a GIT_CONFIG_GLOBAL value; the bare `NUL` is what it accepts.
-const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
-
-// Fixture git processes must never read the developer's config or an ambient
-// GIT_DIR. The helper spawns git with this process's env, so scrub it here.
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith('GIT_CONFIG')) {
-    delete process.env[key];
-  }
-}
-for (const key of [
-  'GIT_DIR',
-  'GIT_INDEX_FILE',
-  'GIT_WORK_TREE',
-  'GIT_COMMON_DIR',
-  'GIT_OBJECT_DIRECTORY',
-]) {
-  delete process.env[key];
-}
-process.env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
 
 // The only commit message in the repository that names #169 with a closing
 // keyword. The test below asserts that no other file carries it.
@@ -74,6 +52,7 @@ after(() => {
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, {
     cwd,
+    env: fixtureEnv(),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -137,7 +116,7 @@ function check(
   args: readonly string[] = [],
   env: Record<string, string> = {},
 ): Run {
-  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  const childEnv: NodeJS.ProcessEnv = fixtureEnv();
   delete childEnv.IDD_CLOSING_ISSUES;
   Object.assign(childEnv, env);
   const result = spawnSync(process.execPath, [ENTRY, ...args], {
@@ -286,7 +265,7 @@ test('a commit message holding a NUL byte refuses the scan', () => {
   const sha = execFileSync(
     'git',
     ['hash-object', '-t', 'commit', '-w', '--literally', '--stdin'],
-    { cwd: work, input: body, encoding: 'utf8' },
+    { cwd: work, env: fixtureEnv(), input: body, encoding: 'utf8' },
   ).trim();
   git(work, 'reset', '-q', '--hard', sha);
   const run = check(work);
