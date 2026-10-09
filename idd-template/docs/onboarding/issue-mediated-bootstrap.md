@@ -633,15 +633,13 @@ Disposition:
   review profile requires a reviewer or maintainer resolution, not
   merely an approval. Do not patch the vendored copy just to silence
   the comment.
-- **`resolve-review-thread.mjs --claimless` refuses this PR** — it
-  closes its own bootstrap issue, so `--claimless` fails closed
-  (2026-09-23; issue `#3229`). Recover: (a) a fresh, trusted-actor
-  `claimed-by` marker (`supersedes: none`) bound to the PR's head
-  branch, unlocking `--claim-issue`/`--claim-id`, released
-  (`unclaimed-by`) afterward; or (b) reply to the thread's top-level
-  comment (REST `.../comments/{root-id}/replies`) in E13's
-  disposition form (`idd-helper-scripts.md`), then resolve its
-  thread id via GraphQL `resolveReviewThread`.
+- **`resolve-review-thread.mjs --claimless` needs a bootstrap marker** on this
+  PR: a trusted, unedited `idd-out-of-loop` marker with `reason: bootstrap`
+  (shape in `idd-helper-scripts.md`) makes it eligible, re-checked before each
+  mutation (2026-09-23; `#3229`, `#3328`). Without one: (a) a fresh,
+  trusted-actor `claimed-by` marker (`supersedes: none`) bound to the PR head
+  branch, unlocking `--claim-issue`/`--claim-id`, released (`unclaimed-by`)
+  afterward; or, with no helper runtime, (b) a maintainer replies and resolves.
 - **After merge, qualify before escalating.**
   [Upstream-candidate escalation][upstream-candidate] is opt-in
   (`upstreamEscalation.enabled`, default `false`) and only accepts
