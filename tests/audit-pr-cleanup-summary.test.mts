@@ -440,7 +440,7 @@ test('the minimization doc lists exactly the closed skip reason codes (#3857)', 
   const rest = doc.slice(start + heading.length);
   const nextHeading = rest.search(/\n#{1,3} /);
   const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
-  const documented = [...section.matchAll(/^\| `([a-z0-9-]+)` \|/gm)].map(
+  const documented = [...section.matchAll(/^\| `([a-z0-9-]+)`\s*\|/gm)].map(
     (match) => match[1] ?? '',
   );
   assert.equal(
