@@ -30,6 +30,7 @@ import {
   orderClaimEvents,
   resolveActiveClaim,
   resolveActiveClaimForWriteGate,
+  resolveActiveClaimWithForcedHandoffTrace,
   resolveLatestReviewWatermark,
   resolvePresentRunConclusion,
   STALE_THREAD_DISPOSITION_HINT,
@@ -5687,4 +5688,28 @@ test('applyClaimEvent reports the gate cause when the authorization lookup throw
     });
   });
   assert.deepEqual(reasons, ['pr-scope-mismatch']);
+});
+
+test('a legacy caller that passes only the boolean gate still reports mode-disabled through the trace', () => {
+  // resolveActiveClaimWithForcedHandoffTrace normalizes its options before
+  // applyClaimEvent sees them. The omitted explainer and authorization must
+  // still count as omitted, so the reason stays mode-disabled.
+  const events = [
+    {
+      author: { login: 'kurone-kito' },
+      createdAt: '2026-05-12T09:00:00Z',
+      lastEditedAt: null,
+      body: '<!-- claimed-by: old-agent old-claim supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+    },
+    refusalEvent(refusalEventBody('issue-plus-pr', '341')),
+  ];
+  const reasons: string[] = [];
+  resolveActiveClaimWithForcedHandoffTrace(events, {
+    isTrustedAuthor: () => true,
+    isForcedHandoffEnabled: () => false,
+    onIgnoredForcedHandoff: ({ reason }) => {
+      reasons.push(reason);
+    },
+  });
+  assert.deepEqual(reasons, ['mode-disabled']);
 });

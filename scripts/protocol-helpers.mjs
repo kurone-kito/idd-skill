@@ -11174,15 +11174,15 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
 export function applyClaimEvent(activeClaim, event, options = {}) {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
-  // The explanation path (#3873) needs to know which checks this caller
-  // enabled, which the normalized options cannot show: an absent authorization
-  // function defaults to "always refuse", not to "no check".
-  const callerOptions =
-    typeof options === 'object' && options !== null ? options : {};
+  // The explanation path (#3873) must know which checks the caller enabled.
+  // Detect the omitted defaults by identity, not by the shape of `options`:
+  // resolveActiveClaimWithForcedHandoffTrace normalizes first, so a function
+  // is always present here, and a default that is still the shared constant
+  // means the caller supplied nothing.
   const explainsRefusal =
-    typeof callerOptions.explainForcedHandoffRefusal === 'function';
+    normalizedOptions.explainForcedHandoffRefusal !== OMITTED_EXPLAINER;
   const authorizationEnabled =
-    typeof callerOptions.isAuthorizedForcedHandoff === 'function';
+    normalizedOptions.isAuthorizedForcedHandoff !== OMITTED_AUTHORIZATION;
   // The authorization lookup runs here only to report a refusal. A lookup that
   // throws must not turn a refusal into an exception, so the gate's cause is
   // reported instead; the marker is refused either way.
@@ -11346,17 +11346,22 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
   }
   return activeClaim;
 }
+// Shared defaults for the two options a caller may leave omitted (#3873).
+// Identity marks "not supplied", so the check survives a second normalization
+// (resolveActiveClaimWithForcedHandoffTrace normalizes before applyClaimEvent).
+const OMITTED_AUTHORIZATION = () => false;
+const OMITTED_EXPLAINER = () => null;
 function normalizeClaimResolutionOptions(optionsOrPredicate) {
   if (typeof optionsOrPredicate === 'function') {
     return {
       isTrustedAuthor: optionsOrPredicate,
       isForcedHandoffEnabled: () => false,
-      isAuthorizedForcedHandoff: () => false,
+      isAuthorizedForcedHandoff: OMITTED_AUTHORIZATION,
       isStale: isStaleAt,
       requireAuthorMatchesForcedBy: false,
       onAnomalousHeartbeat: () => {},
       onIgnoredForcedHandoff: () => {},
-      explainForcedHandoffRefusal: () => null,
+      explainForcedHandoffRefusal: OMITTED_EXPLAINER,
     };
   }
   const options = optionsOrPredicate ?? {};
@@ -11372,7 +11377,7 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
     isAuthorizedForcedHandoff:
       typeof options.isAuthorizedForcedHandoff === 'function'
         ? options.isAuthorizedForcedHandoff
-        : () => false,
+        : OMITTED_AUTHORIZATION,
     isStale:
       typeof options.isStale === 'function' ? options.isStale : isStaleAt,
     requireAuthorMatchesForcedBy: Boolean(options.requireAuthorMatchesForcedBy),
@@ -11387,7 +11392,7 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
     explainForcedHandoffRefusal:
       typeof options.explainForcedHandoffRefusal === 'function'
         ? options.explainForcedHandoffRefusal
-        : () => null,
+        : OMITTED_EXPLAINER,
   };
 }
 export function normalizeLinkedPrReference(value) {
