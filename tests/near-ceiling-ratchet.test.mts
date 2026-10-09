@@ -224,6 +224,7 @@ test('malformed approval entries never widen a limit', () => {
   const approvals = parseNearCeilingRaiseApprovals([
     { bundle: 'bundle-core', limitBytes: 26500, issue: 3840, reason: 'ok' },
     { bundle: 'bundle-core', limitBytes: 999999 },
+    { bundle: 'bundle-core', limitBytes: 26500.5, issue: 3840, reason: 'frac' },
     { bundle: 'bundle-core', limitBytes: 27000, issue: 3840, reason: '  ' },
     { bundle: 'bundle-core', limitBytes: 28000, issue: 0, reason: 'bad' },
     { bundle: 'bundle-x', limitBytes: 'lots' },

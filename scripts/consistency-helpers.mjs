@@ -231,7 +231,7 @@ export function parseNearCeilingRaiseApprovals(value) {
     if (typeof issue !== 'number' || !Number.isInteger(issue) || issue <= 0)
       continue;
     if (typeof reason !== 'string' || reason.trim() === '') continue;
-    if (!Number.isFinite(limitBytes) || limitBytes <= 0) continue;
+    if (!Number.isInteger(limitBytes) || limitBytes <= 0) continue;
     approvals.set(bundle, limitBytes);
   }
   return approvals;
