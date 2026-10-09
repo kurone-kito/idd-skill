@@ -1024,49 +1024,59 @@ one desync token reused across the run) is also cheaper to keep in one
 orchestrating session than to reconstruct per invocation of a stateless
 external scheduler.
 
+The operating rules for this variant are in the
+`.github/instructions/idd-orchestrator.instructions.md`, which an agent
+reads only when its activation conditions hold.
+
 Running this variant safely requires:
 
-- **A non-context-inheriting delegation mechanism for the full
-  B-through-F4 worker role, whenever the calling tool offers one — a
-  strong preference, not merely a suggestion, per
-  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).**
-  A context-inheriting worker (e.g. Claude Code's `fork` subagent) can
-  let the orchestrator's own recent framing compete with, and
-  sometimes override, the delegation brief's own role statement — the
-  same problem [Critique pass invocation](#critique-pass-invocation)
-  already avoids for Claude Code's narrower critique-pass role, since
-  that row also picks a fresh `general-purpose` agent rather than a
-  context-inheriting one. Extend that same preference to this full
-  worker role whenever the tool exposes the choice; a
-  context-inheriting mechanism is a fallback only for when no
-  non-context-inheriting alternative exists, and even careful brief
-  wording (the explicit role-statement text in
-  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation))
-  does not reliably close its residual role-misread risk — a
-  documented known limitation (kurone-kito/idd-skill#2221,
-  kurone-kito/idd-skill#2624, kurone-kito/idd-skill#2802).
-- **A small concurrency cap**, sized against CI-minute cost,
-  shared-file contention, and host capacity rather than raised without
-  bound. The optional `discover-shared-file-overlap` helper (see
-  [IDD helper script evaluation](idd-helper-scripts.md#discover-shared-file-overlap-contract))
-  reports high-contention shared-file overlap evidence to inform both
-  the cap and the delegation order. Neither CI-minute cost nor
-  shared-file contention reflects host capacity: a worker's own build
-  and test children compete for the same cores and memory as every other
-  session on the host, so run a cheap preflight before each dispatch.
-  Compare the 1-minute load average (`uptime`) with the core count
-  (`nproc`, or `sysctl -n hw.ncpu` on macOS), and read the available
-  memory (`MemAvailable` in `/proc/meminfo`, or the platform
-  equivalent). As starting values an operator may tune — this guide's
-  own starting choice, not measured limits — start no new worker while
-  the 1-minute load exceeds the core count or the available memory is
-  under 2 GiB; dispatch fewer workers or wait instead. In one
-  orchestrated private downstream adopter's run (reported 2026-09-30,
-  kurone-kito/idd-skill#3677), a delegated worker's tool calls stopped
-  returning and the runtime ended it (`Agent stalled: no progress for
+-
+  - **A non-context-inheriting delegation mechanism for the full worker role,
+    from B1 through the merge policy's terminal phase, whenever the calling tool
+    offers one — a
+    strong preference, not merely a suggestion, per
+    [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).**
+    A context-inheriting worker (e.g. Claude Code's `fork` subagent) can
+    let the orchestrator's own recent framing compete with, and
+    sometimes override, the delegation brief's own role statement — the
+    same problem [Critique pass invocation](#critique-pass-invocation)
+    already avoids for Claude Code's narrower critique-pass role, since
+    that row also picks a fresh `general-purpose` agent rather than a
+    context-inheriting one. Extend that same preference to this full
+    worker role whenever the tool exposes the choice; a
+    context-inheriting mechanism is a fallback only for when no
+    non-context-inheriting alternative exists, and even careful brief
+    wording (the explicit role-statement text in
+    [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation))
+    does not reliably close its residual role-misread risk — a
+    documented known limitation (kurone-kito/idd-skill#2221,
+    kurone-kito/idd-skill#2624, kurone-kito/idd-skill#2802).
+-
+  - **A concurrency cap**, set by `orchestrator.maxWorkers` and enforced on each
+    dispatch by `idd-worker-budget` (see the
+    `.github/instructions/idd-orchestrator.instructions.md`), sized
+    against CI-minute cost,
+    shared-file contention, and host capacity rather than raised without
+    bound. The optional `discover-shared-file-overlap` helper (see
+    [IDD helper script evaluation](idd-helper-scripts.md#discover-shared-file-overlap-contract))
+    reports high-contention shared-file overlap evidence to inform both
+    the cap and the delegation order. Neither CI-minute cost nor
+    shared-file contention reflects host capacity: a worker's own build
+    and test children compete for the same cores and memory as every other
+    session on the host, so run a cheap preflight before each dispatch.
+    Compare the 1-minute load average (`uptime`) with the core count
+    (`nproc`, or `sysctl -n hw.ncpu` on macOS), and read the available
+    memory (`MemAvailable` in `/proc/meminfo`, or the platform
+    equivalent). As starting values an operator may tune — this guide's
+    own starting choice, not measured limits — start no new worker while
+    the 1-minute load exceeds the core count or the available memory is
+    under 2 GiB; dispatch fewer workers or wait instead. In one
+    orchestrated private downstream adopter's run (reported 2026-09-30,
+    kurone-kito/idd-skill#3677), a delegated worker's tool calls stopped
+    returning and the runtime ended it (`Agent stalled: no progress for
   600s`) while the 1-minute load average read 90.87 on 24 cores and no
-  memory was available, and full-suite runs failed on timeouts in
-  unrelated specs that all passed alone.
+    memory was available, and full-suite runs failed on timeouts in
+    unrelated specs that all passed alone.
 - **Full per-issue gating before every delegation.** The orchestrator
   runs the complete A4.5/A5 suitability and claim gates (and the A4
   viability gate that precedes them) for each issue before handing it to
@@ -1084,8 +1094,9 @@ Running this variant safely requires:
   kurone-kito/idd-skill#2624). When the orchestrating session already
   has a same-session sibling worker that stalled this way, the brief
   must cite that sibling failure by name. The brief must also state
-  that the worker's B-through-F execution ends at F4-complete: the
-  worker reports its final result back to the orchestrator instead of
+  that the worker's execution ends at the merge policy's terminal phase (F4
+  under `fully_autonomous_merge`, F2.5 otherwise): the worker reports its final
+  result back to the orchestrator instead of
   independently entering F5's Discover step, so Discover/Claim
   ownership stays with the orchestrator alone.
 - **A delegation brief that requires issue-number-namespaced

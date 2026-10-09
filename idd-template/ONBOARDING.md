@@ -754,9 +754,8 @@ The issue-authoring skill is available as an optional companion artifact
 from `skills/issue-authoring/` in the idd-skill source repository. That path is
 the canonical source bundle, not the target repository's discovery path.
 When you install it in a target repository, choose one agent-specific native
-skill directory that the selected runtime reads, such as `.agents/skills/`
-for Codex CLI or OpenCode, `.claude/skills/` for Claude Code, OpenCode,
-Grok Build, and Cursor CLI, or `.opencode/skills/` for OpenCode. Do not add a
+skill directory that the selected runtime reads, such as `.agents/skills/` for
+Codex CLI or `.claude/skills/` for Claude Code. Do not add a
 `.grok/skills/` or `.cursor/skills/` install root. The examples below use
 the Codex destination
 `.agents/skills/issue-authoring/`; change `SKILL_DEST` to the one selected
@@ -809,6 +808,7 @@ for the frontmatter convention its generated table follows.
 .github/instructions/idd-discover.instructions.md
 .github/instructions/idd-roadmap-audit.instructions.md
 .github/instructions/idd-suitability.instructions.md
+.github/instructions/idd-orchestrator.instructions.md
 .github/instructions/idd-claim.instructions.md
 .github/instructions/idd-work.instructions.md
 .github/instructions/idd-pr-submit.instructions.md

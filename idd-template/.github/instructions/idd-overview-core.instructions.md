@@ -44,8 +44,8 @@ phase-specific formats in `idd-review-snapshot.instructions.md`;
 but never create new ones.
 
 - `{agent-id}` is a tool or agent identifier shared across concurrent
-  sessions of the same agent type. For auditability, appending a unique
-  session token is recommended (e.g., `copilot-8122ca35`). `{claim-id}`
+  sessions of the same agent type. For auditability, appending a unique session
+  token is recommended. `{claim-id}`
   remains the authoritative ownership token — agent-id alone never
   proves ownership.
 - `{claim-id}` is an opaque unique token for one active claim lineage
@@ -253,8 +253,8 @@ If `.github/idd/config.json` exists and validates against the canonical
 schema at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
 object overrides the table below. Policy fields such as
-`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
-the recorded machine-readable policy. Absent values keep the gate
+`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are the
+recorded machine-readable policy. Absent values keep the gate
 enabled and default approval actors to
 `owners-and-maintainers-only`.
 
@@ -295,6 +295,7 @@ Read this file first, then load the phase file matching your situation.
 <!-- dprint-ignore-start -->
 | Situation | Read this file |
 | --- | --- |
+| Starting fresh, and the orchestrator activation conditions hold | `idd-orchestrator.instructions.md`, then `idd-discover.instructions.md` |
 | Starting fresh (no active claim) | `idd-discover.instructions.md`, then `idd-claim.instructions.md` |
 | Starting fresh with one explicit issue target | `idd-discover.instructions.md` A0-T, then `idd-claim.instructions.md` |
 | Unsure mid E/F-phase while still owning claim | [Live-session E/F orientation](../../docs/idd-workflow.md#live-session-ef-orientation) |

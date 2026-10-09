@@ -35,6 +35,7 @@ const REQUIRED_INSTRUCTION_FILES = [
   '.github/instructions/idd-overview-core.instructions.md',
   '.github/instructions/idd-discover.instructions.md',
   '.github/instructions/idd-suitability.instructions.md',
+  '.github/instructions/idd-orchestrator.instructions.md',
   '.github/instructions/idd-claim.instructions.md',
   '.github/instructions/idd-work.instructions.md',
   '.github/instructions/idd-pr-submit.instructions.md',

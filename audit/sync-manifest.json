@@ -98,6 +98,7 @@
         "idd-template/.github/instructions/idd-discover.instructions.md",
         "idd-template/.github/instructions/idd-roadmap-audit.instructions.md",
         "idd-template/.github/instructions/idd-suitability.instructions.md",
+        "idd-template/.github/instructions/idd-orchestrator.instructions.md",
         "idd-template/.github/instructions/idd-claim.instructions.md",
         "idd-template/.github/instructions/idd-work.instructions.md",
         "idd-template/.github/instructions/idd-pr-submit.instructions.md",
@@ -319,7 +320,7 @@
         ".github/instructions/idd-overview-appendix.instructions.md",
         ".github/instructions/idd-overview-core.instructions.md"
       ],
-      "limitBytes": 26000
+      "limitBytes": 26500
     },
     {
       "id": "bundle-discovery-phase",
@@ -337,6 +338,14 @@
         ".github/instructions/idd-suitability.instructions.md"
       ],
       "limitBytes": 21000
+    },
+    {
+      "id": "bundle-orchestrator-phase",
+      "description": "Orchestrator fan-out phase file: idd-orchestrator (loaded with bundle-core and bundle-discovery-phase, only when its activation conditions hold)",
+      "files": [
+        ".github/instructions/idd-orchestrator.instructions.md"
+      ],
+      "limitBytes": 4000
     },
     {
       "id": "bundle-resume-phase",
@@ -474,7 +483,15 @@
     "maxBundleLimitBytes": 196000,
     "maxUtilizationPct": 98,
     "noticeUtilizationPct": 95,
-    "exemptBundles": ["bundle-work-phase"]
+    "exemptBundles": ["bundle-work-phase"],
+    "nearCeilingRaiseApprovals": [
+      {
+        "bundle": "bundle-core",
+        "limitBytes": 26500,
+        "issue": 3840,
+        "reason": "Maintainer decision: the orchestrator routing row adds about 140 bytes to bundle-core, and trimming governed guidance to stay at 26,000 was judged to cost more than the raise."
+      }
+    ]
   },
   "docBudgetGuard": {
     "id": "doc-budget-drift",
@@ -645,6 +662,12 @@
       "id": "idd-merge-instructions",
       "source": "idd-template/.github/instructions/idd-merge.instructions.md",
       "target": ".github/instructions/idd-merge.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-orchestrator-instructions",
+      "source": "idd-template/.github/instructions/idd-orchestrator.instructions.md",
+      "target": ".github/instructions/idd-orchestrator.instructions.md",
       "mode": "exact"
     },
     {

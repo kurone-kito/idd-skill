@@ -116,6 +116,7 @@ generated separately in `ONBOARDING.md`.
 .github/instructions/idd-discover.instructions.md
 .github/instructions/idd-merge-handoff.instructions.md
 .github/instructions/idd-merge.instructions.md
+.github/instructions/idd-orchestrator.instructions.md
 .github/instructions/idd-overview-appendix.instructions.md
 .github/instructions/idd-overview-core.instructions.md
 .github/instructions/idd-pr-submit.instructions.md
