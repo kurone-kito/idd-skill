@@ -625,23 +625,24 @@ esac
 # start at Step 3 instead.
 if [ "$AW3S_ENTRY" = "pending" ]; then
   revalidate_head || exit 2
-  # Baseline (#3860 review): the removal events that exist before this attempt.
-  # A second-precision timestamp cannot tell an older event from one this
-  # removal creates, so only an event id absent from this list counts.
-  read_removal_snapshot || {
-    echo "AW3-S removal baseline unreadable; route to AW4" >&2
-    exit 2
-  }
-  REMOVED_IDS_BEFORE=$(printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -c '
-    [.data.repository.pullRequest.timelineItems.nodes[].id | select(. != null)]
-  ') || exit 2
-  REMOVE_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   # Bounded retry (#3503, #3860): a failed removal is retried alone, three
   # attempts in all, before any AW4 hold. A 422 "Could not resolve to a User
   # node" for the default bot (PR #3471) is not a removal result.
+  # Each attempt takes its own baseline and start time immediately before the
+  # mutation (#3860 review), so only an event created after that call can prove
+  # it. The baseline lists the removal event ids that already exist, since a
+  # second-precision timestamp cannot tell an older event from a new one.
   REMOVE_OK=0
   for REMOVE_ATTEMPT in 1 2 3; do
     revalidate_head || exit 2
+    read_removal_snapshot || {
+      echo "AW3-S removal baseline unreadable; route to AW4" >&2
+      exit 2
+    }
+    REMOVED_IDS_BEFORE=$(printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -c '
+      [.data.repository.pullRequest.timelineItems.nodes[].id | select(. != null)]
+    ') || exit 2
+    REMOVE_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     if gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"; then
       REMOVE_OK=1
       break
@@ -669,17 +670,25 @@ if [ "$AW3S_ENTRY" = "pending" ]; then
     exit 2
   }
   BOT_STILL_REQUESTED=$(printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -r --arg bot "{primary-advisory-bot-login}" '
+    # The configured reviewer is matched by account type (#3860 review): a User
+    # node by its exact login, a Bot node by the runtime identity rule, where the
+    # three default Copilot logins are one identity and a bare login equals its
+    # [bot] form.
     def canon($l):
       ($l | ascii_downcase) as $n
       | if ($n == "copilot" or $n == "copilot-pull-request-reviewer"
             or $n == "copilot-pull-request-reviewer[bot]") then "copilot"
         elif ($n | endswith("[bot]")) then $n[0:($n | length) - 5]
         else $n end;
-    canon($bot) as $b
-    | [.data.repository.pullRequest.reviewRequests.nodes[]
-        | select((.requestedReviewer.__typename? // "") == "Bot")
-        | (.requestedReviewer.login? // "") | select(. != "") | canon(.)]
-    | index($b) != null
+    def is_configured($r):
+      (($r.__typename? // "") | ascii_downcase) as $t
+      | (($r.login? // "") | ascii_downcase) as $l
+      | ($bot | ascii_downcase) as $b
+      | (($t == "user" and $l == $b) or ($t == "bot" and canon($l) == canon($b)));
+    [.data.repository.pullRequest.reviewRequests.nodes[]
+      | .requestedReviewer // empty
+      | select(is_configured(.))]
+    | length > 0
   ') || exit 2
   BOT_REMOVED_SINCE=$(printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -r \
     --arg bot "{primary-advisory-bot-login}" --arg since "$REMOVE_STARTED_AT" \
@@ -690,13 +699,16 @@ if [ "$AW3S_ENTRY" = "pending" ]; then
             or $n == "copilot-pull-request-reviewer[bot]") then "copilot"
         elif ($n | endswith("[bot]")) then $n[0:($n | length) - 5]
         else $n end;
-    canon($bot) as $b
-    | [.data.repository.pullRequest.timelineItems.nodes[]
-        | select((.requestedReviewer.__typename? // "") == "Bot")
-        | select((.requestedReviewer.login? // "") != "")
-        | select(canon(.requestedReviewer.login) == $b)
-        | select((.id as $id | $before | index($id)) == null)
-        | select(.createdAt >= $since)]
+    def is_configured($r):
+      (($r.__typename? // "") | ascii_downcase) as $t
+      | (($r.login? // "") | ascii_downcase) as $l
+      | ($bot | ascii_downcase) as $b
+      | (($t == "user" and $l == $b) or ($t == "bot" and canon($l) == canon($b)));
+    [.data.repository.pullRequest.timelineItems.nodes[]
+      | select((.id as $id | $before | index($id)) == null)
+      | select(.createdAt >= $since)
+      | .requestedReviewer // empty
+      | select(is_configured(.))]
     | length > 0
   ') || exit 2
   if [ "$BOT_STILL_REQUESTED" = "true" ] && [ "$BOT_REMOVED_SINCE" != "true" ]; then

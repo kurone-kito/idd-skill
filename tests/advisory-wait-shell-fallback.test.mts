@@ -1012,11 +1012,24 @@ test('AW3-S stops when the removal snapshot is truncated (#3860)', {
   assert.match(run.stderr, /removal evidence truncated; route to AW4/);
 });
 
-test('AW3-S does not count a human request that carries the bot login (#3860)', {
+test('AW3-S counts a configured User account that is still requested (#3860)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const human = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"requestedReviewer":{"__typename":"User","login":"${BOT_LOGIN}"}}]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}`;
-  const run = runAw3s({ prEditExit: 0, proof: human });
+  const user = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"requestedReviewer":{"__typename":"User","login":"${BOT_LOGIN}"}}]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}`;
+  const run = runAw3s({ prEditExit: 0, proof: user });
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.registrationCalls, 0);
+  assert.match(
+    run.stderr,
+    /removal not proven: bot still requested; route to AW4/,
+  );
+});
+
+test('AW3-S does not treat a User node spelled with the [bot] suffix as the bot (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const user = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"requestedReviewer":{"__typename":"User","login":"${BOT_LOGIN}[bot]"}}]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}`;
+  const run = runAw3s({ prEditExit: 0, proof: user });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.registrationCalls, 1);
 });
