@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -3338,3 +3339,357 @@ test('CLI: --backfill-tokens writes on a matching lock and exits 0, and exits no
     teardown(fixture);
   }
 });
+
+// Birth-time rule for the git-admin directory (kurone-kito/idd-skill#3900).
+// An acquire reads the git-admin and common directories twice: before and
+// after the clone-mutex wait. Each case below replaces those two reads in a
+// worker whose fs.statSync is wrapped for the two canonical directory paths
+// only, so the verdict depends on the synthesized identities and not on the
+// host filesystem. The worker reports how many synthesized reads it served
+// per directory, and each case asserts two reads per directory before it
+// asserts the outcome.
+
+interface SyntheticRead {
+  dev: string;
+  ino: string;
+  birth: string;
+  ctime: string;
+}
+
+interface SyntheticReads {
+  first: SyntheticRead;
+  second: SyntheticRead;
+}
+
+interface SyntheticAcquireRun {
+  served: { admin: number; common: number };
+  outcome: { mode: string } | null;
+  error: string | null;
+}
+
+function syntheticRead(
+  birth: number,
+  ctime: number,
+  dev = '1',
+  ino = '100',
+): SyntheticRead {
+  return { dev, ino, birth: String(birth), ctime: String(ctime) };
+}
+
+function gitOutput(cwd: string, args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    env: fixtureEnv(),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+async function runSyntheticAcquire(
+  fixture: { primary: string; worktree: string },
+  identities: { admin: SyntheticReads; common: SyntheticReads },
+): Promise<SyntheticAcquireRun> {
+  const adminPath = realpathSync(
+    gitOutput(fixture.worktree, ['rev-parse', '--absolute-git-dir']),
+  );
+  const commonPath = realpathSync(
+    gitOutput(fixture.worktree, [
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-common-dir',
+    ]),
+  );
+  const worker = new Worker(
+    `
+      const { parentPort, workerData } = require('node:worker_threads');
+      const fs = require('node:fs');
+      const served = { admin: 0, common: 0 };
+      const originalStatSync = fs.statSync;
+      const kindOf = (target) => {
+        if (workerData.paths.admin.includes(target)) return 'admin';
+        if (workerData.paths.common.includes(target)) return 'common';
+        return null;
+      };
+      fs.statSync = function statSync(target, options) {
+        const kind =
+          options && options.bigint === true ? kindOf(String(target)) : null;
+        if (kind === null) return originalStatSync.call(fs, target, options);
+        served[kind] += 1;
+        const pair = workerData.identities[kind];
+        const read = served[kind] === 1 ? pair.first : pair.second;
+        return {
+          isDirectory: () => true,
+          dev: BigInt(read.dev),
+          ino: BigInt(read.ino),
+          birthtimeNs: BigInt(read.birth),
+          ctimeNs: BigInt(read.ctime),
+        };
+      };
+      require('node:module').syncBuiltinESMExports();
+      import(workerData.moduleUrl).then(({ acquireClaimLock }) => {
+        try {
+          const outcome = acquireClaimLock(
+            workerData.worktree,
+            'agent-a',
+            'claim-a',
+            false,
+          );
+          parentPort.postMessage({ served, outcome: { mode: outcome.mode } });
+        } catch (error) {
+          parentPort.postMessage({
+            served,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        parentPort.close();
+      }).catch((error) => {
+        parentPort.postMessage({
+          served,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        parentPort.close();
+      });
+    `,
+    {
+      eval: true,
+      workerData: {
+        moduleUrl: pathToFileURL(CLI_PATH).href,
+        worktree: fixture.worktree,
+        paths: { admin: [adminPath], common: [commonPath] },
+        identities: identities,
+      },
+    },
+  );
+  return await new Promise<SyntheticAcquireRun>((resolve, reject) => {
+    worker.once(
+      'message',
+      (message: {
+        served: { admin: number; common: number };
+        outcome?: { mode: string };
+        error?: string;
+      }) => {
+        resolve({
+          served: message.served,
+          outcome: message.outcome ?? null,
+          error: message.error ?? null,
+        });
+      },
+    );
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      reject(new Error(`claim-lock worker exited ${code} without a report`));
+    });
+  });
+}
+
+const UNCHANGED_COMMON: SyntheticReads = {
+  first: syntheticRead(0, 0, '2', '200'),
+  second: syntheticRead(0, 0, '2', '200'),
+};
+
+const UNCHANGED_ADMIN: SyntheticReads = {
+  first: syntheticRead(2000, 2000),
+  second: syntheticRead(2000, 2000),
+};
+
+const GIT_ADMIN_IDENTITY_CASES: Array<{
+  title: string;
+  admin: SyntheticReads;
+  expected: 'accepted' | 'refused';
+}> = [
+  {
+    title:
+      'git-admin identity rule (row a): a later birth time on the second read is refused',
+    admin: {
+      first: syntheticRead(1000, 2000),
+      second: syntheticRead(3000, 4000),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row a): an earlier birth time on the second read is refused',
+    admin: {
+      first: syntheticRead(1000, 2000),
+      second: syntheticRead(500, 4000),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row a2): a refusal holds when the second change time equals the first',
+    admin: {
+      first: syntheticRead(1000, 2000),
+      second: syntheticRead(3000, 2000),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row b): an unchanged birth time with a moved change time is accepted',
+    admin: {
+      first: syntheticRead(1000, 1500),
+      second: syntheticRead(1000, 2500),
+    },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row b): a birth time equal to the first change time is accepted when it is unchanged',
+    admin: {
+      first: syntheticRead(1500, 1500),
+      second: syntheticRead(1500, 2500),
+    },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row c1): a zero birth time on the first read is accepted',
+    admin: {
+      first: syntheticRead(0, 2000),
+      second: syntheticRead(3000, 4000),
+    },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row c1): a zero birth time on the second read is accepted',
+    admin: {
+      first: syntheticRead(3000, 4000),
+      second: syntheticRead(0, 5000),
+    },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row c2): a birth time equal to the change time on both reads is accepted',
+    admin: {
+      first: syntheticRead(2000, 2000),
+      second: syntheticRead(5000, 5000),
+    },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row d): a first read with birth equal to change is refused against a differing second read',
+    admin: {
+      first: syntheticRead(2000, 2000),
+      second: syntheticRead(3000, 4000),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row d-prime): a second read with birth equal to change is refused against a differing first read',
+    admin: {
+      first: syntheticRead(1000, 2000),
+      second: syntheticRead(3000, 3000),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row f): equal usable birth times with a different inode are refused',
+    admin: {
+      first: syntheticRead(1000, 2000),
+      second: syntheticRead(1000, 3000, '1', '101'),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row f): equal usable birth times with a different device are refused',
+    admin: {
+      first: syntheticRead(1000, 2000),
+      second: syntheticRead(1000, 3000, '2', '100'),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row g): an unusable zero birth time with a different inode is refused',
+    admin: {
+      first: syntheticRead(0, 2000),
+      second: syntheticRead(1000, 3000, '1', '101'),
+    },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row g): unusable birth times equal to change times with a different device are refused',
+    admin: {
+      first: syntheticRead(2000, 2000),
+      second: syntheticRead(5000, 5000, '2', '100'),
+    },
+    expected: 'refused',
+  },
+];
+
+for (const testCase of GIT_ADMIN_IDENTITY_CASES) {
+  test(testCase.title, async () => {
+    const fixture = setupLinkedWorktree();
+    try {
+      const run = await runSyntheticAcquire(fixture, {
+        admin: testCase.admin,
+        common: UNCHANGED_COMMON,
+      });
+      assert.deepEqual(run.served, { admin: 2, common: 2 });
+      if (testCase.expected === 'accepted') {
+        assert.equal(run.error, null);
+        assert.equal(run.outcome?.mode, 'acquired');
+      } else {
+        assert.equal(run.outcome, null);
+        assert.match(run.error ?? '', /identity changed/);
+      }
+    } finally {
+      teardown(fixture);
+    }
+  });
+}
+
+test('git-admin identity rule (row e): the common directory ignores a usable birth-time difference', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const run = await runSyntheticAcquire(fixture, {
+      admin: UNCHANGED_ADMIN,
+      common: {
+        first: syntheticRead(1000, 2000, '2', '200'),
+        second: syntheticRead(3000, 4000, '2', '200'),
+      },
+    });
+    assert.deepEqual(run.served, { admin: 2, common: 2 });
+    assert.equal(run.error, null);
+    assert.equal(run.outcome?.mode, 'acquired');
+  } finally {
+    teardown(fixture);
+  }
+});
+
+for (const [title, second] of [
+  [
+    'git-admin identity rule (row e-prime): the common directory with equal usable birth times and a different inode is refused',
+    syntheticRead(1000, 3000, '2', '201'),
+  ],
+  [
+    'git-admin identity rule (row e-prime): the common directory with equal usable birth times and a different device is refused',
+    syntheticRead(1000, 3000, '3', '200'),
+  ],
+] as const) {
+  test(title, async () => {
+    const fixture = setupLinkedWorktree();
+    try {
+      const run = await runSyntheticAcquire(fixture, {
+        admin: UNCHANGED_ADMIN,
+        common: {
+          first: syntheticRead(1000, 2000, '2', '200'),
+          second,
+        },
+      });
+      assert.deepEqual(run.served, { admin: 2, common: 2 });
+      assert.equal(run.outcome, null);
+      assert.match(run.error ?? '', /identity changed/);
+    } finally {
+      teardown(fixture);
+    }
+  });
+}

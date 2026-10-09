@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -8514,6 +8515,7 @@ function runCli(
   sandbox: Sandbox,
   issueNumber: number,
   extraArgs: string[],
+  extraEnv: Record<string, string> = {},
 ): SpawnSyncReturns<string> {
   execFileSync(
     process.execPath,
@@ -8558,6 +8560,7 @@ function runCli(
       encoding: 'utf8',
       env: {
         ...process.env,
+        ...extraEnv,
         GIT_AUTHOR_NAME: GIT_ENV.GIT_AUTHOR_NAME,
         GIT_AUTHOR_EMAIL: GIT_ENV.GIT_AUTHOR_EMAIL,
         GIT_COMMITTER_NAME: GIT_ENV.GIT_COMMITTER_NAME,
@@ -8766,3 +8769,403 @@ test('sandbox: default (no --apply) never mutates even with the operator flag', 
     sandbox.cleanup();
   }
 });
+
+// Birth-time rule for the recovery identity comparison (kurone-kito/idd-skill
+// #3900). The seam rows replace the worktree or admin directory identity on
+// the two reads that step 4 takes, one directory at a time. The production
+// cases run the real reader in a recovery child process whose preload wraps
+// fs.statSync for the two directories; the preload is active only in that
+// process, never in the test process or in the claim-lock preflight.
+
+type RecoveryIdentity = {
+  dev: string;
+  ino: string;
+  birthtimeNs?: string | null;
+  ctimeNs?: string | null;
+};
+
+const SEAM_WORKTREE = '/repo/linked';
+const SEAM_ADMIN = '/repo/primary/.git/worktrees/linked';
+const SEAM_UNCHANGED: RecoveryIdentity = { dev: '9', ino: '9' };
+
+function seamReplacementRun(
+  varied: 'worktree' | 'admin',
+  first: RecoveryIdentity,
+  second: RecoveryIdentity,
+) {
+  let phase: 'before' | 'after' = 'before';
+  let removeCalls = 0;
+  const deps = fakeDeps({
+    checkLock: () => ({ path: '/x', present: false }),
+    confirmBlock: () => ({
+      ok: true,
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'released-claim-local-worktree-occupied',
+        active_claim: null,
+        evidence: {
+          released_claim: { claim_id: null, branch: 'issue/1-task' },
+          local_worktree: {
+            status: 'occupied',
+            paths: [SEAM_WORKTREE],
+            reason: null,
+          },
+        },
+      },
+      error: null,
+    }),
+    acquireCloneLock: () => {
+      phase = 'after';
+      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+    },
+    readDirectoryIdentity: (path) => {
+      const which =
+        path === SEAM_WORKTREE
+          ? 'worktree'
+          : path === SEAM_ADMIN
+            ? 'admin'
+            : null;
+      if (which !== varied) return SEAM_UNCHANGED;
+      return phase === 'before' ? first : second;
+    },
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        removeCalls += 1;
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  return { verdict, removeCalls };
+}
+
+const SEAM_ROWS: Array<{
+  title: string;
+  first: RecoveryIdentity;
+  second: RecoveryIdentity;
+  expected: 'accepted' | 'refused';
+}> = [
+  {
+    title: 'git-admin identity rule (row a): a later birth time is refused',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'refused',
+  },
+  {
+    title: 'git-admin identity rule (row a): an earlier birth time is refused',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '500', ctimeNs: '4000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row a2): a refusal holds when the change time is unchanged',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '2000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row b): an unchanged birth time with a moved change time is accepted',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: '1500' },
+    second: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: '2500' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row c2): a birth time equal to the change time on both reads is accepted',
+    first: { dev: '1', ino: '100', birthtimeNs: '2000', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '5000', ctimeNs: '5000' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row d): a first read with birth equal to change is refused against a differing second read',
+    first: { dev: '1', ino: '100', birthtimeNs: '2000', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row d-prime): a second read with birth equal to change is refused against a differing first read',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '3000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row f): equal usable birth times with a different inode are refused',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: '2000' },
+    second: { dev: '1', ino: '101', birthtimeNs: '1000', ctimeNs: '3000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row g): an unusable zero birth time with a different inode is refused',
+    first: { dev: '1', ino: '100', birthtimeNs: '0', ctimeNs: '2000' },
+    second: { dev: '1', ino: '101', birthtimeNs: '1000', ctimeNs: '3000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row g): unusable birth times equal to change times with a different device are refused',
+    first: { dev: '1', ino: '100', birthtimeNs: '2000', ctimeNs: '2000' },
+    second: { dev: '2', ino: '100', birthtimeNs: '5000', ctimeNs: '5000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row c1, absent field): a zero birth time written as an absent field is accepted',
+    first: { dev: '1', ino: '100', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row c1, null field): a zero birth time written as null is accepted',
+    first: { dev: '1', ino: '100', birthtimeNs: null, ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row c1, "0" field): a zero birth time written as "0" is accepted',
+    first: { dev: '1', ino: '100', birthtimeNs: '0', ctimeNs: '2000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (row g, absent field): a zero birth time written as an absent field with a different inode is refused',
+    first: { dev: '1', ino: '100', ctimeNs: '2000' },
+    second: { dev: '1', ino: '101', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row g, null field): a zero birth time written as null with a different inode is refused',
+    first: { dev: '1', ino: '100', birthtimeNs: null, ctimeNs: '2000' },
+    second: { dev: '1', ino: '101', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (row g, "0" field): a zero birth time written as "0" with a different inode is refused',
+    first: { dev: '1', ino: '100', birthtimeNs: '0', ctimeNs: '2000' },
+    second: { dev: '1', ino: '101', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (absent change time): two different birth times with no change time, same inode, are accepted',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (null change time): two different birth times with a null change time, same inode, are accepted',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000', ctimeNs: null },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: null },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (absent change time): two different birth times with no change time and a different inode are refused',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000' },
+    second: { dev: '1', ino: '101', birthtimeNs: '3000' },
+    expected: 'refused',
+  },
+  {
+    title:
+      'git-admin identity rule (no change time on one read): a birth time without a change time next to a complete read is accepted',
+    first: { dev: '1', ino: '100', birthtimeNs: '1000' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (fields on one read only): the same device and inode compare by dev and ino alone and are accepted',
+    first: { dev: '1', ino: '100' },
+    second: { dev: '1', ino: '100', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'accepted',
+  },
+  {
+    title:
+      'git-admin identity rule (fields on one read only): a different inode compares by dev and ino alone and is refused',
+    first: { dev: '1', ino: '100' },
+    second: { dev: '1', ino: '101', birthtimeNs: '3000', ctimeNs: '4000' },
+    expected: 'refused',
+  },
+];
+
+for (const row of SEAM_ROWS) {
+  test(`${row.title} (readDirectoryIdentity seam, worktree and admin)`, () => {
+    for (const varied of ['worktree', 'admin'] as const) {
+      const { verdict, removeCalls } = seamReplacementRun(
+        varied,
+        row.first,
+        row.second,
+      );
+      const label = `${varied} directory`;
+      if (row.expected === 'refused') {
+        assert.equal(removeCalls, 0, label);
+        assert.match(
+          verdict.result,
+          /identity changed while waiting for the clone lock/,
+          label,
+        );
+        assert.equal(verdict.plan.removal?.ran, false, label);
+      } else {
+        assert.doesNotMatch(verdict.result, /identity changed/, label);
+        assert.equal(verdict.plan.removal?.ran, true, label);
+      }
+    }
+  });
+}
+
+// The preload runs only inside the recovery child (argv[1] names the
+// recovery script), counts the reads it serves per directory, and reports the
+// counts at exit so each case can assert two reads per directory first.
+const BIRTH_SHIM_SOURCE = `
+const fs = require('node:fs');
+const path = require('node:path');
+if (path.basename(process.argv[1] || '') === 'local-worktree-recovery.mjs') {
+  const plan = JSON.parse(process.env.IDD_LWR_SHIM_PLAN);
+  const reportPath = process.env.IDD_LWR_SHIM_REPORT;
+  const served = { worktree: 0, admin: 0 };
+  const originalStatSync = fs.statSync;
+  let pinnedWorktree = null;
+  fs.statSync = function statSync(target, options) {
+    const real = originalStatSync.call(fs, target, options);
+    if (!options || options.bigint !== true) return real;
+    const text = String(target);
+    if (plan.worktree.includes(text)) {
+      served.worktree += 1;
+      if (pinnedWorktree === null) {
+        pinnedWorktree = { birth: real.birthtimeNs, ctime: real.ctimeNs };
+      }
+      return {
+        isDirectory: () => real.isDirectory(),
+        dev: real.dev,
+        ino: real.ino,
+        birthtimeNs: pinnedWorktree.birth,
+        ctimeNs: pinnedWorktree.ctime,
+      };
+    }
+    if (plan.admin.includes(text)) {
+      served.admin += 1;
+      const reads = plan.adminReads;
+      const read = reads[Math.min(served.admin, reads.length) - 1];
+      return {
+        isDirectory: () => real.isDirectory(),
+        dev: real.dev,
+        ino: real.ino,
+        birthtimeNs: BigInt(read.birth),
+        ctimeNs: BigInt(read.ctime),
+      };
+    }
+    return real;
+  };
+  require('node:module').syncBuiltinESMExports();
+  process.on('exit', () => {
+    fs.writeFileSync(reportPath, JSON.stringify(served));
+  });
+}
+`;
+
+const PRODUCTION_BIRTH_CASES: Array<{
+  title: string;
+  adminReads: Array<{ birth: string; ctime: string }>;
+  expected: 'accepted' | 'refused';
+}> = [
+  {
+    title:
+      'production reader, refused: a birth time that differs from its change time, then a different birth time, with the same device and inode',
+    adminReads: [
+      { birth: '1000', ctime: '2000' },
+      { birth: '3000', ctime: '4000' },
+    ],
+    expected: 'refused',
+  },
+  {
+    title:
+      'production reader, mirror: a birth time equal to the change time on both reads, with the change time moved, proceeds',
+    adminReads: [
+      { birth: '2000', ctime: '2000' },
+      { birth: '5000', ctime: '5000' },
+    ],
+    expected: 'accepted',
+  },
+  {
+    title:
+      'production reader, child write: the same non-zero birth time with the change time moved, proceeds',
+    adminReads: [
+      { birth: '1000', ctime: '2000' },
+      { birth: '1000', ctime: '3000' },
+    ],
+    expected: 'accepted',
+  },
+];
+
+for (const testCase of PRODUCTION_BIRTH_CASES) {
+  test(testCase.title, () => {
+    const sandbox = buildSandbox('issue/103-task');
+    const restoreGh = stubGhForStaleClaim({
+      issueNumber: 103,
+      branch: 'issue/103-task',
+      claimId: 'claim-103',
+      createdAt: '2026-09-24T00:00:00Z',
+    });
+    try {
+      const adminRaw = execFileSync(
+        'git',
+        ['rev-parse', '--absolute-git-dir'],
+        { cwd: sandbox.linked, encoding: 'utf8' },
+      ).trim();
+      const shimPath = join(sandbox.root, 'lwr-birth-shim.cjs');
+      const reportPath = join(sandbox.root, 'lwr-birth-report.json');
+      writeFileSync(shimPath, BIRTH_SHIM_SOURCE);
+      const plan = {
+        worktree: [sandbox.linked, realpathSync(sandbox.linked)],
+        admin: [adminRaw, realpathSync(adminRaw)],
+        adminReads: testCase.adminReads,
+      };
+      const result = runCli(
+        sandbox,
+        103,
+        ['--apply', '--operator-confirmed-no-live-session'],
+        {
+          NODE_OPTIONS: `--require ${shimPath}`,
+          IDD_LWR_SHIM_PLAN: JSON.stringify(plan),
+          IDD_LWR_SHIM_REPORT: reportPath,
+        },
+      );
+      const served = JSON.parse(readFileSync(reportPath, 'utf8'));
+      assert.deepEqual(served, { worktree: 2, admin: 2 });
+      if (testCase.expected === 'refused') {
+        assert.notEqual(result.status, 0, result.stdout);
+        const output = JSON.parse(result.stdout);
+        assert.match(output.result, /identity changed/);
+        assert.equal(output.plan.removal?.ran, false);
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        const output = JSON.parse(result.stdout);
+        assert.doesNotMatch(output.result, /identity changed/);
+        assert.equal(output.plan.removal?.ran, true);
+        const worktreeList = execFileSync(
+          'git',
+          ['worktree', 'list', '--porcelain'],
+          { cwd: sandbox.primary, encoding: 'utf8' },
+        );
+        assert.ok(!worktreeList.includes(sandbox.linked));
+      }
+    } finally {
+      restoreGh();
+      sandbox.cleanup();
+    }
+  });
+}

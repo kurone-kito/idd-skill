@@ -541,10 +541,16 @@ function resolveAcquireWorktreeFacts(worktree: string): {
  * resolved path would then let this stale caller install its old claim lock
  * in the replacement worktree. Device/inode identity distinguishes that
  * replacement without treating ordinary child-file changes as a mismatch.
+ * Some filesystems hand a deleted directory's inode number to the next
+ * directory created, so the git-admin comparison also uses the birth time
+ * (see {@link sameAdminDirectoryIdentity}); the change time is read only to
+ * tell whether a birth time is genuine.
  */
 interface DirectoryIdentity {
   dev: bigint;
   ino: bigint;
+  birthtimeNs: bigint;
+  ctimeNs: bigint;
 }
 
 function readDirectoryIdentity(path: string): DirectoryIdentity {
@@ -553,7 +559,12 @@ function readDirectoryIdentity(path: string): DirectoryIdentity {
     if (!stat.isDirectory()) {
       throw new Error('not a directory');
     }
-    return { dev: stat.dev, ino: stat.ino };
+    return {
+      dev: stat.dev,
+      ino: stat.ino,
+      birthtimeNs: stat.birthtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
   } catch (error) {
     throw new Error(
       `could not establish git-admin directory identity for ${path}: ${error instanceof Error ? error.message : String(error)}`,
@@ -566,6 +577,48 @@ function sameDirectoryIdentity(
   right: DirectoryIdentity,
 ): boolean {
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+/**
+ * A single read carries a birth time when the filesystem reports a non-zero
+ * one. Platforms without a birth time report `0n`, which must never count as
+ * a replacement.
+ */
+function carriesBirthTime(identity: DirectoryIdentity): boolean {
+  return identity.birthtimeNs !== 0n;
+}
+
+/**
+ * A pair of reads has a usable birth time when both reads carry one and at
+ * least one read's birth time differs from that same read's change time. A
+ * platform that mirrors the change time into the birth time, or a directory
+ * that has had no child write since creation, does not qualify.
+ */
+function hasUsableBirthTime(
+  left: DirectoryIdentity,
+  right: DirectoryIdentity,
+): boolean {
+  return (
+    carriesBirthTime(left) &&
+    carriesBirthTime(right) &&
+    (left.birthtimeNs !== left.ctimeNs || right.birthtimeNs !== right.ctimeNs)
+  );
+}
+
+/**
+ * Compare a git-admin directory across the clone-mutex wait. Device and inode
+ * must match; when the pair has a usable birth time, the birth times must
+ * match too. This catches a replacement that reused the inode number, and it
+ * still accepts an unchanged directory on a platform whose birth time is
+ * missing or mirrors the change time.
+ */
+function sameAdminDirectoryIdentity(
+  left: DirectoryIdentity,
+  right: DirectoryIdentity,
+): boolean {
+  if (!sameDirectoryIdentity(left, right)) return false;
+  if (!hasUsableBirthTime(left, right)) return true;
+  return left.birthtimeNs === right.birthtimeNs;
 }
 
 /**
@@ -959,7 +1012,7 @@ export function acquireClaimLock(
       postWaitFacts.isPrimary !== initialFacts.isPrimary ||
       postWaitFacts.adminDir !== initialFacts.adminDir ||
       postWaitFacts.commonDir !== initialFacts.commonDir ||
-      !sameDirectoryIdentity(
+      !sameAdminDirectoryIdentity(
         postWaitFacts.adminIdentity,
         initialFacts.adminIdentity,
       ) ||
