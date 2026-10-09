@@ -149,14 +149,19 @@ runtime-file lists in item 4, which were checked against the source.
    ```
 
    The test exempts `--help`
-   itself, so write its own usage line by hand. Add `<stem>` to
+   itself, so write its own usage line by hand. The test reads the spec only
+   when its closing `} as const;` is on a line of its own, and it compares the
+   flags both ways. A flag shown in `--help` but absent from the spec fails too.
+   If `--help` names another command's flag, that helper needs an entry in
+   `CROSS_REFERENCE_FLAGS` in `tests/help-text-flags.test.mts`. Add `<stem>` to
    `COVERED_HELPERS` in `src/scripts/repository-inventory-audit.mts`, and commit
    the regenerated `scripts/repository-inventory-audit.mjs` with it.
    `audit-docs --check` fails with `help-flag-coverage` when a helper that
-   declares a flag spec is missing from `COVERED_HELPERS`. A helper that cannot
-   declare a flag spec must go into `EXCLUDED_HELPERS` in the same file, with a
-   reason, and must not declare one. The audit checks only the entries already
-   listed, so it does not catch a helper left out of both lists.
+   declares a flag spec is missing from `COVERED_HELPERS`, even if it is in
+   neither list. A helper that cannot declare a flag spec must go into
+   `EXCLUDED_HELPERS` in the same file, with a reason, and must not declare one.
+   The audit does not catch a helper with no detectable spec that is left out of
+   both lists.
 3. If a Markdown file invokes the helper as a bare `node scripts/<stem>.mjs`,
    and the helper has no runtime catalog entry (item 4), add entries for it in
    `src/scripts/repository-inventory-audit.mts`:
