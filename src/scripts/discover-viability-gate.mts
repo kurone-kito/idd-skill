@@ -523,8 +523,9 @@ function cueRule(
  * every wording; the tests pin what it does cover. The array is exported, and
  * deliberately mutable, only so the tests can remove one entry at a time and
  * prove that a row passes without it; production code never mutates it. Keep
- * every pattern free of the `g` and `y` flags, because `RegExp.prototype.test`
- * is then stateful.
+ * every cue pattern free of the `g` and `y` flags, because
+ * `RegExp.prototype.test` is then stateful. A shape pattern is only ever given
+ * to `replace`, which resets `lastIndex` itself, so it carries `g` on purpose.
  */
 export const BARE_NOUN_DEPENDENCY_RULES: BareNounDependencyRule[] = [
   cueRule('need', /\bneed(?:s|ed|ing)?\b/i, BARE_NOUN_NEED_SHAPE_PATTERN),

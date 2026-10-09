@@ -3666,6 +3666,15 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
   { list: 'C', body: 'The deploy key needs to be obtained from ops.' },
   { list: 'C', body: 'The key needs to come from the vendor.' },
   { list: 'C', body: 'A key is needed from ops.' },
+  // List C, added (#3890): the three words the issue names as the reason the
+  // exempt article list stays short, and `needed`, which the exemption does not
+  // cover. The last row shows that a noun which only ends in `key` is not a
+  // bare key, so its verb keeps counting in the window of the real one.
+  { list: 'C', body: 'The key needs their approval.' },
+  { list: 'C', body: 'The key needs one from ops.' },
+  { list: 'C', body: 'The key needs another from finance.' },
+  { list: 'C', body: 'The key needed a value from ops.' },
+  { list: 'C', body: 'The turkey needs a default. The key is set.' },
   { list: 'C', body: 'We cannot ship without a token.' },
   { list: 'C', body: 'Fetch the token from infra.' },
   { list: 'C', body: 'Retrieve the key from ops.' },
@@ -3794,6 +3803,14 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
     list: 'F',
     body: '...so the new key needs the matching enum clause there as well, not only a place in the key list.',
   },
+  // List F, added (#3890): two exempt sentences in one window, which only a
+  // global removal passes; a capitalized noun; a plural noun.
+  {
+    list: 'F',
+    body: 'The new key needs a default value. Each token needs a description.',
+  },
+  { list: 'F', body: 'Key needs a default value.' },
+  { list: 'F', body: 'Keys need a default value.' },
 ];
 
 function evaluateBareNounBody(body: string) {
@@ -3841,6 +3858,9 @@ test('#3890: known limit, an article-led external phrase after a bare key verb p
     'The new key requires an approval from legal.',
     'The key requires an admin.',
     'The keys need a new value from ops.',
+    // The removal reaches the window of the second noun too. The #3830 row
+    // needs that reach, so this residual shape passes for the same reason.
+    'Each token needs a key from ops.',
   ];
   for (const body of residual) {
     assert.equal(evaluateBareNounBody(body).pass, true, JSON.stringify(body));
