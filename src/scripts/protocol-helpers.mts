@@ -10646,6 +10646,10 @@ export function resolvePrFirstCommitAt(
  * Semantics:
  *
  * - forced-handoff mode disabled → never honor;
+ * - `linkedPrLookupFailed` (the Resume lookup exception, #3276): a marker
+ *   that is not `issue-plus-pr` is refused whatever the PR set, because an
+ *   unreadable PR state cannot prove that no PR backs the claim. An
+ *   `issue-plus-pr` marker is judged by the PR set as usual.
  * - no open linked PR backs the claim (`expectedLinkedPrReferences` empty) →
  *   honor an `issue-only` (or any) handoff as before;
  * - an open linked PR backs the claim:

@@ -19,6 +19,7 @@ import {
 import {
   renderClaimedByMarker,
   renderExternalCheckWaiverComment,
+  renderForcedHandoffComment,
   renderOutOfLoopMarker,
   renderReviewReplyStamp,
   renderUnclaimedByMarker,
@@ -17340,4 +17341,43 @@ test('a reused trace capture drops an ignored-handoff field from an earlier eval
     capture,
   );
   assert.equal('ignoredForcedHandoffs' in capture, false);
+});
+
+test('buildPreMergeReadinessSummary carries an ignored handoff for the active claim as a top-level field', () => {
+  // End to end: a refused handoff for the active claim reaches the report, and
+  // the claim is still the one the fixture expects, so ownership still matches.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const claimed = fixture.input.claimEvents[0];
+  const branch = /branch: (\S+)/.exec(String(claimed.body))?.[1] ?? '';
+  const handoff = {
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-12T00:00:00Z',
+    lastEditedAt: null,
+    body: renderForcedHandoffComment({
+      oldAgentId: 'github-copilot-cli',
+      oldClaimId: 'claim-123',
+      newAgentId: 'github-copilot-cli-new',
+      newClaimId: 'claim-456',
+      branch,
+      forcedBy: 'kurone-kito',
+      reason: 'handoff',
+      timestamp: '2026-05-12T00:00:00Z',
+      contextScope: 'issue-only',
+    }),
+  };
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, claimEvents: [claimed, handoff] },
+    fixture.options,
+  );
+  assert.deepEqual(summary.ignoredForcedHandoffs, [
+    {
+      oldClaimId: 'claim-123',
+      newClaimId: 'claim-456',
+      cause: 'forced-by-unauthorized',
+    },
+  ]);
+  assert.equal(
+    (summary.claim as { matchesExpectedClaim: boolean }).matchesExpectedClaim,
+    true,
+  );
 });
