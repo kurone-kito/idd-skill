@@ -35,6 +35,7 @@ import {
   summarizeClaimValidation as summarizeClaimValidationImpl,
 } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
   buildForcedHandoffEnabledGate,
   evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
@@ -42,6 +43,7 @@ import {
   fetchOpenLinkedPrReferences,
   loadPolicy,
   resolveAssertOutcome,
+  resolveResumeLinkedPrState,
 } from '../src/scripts/resume-claim-routing.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -5354,4 +5356,217 @@ test('#3871: a DISCONNECTED_EVENT removes a manually linked PR that the closing 
   const result = fetchOpenLinkedPrReferences(port, 11, REPO);
   assert.equal(result.lookupFailed, false);
   assert.deepEqual([...result.references], []);
+});
+
+// #3871: the first-commit time. Resume judges an issue-only handoff against
+// a PR-backed claim with the same time rule the merge gate uses (#1058), and
+// it reads the commits only when such a marker is among the fetched comments.
+const COMMIT_BEFORE_MARKER = '2026-05-12T10:00:30Z';
+const COMMIT_AFTER_MARKER = '2026-05-12T10:30:00Z';
+
+function commitAt(date: string) {
+  return { commit: { committer: { date } } };
+}
+
+function resumeWithLinkedPr(
+  port: ProviderPort,
+  events: ReturnType<typeof forcedHandoffEvents>,
+) {
+  const hasIssueOnlyHandoff = events.some((event) =>
+    event.body.includes('"contextScope":"issue-only"'),
+  );
+  const state = resolveResumeLinkedPrState(port, 11, REPO, {
+    forcedHandoffEnabled: true,
+    hasIssueOnlyHandoff,
+  });
+  return route(events, state.isForcedHandoffEnabled, state.lookupFailed);
+}
+
+function openClosingPr(number: number) {
+  return {
+    nodes: [closingNode(number, 'OPEN', REPO)],
+    hasNextPage: false,
+    endCursor: null,
+  };
+}
+
+test('#3871: an issue-only handoff that predates the first commit of a closing-reference PR is honored', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+test('#3871: an issue-only handoff posted after the first commit of a closing-reference PR is refused', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_BEFORE_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.notEqual(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: an issue-plus-pr handoff naming the backing PR is honored whatever the commit times', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_BEFORE_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+  );
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+test('#3871: an issue-plus-pr handoff naming a different PR is refused', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '88' }),
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: a failed commits read is a lookup failure and the issue-only handoff is refused', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommitErrors: { 77: 'commits unavailable' },
+  });
+  // One resolution only: the fake closing page advances on every read.
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(result.state, 'disputed');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'forced-handoff-linked-pr-lookup-failed');
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: an empty commit list makes the first-commit time unknown and refuses the issue-only handoff', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [] },
+  });
+  const result = resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('#3871: with two backing PRs the marker must predate both, and an unreadable PR time refuses it', () => {
+  const predatesBoth = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(77, 'OPEN', REPO), closingNode(88, 'OPEN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    changeRequestCommits: {
+      77: [commitAt(COMMIT_AFTER_MARKER)],
+      88: [commitAt(COMMIT_BEFORE_MARKER)],
+    },
+  });
+  assert.equal(
+    resumeWithLinkedPr(
+      predatesBoth,
+      forcedHandoffEvents({ contextScope: 'issue-only' }),
+    ).active_claim?.claim_id,
+    'claim-old',
+  );
+  const unreadable = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(77, 'OPEN', REPO), closingNode(88, 'OPEN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    changeRequestCommits: {
+      77: [commitAt(COMMIT_AFTER_MARKER)],
+      88: [{ commit: {} }],
+    },
+  });
+  assert.equal(
+    resumeWithLinkedPr(
+      unreadable,
+      forcedHandoffEvents({ contextScope: 'issue-only' }),
+    ).active_claim?.claim_id,
+    'claim-old',
+  );
+});
+
+test('#3871: the commits are not read when no issue-only marker is among the comments', () => {
+  const base = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+  });
+  const reads: number[] = [];
+  const port: ProviderPort = {
+    ...base,
+    listChangeRequestCommits(number: number) {
+      reads.push(number);
+      return base.listChangeRequestCommits(number);
+    },
+  };
+  resumeWithLinkedPr(
+    port,
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+  );
+  assert.deepEqual(reads, []);
+});
+
+test('#3871: a PR visible only as a ConnectedEvent follows the same time rule as a closing reference', () => {
+  const connectedPort = (commitDate: string) =>
+    createFakeProviderAdapter({
+      connectedPrEventPages: {
+        11: [
+          {
+            events: [
+              {
+                __typename: 'ConnectedEvent',
+                subject: {
+                  __typename: 'PullRequest',
+                  number: 77,
+                  state: 'OPEN',
+                },
+              },
+            ],
+            hasNextPage: false,
+            endCursor: null,
+          },
+        ],
+      },
+      changeRequestCommits: { 77: [commitAt(commitDate)] },
+    });
+  const before = resumeWithLinkedPr(
+    connectedPort(COMMIT_AFTER_MARKER),
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(before.state, 'already_owned');
+  const after = resumeWithLinkedPr(
+    connectedPort(COMMIT_BEFORE_MARKER),
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+  );
+  assert.equal(after.active_claim?.claim_id, 'claim-old');
 });

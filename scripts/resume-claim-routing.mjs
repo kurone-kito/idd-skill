@@ -20,6 +20,7 @@ import { loadPolicyConfig } from './idd-config.mjs';
 import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
 import {
   listActivationNonces,
+  parseForcedHandoffComment,
   parseLegacyClaimComment,
   resolveLegacyClaimState,
 } from './marker-helpers.mjs';
@@ -36,6 +37,7 @@ import {
   parseReleaseComment,
   readClaimStaleAgeMs,
   resolveActiveClaimWithForcedHandoffTrace,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 import {
@@ -109,12 +111,13 @@ if (import.meta.main) {
  */
 export function buildForcedHandoffEnabledGate(options) {
   // Delegate to the shared builder so resume routing and the merge-gate /
-  // write-side helpers cannot drift. Resume routing never passes
-  // `prFirstCommitAt`, so this stays byte-identical to the prior behavior:
-  // an issue-only handoff against a PR-backed claim is rejected.
+  // write-side helpers cannot drift. Without `prFirstCommitAt` the behavior
+  // is byte-identical to the prior one: an issue-only handoff against a
+  // PR-backed claim is rejected.
   const sharedGate = buildForcedHandoffEnableGate({
     forcedHandoffEnabled: options.forcedHandoffEnabled,
     expectedLinkedPrReferences: options.expectedLinkedPrReferences,
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
   });
   if (!options.linkedPrLookupFailed) {
     return sharedGate;
@@ -626,11 +629,20 @@ function runCli() {
   // #3276's own new issue-only-on-failure rejection below). Skip the
   // lookup entirely when forced-handoff mode is off — the gate never
   // honors a handoff then, so the PR context would go unused.
-  const linkedPrLookup = forcedHandoffEnabled
-    ? fetchOpenLinkedPrReferences(port, args.issue, `${owner}/${repo}`)
-    : { references: new Set(), lookupFailed: false };
-  const expectedLinkedPrReferences = linkedPrLookup.references;
-  const linkedPrLookupFailed = linkedPrLookup.lookupFailed;
+  // #3871: the first-commit time is read only when an issue-only handoff is
+  // among the fetched comments, the only marker that time can judge.
+  const hasIssueOnlyHandoff = comments.some(
+    (comment) =>
+      parseForcedHandoffComment(comment.body ?? '', comment.created_at ?? '')
+        ?.contextScope === 'issue-only',
+  );
+  const linkedPr = resolveResumeLinkedPrState(
+    port,
+    args.issue,
+    `${owner}/${repo}`,
+    { forcedHandoffEnabled, hasIssueOnlyHandoff },
+  );
+  const linkedPrLookupFailed = linkedPr.lookupFailed;
   const routingEvents = comments.map((comment) => ({
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
@@ -644,11 +656,7 @@ function runCli() {
           .trim()
           .toLowerCase(),
       ),
-    isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
-      forcedHandoffEnabled,
-      expectedLinkedPrReferences,
-      linkedPrLookupFailed,
-    }),
+    isForcedHandoffEnabled: linkedPr.isForcedHandoffEnabled,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,
@@ -1415,4 +1423,65 @@ function readAllPages(readPage, consume) {
     seenCursors.add(nextCursor);
     after = nextCursor;
   }
+}
+/**
+ * Resolve the {@link ResumeLinkedPrState} for one `--assert` / routing run.
+ *
+ * The first-commit time is read only when it can change a decision: forced-
+ * handoff mode is on, an open PR backs the claim, and an `issue-only` marker
+ * is among the fetched comments. Every PR must report a first-commit time, and
+ * the marker must predate the earliest of them (a PR whose time cannot be read
+ * makes the whole time unknown). A failed commits read is a lookup failure,
+ * like a failed PR read (#3276), so the caller routes the blocked handoff to a
+ * stop instead of letting the displaced owner resume.
+ */
+export function resolveResumeLinkedPrState(
+  port,
+  issueNumber,
+  repository,
+  options,
+) {
+  const linked = options.forcedHandoffEnabled
+    ? fetchOpenLinkedPrReferences(port, issueNumber, repository)
+    : { references: new Set(), lookupFailed: false };
+  let lookupFailed = linked.lookupFailed;
+  let prFirstCommitAt = null;
+  if (
+    options.forcedHandoffEnabled &&
+    options.hasIssueOnlyHandoff &&
+    !lookupFailed &&
+    linked.references.size > 0
+  ) {
+    let earliest = null;
+    let unknown = false;
+    try {
+      for (const reference of linked.references) {
+        const commits = port.listChangeRequestCommits(Number(reference));
+        const first = Array.isArray(commits)
+          ? resolvePrFirstCommitAt(commits)
+          : null;
+        if (first === null) {
+          unknown = true;
+          break;
+        }
+        if (earliest === null || Date.parse(first) < Date.parse(earliest)) {
+          earliest = first;
+        }
+      }
+    } catch {
+      lookupFailed = true;
+    }
+    prFirstCommitAt = !lookupFailed && !unknown ? earliest : null;
+  }
+  return {
+    references: linked.references,
+    lookupFailed,
+    prFirstCommitAt,
+    isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+      forcedHandoffEnabled: options.forcedHandoffEnabled,
+      expectedLinkedPrReferences: linked.references,
+      linkedPrLookupFailed: lookupFailed,
+      prFirstCommitAt,
+    }),
+  };
 }
