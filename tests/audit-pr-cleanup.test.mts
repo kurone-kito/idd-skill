@@ -2490,17 +2490,25 @@ test('every skip reason code is produced by a call site, and every call site use
 
   const here = dirname(fileURLToPath(import.meta.url));
   const scriptsDir = resolve(here, '..', 'src', 'scripts');
+  // The list declaration itself names every code, so it is removed before
+  // the producer scan. Otherwise a listed code that nothing produces would
+  // still match its own declaration.
   const audit = readFileSync(join(scriptsDir, 'audit-pr-cleanup.mts'), 'utf8');
+  const auditProducers = audit.replace(
+    /export const SKIP_REASON_CODES = \[[\s\S]*?\] as const;/,
+    '',
+  );
   const helpers = readFileSync(
     join(scriptsDir, 'protocol-helpers.mts'),
     'utf8',
   );
 
-  // Forward: each listed code appears as a literal in one of the two sources
-  // (the freshness causes and unsafe rules reach `addSkipped` as values).
+  // Forward: each listed code appears as a literal in a producer. The
+  // freshness causes reach `addSkipped` through THREAD_FRESHNESS_SKIPS and the
+  // unsafe rules through UNSAFE_TEXT_RULES, so both sources are searched.
   for (const code of SKIP_REASON_CODES) {
     assert.ok(
-      audit.includes(`'${code}'`) || helpers.includes(`'${code}'`),
+      auditProducers.includes(`'${code}'`) || helpers.includes(`'${code}'`),
       `no call site produces ${code}`,
     );
   }
