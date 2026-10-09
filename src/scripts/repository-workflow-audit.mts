@@ -266,14 +266,19 @@ function checkWorkflowDispatchCheckoutRef(
 ): void {
   // Read as declarations: a commented-out checkout cannot stand in for the real one.
   const declared = declarationText(text);
-  // Every line that names actions/checkout counts, whatever the key spelling,
-  // quoting, letter case, or step style, so a second checkout cannot sit beside
-  // the real one unchecked.
-  const checkouts = declared
+  // Every mention of actions/checkout counts, in any key spelling, quoting, letter
+  // case, or step style, and in a block scalar body, which the declared view
+  // blanks. The token view keeps those bodies. A step name that names the action
+  // is a mention too, so the count fails closed on it.
+  const mentions = tokenText(text)
     .split('\n')
-    .filter((line) => /actions\/checkout@/i.test(line));
-  if (checkouts.length > 1) {
-    report(RWA004, path, 'must declare exactly one actions/checkout step');
+    .filter((line) => /actions\\?\/checkout@/i.test(line));
+  if (mentions.length > 1) {
+    report(
+      RWA004,
+      path,
+      'must mention actions/checkout only once, in its pinned step',
+    );
     return;
   }
   const checkoutStart = declared.search(

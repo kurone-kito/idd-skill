@@ -3344,7 +3344,11 @@ const RULE_CASES: readonly RuleCase[] = [
         return text.split(checkout).join(legacy + checkout);
       },
     },
-    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
   },
   {
     ruleId: 'RWA006',
@@ -3592,7 +3596,11 @@ const RULE_CASES: readonly RuleCase[] = [
         return text.split(checkout).join(legacy + checkout);
       },
     },
-    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
   },
   {
     ruleId: 'RWA004',
@@ -3606,7 +3614,11 @@ const RULE_CASES: readonly RuleCase[] = [
         return text.split(checkout).join(flow + checkout);
       },
     },
-    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
   },
   {
     ruleId: 'RWA004',
@@ -3620,7 +3632,11 @@ const RULE_CASES: readonly RuleCase[] = [
         return text.split(checkout).join(cased + checkout);
       },
     },
-    expected: [{ message: 'must declare exactly one actions/checkout step' }],
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
   },
   {
     ruleId: 'RWA004',
@@ -3719,6 +3735,66 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     },
     expected: [{ message: 'must skip a plain-issue issue_comment event' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a second cleanup checkout named in a folded block scalar beside the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const folded = [
+          '      - uses: >-',
+          '          actions/checkout@v4',
+          '        with:',
+          '          fetch-depth: 1',
+          '',
+        ].join('\n');
+        anchored(text, checkout);
+        return text.split(checkout).join(folded + checkout);
+      },
+    },
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a second cleanup checkout whose action name escapes its slash beside the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const escaped = `      - "uses": "actions\\/checkout@v4"\n        with:\n          fetch-depth: 1\n`;
+        anchored(text, checkout);
+        return text.split(checkout).join(escaped + checkout);
+      },
+    },
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup step whose name mentions actions/checkout beside the pinned checkout',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const checkout = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        const named = `      - name: Verify actions/checkout@v4 pin\n        run: echo verified\n`;
+        anchored(text, checkout);
+        return text.split(checkout).join(named + checkout);
+      },
+    },
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
   },
 ];
 
