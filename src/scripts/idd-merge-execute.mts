@@ -65,6 +65,8 @@ const SOLO_CODEOWNER_BYPASS_REASONS = new Set([
 export interface MergeBlocker {
   gate: string;
   detail: string;
+  /** #3950: optional next-step text; see `PreMergeBlocker.hint`. */
+  hint?: string;
 }
 
 /**

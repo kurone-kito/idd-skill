@@ -8904,6 +8904,24 @@ export function summarizeClaimValidationForWriteGate(
 ) {
   return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
+/**
+ * #3950: fixed next-step text for a `review-currency` blocker whose
+ * `comparisonReason` is `missing-watermark`. Single-sourced so the wording
+ * stays identical across pre-merge-readiness and idd-merge-execute. It names
+ * the E1 steps in order and needs no PR number or claim id, so the blocker
+ * builder needs no new input. Diagnostic only: `detail` is left unchanged and
+ * the hint never feeds the gate decision.
+ */
+export const MISSING_WATERMARK_HINT =
+  'return to E1 and take a fresh snapshot (E1 Step 1); then record the review ' +
+  'watermark exactly as E1 Step 2 specifies, through the profile-selected ' +
+  'post-idd-marker helper. That step gives the complete invocation, which ' +
+  'uses --type watermark, --from-pr, --expected-head-sha set to the Step 1 ' +
+  'head, --agent-id and --claim-id, --operation-local, --apply, and the ' +
+  '--prior-head-sha, --prior-total-item-count, and --prior-max-activity-at ' +
+  'values saved in Step 1; this hint does not reproduce it. Then re-run the ' +
+  'readiness check. See the E1 section of ' +
+  '.github/instructions/idd-review-snapshot.instructions.md.';
 function preMergeAsRecord(value) {
   return value && typeof value === 'object' ? value : {};
 }
@@ -8999,10 +9017,14 @@ export function computePreMergeReadinessBlockers(report) {
       comparisonReason === 'ack-only-post-disposition'
     )
   ) {
-    blockers.push({
+    const reviewCurrencyBlocker = {
       gate: 'review-currency',
       detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${comparisonReason || 'unknown'}`,
-    });
+    };
+    if (comparisonReason === 'missing-watermark') {
+      reviewCurrencyBlocker.hint = MISSING_WATERMARK_HINT;
+    }
+    blockers.push(reviewCurrencyBlocker);
   }
   const threads = preMergeAsRecord(report.threads);
   const actionableCount = Number(threads.actionableCount ?? -1);

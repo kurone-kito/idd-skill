@@ -11072,10 +11072,34 @@ export function summarizeClaimValidationForWriteGate(
   return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
 
+/**
+ * #3950: fixed next-step text for a `review-currency` blocker whose
+ * `comparisonReason` is `missing-watermark`. Single-sourced so the wording
+ * stays identical across pre-merge-readiness and idd-merge-execute. It names
+ * the E1 steps in order and needs no PR number or claim id, so the blocker
+ * builder needs no new input. Diagnostic only: `detail` is left unchanged and
+ * the hint never feeds the gate decision.
+ */
+export const MISSING_WATERMARK_HINT =
+  'return to E1 and take a fresh snapshot (E1 Step 1); then record the review ' +
+  'watermark exactly as E1 Step 2 specifies, through the profile-selected ' +
+  'post-idd-marker helper. That step gives the complete invocation, which ' +
+  'uses --type watermark, --from-pr, --expected-head-sha set to the Step 1 ' +
+  'head, --agent-id and --claim-id, --operation-local, --apply, and the ' +
+  '--prior-head-sha, --prior-total-item-count, and --prior-max-activity-at ' +
+  'values saved in Step 1; this hint does not reproduce it. Then re-run the ' +
+  'readiness check. See the E1 section of ' +
+  '.github/instructions/idd-review-snapshot.instructions.md.';
+
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
 export interface PreMergeBlocker {
   gate: string;
   detail: string;
+  /**
+   * #3950: optional next-step text, present only when a gate can name one
+   * (currently `review-currency` / `missing-watermark`). Diagnostic only.
+   */
+  hint?: string;
 }
 
 function preMergeAsRecord(value: unknown): Record<string, unknown> {
@@ -11185,12 +11209,16 @@ export function computePreMergeReadinessBlockers(
       comparisonReason === 'ack-only-post-disposition'
     )
   ) {
-    blockers.push({
+    const reviewCurrencyBlocker: PreMergeBlocker = {
       gate: 'review-currency',
       detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${
         comparisonReason || 'unknown'
       }`,
-    });
+    };
+    if (comparisonReason === 'missing-watermark') {
+      reviewCurrencyBlocker.hint = MISSING_WATERMARK_HINT;
+    }
+    blockers.push(reviewCurrencyBlocker);
   }
 
   const threads = preMergeAsRecord(report.threads);

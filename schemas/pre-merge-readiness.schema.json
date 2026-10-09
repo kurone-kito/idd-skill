@@ -1972,6 +1972,10 @@
           "detail": {
             "type": "string",
             "description": "Human-readable explanation of why this gate is unmet."
+          },
+          "hint": {
+            "type": "string",
+            "description": "Optional next-step text, present only when the gate can name one (currently review-currency with comparisonReason missing-watermark). Diagnostic only; detail is unchanged and no routing decision reads it."
           }
         }
       }
