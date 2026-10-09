@@ -21,7 +21,6 @@ import {
 } from './idd-config.mjs';
 import {
   deriveRepositoryIdentity,
-  loadRepositoryPolicyDocument,
   resolveLayeredPolicy,
 } from './layered-policy.mjs';
 
@@ -111,7 +110,11 @@ export function computeActivation(options) {
       reason: 'repository-instruction-files',
     };
   }
-  if (loadRepositoryPolicyDocument(topLevel).exists) {
+  const policyFiles = [
+    join(topLevel, '.github', 'idd', 'config.json'),
+    join(topLevel, 'idd-policy.json'),
+  ];
+  if (policyFiles.some(isRegularFile)) {
     const payload = readyPayloadRoot(options);
     if (!('root' in payload)) return inactive(payload.reason);
     return {

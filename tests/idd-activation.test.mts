@@ -445,3 +445,17 @@ test('a directory at the installed instruction path reports a payload that is no
     box.cleanup();
   }
 });
+
+test('a directory at a policy path does not select minimal-import mode', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    mkdirSync(join(repo, '.github/idd/config.json'), { recursive: true });
+    installPayload(box.env);
+    const result = computeActivation({ cwd: repo, env: box.env });
+    assert.equal(result.active, false);
+    assert.equal(result.reason, 'no-activation-rule');
+  } finally {
+    box.cleanup();
+  }
+});

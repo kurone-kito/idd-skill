@@ -25,7 +25,6 @@ import {
 import {
   deriveRepositoryIdentity,
   type GitTextRunner,
-  loadRepositoryPolicyDocument,
   resolveLayeredPolicy,
 } from './layered-policy.mts';
 
@@ -151,7 +150,11 @@ export function computeActivation(
     };
   }
 
-  if (loadRepositoryPolicyDocument(topLevel).exists) {
+  const policyFiles = [
+    join(topLevel, '.github', 'idd', 'config.json'),
+    join(topLevel, 'idd-policy.json'),
+  ];
+  if (policyFiles.some(isRegularFile)) {
     const payload = readyPayloadRoot(options);
     if (!('root' in payload)) return inactive(payload.reason);
     return {
