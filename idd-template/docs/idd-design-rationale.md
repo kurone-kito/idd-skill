@@ -2071,7 +2071,15 @@ and `build` do not. The commit-SHA form
 was refused under every pnpm version tried, with ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED
 under pnpm 12, and the `refs/heads/main` form was refused under pnpm 10. The fix
 is kurone-kito/idd-skill#3829,
-which removed the script. The codeload acceptance runs on its merge commit
+which removed the script. The pre-fix matrix, by ref shape and pnpm version, is:
+
+| Ref shape in the URL | pnpm 12.9.1 | pnpm 11   | pnpm 10   |
+| -------------------- | ----------- | --------- | --------- |
+| `refs/heads/main`    | runs        | runs      | refused   |
+| `refs/tags/v0.14.0`  | runs        | not tried | not tried |
+| a commit SHA         | refused     | refused   | refused   |
+
+The codeload acceptance runs on its merge commit
 `bb9d7d7bca5cea2df863333102882491916a900a` passed `pnpm dlx` under pnpm 10, 11
 and 12, and `pnpm add -D` under pnpm 12.
 
