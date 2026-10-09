@@ -1018,7 +1018,7 @@ export function resolveAssertOutcome(result: {
   // claim holds it, so name the inspection step first.
   const remedy =
     failedProof === 'claim_lock_matches'
-      ? ' remedy="inspect claim-lock --check --worktree <linked-worktree>; acquire only if the lock is absent"'
+      ? ' remedy="inspect claim-lock --check --worktree <linked-worktree>; acquire only if the lock is absent: claim-lock --acquire --worktree <linked-worktree> --agent-id <agent-id> --claim-id <claim-id>"'
       : '';
   return {
     exitCode: 1,

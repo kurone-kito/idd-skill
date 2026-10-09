@@ -4875,7 +4875,7 @@ test('resolveAssertOutcome names the first failed owner proof when the evidence 
   assert.equal(outcome.exitCode, 1);
   assert.equal(
     outcome.message,
-    'resume-claim-routing --assert: state=owner_evidence_required action=stop reason=claim-id-match-without-independent-owner-evidence first_failed_proof=claim_lock_matches remedy="inspect claim-lock --check --worktree <linked-worktree>; acquire only if the lock is absent"',
+    'resume-claim-routing --assert: state=owner_evidence_required action=stop reason=claim-id-match-without-independent-owner-evidence first_failed_proof=claim_lock_matches remedy="inspect claim-lock --check --worktree <linked-worktree>; acquire only if the lock is absent: claim-lock --acquire --worktree <linked-worktree> --agent-id <agent-id> --claim-id <claim-id>"',
   );
 });
 
@@ -5058,7 +5058,7 @@ test('--assert exits non-zero with a gate line naming the failed owner proof, st
       assert.equal(output.evidence.owner_evidence.claim_lock_matches, false);
       assert.equal(
         asserted.stderr,
-        'resume-claim-routing --assert: state=owner_evidence_required action=stop reason=claim-id-match-without-independent-owner-evidence first_failed_proof=claim_lock_matches remedy="inspect claim-lock --check --worktree <linked-worktree>; acquire only if the lock is absent"\n',
+        'resume-claim-routing --assert: state=owner_evidence_required action=stop reason=claim-id-match-without-independent-owner-evidence first_failed_proof=claim_lock_matches remedy="inspect claim-lock --check --worktree <linked-worktree>; acquire only if the lock is absent: claim-lock --acquire --worktree <linked-worktree> --agent-id <agent-id> --claim-id <claim-id>"\n',
       );
     });
   } finally {
