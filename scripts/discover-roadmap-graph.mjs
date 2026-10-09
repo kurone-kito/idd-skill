@@ -436,7 +436,7 @@ const CLOSING_CLAUSE_SOURCE =
   String.raw`(?<![\w-])(?:${CLOSING_KEYWORD_ALTERNATION}):?[ \t]+` +
   `${CLOSING_REFERENCE_SOURCE}(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+)` +
   `${CLOSING_REFERENCE_SOURCE})*`;
-const CLOSING_CLAUSE_SEPARATOR_SOURCE = String.raw`(?:[ \t]*,(?:[ \t]+and)?[ \t]+|[ \t]+and[ \t]+)`;
+const CLOSING_CLAUSE_SEPARATOR_SOURCE = String.raw`(?:[ \t]*,(?:[ \t]+and[ \t]+|[ \t]*)|[ \t]+and[ \t]+)`;
 const CLOSING_DECLARATION_LINE_RE = new RegExp(
   `^[ \\t]*(?:${LIST_MARKER_SOURCE})?${CLOSING_CLAUSE_SOURCE}` +
     `(?:${CLOSING_CLAUSE_SEPARATOR_SOURCE}${CLOSING_CLAUSE_SOURCE})*\\.?[ \\t]*$`,

@@ -5883,6 +5883,19 @@ const CLOSING_DECLARATION_CORPUS: Array<{
     ],
   },
   {
+    name: 'no space after comma, before the next clause',
+    body: 'Closes #12,Fixes #13',
+    edges: [
+      [12, 'closing-keyword'],
+      [13, 'closing-keyword'],
+    ],
+  },
+  {
+    name: 'and glued to the comma is not a separator',
+    body: 'Closes #12,and Fixes #13',
+    edges: [],
+  },
+  {
     name: 'no space after comma',
     body: 'Closes #12,#13',
     edges: [
