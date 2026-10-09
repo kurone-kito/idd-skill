@@ -41,6 +41,7 @@ export const COVERED_HELPERS = [
   'authoring-owner-provenance',
   'branch-conflict-state',
   'branch-name',
+  'check-stray-commit-closes',
   'ci-wait-policy',
   'ci-wait-state',
   'claim-approval-gate',
