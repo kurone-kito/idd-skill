@@ -8726,3 +8726,27 @@ test('trust safety passes a std* option value in a list-indented fence followed 
   } as Context);
   assert.equal(result.pass, true);
 });
+
+test('trust safety keeps a std* key after a closing backtick inside a fence as not an option (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${tick.repeat(3)}js\n${tick}foo${tick}stdio: 'ignore'\n${tick.repeat(3)}\nThe repository policy applies.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety keeps a std* value after three backticks in indented code as content (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n    ${tick.repeat(3)}\n    stdio: 'ignore'\n\nThe repository policy applies.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});

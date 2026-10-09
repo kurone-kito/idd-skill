@@ -2218,7 +2218,7 @@ function isCodeIdentifierProcessMention(
 // the literal. A key with a prefix, another key in between, an unquoted
 // value, or a capital I still fails the check.
 const STDIO_OPTION_KEY_PATTERN =
-  /(?<=^|[\s{,([`])(?:stdio|stdin|stdout|stderr)\s*:/gu;
+  /(?<=^|[\s{,([])(?:stdio|stdin|stdout|stderr)\s*:/gu;
 // The longest run, in characters, between a key's colon and its literal. An
 // array of option values fits well inside it; a longer run fails closed. The
 // cap also bounds the cost of each candidate literal.
@@ -2304,6 +2304,12 @@ function findNonCodeMask(source: string): boolean[] {
   return masked;
 }
 
+interface StdioScanCache {
+  // Start indices of the ranges the parser classifies as fenced code.
+  fencedStarts: ReadonlySet<number>;
+  scans: Map<number, StdioRangeScan>;
+}
+
 interface StdioRangeScan {
   // Local index where the code body begins, or -1 when no literal in the
   // range can be exempt (its opening line is an info string with no end).
@@ -2327,32 +2333,35 @@ const NO_STDIO_EXEMPTION: StdioRangeScan = {
 
 // Scans one code range in a single pass, so each candidate literal in it costs
 // a binary search and a short segment check, not a rescan of the range.
-function scanStdioRange(region: string): StdioRangeScan {
-  // The range's own delimiter is its first backtick or tilde run. A run of
-  // three or more markers is a fence, whatever indentation or container prefix
-  // precedes it, and its opening line's info string is skipped. A single or
-  // double backtick run delimits an inline span only at the start of the range.
-  // Any other text, such as an indented code block's content, has no delimiter,
-  // so its backticks read as content.
+function scanStdioRange(region: string, isFence: boolean): StdioRangeScan {
+  // The parser decides what a range is. A fence's delimiter is its first
+  // backtick or tilde run of three or more markers, whatever indentation or
+  // container prefix precedes it, and its opening line's info string is
+  // skipped. An inline span's delimiter is the backtick run at the start of
+  // the range. Any other range, such as an indented code block, has no
+  // delimiter, so its backticks read as content.
   let openerEnd = 0;
-  const delimiterAt = region.search(/[`~]/);
-  if (delimiterAt >= 0) {
-    const markerChar = region[delimiterAt];
-    let runEnd = delimiterAt;
-    while (region[runEnd] === markerChar) {
-      runEnd += 1;
-    }
-    const run = runEnd - delimiterAt;
-    if (run >= 3) {
-      // A fence's opening line carries an info string. That text is metadata,
-      // not code, so the whole line is skipped; a literal on it fails closed.
-      const lineEnd = region.indexOf('\n', runEnd);
-      if (lineEnd < 0) {
-        return NO_STDIO_EXEMPTION;
+  if (isFence) {
+    const delimiterAt = region.search(/[`~]/);
+    if (delimiterAt >= 0) {
+      const markerChar = region[delimiterAt];
+      let runEnd = delimiterAt;
+      while (region[runEnd] === markerChar) {
+        runEnd += 1;
       }
-      openerEnd = lineEnd + 1;
-    } else if (delimiterAt === 0 && markerChar === '`') {
-      openerEnd = runEnd;
+      if (runEnd - delimiterAt >= 3) {
+        // The info string is metadata, not code, so the whole opening line is
+        // skipped; a literal on it fails closed.
+        const lineEnd = region.indexOf('\n', runEnd);
+        if (lineEnd < 0) {
+          return NO_STDIO_EXEMPTION;
+        }
+        openerEnd = lineEnd + 1;
+      }
+    }
+  } else if (region[0] === '`') {
+    while (region[openerEnd] === '`') {
+      openerEnd += 1;
     }
   }
   const masked = [
@@ -2363,11 +2372,14 @@ function scanStdioRange(region: string): StdioRangeScan {
   // prefix character; a key found in the delimiter is masked and dropped.
   const keyStarts: number[] = [];
   const keyEnds: number[] = [];
+  // The delimiter is replaced by spaces, so a key that starts the body sees a
+  // separator on its left rather than the delimiter itself.
+  const keyScan = ' '.repeat(openerEnd) + region.slice(openerEnd);
   const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN);
   for (
-    let found = keyPattern.exec(region);
+    let found = keyPattern.exec(keyScan);
     found !== null;
-    found = keyPattern.exec(region)
+    found = keyPattern.exec(keyScan)
   ) {
     if (!masked[found.index]) {
       keyStarts.push(found.index);
@@ -2390,12 +2402,21 @@ function scanStdioRange(region: string): StdioRangeScan {
   };
 }
 
+function createStdioScanCache(text: string): StdioScanCache {
+  return {
+    fencedStarts: new Set(
+      findFencedCodeRanges(text).map((range) => range.start),
+    ),
+    scans: new Map(),
+  };
+}
+
 function isStdioIgnoreOptionValue(
   text: string,
   index: number,
   verb: string,
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
-  scans: Map<number, StdioRangeScan>,
+  cache: StdioScanCache,
 ): boolean {
   if (verb !== 'ignore') {
     return false;
@@ -2408,10 +2429,13 @@ function isStdioIgnoreOptionValue(
   if (!codeRange) {
     return false;
   }
-  let scan = scans.get(codeRange.start);
+  let scan = cache.scans.get(codeRange.start);
   if (scan === undefined) {
-    scan = scanStdioRange(text.slice(codeRange.start, codeRange.end));
-    scans.set(codeRange.start, scan);
+    scan = scanStdioRange(
+      text.slice(codeRange.start, codeRange.end),
+      cache.fencedStarts.has(codeRange.start),
+    );
+    cache.scans.set(codeRange.start, scan);
   }
   // Local index of the literal's opening quote within the range.
   const literal = index - 1 - codeRange.start;
@@ -2524,7 +2548,7 @@ function findPolicyOverrideMatch(
   // pass intentionally removes that token, so inspect raw matches as a
   // fallback and retain only matches that are not wholly inside code.
   const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
-  const stdioScans = new Map<number, StdioRangeScan>();
+  const stdioScans = createStdioScanCache(text);
   let match: RegExpExecArray | null;
   while (true) {
     match = pattern.exec(text);
