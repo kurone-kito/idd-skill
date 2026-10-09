@@ -1870,6 +1870,37 @@ test('buildImportPlan throws a clear error when --hold names a path outside the 
   );
 });
 
+test('buildImportPlan refuses --hold on .github/idd/config.json, failing closed (#3959)', () => {
+  assert.throws(
+    () =>
+      buildImportPlan(REPO_ROOT, makeFixtureDir(), {
+        hold: ['.github/idd/config.json'],
+      }),
+    /refusing --hold \.github\/idd\/config\.json/u,
+  );
+});
+
+test('buildImportPlan imports .github/idd/config.json with all four commands keys when --hold is omitted (#3959)', () => {
+  const targetRoot = makeFixtureDir();
+  const plan = buildImportPlan(REPO_ROOT, targetRoot);
+  const config = plan.entries.find(
+    (entry) => entry.targetPath === '.github/idd/config.json',
+  );
+  assert.ok(config, 'config.json is part of the resolved manifest');
+  assert.notEqual(config.classification, 'held');
+
+  applyImportPlan(REPO_ROOT, targetRoot, plan);
+  const written = JSON.parse(
+    readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
+  );
+  assert.deepEqual(Object.keys(written.commands).sort(), [
+    'fix-validate',
+    'install-deps',
+    'post-fix-validate',
+    'pre-push-validate',
+  ]);
+});
+
 test('buildImportPlan never classifies an entry "held" when --hold is omitted (default-behavior regression)', () => {
   const targetRoot = makeFixtureDir();
   const plan = buildImportPlan(REPO_ROOT, targetRoot);
@@ -2921,12 +2952,12 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
   );
 });
 
-test('bin/idd-onboard.mjs --import --hold .github/idd/config.json leaves an existing customized config completely untouched across a re-import', () => {
-  // Unlike a plain --force re-import (#2222 above, which overwrites the
-  // file then restores only the three RESTORABLE_COMMAND_KEYS rows),
-  // holding the file outright means it is never read from --source or
-  // written to --target at all -- every row, including install-deps
-  // (out of #2222's restore scope), survives byte-for-byte.
+test('bin/idd-onboard.mjs --import --hold .github/idd/config.json is refused and leaves an existing customized config untouched (#3959)', () => {
+  // `--hold` on the policy config is refused outright (fail closed): the
+  // overview's command rows read its commands object, so a skipped import
+  // would leave them with no source. The refusal must happen before any
+  // write, so every customized row, including install-deps, survives
+  // byte-for-byte.
   const targetRoot = makeFixtureDir();
   execFileSync(process.execPath, [
     BIN_PATH,
@@ -2963,24 +2994,28 @@ test('bin/idd-onboard.mjs --import --hold .github/idd/config.json leaves an exis
   const configPath = join(targetRoot, '.github', 'idd', 'config.json');
   const before = readFileSync(configPath, 'utf8');
 
-  const { status, verdict } = runCliBin([
-    '--import',
-    '--force',
-    '--source',
-    REPO_ROOT,
-    '--target',
-    targetRoot,
-    '--hold',
-    '.github/idd/config.json',
-  ]);
-  assert.equal(status, 0);
-  assert.equal(verdict.written, true);
-  assert.deepEqual(verdict.heldTargets, ['.github/idd/config.json']);
-  const plan = verdict.plan as { targetPath: string; classification: string }[];
-  const configEntry = plan.find(
-    (entry) => entry.targetPath === '.github/idd/config.json',
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--import',
+      '--force',
+      '--source',
+      REPO_ROOT,
+      '--target',
+      targetRoot,
+      '--hold',
+      '.github/idd/config.json',
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
   );
-  assert.equal(configEntry?.classification, 'held');
+  assert.notEqual(result.status, 0);
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /refusing --hold \.github\/idd\/config\.json/u,
+  );
 
   const after = readFileSync(configPath, 'utf8');
   assert.equal(after, before);

@@ -1398,6 +1398,12 @@ function assertSafeManifestFile(file, origin) {
   return file;
 }
 /**
+ * Manifest target path of the adopter's policy config. The overview's
+ * command rows read its `commands` object, so `--hold` must never skip it
+ * (#3959).
+ */
+const CONFIG_TARGET_PATH = '.github/idd/config.json';
+/**
  * Resolve the full import file set: the core template files, plus — only
  * when `profile` is exactly `vendored-node` — the profile-conditional
  * helper bundle from `helper-runtime-manifest.mts`'s `collectVendoredFiles`
@@ -1506,6 +1512,10 @@ function describeUnresolvedVendoredPath(sourceRoot, error) {
  * problem; `missingSource`'s own blocking finding is the correct signal
  * there instead, and a `--hold` value simply matches nothing beyond the
  * degraded set in that case.
+ *
+ * `--hold` on `.github/idd/config.json` is refused outright (fail closed,
+ * #3959). The overview's command rows read the `commands` object of that
+ * file, so a skipped import would leave those rows with no source.
  */
 export function buildImportPlan(
   sourceRoot,
@@ -1514,6 +1524,11 @@ export function buildImportPlan(
 ) {
   const resolved = resolveImportFiles(sourceRoot, profile);
   const holdSet = new Set(hold);
+  if (holdSet.has(CONFIG_TARGET_PATH)) {
+    throw new Error(
+      `refusing --hold ${CONFIG_TARGET_PATH}: the overview's command rows read its commands object, so the file must always be imported (#3959)`,
+    );
+  }
   if (holdSet.size > 0 && resolved.missingSource.length === 0) {
     const knownTargets = new Set(resolved.files.map((file) => file.targetPath));
     const unknown = [...holdSet].filter((target) => !knownTargets.has(target));
