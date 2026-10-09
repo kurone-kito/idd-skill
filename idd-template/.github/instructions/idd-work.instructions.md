@@ -165,6 +165,8 @@ If WorkTrunk is unavailable, choose the correct case:
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
 <!-- dprint-ignore-end -->
 
+On a fresh claim, a WorkTrunk pre-start hook locks before the claim POST.
+
 For manual `git worktree add`, WorkTrunk without an install hook, or a
 compliant pinned harness-native tool (per "Harness-native worktree
 tools" above), acquire the
