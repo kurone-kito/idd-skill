@@ -5621,3 +5621,42 @@ test('#3871: an open closing-reference node with a non-positive PR number fails 
     );
   }
 });
+
+test('#3871: a failed closing-references read keeps the connected references and still fails the lookup', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        {
+          events: [
+            {
+              __typename: 'ConnectedEvent',
+              subject: { __typename: 'PullRequest', number: 77, state: 'OPEN' },
+            },
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    closingPullRequestPageErrors: { 11: 'closing page unavailable' },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], ['77']);
+});
+
+test('#3871: a non-array commits response is a failed read, not an unknown time', () => {
+  const base = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+  });
+  const port: ProviderPort = {
+    ...base,
+    listChangeRequestCommits: () => ({}) as unknown as unknown[],
+  };
+  const state = resolveResumeLinkedPrState(port, 11, REPO, {
+    forcedHandoffEnabled: true,
+    hasIssueOnlyHandoff: true,
+  });
+  assert.equal(state.lookupFailed, true);
+  assert.equal(state.prFirstCommitAt, null);
+});

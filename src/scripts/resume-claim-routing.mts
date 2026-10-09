@@ -1655,10 +1655,12 @@ function applyConnectedPrEventNode(
  * (which throws on a failed or malformed page, matching
  * `idd-roadmap-audit-execute.mts`'s `hasOpenConnectedPr` precedent) instead
  * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle`.
- * A genuine lookup failure surfaces as `lookupFailed: true` with an empty
- * `references` set, distinct from a successful lookup that legitimately found
- * no open linked PR (`lookupFailed: false`, empty set). Callers must not
- * treat the two the same -- see
+ * A failed connected read surfaces as `lookupFailed: true` with an empty
+ * `references` set. A failed closing-references read also sets
+ * `lookupFailed: true`, but keeps the connected references, which are complete
+ * on their own (#3871). A successful lookup that legitimately found no open
+ * linked PR is `lookupFailed: false` with an empty set. Callers must not treat
+ * a failure and an empty success the same way -- see
  * {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}.
  */
 export function fetchOpenLinkedPrReferences(
@@ -1674,9 +1676,9 @@ export function fetchOpenLinkedPrReferences(
   const states = new Map<number, string>();
   const closing = new Set<number>();
   const issueRepository = repository.trim().toLowerCase();
+  // Number.isInteger(issueNumber) above already excludes null; TS can't
+  // narrow a plain boolean-returning call the way a type predicate would.
   try {
-    // Number.isInteger(issueNumber) above already excludes null; TS can't
-    // narrow a plain boolean-returning call the way a type predicate would.
     readAllPages(
       (after) =>
         port.getConnectedPullRequestEventsPage(issueNumber as number, after),
@@ -1686,6 +1688,15 @@ export function fetchOpenLinkedPrReferences(
         }
       },
     );
+  } catch {
+    // Without the connected timeline nothing is known, so no reference.
+    return { references: new Set(), lookupFailed: true };
+  }
+  // The closing references are read on their own. A failed read keeps the
+  // connected references, which are complete on their own, and still fails
+  // the lookup, so an issue-plus-pr handoff naming one of them still matches.
+  let closingFailed = false;
+  try {
     readAllPages(
       (after) =>
         port.getWorkItemClosingPullRequestsPage(issueNumber as number, after),
@@ -1719,17 +1730,19 @@ export function fetchOpenLinkedPrReferences(
       },
     );
   } catch {
-    return { references: new Set(), lookupFailed: true };
+    closingFailed = true;
   }
   for (const [number, isConnected] of connected) {
     if (isConnected && states.get(number) === 'OPEN') {
       references.add(normalizeLinkedPrReference(number));
     }
   }
-  for (const number of closing) {
-    references.add(normalizeLinkedPrReference(number));
+  if (!closingFailed) {
+    for (const number of closing) {
+      references.add(normalizeLinkedPrReference(number));
+    }
   }
-  return { references, lookupFailed: false };
+  return { references, lookupFailed: closingFailed };
 }
 
 /**
@@ -1810,9 +1823,12 @@ export function resolveResumeLinkedPrState(
     try {
       for (const reference of linked.references) {
         const commits = port.listChangeRequestCommits(Number(reference));
-        const first = Array.isArray(commits)
-          ? resolvePrFirstCommitAt(commits as PrCommitPayload[])
-          : null;
+        // A non-array response is a failed read, the same lookup failure as a
+        // thrown one (#3276), not an unknown time.
+        if (!Array.isArray(commits)) {
+          throw new Error('malformed commits response');
+        }
+        const first = resolvePrFirstCommitAt(commits as PrCommitPayload[]);
         if (first === null) {
           unknown = true;
           break;
