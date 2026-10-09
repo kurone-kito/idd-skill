@@ -3634,8 +3634,9 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
   { list: 'B', body: 'Every key in config.yaml must be documented.' },
   { list: 'B', body: 'Duplicate keys are rejected by the parser.' },
   // List C: a value that someone outside the change must supply. The first
-  // five rows carry cues; the last three carry none and are denied by an
-  // early-return route, so they pin where the new route is consulted.
+  // five rows and the "added" rows after them carry cues; the last three carry
+  // none and are denied by an early-return route, so they pin where the new
+  // route is consulted.
   {
     list: 'C',
     body: 'The API key must be provided before the script runs.',
@@ -3656,6 +3657,48 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
     list: 'C',
     body: 'Obtain the API key from the vendor, then run the script.',
   },
+  // List C, added: the keep-failing lines of the replay block. Each keeps a
+  // cue the new shape does not exempt: `to`, a gerund or a bare noun follows
+  // the verb, or the verb is passive or past (`is needed`).
+  { list: 'C', body: 'The key needs to come from ops.' },
+  { list: 'C', body: 'The key needs creating first.' },
+  { list: 'C', body: 'The key needs approval.' },
+  { list: 'C', body: 'The deploy key needs to be obtained from ops.' },
+  { list: 'C', body: 'The key needs to come from the vendor.' },
+  { list: 'C', body: 'A key is needed from ops.' },
+  // List C, added (#3890): the three words the issue names as the reason the
+  // exempt article list stays short, and `needed`, which the exemption does not
+  // cover. The last row shows that a noun which only ends in `key` is not a
+  // bare key, so its verb keeps counting in the window of the real one.
+  { list: 'C', body: 'The key needs their approval.' },
+  { list: 'C', body: 'The key needs one from ops.' },
+  { list: 'C', body: 'The key needs another from finance.' },
+  { list: 'C', body: 'The key needed a value from ops.' },
+  { list: 'C', body: 'The turkey needs a default. The key is set.' },
+  // List C, added: a window cut inside a longer word starts at index 0, so the
+  // shape must not read `key` in `passkey` as a bare noun.
+  {
+    list: 'C',
+    body: 'The passkey needs the long-lived, per-host, rotated, read-only, staging, nightly deploy key from ops.',
+  },
+  // List C, added: a non-ASCII letter glued to `key` makes a word that is not a
+  // bare key, so its verb keeps counting, as it did before the exemption.
+  {
+    list: 'C',
+    body: 'The \u041a\u043b\u044e\u0447key needs a value from ops.',
+  },
+  { list: 'C', body: 'The 日本語key needs a value from ops.' },
+  // List C, added: an invisible joiner between a letter and `key` does not end
+  // the glued word, so its verb keeps counting.
+  {
+    list: 'C',
+    body: 'The \u041a\u043b\u044e\u0447\u200dkey needs a value from ops.',
+  },
+  // List C, added: an Arabic-Indic digit glued to `key` makes a word that is
+  // not a bare key, so its verb keeps counting.
+  { list: 'C', body: 'The \u0663key needs a value from ops.' },
+  // List C, added: a connector punctuation mark glued to `key` does the same.
+  { list: 'C', body: 'The \u203Fkey needs a value from ops.' },
   { list: 'C', body: 'We cannot ship without a token.' },
   { list: 'C', body: 'Fetch the token from infra.' },
   { list: 'C', body: 'Retrieve the key from ops.' },
@@ -3746,6 +3789,13 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
   },
   { list: 'D', body: 'A deploy key is mandatory.', pins: 'mandatory' },
   { list: 'D', body: 'The staging key is essential.', pins: 'essential' },
+  // List D, added (#3890): the first sentence is exempt, so only the second
+  // sentence's `need` cue fails the line.
+  {
+    list: 'D',
+    body: 'The key needs a default. We need the deploy key from ops.',
+    pins: 'need',
+  },
   // List E, added: the route never sees these. `credential` is not a bare
   // `key` or `token`, and a security-status word in the window denies.
   { list: 'E', body: 'Leave every other credential alone.' },
@@ -3763,6 +3813,28 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
       '-- higher is more autopilot-suitable; below the configured floor is ' +
       'human-oriented._',
   },
+  // List F, added (#3890): a bare `key` or `token`, then `need` or `require`
+  // and an article, is configuration prose. So is the sentence quoted from the
+  // #3830 draft, and the requirement line the #3721 replay left failing.
+  { list: 'F', body: 'The new key needs a default value.' },
+  { list: 'F', body: 'Each key needs a matching entry in the schema.' },
+  { list: 'F', body: 'The config key needs a matching clause.' },
+  { list: 'F', body: 'Every key requires a default value.' },
+  { list: 'F', body: 'Each token needs a description.' },
+  { list: 'F', body: 'Every token requires a unit test.' },
+  { list: 'F', body: 'The key requires a string value.' },
+  {
+    list: 'F',
+    body: '...so the new key needs the matching enum clause there as well, not only a place in the key list.',
+  },
+  // List F, added (#3890): two exempt sentences in one window, which only a
+  // global removal passes; a capitalized noun; a plural noun.
+  {
+    list: 'F',
+    body: 'The new key needs a default value. Each token needs a description.',
+  },
+  { list: 'F', body: 'Key needs a default value.' },
+  { list: 'F', body: 'Keys need a default value.' },
 ];
 
 function evaluateBareNounBody(body: string) {
@@ -3798,6 +3870,67 @@ for (const list of ['A', 'B', 'C', 'D', 'E', 'F'] as const) {
     assert.deepEqual(mismatches, []);
   });
 }
+
+// #3890 known limit: an article-led phrase after a bare `key` or `token` verb
+// now passes, because the verb is exempt. These lines name a supplier or a
+// requirement from outside the change, and no cue or actor in the table sees
+// them. They are recorded here as a decision: a later change that catches them
+// updates this test.
+test('#3890: known limit, an article-led external phrase after a bare key verb passes', () => {
+  const residual = [
+    'The key needs a value from Alice.',
+    'The key requires a sign-off from legal.',
+    'The new key requires an approval from legal.',
+    'The key requires an admin.',
+    'The keys need a new value from ops.',
+    // The removal reaches the window of the second noun too. The #3830 row
+    // needs that reach, so this residual shape passes for the same reason.
+    'Each token needs a key from ops.',
+  ];
+  for (const body of residual) {
+    assert.equal(evaluateBareNounBody(body).pass, true, JSON.stringify(body));
+  }
+});
+
+// #3890: the rule itself, pinned directly rather than through the 80-character
+// alignment that the `passkey` row depends on. The calls pass the window as the
+// corpus, with matchEnd at the end of the noun, except the window-cut case, which
+// passes a longer corpus so that its second noun is bare. A bare noun after a
+// space is exempt; a shape at index 0 of a window, and a noun glued to a longer
+// word or to a non-ASCII letter, are not.
+test('#3890: the need and require entries exempt only a bare noun at a word start', () => {
+  const needRule = BARE_NOUN_DEPENDENCY_RULES.find(
+    (rule) => rule.id === 'need',
+  );
+  const requireRule = BARE_NOUN_DEPENDENCY_RULES.find(
+    (rule) => rule.id === 'require',
+  );
+  assert.ok(needRule);
+  assert.ok(requireRule);
+  const after = ' key needs a default value.';
+  assert.equal(needRule.matches(after, after, 4), false);
+  const edge = 'key needs a default value.';
+  assert.equal(needRule.matches(edge, edge, 3), true);
+  // A window cut at the k of passkey, over a corpus whose second noun is bare:
+  // the shape is refused at the window's first character, so the verb counts.
+  const cutCorpus = 'passkey needs a default value. The key is set.';
+  const cutWindow = 'key needs a default value. The key is set.';
+  const cutEnd = cutCorpus.lastIndexOf('key') + 'key'.length;
+  assert.equal(needRule.matches(cutWindow, cutCorpus, cutEnd), true);
+  const glued = 'The \u041a\u043b\u044e\u0447key needs a default value.';
+  assert.equal(needRule.matches(glued, glued, 11), true);
+  const combining = 'Cafe\u0301key needs a default value.';
+  assert.equal(needRule.matches(combining, combining, 8), true);
+  const joined = 'The \u041a\u043b\u044e\u0447\u200dkey needs a default value.';
+  assert.equal(
+    needRule.matches(joined, joined, joined.indexOf('key') + 3),
+    true,
+  );
+  const requireAfter = ' key requires a string value.';
+  assert.equal(requireRule.matches(requireAfter, requireAfter, 4), false);
+  const requireEdge = 'key requires a string value.';
+  assert.equal(requireRule.matches(requireEdge, requireEdge, 3), true);
+});
 
 test('#3721: the rule table names every cue the issue lists, once each', () => {
   const ids = BARE_NOUN_DEPENDENCY_RULES.map((rule) => rule.id);
