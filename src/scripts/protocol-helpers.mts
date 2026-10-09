@@ -5064,7 +5064,8 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 // 1. Whole-comment length ≤ CODEX_NOTICE_MAX_LENGTH — defends against a long
 //    structured review whose *last* sentence happens to coincidentally
 //    match (the longest known real wording — current wording plus its
-//    two-sentence trailer, see below — is 199 characters).
+//    two-sentence trailer, see below — is 361 characters, and #3885 raises the
+//    cap to 400 to leave room for the optional fourth sentence).
 // 2. Text before the matched span ≤ CODEX_NOTICE_MAX_PREFIX_LENGTH once
 //    trimmed — defends against a narrative lead-in preceding an otherwise
 //    bare match (known real prefixes are 0 and 9 characters).
@@ -5132,11 +5133,17 @@ const CODEX_NOTICE_TRAILER_SENTENCE_2 =
   '\\bcredits must be used\\b[\\s\\S]{0,40}?\\benable\\b[\\s\\S]{0,40}?\\brepository\\b[\\s\\S]{0,40}?\\b(?:code )?reviews?\\b';
 const CODEX_NOTICE_TRAILER_SENTENCE_3 =
   '\\byou can see your limits\\b[\\s\\S]{0,60}?\\bCodex usage dashboard\\b(?:\\]\\([^)]*\\))?';
+// #3885: the dashboard wording above is followed by a second generated sentence
+// that names the upgrade and credits path and links the settings page. It is
+// optional, and only after SENTENCE_3, so the shorter dashboard-only wording still
+// matches. Each gap is bounded like the other sentences.
+const CODEX_NOTICE_TRAILER_SENTENCE_4 =
+  '\\bTo continue using code reviews\\b[\\s\\S]{0,60}?\\bupgrade your account\\b[\\s\\S]{0,60}?\\benable them for code reviews\\b(?:\\s+in your\\s+(?:settings|\\[settings\\]\\([^)]*\\)))?';
 const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN = new RegExp(
-  `^${CODEX_NOTICE_TRAILER_LEAD_IN}(?:${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?|${CODEX_NOTICE_TRAILER_SENTENCE_3})[.!,;:\\s]*$`,
+  `^${CODEX_NOTICE_TRAILER_LEAD_IN}(?:${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?|${CODEX_NOTICE_TRAILER_SENTENCE_3}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_4})?)[.!,;:\\s]*$`,
   'i',
 );
-const CODEX_NOTICE_MAX_LENGTH = 220;
+const CODEX_NOTICE_MAX_LENGTH = 400;
 const CODEX_NOTICE_MAX_PREFIX_LENGTH = 20;
 // Anchored to the *entire* trimmed remainder (not a starts-with check), so
 // trailing prose that happens to begin with a comma or period is still

@@ -17141,3 +17141,52 @@ test('collectPreMergeReadiness: an empty search adds no deferred-follow-up gate 
   });
   assert.ok(!gates.some((gate) => gate.startsWith('deferred-followup-')));
 });
+
+// kurone-kito/idd-skill#3885: the live two-sentence Codex usage-limit notice.
+const CODEX_LIVE_NOTICE_3885 =
+  'You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).\nTo continue using code reviews, you can upgrade your account or add credits to your account and enable them for code reviews in your [settings](https://chatgpt.com/codex/cloud/settings/code-review).';
+
+test('isAdvisoryNonReviewNotice matches the live two-sentence Codex usage-limit notice (#3885)', () => {
+  assert.equal(isAdvisoryNonReviewNotice(CODEX_LIVE_NOTICE_3885), true);
+});
+
+test('isAdvisoryNonReviewNotice rejects a review that embeds the live notice after a narrative lead-in (#3885)', () => {
+  const embedded = `Retry logic looks right overall. ${CODEX_LIVE_NOTICE_3885.replace(/\n/g, ' ')}`;
+  assert.equal(isAdvisoryNonReviewNotice(embedded), false);
+});
+
+test('the Codex notice gap bound is 60 characters: a 70-character gap is rejected and a 60-character gap accepted (#3885)', () => {
+  const withGap = (fill: number) =>
+    CODEX_LIVE_NOTICE_3885.replace(
+      ' or add credits to your account and ',
+      ` ${'x'.repeat(fill)} `,
+    );
+  assert.equal(isAdvisoryNonReviewNotice(withGap(68)), false);
+  assert.equal(isAdvisoryNonReviewNotice(withGap(58)), true);
+});
+
+test('the Codex notice settings tail accepts only the whole plain or linked forms (#3885)', () => {
+  const linked =
+    ' in your [settings](https://chatgpt.com/codex/cloud/settings/code-review).';
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(linked, ' in your settings.'),
+    ),
+    true,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(linked, ' in your [settings.'),
+    ),
+    false,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(
+        linked,
+        ' in your settings](https://chatgpt.com/codex/cloud/settings/code-review).',
+      ),
+    ),
+    false,
+  );
+});
