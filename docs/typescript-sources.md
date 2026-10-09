@@ -141,8 +141,9 @@ runtime-file lists in item 4, which were checked against the source.
 2. Declare the flags in a `<NAME>_FLAG_SPEC = { ... } as const;` object. Without
    `as const` the build fails on the flag `type` values. Declare `--help`
    (`'--help': { type: 'boolean', short: 'h' }`) and make the `--help` output
-   document every declared flag. Check it with
-   `node --test tests/help-text-flags.test.mts`. Add `<stem>` to
+   document every other declared flag. Check those with
+   `node --test tests/help-text-flags.test.mts`. The test exempts `--help`
+   itself, so write its own usage line by hand. Add `<stem>` to
    `COVERED_HELPERS` in `src/scripts/repository-inventory-audit.mts`, and commit
    the regenerated `scripts/repository-inventory-audit.mjs` with it.
    `audit-docs --check` fails with `help-flag-coverage` when a helper that
