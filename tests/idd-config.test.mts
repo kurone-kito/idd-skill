@@ -1036,6 +1036,10 @@ test('evaluateForcedHandoffPreflight fails closed on a PR row with no base ref',
   });
   assert.equal(result.ok, false);
   assert.ok(
+    result.refusal?.includes('the base branch of PR #2 could not be read'),
+    result.refusal ?? 'no refusal',
+  );
+  assert.ok(
     result.refusal?.includes('no base ref was returned for PR #2'),
     result.refusal ?? 'no refusal',
   );
@@ -1077,7 +1081,216 @@ test('evaluateForcedHandoffPreflight names the copy and the sequence in its refu
   assert.ok(refusal.includes('sets forcedHandoff.mode to disabled'), refusal);
   assert.ok(refusal.includes('claim-id-mismatch'), refusal);
   assert.ok(refusal.includes('push the merge'), refusal);
-  assert.ok(refusal.includes('cannot enable the mode for itself'), refusal);
+  assert.ok(refusal.includes('the opt-in must land there'), refusal);
+  assert.ok(
+    refusal.includes(
+      'Commit the opt-in to the base branch through its normal pull-request path',
+    ),
+    refusal,
+  );
+});
+
+test('evaluateForcedHandoffPreflight with no PR asks for the mode on a claim branch that sets another mode', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) =>
+        ref === PREFLIGHT_CLAIM
+          ? { status: 'other', ref, mode: 'disabled' }
+          : { status: 'human-gated', ref },
+      readDefaultBranch: () => 'trunk',
+      probeBranch: () => 'present',
+    },
+  });
+  assert.equal(result.ok, false);
+  const refusal = result.refusal ?? '';
+  assert.ok(
+    refusal.includes(
+      `the claim branch ${PREFLIGHT_CLAIM} sets forcedHandoff.mode to disabled`,
+    ),
+    refusal,
+  );
+  assert.ok(
+    refusal.includes(
+      'Set forcedHandoff.mode to human-gated on the claim branch issue/1-add-x',
+    ),
+    refusal,
+  );
+});
+
+test('evaluateForcedHandoffPreflight with no PR merges the default branch into a claim branch that has no config file', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) =>
+        ref === PREFLIGHT_CLAIM
+          ? { status: 'other', ref, mode: null }
+          : { status: 'human-gated', ref },
+      readDefaultBranch: () => 'trunk',
+      probeBranch: () => 'present',
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    (result.refusal ?? '').includes(
+      'merge the default branch into it and push the merge',
+    ),
+    result.refusal ?? 'no refusal',
+  );
+});
+
+test('evaluateForcedHandoffPreflight restores a read rather than writing when the claim branch probe fails', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) => ({ status: 'human-gated', ref }),
+      readDefaultBranch: () => 'trunk',
+      probeBranch: () => {
+        throw new Error('gh: API rate limit (HTTP 500)');
+      },
+    },
+  });
+  assert.equal(result.ok, false);
+  const refusal = result.refusal ?? '';
+  assert.ok(refusal.includes('HTTP 500'), refusal);
+  assert.ok(
+    refusal.endsWith('Restore the read named above, then rerun.'),
+    refusal,
+  );
+  assert.equal(refusal.includes('repair that file'), false, refusal);
+  assert.equal(/merge the default branch/i.test(refusal), false, refusal);
+});
+
+test('evaluateForcedHandoffPreflight asks for the mode on a PR claim branch that lacks the opt-in, not a commit to the base', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [{ number: 2, baseRefName: 'main' }],
+    deps: {
+      readMode: (_owner, _repo, ref) =>
+        ref === PREFLIGHT_CLAIM
+          ? { status: 'other', ref, mode: 'disabled' }
+          : { status: 'human-gated', ref },
+    },
+  });
+  assert.equal(result.ok, false);
+  const refusal = result.refusal ?? '';
+  assert.ok(
+    refusal.includes(
+      'Set forcedHandoff.mode to human-gated on the claim branch issue/1-add-x',
+    ),
+    refusal,
+  );
+  assert.equal(refusal.includes('Commit the opt-in'), false, refusal);
+});
+
+test('evaluateForcedHandoffPreflight restores a failed lookup, and offers a conditional config repair for a config read', () => {
+  const unknownDefault = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) => ({ status: 'human-gated', ref }),
+      readDefaultBranch: () => null,
+      probeBranch: () => 'absent',
+    },
+  });
+  const missingBase = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [{ number: 2, baseRefName: '' }],
+    deps: {
+      readMode: (_owner, _repo, ref) => ({ status: 'human-gated', ref }),
+    },
+  });
+  for (const result of [unknownDefault, missingBase]) {
+    const refusal = result.refusal ?? '';
+    assert.ok(
+      refusal.endsWith('Restore the read named above, then rerun.'),
+      refusal,
+    );
+    assert.equal(refusal.includes('Commit the opt-in'), false, refusal);
+  }
+  // A config that could not be read may also be repaired at its source.
+  const configRead = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) =>
+        ref === 'trunk'
+          ? { status: 'unreadable', ref, error: 'expected a JSON object' }
+          : { status: 'human-gated', ref },
+      readDefaultBranch: () => 'trunk',
+      probeBranch: () => 'absent',
+    },
+  });
+  assert.ok(
+    (configRead.refusal ?? '').includes(
+      'is not valid JSON or is not a JSON object, repair that file',
+    ),
+    configRead.refusal ?? 'no refusal',
+  );
+});
+
+test('evaluateForcedHandoffPreflight with no PR asks for the opt-in on the default branch when that copy lacks it', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) => ({
+        status: 'other',
+        ref,
+        mode: 'disabled',
+      }),
+      readDefaultBranch: () => 'trunk',
+      probeBranch: () => 'absent',
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    (result.refusal ?? '').includes(
+      'Commit the opt-in to the default branch through its normal pull-request path, then rerun.',
+    ),
+    result.refusal ?? 'no refusal',
+  );
+});
+
+test('evaluateForcedHandoffPreflight merges the PR base into a PR claim branch that has no config file', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [{ number: 2, baseRefName: 'main' }],
+    deps: {
+      readMode: (_owner, _repo, ref) =>
+        ref === PREFLIGHT_CLAIM
+          ? { status: 'other', ref, mode: null }
+          : { status: 'human-gated', ref },
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    (result.refusal ?? '').includes(
+      "merge the PR's base branch into it and push the merge",
+    ),
+    result.refusal ?? 'no refusal',
+  );
 });
 
 test('evaluateForcedHandoffPreflight refuses when the live default branch cannot be determined', () => {

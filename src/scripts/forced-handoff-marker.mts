@@ -269,9 +269,10 @@ type PlanPreflight =
 
 /**
  * Run the successor preflight for `--plan` without refusing. A local mode that
- * is not human-gated, or a plan with no active claim, is `not-evaluated` and
- * makes no GitHub read. Otherwise the trusted copies are read and the result is
- * `ok` or `refused`.
+ * is not human-gated is `not-evaluated` and makes no GitHub read. Otherwise the
+ * trusted copies are read and the result is `ok` or `refused`. A null claim
+ * branch never reaches here in practice, because `planHandoff` throws first for
+ * a plan with no active claim; the guard only narrows the type.
  */
 function planPreflight(
   modeEnabled: boolean,
@@ -418,12 +419,15 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
     // markerBody, so a caller cannot post a marker the trusted copies would
     // not honor.
     const { markerBody, ...planWithoutBody } = plan;
+    // Same PR selection as the marker run: the PR named by --pr, if any.
     const preflight = planPreflight(
       modeEnabled,
       tempClaim ? tempClaim.branch : null,
       owner,
       name,
-      linkedPrs,
+      args.prNumber === undefined
+        ? linkedPrs
+        : linkedPrs.filter((pr) => Number(pr.number) === args.prNumber),
     );
     console.log(
       JSON.stringify(
@@ -539,6 +543,7 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
   }
 
   let linkedPr = '';
+  let namedPrBase = '';
   if (args.prNumber) {
     const pr = ghJson([
       'pr',
@@ -547,44 +552,58 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
       '-R',
       `${owner}/${name}`,
       '--json',
-      'headRefName,url',
+      'headRefName,url,baseRefName,state',
       '--jq',
       '.',
-    ]) as { headRefName?: unknown };
+    ]) as { headRefName?: unknown; baseRefName?: unknown; state?: unknown };
     const headRefName = String(pr.headRefName ?? '');
     if (headRefName !== activeClaim.branch) {
       throw new Error(
         `PR #${args.prNumber} head branch ${headRefName} does not match active claim branch ${activeClaim.branch}`,
       );
     }
+    // A closed or merged PR is not the handoff's PR: the copies its base names
+    // are not the ones Resume and F2 read for an open claim (#3872).
+    if (String(pr.state ?? '') !== 'OPEN') {
+      throw new Error(
+        `PR #${args.prNumber} is not open; --pr must name an open pull request on claim branch ${activeClaim.branch}`,
+      );
+    }
+    namedPrBase = String(pr.baseRefName ?? '');
     linkedPr = String(args.prNumber);
   }
 
-  // #3872: an open PR on the claim branch needs --pr, and the successor must
-  // not take over unless every trusted copy the gates read confirms the
-  // opt-in.
-  const openPrs = ghJson([
-    'pr',
-    'list',
-    '--repo',
-    `${owner}/${name}`,
-    '--head',
-    activeClaim.branch,
-    '--state',
-    'open',
-    '--json',
-    'number,headRefName,baseRefName',
-  ]) as LinkedPrPayload[];
-  if (openPrs.length > 0 && !args.prNumber) {
-    throw new Error(
-      `issue #${args.issueNumber} has an open PR on claim branch ${activeClaim.branch} (#${openPrs.map((pr) => pr.number).join(', #')}); rerun with --pr <number>`,
-    );
+  // #3872: the successor must not take over unless the trusted copies that
+  // Resume and F2 read for the PR it names confirm the opt-in. With an open PR
+  // on the claim branch, --pr is required, and an unrelated open PR is not
+  // checked. Without one, the default branch and the claim branch are checked.
+  let preflightPrs: { number: number; baseRefName: string }[] = [];
+  if (args.prNumber) {
+    preflightPrs = [{ number: args.prNumber, baseRefName: namedPrBase }];
+  } else {
+    const openPrs = ghJson([
+      'pr',
+      'list',
+      '--repo',
+      `${owner}/${name}`,
+      '--head',
+      activeClaim.branch,
+      '--state',
+      'open',
+      '--json',
+      'number,headRefName,baseRefName',
+    ]) as LinkedPrPayload[];
+    if (openPrs.length > 0) {
+      throw new Error(
+        `issue #${args.issueNumber} has an open PR on claim branch ${activeClaim.branch} (#${openPrs.map((pr) => pr.number).join(', #')}); rerun with --pr <number>`,
+      );
+    }
   }
   const preflightResult = evaluateForcedHandoffPreflight({
     owner,
     repo: name,
     claimBranch: activeClaim.branch,
-    openPrs,
+    openPrs: preflightPrs,
   });
   if (!preflightResult.ok) {
     throw new Error(preflightResult.refusal ?? 'forced handoff refused');
@@ -903,8 +922,8 @@ Options:
                                    explicit --new-agent-id and --new-claim-id stay accepted with --plan.
                                    The plan's read-only preflight field reports the trusted copies,
                                    and its markerBody is omitted when the preflight would refuse.
-  --pr <number>                    PR number for issue-plus-pr context (required when the claim
-                                   branch has an open PR)
+  --pr <number>                    open PR for issue-plus-pr context (required when the claim
+                                   branch has an open PR; a PR that is not open is refused)
   --new-agent-id <id>              successor session agent id (required without --plan)
   --new-claim-id <id>              successor claim id (required without --plan)
   --forced-by <actor>              approving human actor recorded in the marker

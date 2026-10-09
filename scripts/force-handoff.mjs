@@ -260,12 +260,14 @@ export async function runHandoff(options = {}) {
       );
     }
     // #3872: refuse before the operator confirms. The successor would stop at
-    // Resume or F2 unless every trusted copy they read confirms the opt-in.
+    // Resume or F2 unless the trusted copies those gates read for the PR the
+    // operator named confirm the opt-in. An unrelated open PR on the branch
+    // does not block it.
     const preflightResult = evaluateForcedHandoffPreflight({
       owner,
       repo: name,
       claimBranch: plan.branch,
-      openPrs: linkedPrs,
+      openPrs: linkedPrs.filter((pr) => Number(pr.number) === resolvedPrNumber),
       deps: preflight,
     });
     if (!preflightResult.ok) {

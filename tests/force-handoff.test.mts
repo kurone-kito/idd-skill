@@ -705,9 +705,10 @@ test('runHandoff refuses when the open PR head copy lacks the opt-in though the 
   assert.equal(posted, 0);
 });
 
-test('runHandoff refuses when any open PR on the claim branch has a base lacking the opt-in (#3872)', async () => {
-  const responses = ['497', '501', '', 'y'];
+test('runHandoff refuses when the PR the operator names has a base lacking the opt-in (#3872)', async () => {
+  const responses = ['497', '502', '', 'y'];
   let callIndex = 0;
+  let posted = 0;
   await assert.rejects(
     () =>
       runHandoff(
@@ -727,6 +728,10 @@ test('runHandoff refuses when any open PR on the claim branch has a base lacking
             readDefaultBranch: () => 'main',
             probeBranch: () => 'absent',
           },
+          postComment: async () => {
+            posted += 1;
+            return { html_url: 'https://github.com/x/y/issues/1#c' };
+          },
         }),
       ),
     (err) => {
@@ -737,6 +742,67 @@ test('runHandoff refuses when any open PR on the claim branch has a base lacking
       return true;
     },
   );
+  assert.equal(posted, 0, 'a refused handoff must post nothing');
+  assert.equal(callIndex, 3, 'the refusal happens before the confirm prompt');
+});
+
+test('runHandoff ignores an unrelated open PR whose base lacks the opt-in (#3872)', async () => {
+  const responses = ['497', '501', '', 'y'];
+  let callIndex = 0;
+  const postedBodies: string[] = [];
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      fetchLinkedPrs: async () => [
+        { number: 501, headRefName: CLAIM_BRANCH, baseRefName: 'main' },
+        { number: 502, headRefName: CLAIM_BRANCH, baseRefName: 'release/1' },
+      ],
+      preflight: {
+        readMode: (_owner, _repo, ref) =>
+          ref === 'release/1' ? lacksAt(ref) : gatedAt(ref),
+        readDefaultBranch: () => 'main',
+        probeBranch: () => 'absent',
+      },
+      postComment: async (_issueNum, body) => {
+        postedBodies.push(body);
+        return { html_url: 'https://github.com/x/y/issues/1#c' };
+      },
+    }),
+  );
+  assert.equal(result.posted, true);
+  assert.ok(postedBodies[0].includes('issue-plus-pr'), postedBodies[0]);
+});
+
+test('runHandoff refuses a named PR whose base ref is missing, and names that PR (#3872)', async () => {
+  const responses = ['497', '501', '', 'y'];
+  let callIndex = 0;
+  let posted = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => [
+            { number: 501, headRefName: CLAIM_BRANCH, baseRefName: '' },
+          ],
+          postComment: async () => {
+            posted += 1;
+            return { html_url: 'https://github.com/x/y/issues/1#c' };
+          },
+        }),
+      ),
+    (err) => {
+      const message = (err as Error).message;
+      assert.ok(message.includes('the base branch of PR #501'), message);
+      assert.ok(
+        message.includes('no base ref was returned for PR #501'),
+        message,
+      );
+      assert.ok(message.includes('Restore the read named above'), message);
+      return true;
+    },
+  );
+  assert.equal(posted, 0);
 });
 
 test('runHandoff refuses with the read error when a trusted copy is unreadable (#3872)', async () => {

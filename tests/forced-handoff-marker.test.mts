@@ -795,7 +795,7 @@ const HANDOFF_PR_VIEW_ARGS = [
   '-R',
   HANDOFF_REPO,
   '--json',
-  'headRefName,url',
+  'headRefName,url,baseRefName,state',
   '--jq',
   '.',
 ];
@@ -806,6 +806,8 @@ function prViewRule(): FixtureGhRule {
     args: HANDOFF_PR_VIEW_ARGS,
     stdout: JSON.stringify({
       headRefName: HANDOFF_BRANCH,
+      baseRefName: 'main',
+      state: 'OPEN',
       url: `https://github.com/${HANDOFF_REPO}/pull/501`,
     }),
   };
@@ -1104,6 +1106,34 @@ test('forced handoff helper renders issue-plus-pr when every trusted copy confir
   );
 });
 
+test('forced handoff helper checks only the PR it names, not an unrelated open PR (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      prViewRule(),
+      ...preflightRules({
+        openPrs: [
+          ...HANDOFF_OPEN_PR_ON_MAIN,
+          {
+            number: 502,
+            headRefName: HANDOFF_BRANCH,
+            baseRefName: 'release/1',
+          },
+        ],
+        configs: { 'release/1': 'disabled' },
+      }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.equal(main([...HANDOFF_ARGS, '--pr', '501']), 0);
+      assert.equal(
+        parseForcedHandoffComment(output(), '2026-05-12T11:00:05Z')
+          ?.contextScope,
+        'issue-plus-pr',
+      );
+    },
+  );
+});
+
 test('forced handoff helper refuses a claim-branch probe failure that is not a 404 (#3872)', () => {
   inHumanGatedSandbox(
     [
@@ -1185,6 +1215,154 @@ test('forced handoff --plan with local mode disabled reports not-evaluated and r
     reads.some((read) => read.includes('contents/.github/idd/config.json')),
     false,
     reads.join('\n'),
+  );
+});
+
+test('forced handoff helper refuses --pr naming a PR that is not open, printing nothing (#3872)', () => {
+  const closedPrView: FixtureGhRule = {
+    args: HANDOFF_PR_VIEW_ARGS,
+    stdout: JSON.stringify({
+      headRefName: HANDOFF_BRANCH,
+      baseRefName: 'main',
+      state: 'CLOSED',
+      url: `https://github.com/${HANDOFF_REPO}/pull/501`,
+    }),
+  };
+  inHumanGatedSandbox(
+    [
+      closedPrView,
+      ...preflightRules({ openPrs: HANDOFF_OPEN_PR_ON_MAIN }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.throws(
+        () => main([...HANDOFF_ARGS, '--pr', '501']),
+        /PR #501 is not open/,
+      );
+      assert.equal(output(), '');
+    },
+  );
+});
+
+test('forced handoff --plan --pr checks the PR it names, not an unrelated open PR (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      ...preflightRules({
+        openPrs: [
+          ...HANDOFF_OPEN_PR_ON_MAIN,
+          {
+            number: 502,
+            headRefName: HANDOFF_BRANCH,
+            baseRefName: 'release/1',
+          },
+        ],
+        configs: { 'release/1': 'disabled' },
+      }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.equal(main([...HANDOFF_PLAN_ARGS, '--pr', '501']), 0);
+      const plan = JSON.parse(output());
+      assert.equal(plan.preflight.status, 'ok');
+      assert.equal(typeof plan.markerBody, 'string');
+    },
+  );
+});
+
+test('forced handoff --plan without --pr checks every open PR base and reports refused (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      ...preflightRules({
+        openPrs: [
+          ...HANDOFF_OPEN_PR_ON_MAIN,
+          {
+            number: 502,
+            headRefName: HANDOFF_BRANCH,
+            baseRefName: 'release/1',
+          },
+        ],
+        configs: { 'release/1': 'disabled' },
+      }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.equal(main(HANDOFF_PLAN_ARGS), 0);
+      const plan = JSON.parse(output());
+      assert.equal(plan.preflight.status, 'refused');
+      assert.match(
+        plan.preflight.refusal,
+        /the base branch release\/1 sets forcedHandoff\.mode to disabled/,
+      );
+      assert.equal('markerBody' in plan, false);
+    },
+  );
+});
+
+test('forced handoff helper refuses --pr for a merged PR or one with no state, printing nothing (#3872)', () => {
+  const prViewWithState = (state: string | null): FixtureGhRule => ({
+    args: HANDOFF_PR_VIEW_ARGS,
+    stdout: JSON.stringify({
+      headRefName: HANDOFF_BRANCH,
+      baseRefName: 'main',
+      ...(state === null ? {} : { state }),
+      url: `https://github.com/${HANDOFF_REPO}/pull/501`,
+    }),
+  });
+  for (const state of ['MERGED', null]) {
+    inHumanGatedSandbox(
+      [
+        prViewWithState(state),
+        ...preflightRules({ openPrs: HANDOFF_OPEN_PR_ON_MAIN }),
+        ...handoffRules(HANDOFF_CLAIM),
+      ],
+      (output) => {
+        assert.throws(
+          () => main([...HANDOFF_ARGS, '--pr', '501']),
+          /PR #501 is not open/,
+        );
+        assert.equal(output(), '');
+      },
+    );
+  }
+});
+
+test('forced handoff --plan --pr refuses a PR that is not among the open PRs (#3872)', () => {
+  inHumanGatedSandbox(
+    [...preflightRules(), ...handoffRules(HANDOFF_CLAIM)],
+    () => {
+      assert.throws(
+        () => main([...HANDOFF_PLAN_ARGS, '--pr', '501']),
+        /does not match any open PR/,
+      );
+    },
+  );
+});
+
+test('forced handoff --plan --pr refuses on the named PR own base, not on the default branch (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      ...preflightRules({
+        openPrs: [
+          {
+            number: 501,
+            headRefName: HANDOFF_BRANCH,
+            baseRefName: 'release/1',
+          },
+        ],
+        configs: { 'release/1': 'disabled' },
+      }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.equal(main([...HANDOFF_PLAN_ARGS, '--pr', '501']), 0);
+      const plan = JSON.parse(output());
+      assert.equal(plan.preflight.status, 'refused');
+      assert.match(
+        plan.preflight.refusal,
+        /the base branch release\/1 sets forcedHandoff\.mode to disabled/,
+      );
+      assert.equal('markerBody' in plan, false);
+    },
   );
 });
 
