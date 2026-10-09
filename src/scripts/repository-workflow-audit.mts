@@ -50,7 +50,22 @@ function readRequiredText(
   report: Report,
 ): string | undefined {
   try {
-    return readFileSync(resolve(root, relativePath), 'utf8');
+    const text = readFileSync(resolve(root, relativePath), 'utf8');
+    // Any line break other than LF is refused, so the audit never reads a line
+    // structure that a YAML parser might split differently.
+    if (
+      [...text].some((character) =>
+        NON_LF_LINE_BREAKS.has(character.charCodeAt(0)),
+      )
+    ) {
+      report(
+        ruleId,
+        relativePath,
+        'a line break other than LF cannot be read by this audit',
+      );
+      return undefined;
+    }
+    return text;
   } catch {
     // A missing or unreadable input is an inspection failure, never a clean
     // result, so the rule reports it under its own ID.
@@ -294,22 +309,41 @@ function checkWorkflowDispatchCheckoutRef(
   // Searched inside the checkout step only, so a later step's fetch-depth
   // cannot satisfy this check.
   const checkoutStep = stepTextFrom(declared, checkoutStart);
+  // Only the checkout's own step keys may sit at step indentation. A line at eight
+  // spaces that is not one of them would end the with: block early, so it fails
+  // closed here instead.
+  const unexpectedStepLines = checkoutStep
+    .split('\n')
+    .filter((line) => /^ {8}\S/.test(line))
+    .filter(
+      (line) =>
+        !/^ {8}(uses|with|name|id|env|if|continue-on-error|timeout-minutes)[ \t]*:/i.test(
+          line,
+        ),
+    );
+  if (unexpectedStepLines.length > 0) {
+    report(RWA004, path, 'checkout step may declare only its own step keys');
+  }
   const fetchDepthStart = checkoutStep.indexOf('fetch-depth:');
   if (fetchDepthStart === -1) {
     report(RWA004, path, 'checkout step must keep its fetch-depth: input');
     return;
   }
   const checkoutWith = withBlockOf(checkoutStep);
-  // Only the inputs this checkout needs. An extra input such as repository:
-  // would fetch another tree into a job that holds write access.
-  const extraInputs = [
-    ...checkoutWith.matchAll(/^ {10}["']?([A-Za-z0-9_-]+)["']?[ \t]*:/gm),
-  ]
-    .map((match) => (match[1] ?? '').toLowerCase())
+  // Every key line of the checkout's with: block must be one of the inputs this
+  // job uses. A tag, an anchor, an escaped or quoted-away key, or a complex key is
+  // not one of those plain names, so it fails closed.
+  // A bare carriage return is a line break in YAML 1.2, so it splits lines too.
+  const unexpectedInputs = checkoutWith
+    .split(/\r\n|\r|\n/)
+    .filter((line) => /^ {10}\S/.test(line))
     .filter(
-      (key) => !['ref', 'fetch-depth', 'persist-credentials'].includes(key),
+      (line) =>
+        !/^ {10}["']?(ref|fetch-depth|persist-credentials)["']?[ \t]*:/i.test(
+          line,
+        ),
     );
-  if (extraInputs.length > 0) {
+  if (unexpectedInputs.length > 0) {
     report(
       RWA004,
       path,
@@ -1532,17 +1566,44 @@ function listPullRequestWorkflows(
       continue;
     }
     const path = `${WORKFLOWS_DIRECTORY}/${name}`;
-    const text = readRequiredText(root, path, RWA002, report);
-    if (text === undefined) {
+    // Trigger discovery reads the text with every non-LF line break treated as a
+    // line break, so a pull_request key after one is still found. A file with such
+    // a break that does not show the trigger is refused here under RWA002, since no
+    // other rule would read it.
+    let raw: string;
+    try {
+      raw = readFileSync(resolve(root, path), 'utf8');
+    } catch {
+      report(RWA002, path, 'required input is missing or unreadable');
       continue;
     }
+    const text = [...raw.replace(/\r\n/g, '\n')]
+      .map((character) =>
+        NON_LF_LINE_BREAKS.has(character.charCodeAt(0)) ? '\n' : character,
+      )
+      .join('');
     const onBlock = extractOnBlock(text);
+    if (
+      onBlock !== undefined &&
+      /^ {2}["']?pull_request["']?\s*:/m.test(onBlock)
+    ) {
+      files.push(name);
+      continue;
+    }
+    if (
+      [...raw].some((character) =>
+        NON_LF_LINE_BREAKS.has(character.charCodeAt(0)),
+      )
+    ) {
+      report(
+        RWA002,
+        path,
+        'a line break other than LF cannot be read by this audit',
+      );
+      continue;
+    }
     if (onBlock === undefined) {
       report(RWA002, path, 'on:/permissions: block not found');
-      continue;
-    }
-    if (/^ {2}["']?pull_request["']?\s*:/m.test(onBlock)) {
-      files.push(name);
     }
   }
   return files;

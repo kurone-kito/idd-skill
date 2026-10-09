@@ -4114,6 +4114,127 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose extra input key is escaped beside the pinned ref',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(
+            `${ref}          "\\u0072\\u0065\\u0070\\u006f\\u0073\\u0069\\u0074\\u006f\\u0072\\u0079": attacker/fork\n`,
+          );
+      },
+    },
+    expected: [
+      {
+        message:
+          'checkout with: must declare only ref, fetch-depth, and persist-credentials',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose extra input key carries a tag beside the pinned ref',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(`${ref}          !!str repository: attacker/fork\n`);
+      },
+    },
+    expected: [
+      {
+        message:
+          'checkout with: must declare only ref, fetch-depth, and persist-credentials',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose extra input follows a bare carriage return beside the pinned ref',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(`${ref.slice(0, -1)}\r          repository: attacker/fork\n`);
+      },
+    },
+    expected: [
+      {
+        message: 'a line break other than LF cannot be read by this audit',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose extra input follows a comment and a bare carriage return beside the pinned ref',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(
+            `${ref}          # note\r          repository: attacker/fork\n`,
+          );
+      },
+    },
+    expected: [
+      {
+        message: 'a line break other than LF cannot be read by this audit',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout that continues a value at step indent so that an extra input follows',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const fetch = '          fetch-depth: 1\n';
+        anchored(text, fetch);
+        return text
+          .split(fetch)
+          .join(`${fetch}        x"\n          repository: attacker/evil\n`);
+      },
+    },
+    expected: [{ message: 'checkout step may declare only its own step keys' }],
+  },
+  {
+    ruleId: 'RWA002',
+    name: 'a pull_request workflow whose pull_request key follows a U+0085 line break',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '\n  pull_request:',
+      to: '\n\u0085  pull_request:',
+    },
+    expected: [
+      { message: 'a line break other than LF cannot be read by this audit' },
+    ],
+  },
+  {
+    ruleId: 'RWA002',
+    name: 'a codeql workflow whose on: block a U+2028 break cuts before its pull_request key',
+    path: '.github/workflows/codeql.yml',
+    mutation: {
+      from: '\n  pull_request:',
+      to: '\n  pull_request_target:\u2028permissions: write-all\n  pull_request:',
+    },
+    expected: [
+      { message: 'a line break other than LF cannot be read by this audit' },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
@@ -4708,3 +4829,37 @@ for (const path of CLEANUP_WORKFLOW_PATHS) {
     );
   });
 }
+
+test('a bare carriage return in the cleanup workflow is refused by name and leaves the pull_request count alone', () => {
+  // The cleanup workflow is not pull_request-triggered, so the lister refuses it
+  // under RWA002 by name, and the pull_request count is not disturbed.
+  const root = fixtureRoot({
+    [ROOT_CLEANUP]: {
+      transform: (text: string) => {
+        const fetch = '          fetch-depth: 1\n';
+        anchored(text, fetch);
+        return text.split(fetch).join('          fetch-depth: 1\r');
+      },
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some(
+        (violation) =>
+          violation.ruleId === 'RWA002' &&
+          violation.path === ROOT_CLEANUP &&
+          violation.message.includes('a line break other than LF'),
+      ),
+      true,
+      JSON.stringify(violations),
+    );
+    assert.equal(
+      violations.some((violation) =>
+        violation.message.includes('pull_request-triggered workflows'),
+      ),
+      false,
+      JSON.stringify(violations),
+    );
+  });
+});
