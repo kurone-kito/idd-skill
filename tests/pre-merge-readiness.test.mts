@@ -17151,7 +17151,7 @@ test('isAdvisoryNonReviewNotice matches the live two-sentence Codex usage-limit 
 });
 
 test('isAdvisoryNonReviewNotice rejects a review that embeds the live notice after a narrative lead-in (#3885)', () => {
-  const embedded = `Retry logic looks right overall. ${CODEX_LIVE_NOTICE_3885.replace('\n', ' ')}`;
+  const embedded = `Retry logic looks right overall. ${CODEX_LIVE_NOTICE_3885.replace(/\n/g, ' ')}`;
   assert.equal(isAdvisoryNonReviewNotice(embedded), false);
 });
 
@@ -17163,4 +17163,30 @@ test('the Codex notice gap bound is 60 characters: a 70-character gap is rejecte
     );
   assert.equal(isAdvisoryNonReviewNotice(withGap(68)), false);
   assert.equal(isAdvisoryNonReviewNotice(withGap(58)), true);
+});
+
+test('the Codex notice settings tail accepts only the whole plain or linked forms (#3885)', () => {
+  const linked =
+    ' in your [settings](https://chatgpt.com/codex/cloud/settings/code-review).';
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(linked, ' in your settings.'),
+    ),
+    true,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(linked, ' in your [settings.'),
+    ),
+    false,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(
+        linked,
+        ' in your settings](https://chatgpt.com/codex/cloud/settings/code-review).',
+      ),
+    ),
+    false,
+  );
 });

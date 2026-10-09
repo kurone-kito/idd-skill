@@ -5138,7 +5138,7 @@ const CODEX_NOTICE_TRAILER_SENTENCE_3 =
 // optional, and only after SENTENCE_3, so the shorter dashboard-only wording still
 // matches. Each gap is bounded like the other sentences.
 const CODEX_NOTICE_TRAILER_SENTENCE_4 =
-  '\\bTo continue using code reviews\\b[\\s\\S]{0,60}?\\bupgrade your account\\b[\\s\\S]{0,60}?\\benable them for code reviews\\b(?:\\s+in your\\s+\\[?settings(?:\\]\\([^)]*\\))?)?';
+  '\\bTo continue using code reviews\\b[\\s\\S]{0,60}?\\bupgrade your account\\b[\\s\\S]{0,60}?\\benable them for code reviews\\b(?:\\s+in your\\s+(?:settings|\\[settings\\]\\([^)]*\\)))?';
 const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN = new RegExp(
   `^${CODEX_NOTICE_TRAILER_LEAD_IN}(?:${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?|${CODEX_NOTICE_TRAILER_SENTENCE_3}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_4})?)[.!,;:\\s]*$`,
   'i',
