@@ -2436,6 +2436,37 @@ test('CLI: --record-tokens on a non-worktree path names the remedy, not the raw 
   }
 });
 
+test('CLI: --record-tokens keeps the git diagnostic when the path has a .git entry', async () => {
+  const broken = mkdtempSync(join(tmpdir(), 'claim-lock-broken-worktree-'));
+  try {
+    writeFileSync(join(broken, '.git'), 'gitdir: /nonexistent/admin-dir\n');
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--record-tokens',
+          '--worktree',
+          broken,
+          '--agent-id',
+          'agent-a',
+          '--claim-id',
+          'claim-a',
+        ],
+        { env: fixtureEnv() },
+      ),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.notEqual(error.code, 0);
+        assert.match(error.stderr ?? '', /fatal:/);
+        assert.doesNotMatch(error.stderr ?? '', /is not a git worktree/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(broken, { recursive: true, force: true });
+  }
+});
+
 test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', async () => {
   const fixture = setupLinkedWorktree();
   try {

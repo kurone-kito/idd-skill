@@ -1710,6 +1710,29 @@ function readGeneratedTokensAtPath(
 }
 
 /**
+ * `--record-tokens` writes into the worktree's private admin directory, which
+ * exists only for a git worktree. Name that requirement and the remedy instead
+ * of surfacing the raw `git rev-parse` failure.
+ */
+function assertRecordTokensWorktree(worktree: string): void {
+  try {
+    resolveWorktreeAdminDir(worktree);
+  } catch (error) {
+    // A path that carries its own `.git` entry is a worktree that failed for
+    // another reason (permissions, `safe.directory`, a malformed repository).
+    // Keep that diagnostic; only a path without one is "not a worktree".
+    if (existsSync(join(worktree, '.git'))) {
+      throw error;
+    }
+    throw markCliUsageError(
+      new Error(
+        `--record-tokens: ${worktree} is not a git worktree. Create the worktree first, for example \`git worktree add --no-track <path> -b <branch> origin/main\`, then re-run --record-tokens.`,
+      ),
+    );
+  }
+}
+
+/**
  * Write (create or idempotently replace) the generated-tokens record for
  * `claimId` at `cwd`'s own private git-admin directory. Unlike the lock
  * file, this exposes no collision/`--takeover` concept of its own: the
@@ -1735,23 +1758,6 @@ function readGeneratedTokensAtPath(
  * reports a distinct `record-blocked` status for exactly this case
  * instead of calling this function at all.
  */
-/**
- * `--record-tokens` writes into the worktree's private admin directory, which
- * exists only for a git worktree. Name that requirement and the remedy instead
- * of surfacing the raw `git rev-parse` failure.
- */
-function assertRecordTokensWorktree(worktree: string): void {
-  try {
-    resolveWorktreeAdminDir(worktree);
-  } catch {
-    throw markCliUsageError(
-      new Error(
-        `--record-tokens: ${worktree} is not a git worktree. Create the worktree first, for example \`git worktree add --no-track <path> -b <branch> origin/main\`, then re-run --record-tokens.`,
-      ),
-    );
-  }
-}
-
 export function recordGeneratedClaimTokens(
   cwd: string,
   fields: { agentId: string; claimId: string; nonce?: string },
