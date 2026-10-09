@@ -38,7 +38,10 @@ const ISSUE_TOKEN_PATTERN = /^[1-9][0-9]*$/;
 // The same pattern as `developmentBranch` in schemas/policy.schema.json.
 const DEVELOPMENT_BRANCH_PATTERN =
   /^(?!refs\/heads\/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
-const RECORD_SEPARATOR = '\x1e';
+// Records end in NUL. A commit made with porcelain never holds a NUL, so a
+// control byte in a body cannot split a record. Plumbing can store a NUL, and
+// then the message is read only up to it.
+const RECORD_TERMINATOR = '\0';
 const UNIT_SEPARATOR = '\x1f';
 
 const USAGE = `usage: node scripts/check-stray-commit-closes.mjs [--closing-issues <n>[,<n>...]]
@@ -168,15 +171,18 @@ function readDefaultBranch(): string {
   return name;
 }
 
-/** Split `git log --format=%H%x1f%B%x1e` output into commits. */
+/** Split `git log -z --format=%H%x1f%B` output into commits. */
 function parseRange(output: string): { sha: string; message: string }[] {
   const commits: { sha: string; message: string }[] = [];
-  for (const rawRecord of output.split(RECORD_SEPARATOR)) {
-    const record = rawRecord.replace(/^\n+/, '').replace(/\n+$/, '');
+  for (const rawRecord of output.split(RECORD_TERMINATOR)) {
+    const record = rawRecord.replace(/\n+$/, '');
     if (record === '') {
       continue;
     }
     const separator = record.indexOf(UNIT_SEPARATOR);
+    if (separator < 0) {
+      throw new CannotRunError('could not parse the commit log');
+    }
     commits.push({
       sha: record.slice(0, separator),
       message: record.slice(separator + 1),
@@ -238,7 +244,8 @@ function run(argv: readonly string[]): number {
 
   const range = runGit([
     'log',
-    '--format=%H%x1f%B%x1e',
+    '-z',
+    '--format=%H%x1f%B',
     `origin/${base}..HEAD`,
   ]);
   if (range.status !== 0) {
