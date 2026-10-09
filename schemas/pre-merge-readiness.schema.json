@@ -1713,7 +1713,15 @@
           },
           "cause": {
             "type": "string",
-            "minLength": 1,
+            "enum": [
+              "mode-disabled",
+              "linked-pr-lookup-failed",
+              "pr-scope-mismatch",
+              "issue-only-not-before-first-commit",
+              "first-commit-time-unknown",
+              "author-forced-by-mismatch",
+              "forced-by-unauthorized"
+            ],
             "description": "Why the marker was not honored: the refusal cause from the explainer, or an author or authorization reason when that check was enabled."
           }
         }
