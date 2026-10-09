@@ -29,8 +29,11 @@ import {
   inspectLocalWorktreeBranch,
   type LocalWorktreeInspection,
 } from '../src/scripts/local-worktree-occupancy.mts';
+import { parseForcedHandoffComment } from '../src/scripts/marker-helpers.mts';
 import {
+  buildForcedHandoffRefusalExplainer,
   DEFAULT_STALE_AGE_MS,
+  normalizeLinkedPrReference,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   summarizeClaimValidation as summarizeClaimValidationImpl,
 } from '../src/scripts/protocol-helpers.mts';
@@ -5716,4 +5719,216 @@ test('#3871: a closing-reference node with an unknown state fails the lookup ins
     },
   });
   assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
+});
+
+// #3873: the refusal cause from the explainer reaches the ignored-handoff
+// warning. Without an explainer, every refusal keeps the generic wording.
+function routeExplained(
+  events: ReturnType<typeof forcedHandoffEvents>,
+  explain: ReturnType<typeof buildForcedHandoffRefusalExplainer>,
+  linkedPrLookupFailed = false,
+) {
+  return evaluateResumeClaimRouting(
+    { claimId: 'claim-new', now: '2026-05-12T11:00:00Z', events },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: (marker) => explain(marker) === null,
+      forcedHandoffRefusalExplainer: explain,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      linkedPrLookupFailed,
+    },
+  );
+}
+
+test('a pr-scope refusal with forced-handoff mode on names its cause, not the disabled mode', () => {
+  const explain = buildForcedHandoffRefusalExplainer({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set([normalizeLinkedPrReference('88')]),
+    prFirstCommitAt: null,
+  });
+  const result = routeExplained(
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+    explain,
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('linked PR 77 does not back the active claim'),
+    ),
+    'expected the pr-scope cause in the warning',
+  );
+  assert.ok(
+    !result.warnings.some((message) =>
+      message.includes('forced-handoff mode is not enabled'),
+    ),
+    'the mode is on, so the warning must not claim it is off',
+  );
+});
+
+test('a disabled forced-handoff mode still names itself when the explainer is supplied', () => {
+  const explain = buildForcedHandoffRefusalExplainer({
+    forcedHandoffEnabled: false,
+    expectedLinkedPrReferences: new Set(),
+  });
+  const result = routeExplained(
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    explain,
+  );
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('forced-handoff mode is not enabled'),
+    ),
+    'expected the disabled-mode wording for mode-disabled',
+  );
+});
+
+test('a forged marker is reported as an author mismatch, not as a lookup failure or a PR-scope refusal', () => {
+  const explain = buildForcedHandoffRefusalExplainer({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set([normalizeLinkedPrReference('88')]),
+    prFirstCommitAt: null,
+    linkedPrLookupFailed: true,
+  });
+  const events = forcedHandoffEvents({ contextScope: 'issue-only' }).map(
+    (event, index) =>
+      index === 1 ? { ...event, author: { login: 'impostor' } } : event,
+  );
+  // The impostor must be a trusted author to reach the author-match check at
+  // all; an untrusted author is dropped before any warning is written.
+  const result = evaluateResumeClaimRouting(
+    { claimId: 'claim-new', now: '2026-05-12T11:00:00Z', events },
+    {
+      isTrustedAuthor: trusted(['maintainer', 'impostor']),
+      isForcedHandoffEnabled: (marker) => explain(marker) === null,
+      forcedHandoffRefusalExplainer: explain,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      linkedPrLookupFailed: true,
+    },
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('does not match forcedBy maintainer'),
+    ),
+    'expected the author-mismatch reason',
+  );
+  assert.ok(
+    !result.warnings.some(
+      (message) =>
+        message.includes('linked-PR lookup failed') ||
+        message.includes('does not back the active claim'),
+    ),
+    'a forged marker must not be reported with the gate cause',
+  );
+});
+
+test('with the explainer, a lookup failure routes the same as the legacy path', () => {
+  const legacy = route(
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    buildForcedHandoffEnabledGate({
+      forcedHandoffEnabled: true,
+      expectedLinkedPrReferences: new Set(),
+      linkedPrLookupFailed: true,
+    }),
+    true,
+  );
+  const explained = routeExplained(
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    buildForcedHandoffRefusalExplainer({
+      forcedHandoffEnabled: true,
+      expectedLinkedPrReferences: new Set(),
+      linkedPrLookupFailed: true,
+    }),
+    true,
+  );
+  const verdict = (result: typeof legacy) => ({
+    state: result.state,
+    action: result.action,
+    reason: result.reason,
+    claim: result.active_claim?.claim_id ?? null,
+  });
+  assert.deepEqual(verdict(explained), verdict(legacy));
+  assert.ok(
+    explained.warnings.some((message) =>
+      message.includes('linked-PR lookup failed'),
+    ),
+    'expected the lookup-failure warning from the explained cause',
+  );
+});
+
+// #3873: resolveResumeLinkedPrState builds the gate and the refusal cause from
+// one record, so the cause a reader reports matches the decision it made.
+test('resolveResumeLinkedPrState names the refusal cause that matches its gate', () => {
+  const marker = parseForcedHandoffComment(
+    forcedHandoffEvents({ contextScope: 'issue-only' })[1].body,
+    '2026-05-12T10:01:00Z',
+  );
+  assert.ok(marker, 'the issue-only marker must parse');
+
+  const lookupFailed = resolveResumeLinkedPrState(
+    createFakeProviderAdapter({
+      closingPullRequestPageErrors: { 11: 'closing page unavailable' },
+    }),
+    11,
+    REPO,
+    { forcedHandoffEnabled: true, hasIssueOnlyHandoff: true },
+  );
+  assert.equal(lookupFailed.lookupFailed, true);
+  assert.equal(lookupFailed.isForcedHandoffEnabled(marker), false);
+  assert.equal(
+    lookupFailed.forcedHandoffRefusalExplainer(marker),
+    'linked-pr-lookup-failed',
+  );
+
+  const unknownTime = resolveResumeLinkedPrState(
+    createFakeProviderAdapter({
+      closingPullRequestPages: { 11: [openClosingPr(77)] },
+      changeRequestCommits: { 77: [] },
+    }),
+    11,
+    REPO,
+    { forcedHandoffEnabled: true, hasIssueOnlyHandoff: true },
+  );
+  assert.equal(unknownTime.lookupFailed, false);
+  assert.equal(unknownTime.isForcedHandoffEnabled(marker), false);
+  assert.equal(
+    unknownTime.forcedHandoffRefusalExplainer(marker),
+    'first-commit-time-unknown',
+  );
+});
+
+test('a caller that supplies the explainer but omits authorization reports the gate cause, not an authorization refusal', () => {
+  const explain = buildForcedHandoffRefusalExplainer({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set([normalizeLinkedPrReference('88')]),
+    prFirstCommitAt: null,
+  });
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      now: '2026-05-12T11:00:00Z',
+      events: forcedHandoffEvents({
+        contextScope: 'issue-plus-pr',
+        linkedPr: '77',
+      }),
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: (marker) => explain(marker) === null,
+      forcedHandoffRefusalExplainer: explain,
+    },
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('linked PR 77 does not back the active claim'),
+    ),
+    'expected the gate cause, since no authorization check was supplied',
+  );
+  assert.ok(
+    !result.warnings.some((message) =>
+      message.includes('is not an authorized maintainer'),
+    ),
+    'an omitted authorization check must not be reported as a refusal',
+  );
 });

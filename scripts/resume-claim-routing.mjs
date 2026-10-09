@@ -26,7 +26,7 @@ import {
 } from './marker-helpers.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
-  buildForcedHandoffEnableGate,
+  buildForcedHandoffRefusalExplainer,
   DEFAULT_STALE_AGE_MS,
   filterTrustedClaimFamilyEvents,
   isStaleByAge,
@@ -117,22 +117,18 @@ if (import.meta.main) {
  *   falling into the empty-set-means-honor-it shortcut.
  */
 export function buildForcedHandoffEnabledGate(options) {
-  // Delegate to the shared builder so resume routing and the merge-gate /
-  // write-side helpers cannot drift. Without `prFirstCommitAt` the behavior
-  // is byte-identical to the prior one: an issue-only handoff against a
-  // PR-backed claim is rejected.
-  const sharedGate = buildForcedHandoffEnableGate({
+  // Built on the shared explainer so resume routing, the merge-gate helpers
+  // and the refusal cause cannot drift (#3873). Without `prFirstCommitAt` the
+  // behavior is byte-identical to the prior one: an issue-only handoff against
+  // a PR-backed claim is rejected. A failed linked-PR lookup rejects every
+  // marker that is not `issue-plus-pr`, as before.
+  const explain = buildForcedHandoffRefusalExplainer({
     forcedHandoffEnabled: options.forcedHandoffEnabled,
     expectedLinkedPrReferences: options.expectedLinkedPrReferences,
     prFirstCommitAt: options.prFirstCommitAt ?? null,
+    linkedPrLookupFailed: options.linkedPrLookupFailed,
   });
-  if (!options.linkedPrLookupFailed) {
-    return sharedGate;
-  }
-  return (forcedHandoff) =>
-    forcedHandoff.contextScope === 'issue-plus-pr'
-      ? sharedGate(forcedHandoff)
-      : false;
+  return (forcedHandoff) => explain(forcedHandoff) === null;
 }
 /**
  * Take the occupancy probe and the owner check once for a claim-id match.
@@ -169,10 +165,6 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     typeof options.isForcedHandoffEnabled === 'function'
       ? options.isForcedHandoffEnabled
       : () => false;
-  const isAuthorizedForcedHandoff =
-    typeof options.isAuthorizedForcedHandoff === 'function'
-      ? options.isAuthorizedForcedHandoff
-      : () => false;
   const events = filterTrustedClaimFamilyEvents(
     normalizeEvents(input.events),
     trustedAuthor,
@@ -180,8 +172,11 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
   const state = resolveClaimState(events, staleAgeMs, {
     isForcedHandoffEnabled,
-    isAuthorizedForcedHandoff,
+    // The caller's own value, not a synthetic default: an omitted check must
+    // stay omitted for the refusal reporting (#3873).
+    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
     linkedPrLookupFailed,
+    forcedHandoffRefusalExplainer: options.forcedHandoffRefusalExplainer,
   });
   const claimIdChecked = normalizeToken(input.claimId);
   const sameSecondContenders = state.activeClaim
@@ -674,6 +669,7 @@ function runCli() {
           .toLowerCase(),
       ),
     isForcedHandoffEnabled: linkedPr.isForcedHandoffEnabled,
+    forcedHandoffRefusalExplainer: linkedPr.forcedHandoffRefusalExplainer,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,
@@ -857,6 +853,34 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
       );
       return;
     }
+    // #3873: the explainer names the cause. applyClaimEvent has already run
+    // the enabled author-match and authorization checks, so a marker reaching
+    // these branches is otherwise valid and is refused only by the gate.
+    if (reason === 'linked-pr-lookup-failed') {
+      linkedPrLookupFailureRejections.push(forcedHandoff);
+      warnings.push(
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: linked-PR lookup failed (PR state unknown), issue-only handoff not honored`,
+      );
+      return;
+    }
+    if (reason === 'pr-scope-mismatch') {
+      warnings.push(
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: linked PR ${forcedHandoff.linkedPr ?? '(none)'} does not back the active claim`,
+      );
+      return;
+    }
+    if (reason === 'issue-only-not-before-first-commit') {
+      warnings.push(
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: issue-only handoff was posted at or after the PR's first commit`,
+      );
+      return;
+    }
+    if (reason === 'first-commit-time-unknown') {
+      warnings.push(
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: the PR's first-commit time is unknown, so the issue-only handoff cannot be shown to predate it`,
+      );
+      return;
+    }
     if (reason === 'author-forced-by-mismatch') {
       warnings.push(
         `ignored forced-handoff for ${forcedHandoff.oldClaimId}: comment author ${event.author?.login ?? '(unknown)'} does not match forcedBy ${forcedHandoff.forcedBy}`,
@@ -873,7 +897,12 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
     ? resolveActiveClaimWithForcedHandoffTrace(events, {
         isTrustedAuthor: () => true, // events were already filtered by caller
         isForcedHandoffEnabled,
-        isAuthorizedForcedHandoff,
+        // Pass the caller's authorization only when it supplied one: the
+        // trace reads an omitted value as "no check" for diagnostics, and the
+        // decision is the same fail-closed refusal either way (#3873).
+        ...(options.isAuthorizedForcedHandoff
+          ? { isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff }
+          : {}),
         isStale: (activeCreatedAt, nextCreatedAt) =>
           isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
         // Resume routing enforces the rule-7 author/forcedBy binding to
@@ -888,6 +917,13 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
         requireAuthorMatchesForcedBy: true,
         onAnomalousHeartbeat,
         onIgnoredForcedHandoff,
+        // #3873: name the refusal cause when the caller supplied an explainer.
+        ...(options.forcedHandoffRefusalExplainer
+          ? {
+              explainForcedHandoffRefusal: (forcedHandoff) =>
+                options.forcedHandoffRefusalExplainer?.(forcedHandoff) ?? null,
+            }
+          : {}),
       })
     : null;
   if (hasNewFormatClaim) {
@@ -1520,15 +1556,20 @@ export function resolveResumeLinkedPrState(
     }
     prFirstCommitAt = !lookupFailed && !unknown ? earliest : null;
   }
+  // The gate and the refusal cause are built from the same inputs and share
+  // one explainer underneath, so they cannot disagree (#3873).
+  const gateInputs = {
+    forcedHandoffEnabled: options.forcedHandoffEnabled,
+    expectedLinkedPrReferences: linked.references,
+    linkedPrLookupFailed: lookupFailed,
+    prFirstCommitAt,
+  };
   return {
     references: linked.references,
     lookupFailed,
     prFirstCommitAt,
-    isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
-      forcedHandoffEnabled: options.forcedHandoffEnabled,
-      expectedLinkedPrReferences: linked.references,
-      linkedPrLookupFailed: lookupFailed,
-      prFirstCommitAt,
-    }),
+    isForcedHandoffEnabled: buildForcedHandoffEnabledGate(gateInputs),
+    forcedHandoffRefusalExplainer:
+      buildForcedHandoffRefusalExplainer(gateInputs),
   };
 }

@@ -8573,6 +8573,10 @@ export function resolvePrFirstCommitAt(commits) {
  * Semantics:
  *
  * - forced-handoff mode disabled → never honor;
+ * - `linkedPrLookupFailed` (the Resume lookup exception, #3276): a marker
+ *   that is not `issue-plus-pr` is refused whatever the PR set, because an
+ *   unreadable PR state cannot prove that no PR backs the claim. An
+ *   `issue-plus-pr` marker is judged by the PR set as usual.
  * - no open linked PR backs the claim (`expectedLinkedPrReferences` empty) →
  *   honor an `issue-only` (or any) handoff as before;
  * - an open linked PR backs the claim:
@@ -8588,25 +8592,62 @@ export function resolvePrFirstCommitAt(commits) {
  * `issue-only` handoff against a PR-backed claim is rejected.
  */
 export function buildForcedHandoffEnableGate(options) {
+  const explain = buildForcedHandoffRefusalExplainer(options);
+  return (forcedHandoff) => explain(forcedHandoff) === null;
+}
+/**
+ * Explain why {@link buildForcedHandoffEnableGate} refuses a marker. It takes
+ * the same inputs and returns the cause of a refusal, or `null` when the gate
+ * honors the marker. The checks run in this order, so the gate and the
+ * explanation cannot disagree:
+ *
+ * 1. forced-handoff mode disabled → `mode-disabled`;
+ * 2. linked-PR lookup failed, for a marker that is not `issue-plus-pr` →
+ *    `linked-pr-lookup-failed` (checked before the first-commit time, because
+ *    a failed commit read also leaves that time unknown, and the #3276
+ *    override depends on the lookup cause);
+ * 3. no open linked PR backs the claim → honored;
+ * 4. `issue-plus-pr` marker whose `linkedPr` is not an expected PR →
+ *    `pr-scope-mismatch`;
+ * 5. `issue-only` marker that predates the PR's first commit → honored;
+ *    with no first-commit time supplied → `first-commit-time-unknown`;
+ *    otherwise → `issue-only-not-before-first-commit`.
+ */
+export function buildForcedHandoffRefusalExplainer(options) {
   const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
   const prFirstCommitAt =
     typeof options.prFirstCommitAt === 'string' ? options.prFirstCommitAt : '';
   return (forcedHandoff) => {
     if (!forcedHandoffEnabled) {
-      return false;
+      return 'mode-disabled';
+    }
+    if (
+      options.linkedPrLookupFailed === true &&
+      forcedHandoff.contextScope !== 'issue-plus-pr'
+    ) {
+      return 'linked-pr-lookup-failed';
     }
     if (expectedLinkedPrReferences.size === 0) {
-      return true;
+      return null;
     }
     if (forcedHandoff.contextScope === 'issue-plus-pr') {
       return expectedLinkedPrReferences.has(
         normalizeLinkedPrReference(forcedHandoff.linkedPr),
-      );
+      )
+        ? null
+        : 'pr-scope-mismatch';
     }
     // issue-only handoff against a PR-backed claim: accept only when it
     // predates the PR's first commit (a robust ISO compare; either side
     // unparseable → fail closed = reject).
-    return isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt);
+    if (isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt)) {
+      return null;
+    }
+    // An unparseable first-commit time is no usable time at all, so it is
+    // reported like a missing one (#3873).
+    return Number.isNaN(Date.parse(prFirstCommitAt))
+      ? 'first-commit-time-unknown'
+      : 'issue-only-not-before-first-commit';
   };
 }
 /**
@@ -8723,6 +8764,17 @@ export function summarizeClaimValidation(
   // reduction, just no longer discarding the extra field. Every existing
   // caller only ever read `.activeClaim` off `resolveActiveClaim`'s own
   // return, so this is behavior-identical for that value.
+  // The default gate and its refusal cause come from one set of inputs, so the
+  // report names the cause the gate actually applied (#3873). A caller's own
+  // gate has no known inputs, so its refusals keep the generic reason.
+  const defaultGateInputs = {
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    expectedLinkedPrReferences,
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
+  };
+  // The old agent id is kept here, not in the report entry, so the filter
+  // below can match the full claim identity that applyClaimEvent matched.
+  const ignoredForcedHandoffs = [];
   const { activeClaim, activeSince } = resolveActiveClaimWithForcedHandoffTrace(
     claimEvents,
     {
@@ -8730,11 +8782,19 @@ export function summarizeClaimValidation(
       isForcedHandoffEnabled:
         typeof options.isForcedHandoffEnabled === 'function'
           ? options.isForcedHandoffEnabled
-          : buildForcedHandoffEnableGate({
-              forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-              expectedLinkedPrReferences,
-              prFirstCommitAt: options.prFirstCommitAt ?? null,
-            }),
+          : buildForcedHandoffEnableGate(defaultGateInputs),
+      explainForcedHandoffRefusal:
+        typeof options.isForcedHandoffEnabled === 'function'
+          ? undefined
+          : buildForcedHandoffRefusalExplainer(defaultGateInputs),
+      onIgnoredForcedHandoff: ({ reason, forcedHandoff }) => {
+        ignoredForcedHandoffs.push({
+          oldAgentId: forcedHandoff.oldAgentId,
+          oldClaimId: forcedHandoff.oldClaimId,
+          newClaimId: forcedHandoff.newClaimId,
+          cause: reason,
+        });
+      },
       isAuthorizedForcedHandoff:
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
@@ -8753,6 +8813,28 @@ export function summarizeClaimValidation(
   );
   if (captureTraceInto) {
     captureTraceInto.activeSince = activeSince;
+    // Only refusals of a marker whose old claim is the claim this evaluation
+    // resolved as active belong in the report (#3873).
+    const ignoredForActive = activeClaim
+      ? ignoredForcedHandoffs
+          .filter(
+            (entry) =>
+              entry.oldAgentId === activeClaim.agentId &&
+              entry.oldClaimId === activeClaim.claimId,
+          )
+          .map(({ oldClaimId, newClaimId, cause }) => ({
+            oldClaimId,
+            newClaimId,
+            cause,
+          }))
+      : [];
+    // Set or clear the field every time: a reused capture object must not keep
+    // the refusals of an earlier evaluation (#3873).
+    if (ignoredForActive.length > 0) {
+      captureTraceInto.ignoredForcedHandoffs = ignoredForActive;
+    } else {
+      delete captureTraceInto.ignoredForcedHandoffs;
+    }
   }
   const expectedNonce = String(options.expectedNonce ?? '').trim();
   let reason = 'match';
@@ -9319,9 +9401,31 @@ export function computePreMergeReadinessBlockers(report) {
   }
   const claim = preMergeAsRecord(report.claim);
   if (claim.matchesExpectedClaim !== true) {
+    // #3873: name the refusal cause of any forced-handoff marker that was
+    // ignored for the active claim. The field is absent when there is none,
+    // so the text is unchanged in that case.
+    // A malformed entry is skipped rather than read: the blocker must never
+    // throw while describing a claim that is already not owned.
+    const ignoredCauses = Array.isArray(report.ignoredForcedHandoffs)
+      ? [
+          ...new Set(
+            report.ignoredForcedHandoffs
+              .map((entry) =>
+                entry !== null && typeof entry === 'object'
+                  ? entry.cause
+                  : undefined,
+              )
+              .filter((cause) => typeof cause === 'string' && cause.length > 0),
+          ),
+        ]
+      : [];
+    const ignoredNote =
+      ignoredCauses.length > 0
+        ? `; ignored forced-handoff: ${ignoredCauses.join(', ')}`
+        : '';
     blockers.push({
       gate: 'claim-ownership',
-      detail: `claim ownership does not match (reason="${String(claim.reason ?? 'unknown')}")`,
+      detail: `claim ownership does not match (reason="${String(claim.reason ?? 'unknown')}")${ignoredNote}`,
     });
   }
   const dispositionEvidence = preMergeAsRecord(report.dispositionEvidence);
@@ -10569,6 +10673,11 @@ export function buildPreMergeReadinessSummary(
     // `discover-roadmap-union.schema.json`), so this stays a top-level,
     // pre-merge-readiness-only field instead.
     claimIdentityInstalledAt,
+    // #3873: present only when a forced-handoff marker was refused for the
+    // active claim, so a report with no ignored handoff is unchanged.
+    ...(claimTrace.ignoredForcedHandoffs
+      ? { ignoredForcedHandoffs: claimTrace.ignoredForcedHandoffs }
+      : {}),
     staleSelfWaiver,
     branchCurrency,
   };
@@ -11067,6 +11176,29 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
 export function applyClaimEvent(activeClaim, event, options = {}) {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
+  // The explanation path (#3873) must know which checks the caller enabled.
+  // Detect the omitted defaults by identity, not by the shape of `options`:
+  // resolveActiveClaimWithForcedHandoffTrace normalizes first, so a function
+  // is always present here, and a default that is still the shared constant
+  // means the caller supplied nothing.
+  const explainsRefusal =
+    normalizedOptions.explainForcedHandoffRefusal !== OMITTED_EXPLAINER;
+  const authorizationEnabled =
+    normalizedOptions.isAuthorizedForcedHandoff !== OMITTED_AUTHORIZATION;
+  // The authorization lookup runs here only to report a refusal. A lookup that
+  // throws must not turn a refusal into an exception, so the gate's cause is
+  // reported instead; the marker is refused either way.
+  const isAuthorizedForReporting = (forcedHandoff, event) => {
+    try {
+      return normalizedOptions.isAuthorizedForcedHandoff(
+        forcedHandoff.forcedBy,
+        forcedHandoff,
+        event,
+      );
+    } catch {
+      return true;
+    }
+  };
   // kurone-kito/idd-skill#3248: defense in depth for a direct caller that
   // bypasses `resolveActiveClaimWithForcedHandoffTrace`'s own pre-filter --
   // every event reaching this point from that trace has already passed the
@@ -11136,8 +11268,35 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
     forcedHandoff.branch === activeClaim.branch
   ) {
     if (!normalizedOptions.isForcedHandoffEnabled(forcedHandoff, event)) {
+      // A marker that fails a check this caller enabled is reported with that
+      // check's reason, not with the gate's cause (#3873). Without the
+      // explanation option the reason stays `mode-disabled`, as before.
+      let refusalReason = 'mode-disabled';
+      if (explainsRefusal) {
+        const authorLoginLower = String(authorLogin).trim().toLowerCase();
+        const forcedByLower = String(forcedHandoff.forcedBy ?? '')
+          .trim()
+          .toLowerCase();
+        if (
+          normalizedOptions.requireAuthorMatchesForcedBy &&
+          (!authorLoginLower || authorLoginLower !== forcedByLower)
+        ) {
+          refusalReason = 'author-forced-by-mismatch';
+        } else if (
+          authorizationEnabled &&
+          !isAuthorizedForReporting(forcedHandoff, event)
+        ) {
+          refusalReason = 'forced-by-unauthorized';
+        } else {
+          refusalReason =
+            normalizedOptions.explainForcedHandoffRefusal(
+              forcedHandoff,
+              event,
+            ) ?? 'mode-disabled';
+        }
+      }
       normalizedOptions.onIgnoredForcedHandoff({
-        reason: 'mode-disabled',
+        reason: refusalReason,
         forcedHandoff,
         event,
       });
@@ -11189,16 +11348,22 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
   }
   return activeClaim;
 }
+// Shared defaults for the two options a caller may leave omitted (#3873).
+// Identity marks "not supplied", so the check survives a second normalization
+// (resolveActiveClaimWithForcedHandoffTrace normalizes before applyClaimEvent).
+const OMITTED_AUTHORIZATION = () => false;
+const OMITTED_EXPLAINER = () => null;
 function normalizeClaimResolutionOptions(optionsOrPredicate) {
   if (typeof optionsOrPredicate === 'function') {
     return {
       isTrustedAuthor: optionsOrPredicate,
       isForcedHandoffEnabled: () => false,
-      isAuthorizedForcedHandoff: () => false,
+      isAuthorizedForcedHandoff: OMITTED_AUTHORIZATION,
       isStale: isStaleAt,
       requireAuthorMatchesForcedBy: false,
       onAnomalousHeartbeat: () => {},
       onIgnoredForcedHandoff: () => {},
+      explainForcedHandoffRefusal: OMITTED_EXPLAINER,
     };
   }
   const options = optionsOrPredicate ?? {};
@@ -11214,7 +11379,7 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
     isAuthorizedForcedHandoff:
       typeof options.isAuthorizedForcedHandoff === 'function'
         ? options.isAuthorizedForcedHandoff
-        : () => false,
+        : OMITTED_AUTHORIZATION,
     isStale:
       typeof options.isStale === 'function' ? options.isStale : isStaleAt,
     requireAuthorMatchesForcedBy: Boolean(options.requireAuthorMatchesForcedBy),
@@ -11226,6 +11391,10 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       typeof options.onIgnoredForcedHandoff === 'function'
         ? options.onIgnoredForcedHandoff
         : () => {},
+    explainForcedHandoffRefusal:
+      typeof options.explainForcedHandoffRefusal === 'function'
+        ? options.explainForcedHandoffRefusal
+        : OMITTED_EXPLAINER,
   };
 }
 export function normalizeLinkedPrReference(value) {
