@@ -94,6 +94,9 @@ function listTree(dir: string): string[] {
   const entries: string[] = [];
   const visit = (current: string): void => {
     for (const name of readdirSync(current).sort()) {
+      // git writes its own bookkeeping, such as maintenance locks, from
+      // background processes, so the snapshot covers working files only.
+      if (name === '.git') continue;
       const path = join(current, name);
       entries.push(path.slice(dir.length));
       if (statSync(path).isDirectory()) visit(path);
