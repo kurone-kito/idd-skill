@@ -236,7 +236,7 @@ jobs:
       # TAP line.
       - name: Run gh-exec Windows import tests
         run: |
-          node --test --import ./tests/isolate-state.mts --test-name-pattern "paginated gh-exec Worker records|does not inherit Worker-invalid execArgv" --test-reporter=tap tests/isolate-gh.test.mts tests/gh-exec.test.mts | Tee-Object -FilePath gh-exec-windows.tap
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "no-such-test-3886-control" --test-reporter=tap tests/isolate-gh.test.mts tests/gh-exec.test.mts | Tee-Object -FilePath gh-exec-windows.tap
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           foreach ($title in @('the paginated gh-exec Worker records caught attempts in its owner ledger', 'ghApiJson (paginated) does not inherit Worker-invalid execArgv (\#3597)')) {
             if (-not (Select-String -Path gh-exec-windows.tap -Pattern ('^ok \d+ - ' + [regex]::Escape($title) + '$') -Quiet)) { throw "no passing TAP line for: $title" }
