@@ -1561,7 +1561,13 @@ release from the authoring hold (see the
 [Narrow auto-release exception](#narrow-auto-release-exception)
 below for the one marker-scoped exception to this precondition). Keep the
 set anchor held until every other
-target's label removal is verified, and remove the anchor label last. First
+target's label removal is verified, and remove the anchor label last. Every
+label removal in this release, the anchor label included, and every restore that
+follows uses `gh issue edit <number> --remove-label "<authoring label>"` or `gh
+issue edit <number> --add-label "<authoring label>"`, with `--repo
+<owner>/<repo>` outside the repository. The IDD template's opt-in Claude Code
+baseline denies the `gh api -X DELETE` spelling and does not allowlist `gh api`,
+so that spelling is not used. First
 re-fetch owner comments during release-marker preflight.
 
 **Mandatory release-time hide-on-supersede sweep (#2896, #2935).** At
