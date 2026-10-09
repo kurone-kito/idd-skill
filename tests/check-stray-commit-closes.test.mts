@@ -253,6 +253,19 @@ test('a record separator byte in a message keeps the stray under its own sha', (
   );
 });
 
+test('a unit separator byte in a message keeps the stray under its own sha', () => {
+  const { work } = makeRepo();
+  const [sha] = featureWithCommits(work, [
+    'Split here\u001f and then\n\nCloses #169 in the old tracker.',
+  ]);
+  const run = check(work);
+  assert.equal(run.status, 1);
+  assert.match(
+    run.stdout,
+    new RegExp(`stray closing reference: commit ${sha} names #169`),
+  );
+});
+
 test('a commit already on origin/main is not reported', () => {
   const { work } = makeRepo();
   commit(work, STRAY_MESSAGE);
