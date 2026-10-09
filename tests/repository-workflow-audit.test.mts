@@ -4024,6 +4024,56 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ prefix: "post step's if: must exclude instructions-only" }],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver with a second, failing notice step of the same name',
+    path: 'idd-template/.github/workflows/idd-advisory-convergence.yml',
+    mutation: {
+      transform: (text: string) => {
+        const post =
+          '      - name: Post the self-referential-bootstrap-auto waiver\n';
+        const decoy = [
+          '      - name: Notice when no helper runtime is configured',
+          "        if: steps.allowlist.outputs.touched == 'true'",
+          '        run: exit 1',
+          '',
+        ].join('\n');
+        anchored(text, post);
+        return text.split(post).join(`${decoy}${post}`);
+      },
+    },
+    expected: [
+      {
+        message:
+          'the "Notice when no helper runtime is configured" step must be declared exactly once',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver with a second post step of the same name',
+    path: 'idd-template/.github/workflows/idd-advisory-convergence.yml',
+    mutation: {
+      transform: (text: string) => {
+        const post =
+          '      - name: Post the self-referential-bootstrap-auto waiver\n';
+        const decoy = [
+          '      - name: Post the self-referential-bootstrap-auto waiver',
+          "        if: steps.allowlist.outputs.touched == 'true' && steps.profile.outputs.profile != 'instructions-only'",
+          '        run: echo decoy',
+          '',
+        ].join('\n');
+        anchored(text, post);
+        return text.split(post).join(`${decoy}${post}`);
+      },
+    },
+    expected: [
+      {
+        message:
+          'the "Post the self-referential-bootstrap-auto waiver" step must be declared exactly once',
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

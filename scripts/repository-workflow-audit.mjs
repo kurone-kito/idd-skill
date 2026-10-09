@@ -2488,6 +2488,13 @@ function checkTemplateSelfWaiverNotice(root, report) {
     report(RWA005, path, `must keep the ${SELF_WAIVER_JOB_ID} job`);
     return;
   }
+  stepNameIsUnique(
+    path,
+    text,
+    'Notice when no helper runtime is configured',
+    RWA005,
+    report,
+  );
   const noticeIndex = stepOffset(
     waiverJob,
     'Notice when no helper runtime is configured',
@@ -2551,6 +2558,13 @@ function checkTemplateSelfWaiverPostGuard(root, report) {
     report(RWA005, path, `must keep the ${SELF_WAIVER_JOB_ID} job`);
     return;
   }
+  stepNameIsUnique(
+    path,
+    text,
+    'Post the self-referential-bootstrap-auto waiver',
+    RWA005,
+    report,
+  );
   const postIndex = stepOffset(
     waiverJob,
     'Post the self-referential-bootstrap-auto waiver',
