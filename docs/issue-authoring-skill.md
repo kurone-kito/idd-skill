@@ -2040,9 +2040,12 @@ skill should read the output by these outcomes. Complete: every summary
 line says `incomplete=false`, the `page=` values add up to `total=`, and
 no `#number` line appears twice. Search not finished: `incomplete=true`
 on any line, so retry once and then narrow the query. Over the
-1,000-result ceiling: the `page=` values add up to fewer than `total=`,
-so split the query with a `closed:` date range (do not add nouns, which
-can hide the match). Not a completed check: a non-zero exit, any stderr
+1,000-result ceiling: every `gh` call exited 0 with nothing on stderr,
+the `total=` values agree, and the `page=` values add up to fewer than
+`total=`. Only then split the query with a `closed:` date range (do not
+add nouns, which can hide the match). A short page sum without those
+guards is a pagination failure or a result set that moved, not the
+ceiling. Not a completed check: a non-zero exit, any stderr
 from `gh`, `total=` values that differ between lines, or a `#number` line
 that appears twice. An incomplete search is not a completed check, so the
 proposal is not published as `ready` until a narrower query completes or
