@@ -3888,10 +3888,20 @@ export function explainFreshDisposition(
     if (isIddDisposition(comment)) {
       return false;
     }
+    // A comment with a readable creation time is a reply when it was created
+    // at or after the disposition. Without one, only an explicitly unedited
+    // comment counts as a reply by its activity time; an edit never does.
     const createdAt = String(comment.createdAt ?? '');
+    const activityAt = effectiveThreadCommentActivityAt(
+      comment,
+      advisoryBotLogins,
+    );
     return (
-      isValidIsoTimestamp(createdAt) &&
-      compareIsoTimestamps(createdAt, latestDispositionAt) >= 0
+      isValidIsoTimestamp(activityAt) &&
+      compareIsoTimestamps(activityAt, latestDispositionAt) >= 0 &&
+      (isValidIsoTimestamp(createdAt)
+        ? compareIsoTimestamps(createdAt, latestDispositionAt) >= 0
+        : classifyCommentEditState(comment) === 'unedited')
     );
   });
   return {

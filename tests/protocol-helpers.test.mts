@@ -5043,6 +5043,43 @@ test('explainFreshDisposition ignores an edited disposition-shaped comment from 
   assert.equal(hasFreshDisposition(thread, options), false);
 });
 
+test('explainFreshDisposition classifies a reply with no creation time by its edit state (#3856)', () => {
+  const disposition = explainDisposition();
+  const request = explainRequest;
+  // No `createdAt`: an unedited reply is dated by its updatedAt, which is
+  // after the disposition, so it supersedes the disposition as a reply.
+  const uneditedReply = explainedThread([
+    request,
+    disposition,
+    {
+      author: { login: 'reviewer-a' },
+      body: 'still broken',
+      updatedAt: '2026-05-12T00:02:00Z',
+      lastEditedAt: null,
+    },
+  ]);
+  assert.deepEqual(explainFreshDisposition(uneditedReply), {
+    fresh: false,
+    cause: 'superseded-by-reply',
+  });
+
+  // The same comment after an edit is an edit, not a reply.
+  const editedReply = explainedThread([
+    request,
+    disposition,
+    {
+      author: { login: 'reviewer-a' },
+      body: 'still broken',
+      updatedAt: '2026-05-12T00:03:00Z',
+      lastEditedAt: '2026-05-12T00:03:00Z',
+    },
+  ]);
+  assert.deepEqual(explainFreshDisposition(editedReply), {
+    fresh: false,
+    cause: 'superseded-by-edit',
+  });
+});
+
 test('explainFreshDisposition agrees with the three existing hasFreshDisposition fixtures (#3856)', () => {
   // The same three threads `hasFreshDisposition` is asserted against above.
   // Each expected boolean and cause is stated here, not derived from
