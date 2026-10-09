@@ -284,9 +284,36 @@ six days after. Search closed issues using the proposal's core nouns
 rather than its new framing, plus at least one alternative phrasing:
 
 ```sh
-gh issue list --repo <owner>/<repo> --state closed --limit 100 \
-  --search 'reason:"not planned" <core-nouns>'
+gh api -X GET search/issues --paginate \
+  -f q='repo:<owner>/<repo> is:issue is:closed reason:"not planned" <core-nouns>' \
+  -f per_page=100 \
+  --jq '(.items[] | "#\(.number) \(.title)"), "-- total=\(.total_count) incomplete=\(.incomplete_results) page=\(.items | length)"'
 ```
+
+A fixed `--limit` cannot prove that nothing was missed: it silently stops
+at the limit, and the search API caps every query at 1,000 results. Read
+the output by these outcomes before judging the proposal:
+
+- **Complete:** every summary line says `incomplete=false`, the `page=`
+  values add up to `total=`, and no `#number` line appears twice (a page
+  shift can repeat one issue and drop another while the sum still
+  matches). Judge the proposal against the listed titles.
+- **Search not finished:** `incomplete=true` on any line means the
+  provider timed out and the list is partial. Retry once, then narrow the
+  query.
+- **Over the 1,000-result ceiling:** every `gh` call exited 0 with
+  nothing on stderr, the `total=` values agree, and the `page=` values add
+  up to fewer than `total=`. Narrow the query with a `closed:` date range
+  and run it again. Do not add nouns to narrow it, because nouns can hide
+  the declined match.
+- **Not a completed check:** a non-zero exit or any stderr from `gh` (for
+  example a rate limit or a server error part-way through the pages),
+  `total=` values that differ between lines (the search moved under the
+  reader), or a `#number` line that appears twice. Run it again.
+
+An incomplete search is not a completed previously-declined check. Do not
+publish the proposal as `ready` until a narrower query completes, or
+route it to `needs-decision` and record the incompleteness.
 
 When the proposal changes an existing mechanism, identify the PR that
 introduced or last reshaped it (for example from `git log -S` on the
