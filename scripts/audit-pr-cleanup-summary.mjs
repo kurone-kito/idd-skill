@@ -3,6 +3,30 @@
 // The scripts/audit-pr-cleanup-summary.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
+const SKIP_REASON_CODE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/**
+ * Counts the skipped rows by reason code (kurone-kito/idd-skill#3857). The
+ * counts and their one-line form are computed here, once, so the workflow
+ * only extracts a ready string.
+ */
+export function computeSkipReasonFields(report) {
+  const counts = new Map();
+  for (const skip of report.skipped) {
+    const code = skip.skipReasonCode;
+    const key =
+      typeof code === 'string' && SKIP_REASON_CODE_PATTERN.test(code)
+        ? code
+        : 'unknown';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  report.skipReasonCounts = Object.fromEntries(sorted);
+  report.skipReasonSummary = sorted
+    .map(([code, count]) => `${code} ${count}`)
+    .join(', ');
+}
 export function computeReportSummary(report) {
   const alreadyMinimized = report.skipped.filter(
     (skip) => skip.isMinimized,
@@ -22,6 +46,8 @@ export function computeReportSummary(report) {
     'viewer-can-minimize': viewerCanMinimize,
     'viewer-cannot-minimize': viewerCannotMinimize,
   };
+  // Before any early return below, so every status carries the fields.
+  computeSkipReasonFields(report);
   if (report.mode === 'dry-run') {
     if (report.candidates.length > 0) {
       report.status = 'needs-apply';

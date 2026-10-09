@@ -308,3 +308,115 @@ test('computeReportSummary: time-budget-exhausted sits between failed and the ex
   computeReportSummary(unaffected);
   assert.equal(unaffected.status, 'applied');
 });
+
+// kurone-kito/idd-skill#3857: the per-reason counts and their one-line form
+// are computed once, on every status, and leave `summary` and `status` alone.
+test('computeReportSummary counts skipped rows by reason code, sorted, on a dry run (#3857)', () => {
+  const report = createReport({
+    candidates: [{ subjectId: 'candidate-1' }],
+    skipped: [
+      { subjectId: 'a', skipReasonCode: 'thread-superseded-by-reply' },
+      { subjectId: 'b', skipReasonCode: 'pr-not-merged' },
+      { subjectId: 'c', skipReasonCode: 'thread-superseded-by-reply' },
+    ],
+  });
+
+  computeReportSummary(report);
+
+  assert.deepEqual(report.skipReasonCounts, {
+    'pr-not-merged': 1,
+    'thread-superseded-by-reply': 2,
+  });
+  assert.equal(
+    report.skipReasonSummary,
+    'pr-not-merged 1, thread-superseded-by-reply 2',
+  );
+  assert.equal(report.status, 'needs-apply');
+  assert.equal(report.summary?.skipped, 3);
+});
+
+test('computeReportSummary sets the per-reason fields on every apply outcome (#3857)', () => {
+  const skipped = [
+    { subjectId: 'a', skipReasonCode: 'already-minimized', isMinimized: true },
+  ];
+  const outcomes: {
+    name: string;
+    overrides: Partial<CleanupReport>;
+    status: string;
+  }[] = [
+    {
+      name: 'rescan-failed',
+      overrides: { rescanError: 'gh failed' },
+      status: 'rescan-failed',
+    },
+    {
+      name: 'failed',
+      overrides: { failed: [{ subjectId: 'x' }] },
+      status: 'failed',
+    },
+    {
+      name: 'time-budget-exhausted',
+      overrides: { timeBudgetExhausted: true },
+      status: 'time-budget-exhausted',
+    },
+    {
+      name: 'incomplete',
+      overrides: {
+        skipped: [
+          {
+            subjectId: 'y',
+            skipReasonCode: 'viewer-cannot-minimize-comment',
+            viewerCanMinimize: false,
+            isMinimized: false,
+          },
+        ],
+      },
+      status: 'incomplete',
+    },
+    {
+      name: 'applied',
+      overrides: { applied: [{ subjectId: 'z' }] },
+      status: 'applied',
+    },
+    { name: 'clean', overrides: {}, status: 'clean' },
+  ];
+
+  for (const outcome of outcomes) {
+    const report = createReport({
+      mode: 'apply',
+      skipped: outcome.overrides.skipped ?? skipped,
+      ...outcome.overrides,
+    });
+    computeReportSummary(report);
+    assert.equal(report.status, outcome.status, outcome.name);
+    assert.ok(report.skipReasonSummary !== undefined, outcome.name);
+    assert.ok(report.skipReasonCounts !== undefined, outcome.name);
+  }
+});
+
+test('computeReportSummary leaves the per-reason fields empty when nothing was skipped (#3857)', () => {
+  const report = createReport({ candidates: [] });
+
+  computeReportSummary(report);
+
+  assert.deepEqual(report.skipReasonCounts, {});
+  assert.equal(report.skipReasonSummary, '');
+});
+
+test('computeReportSummary counts a missing or malformed reason code as unknown (#3857)', () => {
+  const report = createReport({
+    skipped: [
+      { subjectId: 'no-code' },
+      { subjectId: 'not-a-string', skipReasonCode: 42 },
+      { subjectId: 'uppercase', skipReasonCode: 'Not-Kebab' },
+      { subjectId: 'injected', skipReasonCode: 'a,b\nc' },
+      { subjectId: 'good', skipReasonCode: 'pr-not-merged' },
+    ],
+  });
+
+  computeReportSummary(report);
+
+  assert.deepEqual(report.skipReasonCounts, { 'pr-not-merged': 1, unknown: 4 });
+  assert.equal(report.skipReasonSummary, 'pr-not-merged 1, unknown 4');
+  assert.doesNotMatch(report.skipReasonSummary ?? '', /[\n,]\s*[\n,]/);
+});
