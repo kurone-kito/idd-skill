@@ -259,7 +259,7 @@ enabled and default approval actors to
 `owners-and-maintainers-only`.
 
 <!-- dprint-ignore-start -->
-| Name | Commands |
+| Name | Entries |
 | --- | --- |
 | **fix-validate** | `{{FIX_VALIDATE_COMMANDS}}` |
 | **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
