@@ -185,7 +185,9 @@ runtime-file lists in item 4, which were checked against the source.
      reads its data there, as `docs/idd-helper-scripts.md` describes for
      `vendored-node`.
    - Write the wrapper as `src/bin/<binName>.mts`. Its first line is the shebang
-     `#!/usr/bin/env node`, and its banner follows. Without the shebang,
+     `#!/usr/bin/env node`. Its second line is the banner
+     `// idd-generated-from: src/bin/<binName>.mts`, which names the wrapper's
+     own source. Without the shebang,
      `bin-executable-mode` skips the file, and the installed command can fail
      when run directly. The wrapper must name the helper it runs literally, as in
      `runHelper('../scripts/<stem>.mjs');`. The helper must call `runHelperCli(`
