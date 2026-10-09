@@ -124,9 +124,12 @@ them only when `sync-docs --apply` (item 5) writes them. Run
 The `unbacked-helper` and `instruction-helper-registration` failures were
 observed on 2026-10-09 in issue `#3955`. A helper change left
 `audit-docs --check` failing with messages that name the audit but not the fix.
-The other failure claims below are preventive; no observed incident yet. A
-throwaway probe checked them, except item 5 and the runtime-file lists in
-item 4, which were checked against the source.
+Three earlier incidents cover other rules: the runtime-file drift guard
+(issue `#891`, filed 2026-06-12), the executable-mode check on CLI scripts
+(issue `#1971`, filed 2026-08-12) and the help-text check (issue `#1676`, filed
+2026-07-27). Failure claims that no incident above covers are preventive; no
+observed incident yet. A throwaway probe checked them, except item 5 and the
+runtime-file lists in item 4, which were checked against the source.
 
 1. Write `src/scripts/<stem>.mts` with the banner
    `// idd-generated-from: src/scripts/<stem>.mts` in its first 200 bytes; put
@@ -174,8 +177,11 @@ item 4, which were checked against the source.
      `EXTRA_RUNTIME_FILES` in the same file, keyed by `scripts/<stem>.mjs`. The
      drift guard in `tests/helper-runtime-manifest.test.mts` compares the
      manifest with these lists, and it checks the files that `validate-schemas`
-     reads. It does not find a missing data file for another helper, so check
-     that helper's runtime files against a vendored install.
+     reads. It does not find a missing data file for another helper. To check
+     that helper, copy only the `managedFiles` of the `vendored-node` manifest
+     into a scratch checkout at matching paths, then run the helper path that
+     reads its data there, as `docs/idd-helper-scripts.md` describes for
+     `vendored-node`.
    - Write the wrapper as `src/bin/<binName>.mts`. Its first line is the shebang
      `#!/usr/bin/env node`, and its banner follows. Without the shebang,
      `bin-executable-mode` skips the file, and the installed command can fail
