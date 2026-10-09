@@ -5570,3 +5570,20 @@ test('#3871: a PR visible only as a ConnectedEvent follows the same time rule as
   );
   assert.equal(after.active_claim?.claim_id, 'claim-old');
 });
+
+test('#3871: a closing-reference node without a state fails the lookup instead of being skipped', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [{ number: 3875, repository: REPO }],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], []);
+});

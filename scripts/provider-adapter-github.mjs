@@ -2293,7 +2293,10 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       }
       return {
         nodes: connection.nodes.map((node) => ({
-          state: node.state === undefined ? undefined : String(node.state),
+          // Only a real string is a state: a malformed value (null, a number)
+          // stays undefined so the reader fails the lookup instead of reading
+          // it as a non-OPEN node and skipping it.
+          state: typeof node.state === 'string' ? node.state : undefined,
           // An absent or non-integer number stays undefined: the reader
           // treats it as a failed lookup rather than guessing a PR.
           number:
@@ -2306,7 +2309,12 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
               : undefined,
         })),
         hasNextPage: connection.pageInfo.hasNextPage,
-        endCursor: connection.pageInfo.endCursor ?? null,
+        // A non-string cursor becomes null, so a page that says it has more
+        // without a usable cursor fails the pagination check in the reader.
+        endCursor:
+          typeof connection.pageInfo.endCursor === 'string'
+            ? connection.pageInfo.endCursor
+            : null,
       };
     },
     // See provider-port.mts's doc comment on this method: no caller uses it

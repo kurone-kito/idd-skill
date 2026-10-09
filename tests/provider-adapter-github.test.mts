@@ -504,6 +504,32 @@ test('getWorkItemClosingPullRequestsPage leaves a missing number or repository u
   assert.equal(node?.repository, undefined);
 });
 
+test('getWorkItemClosingPullRequestsPage keeps only a string state and a string cursor (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: null, number: 1, repository: null }],
+                  pageInfo: { hasNextPage: true, endCursor: 7 },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const page = port.getWorkItemClosingPullRequestsPage(1048, null);
+  assert.equal(page.nodes[0]?.state, undefined);
+  assert.equal(page.endCursor, null);
+  assert.equal(page.hasNextPage, true);
+});
+
 test('getWorkItemClosingPullRequestsPage throws on a GraphQL errors entry (#3871)', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',
