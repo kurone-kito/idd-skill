@@ -364,8 +364,8 @@ an ack (the snapshot's `latestPrimaryBotReview.reviewAckNeeded`: a thread-less
 finding in a recognized review body shape, or, for the default Copilot bot, an
 unrecognized body; see `docs/idd-helper-scripts.md`), Clause 1 needs
 `latestPrimaryBotReview.reviewAckCovers === true` regardless of any Clause 2
-disposition elsewhere in the review. After confirming the suppressed finding(s)
-are handled (fixed, or judged as needing no action), post `review-ack:` for the
+disposition elsewhere in the review. After confirming every review body finding
+is handled (fixed, or judged as needing no action), post `review-ack:` for the
 current HEAD SHA — only a `trustedMarkerActors`-authored marker counts; an
 untrusted poster's is ignored, not rejected at post time (helper-first:
 `post-idd-marker --type review-ack --from-pr <pr-number> --agent-id <id>
