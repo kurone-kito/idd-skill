@@ -2093,8 +2093,8 @@ evidence.
 
 ### Forced-handoff copies and recovery
 
-Each claim-ownership reader takes `forcedHandoff.mode` from one of the copies
-of `.github/idd/config.json` listed below:
+The readers that take `forcedHandoff.mode` take it from one of the copies of
+`.github/idd/config.json` listed below. The exceptions follow the list.
 
 - `resume-claim-routing`, `idd-force-handoff`, `idd-forced-handoff-marker`,
   `resolve-review-thread`, `disposition-non-review-notices`,
@@ -2105,8 +2105,8 @@ of `.github/idd/config.json` listed below:
 - `pre-merge-readiness` and `idd-merge-execute` read the copy at the PR base
   branch through the trusted loader.
 - The required `idd-advisory-convergence` check reads the checkout of `main`,
-  the default branch. When a `developmentBranch` is set, the check does not
-  honor a forced handoff unless the opt-in is also on the default branch.
+  the default branch, whatever the PR base is. It honors a forced handoff only
+  when `main` carries the opt-in.
 - The external-check waiver honors a forced handoff whatever the mode says.
 - `idd-roadmap-audit-execute`, `suitability-close-execute` and
   `discover-shared-file-overlap` never read the mode, so they never honor a
@@ -2130,17 +2130,21 @@ checkout, and F2 rejects the handoff with `claim-id-mismatch`.
 A pull request cannot enable recovery for itself, because CI ignores a
 PR-edited config. For a stalled change that would add the opt-in, the recovery
 is the stale takeover after `claimTiming.staleAge` (default `PT24H`), or the
-`release` keyword. The `release` keyword needs the local `human-gated` mode and
-an authorized actor (the authenticated `gh` login). It posts an `unclaimed-by`
-marker that no gate conditions on the mode.
+`release` keyword. The `release` keyword works only where the local copy
+already sets `human-gated`, and it needs an authorized actor (the authenticated
+`gh` login). It posts an `unclaimed-by` marker that no gate conditions on the
+mode. A change that adds the opt-in does not set it locally until it merges, so
+`release` is not a recovery for that change.
 
 Every reader that consults the mode evaluates it each time it reads a marker,
 not when the marker was posted. Enabling `human-gated` on the default branch
-therefore lifts the mode gate for every earlier forced-handoff marker, once
-each working directory pulls the change. Find those markers as the issue
-comments whose body starts with `<!-- forced-handoff:`, and review them before
-enabling the mode. A private downstream adopter reported this on 2026-10-06 as
-low severity; preventive; no observed incident yet.
+therefore lifts the mode gate for every earlier forced-handoff marker. The
+required check reads `main` directly, so the lift reaches it when the change
+merges to `main`; each working directory sees it after it pulls. Find those
+markers as the issue comments whose body starts with `<!-- forced-handoff:`,
+and review them before enabling the mode. A private downstream adopter
+reported this on 2026-10-06 as low severity; preventive; no observed incident
+yet.
 
 The sequence that recovers a stalled handoff: commit the opt-in to the base
 branch through a normal pull request, merge the base branch into the PR branch
