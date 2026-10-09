@@ -8758,6 +8758,15 @@ export function summarizeClaimValidation(
   // reduction, just no longer discarding the extra field. Every existing
   // caller only ever read `.activeClaim` off `resolveActiveClaim`'s own
   // return, so this is behavior-identical for that value.
+  // The default gate and its refusal cause come from one set of inputs, so the
+  // report names the cause the gate actually applied (#3873). A caller's own
+  // gate has no known inputs, so its refusals keep the generic reason.
+  const defaultGateInputs = {
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    expectedLinkedPrReferences,
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
+  };
+  const ignoredForcedHandoffs = [];
   const { activeClaim, activeSince } = resolveActiveClaimWithForcedHandoffTrace(
     claimEvents,
     {
@@ -8765,11 +8774,18 @@ export function summarizeClaimValidation(
       isForcedHandoffEnabled:
         typeof options.isForcedHandoffEnabled === 'function'
           ? options.isForcedHandoffEnabled
-          : buildForcedHandoffEnableGate({
-              forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-              expectedLinkedPrReferences,
-              prFirstCommitAt: options.prFirstCommitAt ?? null,
-            }),
+          : buildForcedHandoffEnableGate(defaultGateInputs),
+      explainForcedHandoffRefusal:
+        typeof options.isForcedHandoffEnabled === 'function'
+          ? undefined
+          : buildForcedHandoffRefusalExplainer(defaultGateInputs),
+      onIgnoredForcedHandoff: ({ reason, forcedHandoff }) => {
+        ignoredForcedHandoffs.push({
+          oldClaimId: forcedHandoff.oldClaimId,
+          newClaimId: forcedHandoff.newClaimId,
+          cause: reason,
+        });
+      },
       isAuthorizedForcedHandoff:
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
@@ -8788,6 +8804,16 @@ export function summarizeClaimValidation(
   );
   if (captureTraceInto) {
     captureTraceInto.activeSince = activeSince;
+    // Only refusals of a marker whose old claim is the claim this evaluation
+    // resolved as active belong in the report (#3873).
+    const ignoredForActive = activeClaim
+      ? ignoredForcedHandoffs.filter(
+          (entry) => entry.oldClaimId === activeClaim.claimId,
+        )
+      : [];
+    if (ignoredForActive.length > 0) {
+      captureTraceInto.ignoredForcedHandoffs = ignoredForActive;
+    }
   }
   const expectedNonce = String(options.expectedNonce ?? '').trim();
   let reason = 'match';
@@ -9354,9 +9380,23 @@ export function computePreMergeReadinessBlockers(report) {
   }
   const claim = preMergeAsRecord(report.claim);
   if (claim.matchesExpectedClaim !== true) {
+    // #3873: name the refusal cause of any forced-handoff marker that was
+    // ignored for the active claim. The field is absent when there is none,
+    // so the text is unchanged in that case.
+    const ignoredCauses = Array.isArray(report.ignoredForcedHandoffs)
+      ? [
+          ...new Set(
+            report.ignoredForcedHandoffs.map((entry) => String(entry.cause)),
+          ),
+        ]
+      : [];
+    const ignoredNote =
+      ignoredCauses.length > 0
+        ? `; ignored forced-handoff: ${ignoredCauses.join(', ')}`
+        : '';
     blockers.push({
       gate: 'claim-ownership',
-      detail: `claim ownership does not match (reason="${String(claim.reason ?? 'unknown')}")`,
+      detail: `claim ownership does not match (reason="${String(claim.reason ?? 'unknown')}")${ignoredNote}`,
     });
   }
   const dispositionEvidence = preMergeAsRecord(report.dispositionEvidence);
@@ -10604,6 +10644,11 @@ export function buildPreMergeReadinessSummary(
     // `discover-roadmap-union.schema.json`), so this stays a top-level,
     // pre-merge-readiness-only field instead.
     claimIdentityInstalledAt,
+    // #3873: present only when a forced-handoff marker was refused for the
+    // active claim, so a report with no ignored handoff is unchanged.
+    ...(claimTrace.ignoredForcedHandoffs
+      ? { ignoredForcedHandoffs: claimTrace.ignoredForcedHandoffs }
+      : {}),
     staleSelfWaiver,
     branchCurrency,
   };

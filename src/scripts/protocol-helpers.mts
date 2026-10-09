@@ -10812,6 +10812,20 @@ export function resolveActiveClaimForWriteGate(
   });
 }
 
+/** A forced-handoff marker the merge-side gate refused for the active claim (#3873). */
+export interface IgnoredForcedHandoffEntry {
+  oldClaimId: string;
+  newClaimId: string;
+  cause: string;
+}
+
+/** Side-channel fields {@link summarizeClaimValidation} writes for its caller. */
+export interface ClaimValidationTraceCapture {
+  activeSince?: string;
+  /** Present only when at least one refused marker names the active claim. */
+  ignoredForcedHandoffs?: IgnoredForcedHandoffEntry[];
+}
+
 export function summarizeClaimValidation(
   claimEvents: CommentLike[] = [],
   options: {
@@ -10856,7 +10870,7 @@ export function summarizeClaimValidation(
    * argument and is completely unaffected; `buildPreMergeReadinessSummary`
    * is the sole caller that supplies one today.
    */
-  captureTraceInto?: { activeSince?: string },
+  captureTraceInto?: ClaimValidationTraceCapture,
 ): ClaimValidationSummary {
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
@@ -10901,6 +10915,15 @@ export function summarizeClaimValidation(
   // reduction, just no longer discarding the extra field. Every existing
   // caller only ever read `.activeClaim` off `resolveActiveClaim`'s own
   // return, so this is behavior-identical for that value.
+  // The default gate and its refusal cause come from one set of inputs, so the
+  // report names the cause the gate actually applied (#3873). A caller's own
+  // gate has no known inputs, so its refusals keep the generic reason.
+  const defaultGateInputs = {
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    expectedLinkedPrReferences,
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
+  };
+  const ignoredForcedHandoffs: IgnoredForcedHandoffEntry[] = [];
   const { activeClaim, activeSince } = resolveActiveClaimWithForcedHandoffTrace(
     claimEvents,
     {
@@ -10908,11 +10931,18 @@ export function summarizeClaimValidation(
       isForcedHandoffEnabled:
         typeof options.isForcedHandoffEnabled === 'function'
           ? options.isForcedHandoffEnabled
-          : buildForcedHandoffEnableGate({
-              forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-              expectedLinkedPrReferences,
-              prFirstCommitAt: options.prFirstCommitAt ?? null,
-            }),
+          : buildForcedHandoffEnableGate(defaultGateInputs),
+      explainForcedHandoffRefusal:
+        typeof options.isForcedHandoffEnabled === 'function'
+          ? undefined
+          : buildForcedHandoffRefusalExplainer(defaultGateInputs),
+      onIgnoredForcedHandoff: ({ reason, forcedHandoff }) => {
+        ignoredForcedHandoffs.push({
+          oldClaimId: forcedHandoff.oldClaimId,
+          newClaimId: forcedHandoff.newClaimId,
+          cause: reason,
+        });
+      },
       isAuthorizedForcedHandoff:
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
@@ -10931,6 +10961,16 @@ export function summarizeClaimValidation(
   );
   if (captureTraceInto) {
     captureTraceInto.activeSince = activeSince;
+    // Only refusals of a marker whose old claim is the claim this evaluation
+    // resolved as active belong in the report (#3873).
+    const ignoredForActive = activeClaim
+      ? ignoredForcedHandoffs.filter(
+          (entry) => entry.oldClaimId === activeClaim.claimId,
+        )
+      : [];
+    if (ignoredForActive.length > 0) {
+      captureTraceInto.ignoredForcedHandoffs = ignoredForActive;
+    }
   }
 
   const expectedNonce = String(options.expectedNonce ?? '').trim();
@@ -11003,7 +11043,7 @@ export function summarizeClaimValidationForWriteGate(
     NonNullable<Parameters<typeof summarizeClaimValidation>[1]>,
     'staleAgeMs'
   > & { staleAgeMs: number },
-  captureTraceInto?: { activeSince?: string },
+  captureTraceInto?: ClaimValidationTraceCapture,
 ): ClaimValidationSummary {
   return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
@@ -11572,11 +11612,25 @@ export function computePreMergeReadinessBlockers(
 
   const claim = preMergeAsRecord(report.claim);
   if (claim.matchesExpectedClaim !== true) {
+    // #3873: name the refusal cause of any forced-handoff marker that was
+    // ignored for the active claim. The field is absent when there is none,
+    // so the text is unchanged in that case.
+    const ignoredCauses = Array.isArray(report.ignoredForcedHandoffs)
+      ? [
+          ...new Set(
+            report.ignoredForcedHandoffs.map((entry) => String(entry.cause)),
+          ),
+        ]
+      : [];
+    const ignoredNote =
+      ignoredCauses.length > 0
+        ? `; ignored forced-handoff: ${ignoredCauses.join(', ')}`
+        : '';
     blockers.push({
       gate: 'claim-ownership',
       detail: `claim ownership does not match (reason="${String(
         claim.reason ?? 'unknown',
-      )}")`,
+      )}")${ignoredNote}`,
     });
   }
 
@@ -12393,7 +12447,7 @@ export function buildPreMergeReadinessSummary(
   // parameter's own doc comment. Left `{}` (never populated) on the
   // `claimless` branch below, matching that branch's own synthetic,
   // not-applicable claim shape.
-  const claimTrace: { activeSince?: string } = {};
+  const claimTrace: ClaimValidationTraceCapture = {};
   const claim = options.claimless
     ? {
         expectedClaimId: 'none',
@@ -13198,6 +13252,11 @@ export function buildPreMergeReadinessSummary(
     // `discover-roadmap-union.schema.json`), so this stays a top-level,
     // pre-merge-readiness-only field instead.
     claimIdentityInstalledAt,
+    // #3873: present only when a forced-handoff marker was refused for the
+    // active claim, so a report with no ignored handoff is unchanged.
+    ...(claimTrace.ignoredForcedHandoffs
+      ? { ignoredForcedHandoffs: claimTrace.ignoredForcedHandoffs }
+      : {}),
     staleSelfWaiver,
     branchCurrency,
   };

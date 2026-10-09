@@ -42,6 +42,7 @@ import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary as buildPreMergeReadinessSummaryImpl,
+  type ClaimValidationTraceCapture,
   CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
   CODERABBIT_REVIEW_PAUSED_MARKER,
   CODERABBIT_SUMMARY_MARKER,
@@ -17188,5 +17189,93 @@ test('the Codex notice settings tail accepts only the whole plain or linked form
       ),
     ),
     false,
+  );
+});
+
+// #3873: the merge side names why a forced handoff for the active claim was
+// refused, and the claim-ownership blocker carries that cause only when the
+// report field is present.
+const REFUSED_HANDOFF_OPTIONS = {
+  trustedMarkerLogins: ['cli-old', 'cli-new', 'kurone-kito', 'attacker'],
+  forcedHandoffEnabled: true,
+  expectedLinkedPrs: ['#359'],
+  prFirstCommitAt: '2026-05-12T10:00:00Z',
+};
+
+test('merge-side summary names the cause of a refused forced handoff for the active claim', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => ({
+      oldClaimId: entry.oldClaimId,
+      cause: entry.cause,
+    })),
+    [
+      {
+        oldClaimId: 'claim-20260512T090000Z-337-old',
+        cause: 'issue-only-not-before-first-commit',
+      },
+    ],
+  );
+});
+
+test('merge-side summary reports an unauthorized forced handoff with its authorization reason', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, authorizedForcedHandoffLogins: [] },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['forced-by-unauthorized'],
+  );
+});
+
+test('merge-side summary adds no ignored-handoff field when no marker was refused', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, forcedHandoffEnabled: false },
+    capture,
+  );
+  assert.equal('ignoredForcedHandoffs' in capture, false);
+});
+
+test('claim-ownership blocker names the ignored-handoff cause only when the field is present', () => {
+  const ownership = (report: Record<string, unknown>) =>
+    computePreMergeReadinessBlockers(report).find(
+      (blocker) => blocker.gate === 'claim-ownership',
+    )?.detail;
+  const claim = { matchesExpectedClaim: false, reason: 'claim-id-mismatch' };
+  assert.equal(
+    ownership({ claim }),
+    'claim ownership does not match (reason="claim-id-mismatch")',
+  );
+  assert.equal(
+    ownership({
+      claim,
+      ignoredForcedHandoffs: [
+        {
+          oldClaimId: 'claim-old',
+          newClaimId: 'claim-new',
+          cause: 'pr-scope-mismatch',
+        },
+      ],
+    }),
+    'claim ownership does not match (reason="claim-id-mismatch"); ignored forced-handoff: pr-scope-mismatch',
   );
 });

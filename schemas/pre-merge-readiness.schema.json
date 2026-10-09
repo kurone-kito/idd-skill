@@ -1694,6 +1694,31 @@
       "type": "string",
       "description": "kurone-kito/idd-skill#2911: the non-mutable timestamp at which the active claim's (agentId, claimId) identity was last installed (a fresh claim, a stale takeover, or a forced handoff) -- as opposed to claim.activeClaim.createdAt, which is overwritten on every same-claim heartbeat. '' when no event ever produced an active claim. Deliberately outside claim (not claim.activeClaimInstalledAt): ClaimValidationSummary's shape is embedded in schemas beyond this one, so this stays a top-level, pre-merge-readiness-only field instead."
     },
+    "ignoredForcedHandoffs": {
+      "type": "array",
+      "minItems": 1,
+      "description": "kurone-kito/idd-skill#3873: forced-handoff markers the gate refused for the active claim, with the refusal cause (for example mode-disabled, pr-scope-mismatch, issue-only-not-before-first-commit, first-commit-time-unknown, linked-pr-lookup-failed, author-forced-by-mismatch, forced-by-unauthorized). Absent when no marker was refused for the active claim, so a report without an ignored handoff is unchanged. Deliberately outside claim, like claimIdentityInstalledAt.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["oldClaimId", "newClaimId", "cause"],
+        "properties": {
+          "oldClaimId": {
+            "type": "string",
+            "description": "The claim id the refused marker tried to replace; always the active claim's id."
+          },
+          "newClaimId": {
+            "type": "string",
+            "description": "The claim id the refused marker tried to install."
+          },
+          "cause": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why the marker was not honored: the refusal cause from the explainer, or an author or authorization reason when that check was enabled."
+          }
+        }
+      }
+    },
     "staleSelfWaiver": {
       "type": "object",
       "description": "kurone-kito/idd-skill#2911: evidence for the stale-self-waiver merge blocker -- whether the currently-passing idd-advisory-convergence check (the deduplicated newest instance) rests on a self-referential-bootstrap-auto waiver that has since gone stale (expired, or claim-invalid across a genuine claim-identity transition), with no rerun since. Reported unconditionally (never omitted); stale is false and reason is null whenever the blocker does not apply (including when touchesSelfReferentialAllowlist was not supplied as true, or the configured ciGate.externalCheckWaivers.mode/waivableSelectors policy could never have made this mechanism's waiver valid).",

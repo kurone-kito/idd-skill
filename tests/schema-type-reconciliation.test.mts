@@ -714,6 +714,7 @@ export const preMergeReadinessKeys = [
   'waiverEvidence',
   'advisoryConvergenceWaiverPrecondition',
   'claimIdentityInstalledAt',
+  'ignoredForcedHandoffs',
   'staleSelfWaiver',
   'branchCurrency',
   'trustedMarkerActors',
