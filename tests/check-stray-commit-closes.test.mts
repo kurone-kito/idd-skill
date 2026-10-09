@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -354,6 +354,28 @@ test('a fetch failure exits 1 with the retry text', () => {
     run.stderr,
     /could not fetch origin\/main; check the network and retry/,
   );
+});
+
+test('refuses a shallow clone instead of scanning a cut range', () => {
+  const { work, origin } = makeRepo();
+  featureWithCommits(work, [STRAY_MESSAGE, 'Clean follow-up']);
+  git(work, 'push', '-q', 'origin', 'issue/3876-example');
+  const root = dirname(work);
+  const shallow = join(root, 'shallow');
+  git(
+    root,
+    'clone',
+    '-q',
+    '--depth',
+    '1',
+    '--branch',
+    'issue/3876-example',
+    `file://${origin}`,
+    shallow,
+  );
+  const run = check(shallow);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /the clone is shallow/);
 });
 
 test('an origin/main absent after fetch exits 1', () => {

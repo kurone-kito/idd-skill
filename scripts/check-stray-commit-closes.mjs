@@ -198,6 +198,17 @@ function run(argv) {
     return 0;
   }
   const base = developmentBranch ?? defaultBranch;
+  // A shallow clone cuts the range short without an error, so a stray in an
+  // older commit would pass. Refuse to scan instead.
+  const shallow = runGit(['rev-parse', '--is-shallow-repository']);
+  if (shallow.status !== 0) {
+    throw new CannotRunError('could not tell whether the clone is shallow');
+  }
+  if (shallow.stdout.trim() === 'true') {
+    throw new CannotRunError(
+      'the clone is shallow, so the scanned range would be incomplete; run git fetch --unshallow and retry',
+    );
+  }
   const fetched = runGit(['fetch', '--quiet', 'origin', base]);
   if (fetched.status !== 0) {
     throw new CannotRunError(
