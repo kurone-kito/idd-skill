@@ -11082,11 +11082,13 @@ export function summarizeClaimValidationForWriteGate(
  */
 export const MISSING_WATERMARK_HINT =
   'return to E1 and take a fresh snapshot (E1 Step 1); then record the review ' +
-  'watermark for the current head (E1 Step 2) with the profile-selected ' +
-  'post-idd-marker helper (node scripts/post-idd-marker.mjs in a source ' +
-  'checkout) --type watermark --from-pr <pr-number> --expected-head-sha <head-SHA from ' +
-  'Step 1> --agent-id <agent-id> --claim-id <claim-id> --apply; then re-run ' +
-  'the readiness check. See the E1 section of ' +
+  'watermark exactly as E1 Step 2 specifies, through the profile-selected ' +
+  'post-idd-marker helper. That step gives the complete invocation, which ' +
+  'uses --type watermark, --from-pr, --expected-head-sha set to the Step 1 ' +
+  'head, --agent-id and --claim-id, --operation-local, --apply, and the ' +
+  '--prior-head-sha, --prior-total-item-count, and --prior-max-activity-at ' +
+  'values saved in Step 1; this hint does not reproduce it. Then re-run the ' +
+  'readiness check. See the E1 section of ' +
   '.github/instructions/idd-review-snapshot.instructions.md.';
 
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
