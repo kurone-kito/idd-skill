@@ -38,6 +38,7 @@ import {
   hasTrustedReviewAckAfter,
   isCopilotErrorReviewBody,
   isCopilotReviewerLogin,
+  normalizeTrustedMarkerLogins,
 } from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 import type { ProviderPort } from './provider-port.mts';
@@ -364,7 +365,8 @@ export function copilotReviewAckNeeded(input: {
   return (
     input.suppressedCount > 0 ||
     (input.bodyShape === 'unrecognized' &&
-      input.primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN)
+      input.primaryBotLogin.trim().toLowerCase() ===
+        DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN)
   );
 }
 
@@ -402,10 +404,15 @@ export function resolveLatestPrimaryBotReviewEvidence(input: {
   if (!/^[0-9a-f]{40}$/.test(headSha)) {
     return null;
   }
+  // Normalize the login as the gate does (advisory-convergence.mts), so the
+  // selector and the reported login agree with the gate's view.
+  const primaryBotLogin =
+    input.primaryBotLogin.trim().toLowerCase() ||
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const clause = resolveLatestCopilotReviewClause(
     input.reviews,
     headSha,
-    input.primaryBotLogin,
+    primaryBotLogin,
   );
   if (!clause.found) {
     return null;
@@ -415,18 +422,18 @@ export function resolveLatestPrimaryBotReviewEvidence(input: {
     copilotReviewAckNeeded({
       suppressedCount: clause.suppressedCount,
       bodyShape: clause.bodyShape,
-      primaryBotLogin: input.primaryBotLogin,
+      primaryBotLogin,
     });
   const reviewAckCovers = clause.matchesHead
     ? hasTrustedReviewAckAfter(
         input.comments,
-        input.trustedMarkerLogins.map((login) => login.toLowerCase()),
+        normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
         clause.submittedAt,
         headSha,
       )
     : null;
   return {
-    primaryBotLogin: input.primaryBotLogin,
+    primaryBotLogin,
     reviewId: clause.reviewId,
     commitId: clause.commitId,
     matchesHead: clause.matchesHead,

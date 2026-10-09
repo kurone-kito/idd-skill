@@ -315,6 +315,54 @@ test('no counted review, an off-HEAD review, and an uppercase HEAD', () => {
   assert.equal(upper?.matchesHead, true);
 });
 
+test('the primary bot login is case-insensitive and a malformed HEAD yields null (#3907)', () => {
+  const reviews = [review({ id: 'r7', commitId: HEAD, body: V2_SUPPRESSED })];
+  const lower = resolveLatestPrimaryBotReviewEvidence({
+    reviews,
+    prHeadSha: HEAD,
+    primaryBotLogin: 'copilot',
+    comments: [],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  const padded = resolveLatestPrimaryBotReviewEvidence({
+    reviews,
+    prHeadSha: HEAD,
+    primaryBotLogin: ' Copilot ',
+    comments: [],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.deepEqual(padded, lower);
+  assert.equal(padded?.reviewAckNeeded, true);
+  const upperHead = resolveLatestPrimaryBotReviewEvidence({
+    reviews,
+    prHeadSha: HEAD.toUpperCase(),
+    primaryBotLogin: 'copilot',
+    comments: [],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.equal(upperHead?.matchesHead, true);
+  assert.equal(
+    copilotReviewAckNeeded({
+      suppressedCount: 0,
+      bodyShape: 'unrecognized',
+      primaryBotLogin: 'COPILOT',
+    }),
+    true,
+  );
+  for (const malformed of ['', 'a'.repeat(39), 'z'.repeat(40)]) {
+    assert.equal(
+      resolveLatestPrimaryBotReviewEvidence({
+        reviews,
+        prHeadSha: malformed,
+        primaryBotLogin: 'copilot',
+        comments: [],
+        trustedMarkerLogins: [TRUSTED],
+      }),
+      null,
+    );
+  }
+});
+
 test('fetchReviewsAndHeadCommit feeds the selector through a fake port', () => {
   const port = {
     getChangeRequestReviewsWithHeadCommitDate: () => ({
