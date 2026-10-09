@@ -32,7 +32,7 @@ const DEVELOPMENT_BRANCH_PATTERN =
   /^(?!refs\/heads\/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 // Records end in NUL. A commit made with porcelain never holds a NUL, so a
 // control byte in a body cannot split a record. Plumbing can store a NUL, and
-// then the message is read only up to it.
+// commitHoldsNul refuses such a commit before anything is scanned.
 const RECORD_TERMINATOR = '\0';
 const UNIT_SEPARATOR = '\x1f';
 const USAGE = `usage: node scripts/check-stray-commit-closes.mjs [--closing-issues <n>[,<n>...]]
@@ -148,6 +148,17 @@ function readDefaultBranch() {
   }
   return name;
 }
+/**
+ * `git log` ends a message at the first NUL and prints nothing after it, so
+ * a commit object that holds a NUL cannot be scanned in full.
+ */
+function commitHoldsNul(sha) {
+  const object = spawnSync('git', ['cat-file', 'commit', sha]);
+  if (object.status !== 0) {
+    throw new CannotRunError(`could not read commit ${sha}`);
+  }
+  return object.stdout.includes(0);
+}
 /** Split `git log -z --format=%H%x1f%B` output into commits. */
 function parseRange(output) {
   const commits = [];
@@ -236,9 +247,28 @@ function run(argv) {
     );
   }
   const commits = parseRange(range.stdout);
+  // One record per commit is the invariant. A NUL inside a message splits a
+  // record into more pieces, so a mismatch fails closed rather than scanning
+  // a truncated message.
+  const counted = runGit(['rev-list', '--count', `origin/${base}..HEAD`]);
+  if (
+    counted.status !== 0 ||
+    Number(counted.stdout.trim()) !== commits.length
+  ) {
+    throw new CannotRunError(
+      'the commit log does not match the commit count; a commit message may hold a NUL byte',
+    );
+  }
   if (commits.length === 0) {
     console.log('no stray closing references in 0 commits');
     return 0;
+  }
+  for (const { sha } of commits) {
+    if (commitHoldsNul(sha)) {
+      throw new CannotRunError(
+        `commit ${sha} holds a NUL byte, so its message cannot be read in full`,
+      );
+    }
   }
   const { strays } = checkStrayCommits({ expectedIssues: expected, commits });
   if (strays.length === 0) {

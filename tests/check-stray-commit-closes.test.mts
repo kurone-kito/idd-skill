@@ -100,9 +100,11 @@ function makeRepo(): { work: string; origin: string } {
   roots.push(root);
   const origin = join(root, 'origin.git');
   const work = join(root, 'work');
-  git(root, 'init', '-q', '--bare', '-b', 'main', origin);
+  git(root, 'init', '-q', '--bare', origin);
+  git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main');
   mkdirSync(work);
-  git(work, 'init', '-q', '-b', 'main');
+  git(work, 'init', '-q');
+  git(work, 'symbolic-ref', 'HEAD', 'refs/heads/main');
   git(work, 'config', 'user.name', 'Fixture');
   git(work, 'config', 'user.email', 'fixture@example.invalid');
   git(work, 'config', 'commit.gpgsign', 'false');
@@ -266,6 +268,36 @@ test('a unit separator byte in a message keeps the stray under its own sha', () 
   );
 });
 
+test('a commit message holding a NUL byte refuses the scan', () => {
+  const { work } = makeRepo();
+  featureWithCommits(work, ['Clean start']);
+  const parent = git(work, 'rev-parse', 'HEAD').trim();
+  // Porcelain cannot write a NUL into a message, so the commit is written
+  // through plumbing with the empty tree.
+  const body = [
+    'tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+    `parent ${parent}`,
+    'author Fixture <fixture@example.invalid> 1700000000 +0000',
+    'committer Fixture <fixture@example.invalid> 1700000000 +0000',
+    '',
+    'First\u0000Closes #169 in the old tracker.',
+    '',
+  ].join('\n');
+  const sha = execFileSync(
+    'git',
+    ['hash-object', '-t', 'commit', '-w', '--literally', '--stdin'],
+    { cwd: work, input: body, encoding: 'utf8' },
+  ).trim();
+  git(work, 'reset', '-q', '--hard', sha);
+  const run = check(work);
+  assert.equal(run.status, 1);
+  assert.doesNotMatch(run.stdout, /no stray closing references/);
+  assert.match(
+    run.stderr,
+    /holds a NUL byte, so its message cannot be read in full/,
+  );
+});
+
 test('a commit already on origin/main is not reported', () => {
   const { work } = makeRepo();
   commit(work, STRAY_MESSAGE);
@@ -414,7 +446,8 @@ test('an origin/main absent after fetch exits 1', () => {
 test('an unborn HEAD exits 1', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-stray-check-unborn-'));
   roots.push(root);
-  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'init', '-q');
+  git(root, 'symbolic-ref', 'HEAD', 'refs/heads/main');
   assert.equal(check(root).status, 1);
 });
 
