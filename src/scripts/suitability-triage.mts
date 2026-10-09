@@ -2209,6 +2209,51 @@ function isCodeIdentifierProcessMention(
   return CODE_IDENTIFIER_PROCESS_PROPERTY_ACCESS_PATTERN.test(after);
 }
 
+// #3891: `ignore` is a real value of a Node `stdio` option (and of the other
+// std* keys), so `{ stdio: 'ignore' }` in a code range is an option value,
+// not an instruction to ignore a policy. The exemption is narrow on purpose:
+// the verb must be exactly lowercase `ignore`, it must be a whole quoted
+// literal, and its key must be one of the four std* keys, with only
+// whitespace, `[`, commas and other quoted literals between the colon and
+// the literal. A key with a prefix, another key in between, an unquoted
+// value, or a capital I still fails the check.
+const STDIO_OPTION_KEY_PATTERN = /(?<![\w-])(?:stdio|stdin|stdout|stderr)\s*:/g;
+const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
+
+function isStdioIgnoreOptionValue(
+  text: string,
+  index: number,
+  verb: string,
+  getCodeRangeAt: (start: number) => { start: number; end: number } | null,
+): boolean {
+  if (verb !== 'ignore') {
+    return false;
+  }
+  const quote = text[index - 1];
+  if ((quote !== "'" && quote !== '"') || text[index + verb.length] !== quote) {
+    return false;
+  }
+  const codeRange = getCodeRangeAt(index);
+  if (!codeRange) {
+    return false;
+  }
+  const before = text.slice(codeRange.start, index - 1);
+  const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN.source, 'g');
+  let lastKey: RegExpExecArray | null = null;
+  for (
+    let found = keyPattern.exec(before);
+    found !== null;
+    found = keyPattern.exec(before)
+  ) {
+    lastKey = found;
+  }
+  if (lastKey === null) {
+    return false;
+  }
+  const between = before.slice(lastKey.index + lastKey[0].length);
+  return STDIO_OPTION_VALUE_SEGMENT_PATTERN.test(between);
+}
+
 function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
@@ -2306,11 +2351,12 @@ function findPolicyOverrideMatch(
         index,
         verb,
         getCodeRangeAt,
-      )
+      ) ||
+      isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt)
     ) {
-      // Same rewind as the masked-pass loop above: a negated or
-      // ordinary-compound match's own greedy span can swallow a later,
-      // genuine trigger.
+      // Same rewind as the masked-pass loop above: a negated, ordinary-
+      // compound, or std* option-value match's own greedy span can swallow
+      // a later, genuine trigger.
       pattern.lastIndex = index + (verb.length || 1);
       continue;
     }
