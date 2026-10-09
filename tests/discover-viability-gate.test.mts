@@ -3634,9 +3634,9 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
   { list: 'B', body: 'Every key in config.yaml must be documented.' },
   { list: 'B', body: 'Duplicate keys are rejected by the parser.' },
   // List C: a value that someone outside the change must supply. The first
-  // five rows carry cues, and so do the six "added" rows after them; the last
-  // three carry none and are denied by an early-return route, so they pin
-  // where the new route is consulted.
+  // five rows and the "added" rows after them carry cues; the last three carry
+  // none and are denied by an early-return route, so they pin where the new
+  // route is consulted.
   {
     list: 'C',
     body: 'The API key must be provided before the script runs.',
@@ -3658,8 +3658,8 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
     body: 'Obtain the API key from the vendor, then run the script.',
   },
   // List C, added: the keep-failing lines of the replay block. Each keeps a
-  // cue the new shape does not exempt, because `to`, a gerund, `approval` or
-  // `is` follows the verb, or because the verb is not after a bare noun.
+  // cue the new shape does not exempt: `to`, a gerund or a bare noun follows
+  // the verb, or the verb is passive or past (`is needed`).
   { list: 'C', body: 'The key needs to come from ops.' },
   { list: 'C', body: 'The key needs creating first.' },
   { list: 'C', body: 'The key needs approval.' },
@@ -3854,9 +3854,10 @@ for (const list of ['A', 'B', 'C', 'D', 'E', 'F'] as const) {
 }
 
 // #3890 known limit: an article-led phrase after a bare `key` or `token` verb
-// now passes, because the verb is exempt. These lines name a value from outside
-// the change, and no cue or actor in the table sees them. They are recorded
-// here as a decision: a later change that catches them updates this test.
+// now passes, because the verb is exempt. These lines name a supplier or a
+// requirement from outside the change, and no cue or actor in the table sees
+// them. They are recorded here as a decision: a later change that catches them
+// updates this test.
 test('#3890: known limit, an article-led external phrase after a bare key verb passes', () => {
   const residual = [
     'The key needs a value from Alice.',

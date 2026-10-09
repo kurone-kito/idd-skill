@@ -423,13 +423,15 @@ function cueRule(id, pattern, shape) {
 }
 /**
  * The dependency cues (each verb in its inflected forms, with a few common
- * `re-` forms), plus the two shapes the file already has. No table covers
- * every wording; the tests pin what it does cover. The array is exported, and
+ * `re-` forms), plus the `actor` and `forward` entries. No table covers every
+ * wording; the tests pin what it does cover. The array is exported, and
  * deliberately mutable, only so the tests can remove one entry at a time and
  * prove that a row passes without it; production code never mutates it. Keep
  * every cue pattern free of the `g` and `y` flags, because
- * `RegExp.prototype.test` is then stateful. A shape pattern is only ever given
- * to `replace`, which resets `lastIndex` itself, so it carries `g` on purpose.
+ * `RegExp.prototype.test` is then stateful. The two shape patterns above are
+ * the exception: they are only ever given to `replace`, which resets
+ * `lastIndex` itself, and they must carry `g`, so that every matching verb in
+ * a window is removed, not only the first.
  */
 export const BARE_NOUN_DEPENDENCY_RULES = [
   cueRule('need', /\bneed(?:s|ed|ing)?\b/i, BARE_NOUN_NEED_SHAPE_PATTERN),
