@@ -11084,8 +11084,8 @@ export const MISSING_WATERMARK_HINT =
   'return to E1 and take a fresh snapshot (E1 Step 1); then record the review ' +
   'watermark for the current head (E1 Step 2) with post-idd-marker.mjs ' +
   '--type watermark --from-pr <pr-number> --expected-head-sha <head-SHA from ' +
-  'Step 1> --apply, passing the agent and claim ids that Step 2 names; then ' +
-  're-run the readiness check. See the E1 section of ' +
+  'Step 1> --agent-id <agent-id> --claim-id <claim-id> --apply; then re-run ' +
+  'the readiness check. See the E1 section of ' +
   '.github/instructions/idd-review-snapshot.instructions.md.';
 
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
