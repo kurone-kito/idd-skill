@@ -1371,6 +1371,7 @@ export function unsafeTextFinding(body) {
   }
   return null;
 }
+// audit:ignore-dead-export: kept for the advisory-wait test callers after #3856 moved the audit to unsafeTextFinding; no production caller remains
 export function unsafeTextReason(body) {
   return unsafeTextFinding(body)?.reason ?? null;
 }

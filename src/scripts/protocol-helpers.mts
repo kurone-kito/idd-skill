@@ -1109,7 +1109,7 @@ const UNSAFE_TEXT_RULES = [
       /\bfailed[- ]ci\b|\bfailing ci\b|\bci failure\b|\bci failed\b|\bfailed checks?\b/i,
     reason: 'contains failed-CI context',
   },
-];
+] as const;
 // Exported (kurone-kito/idd-skill#3223) so copilot-review-wave-audit.mts can
 // classify a reply as a recognized-but-non-accept/reject disposition using
 // the exact same loose, no-em-dash-required marker this file's own
@@ -2433,7 +2433,7 @@ export function applyDigestUpsert<P extends DigestUpsertPlanLike>(
  */
 export function unsafeTextFinding(
   body: string,
-): { code: string; reason: string } | null {
+): { code: (typeof UNSAFE_TEXT_RULES)[number]['code']; reason: string } | null {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {
       return { code: rule.code, reason: rule.reason };
@@ -2442,6 +2442,7 @@ export function unsafeTextFinding(
   return null;
 }
 
+// audit:ignore-dead-export: kept for the advisory-wait test callers after #3856 moved the audit to unsafeTextFinding; no production caller remains
 export function unsafeTextReason(body: string): string | null {
   return unsafeTextFinding(body)?.reason ?? null;
 }
@@ -3756,13 +3757,21 @@ export type FreshDispositionCause =
   | 'superseded-by-edit';
 
 /**
+ * A freshness explanation. The cause is narrowed to a stale cause once `fresh`
+ * is false, so a caller can index a per-cause table without a cast.
+ */
+export type FreshDispositionExplanation =
+  | { fresh: true; cause: 'fresh' }
+  | { fresh: false; cause: Exclude<FreshDispositionCause, 'fresh'> };
+
+/**
  * Explains `hasFreshDisposition`. `fresh` is decided exactly as before; `cause`
  * is classified only when the disposition is not fresh.
  */
 export function explainFreshDisposition(
   thread: ThreadLike,
   options: FreshDispositionOptions = {},
-): { fresh: boolean; cause: FreshDispositionCause } {
+): FreshDispositionExplanation {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
   // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
   // options.isDispositionAuthor with an IDD-scoped predicate (e.g., via summarizeDispositionEvidenceForGate).

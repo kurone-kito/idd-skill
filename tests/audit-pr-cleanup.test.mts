@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import type {
   CleanupArgs,
@@ -18,9 +19,11 @@ import {
   enrichAuditReviewThreads,
   evaluateOperationalComment,
   evaluateReviewComment,
+  evaluateReviewParent,
   fetchReviewThreads,
   parsePrNumbers,
   readActiveClaim,
+  SKIP_REASON_CODES,
 } from '../src/scripts/audit-pr-cleanup.mts';
 import { computeReportSummary } from '../src/scripts/audit-pr-cleanup-summary.mts';
 import { renderClaimedByMarker } from '../src/scripts/marker-helpers.mts';
@@ -1453,6 +1456,14 @@ test('evaluateReviewComment still skips a genuinely missing disposition (#2618)'
   );
 });
 
+// kurone-kito/idd-skill#3856: the free text each thread-freshness cause carries.
+const DISPOSITION_EDITED_TEXT =
+  "the thread's IDD disposition was edited, or its edit state could not be read";
+const SUPERSEDED_BY_EDIT_TEXT =
+  "a thread comment was edited after the thread's IDD disposition";
+const SUPERSEDED_BY_REPLY_TEXT =
+  "a later reply follows the thread's IDD disposition";
+
 // #3249: an edited (or edit-state-unresolved) trusted disposition reply
 // must no longer satisfy `hasFreshDisposition` -- proven here with NO
 // advisory-bot reply after it, so the ack-only-post-disposition carve-out
@@ -1509,9 +1520,10 @@ test('evaluateReviewComment treats an edited or edit-state-unresolved dispositio
   );
   assert.equal(editedReport.candidates.length, 0);
   assert.equal(
-    editedReport.skipped[0]?.skipReason,
-    'review thread is missing an IDD accept/reject disposition',
+    editedReport.skipped[0]?.skipReasonCode,
+    'thread-disposition-edited',
   );
+  assert.equal(editedReport.skipped[0]?.skipReason, DISPOSITION_EDITED_TEXT);
 
   const unknownThread = buildThread('THREAD-EE-UNKNOWN', {
     id: 'EE-3',
@@ -1531,6 +1543,10 @@ test('evaluateReviewComment treats an edited or edit-state-unresolved dispositio
     unknownReport,
   );
   assert.equal(unknownReport.candidates.length, 0);
+  assert.equal(
+    unknownReport.skipped[0]?.skipReasonCode,
+    'thread-disposition-edited',
+  );
 
   // Minimized shape (`lastEditedAt: null`) is still honored (control case).
   const uneditedThread = buildThread('THREAD-EE-UNEDITED', {
@@ -1662,6 +1678,7 @@ function cosmeticHistory3786(
 
 function dispositionPaths(thread: ReviewThreadNode): {
   skipReason: string | undefined;
+  skipReasonCode: string | undefined;
   missingDisposition: number;
 } {
   const report = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
@@ -1677,6 +1694,7 @@ function dispositionPaths(thread: ReviewThreadNode): {
   });
   return {
     skipReason: report.skipped[0]?.skipReason,
+    skipReasonCode: report.skipped[0]?.skipReasonCode,
     missingDisposition: index.get(REVIEW_ID_3786)?.missingDisposition ?? -1,
   };
 }
@@ -1709,10 +1727,8 @@ test('both F4 disposition paths still reject a visible post-disposition change (
     includeCourtesy: false,
   });
   const paths = dispositionPaths(thread);
-  assert.equal(
-    paths.skipReason,
-    'review thread is missing an IDD accept/reject disposition',
-  );
+  assert.equal(paths.skipReasonCode, 'thread-superseded-by-edit');
+  assert.equal(paths.skipReason, SUPERSEDED_BY_EDIT_TEXT);
   assert.equal(paths.missingDisposition, 1);
 });
 
@@ -1738,10 +1754,8 @@ test('both F4 disposition paths stay fail-closed without a verified history (#37
   ];
   for (const thread of cases) {
     const paths = dispositionPaths(thread);
-    assert.equal(
-      paths.skipReason,
-      'review thread is missing an IDD accept/reject disposition',
-    );
+    assert.equal(paths.skipReasonCode, 'thread-superseded-by-edit');
+    assert.equal(paths.skipReason, SUPERSEDED_BY_EDIT_TEXT);
     assert.equal(paths.missingDisposition, 1);
   }
 });
@@ -2218,4 +2232,290 @@ test('readActiveClaim (#3270) keeps the old claim active for the same 20h gap wh
       assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
     });
   });
+});
+
+// kurone-kito/idd-skill#3856: each thread-freshness shape reports its own
+// cause code and text through the real classifier. A superseded disposition
+// must never read as missing.
+const FINDING_3856 = {
+  id: 'FIND-3856',
+  url: 'https://pr#FIND-3856',
+  author: { login: 'coderabbitai[bot]' },
+  body: 'nit: consider extracting this into a helper',
+  createdAt: '2026-05-12T00:00:00Z',
+  lastEditedAt: null,
+  viewerCanMinimize: true,
+  isMinimized: false,
+};
+const DISPOSITION_3856 = {
+  id: 'DISP-3856',
+  url: 'https://pr#DISP-3856',
+  author: { login: 'idd-bot' },
+  body: '**Accepted** — extracted.',
+  createdAt: '2026-05-12T00:01:00Z',
+  lastEditedAt: null,
+  viewerCanMinimize: true,
+  isMinimized: false,
+};
+const REPLY_3856 = {
+  id: 'REPLY-3856',
+  url: 'https://pr#REPLY-3856',
+  author: { login: 'reviewer-a' },
+  body: 'still broken',
+  createdAt: '2026-05-12T00:02:00Z',
+  lastEditedAt: null,
+  viewerCanMinimize: true,
+  isMinimized: false,
+};
+
+/** Evaluate `subject` in a resolved thread made of `nodes`, as F4 does. */
+function evaluate3856(
+  subject: Record<string, unknown>,
+  nodes: Record<string, unknown>[],
+  pr: Record<string, unknown> = mergedPr,
+): CleanupAuditReport {
+  const report = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+  const thread = {
+    id: 'THREAD-3856',
+    isResolved: true,
+    comments: { pageInfo: { hasNextPage: false }, nodes },
+  } as unknown as ReviewThreadNode;
+  evaluateReviewComment(
+    subject as unknown as Parameters<typeof evaluateReviewComment>[0],
+    thread,
+    pr as unknown as Parameters<typeof evaluateReviewComment>[2],
+    noGatingReviews,
+    report,
+  );
+  return report;
+}
+
+test('each thread-freshness shape reports its own cause code and text (#3856)', () => {
+  const editedFinding = {
+    ...FINDING_3856,
+    lastEditedAt: '2026-05-12T00:05:00Z',
+    updatedAt: '2026-05-12T00:05:00Z',
+  };
+  const cases = [
+    {
+      name: 'a later reply',
+      nodes: [FINDING_3856, DISPOSITION_3856, REPLY_3856],
+      code: 'thread-superseded-by-reply',
+      text: SUPERSEDED_BY_REPLY_TEXT,
+    },
+    {
+      name: 'a reply in the same second as the disposition',
+      nodes: [
+        FINDING_3856,
+        DISPOSITION_3856,
+        { ...REPLY_3856, createdAt: DISPOSITION_3856.createdAt },
+      ],
+      code: 'thread-superseded-by-reply',
+      text: SUPERSEDED_BY_REPLY_TEXT,
+    },
+    {
+      name: 'a reply and an edit after the disposition',
+      nodes: [editedFinding, DISPOSITION_3856, REPLY_3856],
+      code: 'thread-superseded-by-reply',
+      text: SUPERSEDED_BY_REPLY_TEXT,
+    },
+    {
+      name: 'an edit to the finding after the disposition',
+      nodes: [editedFinding, DISPOSITION_3856],
+      code: 'thread-superseded-by-edit',
+      text: SUPERSEDED_BY_EDIT_TEXT,
+    },
+    {
+      name: 'an edited IDD disposition after an unedited one',
+      nodes: [
+        FINDING_3856,
+        DISPOSITION_3856,
+        {
+          ...DISPOSITION_3856,
+          id: 'DISP-3856-EDITED',
+          createdAt: '2026-05-12T00:03:00Z',
+          lastEditedAt: '2026-05-12T00:04:00Z',
+        },
+      ],
+      code: 'thread-superseded-by-reply',
+      text: SUPERSEDED_BY_REPLY_TEXT,
+    },
+    {
+      name: 'no IDD disposition at all',
+      nodes: [FINDING_3856, REPLY_3856],
+      code: 'thread-no-disposition',
+      text: 'review thread is missing an IDD accept/reject disposition',
+    },
+  ];
+
+  for (const testCase of cases) {
+    const report = evaluate3856(FINDING_3856, testCase.nodes);
+    assert.equal(report.candidates.length, 0, testCase.name);
+    assert.equal(report.skipped.length, 1, testCase.name);
+    assert.equal(
+      report.skipped[0]?.skipReasonCode,
+      testCase.code,
+      testCase.name,
+    );
+    assert.equal(report.skipped[0]?.skipReason, testCase.text, testCase.name);
+    // Only a genuinely absent disposition may say "missing".
+    if (testCase.code !== 'thread-no-disposition') {
+      assert.doesNotMatch(
+        report.skipped[0]?.skipReason ?? '',
+        /missing/,
+        testCase.name,
+      );
+    }
+  }
+});
+
+test('a PR-author reply alone stays skipped, and a courtesy acknowledgment after it is a candidate (#3856)', () => {
+  const prAuthor = { ...mergedPr, author: { login: 'kurone-kito' } };
+  const prReply = {
+    id: 'author-reply-3856',
+    url: 'https://pr#author-reply-3856',
+    author: { login: 'kurone-kito' },
+    body: 'thanks, looking',
+    createdAt: '2026-05-12T00:02:00Z',
+    lastEditedAt: null,
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+  const courtesy = {
+    id: 'COURTESY-3856',
+    url: 'https://pr#COURTESY-3856',
+    author: { login: 'coderabbitai[bot]' },
+    body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+    createdAt: '2026-05-12T00:03:00Z',
+    lastEditedAt: null,
+    viewerCanMinimize: true,
+    isMinimized: false,
+  };
+
+  const alone = evaluate3856(
+    FINDING_3856,
+    [FINDING_3856, DISPOSITION_3856, prReply],
+    prAuthor,
+  );
+  assert.equal(alone.candidates.length, 0);
+  assert.equal(alone.skipped[0]?.skipReasonCode, 'thread-superseded-by-reply');
+
+  const acknowledged = evaluate3856(
+    courtesy,
+    [FINDING_3856, DISPOSITION_3856, prReply, courtesy],
+    prAuthor,
+  );
+  assert.equal(acknowledged.skipped.length, 0);
+  assert.equal(acknowledged.candidates.length, 1);
+  assert.equal(acknowledged.candidates[0]?.subjectId, 'COURTESY-3856');
+});
+
+test('an unsafe-text finding reports its rule code (#3856)', () => {
+  const cases = [
+    {
+      body: '**Awaiting maintainer decision** — please confirm the scope.',
+      code: 'unsafe-awaiting-maintainer-decision',
+    },
+    {
+      body: 'Leaving this as an active hold for now.',
+      code: 'unsafe-active-hold',
+    },
+    { body: 'The CI failed on the lint step.', code: 'unsafe-failed-ci' },
+  ];
+  for (const testCase of cases) {
+    const report = evaluate3856({ ...FINDING_3856, body: testCase.body }, [
+      { ...FINDING_3856, body: testCase.body },
+      DISPOSITION_3856,
+    ]);
+    assert.equal(
+      report.skipped[0]?.skipReasonCode,
+      testCase.code,
+      testCase.body,
+    );
+    assert.equal(report.candidates.length, 0, testCase.body);
+  }
+});
+
+test('the review-parent row for a superseded thread names the fresh disposition, not a missing one (#3856)', () => {
+  const finding = {
+    ...FINDING_3856,
+    pullRequestReview: { id: 'REV-3856' },
+  };
+  const thread = {
+    id: 'THREAD-3856-PARENT',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [finding, DISPOSITION_3856, REPLY_3856],
+    },
+  } as ReviewThreadNode;
+  const threadIndex = indexThreadsByReview([thread], {
+    isDispositionAuthor: (login) => login === 'idd-bot',
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  });
+  const review = {
+    id: 'REV-3856',
+    url: 'https://pr#REV-3856',
+    author: { login: 'copilot-pull-request-reviewer[bot]' },
+    body: '',
+    state: 'COMMENTED',
+    isMinimized: false,
+    viewerCanMinimize: true,
+  };
+  const report = createAuditReport({ trustedMarkerActors: ['idd-bot'] });
+
+  evaluateReviewParent(
+    review as unknown as Parameters<typeof evaluateReviewParent>[0],
+    mergedPr as unknown as Parameters<typeof evaluateReviewParent>[1],
+    threadIndex,
+    noGatingReviews,
+    report,
+  );
+
+  assert.equal(report.candidates.length, 0);
+  assert.equal(
+    report.skipped[0]?.skipReasonCode,
+    'review-threads-no-fresh-disposition',
+  );
+  assert.equal(
+    report.skipped[0]?.skipReason,
+    'associated review threads have no fresh IDD accept/reject disposition',
+  );
+  assert.equal(report.skipped[0]?.missingDispositionThreads, 1);
+});
+
+test('every skip reason code is produced by a call site, and every call site uses a listed code (#3856)', () => {
+  assert.equal(new Set(SKIP_REASON_CODES).size, SKIP_REASON_CODES.length);
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  const scriptsDir = resolve(here, '..', 'src', 'scripts');
+  const audit = readFileSync(join(scriptsDir, 'audit-pr-cleanup.mts'), 'utf8');
+  const helpers = readFileSync(
+    join(scriptsDir, 'protocol-helpers.mts'),
+    'utf8',
+  );
+
+  // Forward: each listed code appears as a literal in one of the two sources
+  // (the freshness causes and unsafe rules reach `addSkipped` as values).
+  for (const code of SKIP_REASON_CODES) {
+    assert.ok(
+      audit.includes(`'${code}'`) || helpers.includes(`'${code}'`),
+      `no call site produces ${code}`,
+    );
+  }
+
+  // Reverse: each literal code passed to `addSkipped` is a listed code. The
+  // match stops at the statement end, so a value argument cannot pair with a
+  // literal from the next call.
+  const literalCodes = [
+    ...audit.matchAll(/addSkipped\(\s*report,[^;]*?,\s*'([a-z-]+)',/g),
+  ].map((match) => match[1] ?? '');
+  assert.ok(literalCodes.length >= 20);
+  for (const code of literalCodes) {
+    assert.ok(
+      (SKIP_REASON_CODES as readonly string[]).includes(code),
+      `unlisted code ${code}`,
+    );
+  }
 });
