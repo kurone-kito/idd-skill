@@ -142,7 +142,7 @@ inheritable claim comment. An inheritable claim comment is either:
   matching trusted `unclaimed-by` comment (the last voluntarily released
   branch), or
 - trusted forced-handoff evidence already verified by Resume Step 1,
-  but only when its branch and linked PR fields match the live GitHub
+  but only when its branch, and linked PR when it names one, match the live GitHub
   state, or
 - the latest trusted legacy `claimed-by` comment when performing a
   legacy migration (see **Legacy claim migration** near the end of
