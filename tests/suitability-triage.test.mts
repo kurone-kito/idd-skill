@@ -8714,3 +8714,15 @@ test('trust safety keeps a backtick-wrapped std* value in an indented code block
   } as Context);
   assert.equal(result.pass, false);
 });
+
+test('trust safety passes a std* option value in a list-indented fence followed by prose (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n- Run it:\n\n     ${tick.repeat(3)}js\n     spawn(cmd, { stdio: 'ignore' })\n     ${tick.repeat(3)}\nThe repository root is the working directory.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
