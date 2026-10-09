@@ -683,6 +683,16 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA001',
+    name: 'a required check job that spells its display name with a space before the colon',
+    path: '.github/workflows/lint.yml',
+    mutation: {
+      from: '\n  lint:\n    runs-on: ubuntu-latest',
+      to: '\n  lint:\n    name : Lint\n    runs-on: ubuntu-latest',
+    },
+    expected: [{ prefix: 'job lint must not declare its own display name' }],
+  },
+  {
+    ruleId: 'RWA001',
     name: 'the advisory check trigger renamed away from pull_request_target',
     path: ROOT_ADVISORY,
     mutation: {

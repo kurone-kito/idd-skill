@@ -1334,7 +1334,7 @@ function checkRequiredCheckWorkflows(root, report) {
       report(RWA001, path, `job ${jobId} not found`);
       continue;
     }
-    if (/^ {4}name:/m.test(jobBody)) {
+    if (/^ {4}["\x27]?name["\x27]?[ \t]*:/m.test(jobBody)) {
       report(
         RWA001,
         path,
