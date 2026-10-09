@@ -507,8 +507,10 @@ export interface BareNounDependencyRule {
 // The same refusal applies at the start of any window that begins with a real
 // word, because the window cannot tell a cut from the start of the corpus. So
 // when a later noun's window begins at a bare key that opens the corpus, that
-// key's verb stays in the window, and the later noun can fail. That fails
-// closed, and the issue prefers a false positive to a false negative.
+// key's verb stays in the window, and the later noun can fail. A window that
+// starts inside an earlier noun, or at its verb, fails the same way, because the
+// shape then cannot see a whole bare noun. Every such failure is closed, and the
+// issue prefers a false positive to a false negative.
 const BARE_NOUN_NEED_SHAPE_PATTERN =
   /(?<=\W)((?:keys?|tokens?)\s+)needs?\s+(?=(?:a|an|the)\b)/gi;
 const BARE_NOUN_REQUIRE_SHAPE_PATTERN =
