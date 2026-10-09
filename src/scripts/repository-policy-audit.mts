@@ -33,6 +33,7 @@ interface RuleDefinition {
 
 interface RawPolicyConfig extends Record<string, unknown> {
   githubApi?: { loadControl?: unknown };
+  orchestrator?: { maxWorkers?: unknown };
 }
 
 class RuleFailure extends Error {
