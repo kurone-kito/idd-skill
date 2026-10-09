@@ -1005,6 +1005,7 @@ test('buildPreMergeReadinessSummary: missing-watermark review-currency blocker c
     '--agent-id',
     '--claim-id',
     '--apply',
+    'profile-selected',
   ]) {
     assert.ok(hint.includes(token), `hint should name ${token}`);
   }

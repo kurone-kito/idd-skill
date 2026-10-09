@@ -8914,8 +8914,9 @@ export function summarizeClaimValidationForWriteGate(
  */
 export const MISSING_WATERMARK_HINT =
   'return to E1 and take a fresh snapshot (E1 Step 1); then record the review ' +
-  'watermark for the current head (E1 Step 2) with post-idd-marker.mjs ' +
-  '--type watermark --from-pr <pr-number> --expected-head-sha <head-SHA from ' +
+  'watermark for the current head (E1 Step 2) with the profile-selected ' +
+  'post-idd-marker helper (node scripts/post-idd-marker.mjs in a source ' +
+  'checkout) --type watermark --from-pr <pr-number> --expected-head-sha <head-SHA from ' +
   'Step 1> --agent-id <agent-id> --claim-id <claim-id> --apply; then re-run ' +
   'the readiness check. See the E1 section of ' +
   '.github/instructions/idd-review-snapshot.instructions.md.';
