@@ -1987,6 +1987,7 @@ function isCodeIdentifierProcessMention(rawSource, matchIndex) {
 // the literal. A key with a prefix, another key in between, an unquoted
 // value, or a capital I still fails the check.
 const STDIO_OPTION_KEY_PATTERN = /(?<![\w-])(?:stdio|stdin|stdout|stderr)\s*:/g;
+const STDIO_OPTION_MAX_RANGE_CHARS = 4096;
 const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
 // Marks each character of `source` that sits inside a single- or
 // double-quoted string, so a key or literal inside another string is not read
@@ -2025,6 +2026,12 @@ function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt) {
   }
   const codeRange = getCodeRangeAt(index);
   if (!codeRange) {
+    return false;
+  }
+  // The scan below restarts at the range start for every candidate, so a
+  // large fenced block would cost quadratic time. A range that long is not
+  // exempt; the check then fails closed as it did before #3891.
+  if (codeRange.end - codeRange.start > STDIO_OPTION_MAX_RANGE_CHARS) {
     return false;
   }
   // Scan from the code range start through the opening quote of the literal.
