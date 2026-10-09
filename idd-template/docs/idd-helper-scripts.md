@@ -2722,6 +2722,12 @@ The adopted helper boundaries are intentionally narrow:
   omitting the flag leaves apply-mode behavior unchanged
 - known review-bot regular comments are considered only after merge and
   only when they match a completed-review or stale-notification signal
+- every skipped row carries a `skipReasonCode` from a closed list
+  (documented with its meaning in `docs/idd-comment-minimization.md`,
+  under Skip reason codes). The report also has `skipReasonCounts` (the
+  count per code, sorted by code) and `skipReasonSummary` (the same as
+  one line, `code n, code n`, for the evidence comment; empty when nothing
+  was skipped). Neither changes `summary` or `status`
 - cleanup remains best-effort and never becomes a merge gate
 - direct GraphQL fallback commands remain documented in
   `docs/idd-comment-minimization.md`
@@ -6148,9 +6154,11 @@ reflexively as any other CLI option.
   only advisory-bot thread comments whose `lastEditedAt` postdates
   their thread's latest IDD disposition, in one batched call when
   there is at least one such comment and none otherwise. Every other
-  consumer (the merged-PR feedback sweep, `audit-pr-cleanup.mjs`)
-  never fetches it, so an edited comment keeps `updatedAt` dating
-  there, unchanged.
+  consumer never fetches it. The merged-PR feedback sweep does not, so an
+  edited comment keeps `updatedAt` dating there, unchanged. The F4 cleanup
+  audit (`audit-pr-cleanup.mjs`) fetches it with a bounded call of its own
+  (kurone-kito/idd-skill#3791), so its thread comments are dated by the
+  same rule.
   `missingThreads[].inPlaceEditOnly` / `soleCauseInPlaceEditOnly` stay a
   separate, coarser, revision-content-blind heuristic
   (`classifyThreadAckOnlyPostDisposition`), unaffected by this dating

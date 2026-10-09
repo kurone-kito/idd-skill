@@ -27,6 +27,44 @@ export interface CleanupReport {
    * apply mode, and never set when the flag is absent.
    */
   timeBudgetExhausted?: boolean;
+  /**
+   * Skipped rows counted by `skipReasonCode`, sorted by code (kurone-kito/idd-skill#3857).
+   * A row with a missing or malformed code is counted as `unknown`.
+   */
+  skipReasonCounts?: Record<string, number>;
+  /**
+   * `skipReasonCounts` on one line, `code n, code n`, for an evidence
+   * comment. Empty when nothing was skipped. Built only from kebab-case
+   * codes, digits and the `unknown` fallback, so it is safe to pass as a
+   * workflow step output.
+   */
+  skipReasonSummary?: string;
+}
+
+const SKIP_REASON_CODE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Counts the skipped rows by reason code (kurone-kito/idd-skill#3857). The
+ * counts and their one-line form are computed here, once, so the workflow
+ * only extracts a ready string.
+ */
+export function computeSkipReasonFields(report: CleanupReport): void {
+  const counts = new Map<string, number>();
+  for (const skip of report.skipped) {
+    const code = skip.skipReasonCode;
+    const key =
+      typeof code === 'string' && SKIP_REASON_CODE_PATTERN.test(code)
+        ? code
+        : 'unknown';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  report.skipReasonCounts = Object.fromEntries(sorted);
+  report.skipReasonSummary = sorted
+    .map(([code, count]) => `${code} ${count}`)
+    .join(', ');
 }
 
 export function computeReportSummary(report: CleanupReport): void {
@@ -49,6 +87,8 @@ export function computeReportSummary(report: CleanupReport): void {
     'viewer-can-minimize': viewerCanMinimize,
     'viewer-cannot-minimize': viewerCannotMinimize,
   };
+  // Before any early return below, so every status carries the fields.
+  computeSkipReasonFields(report);
 
   if (report.mode === 'dry-run') {
     if (report.candidates.length > 0) {

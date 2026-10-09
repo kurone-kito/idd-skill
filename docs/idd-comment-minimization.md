@@ -543,6 +543,20 @@ when all of these are true:
 - the reviewer has no active `CHANGES_REQUESTED` state that still gates
   the PR
 
+Freshness applies to review comments and review parents alike. An IDD
+disposition is fresh only while nothing follows it. Any non-disposition
+comment in the thread created at or after the disposition's second ends
+its freshness, including a reply made in the same second. An edit made at
+or after that second to any thread comment that is not verified cosmetic
+ends it too, the root included; the cosmetic carve-out applies only to
+configured advisory-bot comments with a fetched edit history. An edited
+disposition never counts. The one exemption (#2618) is for known advisory-bot
+courtesy acknowledgments: when every comment strictly after the disposition
+that comes from neither an IDD agent nor the PR author is such an
+acknowledgment, and there is at least one, the thread still counts as
+dispositioned. A same-second comment that is not an acknowledgment is not
+exempt.
+
 Known review-bot regular PR comments may be minimized after merge only
 when they have a clear completed-review or stale-notification signal.
 Current safe classes are:
@@ -739,14 +753,54 @@ with at least these fields:
 
 Candidate rows must have `viewerCanMinimize=true` and
 `isMinimized=false`. Skipped rows may report the opposite states and
-must include the skip reason.
+must include the skip reason and its `skipReasonCode` (see
+[Skip reason codes](#skip-reason-codes)).
 
 The helper also reports skipped cleanup-shaped nodes with reasons such
 as already minimized, no minimization permission, unresolved associated
-review threads, missing accept/reject dispositions, unsafe hold or
-decision context, no completed-review signal on a known-bot regular
+review threads, an IDD accept/reject disposition that is missing or has
+been superseded (each has its own code below), unsafe hold or decision
+context, no completed-review signal on a known-bot regular
 comment, no associated review threads on a bot review parent, untrusted
 operational marker author, or a non-merged PR.
+
+Every skipped row carries a `skipReasonCode` from the closed list below.
+The report also counts the skipped rows by code: `skipReasonCounts` is the
+count per code, sorted by code, and `skipReasonSummary` is the same as one
+line, `code n, code n`, for an evidence comment. Both are empty when nothing
+was skipped.
+
+### Skip reason codes
+
+| Code                                    | Meaning                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `operational-marker-not-recognized`     | An IDD operational comment outside the marker list, such as a live-status digest or a CI-posted bookkeeping marker. It stays visible. |
+| `operational-marker-untrusted-author`   | An operational marker whose author is not trusted.                                                                                    |
+| `forced-handoff-evidence`               | A forced-handoff marker, kept as audit evidence.                                                                                      |
+| `pr-not-merged`                         | The PR is not merged.                                                                                                                 |
+| `already-minimized`                     | The comment or review is already minimized.                                                                                           |
+| `viewer-cannot-minimize-comment`        | The viewer cannot minimize this issue comment.                                                                                        |
+| `viewer-cannot-minimize-review`         | The viewer cannot minimize this review.                                                                                               |
+| `viewer-cannot-minimize-review-comment` | The viewer cannot minimize this review comment.                                                                                       |
+| `review-bot-no-completed-review`        | A known review-bot regular comment without a completed-review signal.                                                                 |
+| `review-changes-requested-active`       | The review author still has an active changes-requested state.                                                                        |
+| `review-no-threads`                     | A bot review parent with no associated review threads.                                                                                |
+| `review-threads-truncated`              | Associated review threads whose comment data is truncated.                                                                            |
+| `review-threads-unresolved`             | Associated review threads that are unresolved.                                                                                        |
+| `review-threads-no-fresh-disposition`   | Associated review threads with no fresh IDD disposition.                                                                              |
+| `thread-unresolved`                     | The review thread is unresolved.                                                                                                      |
+| `thread-data-truncated`                 | The review thread's comment data is truncated.                                                                                        |
+| `thread-no-disposition`                 | No IDD accept/reject disposition was ever posted on the thread.                                                                       |
+| `thread-disposition-edited`             | The IDD disposition was edited, or its edit state could not be read.                                                                  |
+| `thread-disposition-time-unreadable`    | The IDD disposition has no readable time.                                                                                             |
+| `thread-superseded-by-reply`            | A later reply follows the IDD disposition.                                                                                            |
+| `thread-superseded-by-edit`             | A thread comment was edited after the IDD disposition.                                                                                |
+| `unsafe-awaiting-maintainer-decision`   | The comment contains an awaiting-maintainer-decision marker.                                                                          |
+| `unsafe-active-hold`                    | The comment contains active hold context.                                                                                             |
+| `unsafe-failed-ci`                      | The comment contains failed-CI context.                                                                                               |
+| `pre-minimize-subject-missing`          | Pre-minimize revalidation: the subject no longer exists.                                                                              |
+| `pre-minimize-already-minimized`        | Pre-minimize revalidation: the candidate is already minimized, likely cascade-minimized with a parent.                                |
+| `pre-minimize-viewer-cannot-minimize`   | Pre-minimize revalidation: the viewer cannot minimize this comment.                                                                   |
 
 ## Apply Shape
 
@@ -854,7 +908,7 @@ record (preventive; no observed incident yet — issue `#2043`):
 | Skipped                          | N                                                                                                      |
 | Permission-blocked               | N                                                                                                      |
 | Retry attempts (bound-exhausted) | N (true / false)                                                                                       |
-| Notes                            | reason for any failed or skipped items                                                                 |
+| Notes                            | per-reason skip counts (`skipReasonSummary`) and the reason for any failed item                        |
 ```
 
 `retry-attempts` / `retry-bound-exhausted` mirror
