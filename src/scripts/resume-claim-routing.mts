@@ -1734,7 +1734,8 @@ export function fetchOpenLinkedPrReferences(
             typeof node.number !== 'number' ||
             !Number.isSafeInteger(node.number) ||
             node.number <= 0 ||
-            typeof node.repository !== 'string'
+            typeof node.repository !== 'string' ||
+            node.repository.trim().length === 0
           ) {
             throw new Error(
               'open closing-reference node without a number or repository',

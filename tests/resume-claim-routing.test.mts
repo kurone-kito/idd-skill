@@ -5687,3 +5687,18 @@ test('#3871: a blank repository fails the closing-reference read instead of matc
   assert.equal(result.lookupFailed, true);
   assert.deepEqual([...result.references], []);
 });
+
+test('#3871: an open closing-reference node with a blank repository fails the lookup instead of being skipped', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', ' ')],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
+});
