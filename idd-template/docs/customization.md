@@ -2093,8 +2093,8 @@ evidence.
 
 ### Forced-handoff copies and recovery
 
-Each claim-ownership reader takes `forcedHandoff.mode` from a different copy
-of `.github/idd/config.json`:
+Each claim-ownership reader takes `forcedHandoff.mode` from one of the copies
+of `.github/idd/config.json` listed below:
 
 - `resume-claim-routing`, `idd-force-handoff`, `idd-forced-handoff-marker`,
   `resolve-review-thread`, `disposition-non-review-notices`,
@@ -2109,8 +2109,9 @@ of `.github/idd/config.json`:
   honor a forced handoff unless the opt-in is also on the default branch.
 - The external-check waiver honors a forced handoff whatever the mode says.
 - `idd-roadmap-audit-execute`, `suitability-close-execute` and
-  `discover-shared-file-overlap` never read the mode. They are off by default
-  and never honor a forced handoff.
+  `discover-shared-file-overlap` never read the mode, so they never honor a
+  forced handoff. `suitability-close-execute` acts only with `--apply`, and
+  `discover-shared-file-overlap` checks overlap only with `--check-overlap`.
 
 The pre-flight runs on the successor path of `idd-force-handoff`, and in
 `idd-forced-handoff-marker`, before either posts or renders a marker. With a
@@ -2120,11 +2121,13 @@ branch. A copy that does not set `human-gated`, or cannot be read, refuses the
 handoff. The `release` keyword does not run the pre-flight.
 
 Commit the opt-in to the PR base branch through a normal pull request, and
-merge that branch into the PR branch, before an incident. An opt-in that exists
+merge that branch into the PR branch. Doing so before an incident is
+recommended, because the pre-flight checks the copies when a handoff is
+posted. An opt-in that exists
 only in the operator's checkout is not enough: Resume honors it from that
 checkout, and F2 rejects the handoff with `claim-id-mismatch`.
 
-A pull request cannot enable the mode for itself, because CI ignores a
+A pull request cannot enable recovery for itself, because CI ignores a
 PR-edited config. For a stalled change that would add the opt-in, the recovery
 is the stale takeover after `claimTiming.staleAge` (default `PT24H`), or the
 `release` keyword. The `release` keyword needs the local `human-gated` mode and
@@ -2133,19 +2136,22 @@ marker that no gate conditions on the mode.
 
 Every reader that consults the mode evaluates it each time it reads a marker,
 not when the marker was posted. Enabling `human-gated` on the default branch
-therefore makes every earlier forced-handoff marker effective at once. Find
-those markers as the issue comments whose body starts with
-`<!-- forced-handoff:`, and review them before enabling the mode. A private
-downstream adopter reported this on 2026-10-06 as low severity; no incident is
-recorded.
+therefore lifts the mode gate for every earlier forced-handoff marker, once
+each working directory pulls the change. Find those markers as the issue
+comments whose body starts with `<!-- forced-handoff:`, and review them before
+enabling the mode. A private downstream adopter reported this on 2026-10-06 as
+low severity; preventive; no observed incident yet.
 
 The sequence that recovers a stalled handoff: commit the opt-in to the base
 branch through a normal pull request, merge the base branch into the PR branch
-and push the merge, rerun Resume Step 1, then hand off. The claim branch copy
-is read from the remote. A claim branch that sets its own mode needs
-`forcedHandoff.mode: human-gated` set on that branch, because a merge does not
-change that setting. For a claim with no open PR, commit the opt-in to the
-default branch instead, and merge the default branch into the claim branch and
+and push the merge, pull the change into each working directory that runs
+Resume, rerun Resume Step 1, then hand off. The claim branch copy is read from
+the remote. When the PR base is not the default branch, also commit the opt-in
+to the default branch, because the required check reads that copy. A claim
+branch that sets its own mode needs `forcedHandoff.mode: human-gated` set on
+that branch, because a merge does not change that setting. For a claim with no
+open PR, commit the opt-in to the default branch instead, and merge the default
+branch into the claim branch and
 push the merge.
 
 `--import --force` overwrites `.github/idd/config.json`, including
@@ -2153,8 +2159,7 @@ push the merge.
 overlay re-import procedure passes one `--hold` per owned path, with
 `.github/idd/config.json` as the default example. Any other forced re-import
 must re-record the opt-in. A private downstream adopter reported this on
-2026-10-04 as not observed, so the rule is preventive and has no observed
-incident.
+2026-10-04 as not observed; preventive; no observed incident yet.
 
 ### Example configurations
 
