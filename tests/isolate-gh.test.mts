@@ -1388,7 +1388,7 @@ test('the paginated gh-exec Worker records caught attempts in its owner ledger',
   const substitutionCommand = 'printf "%s" "$(gh api repos/o/r)"';
   const backtickCommand = 'printf "%s" "`gh api repos/o/r`"';
   const source = `
-import { ghApiJson } from ${JSON.stringify(modulePath)};
+import { ghApiJson } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 import { Worker } from 'node:worker_threads';
 try {
   ghApiJson('repos/o/r/issues', { paginate: true, timeout: 1000 });

@@ -1048,7 +1048,7 @@ test('ghApiJson (paginated) does not inherit Worker-invalid execArgv (#3597)', (
   const modulePath = join(repoRoot(), 'src/scripts/gh-exec.mts');
   writeFileSync(
     runnerPath,
-    `import { ghApiJson } from ${JSON.stringify(modulePath)};
+    `import { ghApiJson } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 const rows = ghApiJson('repos/o/r/issues', { paginate: true });
 if (!Array.isArray(rows) || rows.length !== 3 || rows[2]?.id !== 3) {
   console.error(JSON.stringify(rows));
