@@ -402,15 +402,18 @@ const BARE_NOUN_EXTERNAL_ACTOR_PATTERN = new RegExp(
 );
 // #3890: a bare `key` or `token` directly followed by a present-tense `need`
 // or `require` verb and then an article is configuration prose ("The new key
-// needs a default value."). The entry for that verb takes the verb out of the
-// window before its own cue is read, and only that verb: the noun and the
-// article stay, and any other occurrence of the cue in the window still counts.
-// `replace` resets a global pattern's `lastIndex` itself, so these may carry
-// the `g` flag.
+// needs a default value."). The entry for that verb takes every such verb out
+// of the window before its own cue is read. The noun and the article stay, so
+// any other cue in the window still counts. The noun must start after a
+// non-word character, so the lookbehind is `(?<=\W)` rather than `\b`: a window
+// cut inside a longer word (`passkey`) starts at index 0, where `\b` would match
+// and wrongly read `key` as a bare noun. `replace` resets a global pattern's
+// `lastIndex` itself, so these carry the `g` flag, which the two-sentence test
+// row needs in order to remove both verbs.
 const BARE_NOUN_NEED_SHAPE_PATTERN =
-  /\b((?:keys?|tokens?)\s+)needs?\s+(?=(?:a|an|the)\b)/gi;
+  /(?<=\W)((?:keys?|tokens?)\s+)needs?\s+(?=(?:a|an|the)\b)/gi;
 const BARE_NOUN_REQUIRE_SHAPE_PATTERN =
-  /\b((?:keys?|tokens?)\s+)requires?\s+(?=(?:a|an|the)\b)/gi;
+  /(?<=\W)((?:keys?|tokens?)\s+)requires?\s+(?=(?:a|an|the)\b)/gi;
 function cueRule(id, pattern, shape) {
   return {
     id,

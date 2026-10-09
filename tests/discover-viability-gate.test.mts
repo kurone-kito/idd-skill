@@ -3675,6 +3675,12 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
   { list: 'C', body: 'The key needs another from finance.' },
   { list: 'C', body: 'The key needed a value from ops.' },
   { list: 'C', body: 'The turkey needs a default. The key is set.' },
+  // List C, added: a window cut inside a longer word starts at index 0, so the
+  // shape must not read `key` in `passkey` as a bare noun.
+  {
+    list: 'C',
+    body: 'The passkey needs the long-lived, per-host, rotated, read-only, staging, nightly deploy key from ops.',
+  },
   { list: 'C', body: 'We cannot ship without a token.' },
   { list: 'C', body: 'Fetch the token from infra.' },
   { list: 'C', body: 'Retrieve the key from ops.' },
