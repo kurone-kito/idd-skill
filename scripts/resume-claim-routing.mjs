@@ -165,10 +165,6 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     typeof options.isForcedHandoffEnabled === 'function'
       ? options.isForcedHandoffEnabled
       : () => false;
-  const isAuthorizedForcedHandoff =
-    typeof options.isAuthorizedForcedHandoff === 'function'
-      ? options.isAuthorizedForcedHandoff
-      : () => false;
   const events = filterTrustedClaimFamilyEvents(
     normalizeEvents(input.events),
     trustedAuthor,
@@ -176,7 +172,9 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const linkedPrLookupFailed = options.linkedPrLookupFailed === true;
   const state = resolveClaimState(events, staleAgeMs, {
     isForcedHandoffEnabled,
-    isAuthorizedForcedHandoff,
+    // The caller's own value, not a synthetic default: an omitted check must
+    // stay omitted for the refusal reporting (#3873).
+    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
     linkedPrLookupFailed,
     forcedHandoffRefusalExplainer: options.forcedHandoffRefusalExplainer,
   });
@@ -899,7 +897,12 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
     ? resolveActiveClaimWithForcedHandoffTrace(events, {
         isTrustedAuthor: () => true, // events were already filtered by caller
         isForcedHandoffEnabled,
-        isAuthorizedForcedHandoff,
+        // Pass the caller's authorization only when it supplied one: the
+        // trace reads an omitted value as "no check" for diagnostics, and the
+        // decision is the same fail-closed refusal either way (#3873).
+        ...(options.isAuthorizedForcedHandoff
+          ? { isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff }
+          : {}),
         isStale: (activeCreatedAt, nextCreatedAt) =>
           isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
         // Resume routing enforces the rule-7 author/forcedBy binding to

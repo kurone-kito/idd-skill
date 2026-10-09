@@ -5896,3 +5896,39 @@ test('resolveResumeLinkedPrState names the refusal cause that matches its gate',
     'first-commit-time-unknown',
   );
 });
+
+test('a caller that supplies the explainer but omits authorization reports the gate cause, not an authorization refusal', () => {
+  const explain = buildForcedHandoffRefusalExplainer({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set([normalizeLinkedPrReference('88')]),
+    prFirstCommitAt: null,
+  });
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      now: '2026-05-12T11:00:00Z',
+      events: forcedHandoffEvents({
+        contextScope: 'issue-plus-pr',
+        linkedPr: '77',
+      }),
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: (marker) => explain(marker) === null,
+      forcedHandoffRefusalExplainer: explain,
+    },
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.ok(
+    result.warnings.some((message) =>
+      message.includes('linked PR 77 does not back the active claim'),
+    ),
+    'expected the gate cause, since no authorization check was supplied',
+  );
+  assert.ok(
+    !result.warnings.some((message) =>
+      message.includes('is not an authorized maintainer'),
+    ),
+    'an omitted authorization check must not be reported as a refusal',
+  );
+});
