@@ -2217,9 +2217,13 @@ function isCodeIdentifierProcessMention(
 // whitespace, `[`, commas and other quoted literals between the colon and
 // the literal. A key with a prefix, another key in between, an unquoted
 // value, or a capital I still fails the check.
-const STDIO_OPTION_KEY_PATTERN = /(?<![\w-])(?:stdio|stdin|stdout|stderr)\s*:/g;
+const STDIO_OPTION_KEY_PATTERN =
+  /(?<![\p{ID_Continue}$-])(?:stdio|stdin|stdout|stderr)\s*:/gu;
 const STDIO_OPTION_MAX_RANGE_CHARS = 4096;
 const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
+// Characters that may precede a code range's own delimiter: the indent of a
+// fence, a container prefix such as a blockquote `>`, or a list marker.
+const CODE_RANGE_PREFIX_PATTERN = /[\s>*+\-\d.)]/;
 
 // Marks each UTF-16 code unit of `source` that is not code: the inside of a
 // single-, double- or backtick-quoted string, a `//` line comment, or a `/* */`
@@ -2305,32 +2309,36 @@ function isStdioIgnoreOptionValue(
   if (codeRange.end - codeRange.start > STDIO_OPTION_MAX_RANGE_CHARS) {
     return false;
   }
-  // Skip the range's own opening backticks, which delimit the span or fence.
-  // A fence range starts at its line, so skip any indent before the backticks
-  // too; none of these characters can be the key or the literal.
-  let openerEnd = codeRange.start;
-  while (
-    text[openerEnd] === '`' ||
-    text[openerEnd] === ' ' ||
-    text[openerEnd] === '\t'
-  ) {
+  // The text from the range start up to the literal's opening quote.
+  const scanned = text.slice(codeRange.start, index);
+  // Skip the range's own delimiter: any container prefix or fence indent, then
+  // the maximal opening run of backticks. Backticks after that run are content
+  // and stay in the body, where the lexer reads them as a template string.
+  let openerEnd = 0;
+  while (CODE_RANGE_PREFIX_PATTERN.test(scanned[openerEnd] ?? '')) {
     openerEnd += 1;
   }
-  // Scan from the opener through the opening quote of the literal.
-  const scanned = text.slice(openerEnd, index);
-  const masked = findNonCodeMask(scanned);
-  if (masked[scanned.length - 1]) {
+  while (scanned[openerEnd] === '`') {
+    openerEnd += 1;
+  }
+  const body = scanned.slice(openerEnd);
+  const bodyMask = findNonCodeMask(body);
+  if (bodyMask[body.length - 1]) {
     return false;
   }
   // A `/` outside strings and comments may open a regex literal, whose text
   // can hold a key that is not an option, so it disqualifies the exemption.
-  for (let position = 0; position < scanned.length; position += 1) {
-    if (scanned[position] === '/' && !masked[position]) {
+  for (let position = 0; position < body.length; position += 1) {
+    if (body[position] === '/' && !bodyMask[position]) {
       return false;
     }
   }
+  // The delimiter is not code, so a key found there is never an option. The
+  // key scan still runs over the delimiter, so a prefix character is seen by
+  // the key's left boundary.
+  const masked = [...new Array<boolean>(openerEnd).fill(true), ...bodyMask];
   const before = scanned.slice(0, -1);
-  const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN.source, 'g');
+  const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN);
   let lastKey: RegExpExecArray | null = null;
   for (
     let found = keyPattern.exec(before);
