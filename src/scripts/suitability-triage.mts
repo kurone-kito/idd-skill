@@ -2219,19 +2219,22 @@ function isCodeIdentifierProcessMention(
 // value, or a capital I still fails the check.
 const STDIO_OPTION_KEY_PATTERN =
   /(?<![\p{ID_Continue}$-])(?:stdio|stdin|stdout|stderr)\s*:/gu;
-const STDIO_OPTION_MAX_RANGE_CHARS = 4096;
+// The longest run, in characters, between a key's colon and its literal. An
+// array of option values fits well inside it; a longer run fails closed. The
+// cap also bounds the cost of each candidate literal.
+const STDIO_OPTION_MAX_SEGMENT_CHARS = 256;
 const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
 // Characters that may precede a code range's own delimiter: the indent of a
 // fence, a container prefix such as a blockquote `>`, or a list marker.
 const CODE_RANGE_PREFIX_PATTERN = /[\s>*+\-\d.)]/;
 
 // Marks each UTF-16 code unit of `source` that is not code: the inside of a
-// single-, double- or backtick-quoted string, a `//` line comment, or a `/* */`
-// block comment. The opening quote of a string is code, so a literal can be
-// checked for sitting outside any other string. Indices are code units, the
-// same units as string and regex indices, so an astral character cannot shift
-// the mask. An unclosed string or comment marks the rest of the source as not
-// code, which only makes the exemption fail closed.
+// single-, double- or backtick-quoted string, a `//` line comment, a `/* */`
+// block comment, or an HTML comment. The opening quote of a string is code, so
+// a literal can be checked for sitting outside any other string. Indices are
+// code units, the same units as string and regex indices, so an astral
+// character cannot shift the mask. An unclosed string or comment marks the rest
+// of the source as not code, which only makes the exemption fail closed.
 function findNonCodeMask(source: string): boolean[] {
   const masked = new Array<boolean>(source.length).fill(false);
   let quote: string | null = null;
@@ -2304,11 +2307,94 @@ function findNonCodeMask(source: string): boolean[] {
   return masked;
 }
 
+interface StdioRangeScan {
+  // Local index where the code body begins, or -1 when no literal in the
+  // range can be exempt (its opening line is an info string with no end).
+  bodyStart: number;
+  // Non-code flags, indexed by local position in the range.
+  masked: boolean[];
+  // Local start and end of each std* key that is code, ascending.
+  keyStarts: number[];
+  keyEnds: number[];
+  // Local index of the first `/` that is code, or -1.
+  firstCodeSlash: number;
+}
+
+const NO_STDIO_EXEMPTION: StdioRangeScan = {
+  bodyStart: -1,
+  masked: [],
+  keyStarts: [],
+  keyEnds: [],
+  firstCodeSlash: -1,
+};
+
+// Scans one code range in a single pass, so each candidate literal in it costs
+// a binary search and a short segment check, not a rescan of the range.
+function scanStdioRange(region: string): StdioRangeScan {
+  // Skip the range's own delimiter: any container prefix or fence indent, then
+  // the maximal opening run of backticks or tildes.
+  let openerEnd = 0;
+  while (CODE_RANGE_PREFIX_PATTERN.test(region[openerEnd] ?? '')) {
+    openerEnd += 1;
+  }
+  const markerChar = region[openerEnd];
+  const markerStart = openerEnd;
+  while (
+    (markerChar === '`' || markerChar === '~') &&
+    region[openerEnd] === markerChar
+  ) {
+    openerEnd += 1;
+  }
+  // A fence of three or more markers has an info string on its opening line.
+  // That text is metadata, not code, so the whole line is skipped.
+  if (openerEnd - markerStart >= 3) {
+    const lineEnd = region.indexOf('\n', openerEnd);
+    if (lineEnd < 0) {
+      return NO_STDIO_EXEMPTION;
+    }
+    openerEnd = lineEnd + 1;
+  }
+  const masked = [
+    ...new Array<boolean>(openerEnd).fill(true),
+    ...findNonCodeMask(region.slice(openerEnd)),
+  ];
+  // The key scan runs over the whole region so its left boundary sees any
+  // prefix character; a key found in the delimiter is masked and dropped.
+  const keyStarts: number[] = [];
+  const keyEnds: number[] = [];
+  const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN);
+  for (
+    let found = keyPattern.exec(region);
+    found !== null;
+    found = keyPattern.exec(region)
+  ) {
+    if (!masked[found.index]) {
+      keyStarts.push(found.index);
+      keyEnds.push(found.index + found[0].length);
+    }
+  }
+  let firstCodeSlash = -1;
+  for (let position = openerEnd; position < region.length; position += 1) {
+    if (region[position] === '/' && !masked[position]) {
+      firstCodeSlash = position;
+      break;
+    }
+  }
+  return {
+    bodyStart: openerEnd,
+    masked,
+    keyStarts,
+    keyEnds,
+    firstCodeSlash,
+  };
+}
+
 function isStdioIgnoreOptionValue(
   text: string,
   index: number,
   verb: string,
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
+  scans: Map<number, StdioRangeScan>,
 ): boolean {
   if (verb !== 'ignore') {
     return false;
@@ -2321,71 +2407,42 @@ function isStdioIgnoreOptionValue(
   if (!codeRange) {
     return false;
   }
-  // The scan below restarts at the range start for every candidate, so a
-  // large fenced block would cost quadratic time. A range that long is not
-  // exempt; the check then fails closed as it did before #3891.
-  if (codeRange.end - codeRange.start > STDIO_OPTION_MAX_RANGE_CHARS) {
-    return false;
+  let scan = scans.get(codeRange.start);
+  if (scan === undefined) {
+    scan = scanStdioRange(text.slice(codeRange.start, codeRange.end));
+    scans.set(codeRange.start, scan);
   }
-  // The text from the range start up to the literal's opening quote.
-  const scanned = text.slice(codeRange.start, index);
-  // Skip the range's own delimiter: any container prefix or fence indent, then
-  // the maximal opening run of backticks. Backticks after that run are content
-  // and stay in the body, where the lexer reads them as a template string.
-  let openerEnd = 0;
-  while (CODE_RANGE_PREFIX_PATTERN.test(scanned[openerEnd] ?? '')) {
-    openerEnd += 1;
-  }
-  const markerChar = scanned[openerEnd];
-  const markerStart = openerEnd;
-  while (
-    (markerChar === '`' || markerChar === '~') &&
-    scanned[openerEnd] === markerChar
-  ) {
-    openerEnd += 1;
-  }
-  // A fence of three or more markers has an info string on its opening line.
-  // That text is metadata, not code, so the whole line is skipped; a literal on
-  // that line fails closed.
-  if (openerEnd - markerStart >= 3) {
-    const lineEnd = scanned.indexOf('\n', openerEnd);
-    if (lineEnd < 0) {
-      return false;
-    }
-    openerEnd = lineEnd + 1;
-  }
-  const body = scanned.slice(openerEnd);
-  const bodyMask = findNonCodeMask(body);
-  if (bodyMask[body.length - 1]) {
+  // Local index of the literal's opening quote within the range.
+  const literal = index - 1 - codeRange.start;
+  if (scan.bodyStart < 0 || literal < scan.bodyStart || scan.masked[literal]) {
     return false;
   }
   // A `/` outside strings and comments may open a regex literal, whose text
   // can hold a key that is not an option, so it disqualifies the exemption.
-  for (let position = 0; position < body.length; position += 1) {
-    if (body[position] === '/' && !bodyMask[position]) {
-      return false;
-    }
-  }
-  // The delimiter is not code, so a key found there is never an option. The
-  // key scan still runs over the delimiter, so a prefix character is seen by
-  // the key's left boundary.
-  const masked = [...new Array<boolean>(openerEnd).fill(true), ...bodyMask];
-  const before = scanned.slice(0, -1);
-  const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN);
-  let lastKey: RegExpExecArray | null = null;
-  for (
-    let found = keyPattern.exec(before);
-    found !== null;
-    found = keyPattern.exec(before)
-  ) {
-    if (!masked[found.index]) {
-      lastKey = found;
-    }
-  }
-  if (lastKey === null) {
+  if (scan.firstCodeSlash !== -1 && scan.firstCodeSlash < literal) {
     return false;
   }
-  const between = before.slice(lastKey.index + lastKey[0].length);
+  // The nearest code key before the literal, found by binary search.
+  let low = 0;
+  let high = scan.keyStarts.length - 1;
+  let nearest = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (scan.keyStarts[middle] < literal) {
+      nearest = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  if (nearest < 0) {
+    return false;
+  }
+  const keyEnd = scan.keyEnds[nearest];
+  if (literal - keyEnd > STDIO_OPTION_MAX_SEGMENT_CHARS) {
+    return false;
+  }
+  const between = text.slice(codeRange.start + keyEnd, index - 1);
   return STDIO_OPTION_VALUE_SEGMENT_PATTERN.test(between);
 }
 
@@ -2466,6 +2523,7 @@ function findPolicyOverrideMatch(
   // pass intentionally removes that token, so inspect raw matches as a
   // fallback and retain only matches that are not wholly inside code.
   const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
+  const stdioScans = new Map<number, StdioRangeScan>();
   let match: RegExpExecArray | null;
   while (true) {
     match = pattern.exec(text);
@@ -2487,7 +2545,7 @@ function findPolicyOverrideMatch(
         verb,
         getCodeRangeAt,
       ) ||
-      isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt)
+      isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt, stdioScans)
     ) {
       // Same rewind as the masked-pass loop above: a negated, ordinary-
       // compound, or std* option-value match's own greedy span can swallow

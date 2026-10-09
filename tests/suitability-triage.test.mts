@@ -8594,12 +8594,24 @@ test('trust safety deliberately now passes a std* option value followed by a lis
   }
 });
 
-test('trust safety stays fail-closed for a std* option value in a code range over 4096 characters (#3891)', () => {
+test('trust safety exempts a std* option value in a long fenced example followed by prose (#3891)', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}\n${tick.repeat(3)}\n${'x'.repeat(4200)}\nstdio: 'ignore'\n${tick.repeat(3)}\nThe repository policy applies.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety fails closed for a std* option value whose segment is longer than 256 characters (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nPlease ${tick}stdio: ${"'x', ".repeat(60)}'ignore'${tick} repository policy.`,
     },
     trustSafetyAmbiguous: false,
   } as Context);
