@@ -678,8 +678,11 @@ clear it and how.
    `OUTDATED` classifier, never `resolved`, and run the helper again; repeat
    while the reason names an edited, unparseable or target-mismatch comment,
    and for an `incomplete_results` or `index-lag window exceeded` result wait
-   out the one-hour index-lag window before running it again; stop at any
-   other reason and go to statement 6.
+   out the one-hour index-lag window before running it again; stop at the
+   hidden-only reason and go to statement 6, and use the explicit human
+   release for any other reason that hiding does not clear, such as a search
+   result cap, an unstable total count, a missing search response or
+   `enumeration incomplete`.
 4. The comment stays on the issue, hidden as `OUTDATED`, and the next run
    lists it in `skippedMarkers` as `unattributable`, with `namesRequestedSet`
    read from its current text, so the helper's own report is the record and
