@@ -3681,6 +3681,24 @@ const BARE_NOUN_ROWS: readonly BareNounRow[] = [
     list: 'C',
     body: 'The passkey needs the long-lived, per-host, rotated, read-only, staging, nightly deploy key from ops.',
   },
+  // List C, added: a non-ASCII letter glued to `key` makes a word that is not a
+  // bare key, so its verb keeps counting, as it did before the exemption.
+  {
+    list: 'C',
+    body: 'The \u041a\u043b\u044e\u0447key needs a value from ops.',
+  },
+  { list: 'C', body: 'The 日本語key needs a value from ops.' },
+  // List C, added: an invisible joiner between a letter and `key` does not end
+  // the glued word, so its verb keeps counting.
+  {
+    list: 'C',
+    body: 'The \u041a\u043b\u044e\u0447\u200dkey needs a value from ops.',
+  },
+  // List C, added: an Arabic-Indic digit glued to `key` makes a word that is
+  // not a bare key, so its verb keeps counting.
+  { list: 'C', body: 'The \u0663key needs a value from ops.' },
+  // List C, added: a connector punctuation mark glued to `key` does the same.
+  { list: 'C', body: 'The \u203Fkey needs a value from ops.' },
   { list: 'C', body: 'We cannot ship without a token.' },
   { list: 'C', body: 'Fetch the token from infra.' },
   { list: 'C', body: 'Retrieve the key from ops.' },
@@ -3874,11 +3892,13 @@ test('#3890: known limit, an article-led external phrase after a bare key verb p
   }
 });
 
-// #3890: the window edge. A shape at index 0 of a window is refused, because
-// that window may begin inside a longer word; after a space the same shape is
-// taken out. These checks pin both sides on the rule itself, rather than through
-// the 80-character alignment that the `passkey` row depends on.
-test('#3890: the need and require entries refuse the shape at the window edge only', () => {
+// #3890: the rule itself, pinned directly rather than through the 80-character
+// alignment that the `passkey` row depends on. The calls pass the window as the
+// corpus, with matchEnd at the end of the noun, except the window-cut case, which
+// passes a longer corpus so that its second noun is bare. A bare noun after a
+// space is exempt; a shape at index 0 of a window, and a noun glued to a longer
+// word or to a non-ASCII letter, are not.
+test('#3890: the need and require entries exempt only a bare noun at a word start', () => {
   const needRule = BARE_NOUN_DEPENDENCY_RULES.find(
     (rule) => rule.id === 'need',
   );
@@ -3887,17 +3907,29 @@ test('#3890: the need and require entries refuse the shape at the window edge on
   );
   assert.ok(needRule);
   assert.ok(requireRule);
-  assert.equal(needRule.matches(' key needs a default value.', '', 0), false);
-  assert.equal(needRule.matches('key needs a default value.', '', 0), true);
-  assert.equal(needRule.matches('passkey needs a default value.', '', 0), true);
+  const after = ' key needs a default value.';
+  assert.equal(needRule.matches(after, after, 4), false);
+  const edge = 'key needs a default value.';
+  assert.equal(needRule.matches(edge, edge, 3), true);
+  // A window cut at the k of passkey, over a corpus whose second noun is bare:
+  // the shape is refused at the window's first character, so the verb counts.
+  const cutCorpus = 'passkey needs a default value. The key is set.';
+  const cutWindow = 'key needs a default value. The key is set.';
+  const cutEnd = cutCorpus.lastIndexOf('key') + 'key'.length;
+  assert.equal(needRule.matches(cutWindow, cutCorpus, cutEnd), true);
+  const glued = 'The \u041a\u043b\u044e\u0447key needs a default value.';
+  assert.equal(needRule.matches(glued, glued, 11), true);
+  const combining = 'Cafe\u0301key needs a default value.';
+  assert.equal(needRule.matches(combining, combining, 8), true);
+  const joined = 'The \u041a\u043b\u044e\u0447\u200dkey needs a default value.';
   assert.equal(
-    requireRule.matches(' key requires a string value.', '', 0),
-    false,
-  );
-  assert.equal(
-    requireRule.matches('key requires a string value.', '', 0),
+    needRule.matches(joined, joined, joined.indexOf('key') + 3),
     true,
   );
+  const requireAfter = ' key requires a string value.';
+  assert.equal(requireRule.matches(requireAfter, requireAfter, 4), false);
+  const requireEdge = 'key requires a string value.';
+  assert.equal(requireRule.matches(requireEdge, requireEdge, 3), true);
 });
 
 test('#3721: the rule table names every cue the issue lists, once each', () => {

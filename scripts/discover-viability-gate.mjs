@@ -422,11 +422,35 @@ const BARE_NOUN_NEED_SHAPE_PATTERN =
   /(?<=\W)((?:keys?|tokens?)\s+)needs?\s+(?=(?:a|an|the)\b)/gi;
 const BARE_NOUN_REQUIRE_SHAPE_PATTERN =
   /(?<=\W)((?:keys?|tokens?)\s+)requires?\s+(?=(?:a|an|the)\b)/gi;
+// The vocabulary match is bounded by ASCII `\b`, so a noun glued to a non-ASCII
+// letter (for example a Cyrillic or CJK word), a non-ASCII digit, a combining
+// mark, an invisible format character (a zero-width joiner) or a connector
+// punctuation mark reaches this route as `key`. That word is not a bare key, so
+// no verb is taken out for its window. Only the text before the noun is checked;
+// `corpus` and `matchEnd` are the values the rule receives. The classes are wide
+// on purpose, and the cost is a closed failure: a format character directly
+// before a bare key, such as a byte-order mark at the start of a body, also makes
+// the key glued, so its sentence fails. The issue prefers that to a false
+// negative.
+const BARE_NOUN_AT_END_PATTERN = /(?:keys?|tokens?)$/i;
+const WORD_CHARACTER_AT_END_PATTERN = /[\p{L}\p{M}\p{N}\p{Pc}\p{Cf}]$/u;
+function isBareNounAt(corpus, matchEnd) {
+  const head = corpus.slice(0, matchEnd);
+  const noun = BARE_NOUN_AT_END_PATTERN.exec(head);
+  if (noun === null) {
+    return false;
+  }
+  return !WORD_CHARACTER_AT_END_PATTERN.test(head.slice(0, noun.index));
+}
 function cueRule(id, pattern, shape) {
   return {
     id,
-    matches: (windowText) =>
-      pattern.test(shape ? windowText.replace(shape, '$1') : windowText),
+    matches: (windowText, corpus, matchEnd) =>
+      pattern.test(
+        shape && isBareNounAt(corpus, matchEnd)
+          ? windowText.replace(shape, '$1')
+          : windowText,
+      ),
   };
 }
 /**
