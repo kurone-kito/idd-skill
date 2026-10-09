@@ -3462,6 +3462,40 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose rerun helper is removed while the classifier step names it',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) =>
+        replaceInStep(
+          text
+            .split('scripts/rerun-advisory-convergence.mjs')
+            .join('scripts/rerun-disabled.mjs'),
+          'Classify review comment',
+          '        run: node scripts/review-comment-origin.mjs',
+          '        run: node scripts/review-comment-origin.mjs && echo rerun-advisory-convergence',
+        ),
+    },
+    expected: [{ message: 'must keep the rerun helper' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose debounce helper is removed while the classifier step names it',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) =>
+        replaceInStep(
+          text
+            .split('scripts/advisory-comment-debounce.mjs')
+            .join('scripts/debounce-disabled.mjs'),
+          'Classify review comment',
+          '        run: node scripts/review-comment-origin.mjs',
+          '        run: node scripts/review-comment-origin.mjs && echo advisory-comment-debounce',
+        ),
+    },
+    expected: [{ message: 'must invoke the advisory-comment-debounce helper' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

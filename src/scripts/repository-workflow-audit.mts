@@ -2249,10 +2249,20 @@ function checkCommentRefreshIdentity(root: string, report: Report): void {
     ) {
       report(RWA005, path, 'must keep the pull_request_review_comment trigger');
     }
-    if (!/rerun-advisory-convergence/.test(tokens)) {
+    // Each helper is read from the run body of the step that owns it, so a name in
+    // another step cannot satisfy the check.
+    if (
+      !/rerun-advisory-convergence/.test(
+        runBodyOf(stepTextNamed(tokens, 'Rerun required HEAD check') ?? ''),
+      )
+    ) {
       report(RWA005, path, 'must keep the rerun helper');
     }
-    if (!/review-comment-origin/.test(tokens)) {
+    if (
+      !/review-comment-origin/.test(
+        runBodyOf(stepTextNamed(tokens, 'Classify review comment') ?? ''),
+      )
+    ) {
       report(RWA005, path, 'must keep the review-comment origin classifier');
     }
     if (
@@ -2360,7 +2370,13 @@ function checkCommentRefreshDebounce(root: string, report: Report): void {
     if (!/^ {8}id: debounce\s*$/m.test(declared)) {
       report(RWA005, path, 'debounce step must expose id: debounce');
     }
-    if (!/advisory-comment-debounce/.test(tokens)) {
+    if (
+      !/advisory-comment-debounce/.test(
+        runBodyOf(
+          stepTextNamed(tokens, 'Check for newer qualifying event') ?? '',
+        ),
+      )
+    ) {
       report(RWA005, path, 'must invoke the advisory-comment-debounce helper');
     }
     const originIndex = stepOffset(declared, 'Classify review comment');
