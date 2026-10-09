@@ -116,10 +116,10 @@ The placeholders below are not all the same name:
   the wrapper `src/bin/<binName>.mts` and the file `bin/<binName>.mjs`.
 
 Whenever an edit changes a `.mts` source, run `pnpm run build` and commit every
-file it regenerates. That includes `.gitattributes`, the regenerated
-`scripts/*.mjs` files, the generated `bin/*.mjs` files and any instruction
-mirror that `sync-docs` writes. Run `pnpm run build:check` only after that
-commit.
+file it regenerates. That is the `scripts/*.mjs` files, the `bin/*.mjs` files
+and the `.gitattributes` block. Instruction mirrors are a separate step: commit
+them only when `sync-docs --apply` (item 5) writes them. Run
+`pnpm run build:check` only after that commit.
 
 The `unbacked-helper` and `instruction-helper-registration` failures were
 observed on 2026-10-09 in issue `#3955`. A helper change left
@@ -201,8 +201,10 @@ item 4, which were checked against the source.
    `.github/instructions/idd-overview-core.instructions.md`, which `bundle-core`
    loads. `audit-docs --check` prints a notice for a bundle at the
    `noticeUtilizationPct` in `contextCeiling` (`audit/sync-manifest.json`), and
-   fails above `maxUtilizationPct`. `bundle-work-phase` is exempt. Read each
-   bundle's current figure in the audit output before you edit.
+   fails above `maxUtilizationPct`. `bundle-work-phase` is exempt from that
+   error only: it still gets the notice, and its byte total is still checked
+   against its own `limitBytes`. Read each bundle's current figure in the audit
+   output before you edit.
    - From the notice level up to the limit, follow the near-ceiling exception in
      `docs/policy-constants.md`: prefer trimming or splitting the net addition
      over a ratchet bump.
