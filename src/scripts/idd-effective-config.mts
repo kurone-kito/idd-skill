@@ -55,7 +55,10 @@ export interface EffectiveConfigKeyReport {
   key: string;
   found: boolean;
   value: unknown;
+  /** The layer the value came from, or `null` when it is absent or mixed. */
   source: string | null;
+  /** Every distinct layer beneath the key, sorted; empty when absent. */
+  sources: string[];
 }
 
 /** Build the full report from a loaded layered policy. */
@@ -94,16 +97,37 @@ export function buildEffectiveConfigKeyReport(
       Array.isArray(value) ||
       !Object.hasOwn(value, segment)
     ) {
-      return { key, found: false, value: null, source: null };
+      return { key, found: false, value: null, source: null, sources: [] };
     }
     value = (value as Record<string, unknown>)[segment];
   }
+  const sources = layersBeneath(loaded.sourceMap, key);
   return {
     key,
     found: true,
     value,
-    source: loaded.sourceMap[key] ?? null,
+    source: sources.length === 1 ? (sources[0] ?? null) : null,
+    sources,
   };
+}
+
+/**
+ * The distinct layers that supplied a dotted key. The source map is keyed by
+ * leaf, so an object-valued key has no entry of its own: its layers are the
+ * layers of the leaves beneath it, and a single shared layer is the answer.
+ */
+function layersBeneath(
+  sourceMap: LayeredLocalPolicyLoad['sourceMap'],
+  key: string,
+): string[] {
+  const direct = sourceMap[key];
+  if (direct !== undefined) return [direct];
+  const prefix = `${key}.`;
+  const layers = new Set<string>();
+  for (const [path, layer] of Object.entries(sourceMap)) {
+    if (path.startsWith(prefix)) layers.add(layer);
+  }
+  return [...layers].sort();
 }
 
 function runCli(): HelperCliResult {

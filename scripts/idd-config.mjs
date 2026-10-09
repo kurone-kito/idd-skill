@@ -31,7 +31,7 @@
 // blast radius to match `loadPolicyConfig()`'s stricter rules is a separate,
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
-import { readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
@@ -113,15 +113,16 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error);
 }
 /**
- * Whether the legacy repository policy file exists, for the blocking check
- * only. Any stat failure other than ENOENT counts as present, so a legacy file
- * that cannot be inspected still blocks user-global repository fields. That is
- * the fail-closed direction: the operator's global value must not win over a
- * repository whose own policy cannot be read.
+ * Whether the legacy repository policy entry exists, for the blocking check
+ * only. `lstat` does not follow a symlink, so a dangling link still counts as
+ * present. Any failure other than ENOENT also counts as present, so a legacy
+ * entry that cannot be inspected still blocks user-global repository fields.
+ * That is the fail-closed direction: the operator's global value must not win
+ * over a repository whose own policy cannot be read.
  */
 function legacyPolicyFilePresent(path) {
   try {
-    statSync(path);
+    lstatSync(path);
     return true;
   } catch (error) {
     return !isEnoentError(error);

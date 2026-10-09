@@ -60,16 +60,33 @@ export function buildEffectiveConfigKeyReport(loaded, key) {
       Array.isArray(value) ||
       !Object.hasOwn(value, segment)
     ) {
-      return { key, found: false, value: null, source: null };
+      return { key, found: false, value: null, source: null, sources: [] };
     }
     value = value[segment];
   }
+  const sources = layersBeneath(loaded.sourceMap, key);
   return {
     key,
     found: true,
     value,
-    source: loaded.sourceMap[key] ?? null,
+    source: sources.length === 1 ? (sources[0] ?? null) : null,
+    sources,
   };
+}
+/**
+ * The distinct layers that supplied a dotted key. The source map is keyed by
+ * leaf, so an object-valued key has no entry of its own: its layers are the
+ * layers of the leaves beneath it, and a single shared layer is the answer.
+ */
+function layersBeneath(sourceMap, key) {
+  const direct = sourceMap[key];
+  if (direct !== undefined) return [direct];
+  const prefix = `${key}.`;
+  const layers = new Set();
+  for (const [path, layer] of Object.entries(sourceMap)) {
+    if (path.startsWith(prefix)) layers.add(layer);
+  }
+  return [...layers].sort();
 }
 function runCli() {
   const args = parseArgs(process.argv.slice(2));

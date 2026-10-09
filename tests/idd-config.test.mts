@@ -432,6 +432,26 @@ test('an uninspectable legacy idd-policy.json still blocks user-global repositor
   });
 });
 
+// #3820: a dangling symlink is still a legacy entry, so it blocks the
+// user-global repository fields too. Only a missing entry counts as absent.
+test('a dangling legacy idd-policy.json symlink still blocks user-global repository fields (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    symlinkSync(
+      join(sandbox, 'missing-target.json'),
+      join(sandbox, 'idd-policy.json'),
+    );
+    withUserGlobal(
+      '{"trustedMarkerActors":["global-login"],"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), {
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+      },
+    );
+  });
+});
+
 test('a legacy idd-policy.json blocks user-global repository-owned fields but is never read as policy (#3820)', () => {
   withSandboxCwd((sandbox) => {
     writeRepositoryPolicy(

@@ -12,6 +12,7 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { loadLayeredLocalPolicy } from './idd-config.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
@@ -104,10 +105,33 @@ export function normalizeCiWaitPolicy(ciWait = {}) {
     rerunPolicy,
   };
 }
+/**
+ * #3820: the ciWait section of the layered policy, for the default path. The
+ * same section validation applies, so an invalid section still falls back to
+ * the defaults as the single-file read does. A malformed repository file also
+ * falls back, because the layered result would otherwise hide that failure.
+ */
+function readLayeredCiWaitPolicy() {
+  try {
+    const loaded = loadLayeredLocalPolicy();
+    if (loaded.local.diagnostic !== undefined || loaded.config === null) {
+      return { ...DEFAULT_CI_WAIT_POLICY };
+    }
+    if (
+      validateConfigSection(loaded.config, POLICY_SCHEMA, 'ciWait').length > 0
+    ) {
+      return { ...DEFAULT_CI_WAIT_POLICY };
+    }
+    return normalizeCiWaitPolicy(loaded.config.ciWait);
+  } catch {
+    return { ...DEFAULT_CI_WAIT_POLICY };
+  }
+}
 export function readCiWaitPolicy(policyPath = DEFAULT_POLICY_PATH) {
-  const source = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), DEFAULT_POLICY_PATH);
+  if (!policyPath || policyPath === DEFAULT_POLICY_PATH) {
+    return readLayeredCiWaitPolicy();
+  }
+  const source = resolve(process.cwd(), policyPath);
   try {
     const config = JSON.parse(readFileSync(source, 'utf8'));
     // Scoped to the ciWait subtree (#1359): an unrelated invalid field

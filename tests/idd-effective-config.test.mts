@@ -82,6 +82,7 @@ test('--key prints one value and the layer that supplied it (#3820)', () => {
         found: true,
         value: 'global-thread',
         source: 'user-global',
+        sources: ['user-global'],
       },
     );
     assert.deepEqual(buildEffectiveConfigKeyReport(loaded, 'missing.path'), {
@@ -89,6 +90,7 @@ test('--key prints one value and the layer that supplied it (#3820)', () => {
       found: false,
       value: null,
       source: null,
+      sources: [],
     });
   } finally {
     f.cleanup();
@@ -112,6 +114,30 @@ test('--no-user-global skips the user-global layers entirely (#3820)', () => {
     });
     assert.equal(withoutGlobal.config, null);
     assert.equal(withoutGlobal.userGlobalContributed, false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+// #3820: the source map is keyed by leaf, so an object-valued key reports the
+// one layer its leaves share, and `sources` lists every layer beneath it.
+test('an object-valued key reports the single layer its leaves share (#3820)', () => {
+  const f = fixture({
+    local: '{"critiqueLoop":{"delegate":{"command":"repo-review"}}}',
+    global: null,
+  });
+  try {
+    const loaded = loadLayeredLocalPolicy({ cwd: f.cwd, env: f.env });
+    assert.deepEqual(
+      buildEffectiveConfigKeyReport(loaded, 'critiqueLoop.delegate'),
+      {
+        key: 'critiqueLoop.delegate',
+        found: true,
+        value: { command: 'repo-review' },
+        source: 'repository-local',
+        sources: ['repository-local'],
+      },
+    );
   } finally {
     f.cleanup();
   }
@@ -149,6 +175,7 @@ test('the CLI reports a canonical default with source "default" (#3820)', () => 
       found: true,
       value: POLICY_DEFAULTS.issueScope,
       source: 'default',
+      sources: ['default'],
     });
   } finally {
     f.cleanup();
@@ -181,6 +208,7 @@ test('the CLI prints the JSON report and honors --key and --no-user-global (#382
       found: true,
       value: 'global-thread',
       source: 'user-global',
+      sources: ['user-global'],
     });
     const bare = run(['--no-user-global']) as {
       config: Record<string, unknown>;
