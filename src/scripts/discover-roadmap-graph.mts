@@ -1039,7 +1039,7 @@ function buildRerunArguments(args: ParsedArgs): string[] {
 const LIST_MARKER_SOURCE = String.raw`(?:[-*+]|\d+[.)])[ \t]+`;
 const CLOSING_REFERENCE_SOURCE = String.raw`(?:#\d+|[\w.-]+\/[\w.-]+#\d+)(?!\w)`;
 const CLOSING_CLAUSE_SOURCE =
-  String.raw`(?<![\w-])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+` +
+  String.raw`(?<![\w-])(?:${CLOSING_KEYWORD_ALTERNATION}):?[ \t]+` +
   `${CLOSING_REFERENCE_SOURCE}(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+)` +
   `${CLOSING_REFERENCE_SOURCE})*`;
 const CLOSING_CLAUSE_SEPARATOR_SOURCE = String.raw`(?:[ \t]*,(?:[ \t]+and)?[ \t]+|[ \t]+and[ \t]+)`;
@@ -1054,7 +1054,7 @@ const CLOSING_DECLARATION_LINE_RE = new RegExp(
 // `(non-blocking)`.
 const RELATIONSHIP_REFERENCE_SOURCE = String.raw`(?:#\d+|[\w.-]+\/[\w.-]+#\d+|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+)(?!\w)`;
 const RELATIONSHIP_CLAUSE_SOURCE =
-  String.raw`(?<![\w-])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|depends on|blocked by|sub-issue|sub issue|parent roadmap):?[ \t]+` +
+  String.raw`(?<![\w-])(?:${CLOSING_KEYWORD_ALTERNATION}|refs?|depends on|blocked by|sub-issue|sub issue|parent roadmap):?[ \t]+` +
   `${RELATIONSHIP_REFERENCE_SOURCE}(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+|[ \t]+)` +
   `${RELATIONSHIP_REFERENCE_SOURCE})*`;
 const RELATIONSHIP_DECLARATION_LINE_RE = new RegExp(
