@@ -1521,15 +1521,24 @@ test('registered fixture gh paths work through nested stubs and paginated worker
       'outer-fixture',
     );
     const callbackOutput = await new Promise<string>((resolve, reject) => {
-      execFile(outerPath, [], { encoding: 'utf8' }, (error, stdout) => {
-        if (error) reject(error);
-        else resolve(stdout);
-      });
+      execFile(
+        outerPath,
+        ['idd-stub-stay-alive'],
+        { encoding: 'utf8' },
+        (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        },
+      );
     });
     assert.equal(callbackOutput, 'outer-fixture');
-    const promisedOutput = await promisify(execFile)(outerPath, [], {
-      encoding: 'utf8',
-    });
+    const promisedOutput = await promisify(execFile)(
+      outerPath,
+      ['idd-stub-stay-alive'],
+      {
+        encoding: 'utf8',
+      },
+    );
     assert.equal(promisedOutput.stdout, 'outer-fixture');
     assert.equal(promisedOutput.stderr, '');
 
@@ -1551,7 +1560,7 @@ test('registered fixture gh paths work through nested stubs and paginated worker
 
       const modulePath = join(process.cwd(), 'src/scripts/gh-exec.mts');
       const source = `
-import { ghApiJson } from ${JSON.stringify(modulePath)};
+import { ghApiJson } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 process.stdout.write(JSON.stringify(ghApiJson('repos/o/r/issues', { paginate: true })));
 `;
       const result = spawnSync(
@@ -1580,7 +1589,7 @@ process.stdout.write(JSON.stringify(ghApiJson('repos/o/r/issues', { paginate: tr
       "const { parentPort, workerData } = require('node:worker_threads');",
       "const { execFile } = require('node:child_process');",
       "const { promisify } = require('node:util');",
-      "const result = promisify(execFile)(workerData.ghPath, [], { encoding: 'utf8' });",
+      "const result = promisify(execFile)(workerData.ghPath, ['idd-stub-stay-alive'], { encoding: 'utf8' });",
       'result.then(({ stdout, stderr }) => {',
       '  parentPort.postMessage({ stdout, stderr, hasChild: Boolean(result.child) });',
       '}, (error) => {',
