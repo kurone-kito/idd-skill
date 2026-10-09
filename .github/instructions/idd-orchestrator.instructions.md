@@ -49,11 +49,11 @@ The roster lives in the orchestrating session. Workers do not read it.
 
 1. Run Discover A0 through A4 Step 1.5 as written. The startable candidates
    are the survivors of A4 Step 1.5.
-2. Call `idd-worker-budget` with `--running <roster count>` and
-   `--startable <candidate count>`. Add `--harness-limit <limit>` from the
-   worker mechanism table's row for this harness when that row gives a numeric
-   limit, and omit it otherwise. Its `slots` field is the number of workers to
-   start now.
+2. Call `idd-worker-budget` with `--running <count of entries not
+   disposed>` and `--startable <candidate count>`. Add
+   `--harness-limit <limit>` from the worker mechanism table's row for this
+   harness when that row gives a numeric limit, and omit it otherwise. Its
+   `slots` field is the number of workers to start now.
 3. Pick that many candidates with `discover-shared-file-overlap`, passing the
    survivors with `--issues`, `--batch <slots>`, one `--in-flight` per roster
    issue, and `--check-overlap`. When `discover.selectionDesync` is
@@ -71,8 +71,8 @@ The roster lives in the orchestrating session. Workers do not read it.
   the cached graph. Follow the Discover re-run cadence, including the
   target-local A3 recheck.
 - When the graph in hand has nothing startable, re-run Discover as that cadence
-  requires. Report and stop only when that re-run finds nothing startable and no
-  worker is running.
+  requires. Report and stop only when that re-run finds nothing startable and every
+  roster entry is `disposed`.
 
 ## 5. Report and disposal
 
