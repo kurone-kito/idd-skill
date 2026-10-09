@@ -269,11 +269,13 @@ function checkWorkflowDispatchCheckoutRef(
   // Read as declarations: a commented-out checkout cannot stand in for the real one.
   const declared = declarationText(text);
   // Every mention of actions/checkout counts, in any key spelling, quoting, letter
-  // case, or step style, and in a block scalar body, which the declared view
-  // blanks. The token view keeps those bodies. A step name that names the action
-  // is a mention too, so the count fails closed on it.
-  const mentions = tokenText(text)
+  // case, or step style, and in a block scalar body. Full-line comments are
+  // skipped, but trailing text is not cut, so a quoted hash cannot hide a mention
+  // in a flow mapping. A step name or trailing comment that names the action
+  // counts too, so the count fails closed on it.
+  const mentions = text
     .split('\n')
+    .filter((line) => !/^[ \t]*#/.test(line))
     .filter((line) => /actions\\?\/checkout@/i.test(line));
   if (mentions.length > 1) {
     report(

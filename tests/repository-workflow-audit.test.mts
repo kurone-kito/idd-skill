@@ -3855,6 +3855,25 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ message: 'refresh job must declare exactly one if: key' }],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a second checkout in a one-line flow mapping whose quoted hash hid its uses key',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const anchor =
+          '      - name: Require a merged PR for workflow_dispatch\n';
+        const flow = `      - { name: "x #", uses: actions/checkout@v4, with: { ref: "\${{ github.event.pull_request.head.sha }}", fetch-depth: 0 } }\n`;
+        anchored(text, anchor);
+        return text.split(anchor).join(flow + anchor);
+      },
+    },
+    expected: [
+      {
+        message: 'must mention actions/checkout only once, in its pinned step',
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
