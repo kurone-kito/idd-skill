@@ -563,9 +563,11 @@ read_removal_snapshot() {
         repository(owner:$owner, name:$repo) {
           pullRequest(number:$number) {
             reviewRequests(first:100) {
+              pageInfo { hasNextPage }
               nodes { requestedReviewer { __typename ... on Bot { login } ... on User { login } } }
             }
             timelineItems(last:50, itemTypes:[REVIEW_REQUEST_REMOVED_EVENT]) {
+              pageInfo { hasPreviousPage }
               nodes {
                 ... on ReviewRequestRemovedEvent {
                   id
@@ -581,7 +583,19 @@ read_removal_snapshot() {
   printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -e '
     .data.repository.pullRequest
     | (.reviewRequests.nodes | type == "array") and (.timelineItems.nodes | type == "array")
+      and (.reviewRequests.pageInfo | has("hasNextPage"))
+      and (.timelineItems.pageInfo | has("hasPreviousPage"))
   ' > /dev/null || return 2
+  # A truncated connection can hide the bot or a removal event, so stop here
+  # rather than read a partial window as proof (#3860 review).
+  printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -e '
+    .data.repository.pullRequest
+    | (.reviewRequests.pageInfo.hasNextPage == false)
+      and (.timelineItems.pageInfo.hasPreviousPage == false)
+  ' > /dev/null || {
+    echo "AW3-S removal evidence truncated; route to AW4" >&2
+    return 2
+  }
 }
 
 # Resolve and validate the entry before any destructive mutation. A
@@ -627,6 +641,7 @@ if [ "$AW3S_ENTRY" = "pending" ]; then
   # node" for the default bot (PR #3471) is not a removal result.
   REMOVE_OK=0
   for REMOVE_ATTEMPT in 1 2 3; do
+    revalidate_head || exit 2
     if gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"; then
       REMOVE_OK=1
       break
@@ -662,6 +677,7 @@ if [ "$AW3S_ENTRY" = "pending" ]; then
         else $n end;
     canon($bot) as $b
     | [.data.repository.pullRequest.reviewRequests.nodes[]
+        | select((.requestedReviewer.__typename? // "") == "Bot")
         | (.requestedReviewer.login? // "") | select(. != "") | canon(.)]
     | index($b) != null
   ') || exit 2
@@ -676,6 +692,7 @@ if [ "$AW3S_ENTRY" = "pending" ]; then
         else $n end;
     canon($bot) as $b
     | [.data.repository.pullRequest.timelineItems.nodes[]
+        | select((.requestedReviewer.__typename? // "") == "Bot")
         | select((.requestedReviewer.login? // "") != "")
         | select(canon(.requestedReviewer.login) == $b)
         | select((.id as $id | $before | index($id)) == null)

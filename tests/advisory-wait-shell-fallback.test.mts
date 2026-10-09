@@ -165,6 +165,9 @@ case "$*" in
   "api repos/"*"/reviews/"*"/comments"*) answer "$STUB_REVIEW_COMMENTS" ;;
   "api repos/"*"/pulls/"*"/reviews"*) answer "$STUB_REVIEWS" ;;
   "api repos/"*"/pulls/"*"/requested_reviewers"*) exit 0 ;;
+  "api repos/"*"/issues/"*"/timeline"*)
+    if [ "\${STUB_TIMELINE_FAIL:-0}" = 1 ]; then exit 1; fi
+    cat "$STUB_TIMELINE" ;;
   "api repos/"*"/issues/"*"/comments"*)
     if [ "\${STUB_REST_FAIL:-0}" = 1 ]; then exit 1; fi
     answer "$STUB_REST" ;;
@@ -181,6 +184,8 @@ interface Fixtures {
   proof?: string;
   proofBefore?: string;
   restFail?: boolean;
+  timeline?: string;
+  timelineFail?: boolean;
   prEditExit?: number;
 }
 
@@ -230,13 +235,15 @@ function makeSandbox(fixtures: Fixtures): string {
   write('review-comments.json', fixtures.reviewComments ?? []);
   const proof =
     fixtures.proof ??
-    '{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}';
+    '{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}';
   write('proof.json', proof);
   // The first removal read is the baseline; it defaults to the same evidence.
   write('proof-before.json', fixtures.proofBefore ?? proof);
   write('head.txt', HEAD_SHA);
   write('pr-edit-exit.txt', String(fixtures.prEditExit ?? 0));
   write('rest-fail.txt', fixtures.restFail ? '1' : '0');
+  write('timeline.json', fixtures.timeline ?? '[]');
+  write('timeline-fail.txt', fixtures.timelineFail ? '1' : '0');
   return root;
 }
 
@@ -315,6 +322,11 @@ function runScript(
         ).trim(),
         STUB_REST_FAIL: readFileSync(
           join(root, 'rest-fail.txt'),
+          'utf8',
+        ).trim(),
+        STUB_TIMELINE: join(root, 'timeline.json'),
+        STUB_TIMELINE_FAIL: readFileSync(
+          join(root, 'timeline-fail.txt'),
           'utf8',
         ).trim(),
         REG_LOG: registration,
@@ -491,9 +503,9 @@ function runAw3s(fixtures: Fixtures): {
   };
 }
 
-const PROOF_LISTING_BOT = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]},"timelineItems":{"nodes":[]}}}}}`;
-const PROOF_BOT_GONE = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}`;
-const PROOF_REMOVED_EVENT = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]},"timelineItems":{"nodes":[{"id":"E-after","createdAt":"2999-01-01T00:00:00Z","requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]}}}}}`;
+const PROOF_LISTING_BOT = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}`;
+const PROOF_BOT_GONE = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}`;
+const PROOF_REMOVED_EVENT = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[{"id":"E-after","createdAt":"2999-01-01T00:00:00Z","requestedReviewer":{"__typename":"Bot","login":"${BOT_LOGIN}"}}]}}}}}`;
 
 test('AW3-S retries a failed removal three times and routes to AW4 without requesting (#3860)', {
   skip: SKIP_REASON ?? false,
@@ -514,7 +526,7 @@ test('AW3-S requests again only after the removal proof shows the bot gone (#386
 });
 
 const listedBot = (login: string, extra = ''): string =>
-  `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${login}"}}]},"timelineItems":{"nodes":[${extra}]}}}}}`;
+  `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${login}"}}]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[${extra}]}}}}}`;
 const removedEvent = (id: string, login: string): string =>
   `{"id":"${id}","createdAt":"2999-01-01T00:00:00Z","requestedReviewer":{"__typename":"Bot","login":"${login}"}}`;
 
@@ -927,4 +939,84 @@ test('AW2 treats a GraphQL row without lastEditedAt as unresolved, not as unedit
   assert.equal(run.values.EARLIEST, '');
   assert.equal(run.values.PRESENT, 'false');
   assert.equal(run.values.COUNT, '1');
+});
+
+// AW1: the head-and-request timeline read, fail-closed (#3860 review).
+function runAw1(fixtures: Fixtures): {
+  status: number;
+  stderr: string;
+  covers: string;
+} {
+  const root = makeSandbox(fixtures);
+  const block = substitutePlaceholders(fencedBlock('## AW1'));
+  const result = runScript(
+    root,
+    block + '\nprintf "COVERS=%s\\n" "$COPILOT_PENDING_COVERS_HEAD"',
+    {},
+  );
+  rmSync(root, { recursive: true, force: true });
+  return {
+    status: result.status,
+    stderr: result.stderr,
+    covers: /COVERS=(\S*)/.exec(result.stdout)?.[1] ?? '',
+  };
+}
+
+const TIMELINE_HEAD = `[{"event":"committed","sha":"${HEAD_SHA}"}]`;
+const TIMELINE_REQUEST = `[{"event":"review_requested","requested_reviewer":{"login":"${BOT_LOGIN}[bot]"}}]`;
+
+test('AW1 stops when the timeline read fails (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({ timelineFail: true });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /timeline read failed; not trusted \(#3860\)/);
+});
+
+test('AW1 stops on an empty timeline instead of reading it as empty (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({ timeline: '' });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /timeline read malformed; not trusted \(#3860\)/);
+});
+
+test('AW1 stops on a malformed timeline page (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({ timeline: '{"message":"not a list"}' });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /timeline read malformed; not trusted \(#3860\)/);
+});
+
+test('AW1 reads a multi-page timeline and finds the request after HEAD (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({ timeline: `${TIMELINE_HEAD}\n${TIMELINE_REQUEST}` });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.covers, 'true');
+});
+
+test('AW3-S stops when the removal snapshot is truncated (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw3s({
+    prEditExit: 0,
+    proof: listedBot(BOT_LOGIN).replace(
+      '"hasNextPage":false',
+      '"hasNextPage":true',
+    ),
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.registrationCalls, 0);
+  assert.match(run.stderr, /removal evidence truncated; route to AW4/);
+});
+
+test('AW3-S does not count a human request that carries the bot login (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const human = `{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"requestedReviewer":{"__typename":"User","login":"${BOT_LOGIN}"}}]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}`;
+  const run = runAw3s({ prEditExit: 0, proof: human });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.registrationCalls, 1);
 });
