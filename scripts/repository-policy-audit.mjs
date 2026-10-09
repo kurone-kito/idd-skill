@@ -684,6 +684,27 @@ const RULES = [
       assert.ok(
         botMutation > 0 && userMutation > botMutation && marker > userMutation,
       );
+      // #3860: the removal proof must sit inside the pending-only removal
+      // branch, before the request step that follows that branch.
+      const pendingBranchStart = fallback.indexOf(
+        'if [ "$AW3S_ENTRY" = "pending" ]; then',
+      );
+      const pendingBranchEnd =
+        pendingBranchStart === -1
+          ? -1
+          : fallback.indexOf('\nfi\n', pendingBranchStart);
+      const removalProof = fallback.indexOf('# Removal proof (#3860)');
+      const requestStep = fallback.indexOf(
+        'registration_attempt aw3-s',
+        pendingBranchStart,
+      );
+      assert.ok(
+        pendingBranchStart > 0 &&
+          removalProof > pendingBranchStart &&
+          removalProof < pendingBranchEnd &&
+          pendingBranchEnd < requestStep,
+        'removal proof must sit inside the pending branch, before the request step',
+      );
       requirePhrases(path, fallback, [
         'requestedReviewer{__typename',
         'variables:{id:$id,reviewer:[$reviewer]}',

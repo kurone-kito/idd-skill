@@ -101,10 +101,43 @@ COPILOT_PENDING_COVERS_HEAD=$(
 ## AW2
 
 ```sh
+ADVISORY_COMMENTS_RAW=$(
+  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate
+) || {
+  echo "AW2 comment list read failed; not trusted (#3860)" >&2
+  exit 2
+}
+ADVISORY_COMMENTS_JSON=$(printf '%s' "${ADVISORY_COMMENTS_RAW}" | jq -s 'add // []') || exit 2
+
+# Edit state (#3860): REST rows carry no lastEditedAt. Read it from GraphQL
+# and join by databaseId = REST id. A row the join misses is "unresolved":
+# it is never evidence, but it still counts toward the request cap below.
+EDIT_STATE_RAW=$(
+  gh api graphql --paginate -f query='
+    query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$number) {
+          comments(first:100, after:$endCursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { databaseId lastEditedAt }
+          }
+        }
+      }
+    }' -F owner="${OWNER}" -F repo="${REPO}" -F number={pr-number} \
+    --jq '.data.repository.pullRequest.comments.nodes[]'
+) || {
+  echo "AW2 edit-state read failed; comment list not trusted (#3860)" >&2
+  exit 2
+}
+EDIT_STATE_JSON=$(printf '%s\n' "${EDIT_STATE_RAW}" \
+  | jq -s 'map({key: (.databaseId | tostring), value: .lastEditedAt}) | from_entries') || exit 2
 ADVISORY_COMMENTS_JSON=$(
-  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
-    | jq -s 'add // []'
-)
+  printf '%s' "${ADVISORY_COMMENTS_JSON}" | jq --argjson edit "${EDIT_STATE_JSON}" '
+    map(. + {lastEditedAt: ((.id | tostring) as $k
+      | if ($edit | has($k)) then $edit[$k] else "unresolved" end)})
+  '
+) || exit 2
+
 CURRENT_MARKER_ACTOR=$(gh api user --jq '.login' 2>/dev/null || true)
 TRUSTED_MARKER_ACTORS="${IDD_TRUSTED_MARKER_ACTORS:-}"
 TRUST_COLLABORATOR_MARKERS="${IDD_TRUST_COLLABORATOR_MARKERS:-}"
@@ -131,6 +164,8 @@ TRUSTED_MARKER_LOGIN_JSON=$(
   } | jq -R -s 'split("\n") | map(ascii_downcase | select(length > 0)) | unique'
 )
 
+# Same-HEAD evidence (#3860): a marker counts only while its lastEditedAt is
+# explicitly null. An edited or unresolved marker is no evidence.
 EARLIEST_SAME_HEAD_AT=$(
   printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
     | jq -r \
@@ -143,6 +178,7 @@ EARLIEST_SAME_HEAD_AT=$(
           and (($trusted_marker_logins | index($login)) != null);
         [.[] | select(
           trusted_marker_actor
+          and (.lastEditedAt == null)
           and (
             ((.body // "") | test("^advisory-wait:\\s+\\S+\\s+" + $sha + "\\s+\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z\\s*$")) or
             ((.body // "") | test("^advisory-wait-recovery:\\s+\\S+\\s+" + $sha + "\\s+\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z(?:\\s+claim:\\S+\\s+attempt:[1-9]\\d*)?\\s*$")) or
@@ -153,6 +189,8 @@ EARLIEST_SAME_HEAD_AT=$(
       '
 )
 
+# Every trusted request marker counts toward the cap, edited or not, so
+# editing an old request cannot reopen the bounded budget (#3860).
 REQUEST_MARKER_COUNT=$(
   printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
     | jq -r \
@@ -173,6 +211,8 @@ REQUEST_MARKER_COUNT=$(
 # #2327: head-scoped, request-only (excludes advisory-wait-recovery:) --
 # distinct from EARLIEST_SAME_HEAD_AT above (a recovery-only marker also
 # satisfies that) and from REQUEST_MARKER_COUNT above (not head-scoped).
+# #3860: as for EARLIEST_SAME_HEAD_AT, only an explicitly unedited marker
+# is evidence.
 SAME_HEAD_REQUEST_MARKER_PRESENT=$(
   printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
     | jq -r \
@@ -185,6 +225,7 @@ SAME_HEAD_REQUEST_MARKER_PRESENT=$(
           and (($trusted_marker_logins | index($login)) != null);
         [.[] | select(
           trusted_marker_actor
+          and (.lastEditedAt == null)
           and (
             ((.body // "") | test("^advisory-wait:\\s+\\S+\\s+" + $sha + "\\s+\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z\\s*$")) or
             ((.body // "") | test("^<!--\\s*advisory-wait:\\s+\\S+\\s+" + $sha + "\\s+\\S+\\s*-->\\s*$"))
@@ -519,15 +560,78 @@ esac
 # start at Step 3 instead.
 if [ "$AW3S_ENTRY" = "pending" ]; then
   revalidate_head || exit 2
-  gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
-  # on a GraphQL login-resolution failure, this DELETE is an attempt only:
-  # a 422 "Could not resolve to a User node" for the default bot (PR #3471)
-  # is not a removal result -- retry gh pr edit --remove-reviewer alone
-  # (3 attempts) before any AW4 hold; never conclude from this call or an
-  # empty requested_reviewers read (#2167, #3503).
+  REMOVE_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # Bounded retry (#3503, #3860): a failed removal is retried alone, three
+  # attempts in all, before any AW4 hold. A 422 "Could not resolve to a User
+  # node" for the default bot (PR #3471) is not a removal result.
+  REMOVE_OK=0
+  for REMOVE_ATTEMPT in 1 2 3; do
+    if gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"; then
+      REMOVE_OK=1
+      break
+    fi
+  done
+  if [ "$REMOVE_OK" -ne 1 ]; then
+    echo "AW3-S removal failed after 3 attempts; route to AW4" >&2
+    exit 2
+  fi
   revalidate_head || exit 2
+  # The REST DELETE is an attempt only: never conclude from it, or from an
+  # empty requested_reviewers read (#2167, #3503).
   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
-    -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
+    -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}" || true
+  revalidate_head || exit 2
+  # Removal proof (#3860): the bot must be gone from reviewRequests, or a
+  # review_request_removed event for it must follow REMOVE_STARTED_AT. A
+  # proof that cannot be read, or that shows the bot still requested with no
+  # such event, stops here, before the request step.
+  REMOVAL_PROOF_JSON=$(
+    gh api graphql -f query='
+      query($owner:String!, $repo:String!, $number:Int!) {
+        repository(owner:$owner, name:$repo) {
+          pullRequest(number:$number) {
+            reviewRequests(first:100) {
+              nodes { requestedReviewer { __typename ... on Bot { login } ... on User { login } } }
+            }
+            timelineItems(last:50, itemTypes:[REVIEW_REQUEST_REMOVED_EVENT]) {
+              nodes {
+                ... on ReviewRequestRemovedEvent {
+                  createdAt
+                  requestedReviewer { __typename ... on Bot { login } ... on User { login } }
+                }
+              }
+            }
+          }
+        }
+      }' -F owner="{owner}" -F repo="{repo}" -F number={pr-number}
+  ) || {
+    echo "AW3-S removal proof unreadable; route to AW4" >&2
+    exit 2
+  }
+  printf '%s' "$REMOVAL_PROOF_JSON" | jq -e '
+    .data.repository.pullRequest
+    | (.reviewRequests.nodes | type == "array") and (.timelineItems.nodes | type == "array")
+  ' > /dev/null || {
+    echo "AW3-S removal proof unreadable; route to AW4" >&2
+    exit 2
+  }
+  BOT_STILL_REQUESTED=$(printf '%s' "$REMOVAL_PROOF_JSON" | jq -r --arg bot "{primary-advisory-bot-login}" '
+    ($bot | ascii_downcase) as $b
+    | [.data.repository.pullRequest.reviewRequests.nodes[]
+        | (.requestedReviewer.login? // "") | ascii_downcase]
+    | index($b) != null
+  ') || exit 2
+  BOT_REMOVED_SINCE=$(printf '%s' "$REMOVAL_PROOF_JSON" | jq -r --arg bot "{primary-advisory-bot-login}" --arg since "$REMOVE_STARTED_AT" '
+    ($bot | ascii_downcase) as $b
+    | [.data.repository.pullRequest.timelineItems.nodes[]
+        | select(((.requestedReviewer.login? // "") | ascii_downcase) == $b)
+        | select(.createdAt >= $since)]
+    | length > 0
+  ') || exit 2
+  if [ "$BOT_STILL_REQUESTED" = "true" ] && [ "$BOT_REMOVED_SINCE" != "true" ]; then
+    echo "AW3-S removal not proven: bot still requested; route to AW4" >&2
+    exit 2
+  fi
 fi
 
 # Step 3 — request again (non-pending entry: the first mutating step;
@@ -691,7 +795,7 @@ THREADS_JSON=$(gh api graphql --paginate -f query='
             isResolved
             comments(first:100) {
               pageInfo { hasNextPage }
-              nodes { author { login } body createdAt commit { oid } }
+              nodes { author { login } body createdAt commit { oid } lastEditedAt }
             }
           }
         }
@@ -724,7 +828,8 @@ CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" --
       | ($agents | map(ascii_downcase) | index($u)) != null);
   def is_disp:
     ((.body | startswith("**Accepted**") or startswith("**Rejected**")))
-    and is_idd_agent;
+    and is_idd_agent
+    and (has("lastEditedAt") and (.lastEditedAt == null));
   def latest_feedback:
     [.comments.nodes[] | select(is_disp | not) | .createdAt]
     | if length == 0 then null else max end;
@@ -750,11 +855,41 @@ COMMENTS_JSON=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
     | jq -s 'add // []'
 )
+# Edit state for the same comments (#3860): REST rows carry no
+# lastEditedAt, so join the GraphQL value by databaseId = REST id. An
+# unmatched row is "unresolved", and only an explicitly unedited disposition
+# clears the comment it answers.
+EDIT_STATE_RAW=$(
+  gh api graphql --paginate -f query='
+    query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$number) {
+          comments(first:100, after:$endCursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { databaseId lastEditedAt }
+          }
+        }
+      }
+    }' -F owner="${OWNER}" -F repo="${REPO}" -F number={pr-number} \
+    --jq '.data.repository.pullRequest.comments.nodes[]'
+) || {
+  echo "F2 edit-state read failed; not converged (#3860)" >&2
+  exit 2
+}
+EDIT_STATE_JSON=$(printf '%s\n' "${EDIT_STATE_RAW}" \
+  | jq -s 'map({key: (.databaseId | tostring), value: .lastEditedAt}) | from_entries') || exit 2
+COMMENTS_JSON=$(
+  printf '%s' "${COMMENTS_JSON}" | jq --argjson edit "${EDIT_STATE_JSON}" '
+    map(. + {lastEditedAt: ((.id | tostring) as $k
+      | if ($edit | has($k)) then $edit[$k] else "unresolved" end)})
+  '
+) || exit 2
 DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
   map(select(
     (.body | startswith("**Accepted**") or startswith("**Rejected**"))
     and (((.user.login // "") | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null)
+    and (has("lastEditedAt") and (.lastEditedAt == null))
   ))
 ')
 MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson bots '["copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]","coderabbitai[bot]","coderabbitai","chatgpt-codex-connector","chatgpt-codex-connector[bot]"]' --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
@@ -787,7 +922,8 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
       | ($agents | map(ascii_downcase) | index($u)) != null);
   def is_disp:
     ((.body | startswith("**Accepted**") or startswith("**Rejected**")))
-    and is_idd_agent;
+    and is_idd_agent
+    and (has("lastEditedAt") and (.lastEditedAt == null));
   def latest_feedback:
     [.comments.nodes[] | select(is_disp | not) | .createdAt]
     | if length == 0 then null else max end;
