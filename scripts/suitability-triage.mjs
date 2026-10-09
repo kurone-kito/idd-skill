@@ -2068,8 +2068,14 @@ function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt) {
     return false;
   }
   // Skip the range's own opening backticks, which delimit the span or fence.
+  // A fence range starts at its line, so skip any indent before the backticks
+  // too; none of these characters can be the key or the literal.
   let openerEnd = codeRange.start;
-  while (text[openerEnd] === '`') {
+  while (
+    text[openerEnd] === '`' ||
+    text[openerEnd] === ' ' ||
+    text[openerEnd] === '\t'
+  ) {
     openerEnd += 1;
   }
   // Scan from the opener through the opening quote of the literal.
@@ -2077,6 +2083,13 @@ function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt) {
   const masked = findNonCodeMask(scanned);
   if (masked[scanned.length - 1]) {
     return false;
+  }
+  // A `/` outside strings and comments may open a regex literal, whose text
+  // can hold a key that is not an option, so it disqualifies the exemption.
+  for (let position = 0; position < scanned.length; position += 1) {
+    if (scanned[position] === '/' && !masked[position]) {
+      return false;
+    }
   }
   const before = scanned.slice(0, -1);
   const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN.source, 'g');
