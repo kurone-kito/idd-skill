@@ -1094,19 +1094,22 @@ const REVIEW_BOT_LOGINS = new Set([
 
 const UNSAFE_TEXT_RULES = [
   {
+    code: 'unsafe-awaiting-maintainer-decision',
     pattern: /\*\*Awaiting maintainer decision\*\*/i,
     reason: 'contains an awaiting-maintainer-decision marker',
   },
   {
+    code: 'unsafe-active-hold',
     pattern: /\bactive hold\b/i,
     reason: 'contains active hold context',
   },
   {
+    code: 'unsafe-failed-ci',
     pattern:
       /\bfailed[- ]ci\b|\bfailing ci\b|\bci failure\b|\bci failed\b|\bfailed checks?\b/i,
     reason: 'contains failed-CI context',
   },
-];
+] as const;
 // Exported (kurone-kito/idd-skill#3223) so copilot-review-wave-audit.mts can
 // classify a reply as a recognized-but-non-accept/reject disposition using
 // the exact same loose, no-em-dash-required marker this file's own
@@ -2424,13 +2427,24 @@ export function applyDigestUpsert<P extends DigestUpsertPlanLike>(
   return { planned, outcome: 'noop' };
 }
 
-export function unsafeTextReason(body: string): string | null {
+/**
+ * The first unsafe-text rule `body` matches, with its closed code, or null.
+ * `unsafeTextReason` returns only the reason text from the same rule.
+ */
+export function unsafeTextFinding(
+  body: string,
+): { code: (typeof UNSAFE_TEXT_RULES)[number]['code']; reason: string } | null {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {
-      return rule.reason;
+      return { code: rule.code, reason: rule.reason };
     }
   }
   return null;
+}
+
+// audit:ignore-dead-export: kept for the advisory-wait test callers after #3856 moved the audit to unsafeTextFinding; no production caller remains
+export function unsafeTextReason(body: string): string | null {
+  return unsafeTextFinding(body)?.reason ?? null;
 }
 
 // #2473: Copilot's PR-level review object reports a `[bot]`-suffixed slug
@@ -3709,20 +3723,55 @@ function inferReviewerReopenedAt(thread: ThreadLike): string {
   return '';
 }
 
+type FreshDispositionOptions = {
+  isDispositionAuthor?: (login: string) => boolean;
+  // #3269: forwarded to `effectiveThreadCommentActivityAt`'s own
+  // verified-cosmetic-edit dating -- see that function's doc comment.
+  // Omitted (the default) by every caller outside the F2/F3
+  // disposition-evidence path and F4 `audit-pr-cleanup.mts` (#3791).
+  // Those callers never verify an edited comment as cosmetic
+  // regardless of any attached `userContentEdits`, unchanged
+  // pre-#3269 `updatedAt` dating.
+  advisoryBotLogins?: unknown[] | null;
+};
+
+/**
+ * Whether the thread has an IDD disposition that no later feedback supersedes.
+ * Delegates to `explainFreshDisposition`, so the boolean and the cause come
+ * from one decision.
+ */
 export function hasFreshDisposition(
   thread: ThreadLike,
-  options: {
-    isDispositionAuthor?: (login: string) => boolean;
-    // #3269: forwarded to `effectiveThreadCommentActivityAt`'s own
-    // verified-cosmetic-edit dating -- see that function's doc comment.
-    // Omitted (the default) by every caller outside the F2/F3
-    // disposition-evidence path and F4 `audit-pr-cleanup.mts` (#3791).
-    // Those callers never verify an edited comment as cosmetic
-    // regardless of any attached `userContentEdits`, unchanged
-    // pre-#3269 `updatedAt` dating.
-    advisoryBotLogins?: unknown[] | null;
-  } = {},
+  options: FreshDispositionOptions = {},
 ): boolean {
+  return explainFreshDisposition(thread, options).fresh;
+}
+
+/** Why a thread's IDD disposition is, or is not, fresh. */
+export type FreshDispositionCause =
+  | 'fresh'
+  | 'no-disposition'
+  | 'disposition-edited'
+  | 'disposition-time-unreadable'
+  | 'superseded-by-reply'
+  | 'superseded-by-edit';
+
+/**
+ * A freshness explanation. The cause is narrowed to a stale cause once `fresh`
+ * is false, so a caller can index a per-cause table without a cast.
+ */
+export type FreshDispositionExplanation =
+  | { fresh: true; cause: 'fresh' }
+  | { fresh: false; cause: Exclude<FreshDispositionCause, 'fresh'> };
+
+/**
+ * Explains `hasFreshDisposition`. `fresh` is decided exactly as before; `cause`
+ * is classified only when the disposition is not fresh.
+ */
+export function explainFreshDisposition(
+  thread: ThreadLike,
+  options: FreshDispositionOptions = {},
+): FreshDispositionExplanation {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
   // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
   // options.isDispositionAuthor with an IDD-scoped predicate (e.g., via summarizeDispositionEvidenceForGate).
@@ -3782,7 +3831,7 @@ export function hasFreshDisposition(
       .filter(isValidIsoTimestamp),
   );
 
-  return comments.some((comment) => {
+  const fresh = comments.some((comment) => {
     if (!isIddDisposition(comment)) {
       return false;
     }
@@ -3798,6 +3847,67 @@ export function hasFreshDisposition(
       compareIsoTimestamps(dispositionActivityAt, latestFeedbackAt) > 0
     );
   });
+  if (fresh) {
+    return { fresh: true, cause: 'fresh' };
+  }
+
+  // Not fresh: name the cause. The author predicate applies to edited
+  // disposition-shaped comments too, so an edited comment from a non-IDD
+  // author is not counted as an IDD disposition here.
+  const iddAuthorDispositionShaped = comments.filter((comment) => {
+    const authorLogin = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    return isDisposition(comment) && dispositionAuthorPredicate(authorLogin);
+  });
+  const uneditedIddDispositions = comments.filter((comment) =>
+    isIddDisposition(comment),
+  );
+  if (uneditedIddDispositions.length === 0) {
+    return {
+      fresh: false,
+      cause:
+        iddAuthorDispositionShaped.length > 0
+          ? 'disposition-edited'
+          : 'no-disposition',
+    };
+  }
+  const readableDispositionAts = uneditedIddDispositions
+    .map((comment) =>
+      effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+    )
+    .filter(isValidIsoTimestamp);
+  if (readableDispositionAts.length === 0) {
+    return { fresh: false, cause: 'disposition-time-unreadable' };
+  }
+  // Not fresh with a readable disposition means some feedback is at or after
+  // the latest such disposition. Feedback created at or after it is a reply;
+  // otherwise the supersession came from an edit.
+  const latestDispositionAt = maxIsoTimestamp(readableDispositionAts);
+  const supersededByReply = comments.some((comment) => {
+    if (isIddDisposition(comment)) {
+      return false;
+    }
+    // A comment with a readable creation time is a reply when it was created
+    // at or after the disposition. Without one, only an explicitly unedited
+    // comment counts as a reply by its activity time; an edit never does.
+    const createdAt = String(comment.createdAt ?? '');
+    const activityAt = effectiveThreadCommentActivityAt(
+      comment,
+      advisoryBotLogins,
+    );
+    return (
+      isValidIsoTimestamp(activityAt) &&
+      compareIsoTimestamps(activityAt, latestDispositionAt) >= 0 &&
+      (isValidIsoTimestamp(createdAt)
+        ? compareIsoTimestamps(createdAt, latestDispositionAt) >= 0
+        : classifyCommentEditState(comment) === 'unedited')
+    );
+  });
+  return {
+    fresh: false,
+    cause: supersededByReply ? 'superseded-by-reply' : 'superseded-by-edit',
+  };
 }
 
 /**

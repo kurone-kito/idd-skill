@@ -352,14 +352,16 @@ mirror-path content or mode mismatches fail.
 kurone-kito/setup.ubuntu#201 (2026-10-05): a forced re-import erased overlays
 and its mirror check passed. Order:
 
-1. Record pre-import ref and old upstream tag/commit in policy record; check
-   out a clean worktree: the `--upstream-base-path` source.
+1. Record pre-import ref, old upstream tag/commit and upstream target commit
+   in policy record; classify each retained difference by the target-side rule
+   in `idd-helper-scripts.md`. Check out a clean worktree: the
+   `--upstream-base-path` source.
 2. On a fresh branch run `idd-onboard --import --force` (Step 2; same
    `--profile`; `--allow-root` if `--source` is outside cwd) and one
    `--hold <path>` per path you own or exclude (default
    `.github/idd/config.json`, hand-merged workflows): exact manifest path, an
    unknown path exits 2, repeat on `idd-onboard --verify`; hold each excluded
-   lite path (11 at v0.14.0). Hold also a same-named file of yours the old
+   lite path. Hold also a same-named file of yours the old
    template lacked (the import overwrites it whole, unlisted). For paths only
    the old tag has (compare `plan[].targetPath` of old/new dry-runs via
    `--import --dry-run --force --source <root>`, no holds), check diff

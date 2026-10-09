@@ -543,6 +543,20 @@ when all of these are true:
 - the reviewer has no active `CHANGES_REQUESTED` state that still gates
   the PR
 
+Freshness applies to review comments and review parents alike. An IDD
+disposition is fresh only while nothing follows it. Any non-disposition
+comment in the thread created at or after the disposition's second ends
+its freshness, including a reply made in the same second. An edit made at
+or after that second to any thread comment that is not verified cosmetic
+ends it too, the root included; the cosmetic carve-out applies only to
+configured advisory-bot comments with a fetched edit history. An edited
+disposition never counts. The one exemption (#2618) is for known advisory-bot
+courtesy acknowledgments: when every comment strictly after the disposition
+that comes from neither an IDD agent nor the PR author is such an
+acknowledgment, and there is at least one, the thread still counts as
+dispositioned. A same-second comment that is not an acknowledgment is not
+exempt.
+
 Known review-bot regular PR comments may be minimized after merge only
 when they have a clear completed-review or stale-notification signal.
 Current safe classes are:
@@ -647,6 +661,70 @@ with an empty `body-sha256` on closed issue #2689 caused
 `authoring-set-members` to fail closed on the Stage 2 release of
 issue #3547.
 
+### Clearing a comment that blocks the scan
+
+When the helper's reason names a comment, it is an edited, unparseable or
+target-mismatch comment that is still visible, or a hidden marker that is
+the set's only marker on its issue. The seven statements below say who may
+clear it and how.
+
+1. Only a maintainer or an operator acting outside the IDD loop may hide
+   the named comment, never the session whose helper run failed, because
+   minimizing is irreversible under the autonomy contract
+   (`idd-autonomy-contract.md`, "GitHub-minimize convention") and a hide by
+   that session would turn its own fail-closed result into a pass; that
+   session falls back to the explicit human release, reports the locator,
+   and agents never edit or delete an owner marker.
+2. Read the comment's `set=` field first and hide it only when that set has
+   finished (its anchor carries a visible `release-complete`) or the comment
+   names no set, because a hidden comment that names a live set keeps
+   refusing that set's pass sentence on every later run and does not go
+   away; when it names the set under release, another set that is still
+   running, or a set that cannot be read (an edited comment's current text
+   is untrusted, so read its earliest revision from the edit history or
+   treat it as possibly naming the set), use the explicit human release.
+3. Clear one comment per run, because the reason names one comment: convert
+   the REST comment id in the locator to a node id with
+   `gh api repos/{owner}/{repo}/issues/comments/{comment_id} -q '.node_id'`,
+   hide it with the minimize helper (its `--subject-ids`, `--classifier
+   OUTDATED`, `--trusted-marker-logins` and `--apply` options, as shown
+   below the list) or with the GraphQL `minimizeComment` mutation and the
+   `OUTDATED` classifier, never `resolved`, and run the helper again; repeat
+   while the reason names an edited, unparseable or target-mismatch comment,
+   and for an `incomplete_results` or `index-lag window exceeded` result wait
+   out the one-hour index-lag window before running it again; stop at the
+   hidden-only reason and go to statement 6, and use the explicit human
+   release for any other reason that hiding does not clear, such as a search
+   result cap, an unstable total count, a missing search response or
+   `enumeration incomplete`.
+4. The comment stays on the issue, hidden as `OUTDATED`, and the next run
+   lists it in `skippedMarkers` as `unattributable`, with `namesRequestedSet`
+   read from its current text, so the helper's own report is the record and
+   nothing is deleted.
+5. Two shapes to avoid: minimizing the newest parseable marker of a live set
+   when no other visible marker of that set remains on its issue, which turns
+   the issue into the hidden-only reason; and quoting the owner-marker string
+   in prose, which a trusted comment can carry as an unparseable marker.
+6. For the hidden-only reason, the safe default is the explicit human release,
+   which never depends on this helper, because the issue is usually hidden-only
+   when another set's marker is newer than the set's own or a maintainer
+   minimized the newest marker by hand, which is the very shape that reason
+   exists to catch; undoing the minimization of the named comment is a
+   maintainer action outside the loop, the next sweep hides it again while
+   the newer marker stands, and for a genuine sibling the scan still reports
+   `complete: true` with `soleMember: false`, so the exception still does not
+   apply.
+7. A recurrence, meaning a trusted owner comment that is edited, unparseable
+   or mistargeted although an IDD session posted it correctly, is a producer
+   bug and should be reported with its locator, because the producer is not
+   identified and clearing the comment treats only the symptom.
+
+The hide command for statement 3, run from the source repository, is:
+
+```sh
+node scripts/minimize-superseded-markers.mjs --subject-ids <node-id> --classifier OUTDATED --trusted-marker-logins <login> --apply
+```
+
 ## Dry Run Shape
 
 In the idd-skill source repository, the helper is available; start with
@@ -675,14 +753,54 @@ with at least these fields:
 
 Candidate rows must have `viewerCanMinimize=true` and
 `isMinimized=false`. Skipped rows may report the opposite states and
-must include the skip reason.
+must include the skip reason and its `skipReasonCode` (see
+[Skip reason codes](#skip-reason-codes)).
 
 The helper also reports skipped cleanup-shaped nodes with reasons such
 as already minimized, no minimization permission, unresolved associated
-review threads, missing accept/reject dispositions, unsafe hold or
-decision context, no completed-review signal on a known-bot regular
+review threads, an IDD accept/reject disposition that is missing or has
+been superseded (each has its own code below), unsafe hold or decision
+context, no completed-review signal on a known-bot regular
 comment, no associated review threads on a bot review parent, untrusted
 operational marker author, or a non-merged PR.
+
+Every skipped row carries a `skipReasonCode` from the closed list below.
+The report also counts the skipped rows by code: `skipReasonCounts` is the
+count per code, sorted by code, and `skipReasonSummary` is the same as one
+line, `code n, code n`, for an evidence comment. Both are empty when nothing
+was skipped.
+
+### Skip reason codes
+
+| Code                                    | Meaning                                                                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `operational-marker-not-recognized`     | An IDD operational comment outside the marker list, such as a live-status digest or a CI-posted bookkeeping marker. It stays visible. |
+| `operational-marker-untrusted-author`   | An operational marker whose author is not trusted.                                                                                    |
+| `forced-handoff-evidence`               | A forced-handoff marker, kept as audit evidence.                                                                                      |
+| `pr-not-merged`                         | The PR is not merged.                                                                                                                 |
+| `already-minimized`                     | The comment or review is already minimized.                                                                                           |
+| `viewer-cannot-minimize-comment`        | The viewer cannot minimize this issue comment.                                                                                        |
+| `viewer-cannot-minimize-review`         | The viewer cannot minimize this review.                                                                                               |
+| `viewer-cannot-minimize-review-comment` | The viewer cannot minimize this review comment.                                                                                       |
+| `review-bot-no-completed-review`        | A known review-bot regular comment without a completed-review signal.                                                                 |
+| `review-changes-requested-active`       | The review author still has an active changes-requested state.                                                                        |
+| `review-no-threads`                     | A bot review parent with no associated review threads.                                                                                |
+| `review-threads-truncated`              | Associated review threads whose comment data is truncated.                                                                            |
+| `review-threads-unresolved`             | Associated review threads that are unresolved.                                                                                        |
+| `review-threads-no-fresh-disposition`   | Associated review threads with no fresh IDD disposition.                                                                              |
+| `thread-unresolved`                     | The review thread is unresolved.                                                                                                      |
+| `thread-data-truncated`                 | The review thread's comment data is truncated.                                                                                        |
+| `thread-no-disposition`                 | No IDD accept/reject disposition was ever posted on the thread.                                                                       |
+| `thread-disposition-edited`             | The IDD disposition was edited, or its edit state could not be read.                                                                  |
+| `thread-disposition-time-unreadable`    | The IDD disposition has no readable time.                                                                                             |
+| `thread-superseded-by-reply`            | A later reply follows the IDD disposition.                                                                                            |
+| `thread-superseded-by-edit`             | A thread comment was edited after the IDD disposition.                                                                                |
+| `unsafe-awaiting-maintainer-decision`   | The comment contains an awaiting-maintainer-decision marker.                                                                          |
+| `unsafe-active-hold`                    | The comment contains active hold context.                                                                                             |
+| `unsafe-failed-ci`                      | The comment contains failed-CI context.                                                                                               |
+| `pre-minimize-subject-missing`          | Pre-minimize revalidation: the subject no longer exists.                                                                              |
+| `pre-minimize-already-minimized`        | Pre-minimize revalidation: the candidate is already minimized, likely cascade-minimized with a parent.                                |
+| `pre-minimize-viewer-cannot-minimize`   | Pre-minimize revalidation: the viewer cannot minimize this comment.                                                                   |
 
 ## Apply Shape
 
@@ -790,7 +908,7 @@ record (preventive; no observed incident yet — issue `#2043`):
 | Skipped                          | N                                                                                                      |
 | Permission-blocked               | N                                                                                                      |
 | Retry attempts (bound-exhausted) | N (true / false)                                                                                       |
-| Notes                            | reason for any failed or skipped items                                                                 |
+| Notes                            | per-reason skip counts (`skipReasonSummary`) and the reason for any failed item                        |
 ```
 
 `retry-attempts` / `retry-bound-exhausted` mirror
