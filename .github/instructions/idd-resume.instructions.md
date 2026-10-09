@@ -25,7 +25,7 @@ Collect all signals before routing. Use GitHub server timestamps only.
 | Signal                   | What to collect                                                                                                                                                                 |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claim state              | Active `{claim-id}`, agent-id, branch, latest valid `claimed-by` `created_at`; `none` if unclaimed. Record suspicious marker-shaped comments from untrusted authors separately. |
-| Forced-handoff evidence  | Approving human, displaced `{claim-id}`, branch, linked PR, evidence URL (`forced-handoff: human-gated` only); an open PR requires issue-plus-PR approval naming it.            |
+| Forced-handoff evidence  | Approver, displaced `{claim-id}`, branch, linked PR, URL (human-gated only); an open PR needs issue-plus-PR approval naming it, or issue-only before its first commit.          |
 | Open PR and current HEAD | PR number + current HEAD SHA; or `none`.                                                                                                                                        |
 | Activity recency         | Latest `updatedAt` across issue comments, review threads, review bodies, PR comments. Include PR `createdAt`/`updatedAt` when a PR exists.                                      |
 | PR HEAD movement         | Baseline: latest trusted watermark/baseline marker SHA if present, else current PR HEAD. Then confirm whether commits were added after that baseline.                           |
@@ -207,7 +207,7 @@ A branch left by a stale or released claim is inheritable only when no
 matching local worktree is occupied, unreadable, or unknown. An open PR or
 remote branch may then be reused when it matches the branch in the stale
 active claim, the latest released claim, or trusted forced-handoff evidence
-whose branch and linked PR fields still match live GitHub state.
+whose branch, and linked PR when it names one, still match live GitHub state.
 
 After routing, repair a missing or stale digest from the parsed claim state,
 PR state, CI state, and review activity when safe under the claim

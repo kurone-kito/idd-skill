@@ -43,9 +43,9 @@ forced-handoff if:
   issue-only approval is insufficient for PR-scoped recovery unless it
   predates the first commit of every open PR that backs the claim, the
   earliest one when several do, kurone-kito/idd-skill#3871).
-- The evidence `{claim-id}`, branch, or linked PR does not match the live
-  active claim or inheritable released branch/PR state — stop and report
-  the mismatch; do not claim, push, or mutate review state.
+- The evidence `{claim-id}`, branch, or linked PR (when it names one) does not
+  match the live active claim or inheritable released branch/PR state — stop and
+  report the mismatch; do not claim, push, or mutate review state.
 - The forced-handoff **authorization gate** does not hold. See
   [`idd-claim.instructions.md` rule 7](../.github/instructions/idd-claim.instructions.md#claim-state-parsing)
   for the full criteria — apply it in addition to the checks above; it
