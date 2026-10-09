@@ -24,7 +24,10 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadIddConfig } from './idd-config.mjs';
+import {
+  evaluateForcedHandoffPreflight,
+  loadIddConfig,
+} from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   parsePaginatedGhNdjson,
@@ -141,6 +144,29 @@ export function planHandoff(issueComments, linkedPrs, options) {
     successorIds,
   };
 }
+/**
+ * Run the successor preflight for `--plan` without refusing. A local mode that
+ * is not human-gated, or a plan with no active claim, is `not-evaluated` and
+ * makes no GitHub read. Otherwise the trusted copies are read and the result is
+ * `ok` or `refused`.
+ */
+function planPreflight(modeEnabled, claimBranch, owner, repo, openPrs) {
+  if (!modeEnabled) {
+    return { status: 'not-evaluated', reason: 'local-mode-disabled' };
+  }
+  if (claimBranch === null) {
+    return { status: 'not-evaluated', reason: 'no-active-claim' };
+  }
+  const result = evaluateForcedHandoffPreflight({
+    owner,
+    repo,
+    claimBranch,
+    openPrs,
+  });
+  return result.ok
+    ? { status: 'ok', checks: result.checks }
+    : { status: 'refused', checks: result.checks, refusal: result.refusal };
+}
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
@@ -229,7 +255,7 @@ export function main(argv = process.argv.slice(2)) {
         '--state',
         'open',
         '--json',
-        'number,headRefName',
+        'number,headRefName,baseRefName',
       ]);
     }
     const modeEnabled = readForcedHandoffMode() === 'human-gated';
@@ -251,6 +277,17 @@ export function main(argv = process.argv.slice(2)) {
         ),
       staleAgeMs,
     });
+    // #3872: the preflight is read-only and never throws. A refusal drops
+    // markerBody, so a caller cannot post a marker the trusted copies would
+    // not honor.
+    const { markerBody, ...planWithoutBody } = plan;
+    const preflight = planPreflight(
+      modeEnabled,
+      tempClaim ? tempClaim.branch : null,
+      owner,
+      name,
+      linkedPrs,
+    );
     console.log(
       JSON.stringify(
         {
@@ -259,7 +296,9 @@ export function main(argv = process.argv.slice(2)) {
           modeEnabled,
           trustedMarkerActors: [...trustedMarkerLogins].sort(),
           trustedMarkerActorsSources,
-          ...plan,
+          ...planWithoutBody,
+          ...(preflight.status === 'refused' ? {} : { markerBody }),
+          preflight,
         },
         null,
         2,
@@ -377,6 +416,35 @@ export function main(argv = process.argv.slice(2)) {
       );
     }
     linkedPr = String(args.prNumber);
+  }
+  // #3872: an open PR on the claim branch needs --pr, and the successor must
+  // not take over unless every trusted copy the gates read confirms the
+  // opt-in.
+  const openPrs = ghJson([
+    'pr',
+    'list',
+    '--repo',
+    `${owner}/${name}`,
+    '--head',
+    activeClaim.branch,
+    '--state',
+    'open',
+    '--json',
+    'number,headRefName,baseRefName',
+  ]);
+  if (openPrs.length > 0 && !args.prNumber) {
+    throw new Error(
+      `issue #${args.issueNumber} has an open PR on claim branch ${activeClaim.branch} (#${openPrs.map((pr) => pr.number).join(', #')}); rerun with --pr <number>`,
+    );
+  }
+  const preflightResult = evaluateForcedHandoffPreflight({
+    owner,
+    repo: name,
+    claimBranch: activeClaim.branch,
+    openPrs,
+  });
+  if (!preflightResult.ok) {
+    throw new Error(preflightResult.refusal ?? 'forced handoff refused');
   }
   const payload = {
     oldAgentId: activeClaim.agentId,
@@ -643,8 +711,12 @@ function printUsage() {
 
 Options:
   --plan                           derive live PR context and emit a structured execution plan;
-                                   --new-agent-id and --new-claim-id become optional (auto-generated)
-  --pr <number>                    optional PR number for issue-plus-pr context
+                                   --new-agent-id and --new-claim-id become optional (auto-generated);
+                                   explicit --new-agent-id and --new-claim-id stay accepted with --plan.
+                                   The plan's read-only preflight field reports the trusted copies,
+                                   and its markerBody is omitted when the preflight would refuse.
+  --pr <number>                    PR number for issue-plus-pr context (required when the claim
+                                   branch has an open PR)
   --new-agent-id <id>              successor session agent id (required without --plan)
   --new-claim-id <id>              successor claim id (required without --plan)
   --forced-by <actor>              approving human actor recorded in the marker

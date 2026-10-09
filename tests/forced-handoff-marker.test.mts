@@ -786,6 +786,111 @@ const fixtureComment = (
   body,
 });
 
+/** Claim branch of the handoff fixtures (issue #337), and the PR the --pr runs name. */
+const HANDOFF_BRANCH = 'issue/337-feat-protocol-add-auditable-forced';
+const HANDOFF_PR_VIEW_ARGS = [
+  'pr',
+  'view',
+  '501',
+  '-R',
+  HANDOFF_REPO,
+  '--json',
+  'headRefName,url',
+  '--jq',
+  '.',
+];
+
+/** `gh pr view 501` answering with the claim branch as its head. */
+function prViewRule(): FixtureGhRule {
+  return {
+    args: HANDOFF_PR_VIEW_ARGS,
+    stdout: JSON.stringify({
+      headRefName: HANDOFF_BRANCH,
+      url: `https://github.com/${HANDOFF_REPO}/pull/501`,
+    }),
+  };
+}
+
+/**
+ * The reads the successor preflight makes (#3872) as canned answers. By default
+ * the claim branch has no open PR, the live default branch is `main`, the claim
+ * branch is absent on the remote (a 404), and every trusted copy confirms
+ * human-gated. A test overrides any of these by listing its own rules first.
+ */
+function preflightRules(
+  options: {
+    openPrs?: { number: number; headRefName: string; baseRefName: string }[];
+    defaultBranch?: string;
+    claimBranchPresent?: boolean;
+    probeFailure?: string;
+    /** Mode the trusted copy at each ref sets; absent refs are human-gated. */
+    configs?: Record<string, string>;
+  } = {},
+): FixtureGhRule[] {
+  const openPrs = options.openPrs ?? [];
+  const defaultBranch = options.defaultBranch ?? 'main';
+  const probeArgs = [
+    'api',
+    `repos/${HANDOFF_REPO}/branches/${encodeURIComponent(HANDOFF_BRANCH)}`,
+    '--jq',
+    '.name',
+  ];
+  const rules: FixtureGhRule[] = [
+    {
+      args: ['pr', 'list'],
+      match: 'prefix',
+      includes: ['number,headRefName,baseRefName'],
+      stdout: JSON.stringify(openPrs),
+    },
+    {
+      args: [
+        'api',
+        `repos/${HANDOFF_REPO}`,
+        '--jq',
+        '.default_branch // empty',
+      ],
+      stdout: `${defaultBranch}\n`,
+    },
+  ];
+  if (options.probeFailure !== undefined) {
+    rules.push({ args: probeArgs, stderr: options.probeFailure, status: 1 });
+  } else if (options.claimBranchPresent) {
+    rules.push({ args: probeArgs, stdout: `${HANDOFF_BRANCH}\n` });
+  } else {
+    rules.push({
+      args: probeArgs,
+      stderr: 'gh: Not Found (HTTP 404)\n',
+      status: 1,
+    });
+  }
+  const refs = new Set<string>([
+    defaultBranch,
+    HANDOFF_BRANCH,
+    ...openPrs.map((pr) => pr.baseRefName),
+  ]);
+  for (const ref of refs) {
+    const mode = options.configs?.[ref] ?? 'human-gated';
+    const content = Buffer.from(
+      JSON.stringify({ forcedHandoff: { mode } }),
+      'utf8',
+    ).toString('base64');
+    rules.push({
+      args: [
+        'api',
+        `repos/${HANDOFF_REPO}/contents/.github/idd/config.json`,
+        '--method',
+        'GET',
+        '-f',
+        `ref=${ref}`,
+        '--jq',
+        '.content',
+      ],
+      stdout: content,
+    });
+  }
+  return rules;
+}
+
 /**
  * The four reads a human-gated `main` run makes, as canned answers: the comment
  * list (NDJSON via `--jq .[]`), the GraphQL edit-state read for those comments,
@@ -816,6 +921,9 @@ function handoffRules(
       }),
     },
     { args: HANDOFF_PERMISSION_ARGS, ...permission },
+    // #3872: the successor preflight's reads, served by default (no open PR,
+    // human-gated copies) so the existing human-gated runs keep their meaning.
+    ...preflightRules(),
   ];
 }
 
@@ -921,6 +1029,178 @@ test('nested forcedHandoff.mode key enables human-gated mode and renders the mar
   assert.ok(
     reads.some((read) => read.includes(HANDOFF_PERMISSION_ARGS[1] as string)),
     reads.join('\n'),
+  );
+});
+
+// #3872: the successor preflight in the marker helper. A refusal prints
+// nothing, and --plan reports the preflight without refusing.
+const HANDOFF_CLAIM = [fixtureComment(1001, 'kurone-kito', HANDOFF_CLAIM_BODY)];
+const HANDOFF_OPEN_PR_ON_MAIN = [
+  { number: 501, headRefName: HANDOFF_BRANCH, baseRefName: 'main' },
+];
+const HANDOFF_PLAN_ARGS = [
+  '--issue',
+  '337',
+  '--forced-by',
+  'kurone-kito',
+  '--reason',
+  'operator-approved-recovery',
+  '--repo',
+  HANDOFF_REPO,
+  '--plan',
+];
+
+test('forced handoff helper names --pr and prints nothing when the claim branch has an open PR (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      ...preflightRules({ openPrs: HANDOFF_OPEN_PR_ON_MAIN }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.throws(
+        () => main(HANDOFF_ARGS),
+        /open PR on claim branch issue\/337-feat-protocol-add-auditable-forced \(#501\); rerun with --pr <number>/,
+      );
+      assert.equal(output(), '');
+    },
+  );
+});
+
+test('forced handoff helper refuses --pr when the base copy lacks the opt-in and prints nothing (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      prViewRule(),
+      ...preflightRules({
+        openPrs: HANDOFF_OPEN_PR_ON_MAIN,
+        configs: { main: 'disabled' },
+      }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.throws(
+        () => main([...HANDOFF_ARGS, '--pr', '501']),
+        /the base branch main sets forcedHandoff\.mode to disabled/,
+      );
+      assert.equal(output(), '');
+    },
+  );
+});
+
+test('forced handoff helper renders issue-plus-pr when every trusted copy confirms the opt-in (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      prViewRule(),
+      ...preflightRules({ openPrs: HANDOFF_OPEN_PR_ON_MAIN }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.equal(main([...HANDOFF_ARGS, '--pr', '501']), 0);
+      assert.equal(
+        parseForcedHandoffComment(output(), '2026-05-12T11:00:05Z')
+          ?.contextScope,
+        'issue-plus-pr',
+      );
+    },
+  );
+});
+
+test('forced handoff helper refuses a claim-branch probe failure that is not a 404 (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      ...preflightRules({
+        probeFailure: 'gh: API rate limit exceeded (HTTP 500)\n',
+      }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.throws(
+        () => main(HANDOFF_ARGS),
+        /the claim branch issue\/337-feat-protocol-add-auditable-forced could not be read/,
+      );
+      assert.equal(output(), '');
+    },
+  );
+});
+
+test('forced handoff --plan reports a refused preflight, omits markerBody, and exits 0 (#3872)', () => {
+  inHumanGatedSandbox(
+    [
+      ...preflightRules({ configs: { main: 'disabled' } }),
+      ...handoffRules(HANDOFF_CLAIM),
+    ],
+    (output) => {
+      assert.equal(main(HANDOFF_PLAN_ARGS), 0);
+      const plan = JSON.parse(output());
+      assert.equal(plan.preflight.status, 'refused');
+      assert.match(
+        plan.preflight.refusal,
+        /the default branch main sets forcedHandoff\.mode to disabled/,
+      );
+      assert.equal('markerBody' in plan, false);
+    },
+  );
+});
+
+test('forced handoff --plan keeps markerBody and reports an ok preflight when every copy confirms (#3872)', () => {
+  inHumanGatedSandbox(
+    [...preflightRules(), ...handoffRules(HANDOFF_CLAIM)],
+    (output) => {
+      assert.equal(main(HANDOFF_PLAN_ARGS), 0);
+      const plan = JSON.parse(output());
+      assert.equal(plan.preflight.status, 'ok');
+      assert.equal(typeof plan.markerBody, 'string');
+    },
+  );
+});
+
+test('forced handoff --plan with local mode disabled reports not-evaluated and reads no trusted copy (#3872)', () => {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
+  mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(sandbox, '.github', 'idd', 'config.json'),
+    JSON.stringify({ forcedHandoff: 'disabled' }),
+  );
+  const lines: string[] = [];
+  const log = mock.method(console, 'log', (message?: unknown) => {
+    lines.push(String(message));
+  });
+  fixtureGh.setResponses(handoffRules(HANDOFF_CLAIM));
+  const callsBefore = fixtureGh.calls().length;
+  process.chdir(sandbox);
+  try {
+    assert.equal(main(HANDOFF_PLAN_ARGS), 0);
+  } finally {
+    process.chdir(originalCwd);
+    log.mock.restore();
+    fixtureGh.setResponses([]);
+  }
+  const plan = JSON.parse(lines.join('\n'));
+  assert.equal(plan.preflight.status, 'not-evaluated');
+  const reads = fixtureGh
+    .calls()
+    .slice(callsBefore)
+    .map((call) => call.join(' '));
+  assert.equal(
+    reads.some((read) => read.includes('contents/.github/idd/config.json')),
+    false,
+    reads.join('\n'),
+  );
+});
+
+test('forced handoff helper --help says explicit successor ids stay accepted with --plan (#3872)', () => {
+  const lines: string[] = [];
+  const log = mock.method(console, 'log', (message?: unknown) => {
+    lines.push(String(message));
+  });
+  try {
+    assert.equal(main(['--help']), 0);
+  } finally {
+    log.mock.restore();
+  }
+  assert.match(
+    lines.join('\n'),
+    /explicit --new-agent-id and --new-claim-id stay accepted with --plan/,
   );
 });
 
