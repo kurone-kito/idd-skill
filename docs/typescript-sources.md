@@ -173,8 +173,10 @@ item 4, which were checked against the source.
      schema goes into `contractPaths` on this entry. Any other file goes into
      `EXTRA_RUNTIME_FILES` in the same file, keyed by `scripts/<stem>.mjs`. The
      drift guard in `tests/helper-runtime-manifest.test.mts` checks this list.
-   - Write the wrapper as `src/bin/<binName>.mts`, with its own banner. It must
-     name the helper it runs literally, as in
+   - Write the wrapper as `src/bin/<binName>.mts`. Its first line is the shebang
+     `#!/usr/bin/env node`, and its banner follows. Without the shebang,
+     `bin-executable-mode` skips the file, and the installed command can fail
+     when run directly. The wrapper must name the helper it runs literally, as in
      `runHelper('../scripts/<stem>.mjs');`. The helper must call `runHelperCli(`
      or `applyHelperCliOutcomeWhenDisabled(` from
      `src/scripts/helper-cli-runner.mts`, as
