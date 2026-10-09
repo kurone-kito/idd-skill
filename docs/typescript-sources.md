@@ -177,8 +177,10 @@ runtime-file lists in item 4, which were checked against the source.
    - Put a schema that defines this command's contract in `contractPaths` on
      this entry. Put any other file that the helper reads at runtime, and that
      its imports do not reach, in `EXTRA_RUNTIME_FILES` in the same file. Key it
-     by the module that reads it, `scripts/<stem>.mjs`. This includes a schema
-     that is not the command's contract. Both lists feed `managedFiles`. The
+     by the emitted path of the module that does the read. That is
+     `scripts/<stem>.mjs` only when the entry module itself reads the file, and
+     it is often an imported module instead. This includes a schema that is not
+     the command's contract. Both lists feed `managedFiles`. The
      drift guard in `tests/helper-runtime-manifest.test.mts` compares the
      manifest with these lists, and it checks the files that `validate-schemas`
      reads. It does not find a missing data file for another helper. To check
