@@ -52,6 +52,11 @@ test('worker budget reports each reachable limiting factor', () => {
       factor: 'host-load',
     },
     {
+      name: 'zero core count',
+      readers: { coreCount: () => 0, load1m: () => 0 },
+      factor: 'host-load',
+    },
+    {
       name: 'unavailable host load',
       readers: { load1m: () => Number.NaN },
       factor: 'host-load',
@@ -293,4 +298,30 @@ test('available memory falls back from /proc/meminfo to os.freemem()', () => {
   );
   assert.equal(result.availableMemoryBytes, 4 * GIB);
   assert.equal(result.limitingFactor, 'candidates');
+});
+
+test('worker budget admits slots at each exact threshold', () => {
+  const atThreshold = [
+    { name: 'load equal to the core count', readers: { load1m: () => 4 } },
+    {
+      name: 'memory at the floor',
+      readers: { procMemAvailableBytes: () => 2 * GIB },
+    },
+    {
+      name: 'quota at the floor',
+      readers: {
+        rateLimit: () => ({
+          resources: {
+            core: { remaining: 500 },
+            graphql: { remaining: 500 },
+          },
+        }),
+      },
+    },
+  ];
+  for (const scenario of atThreshold) {
+    const result = computeWorkerBudget(request(), readers(scenario.readers));
+    assert.equal(result.slots, 2, scenario.name);
+    assert.equal(result.limitingFactor, 'candidates', scenario.name);
+  }
 });
