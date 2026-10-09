@@ -358,7 +358,7 @@ PATH B — Advisory items (completed review of current HEAD):
   (and any thread resolution) is posted.
 
 **`review-ack:` marker — Clause 1 vs Clause 2.** Posting `**Accepted**`/
-`**Rejected**` above satisfies advisory-convergence's Clause 2 (thread/ comment
+`**Rejected**` above satisfies advisory-convergence's Clause 2 (thread/comment
 disposition) only. When the latest primary bot review on current HEAD also needs
 an ack (the snapshot's `latestPrimaryBotReview.reviewAckNeeded`: a thread-less
 finding in a recognized review body shape, or, for the default Copilot bot, an
