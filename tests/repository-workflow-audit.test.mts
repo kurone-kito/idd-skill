@@ -3971,6 +3971,59 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver notice that survives only as a same-named step in the gate job',
+    path: 'idd-template/.github/workflows/idd-advisory-convergence.yml',
+    mutation: {
+      transform: (text: string) => {
+        const real =
+          '      - name: Notice when no helper runtime is configured\n';
+        const decoy = [
+          '      - name: Notice when no helper runtime is configured',
+          "        if: steps.allowlist.outputs.touched == 'true'",
+          '        run: echo "::notice::decoy"',
+          '',
+        ].join('\n');
+        const job = '  idd-advisory-convergence-self-waiver:\n';
+        anchored(text, real);
+        anchored(text, job);
+        return text
+          .split(real)
+          .join('      - name: Notice removed\n')
+          .split(job)
+          .join(`${decoy}${job}`);
+      },
+    },
+    expected: [
+      {
+        message:
+          'must keep a non-failing notice step for an unconfigured helper runtime',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template self-waiver post step that loses its instructions-only exclusion while a same-named step in the gate job keeps it',
+    path: 'idd-template/.github/workflows/idd-advisory-convergence.yml',
+    mutation: {
+      transform: (text: string) => {
+        const exclusion =
+          "steps.profile.outputs.profile != 'instructions-only' && ";
+        const decoy = [
+          '      - name: Post the self-referential-bootstrap-auto waiver',
+          "        if: steps.profile.outputs.profile != 'instructions-only'",
+          '        run: echo decoy',
+          '',
+        ].join('\n');
+        const job = '  idd-advisory-convergence-self-waiver:\n';
+        anchored(text, exclusion);
+        anchored(text, job);
+        return text.split(exclusion).join('').split(job).join(`${decoy}${job}`);
+      },
+    },
+    expected: [{ prefix: "post step's if: must exclude instructions-only" }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

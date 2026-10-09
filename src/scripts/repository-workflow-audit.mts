@@ -2668,6 +2668,9 @@ function checkTemplateCommentProfileGuard(root: string, report: Report): void {
   }
 }
 
+// The self-waiver job's own steps are the only ones these checks read.
+const SELF_WAIVER_JOB_ID = 'idd-advisory-convergence-self-waiver';
+
 // The template self-waiver job keeps a non-failing notice for an unconfigured
 // helper runtime, gated on the allowlist touch.
 function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
@@ -2676,10 +2679,16 @@ function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
   if (text === undefined) {
     return;
   }
-  const declared = declarationText(text);
-  const tokens = tokenText(text);
+  // Looked up inside the self-waiver job only, so a same-named step in another
+  // job cannot satisfy the check.
+  const waiverJob = jobBlocks(declarationText(text))?.get(SELF_WAIVER_JOB_ID);
+  const waiverTokens = jobBlocks(tokenText(text))?.get(SELF_WAIVER_JOB_ID);
+  if (waiverJob === undefined || waiverTokens === undefined) {
+    report(RWA005, path, `must keep the ${SELF_WAIVER_JOB_ID} job`);
+    return;
+  }
   const noticeIndex = stepOffset(
-    declared,
+    waiverJob,
     'Notice when no helper runtime is configured',
   );
   if (noticeIndex === -1) {
@@ -2690,7 +2699,7 @@ function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
     );
     return;
   }
-  const noticeStepText = stepTextFrom(declared, noticeIndex);
+  const noticeStepText = stepTextFrom(waiverJob, noticeIndex);
   const noticeIfLine = firstIfLine(noticeStepText);
   if (noticeIfLine === undefined) {
     report(RWA005, path, 'notice step must have an if: condition');
@@ -2704,7 +2713,10 @@ function checkTemplateSelfWaiverNotice(root: string, report: Report): void {
     );
   }
   const noticeStepCode = (
-    stepTextNamed(tokens, 'Notice when no helper runtime is configured') ?? ''
+    stepTextNamed(
+      waiverTokens,
+      'Notice when no helper runtime is configured',
+    ) ?? ''
   )
     .split('\n')
     .filter((line) => !line.trim().startsWith('#'))
@@ -2732,9 +2744,15 @@ function checkTemplateSelfWaiverPostGuard(root: string, report: Report): void {
   if (text === undefined) {
     return;
   }
-  const declared = declarationText(text);
+  // Looked up inside the self-waiver job only, so a same-named step in another
+  // job cannot satisfy the check.
+  const waiverJob = jobBlocks(declarationText(text))?.get(SELF_WAIVER_JOB_ID);
+  if (waiverJob === undefined) {
+    report(RWA005, path, `must keep the ${SELF_WAIVER_JOB_ID} job`);
+    return;
+  }
   const postIndex = stepOffset(
-    declared,
+    waiverJob,
     'Post the self-referential-bootstrap-auto waiver',
   );
   if (postIndex === -1) {
@@ -2745,7 +2763,7 @@ function checkTemplateSelfWaiverPostGuard(root: string, report: Report): void {
     );
     return;
   }
-  const postIfLine = firstIfLine(stepTextFrom(declared, postIndex));
+  const postIfLine = firstIfLine(stepTextFrom(waiverJob, postIndex));
   if (postIfLine === undefined) {
     report(RWA005, path, 'post step must have an if: condition');
   } else if (
