@@ -1528,6 +1528,30 @@ const RULES: readonly RuleDefinition[] = [
     },
   },
   {
+    id: 'orchestrator-worker-cap-dogfood',
+    paths: [REPO_CONFIG, TEMPLATE_CONFIG, POLICY_SCHEMA],
+    check({ json }) {
+      const repo = json(REPO_CONFIG) as RawPolicyConfig;
+      const errors = validate(repo, json(POLICY_SCHEMA));
+      if (errors.length > 0)
+        fail(REPO_CONFIG, `policy config fails schema: ${errors.join('; ')}`);
+      const actual = repo.orchestrator;
+      if (
+        typeof actual !== 'object' ||
+        actual === null ||
+        Array.isArray(actual) ||
+        (actual as Record<string, unknown>).maxWorkers !== 4
+      )
+        fail(REPO_CONFIG, 'measured orchestrator.maxWorkers must remain 4');
+      const template = json(TEMPLATE_CONFIG) as Record<string, unknown>;
+      if ('orchestrator' in template)
+        fail(
+          TEMPLATE_CONFIG,
+          'distributed template must omit the local orchestrator entry',
+        );
+    },
+  },
+  {
     id: 'f4-dirty-worktree-hold',
     paths: [MERGE],
     check({ text }) {

@@ -678,6 +678,14 @@ function makeRuleViolation(
           loadControl.maxConcurrent = 3;
         },
       );
+    case 'orchestrator-worker-cap-dogfood':
+      return updateFixtureJson(
+        documents,
+        '.github/idd/config.json',
+        (value) => {
+          value.orchestrator = { maxWorkers: 2 };
+        },
+      );
     case 'f4-dirty-worktree-hold':
       return replaceFixtureText(
         documents,
