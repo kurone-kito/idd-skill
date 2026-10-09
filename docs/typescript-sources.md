@@ -99,6 +99,92 @@ available, and a local process-liveness check can be defeated by a
 process-lifecycle mismatch (in `src/scripts/clone-lock.mts`'s case, a wrapper
 process dying while the child command it spawned kept running).
 
+## Registering a repository-local helper
+
+A new helper touches more files than its source. First decide whether it
+ships to adopters: item 4 applies only if it does, and items 3 and 4 depend on
+that decision. Then work through the list in order. Each item names the file to
+edit and the audit that fails when the item is missed.
+
+1. Write `src/scripts/<name>.mts` with the banner
+   `// idd-generated-from: src/scripts/<name>.mts` in its first 200 bytes; put
+   it on the line after the shebang. `audit-docs --check` fails without it.
+   `pnpm run build` then writes `scripts/<name>.mjs` and its
+   `linguist-generated` line in `.gitattributes`. Commit the generated file,
+   the `.gitattributes` change and the source together.
+   `pnpm run build:check` verifies that the committed artifacts match.
+2. Declare the flags in a `<NAME>_FLAG_SPEC = { ... } as const;` object. Without
+   `as const` the build fails on the flag `type` values. Declare `--help`
+   (`'--help': { type: 'boolean', short: 'h' }`) and make the `--help` output
+   document every declared flag. Check it with
+   `node --test tests/help-text-flags.test.mts`. Add `<name>` to
+   `COVERED_HELPERS` in `src/scripts/repository-inventory-audit.mts`, and commit
+   the regenerated `scripts/repository-inventory-audit.mjs` with it.
+   `audit-docs --check` fails with `help-flag-coverage` when a helper that
+   declares a flag spec is missing from `COVERED_HELPERS`. A helper that cannot
+   declare a flag spec may go into `EXCLUDED_HELPERS` in the same file, with a
+   reason. It must not declare one.
+3. If a Markdown file invokes the helper as a bare `node scripts/<name>.mjs`,
+   and the helper has no runtime catalog entry (item 4), add entries for it in
+   `src/scripts/repository-inventory-audit.mts`:
+   - a reason in `INTERNAL_ENTRY_REASONS`. The audit scans Markdown under
+     `.github/instructions/`, `docs/` and their `idd-template/` copies, and
+     without this entry it fails with `unbacked-helper`. `DOGFOOD_ONLY_TOOLS`
+     does not satisfy this check.
+   - `scripts/<name>.mjs` in `DOGFOOD_ONLY_TOOLS`, if an instruction file under
+     `.github/instructions/` invokes it. Without it, the check fails with
+     `instruction-helper-registration`.
+4. If the helper ships to adopters, make it a packaged helper.
+   - Add an entry to the `HELPER_COMMANDS` array in
+     `src/scripts/helper-runtime-manifest.mts`, with `id`, `scriptName`
+     (`idd:<name>`), `binName` (`idd-<name>`), `entryPath`
+     (`scripts/<name>.mjs`), `vendoredCommand` (`node scripts/<name>.mjs`) and
+     `description`. Keep the `id` values in ascending order
+     (`helper-command-order`).
+   - Write the wrapper as `src/bin/idd-<name>.mts`, with its own banner, and
+     name the helper it runs literally, as in
+     `runHelper('../scripts/<name>.mjs');`. The helper must call `runHelperCli(`
+     or `applyHelperCliOutcomeWhenDisabled(` from
+     `src/scripts/helper-cli-runner.mts`, as
+     `src/scripts/select-desynced-index.mts` does. Otherwise the audit fails
+     with `helper-cli-migration`.
+   - Add `"idd-<name>": "./bin/idd-<name>.mjs"` to the `bin` object in
+     `package.json`. Keep its keys in ascending order (`helper-bin-order`).
+     `runtime-bin-forward` requires this exact path.
+   - Run `pnpm run build`. Make `bin/idd-<name>.mjs` executable with
+     `chmod +x` and stage it with `git add` before you commit.
+     `audit-docs --check` fails with `bin-executable-mode` while git has the
+     file as untracked or non-executable.
+   - Add an `"idd-<name>.mjs"` key to `bins` in
+     `tests/fixtures/helper-cli-contract.json`, with
+     `runs.unknownFlag` and `runs.noArgs`, each an object of `exitCode` and
+     `kind`. Use the values the helper actually returns. Check them with
+     `node --test tests/helper-cli-contract.test.mts`. Neither
+     `audit-docs --check` nor `build:check` reads this fixture.
+   - Do not hand-edit a generated `.mjs`.
+5. If the helper joins `pre-push-validate` or another command-table row, edit
+   the command in `.github/idd/config.json` and the matching row in
+   `audit/sync-manifest.json`, then run `node scripts/sync-docs.mjs --apply`.
+   The command table is rendered into
+   `.github/instructions/idd-overview-core.instructions.md`, which `bundle-core`
+   loads. `audit-docs --check` prints a notice for a bundle at the
+   `noticeUtilizationPct` in `contextCeiling` (`audit/sync-manifest.json`), and
+   fails above `maxUtilizationPct`. `bundle-work-phase` is exempt. Read each
+   bundle's current figure in the audit output before you edit.
+   - From the notice level up to the limit, follow the near-ceiling exception in
+     `docs/policy-constants.md`: prefer trimming or splitting the net addition
+     over a ratchet bump.
+   - If the change would take a bundle above the limit, it cannot land until the
+     budget is decided. Record the options for the maintainer (split, raise
+     with a callout, or exemption), and stop. Do not trim instruction text in
+     this change to make room.
+6. Run `node scripts/audit-docs.mjs --check`, then
+   `node --test tests/help-text-flags.test.mts` (any helper with a flag spec)
+   and `node --test tests/helper-cli-contract.test.mts` (an adopter-shipped
+   helper). Run `pnpm run build:check` after the commit, because it compares
+   the committed tree with the generated files. `pnpm run test:scripts` runs
+   both test files as well.
+
 ## Build and verification
 
 | Command                | Purpose                                                                                                                                                                                                                                                                |
