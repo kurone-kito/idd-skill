@@ -264,7 +264,7 @@ jobs:
       # tests in the TAP output and fails when none was selected.
       - name: Run gh guard PATH shim Windows tests
         run: |
-          node --test --import ./tests/isolate-state.mts --test-name-pattern "zz-no-such-test" --test-reporter=tap tests/isolate-gh.test.mts | Tee-Object -FilePath path-shim-windows.tap
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "path shim: windows" --test-reporter=tap tests/isolate-gh.test.mts | Tee-Object -FilePath path-shim-windows.tap
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $tap = 'path-shim-windows.tap'
           $file = 'tests/isolate-gh.test.mts'
