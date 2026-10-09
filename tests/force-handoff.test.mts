@@ -46,6 +46,13 @@ function makeCommonOpts(overrides: RunHandoffOptions = {}): RunHandoffOptions {
     }),
     // Hermetic by default: never touch a host cache from a unit test (#3588).
     invalidateHints: () => {},
+    // Hermetic by default (#3872): every trusted copy confirms human-gated,
+    // and the claim branch is absent, so no gh read happens.
+    preflight: {
+      readMode: (_owner, _repo, ref) => ({ status: 'human-gated', ref }),
+      readDefaultBranch: () => 'main',
+      probeBranch: () => 'absent',
+    },
     ...overrides,
   };
 }
@@ -113,6 +120,7 @@ test('runHandoff completes issue-plus-pr flow with PR prompt', async () => {
     {
       number: 501,
       headRefName: 'issue/497-feat-force-handoff-add-interactive',
+      baseRefName: 'main',
     },
   ];
 
@@ -338,6 +346,7 @@ test('runHandoff preserves the chosen PR number when a distinct successor agent-
     {
       number: 501,
       headRefName: 'issue/497-feat-force-handoff-add-interactive',
+      baseRefName: 'main',
     },
   ];
 
@@ -612,4 +621,281 @@ test('runHandoff leaves the Discover hints alone when the operator aborts', asyn
   );
   assert.equal(result.posted, false);
   assert.equal(invalidations, 0);
+});
+
+// #3872: the successor preflight. Each case injects the trusted reads, so no
+// gh call is made. A refusal must happen before the confirm prompt and before
+// any comment is posted.
+const CLAIM_BRANCH = 'issue/497-feat-force-handoff-add-interactive';
+const gatedAt = (ref: string) => ({ status: 'human-gated' as const, ref });
+const lacksAt = (ref: string) => ({
+  status: 'other' as const,
+  ref,
+  mode: 'disabled',
+});
+const OPEN_PR_ON_BASE_MAIN = [
+  { number: 501, headRefName: CLAIM_BRANCH, baseRefName: 'main' },
+];
+
+test('runHandoff refuses a successor when the trusted base copy lacks the opt-in (#3872)', async () => {
+  const responses = ['497', '501', '', 'y'];
+  let callIndex = 0;
+  let posted = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => OPEN_PR_ON_BASE_MAIN,
+          preflight: {
+            readMode: (_owner, _repo, ref) =>
+              ref === 'main' ? lacksAt(ref) : gatedAt(ref),
+            readDefaultBranch: () => 'main',
+            probeBranch: () => 'absent',
+          },
+          postComment: async () => {
+            posted += 1;
+            return { html_url: 'https://github.com/x/y/issues/1#c' };
+          },
+        }),
+      ),
+    (err) => {
+      const message = (err as Error).message;
+      assert.ok(message.includes('the base branch main'), message);
+      assert.ok(message.includes('human-gated'), message);
+      assert.ok(message.includes('claim-id-mismatch'), message);
+      assert.ok(message.includes('push the merge'), message);
+      return true;
+    },
+  );
+  assert.equal(posted, 0, 'a refused handoff must post nothing');
+  assert.equal(callIndex, 3, 'the refusal happens before the confirm prompt');
+});
+
+test('runHandoff refuses when the open PR head copy lacks the opt-in though the base has it (#3872)', async () => {
+  const responses = ['497', '501', '', 'y'];
+  let callIndex = 0;
+  let posted = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => OPEN_PR_ON_BASE_MAIN,
+          preflight: {
+            readMode: (_owner, _repo, ref) =>
+              ref === CLAIM_BRANCH ? lacksAt(ref) : gatedAt(ref),
+            readDefaultBranch: () => 'main',
+            probeBranch: () => 'absent',
+          },
+          postComment: async () => {
+            posted += 1;
+            return { html_url: 'https://github.com/x/y/issues/1#c' };
+          },
+        }),
+      ),
+    (err) => {
+      assert.ok(
+        (err as Error).message.includes(`the claim branch ${CLAIM_BRANCH}`),
+        (err as Error).message,
+      );
+      return true;
+    },
+  );
+  assert.equal(posted, 0);
+});
+
+test('runHandoff refuses when any open PR on the claim branch has a base lacking the opt-in (#3872)', async () => {
+  const responses = ['497', '501', '', 'y'];
+  let callIndex = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => [
+            { number: 501, headRefName: CLAIM_BRANCH, baseRefName: 'main' },
+            {
+              number: 502,
+              headRefName: CLAIM_BRANCH,
+              baseRefName: 'release/1',
+            },
+          ],
+          preflight: {
+            readMode: (_owner, _repo, ref) =>
+              ref === 'release/1' ? lacksAt(ref) : gatedAt(ref),
+            readDefaultBranch: () => 'main',
+            probeBranch: () => 'absent',
+          },
+        }),
+      ),
+    (err) => {
+      assert.ok(
+        (err as Error).message.includes('the base branch release/1'),
+        (err as Error).message,
+      );
+      return true;
+    },
+  );
+});
+
+test('runHandoff refuses with the read error when a trusted copy is unreadable (#3872)', async () => {
+  const responses = ['497', '501', '', 'y'];
+  let callIndex = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => OPEN_PR_ON_BASE_MAIN,
+          preflight: {
+            readMode: (_owner, _repo, ref) => ({
+              status: 'unreadable',
+              ref,
+              error: 'cannot confirm .github/idd/config.json: HTTP 403 denied',
+            }),
+            readDefaultBranch: () => 'main',
+            probeBranch: () => 'absent',
+          },
+        }),
+      ),
+    (err) => {
+      const message = (err as Error).message;
+      assert.ok(message.includes('could not be read'), message);
+      assert.ok(message.includes('HTTP 403 denied'), message);
+      return true;
+    },
+  );
+});
+
+test('runHandoff treats a non-404 claim-branch probe failure as a refusal, not as absent (#3872)', async () => {
+  const responses = ['497', '', 'y'];
+  let callIndex = 0;
+  let posted = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => [],
+          preflight: {
+            readMode: (_owner, _repo, ref) => gatedAt(ref),
+            readDefaultBranch: () => 'main',
+            probeBranch: () => {
+              throw new Error('gh: API rate limit (HTTP 500)');
+            },
+          },
+          postComment: async () => {
+            posted += 1;
+            return { html_url: 'https://github.com/x/y/issues/1#c' };
+          },
+        }),
+      ),
+    (err) => {
+      const message = (err as Error).message;
+      assert.ok(message.includes(`the claim branch ${CLAIM_BRANCH}`), message);
+      assert.ok(message.includes('HTTP 500'), message);
+      return true;
+    },
+  );
+  assert.equal(posted, 0);
+});
+
+test('runHandoff refuses a pushed claim branch without a PR when that branch lacks the opt-in (#3872)', async () => {
+  const responses = ['497', '', 'y'];
+  let callIndex = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => [],
+          preflight: {
+            readMode: (_owner, _repo, ref) =>
+              ref === CLAIM_BRANCH ? lacksAt(ref) : gatedAt(ref),
+            readDefaultBranch: () => 'main',
+            probeBranch: () => 'present',
+          },
+        }),
+      ),
+    (err) => {
+      assert.ok(
+        (err as Error).message.includes(`the claim branch ${CLAIM_BRANCH}`),
+        (err as Error).message,
+      );
+      return true;
+    },
+  );
+});
+
+test('runHandoff reads only the default branch when the claim branch is absent on the remote (#3872)', async () => {
+  const responses = ['497', '', 'y'];
+  let callIndex = 0;
+  const reads: string[] = [];
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      fetchLinkedPrs: async () => [],
+      preflight: {
+        readMode: (_owner, _repo, ref) => {
+          reads.push(ref);
+          return gatedAt(ref);
+        },
+        readDefaultBranch: () => 'main',
+        probeBranch: () => 'absent',
+      },
+    }),
+  );
+  assert.equal(result.posted, true);
+  assert.deepEqual(reads, ['main']);
+});
+
+test('runHandoff refuses when the live default branch cannot be determined (#3872)', async () => {
+  const responses = ['497', '', 'y'];
+  let callIndex = 0;
+  await assert.rejects(
+    () =>
+      runHandoff(
+        makeCommonOpts({
+          prompt: async () => responses[callIndex++],
+          fetchLinkedPrs: async () => [],
+          preflight: {
+            readMode: (_owner, _repo, ref) => gatedAt(ref),
+            readDefaultBranch: () => null,
+            probeBranch: () => 'absent',
+          },
+        }),
+      ),
+    (err) => {
+      assert.ok(
+        (err as Error).message.includes(
+          'could not determine the live default branch',
+        ),
+        (err as Error).message,
+      );
+      return true;
+    },
+  );
+});
+
+test('runHandoff release keyword still posts unclaimed-by when the trusted copy lacks the opt-in (#3872)', async () => {
+  const responses = ['497', 'release', 'y'];
+  let callIndex = 0;
+  const postedBodies: string[] = [];
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      preflight: {
+        readMode: (_owner, _repo, ref) => lacksAt(ref),
+        readDefaultBranch: () => 'main',
+        probeBranch: () => 'present',
+      },
+      postComment: async (_issueNum, body) => {
+        postedBodies.push(body);
+        return { html_url: 'https://github.com/x/y/issues/1#c' };
+      },
+    }),
+  );
+  assert.equal(result.posted, true);
+  assert.ok(postedBodies[0].includes('unclaimed-by'), postedBodies[0]);
 });

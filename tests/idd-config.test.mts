@@ -7,12 +7,14 @@ import { test } from 'node:test';
 
 import {
   buildIddConfigContentsArgs,
+  evaluateForcedHandoffPreflight,
   isUpstreamEscalationEnabled,
   loadIddConfig,
   loadPolicyConfig,
   loadTrustedActorConfig,
   loadTrustedIddConfig,
   loadUserGlobalPolicyDocument,
+  readTrustedForcedHandoffMode,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
   resolveEffectiveCritiqueLoopTelemetryHookFromEnv,
   resolveUserGlobalConfigPath,
@@ -894,5 +896,205 @@ test('an empty base ref and an unavailable default branch throw', () => {
         },
       }),
     /no base ref was supplied/,
+  );
+});
+
+// --- forced-handoff preflight reader (#3872) ----------------------------
+
+test('readTrustedForcedHandoffMode reports human-gated when the trusted copy sets it', () => {
+  const reading = readTrustedForcedHandoffMode('o', 'r', 'main', () =>
+    toEncodedConfig({ forcedHandoff: { mode: 'human-gated' } }),
+  );
+  assert.deepEqual(reading, { status: 'human-gated', ref: 'main' });
+});
+
+test('readTrustedForcedHandoffMode resolves the legacy forcedHandoffMode alias the way F2 does', () => {
+  const reading = readTrustedForcedHandoffMode('o', 'r', 'main', () =>
+    toEncodedConfig({ forcedHandoffMode: 'human-gated' }),
+  );
+  assert.deepEqual(reading, { status: 'human-gated', ref: 'main' });
+});
+
+test('readTrustedForcedHandoffMode reports another mode, and an absent block as disabled', () => {
+  assert.deepEqual(
+    readTrustedForcedHandoffMode('o', 'r', 'main', () =>
+      toEncodedConfig({ forcedHandoff: { mode: 'disabled' } }),
+    ),
+    { status: 'other', ref: 'main', mode: 'disabled' },
+  );
+  assert.deepEqual(
+    readTrustedForcedHandoffMode('o', 'r', 'main', () =>
+      toEncodedConfig({ claimTiming: { staleAge: 'PT24H' } }),
+    ),
+    { status: 'other', ref: 'main', mode: 'disabled' },
+  );
+});
+
+test('readTrustedForcedHandoffMode reports a confirmed 404 (no config file at the ref) as other', () => {
+  const reading = readTrustedForcedHandoffMode('o', 'r', 'main', () => {
+    throw syntheticNotFoundError();
+  });
+  assert.deepEqual(reading, { status: 'other', ref: 'main', mode: null });
+});
+
+test('readTrustedForcedHandoffMode keeps a read or parse failure unreadable, never other', () => {
+  const network = readTrustedForcedHandoffMode('o', 'r', 'main', () => {
+    throw new Error('network timeout');
+  });
+  assert.equal(network.status, 'unreadable');
+  assert.ok(
+    network.status === 'unreadable' &&
+      network.error.includes('network timeout'),
+  );
+
+  const notAnObject = readTrustedForcedHandoffMode('o', 'r', 'main', () =>
+    toEncodedConfig(null),
+  );
+  assert.equal(notAnObject.status, 'unreadable');
+});
+
+// --- forced-handoff preflight evaluator (#3872) -------------------------
+
+const PREFLIGHT_CLAIM = 'issue/1-add-x';
+
+test('evaluateForcedHandoffPreflight passes when the PR base and the claim branch confirm human-gated', () => {
+  const reads: string[] = [];
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [{ number: 2, baseRefName: 'main' }],
+    deps: {
+      readMode: (_owner, _repo, ref) => {
+        reads.push(ref);
+        return { status: 'human-gated', ref };
+      },
+      readDefaultBranch: () => {
+        throw new Error('default branch is not read when PR bases are known');
+      },
+      probeBranch: () => {
+        throw new Error('the branch is not probed when a PR proves it');
+      },
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.refusal, null);
+  assert.deepEqual(reads, ['main', PREFLIGHT_CLAIM]);
+});
+
+test('evaluateForcedHandoffPreflight reads each distinct PR base once, across several PRs', () => {
+  const reads: string[] = [];
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [
+      { number: 2, baseRefName: 'main' },
+      { number: 3, baseRefName: 'main' },
+      { number: 4, baseRefName: 'release/1' },
+    ],
+    deps: {
+      readMode: (_owner, _repo, ref) => {
+        reads.push(ref);
+        return { status: 'human-gated', ref };
+      },
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(reads, ['main', 'release/1', PREFLIGHT_CLAIM]);
+});
+
+test('evaluateForcedHandoffPreflight with no open PR checks the default branch and a present claim branch', () => {
+  const reads: string[] = [];
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) => {
+        reads.push(ref);
+        return { status: 'human-gated', ref };
+      },
+      readDefaultBranch: () => 'trunk',
+      probeBranch: () => 'present',
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(reads, ['trunk', PREFLIGHT_CLAIM]);
+});
+
+test('evaluateForcedHandoffPreflight fails closed on a PR row with no base ref', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [{ number: 2, baseRefName: '' }],
+    deps: {
+      readMode: (_owner, _repo, ref) => ({ status: 'human-gated', ref }),
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.refusal?.includes('no base ref was returned for PR #2'),
+    result.refusal ?? 'no refusal',
+  );
+});
+
+test('evaluateForcedHandoffPreflight records a throwing read as unreadable and never throws', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [{ number: 2, baseRefName: 'main' }],
+    deps: {
+      readMode: () => {
+        throw new Error('boom');
+      },
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks[0].reading.status, 'unreadable');
+  assert.ok(result.refusal?.includes('boom'), result.refusal ?? 'no refusal');
+});
+
+test('evaluateForcedHandoffPreflight names the copy and the sequence in its refusal', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [{ number: 2, baseRefName: 'main' }],
+    deps: {
+      readMode: (_owner, _repo, ref) =>
+        ref === 'main'
+          ? { status: 'other', ref, mode: 'disabled' }
+          : { status: 'human-gated', ref },
+    },
+  });
+  assert.equal(result.ok, false);
+  const refusal = result.refusal ?? '';
+  assert.ok(refusal.includes('the base branch main'), refusal);
+  assert.ok(refusal.includes('sets forcedHandoff.mode to disabled'), refusal);
+  assert.ok(refusal.includes('claim-id-mismatch'), refusal);
+  assert.ok(refusal.includes('push the merge'), refusal);
+  assert.ok(refusal.includes('cannot enable the mode for itself'), refusal);
+});
+
+test('evaluateForcedHandoffPreflight refuses when the live default branch cannot be determined', () => {
+  const result = evaluateForcedHandoffPreflight({
+    owner: 'o',
+    repo: 'r',
+    claimBranch: PREFLIGHT_CLAIM,
+    openPrs: [],
+    deps: {
+      readMode: (_owner, _repo, ref) => ({ status: 'human-gated', ref }),
+      readDefaultBranch: () => null,
+      probeBranch: () => 'absent',
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.refusal?.includes('could not determine the live default branch'),
+    result.refusal ?? 'no refusal',
   );
 });

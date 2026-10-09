@@ -48,6 +48,7 @@ import {
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectIssueAuthoringDelegateLayer,
+  normalizePolicyConfig,
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveIssueAuthoringDelegate,
@@ -264,6 +265,241 @@ export function loadTrustedActorConfig({
     String(baseRefName ?? '').trim() ? null : readDefaultBranch(owner, repo),
   );
   return loadTrustedIddConfig(owner, repo, ref, fetchEncodedConfig);
+}
+
+/**
+ * Outcome of reading `forcedHandoff.mode` at one trusted ref. Only
+ * `human-gated` lets a handoff proceed. `other` covers another mode and a ref
+ * with no config file. `unreadable` keeps the read error so a refusal can
+ * name it, and never reads as `other`: an ambiguous copy must not pass for
+ * one that lacks the opt-in (#3872).
+ */
+export type TrustedForcedHandoffModeReading =
+  | { status: 'human-gated'; ref: string }
+  | { status: 'other'; ref: string; mode: string | null }
+  | { status: 'unreadable'; ref: string; error: string };
+
+/**
+ * Read `forcedHandoff.mode` at a trusted ref through the same loader and
+ * normalization F2 applies, so a legacy `forcedHandoffMode` spelling resolves
+ * identically on both sides of the gate.
+ */
+export function readTrustedForcedHandoffMode(
+  owner: string,
+  repo: string,
+  ref: string,
+  fetchEncodedConfig?: (owner: string, repo: string, ref: string) => string,
+): TrustedForcedHandoffModeReading {
+  try {
+    const config = loadTrustedIddConfig(owner, repo, ref, fetchEncodedConfig);
+    if (config === null) {
+      return { status: 'other', ref, mode: null };
+    }
+    const mode = normalizePolicyConfig(config).forcedHandoff.mode;
+    return mode === 'human-gated'
+      ? { status: 'human-gated', ref }
+      : { status: 'other', ref, mode };
+  } catch (error) {
+    return {
+      status: 'unreadable',
+      ref,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Whether `branch` exists on the remote. Only a 404 means absent. Any other
+ * failure throws, so the caller records it as unreadable instead of treating
+ * an unknown branch as one that carries no opt-in.
+ */
+export function probeRemoteBranch(
+  owner: string,
+  repo: string,
+  branch: string,
+): 'present' | 'absent' {
+  try {
+    ghText([
+      'api',
+      `repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
+      '--jq',
+      '.name',
+    ]);
+    return 'present';
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 404) {
+      return 'absent';
+    }
+    throw error;
+  }
+}
+
+/** Injectable reads for {@link evaluateForcedHandoffPreflight}. */
+export interface ForcedHandoffPreflightDeps {
+  readMode?: (
+    owner: string,
+    repo: string,
+    ref: string,
+  ) => TrustedForcedHandoffModeReading;
+  readDefaultBranch?: (owner: string, repo: string) => string | null;
+  probeBranch?: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => 'present' | 'absent';
+}
+
+/** An open pull request whose head is the claim branch. */
+export interface ForcedHandoffPreflightPr {
+  number?: number | string | null;
+  baseRefName?: string | null;
+}
+
+/** One trusted copy the preflight read, and what it found. */
+export interface ForcedHandoffPreflightCheck {
+  kind: 'pr-base' | 'default-branch' | 'claim-branch';
+  reading: TrustedForcedHandoffModeReading;
+}
+
+export interface ForcedHandoffPreflightResult {
+  ok: boolean;
+  checks: ForcedHandoffPreflightCheck[];
+  /** Operator-facing refusal text when `ok` is false; `null` otherwise. */
+  refusal: string | null;
+}
+
+/**
+ * Decide whether a forced handoff on `claimBranch` may proceed: every copy the
+ * Resume and F2 gates would read must confirm `human-gated`. With open pull
+ * requests on the claim branch, those copies are each PR base plus the claim
+ * branch itself. With none, they are the live default branch and, when the
+ * claim branch exists on the remote, that branch. Never throws: a failed read
+ * is recorded, so `--plan` can report it and still exit 0.
+ */
+export function evaluateForcedHandoffPreflight({
+  owner,
+  repo,
+  claimBranch,
+  openPrs,
+  deps = {},
+}: {
+  owner: string;
+  repo: string;
+  claimBranch: string;
+  openPrs: ForcedHandoffPreflightPr[];
+  deps?: ForcedHandoffPreflightDeps;
+}): ForcedHandoffPreflightResult {
+  const readMode = deps.readMode ?? readTrustedForcedHandoffMode;
+  const readDefaultBranch =
+    deps.readDefaultBranch ?? readGithubRepoDefaultBranch;
+  const probeBranch = deps.probeBranch ?? probeRemoteBranch;
+  const checks: ForcedHandoffPreflightCheck[] = [];
+
+  const readCopy = (kind: ForcedHandoffPreflightCheck['kind'], ref: string) => {
+    let reading: TrustedForcedHandoffModeReading;
+    try {
+      reading = readMode(owner, repo, ref);
+    } catch (error) {
+      reading = {
+        status: 'unreadable',
+        ref,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    checks.push({ kind, reading });
+  };
+
+  if (openPrs.length > 0) {
+    const bases: string[] = [];
+    for (const pr of openPrs) {
+      const base = String(pr.baseRefName ?? '').trim();
+      if (base === '') {
+        checks.push({
+          kind: 'pr-base',
+          reading: {
+            status: 'unreadable',
+            ref: `PR #${pr.number ?? '?'}'s base`,
+            error: `no base ref was returned for PR #${pr.number ?? '?'}`,
+          },
+        });
+      } else if (!bases.includes(base)) {
+        bases.push(base);
+      }
+    }
+    for (const base of bases) {
+      readCopy('pr-base', base);
+    }
+    readCopy('claim-branch', claimBranch);
+  } else {
+    let defaultBranch = '';
+    let defaultBranchError = 'could not determine the live default branch';
+    try {
+      defaultBranch = String(readDefaultBranch(owner, repo) ?? '').trim();
+    } catch (error) {
+      defaultBranchError =
+        error instanceof Error ? error.message : String(error);
+    }
+    if (defaultBranch === '') {
+      checks.push({
+        kind: 'default-branch',
+        reading: {
+          status: 'unreadable',
+          ref: '',
+          error: defaultBranchError,
+        },
+      });
+    } else {
+      readCopy('default-branch', defaultBranch);
+    }
+    try {
+      if (probeBranch(owner, repo, claimBranch) === 'present') {
+        readCopy('claim-branch', claimBranch);
+      }
+    } catch (error) {
+      checks.push({
+        kind: 'claim-branch',
+        reading: {
+          status: 'unreadable',
+          ref: claimBranch,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  const failing = checks.find(
+    (check) => check.reading.status !== 'human-gated',
+  );
+  if (!failing) {
+    return { ok: true, checks, refusal: null };
+  }
+
+  const reading = failing.reading;
+  const label =
+    failing.kind === 'pr-base'
+      ? `the base branch ${reading.ref}`
+      : failing.kind === 'default-branch'
+        ? reading.ref
+          ? `the default branch ${reading.ref}`
+          : 'the live default branch'
+        : `the claim branch ${reading.ref}`;
+  let cause: string;
+  if (reading.status === 'unreadable') {
+    cause = `could not be read (${reading.error})`;
+  } else if (reading.status === 'other' && reading.mode !== null) {
+    cause = `sets forcedHandoff.mode to ${reading.mode}`;
+  } else {
+    cause = 'does not set forcedHandoff.mode (no config file or no block)';
+  }
+  const sequence =
+    openPrs.length > 0
+      ? `Commit the opt-in to the base branch through its normal pull-request path, merge that branch into the PR branch ${claimBranch} and push the merge, then rerun. A pull request cannot enable the mode for itself: the merge gate reads the base-branch config.`
+      : 'Commit the opt-in to the default branch through its normal pull-request path, then rerun.';
+  return {
+    ok: false,
+    checks,
+    refusal: `forced handoff refused: ${label} ${cause}, and forced handoff needs forcedHandoff.mode to be human-gated there. The successor would stop at Resume or F2 with claim-id-mismatch. ${sequence}`,
+  };
 }
 
 /** Result of {@link loadPolicyConfig}. */
