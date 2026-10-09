@@ -1507,6 +1507,22 @@ function readGeneratedTokensAtPath(path, claimId) {
  * reports a distinct `record-blocked` status for exactly this case
  * instead of calling this function at all.
  */
+/**
+ * `--record-tokens` writes into the worktree's private admin directory, which
+ * exists only for a git worktree. Name that requirement and the remedy instead
+ * of surfacing the raw `git rev-parse` failure.
+ */
+function assertRecordTokensWorktree(worktree) {
+  try {
+    resolveWorktreeAdminDir(worktree);
+  } catch {
+    throw markCliUsageError(
+      new Error(
+        `--record-tokens: ${worktree} is not a git worktree. Create the worktree first, for example \`git worktree add --no-track <path> -b <branch> origin/main\`, then re-run --record-tokens.`,
+      ),
+    );
+  }
+}
 export function recordGeneratedClaimTokens(cwd, fields) {
   const path = resolveGeneratedTokensPath(cwd, fields.claimId);
   withGeneratedTokensWriteLock(path, () => {
@@ -1713,6 +1729,7 @@ function runCli() {
         new Error('--claim-id is required for --record-tokens'),
       );
     }
+    assertRecordTokensWorktree(args.worktree);
     const outcome = recordGeneratedClaimTokens(args.worktree, {
       agentId: args.agentId,
       claimId: args.claimId,

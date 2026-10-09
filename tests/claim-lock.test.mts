@@ -2403,6 +2403,39 @@ test('generated-tokens: resolveGeneratedTokensPath resolves inside the linked wo
   }
 });
 
+test('CLI: --record-tokens on a non-worktree path names the remedy, not the raw git error', async () => {
+  const plain = mkdtempSync(join(tmpdir(), 'claim-lock-not-worktree-'));
+  try {
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--record-tokens',
+          '--worktree',
+          plain,
+          '--agent-id',
+          'agent-a',
+          '--claim-id',
+          'claim-a',
+        ],
+        { env: fixtureEnv() },
+      ),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.notEqual(error.code, 0);
+        assert.match(
+          error.stderr ?? '',
+          /--record-tokens: .+ is not a git worktree\. Create the worktree first/,
+        );
+        assert.doesNotMatch(error.stderr ?? '', /fatal:/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(plain, { recursive: true, force: true });
+  }
+});
+
 test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', async () => {
   const fixture = setupLinkedWorktree();
   try {
