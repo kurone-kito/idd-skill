@@ -2328,17 +2328,30 @@ node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
   and the built-in defaults. A repository-owned field from a user-global
   layer is ignored once a repository file exists.
 - **Output**: `repository`, `userGlobalContributed`, `selectedOverrideIndex`,
-  `config`, `sourceMap`, and `diagnostics`. `--key` prints only that value,
-  `found`, and the layer that supplied it.
+  `config`, `sourceMap`, and `diagnostics`. The helper passes the canonical
+  defaults, so a default reports the `default` layer. `--key` prints only
+  that value, `found`, the layer that supplied it (`source`), and every
+  distinct layer beneath the key (`sources`). An object-valued key reports
+  one `source` only when all of its leaves share a layer; otherwise `source`
+  is `null` and `sources` names the layers.
 - **`--no-user-global`** skips the user-global layers entirely.
-- **CI**: under `GITHUB_ACTIONS=true` the shared loaders and the fragment
-  resolvers never read the user-global file, so a CI helper sees the
-  repository file alone.
+- **CI**: under `GITHUB_ACTIONS=true` the shared loaders, the ciWait reader,
+  and the fragment resolvers never read the user-global file, so a CI helper
+  sees the repository file alone.
+- **Unreadable repository files fail closed**: a canonical or legacy
+  `idd-policy.json` entry that exists but cannot be read, including a
+  dangling symlink, blocks the user-global repository-owned fields. A
+  canonical file that cannot be read is a diagnostic, not an absent file.
 - **Trusted reads** (the gate trusted-actor lists) fall back to the
   user-global layers only when the base file and the legacy
   `idd-policy.json` are both confirmed absent (HTTP 404) at the trusted
   ref. The working tree is never read there, and a path override cannot
   match, only a repository-slug override can.
+- **Forced handoff is repository-only.** The forced-handoff reader never uses
+  the user-global fallback. With no repository file it reads as `other`, so
+  a user-global `human-gated` mode cannot authorize a handoff.
+- **`--policy`**: an omitted `--policy` reads the layered policy. An explicit
+  path, even the default string, reads only that file.
 
 ## Helper Runtime Profiles
 
