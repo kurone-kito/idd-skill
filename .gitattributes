@@ -68,6 +68,7 @@ scripts/github-api-request-class.mjs linguist-generated=true
 scripts/helper-cli-runner.mjs linguist-generated=true
 scripts/helper-flag-drift.mjs linguist-generated=true
 scripts/helper-runtime-manifest.mjs linguist-generated=true
+scripts/idd-activation.mjs linguist-generated=true
 scripts/idd-config.mjs linguist-generated=true
 scripts/idd-critique-delegate.mjs linguist-generated=true
 scripts/idd-critique-harvest.mjs linguist-generated=true

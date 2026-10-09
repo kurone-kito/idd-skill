@@ -866,5 +866,13 @@
         "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('pr view')) { process.stdout.write(\"{\\\"number\\\":1,\\\"state\\\":\\\"OPEN\\\",\\\"url\\\":\\\"https://example.test/1\\\",\\\"headRefName\\\":\\\"branch\\\",\\\"headRefOid\\\":\\\"\\\",\\\"baseRefName\\\":\\\"main\\\",\\\"statusCheckRollup\\\":[],\\\"closingIssuesReferences\\\":[]}\"); process.exit(0); } process.stderr.write('gh: HTTP 404'); process.exit(1);"
       }
     ]
+  },
+  "idd-activation.mjs": {
+    "runs": {
+      "unknownFlag": {
+        "exitCode": 1,
+        "kind": "usage"
+      }
+    }
   }
 }
