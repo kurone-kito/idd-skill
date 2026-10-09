@@ -104,12 +104,21 @@ process dying while the child command it spawned kept running).
 A new helper touches more files than its source. First decide whether it
 ships to adopters: item 4 applies only if it does, and items 3 and 4 depend on
 that decision. Then work through the list in order. Each item names the file to
-edit and the audit that fails when the item is missed.
+edit and the audit or test that fails when the item is missed.
 
-1. Write `src/scripts/<name>.mts` with the banner
-   `// idd-generated-from: src/scripts/<name>.mts` in its first 200 bytes; put
+The placeholders below are not all the same name:
+
+- `<stem>` is the source file name. `src/scripts/<stem>.mts` compiles to
+  `scripts/<stem>.mjs`.
+- `<id>` is the manifest command id. It need not match the stem: the file
+  `scripts/idd-merge-execute.mjs` has `id: 'merge-execute'`.
+- `<binName>` is the packaged command name. It starts with `idd-`, and it names
+  the wrapper `src/bin/<binName>.mts` and the file `bin/<binName>.mjs`.
+
+1. Write `src/scripts/<stem>.mts` with the banner
+   `// idd-generated-from: src/scripts/<stem>.mts` in its first 200 bytes; put
    it on the line after the shebang. `audit-docs --check` fails without it.
-   `pnpm run build` then writes `scripts/<name>.mjs` and its
+   `pnpm run build` then writes `scripts/<stem>.mjs` and its
    `linguist-generated` line in `.gitattributes`. Commit the generated file,
    the `.gitattributes` change and the source together.
    `pnpm run build:check` verifies that the committed artifacts match.
@@ -117,48 +126,56 @@ edit and the audit that fails when the item is missed.
    `as const` the build fails on the flag `type` values. Declare `--help`
    (`'--help': { type: 'boolean', short: 'h' }`) and make the `--help` output
    document every declared flag. Check it with
-   `node --test tests/help-text-flags.test.mts`. Add `<name>` to
+   `node --test tests/help-text-flags.test.mts`. Add `<stem>` to
    `COVERED_HELPERS` in `src/scripts/repository-inventory-audit.mts`, and commit
    the regenerated `scripts/repository-inventory-audit.mjs` with it.
    `audit-docs --check` fails with `help-flag-coverage` when a helper that
    declares a flag spec is missing from `COVERED_HELPERS`. A helper that cannot
    declare a flag spec may go into `EXCLUDED_HELPERS` in the same file, with a
    reason. It must not declare one.
-3. If a Markdown file invokes the helper as a bare `node scripts/<name>.mjs`,
+3. If a Markdown file invokes the helper as a bare `node scripts/<stem>.mjs`,
    and the helper has no runtime catalog entry (item 4), add entries for it in
    `src/scripts/repository-inventory-audit.mts`:
    - a reason in `INTERNAL_ENTRY_REASONS`. The audit scans Markdown under
      `.github/instructions/`, `docs/` and their `idd-template/` copies, and
      without this entry it fails with `unbacked-helper`. `DOGFOOD_ONLY_TOOLS`
      does not satisfy this check.
-   - `scripts/<name>.mjs` in `DOGFOOD_ONLY_TOOLS`, if an instruction file under
+   - `scripts/<stem>.mjs` in `DOGFOOD_ONLY_TOOLS`, if an instruction file under
      `.github/instructions/` invokes it. Without it, the check fails with
      `instruction-helper-registration`.
+     Any bare `node scripts/<stem>.mjs` in an instruction file also needs the
+     words `profile-selected` in the same paragraph, or earlier in that file, and
+     this applies even when the helper has a catalog entry. Without them, the
+     audit fails with `unpointed-source-form`. This check does not scan `docs/`.
 4. If the helper ships to adopters, make it a packaged helper.
    - Add an entry to the `HELPER_COMMANDS` array in
-     `src/scripts/helper-runtime-manifest.mts`, with `id`, `scriptName`
-     (`idd:<name>`), `binName` (`idd-<name>`), `entryPath`
-     (`scripts/<name>.mjs`), `vendoredCommand` (`node scripts/<name>.mjs`) and
+     `src/scripts/helper-runtime-manifest.mts`, with `id` (`<id>`), `scriptName`
+     (`idd:<id>`), `binName` (`<binName>`), `entryPath`
+     (`scripts/<stem>.mjs`), `vendoredCommand` (`node scripts/<stem>.mjs`) and
      `description`. Keep the `id` values in ascending order
      (`helper-command-order`).
-   - Write the wrapper as `src/bin/idd-<name>.mts`, with its own banner, and
+   - If the helper reads files that its imports do not reach, list them. A
+     schema goes into `contractPaths` on this entry. Any other file goes into
+     `EXTRA_RUNTIME_FILES` in the same file, keyed by `scripts/<stem>.mjs`. The
+     drift guard in `tests/helper-runtime-manifest.test.mts` checks this list.
+   - Write the wrapper as `src/bin/<binName>.mts`, with its own banner. It must
      name the helper it runs literally, as in
-     `runHelper('../scripts/<name>.mjs');`. The helper must call `runHelperCli(`
+     `runHelper('../scripts/<stem>.mjs');`. The helper must call `runHelperCli(`
      or `applyHelperCliOutcomeWhenDisabled(` from
      `src/scripts/helper-cli-runner.mts`, as
      `src/scripts/select-desynced-index.mts` does. Otherwise the audit fails
      with `helper-cli-migration`.
-   - Add `"idd-<name>": "./bin/idd-<name>.mjs"` to the `bin` object in
+   - Add `"<binName>": "./bin/<binName>.mjs"` to the `bin` object in
      `package.json`. Keep its keys in ascending order (`helper-bin-order`).
      `runtime-bin-forward` requires this exact path.
-   - Run `pnpm run build`. Make `bin/idd-<name>.mjs` executable with
-     `chmod +x` and stage it with `git add` before you commit.
-     `audit-docs --check` fails with `bin-executable-mode` while git has the
-     file as untracked or non-executable.
-   - Add an `"idd-<name>.mjs"` key to `bins` in
-     `tests/fixtures/helper-cli-contract.json`, with
-     `runs.unknownFlag` and `runs.noArgs`, each an object of `exitCode` and
-     `kind`. Use the values the helper actually returns. Check them with
+   - Run `pnpm run build`. Make `bin/<binName>.mjs` executable with `chmod +x`
+     and stage it with `git add` before you commit. `audit-docs --check` fails
+     with `bin-executable-mode` while git has the file as untracked or
+     non-executable.
+   - Add a `"<binName>.mjs"` key to `bins` in
+     `tests/fixtures/helper-cli-contract.json`, with `runs.unknownFlag` and
+     `runs.noArgs`, each an object of `exitCode` and `kind`. Use the values the
+     helper actually returns. Check them with
      `node --test tests/helper-cli-contract.test.mts`. Neither
      `audit-docs --check` nor `build:check` reads this fixture.
    - Do not hand-edit a generated `.mjs`.
