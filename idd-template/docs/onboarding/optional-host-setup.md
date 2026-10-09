@@ -543,7 +543,7 @@ drives every live GitHub API call the script makes (reviews, threads,
 comments), independent of what is checked out locally, so pinning the
 checkout to the trusted branch costs nothing functionally.
 
-Only `pull_request_target` triggers the verdict now:
+`pull_request_target` is the verdict's only pull-request trigger:
 evaluated against the base branch's copy, so a same-repository PR
 cannot edit its own copy to force the check green (see Trusted-code
 checkout above). A PR that first adds this workflow gets no run --
@@ -604,10 +604,8 @@ plain string-array `contexts` field into `app_id`-pinned `checks`
 entries: a `PUT .../protection`
 call configuring `contexts` comes back with a `checks` array carrying
 an `app_id` (for example, `15368` for `github-actions[bot]` on
-github.com — an implementation detail of that specific integration, not
-a portable constant; a GHES instance or a future GitHub change can
-differ). A pinned entry is exactly what the fail-closed "Source-pinned
-required-check trust" default (`ciGate.trustSourcePinnedRequiredChecks`
+github.com; GHES or a future GitHub change can differ). A pinned entry is
+exactly what the fail-closed "Source-pinned required-check trust" default (`ciGate.trustSourcePinnedRequiredChecks`
 — see the row in [Customizing IDD](../customization.md)) downgrades
 to unresolved even when green, so an operator who registers this or any
 other required check the straightforward way walks into that gate on
@@ -670,8 +668,9 @@ advisory bot has not yet reviewed the current PR HEAD — GitHub Actions
 has no separate non-failing "pending" check state, so the check simply
 **shows as failing** until it converges (by design: it must stay red
 until Copilot reviews the HEAD). After `advisoryWait.convergenceDeadline`
-(default 24h) elapses from the HEAD commit's own timestamp, the only
-way to turn the check green without a fresh review is a valid
+(default 24h) elapses from when GitHub first recorded the HEAD (its
+earliest check suite), the only way to turn the check green without a
+fresh review is a valid
 maintainer external-check waiver for that HEAD under the selector
 `idd-advisory-convergence` — see
 [External-Check Waiver Defaults](../policy-constants.md#external-check-waiver-defaults)

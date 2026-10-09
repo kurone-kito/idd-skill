@@ -1289,6 +1289,11 @@ future inventory reviews do not need to re-infer their role from code.
     --report-reverted-overlays
   ```
 
+  Before any retained local difference is called an overlay or given a
+  divergence marker, quote the target-side text and confirm the difference
+  still exists against the target: an older local workaround may have been
+  adopted upstream between pins, and then the overlay is dropped.
+
   For every modified, non-JSON path that the previous upstream version also
   has, the report lists each pre-import line that is absent from that previous
   version (so the adopter added it) and also absent from the file after the
@@ -3283,8 +3288,8 @@ needs a live per-marker run lookup no other consumer needs):
 4. that same response's `event` field is exactly `pull_request_target`,
    never `pull_request` -- closing the gap where a same-repository PR
    editing the workflow YAML can still trigger a `pull_request`-triggered
-   run of it: the workflow's own `on:` block declares only
-   `pull_request_target` (kurone-kito/idd-skill#2764 Phase 2), but a PR
+   run of it: the workflow's own `on:` block names `pull_request_target` as
+   its only pull-request trigger (kurone-kito/idd-skill#2764 Phase 2), but a PR
    can still reintroduce a `pull_request` trigger to its own copy of that
    YAML, and this condition rejects a marker citing a run from that
    reintroduced trigger the same way it always did;
