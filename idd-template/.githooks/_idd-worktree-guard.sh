@@ -162,6 +162,10 @@ _IDD_WTG_REFS_
           printf '(To bypass intentionally, re-run the git command with --no-verify.)\n' >&2
           return 1
         fi
+        # An accepted deletion (refuse=0) is final. Return before the
+        # implementation-branch pattern check below, so a developmentBranch that
+        # also matches branchPatterns, such as issue/main, still allows it.
+        return 0
       fi
       ;;
   esac

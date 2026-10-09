@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -611,6 +611,43 @@ test('refuseBaseBranchCommits off leaves base-branch pushes and commits allowed 
   }
 });
 
+test('an accepted deletion passes when developmentBranch also matches branchPatterns (#3854)', () => {
+  // issue/main matches the default issue/* pattern, so the implementation-branch
+  // check below would refuse anything that reached it.
+  const overlapping = {
+    worktreeGuard: { enabled: true, refuseBaseBranchCommits: true },
+    developmentBranch: 'issue/main',
+  };
+  for (const [copy, hooksSource] of HOOK_COPIES) {
+    const repo = setupRepo(overlapping, hooksSource);
+    try {
+      git(repo, ['checkout', '-b', 'issue/main']);
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `(delete) ${ZERO_SHA} refs/heads/feature/x ${SHA_A}\n`,
+        ),
+        0,
+        `${copy}: an accepted deletion must pass the pattern check too`,
+      );
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `${SHA_B} ${SHA_C} refs/heads/issue/main ${SHA_A}\n`,
+        ),
+        1,
+        `${copy}: an update of the development branch must be refused`,
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }
+});
+
 test('a merged feature branch is deleted from the primary worktree on the base branch, and a base update stays refused (#3854)', () => {
   const helper = join(
     dirname(fileURLToPath(import.meta.url)),
@@ -669,13 +706,24 @@ test('a merged feature branch is deleted from the primary worktree on the base b
       assert.equal(verdict.status, 'complete', `${copy}: helper completes`);
       assert.equal(verdict.action, 'deleted', `${copy}: helper deletes`);
 
-      // A real base update from the same worktree is still refused.
+      // A real base update from the same worktree is still refused, and the
+      // refusal must be the guard's own message, not any failed push.
       writeFileSync(join(repo, 'README.md'), 'changed\n');
       git(repo, ['commit', '--no-verify', '-am', 'local base commit']);
-      assert.throws(
-        () => git(repo, ['push', 'origin', 'main']),
-        Error,
+      const refused = spawnSync('git', ['push', 'origin', 'main'], {
+        cwd: repo,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+      });
+      assert.notEqual(
+        refused.status,
+        0,
         `${copy}: base update must be refused`,
+      );
+      assert.match(
+        refused.stderr,
+        /refusing to push directly on "main"/,
+        `${copy}: the refusal must be the guard's own message`,
       );
     } finally {
       rmSync(repo, { recursive: true, force: true });
