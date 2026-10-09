@@ -5469,29 +5469,43 @@ test('#3871: an empty commit list makes the first-commit time unknown and refuse
   assert.equal(result.active_claim?.claim_id, 'claim-old');
 });
 
-test('#3871: with two backing PRs the marker must predate both, and an unreadable PR time refuses it', () => {
-  const predatesBoth = createFakeProviderAdapter({
-    closingPullRequestPages: {
-      11: [
-        {
-          nodes: [closingNode(77, 'OPEN', REPO), closingNode(88, 'OPEN', REPO)],
-          hasNextPage: false,
-          endCursor: null,
-        },
-      ],
-    },
-    changeRequestCommits: {
-      77: [commitAt(COMMIT_AFTER_MARKER)],
-      88: [commitAt(COMMIT_BEFORE_MARKER)],
-    },
-  });
+test('#3871: with two backing PRs the marker must predate the earliest, so one PR that predates it refuses it', () => {
+  const both = (first: string, second: string) =>
+    createFakeProviderAdapter({
+      closingPullRequestPages: {
+        11: [
+          {
+            nodes: [
+              closingNode(77, 'OPEN', REPO),
+              closingNode(88, 'OPEN', REPO),
+            ],
+            hasNextPage: false,
+            endCursor: null,
+          },
+        ],
+      },
+      changeRequestCommits: {
+        77: [commitAt(first)],
+        88: [commitAt(second)],
+      },
+    });
+  // Both first commits follow the marker: it predates the earliest, so honored.
   assert.equal(
     resumeWithLinkedPr(
-      predatesBoth,
+      both(COMMIT_AFTER_MARKER, COMMIT_AFTER_MARKER),
+      forcedHandoffEvents({ contextScope: 'issue-only' }),
+    ).active_claim?.claim_id,
+    'claim-new',
+  );
+  // PR 88's first commit predates the marker, so the marker is refused.
+  assert.equal(
+    resumeWithLinkedPr(
+      both(COMMIT_AFTER_MARKER, COMMIT_BEFORE_MARKER),
       forcedHandoffEvents({ contextScope: 'issue-only' }),
     ).active_claim?.claim_id,
     'claim-old',
   );
+  // A PR whose first-commit time cannot be read makes the time unknown.
   const unreadable = createFakeProviderAdapter({
     closingPullRequestPages: {
       11: [
@@ -5586,4 +5600,24 @@ test('#3871: a closing-reference node without a state fails the lookup instead o
   const result = fetchOpenLinkedPrReferences(port, 11, REPO);
   assert.equal(result.lookupFailed, true);
   assert.deepEqual([...result.references], []);
+});
+
+test('#3871: an open closing-reference node with a non-positive PR number fails the lookup', () => {
+  for (const number of [0, -4]) {
+    const port = createFakeProviderAdapter({
+      closingPullRequestPages: {
+        11: [
+          {
+            nodes: [closingNode(number, 'OPEN', REPO)],
+            hasNextPage: false,
+            endCursor: null,
+          },
+        ],
+      },
+    });
+    assert.equal(
+      fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed,
+      true,
+    );
+  }
 });

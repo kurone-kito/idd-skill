@@ -1371,7 +1371,8 @@ export function fetchOpenLinkedPrReferences(port, issueNumber, repository) {
           // repository" or as no PR at all: fail the lookup (#3871).
           if (
             typeof node.number !== 'number' ||
-            !Number.isInteger(node.number) ||
+            !Number.isSafeInteger(node.number) ||
+            node.number <= 0 ||
             typeof node.repository !== 'string'
           ) {
             throw new Error(
