@@ -2091,6 +2091,62 @@ open-PR operational markers such as `claimed-by`, `review-watermark`,
 the relevant freshness and review gates instead of mutating away the old
 evidence.
 
+### Forced-handoff copies and recovery
+
+Each claim-ownership reader takes `forcedHandoff.mode` from a different copy
+of `.github/idd/config.json`:
+
+- `resume-claim-routing`, `idd-force-handoff`, `idd-forced-handoff-marker`,
+  `resolve-review-thread`, `disposition-non-review-notices`,
+  `live-status-digest` and `audit-pr-cleanup` read the working directory's
+  copy. The Discover annotations (`discover-orphan-filter` and
+  `discover-roadmap-graph`) read it as a soft signal that treats any
+  trusted-author handoff as honored once the mode is on.
+- `pre-merge-readiness` and `idd-merge-execute` read the copy at the PR base
+  branch through the trusted loader.
+- The required `idd-advisory-convergence` check reads the checkout of `main`,
+  the default branch. When a `developmentBranch` is set, an opt-in committed
+  only to the PR base leaves that check disabled.
+- The external-check waiver honors a forced handoff whatever the mode says.
+
+The pre-flight runs on the successor path of `idd-force-handoff`, and in
+`idd-forced-handoff-marker`, before either posts or renders a marker. With a
+PR named, the copies it checks are the PR base branch and the pushed claim
+branch. With no PR, they are the live default branch and the pushed claim
+branch. A copy that does not set `human-gated`, or cannot be read, refuses the
+handoff. The `release` keyword does not run the pre-flight.
+
+Commit the opt-in to the PR base branch through a normal pull request, and
+merge that branch into the PR branch, before an incident. An opt-in that exists
+only in the operator's checkout is not enough: Resume honors it from that
+checkout, and F2 rejects the handoff with `claim-id-mismatch`.
+
+A pull request cannot enable the mode for itself, because CI ignores a
+PR-edited config. For a stalled change that would add the opt-in, the recovery
+is the stale takeover after `claimTiming.staleAge` (default `PT24H`), or the
+`release` keyword. The `release` keyword needs the local `human-gated` mode and
+an authorized `--forced-by` actor. It posts an `unclaimed-by` marker that no
+gate conditions on the mode.
+
+Every reader evaluates the mode each time it reads a marker, not when the
+marker was posted. Enabling `human-gated` on the default branch therefore makes
+every earlier forced-handoff marker effective at once. Find those markers as
+the issue comments whose body starts with `<!-- forced-handoff:`, and review
+them before enabling the mode. A private downstream adopter reported this on
+2026-10-06 as low severity; no incident is recorded.
+
+The sequence that recovers a stalled handoff: commit the opt-in to the base
+branch through a normal pull request, merge the base branch into the PR branch,
+rerun Resume Step 1, then hand off.
+
+`--import --force` overwrites `.github/idd/config.json`, including
+`forcedHandoff`, and only the `commands` table is restored afterwards. The
+overlay re-import procedure passes one `--hold` per owned path, with
+`.github/idd/config.json` as the default example. Any other forced re-import
+must re-record the opt-in. A private downstream adopter reported this on
+2026-10-04 as not observed, so the rule is preventive and has no observed
+incident.
+
 ### Example configurations
 
 **Small team, high trust**:
