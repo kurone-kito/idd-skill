@@ -3825,6 +3825,36 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ prefix: 'checkout must pin ref:' }],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a refresh job guard wrapped with a true || prefix does not skip plain issues',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const job = `    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`;
+        anchored(text, job);
+        return text
+          .split(job)
+          .join(
+            `    if: \${{ true || github.event_name != 'issue_comment' || github.event.issue.pull_request != null }}\n`,
+          );
+      },
+    },
+    expected: [{ message: 'must skip a plain-issue issue_comment event' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a refresh job that declares a second if: key after its guard',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const job = `    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`;
+        anchored(text, job);
+        return text.split(job).join(`${job}    if: true\n`);
+      },
+    },
+    expected: [{ message: 'refresh job must declare exactly one if: key' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
@@ -4184,6 +4214,52 @@ test('RWA006 reads a poster whose run: value starts on the next line', () => {
           violation.message ===
             'the post step must run scripts/external-check-waiver.mjs',
       ),
+      false,
+      JSON.stringify(violations),
+    );
+  });
+});
+
+test('RWA005 accepts a refresh job guard written in the expression wrapper', () => {
+  // GitHub accepts an if: expression with or without the ${{ }} wrapper, so a
+  // healthy copy written with the wrapper must not fail the guard check.
+  const wrapped = `    if: \${{ github.event_name != 'issue_comment' || github.event.issue.pull_request != null }}\n`;
+  const root = fixtureRoot({
+    [ROOT_COMMENT]: {
+      transform: (text: string) => {
+        const job = `    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`;
+        anchored(text, job);
+        return text.split(job).join(wrapped);
+      },
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some((violation) => violation.ruleId === 'RWA005'),
+      false,
+      JSON.stringify(violations),
+    );
+  });
+});
+
+test('RWA005 accepts a refresh job guard written in double quotes', () => {
+  // GitHub reads a double-quoted if: value as the same expression, so a healthy
+  // copy quoted this way must not fail the guard check.
+  const quoted = `    if: "github.event_name != 'issue_comment' || github.event.issue.pull_request != null"\n`;
+  const root = fixtureRoot({
+    [ROOT_COMMENT]: {
+      transform: (text: string) => {
+        const job = `    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`;
+        anchored(text, job);
+        return text.split(job).join(quoted);
+      },
+    },
+  });
+  withRoot(root, () => {
+    const violations = collectRepositoryWorkflowViolations(root);
+    assert.equal(
+      violations.some((violation) => violation.ruleId === 'RWA005'),
       false,
       JSON.stringify(violations),
     );

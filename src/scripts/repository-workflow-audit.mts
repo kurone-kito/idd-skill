@@ -2358,12 +2358,23 @@ function checkCommentRefreshTriggers(root: string, report: Report): void {
     ) {
       report(RWA005, path, 'on: must include issue_comment');
     }
-    const refreshIf =
-      jobBlocks(declared)
-        ?.get('refresh-if-idd-originated')
-        ?.match(/^ {4}if: (.*)$/m)?.[1]
-        ?.trim() ?? '';
-    if (
+    // The refresh job's own if:, read from its job block. GitHub accepts the
+    // expression with or without the ${{ }} wrapper and in double quotes, so
+    // those forms are normalized before the exact match. Whether GitHub keeps
+    // the first or the last of two if: keys was not verified, so a second one
+    // fails closed.
+    const refreshJob =
+      jobBlocks(declared)?.get('refresh-if-idd-originated') ?? '';
+    const refreshIfKeys = refreshJob.match(/^ {4}["']?if["']?[ \t]*:/gm) ?? [];
+    const refreshIf = (
+      refreshJob.match(/^ {4}["']?if["']?[ \t]*:[ \t]*(.*)$/m)?.[1] ?? ''
+    )
+      .trim()
+      .replace(/^"(.*)"$/, '$1')
+      .replace(/^\$\{\{\s*(.*?)\s*\}\}$/, '$1');
+    if (refreshIfKeys.length > 1) {
+      report(RWA005, path, 'refresh job must declare exactly one if: key');
+    } else if (
       !/^github\.event_name\s*!=\s*'issue_comment'\s*\|\|\s*github\.event\.issue\.pull_request\s*!=\s*null$/.test(
         refreshIf,
       )
