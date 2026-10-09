@@ -930,7 +930,7 @@
         "roadmapLabelName": {
           "type": "string",
           "minLength": 1,
-          "description": "GitHub label name applied to roadmap issues. Root discovery ignores it: the `<prefix>-roadmap-id` marker alone identifies a roadmap root. Readiness still reads it. Optional; defaults to `roadmap`."
+          "description": "GitHub label name applied to roadmap issues. Root discovery ignores it: the `<prefix>-roadmap-id` marker alone identifies a roadmap root. Discover and idd-doctor still read it. Optional; defaults to `roadmap`."
         },
         "blockedByHumanLabelName": {
           "type": "string",
