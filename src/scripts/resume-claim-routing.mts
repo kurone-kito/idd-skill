@@ -1013,9 +1013,15 @@ export function resolveAssertOutcome(result: {
     result.state === 'owner_evidence_required' && result.evidence.owner_evidence
       ? firstFailedOwnerProof(result.evidence.owner_evidence)
       : null;
+  // A claim-lock mismatch is cured by acquiring the lock on the linked
+  // worktree, so name that step instead of leaving only the proof name.
+  const remedy =
+    failedProof === 'claim_lock_matches'
+      ? ' remedy="claim-lock --acquire --worktree <linked-worktree>"'
+      : '';
   return {
     exitCode: 1,
-    message: `resume-claim-routing --assert: state=${result.state} action=${result.action} reason=${result.reason}${failedProof === null ? '' : ` first_failed_proof=${failedProof}`}`,
+    message: `resume-claim-routing --assert: state=${result.state} action=${result.action} reason=${result.reason}${failedProof === null ? '' : ` first_failed_proof=${failedProof}`}${remedy}`,
   };
 }
 
