@@ -12,7 +12,7 @@
  * Supported enforcement keywords:
  *   type, required, properties, patternProperties, additionalProperties,
  *   minLength, minimum, exclusiveMinimum, pattern, format (date-time, RFC 3339),
- *   minItems, items, enum
+ *   minItems, items, enum, oneOf, `$defs`, and constrained local `$ref`
  *
  * Any other keyword in a schema triggers an error, preventing false
  * confidence from silently-ignored constraints.
@@ -53,6 +53,9 @@ const ENFORCED_KEYWORDS = new Set([
   'minItems',
   'items',
   'enum',
+  '$ref',
+  'oneOf',
+  '$defs',
 ]);
 const ALLOWED_KEYWORDS = new Set([
   ...ANNOTATION_KEYWORDS,
@@ -104,7 +107,10 @@ export function isRfc3339DateTime(value) {
 /**
  * Check that a schema object only uses allowed keywords, recursively.
  */
-export function checkSchemaKeywords(schema, path = '$') {
+export function checkSchemaKeywords(schema, path = '$', context) {
+  return checkSchemaKeywordsWithRefs(schema, path, context, new Set());
+}
+function checkSchemaKeywordsWithRefs(schema, path, context, activeRefs) {
   if (typeof schema !== 'object' || schema === null) return [];
   const s = schema;
   const errors = [];
@@ -116,36 +122,163 @@ export function checkSchemaKeywords(schema, path = '$') {
   if (s.format !== undefined && !SUPPORTED_FORMATS.has(s.format)) {
     errors.push(`${path}: unsupported format value "${s.format}"`);
   }
+  if (s.$ref !== undefined) {
+    if (typeof s.$ref !== 'string') {
+      errors.push(`${path}: $ref must be a string`);
+    } else if (!context) {
+      errors.push(`${path}: cannot resolve $ref without schema source context`);
+    } else if (activeRefs.has(s.$ref)) {
+      errors.push(`${path}: cyclic $ref "${s.$ref}"`);
+    } else {
+      const resolved = resolveUserGlobalConfigRef(s.$ref, context);
+      if (typeof resolved === 'string') {
+        errors.push(`${path}: ${resolved}`);
+      } else {
+        const nextRefs = new Set(activeRefs);
+        nextRefs.add(s.$ref);
+        errors.push(
+          ...checkSchemaKeywordsWithRefs(
+            resolved,
+            `${path}.$ref(${s.$ref})`,
+            context,
+            nextRefs,
+          ),
+        );
+      }
+    }
+  }
+  for (const [name, definition] of Object.entries(s.$defs ?? {})) {
+    errors.push(
+      ...checkSchemaKeywordsWithRefs(
+        definition,
+        `${path}.$defs.${name}`,
+        context,
+        activeRefs,
+      ),
+    );
+  }
   for (const [prop, propSchema] of Object.entries(s.properties ?? {})) {
     errors.push(
-      ...checkSchemaKeywords(propSchema, `${path}.properties.${prop}`),
+      ...checkSchemaKeywordsWithRefs(
+        propSchema,
+        `${path}.properties.${prop}`,
+        context,
+        activeRefs,
+      ),
     );
   }
   for (const [pattern, propSchema] of Object.entries(
     s.patternProperties ?? {},
   )) {
     errors.push(
-      ...checkSchemaKeywords(
+      ...checkSchemaKeywordsWithRefs(
         propSchema,
         `${path}.patternProperties.${pattern}`,
+        context,
+        activeRefs,
       ),
     );
   }
   if (s.items && typeof s.items === 'object') {
-    errors.push(...checkSchemaKeywords(s.items, `${path}.items`));
+    errors.push(
+      ...checkSchemaKeywordsWithRefs(
+        s.items,
+        `${path}.items`,
+        context,
+        activeRefs,
+      ),
+    );
+  }
+  if (s.oneOf !== undefined) {
+    if (!Array.isArray(s.oneOf) || s.oneOf.length === 0) {
+      errors.push(`${path}: oneOf must be a non-empty array of schemas`);
+    } else {
+      for (let index = 0; index < s.oneOf.length; index += 1) {
+        errors.push(
+          ...checkSchemaKeywordsWithRefs(
+            s.oneOf[index],
+            `${path}.oneOf[${index}]`,
+            context,
+            activeRefs,
+          ),
+        );
+      }
+    }
   }
   if (
     typeof s.additionalProperties === 'object' &&
     s.additionalProperties !== null
   ) {
     errors.push(
-      ...checkSchemaKeywords(
+      ...checkSchemaKeywordsWithRefs(
         s.additionalProperties,
         `${path}.additionalProperties`,
+        context,
+        activeRefs,
       ),
     );
   }
   return errors;
+}
+/** Resolve only exact user-global definitions and same-bundle policy refs. */
+function resolveUserGlobalConfigRef(reference, context) {
+  if (context.schemaPath !== 'schemas/user-global-config.schema.json') {
+    return `unsupported $ref source "${context.schemaPath}"`;
+  }
+  const definitionMatch = /^#\/\$defs\/([A-Za-z0-9_$-]+)$/u.exec(reference);
+  if (definitionMatch) {
+    const definitionName = definitionMatch[1];
+    if (!definitionName) return `unresolved $ref "${reference}"`;
+    try {
+      const userGlobalSchema = loadJson(context.schemaPath, context.root);
+      const definitions = userGlobalSchema.$defs;
+      if (!definitions || !Object.hasOwn(definitions, definitionName)) {
+        return `unresolved $ref "${reference}"`;
+      }
+      return definitions[definitionName] ?? `unresolved $ref "${reference}"`;
+    } catch (error) {
+      return `cannot load local $ref "${reference}": ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  if (
+    !/^policy\.schema\.json#\/properties\/[A-Za-z0-9_$-]+(?:\/properties\/[A-Za-z0-9_$-]+)*$/u.test(
+      reference,
+    )
+  ) {
+    return `unsupported or non-local $ref "${reference}"`;
+  }
+  const pointer = reference.slice('policy.schema.json#/'.length);
+  const segments = pointer.split('/');
+  try {
+    const policySchema = loadJson('schemas/policy.schema.json', context.root);
+    let target = policySchema;
+    for (let index = 0; index < segments.length; index += 2) {
+      const keyword = segments[index];
+      const propertyName = segments[index + 1];
+      if (
+        keyword !== 'properties' ||
+        !propertyName ||
+        typeof target !== 'object' ||
+        target === null ||
+        Array.isArray(target)
+      ) {
+        return `unresolved $ref "${reference}"`;
+      }
+      const properties = target.properties;
+      if (
+        typeof properties !== 'object' ||
+        properties === null ||
+        Array.isArray(properties) ||
+        !Object.hasOwn(properties, propertyName)
+      ) {
+        return `unresolved $ref "${reference}"`;
+      }
+      target = properties[propertyName];
+    }
+    return target ?? `unresolved $ref "${reference}"`;
+  } catch (error) {
+    return `cannot load local $ref "${reference}": ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 function getType(val) {
   if (val === null) return 'null';
@@ -156,10 +289,49 @@ function getType(val) {
  * Validate data against a schema (subset enforced by this validator).
  * Returns error messages — empty array means valid.
  */
-export function validate(data, schema, path = '$') {
+export function validate(
+  data,
+  schema,
+  path = '$',
+  context,
+  activeRefs = new Set(),
+) {
   const s = schema;
   const errors = [];
   const actualType = getType(data);
+  if (s.$ref !== undefined) {
+    if (typeof s.$ref !== 'string') {
+      errors.push(`${path}: $ref must be a string`);
+    } else if (!context) {
+      errors.push(`${path}: cannot resolve $ref without schema source context`);
+    } else if (activeRefs.has(s.$ref)) {
+      errors.push(`${path}: cyclic $ref "${s.$ref}"`);
+    } else {
+      const resolved = resolveUserGlobalConfigRef(s.$ref, context);
+      if (typeof resolved === 'string') {
+        errors.push(`${path}: ${resolved}`);
+      } else {
+        const nextRefs = new Set(activeRefs);
+        nextRefs.add(s.$ref);
+        errors.push(...validate(data, resolved, path, context, nextRefs));
+      }
+    }
+  }
+  if (s.oneOf !== undefined) {
+    if (!Array.isArray(s.oneOf) || s.oneOf.length === 0) {
+      errors.push(`${path}: oneOf must be a non-empty array of schemas`);
+    } else {
+      const matchingBranches = s.oneOf.filter(
+        (branch) =>
+          validate(data, branch, path, context, activeRefs).length === 0,
+      ).length;
+      if (matchingBranches !== 1) {
+        errors.push(
+          `${path}: expected exactly one oneOf branch to match, got ${matchingBranches}`,
+        );
+      }
+    }
+  }
   if (s.type !== undefined) {
     if (Array.isArray(s.type)) {
       // Union type (e.g. ["string", "null"]): valid when the value matches any
@@ -227,7 +399,9 @@ export function validate(data, schema, path = '$') {
     }
     if (s.items !== undefined) {
       for (let i = 0; i < arr.length; i++) {
-        errors.push(...validate(arr[i], s.items, `${path}[${i}]`));
+        errors.push(
+          ...validate(arr[i], s.items, `${path}[${i}]`, context, activeRefs),
+        );
       }
     }
   }
@@ -240,7 +414,15 @@ export function validate(data, schema, path = '$') {
     }
     for (const [prop, propSchema] of Object.entries(s.properties ?? {})) {
       if (prop in obj) {
-        errors.push(...validate(obj[prop], propSchema, `${path}.${prop}`));
+        errors.push(
+          ...validate(
+            obj[prop],
+            propSchema,
+            `${path}.${prop}`,
+            context,
+            activeRefs,
+          ),
+        );
       }
     }
     const declaredProperties = s.properties ?? {};
@@ -265,7 +447,15 @@ export function validate(data, schema, path = '$') {
       for (const [patternRegex, patternSchema] of compiledPatternSchemas) {
         if (patternRegex.test(key)) {
           matchedPattern = true;
-          errors.push(...validate(obj[key], patternSchema, `${path}.${key}`));
+          errors.push(
+            ...validate(
+              obj[key],
+              patternSchema,
+              `${path}.${key}`,
+              context,
+              activeRefs,
+            ),
+          );
         }
       }
       if (isDeclaredProperty || matchedPattern) {
@@ -277,7 +467,13 @@ export function validate(data, schema, path = '$') {
       }
       if (additionalPropertiesSchema !== null) {
         errors.push(
-          ...validate(obj[key], additionalPropertiesSchema, `${path}.${key}`),
+          ...validate(
+            obj[key],
+            additionalPropertiesSchema,
+            `${path}.${key}`,
+            context,
+            activeRefs,
+          ),
         );
       }
     }
@@ -300,7 +496,7 @@ export function validate(data, schema, path = '$') {
  * `sectionKey` is absent from `config` — an absent section is valid on its
  * own terms; the caller's own defaults apply.
  */
-export function validateConfigSection(config, schema, sectionKey) {
+export function validateConfigSection(config, schema, sectionKey, context) {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     return [];
   }
@@ -312,7 +508,7 @@ export function validateConfigSection(config, schema, sectionKey) {
   if (!Object.hasOwn(obj, sectionKey)) {
     return [];
   }
-  return validate(obj[sectionKey], sectionSchema, `$.${sectionKey}`);
+  return validate(obj[sectionKey], sectionSchema, `$.${sectionKey}`, context);
 }
 /**
  * Load and parse a JSON file by path relative to repository root.
@@ -365,14 +561,15 @@ export function validateFixture(
 ) {
   const schema = loadJson(schemaPath, root);
   const fixture = loadJson(fixturePath, root);
-  const keyErrors = checkSchemaKeywords(schema);
+  const context = { root, schemaPath };
+  const keyErrors = checkSchemaKeywords(schema, '$', context);
   if (keyErrors.length > 0) {
     return {
       ok: false,
       errors: [`Schema has unsupported keywords: ${keyErrors.join('; ')}`],
     };
   }
-  const errs = validate(fixture, schema);
+  const errs = validate(fixture, schema, '$', context);
   let graphErrors = [];
   if (schemaPath.endsWith('phase-graph.schema.json') && errs.length === 0) {
     graphErrors = validatePhaseGraph(fixture);

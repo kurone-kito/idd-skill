@@ -212,6 +212,11 @@ export const SCHEMA_TYPE_CATALOG = [
     owningModule: 'src/scripts/policy-helpers.mts',
   },
   {
+    schemaFile: 'user-global-config.schema.json',
+    exportedType: 'UserGlobalPolicyDocument',
+    owningModule: 'src/scripts/layered-policy.mts',
+  },
+  {
     schemaFile: 'pre-merge-readiness.schema.json',
     exportedType: 'PreMergeReadinessReport',
     owningModule: 'src/scripts/pre-merge-readiness.mts',
@@ -404,6 +409,14 @@ export const SCHEMA_OUTPUT_COVERAGE: readonly CoverageEntry[] = [
       'policy.schema.json describes the input config document ' +
       '(.github/idd/config.json), not a helper stdout output -- it is ' +
       'already validated directly by validate-schemas (LIVE_INSTANCE_CASES).',
+  },
+  {
+    schema: 'user-global-config.schema.json',
+    status: 'uncovered',
+    reason:
+      'user-global-config.schema.json describes an operator input file, ' +
+      'not a helper stdout output -- its valid/invalid fixtures are ' +
+      'validated directly by validate-schemas.',
   },
   {
     schema: 'post-idd-marker.schema.json',

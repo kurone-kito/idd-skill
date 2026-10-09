@@ -1,0 +1,41 @@
+{
+  "claimTiming": {
+    "staleAge": "PT24H"
+  },
+  "commands": {
+    "install-deps": "pnpm install"
+  },
+  "helperRuntime": {
+    "packageSpec": "idd-skill@^1.0.0"
+  },
+  "critiqueLoop": {
+    "delegate": {
+      "mode": "combined"
+    }
+  },
+  "issueAuthoring": {
+    "adversarialReview": {
+      "delegate": {
+        "mode": "never"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "match": {
+        "repo": "owner/repo"
+      },
+      "config": {
+        "mergePolicy": "human_merge"
+      }
+    },
+    {
+      "match": {
+        "path": "operators/team/repo"
+      },
+      "config": {
+        "markerPrefix": "idd-operator"
+      }
+    }
+  ]
+}

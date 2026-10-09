@@ -111,6 +111,258 @@ test('policy schema uses only allowed keywords', () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
+test('user-global config schema uses only supported local refs and oneOf', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  assert.deepEqual(
+    checkSchemaKeywords(schema, '$', {
+      root: REPO_ROOT,
+      schemaPath: 'schemas/user-global-config.schema.json',
+    }),
+    [],
+  );
+});
+
+test('user-global partial object definitions preserve policy leaf constraints', () => {
+  const policy = loadJson('schemas/policy.schema.json') as {
+    properties: Record<string, unknown>;
+  };
+  const userGlobal = loadJson('schemas/user-global-config.schema.json') as {
+    $defs: Record<string, unknown>;
+  };
+  const partialFields = [
+    'claimTiming',
+    'commands',
+    'helperRuntime',
+    'critiqueLoop',
+    'issueAuthoring',
+  ];
+
+  function expectedPartialShape(
+    value: unknown,
+    field: string,
+    nestedPath: string[] = [],
+  ): unknown {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+      return value;
+    const node = value as Record<string, unknown>;
+    const expected: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'required' || key === 'description') continue;
+      if (key !== 'properties' || typeof child !== 'object' || child === null) {
+        expected[key] = child;
+        continue;
+      }
+      expected.properties = Object.fromEntries(
+        Object.entries(child).map(([name, propertySchema]) => {
+          const path = [...nestedPath, name];
+          const property = propertySchema as Record<string, unknown>;
+          if (property.properties && typeof property.properties === 'object') {
+            return [name, expectedPartialShape(propertySchema, field, path)];
+          }
+          const tokens = [field, ...path].map((token) =>
+            token.replaceAll('~', '~0').replaceAll('/', '~1'),
+          );
+          return [
+            name,
+            {
+              $ref: `policy.schema.json#/properties/${tokens.join('/properties/')}`,
+            },
+          ];
+        }),
+      );
+    }
+    return expected;
+  }
+
+  function withoutDescriptions(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(withoutDescriptions);
+    if (typeof value !== 'object' || value === null) return value;
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([key]) => key !== 'description')
+        .map(([key, child]) => [key, withoutDescriptions(child)]),
+    );
+  }
+
+  for (const field of partialFields) {
+    const definitionName = `partial${field[0]?.toUpperCase()}${field.slice(1)}`;
+    const source = policy.properties[field];
+    const partial = userGlobal.$defs[definitionName];
+    assert.ok(source, `policy schema must declare ${field}`);
+    assert.ok(partial, `user-global schema must define ${definitionName}`);
+    assert.deepEqual(
+      withoutDescriptions(partial),
+      expectedPartialShape(source, field),
+      field,
+    );
+  }
+});
+
+test('schema refs validate policy property targets and reject remote or escaping refs', () => {
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const reference = { $ref: 'policy.schema.json#/properties/markerPrefix' };
+  assert.deepEqual(validate('idd-operator', reference, '$', context), []);
+  assert.ok(validate('Bad', reference, '$', context).length > 0);
+
+  for (const ref of [
+    'https://example.test/schema.json',
+    '../policy.schema.json#/properties/markerPrefix',
+    'policy.schema.json#/properties/not-a-policy-field',
+    'policy.schema.json#/properties/constructor',
+    'policy.schema.json#/properties/toString',
+  ]) {
+    const errors = checkSchemaKeywords({ $ref: ref }, '$', context);
+    assert.ok(errors.length > 0, `expected ${ref} to be rejected`);
+  }
+  assert.ok(
+    validate(
+      42,
+      { $ref: 'policy.schema.json#/properties/constructor' },
+      '$',
+      context,
+    ).some((error) => error.includes('unresolved $ref')),
+  );
+  assert.ok(
+    checkSchemaKeywords({ $ref: reference.$ref }).some((error) =>
+      error.includes('without schema source context'),
+    ),
+  );
+});
+
+test('policy schema accepts distinct dotted x-extension keys', () => {
+  const policy = loadJson('fixtures/schemas/policy.valid.json') as JsonRecord;
+  policy['x-a.b'] = 'literal extension';
+  policy['x-a'] = { b: 'nested extension' };
+  assert.deepEqual(
+    validate(policy, loadJson('schemas/policy.schema.json')),
+    [],
+  );
+});
+
+test('user-global nested policy fields are partial while array entries stay complete', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+
+  assert.deepEqual(
+    validate(
+      {
+        claimTiming: { staleAge: 'PT24H' },
+        helperRuntime: { packageSpec: 'idd-skill@^1.0.0' },
+        overrides: [
+          {
+            match: { repo: 'owner/repo' },
+            config: { commands: { 'install-deps': 'pnpm install' } },
+          },
+        ],
+      },
+      schema,
+      '$',
+      context,
+    ),
+    [],
+  );
+  assert.ok(
+    validate({ claimTiming: { staleAge: 24 } }, schema, '$', context).length >
+      0,
+  );
+  assert.ok(
+    validate(
+      { ciGate: { externalChecks: { advisory: [{}] } } },
+      schema,
+      '$',
+      context,
+    ).some((error) => error.includes('missing required property "selector"')),
+  );
+});
+
+test('user-global path overrides reject dot segments', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const configFor = (path: string) => ({
+    overrides: [{ match: { path }, config: { issueScope: 'roadmap-first' } }],
+  });
+
+  for (const path of ['team/project', 'team\\project']) {
+    assert.deepEqual(validate(configFor(path), schema, '$', context), [], path);
+  }
+  for (const path of [
+    '.',
+    '..',
+    'team/./project',
+    'team/../project',
+    'team\n/./project',
+    'team\n/../project',
+  ]) {
+    assert.ok(
+      validate(configFor(path), schema, '$', context).length > 0,
+      `expected ${path} to be rejected`,
+    );
+  }
+});
+
+test('user-global repo overrides require a GitHub owner/repo slug', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const configFor = (repo: string) => ({
+    overrides: [{ match: { repo }, config: { issueScope: 'roadmap-first' } }],
+  });
+
+  assert.deepEqual(validate(configFor('owner/repo'), schema, '$', context), []);
+  for (const repo of [
+    'owner/repo?query',
+    'owner/repo#fragment',
+    'owner/repo name',
+    './repo',
+    'owner/..',
+  ]) {
+    assert.ok(
+      validate(configFor(repo), schema, '$', context).length > 0,
+      `expected ${repo} to be rejected`,
+    );
+  }
+});
+
+test('oneOf requires exactly one matching branch', () => {
+  const exclusiveMatch = {
+    oneOf: [
+      {
+        type: 'object',
+        required: ['repo'],
+        properties: { repo: { type: 'string' } },
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        required: ['path'],
+        properties: { path: { type: 'string' } },
+        additionalProperties: false,
+      },
+    ],
+  };
+  assert.ok(
+    validate({}, exclusiveMatch).some((error) => error.includes('got 0')),
+  );
+  assert.deepEqual(validate({ repo: 'owner/repo' }, exclusiveMatch), []);
+  assert.ok(
+    validate(
+      { one: true },
+      { oneOf: [{ type: 'object' }, { type: 'object' }] },
+    ).some((error) => error.includes('got 2')),
+  );
+});
+
 test('policy schema declares ciWait only once at the top level', () => {
   const schemaText = readFileSync(
     new URL('../schemas/policy.schema.json', import.meta.url),
@@ -141,8 +393,10 @@ test('every reachable property in every published schema has a description', () 
   // staying out of scope for the same reason.
   interface SchemaPropertyNode {
     description?: unknown;
+    $ref?: unknown;
     properties?: Record<string, SchemaPropertyNode>;
     items?: SchemaPropertyNode;
+    oneOf?: SchemaPropertyNode[];
   }
   function isSchemaObject(
     node: SchemaPropertyNode | undefined,
@@ -155,6 +409,7 @@ test('every reachable property in every published schema has a description', () 
     missing: string[],
     visited: { count: number },
     requireDescription: boolean,
+    policyProperties: Record<string, SchemaPropertyNode>,
   ): void {
     // A malformed node (non-object, null, or array) fails the description
     // check itself rather than being silently skipped -- otherwise a
@@ -162,10 +417,20 @@ test('every reachable property in every published schema has a description', () 
     // still counts toward the per-file visited guard.
     if (requireDescription) {
       visited.count += 1;
+      const ref =
+        typeof node?.$ref === 'string'
+          ? /^policy\.schema\.json#\/properties\/([A-Za-z0-9_$-]+)$/u.exec(
+              node.$ref,
+            )
+          : null;
+      const targetName = ref?.[1];
+      const target = targetName ? policyProperties[targetName] : undefined;
       if (
         !isSchemaObject(node) ||
-        typeof node.description !== 'string' ||
-        node.description.trim() === ''
+        ((typeof node.description !== 'string' ||
+          node.description.trim() === '') &&
+          (typeof target?.description !== 'string' ||
+            target.description.trim() === ''))
       ) {
         missing.push(path);
       }
@@ -178,6 +443,7 @@ test('every reachable property in every published schema has a description', () 
         missing,
         visited,
         true,
+        policyProperties,
       );
     }
     if (isSchemaObject(node.items)) {
@@ -187,6 +453,17 @@ test('every reachable property in every published schema has a description', () 
         missing,
         visited,
         false,
+        policyProperties,
+      );
+    }
+    for (const [index, branch] of (node.oneOf ?? []).entries()) {
+      collectMissingDescriptions(
+        branch,
+        `${path}.oneOf[${index}]`,
+        missing,
+        visited,
+        false,
+        policyProperties,
       );
     }
   }
@@ -202,6 +479,10 @@ test('every reachable property in every published schema has a description', () 
   );
 
   const missing: string[] = [];
+  const policySchema = loadJson('schemas/policy.schema.json') as {
+    properties?: Record<string, SchemaPropertyNode>;
+  };
+  const policyProperties = policySchema.properties ?? {};
   for (const file of schemaFiles) {
     const schema = loadJson(`schemas/${file}`) as {
       properties?: Record<string, SchemaPropertyNode>;
@@ -227,6 +508,7 @@ test('every reachable property in every published schema has a description', () 
         missing,
         visited,
         true,
+        policyProperties,
       );
     }
     assert.ok(

@@ -1,0 +1,549 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/user-global-config.schema.json",
+  "title": "IDD User-Global Config",
+  "description": "Partial operator-global IDD policy with repository-specific overrides.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "$ref": "policy.schema.json#/properties/$schema"
+    },
+    "iddVersion": {
+      "$ref": "policy.schema.json#/properties/iddVersion"
+    },
+    "markerPrefix": {
+      "$ref": "policy.schema.json#/properties/markerPrefix"
+    },
+    "developmentBranch": {
+      "$ref": "policy.schema.json#/properties/developmentBranch"
+    },
+    "provider": {
+      "$ref": "policy.schema.json#/properties/provider"
+    },
+    "mergePolicy": {
+      "$ref": "policy.schema.json#/properties/mergePolicy"
+    },
+    "mergePolicyAck": {
+      "$ref": "policy.schema.json#/properties/mergePolicyAck"
+    },
+    "reviewPolicy": {
+      "$ref": "policy.schema.json#/properties/reviewPolicy"
+    },
+    "threadResolutionPolicy": {
+      "$ref": "policy.schema.json#/properties/threadResolutionPolicy"
+    },
+    "authoringLanguage": {
+      "$ref": "policy.schema.json#/properties/authoringLanguage"
+    },
+    "claimTiming": {
+      "$ref": "#/$defs/partialClaimTiming",
+      "description": "Partial claim-ownership timing settings for user-global policy. Omitted fields inherit from lower layers."
+    },
+    "trustedMarkerActors": {
+      "$ref": "policy.schema.json#/properties/trustedMarkerActors"
+    },
+    "advisoryBotLogins": {
+      "$ref": "policy.schema.json#/properties/advisoryBotLogins"
+    },
+    "workshop": {
+      "$ref": "policy.schema.json#/properties/workshop"
+    },
+    "commands": {
+      "$ref": "#/$defs/partialCommands",
+      "description": "Partial shell-command overrides for user-global policy. Omitted commands inherit from lower layers."
+    },
+    "helperRuntime": {
+      "$ref": "#/$defs/partialHelperRuntime",
+      "description": "Partial helper-runtime selection for user-global policy. Omitted keys inherit from lower layers."
+    },
+    "issueScope": {
+      "$ref": "policy.schema.json#/properties/issueScope"
+    },
+    "orphanFirstPolicy": {
+      "$ref": "policy.schema.json#/properties/orphanFirstPolicy"
+    },
+    "skipIssueAuthorApprovalGate": {
+      "$ref": "policy.schema.json#/properties/skipIssueAuthorApprovalGate"
+    },
+    "critiqueLoopProfile": {
+      "$ref": "policy.schema.json#/properties/critiqueLoopProfile"
+    },
+    "mergeHandoffActor": {
+      "$ref": "policy.schema.json#/properties/mergeHandoffActor"
+    },
+    "externalAdvisoryBot": {
+      "$ref": "policy.schema.json#/properties/externalAdvisoryBot"
+    },
+    "maintainerApprovalActorPolicy": {
+      "$ref": "policy.schema.json#/properties/maintainerApprovalActorPolicy"
+    },
+    "maintainerApprovalActors": {
+      "$ref": "policy.schema.json#/properties/maintainerApprovalActors"
+    },
+    "stallRecovery": {
+      "$ref": "policy.schema.json#/properties/stallRecovery"
+    },
+    "forcedHandoff": {
+      "$ref": "policy.schema.json#/properties/forcedHandoff"
+    },
+    "forced-handoff": {
+      "$ref": "policy.schema.json#/properties/forced-handoff"
+    },
+    "forcedHandoffMode": {
+      "$ref": "policy.schema.json#/properties/forcedHandoffMode"
+    },
+    "forced-handoff-mode": {
+      "$ref": "policy.schema.json#/properties/forced-handoff-mode"
+    },
+    "forcedHandoffAuthority": {
+      "$ref": "policy.schema.json#/properties/forcedHandoffAuthority"
+    },
+    "forced-handoff-authority": {
+      "$ref": "policy.schema.json#/properties/forced-handoff-authority"
+    },
+    "markerTrust": {
+      "$ref": "policy.schema.json#/properties/markerTrust"
+    },
+    "markerTrustAllowCollaboratorMarkers": {
+      "$ref": "policy.schema.json#/properties/markerTrustAllowCollaboratorMarkers"
+    },
+    "allowCollaboratorMarkers": {
+      "$ref": "policy.schema.json#/properties/allowCollaboratorMarkers"
+    },
+    "advisoryWait": {
+      "$ref": "policy.schema.json#/properties/advisoryWait"
+    },
+    "advisoryConvergence": {
+      "$ref": "policy.schema.json#/properties/advisoryConvergence"
+    },
+    "ciWait": {
+      "$ref": "policy.schema.json#/properties/ciWait"
+    },
+    "ciGate": {
+      "$ref": "policy.schema.json#/properties/ciGate"
+    },
+    "providerOutage": {
+      "$ref": "policy.schema.json#/properties/providerOutage"
+    },
+    "localValidationEvidence": {
+      "$ref": "policy.schema.json#/properties/localValidationEvidence"
+    },
+    "providerHealth": {
+      "$ref": "policy.schema.json#/properties/providerHealth"
+    },
+    "githubApi": {
+      "$ref": "policy.schema.json#/properties/githubApi"
+    },
+    "discover": {
+      "$ref": "policy.schema.json#/properties/discover"
+    },
+    "claim": {
+      "$ref": "policy.schema.json#/properties/claim"
+    },
+    "critiqueLoop": {
+      "$ref": "#/$defs/partialCritiqueLoop",
+      "description": "Partial critique-loop settings for user-global policy. Omitted keys inherit from lower layers."
+    },
+    "reviewEscalation": {
+      "$ref": "policy.schema.json#/properties/reviewEscalation"
+    },
+    "approvalSignals": {
+      "$ref": "policy.schema.json#/properties/approvalSignals"
+    },
+    "issueAuthoring": {
+      "$ref": "#/$defs/partialIssueAuthoring",
+      "description": "Partial issue-authoring settings for user-global policy. Omitted keys inherit from lower layers."
+    },
+    "autopilotSuitability": {
+      "$ref": "policy.schema.json#/properties/autopilotSuitability"
+    },
+    "worktreeGuard": {
+      "$ref": "policy.schema.json#/properties/worktreeGuard"
+    },
+    "upstreamEscalation": {
+      "$ref": "policy.schema.json#/properties/upstreamEscalation"
+    },
+    "labels": {
+      "$ref": "policy.schema.json#/properties/labels"
+    },
+    "mergeGate": {
+      "$ref": "policy.schema.json#/properties/mergeGate"
+    },
+    "overrides": {
+      "type": "array",
+      "description": "Repository-specific partial policy entries, evaluated by match specificity.",
+      "items": {
+        "type": "object",
+        "required": [
+          "match",
+          "config"
+        ],
+        "properties": {
+          "match": {
+            "type": "object",
+            "description": "Selects one repository by GitHub slug or path suffix, never both.",
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "repo"
+                ],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "pattern": "^(?![.]{1,2}/)(?![^/]+/[.]{1,2}$)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+                    "description": "GitHub owner/repo slug matched case-insensitively."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "path"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?![\\s\\S]*(?:^|[/\\\\])\\.{1,2}(?:[/\\\\]|$))(?:[^/\\\\]+[/\\\\])*[^/\\\\]+$",
+                    "description": "Path suffix matched on whole segments when origin is not GitHub. Dot and dot-dot segments are rejected because the resolver cannot match them safely."
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "config": {
+            "type": "object",
+            "description": "Partial policy fields applied above the user-global top-level fields.",
+            "properties": {
+              "$schema": {
+                "$ref": "policy.schema.json#/properties/$schema"
+              },
+              "iddVersion": {
+                "$ref": "policy.schema.json#/properties/iddVersion"
+              },
+              "markerPrefix": {
+                "$ref": "policy.schema.json#/properties/markerPrefix"
+              },
+              "developmentBranch": {
+                "$ref": "policy.schema.json#/properties/developmentBranch"
+              },
+              "provider": {
+                "$ref": "policy.schema.json#/properties/provider"
+              },
+              "mergePolicy": {
+                "$ref": "policy.schema.json#/properties/mergePolicy"
+              },
+              "mergePolicyAck": {
+                "$ref": "policy.schema.json#/properties/mergePolicyAck"
+              },
+              "reviewPolicy": {
+                "$ref": "policy.schema.json#/properties/reviewPolicy"
+              },
+              "threadResolutionPolicy": {
+                "$ref": "policy.schema.json#/properties/threadResolutionPolicy"
+              },
+              "authoringLanguage": {
+                "$ref": "policy.schema.json#/properties/authoringLanguage"
+              },
+              "claimTiming": {
+                "$ref": "#/$defs/partialClaimTiming",
+                "description": "Partial claim-ownership timing settings for user-global policy. Omitted fields inherit from lower layers."
+              },
+              "trustedMarkerActors": {
+                "$ref": "policy.schema.json#/properties/trustedMarkerActors"
+              },
+              "advisoryBotLogins": {
+                "$ref": "policy.schema.json#/properties/advisoryBotLogins"
+              },
+              "workshop": {
+                "$ref": "policy.schema.json#/properties/workshop"
+              },
+              "commands": {
+                "$ref": "#/$defs/partialCommands",
+                "description": "Partial shell-command overrides for user-global policy. Omitted commands inherit from lower layers."
+              },
+              "helperRuntime": {
+                "$ref": "#/$defs/partialHelperRuntime",
+                "description": "Partial helper-runtime selection for user-global policy. Omitted keys inherit from lower layers."
+              },
+              "issueScope": {
+                "$ref": "policy.schema.json#/properties/issueScope"
+              },
+              "orphanFirstPolicy": {
+                "$ref": "policy.schema.json#/properties/orphanFirstPolicy"
+              },
+              "skipIssueAuthorApprovalGate": {
+                "$ref": "policy.schema.json#/properties/skipIssueAuthorApprovalGate"
+              },
+              "critiqueLoopProfile": {
+                "$ref": "policy.schema.json#/properties/critiqueLoopProfile"
+              },
+              "mergeHandoffActor": {
+                "$ref": "policy.schema.json#/properties/mergeHandoffActor"
+              },
+              "externalAdvisoryBot": {
+                "$ref": "policy.schema.json#/properties/externalAdvisoryBot"
+              },
+              "maintainerApprovalActorPolicy": {
+                "$ref": "policy.schema.json#/properties/maintainerApprovalActorPolicy"
+              },
+              "maintainerApprovalActors": {
+                "$ref": "policy.schema.json#/properties/maintainerApprovalActors"
+              },
+              "stallRecovery": {
+                "$ref": "policy.schema.json#/properties/stallRecovery"
+              },
+              "forcedHandoff": {
+                "$ref": "policy.schema.json#/properties/forcedHandoff"
+              },
+              "forced-handoff": {
+                "$ref": "policy.schema.json#/properties/forced-handoff"
+              },
+              "forcedHandoffMode": {
+                "$ref": "policy.schema.json#/properties/forcedHandoffMode"
+              },
+              "forced-handoff-mode": {
+                "$ref": "policy.schema.json#/properties/forced-handoff-mode"
+              },
+              "forcedHandoffAuthority": {
+                "$ref": "policy.schema.json#/properties/forcedHandoffAuthority"
+              },
+              "forced-handoff-authority": {
+                "$ref": "policy.schema.json#/properties/forced-handoff-authority"
+              },
+              "markerTrust": {
+                "$ref": "policy.schema.json#/properties/markerTrust"
+              },
+              "markerTrustAllowCollaboratorMarkers": {
+                "$ref": "policy.schema.json#/properties/markerTrustAllowCollaboratorMarkers"
+              },
+              "allowCollaboratorMarkers": {
+                "$ref": "policy.schema.json#/properties/allowCollaboratorMarkers"
+              },
+              "advisoryWait": {
+                "$ref": "policy.schema.json#/properties/advisoryWait"
+              },
+              "advisoryConvergence": {
+                "$ref": "policy.schema.json#/properties/advisoryConvergence"
+              },
+              "ciWait": {
+                "$ref": "policy.schema.json#/properties/ciWait"
+              },
+              "ciGate": {
+                "$ref": "policy.schema.json#/properties/ciGate"
+              },
+              "providerOutage": {
+                "$ref": "policy.schema.json#/properties/providerOutage"
+              },
+              "localValidationEvidence": {
+                "$ref": "policy.schema.json#/properties/localValidationEvidence"
+              },
+              "providerHealth": {
+                "$ref": "policy.schema.json#/properties/providerHealth"
+              },
+              "githubApi": {
+                "$ref": "policy.schema.json#/properties/githubApi"
+              },
+              "discover": {
+                "$ref": "policy.schema.json#/properties/discover"
+              },
+              "claim": {
+                "$ref": "policy.schema.json#/properties/claim"
+              },
+              "critiqueLoop": {
+                "$ref": "#/$defs/partialCritiqueLoop",
+                "description": "Partial critique-loop settings for user-global policy. Omitted keys inherit from lower layers."
+              },
+              "reviewEscalation": {
+                "$ref": "policy.schema.json#/properties/reviewEscalation"
+              },
+              "approvalSignals": {
+                "$ref": "policy.schema.json#/properties/approvalSignals"
+              },
+              "issueAuthoring": {
+                "$ref": "#/$defs/partialIssueAuthoring",
+                "description": "Partial issue-authoring settings for user-global policy. Omitted keys inherit from lower layers."
+              },
+              "autopilotSuitability": {
+                "$ref": "policy.schema.json#/properties/autopilotSuitability"
+              },
+              "worktreeGuard": {
+                "$ref": "policy.schema.json#/properties/worktreeGuard"
+              },
+              "upstreamEscalation": {
+                "$ref": "policy.schema.json#/properties/upstreamEscalation"
+              },
+              "labels": {
+                "$ref": "policy.schema.json#/properties/labels"
+              },
+              "mergeGate": {
+                "$ref": "policy.schema.json#/properties/mergeGate"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "partialClaimTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "staleAge": {
+          "$ref": "policy.schema.json#/properties/claimTiming/properties/staleAge"
+        },
+        "heartbeatInterval": {
+          "$ref": "policy.schema.json#/properties/claimTiming/properties/heartbeatInterval"
+        }
+      },
+      "description": "Partial claim-ownership timing settings for user-global policy. Omitted fields inherit from lower layers."
+    },
+    "partialCommands": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "install-deps": {
+          "$ref": "policy.schema.json#/properties/commands/properties/install-deps"
+        },
+        "fix-validate": {
+          "$ref": "policy.schema.json#/properties/commands/properties/fix-validate"
+        },
+        "pre-push-validate": {
+          "$ref": "policy.schema.json#/properties/commands/properties/pre-push-validate"
+        },
+        "post-fix-validate": {
+          "$ref": "policy.schema.json#/properties/commands/properties/post-fix-validate"
+        }
+      },
+      "description": "Partial shell-command overrides for user-global policy. Omitted commands inherit from lower layers."
+    },
+    "partialHelperRuntime": {
+      "type": "object",
+      "description": "Partial helper-runtime selection for user-global policy. Omitted keys inherit from lower layers.",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "$ref": "policy.schema.json#/properties/helperRuntime/properties/profile"
+        },
+        "launcher": {
+          "$ref": "policy.schema.json#/properties/helperRuntime/properties/launcher"
+        },
+        "packageSpec": {
+          "$ref": "policy.schema.json#/properties/helperRuntime/properties/packageSpec"
+        }
+      }
+    },
+    "partialCritiqueLoop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cPhaseLowSeveritySkipAfter": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/cPhaseLowSeveritySkipAfter"
+        },
+        "e10NoProgressHoldAfter": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/e10NoProgressHoldAfter"
+        },
+        "deferAfterRounds": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferAfterRounds"
+        },
+        "deferByUrgency": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferByUrgency"
+        },
+        "deferRelaxAtRounds": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferRelaxAtRounds"
+        },
+        "deferNeedsDecision": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferNeedsDecision"
+        },
+        "subagentWaitCeiling": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/subagentWaitCeiling"
+        },
+        "delegate": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "policy.schema.json#/properties/critiqueLoop/properties/delegate/properties/command"
+            },
+            "mode": {
+              "$ref": "policy.schema.json#/properties/critiqueLoop/properties/delegate/properties/mode"
+            }
+          },
+          "description": "Repository-configurable C1/E10 critique delegate. Optional; a repo-local key genuinely absent (not this explicit-null case) keeps per-agent-only behavior unless a local runtime inherits a user-global delegate instead. An explicit JSON `null` is the local disable sentinel: it prevents inheriting a user-global delegate without installing a local command. `required` and `properties` apply only when the value is an object. User-global layers may omit these nested keys; absent values inherit from lower layers."
+        },
+        "telemetryHook": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "$ref": "policy.schema.json#/properties/critiqueLoop/properties/telemetryHook/properties/command"
+            }
+          },
+          "description": "Repository-configurable per-round C-phase critique telemetry hook declaration. Optional; resolved and invoked fire-and-forget from the C-phase loop (C2's zero-issue exit and C4's Accept/Reject decision) — see `docs/idd-workflow.md`'s \"Repository-configurable critique telemetry hook\" section for the resolution order and JSON payload shape. Unlike `delegate` above, it never supplies critique findings or gates C-phase control flow. An explicit JSON `null` is the local disable sentinel: it prevents inheriting a user-global hook without installing a local one. `required` and `properties` apply only when the value is an object. User-global layers may omit these nested keys; absent values inherit from lower layers."
+        }
+      },
+      "description": "Partial critique-loop settings for user-global policy. Omitted keys inherit from lower layers."
+    },
+    "partialIssueAuthoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxClarificationRounds": {
+          "$ref": "policy.schema.json#/properties/issueAuthoring/properties/maxClarificationRounds"
+        },
+        "authoringLabelName": {
+          "$ref": "policy.schema.json#/properties/issueAuthoring/properties/authoringLabelName"
+        },
+        "authoringStaleAge": {
+          "$ref": "policy.schema.json#/properties/issueAuthoring/properties/authoringStaleAge"
+        },
+        "heartbeatCoalesceWindow": {
+          "$ref": "policy.schema.json#/properties/issueAuthoring/properties/heartbeatCoalesceWindow"
+        },
+        "journalIssue": {
+          "$ref": "policy.schema.json#/properties/issueAuthoring/properties/journalIssue"
+        },
+        "adversarialReview": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "waitCeiling": {
+              "$ref": "policy.schema.json#/properties/issueAuthoring/properties/adversarialReview/properties/waitCeiling"
+            },
+            "delegate": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "$ref": "policy.schema.json#/properties/issueAuthoring/properties/adversarialReview/properties/delegate/properties/command"
+                },
+                "mode": {
+                  "$ref": "policy.schema.json#/properties/issueAuthoring/properties/adversarialReview/properties/delegate/properties/mode"
+                }
+              },
+              "description": "Dedicated issue-authoring adversarial-review delegate. Optional; a key genuinely absent keeps the native reviewer unless a local runtime inherits a user-global delegate. An explicit JSON `null` disables inheritance without installing a local command. `required` and `properties` apply only when the value is an object. User-global layers may omit these nested keys; absent values inherit from lower layers."
+            }
+          },
+          "description": "Issue-authoring adversarial draft review. Optional; omitting it keeps the native reviewer and the `PT20M` wait ceiling. Unknown keys are rejected."
+        }
+      },
+      "description": "Partial issue-authoring settings for user-global policy. Omitted keys inherit from lower layers."
+    }
+  }
+}
