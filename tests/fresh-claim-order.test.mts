@@ -23,14 +23,26 @@ test('both fresh-claim worktree commands use --no-track', () => {
   }
 });
 
-test('the claim instructions state the worktree-first order and the counting check', () => {
+test('the claim instructions state the worktree-first steps in sequence', () => {
   const claim = readTemplate(
     'idd-template/.github/instructions/idd-claim.instructions.md',
   );
-  assert.match(claim, /Fresh-claim order, worktree first:/);
-  assert.match(claim, /`--acquire --worktree <path>`/);
-  assert.match(
-    claim,
-    /after the settle\s+delay, `--assert --worktree <path>`, which alone counts/,
+  const steps = [
+    'Fresh-claim order, worktree first:',
+    '(1) `git worktree add --no-track`',
+    '(2) `--record-tokens',
+    '(3) claim comment per',
+    '(4) `--acquire --worktree <path>`',
+    '(5) after the settle',
+    '`--assert --worktree <path>`, which alone counts',
+  ];
+  const positions = steps.map((step) => claim.indexOf(step));
+  for (const [index, position] of positions.entries()) {
+    assert.notEqual(position, -1, steps[index]);
+  }
+  assert.deepEqual(
+    [...positions].sort((left, right) => left - right),
+    positions,
+    'the steps must appear in the documented order',
   );
 });
