@@ -1655,12 +1655,13 @@ function applyConnectedPrEventNode(
  * (which throws on a failed or malformed page, matching
  * `idd-roadmap-audit-execute.mts`'s `hasOpenConnectedPr` precedent) instead
  * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle`.
- * A failed connected read surfaces as `lookupFailed: true` with an empty
- * `references` set. A failed closing-references read also sets
- * `lookupFailed: true`, but keeps the connected references, which are complete
- * on their own (#3871). A successful lookup that legitimately found no open
- * linked PR is `lookupFailed: false` with an empty set. Callers must not treat
- * a failure and an empty success the same way -- see
+ * A failed read of either signal sets `lookupFailed: true`. The failed signal
+ * contributes nothing: a failed connected read discards its partial map, and a
+ * failed closing read adds no node. The other signal's references are kept
+ * when that read succeeds (#3871), so `references` can be non-empty on a
+ * failure. A successful lookup that legitimately found no open linked PR is
+ * `lookupFailed: false` with an empty set. Callers must not treat a failure
+ * and an empty success the same way -- see
  * {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}.
  */
 export function fetchOpenLinkedPrReferences(
