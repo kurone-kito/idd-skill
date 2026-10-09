@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 // #2919: the real workflow-file-path constant, imported here (a test file,
 // no import-cycle constraint applies) to pin protocol-helpers.mts's own
@@ -17420,4 +17421,78 @@ test('merge-side summary reports a relayed, authorized handoff with its gate cau
     capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
     ['issue-only-not-before-first-commit'],
   );
+});
+
+test('merge-side summary names first-commit-time-unknown when no first-commit time is supplied', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      prFirstCommitAt: null,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['first-commit-time-unknown'],
+  );
+});
+
+test('every ignored-handoff cause the merge report produces is in the published schema enum', () => {
+  // The schema is the published contract, so a cause the code can emit must be
+  // one the schema accepts. Cover each merge-side refusal the tests exercise.
+  const schema = JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL('../schemas/pre-merge-readiness.schema.json', import.meta.url),
+      ),
+      'utf8',
+    ),
+  ) as {
+    properties: {
+      ignoredForcedHandoffs: {
+        items: { properties: { cause: { enum: string[] } } };
+      };
+    };
+  };
+  const allowed = new Set(
+    schema.properties.ignoredForcedHandoffs.items.properties.cause.enum,
+  );
+  const scenarios = [
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    { ...REFUSED_HANDOFF_OPTIONS, authorizedForcedHandoffLogins: [] },
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      forcedHandoffEnabled: false,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      prFirstCommitAt: null,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+  ];
+  for (const options of scenarios) {
+    const capture: ClaimValidationTraceCapture = {};
+    summarizeClaimValidationImpl(
+      withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+        typeof summarizeClaimValidationImpl
+      >[0],
+      options,
+      capture,
+    );
+    for (const entry of capture.ignoredForcedHandoffs ?? []) {
+      assert.ok(
+        allowed.has(entry.cause),
+        `cause ${entry.cause} is not in the schema enum`,
+      );
+    }
+  }
 });
