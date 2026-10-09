@@ -77,6 +77,118 @@ test('reports usable:false, reason repository-local-explicit-disable for a null 
   });
 });
 
+// #3820: without an explicit localConfig, the repository document is read raw,
+// so a user-global delegate is still attributed to the user-global layer.
+test('a user-global delegate with no repository file is reported as user-global (#3820)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-source-'));
+  const globalPath = join(sandbox, 'config.json');
+  writeFileSync(
+    globalPath,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    }),
+  );
+  const previousCwd = process.cwd();
+  process.chdir(sandbox);
+  try {
+    const report = buildCritiqueDelegateReport({
+      globalConfigPath: globalPath,
+      env: {},
+    });
+    assert.deepEqual(report, {
+      usable: true,
+      source: 'user-global',
+      command: 'global-review',
+      mode: 'fallback',
+      reason: null,
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+// #3820: the fragment resolver reads the user-global layers through the
+// layered resolver, so an override selected for this checkout supplies the
+// delegate when the repository has none. A path override matches only a
+// readable git repository with no GitHub origin, so the checkout is initialized
+// as one here.
+test('a user-global override selected for this checkout supplies the delegate when local is absent (#3820)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-override-'),
+  );
+  const checkout = join(sandbox, 'checkout-override');
+  mkdirSync(checkout);
+  execFileSync('git', ['init', '-q', checkout]);
+  const globalPath = join(sandbox, 'config.json');
+  writeFileSync(
+    globalPath,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'base-review' } },
+      overrides: [
+        {
+          match: { path: 'checkout-override' },
+          config: {
+            critiqueLoop: { delegate: { command: 'override-review' } },
+          },
+        },
+      ],
+    }),
+  );
+  const previousCwd = process.cwd();
+  process.chdir(checkout);
+  try {
+    const report = buildCritiqueDelegateReport({
+      localConfig: {},
+      globalConfigPath: globalPath,
+      env: {},
+    });
+    assert.deepEqual(report, {
+      usable: true,
+      source: 'user-global',
+      command: 'override-review',
+      mode: 'fallback',
+      reason: null,
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
+// #3820: a path override never applies to a directory that is not a readable
+// git repository, so the base delegate stays in force there.
+test('a path override does not apply to a directory that is not a git repository (#3820)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-nongit-'));
+  const checkout = join(sandbox, 'checkout-nongit');
+  mkdirSync(checkout);
+  const globalPath = join(sandbox, 'config.json');
+  writeFileSync(
+    globalPath,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'base-review' } },
+      overrides: [
+        {
+          match: { path: 'checkout-nongit' },
+          config: {
+            critiqueLoop: { delegate: { command: 'override-review' } },
+          },
+        },
+      ],
+    }),
+  );
+  const previousCwd = process.cwd();
+  process.chdir(checkout);
+  try {
+    const report = buildCritiqueDelegateReport({
+      localConfig: {},
+      globalConfigPath: globalPath,
+      env: {},
+    });
+    assert.equal(report.command, 'base-review');
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
 test('a malformed repository-local delegate fails closed and never inherits a configured global delegate', () => {
   const sandbox = mkdtempSync(
     join(tmpdir(), 'idd-critique-delegate-malformed-'),

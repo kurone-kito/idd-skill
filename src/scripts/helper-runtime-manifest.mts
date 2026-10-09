@@ -477,6 +477,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Run IDD onboarding drift checks against the local repository.',
   },
   {
+    id: 'effective-config',
+    scriptName: 'idd:effective-config',
+    binName: 'idd-effective-config',
+    entryPath: 'scripts/idd-effective-config.mjs',
+    vendoredCommand: 'node scripts/idd-effective-config.mjs',
+    description:
+      'Print the effective layered policy as JSON, with the layer each value came from, the selected user-global override, and layering diagnostics. Read-only.',
+  },
+  {
     id: 'emit-marker',
     scriptName: 'idd:emit-marker',
     binName: 'idd-emit-marker',

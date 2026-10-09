@@ -12,6 +12,7 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { loadLayeredLocalPolicy } from './idd-config.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
@@ -21,7 +22,6 @@ import { loadJson, validateConfigSection } from './validate-schemas.mjs';
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
 const DEFAULT_GENERATION_TIMEOUT = 'PT10M';
 const DEFAULT_RERUN_POLICY = 'rerun-once';
-const DEFAULT_POLICY_PATH = '.github/idd/config.json';
 const RERUN_POLICIES = new Set(['rerun-once', 'hold']);
 /** A conservative GitHub owner/repo identifier character class --
  * alphanumeric, hyphen, underscore, period. Mirrors
@@ -58,7 +58,10 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
 // trigger fires (see #1177's entry-order TDZ hardening for the same class
 // of bug in this file).
 const CI_WAIT_POLICY_FLAG_SPEC = {
-  '--policy': { type: 'string', default: DEFAULT_POLICY_PATH },
+  // No default: an omitted --policy must stay distinguishable from an explicit
+  // one. An omitted flag reads the layered policy (#3820); an explicit path,
+  // even the default string, reads only that file.
+  '--policy': { type: 'string' },
   '--rerun-count': { type: 'string' },
   '--run-id': { type: 'string' },
   '--owner': { type: 'string', default: '' },
@@ -104,10 +107,36 @@ export function normalizeCiWaitPolicy(ciWait = {}) {
     rerunPolicy,
   };
 }
-export function readCiWaitPolicy(policyPath = DEFAULT_POLICY_PATH) {
-  const source = policyPath
-    ? resolve(process.cwd(), policyPath)
-    : resolve(process.cwd(), DEFAULT_POLICY_PATH);
+/**
+ * #3820: the ciWait section of the layered policy, for the default path. The
+ * same section validation applies, so an invalid section still falls back to
+ * the defaults as the single-file read does. A malformed repository file also
+ * falls back, because the layered result would otherwise hide that failure.
+ */
+function readLayeredCiWaitPolicy() {
+  try {
+    const loaded = loadLayeredLocalPolicy();
+    if (loaded.local.diagnostic !== undefined || loaded.config === null) {
+      return { ...DEFAULT_CI_WAIT_POLICY };
+    }
+    if (
+      validateConfigSection(loaded.config, POLICY_SCHEMA, 'ciWait').length > 0
+    ) {
+      return { ...DEFAULT_CI_WAIT_POLICY };
+    }
+    return normalizeCiWaitPolicy(loaded.config.ciWait);
+  } catch {
+    return { ...DEFAULT_CI_WAIT_POLICY };
+  }
+}
+export function readCiWaitPolicy(policyPath) {
+  // Only an omitted path reads the layered policy. An explicit empty path is
+  // not a request for the user-global layers: it reads that path, which is
+  // not a file, so it falls back to the defaults.
+  if (policyPath === undefined) {
+    return readLayeredCiWaitPolicy();
+  }
+  const source = resolve(process.cwd(), policyPath);
   try {
     const config = JSON.parse(readFileSync(source, 'utf8'));
     // Scoped to the ciWait subtree (#1359): an unrelated invalid field
