@@ -635,11 +635,15 @@ export function evaluateForcedHandoffPreflight({
  *   and the underlying message. An operator who passes `--policy` has
  *   stated that the file matters; silently falling back to defaults would
  *   discard that intent.
- * - The default path (`policyPath` empty or omitted) returns `{ config:
- *   null }` only when the file does not exist (`ENOENT`) — the legitimate
- *   "repository has no IDD config" case. A syntax error, permission error,
- *   or any other read failure on the default path still throws: an
- *   existing-but-broken config is never silently equivalent to "absent".
+ * - The default path (`policyPath` empty or omitted) reads the layered policy
+ *   (#3820): the repository file over the selected user-global override over
+ *   the user-global base. `config` is `null` only when no tier exists at all,
+ *   the legitimate "no IDD config anywhere" case. A repository file that
+ *   exists but cannot be read, such as a syntax error, a permission error, or
+ *   a dangling symlink, still throws: an existing-but-broken config is never
+ *   silently equivalent to "absent".
+ * - An explicit path reads only that file, with no user-global layers, and
+ *   throws when that file is missing, unreadable, or malformed.
  * - A file that parses as valid JSON but whose top-level value is not a
  *   plain object (`null`, an array, a string, a number, a boolean) is
  *   rejected the same way as a syntax error, for both the explicit and
