@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   computeWorkerBudget,
   readOneMinuteLoad,
@@ -350,4 +352,25 @@ test('worker budget fails closed on a fractional core count and admits a single-
   );
   assert.equal(singleCore.limitingFactor, 'candidates');
   assert.equal(singleCore.slots, 2);
+});
+
+test('the helper CLI rejects a worker count beyond the safe integer range', () => {
+  const repoRoot = fileURLToPath(new URL('../', import.meta.url));
+  const result = spawnSync(
+    process.execPath,
+    [
+      'scripts/idd-worker-budget.mjs',
+      '--running',
+      '9007199254740993',
+      '--startable',
+      '1',
+      '--no-network',
+    ],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /invalid value for argument: --running/,
+  );
 });

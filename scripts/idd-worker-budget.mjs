@@ -45,6 +45,20 @@ if (import.meta.main) {
     applyHelperCliOutcomeWhenDisabled(runCli());
   }
 }
+/**
+ * Parse a worker count, rejecting values beyond the safe integer range. The
+ * shared canonical parser accepts any digit string, and an unsafe value would
+ * be silently rounded before the budget arithmetic runs.
+ */
+function parseWorkerCountOrThrow(token, flagName) {
+  const value = parseCanonicalIntegerOrThrow(token, flagName, 0);
+  if (!Number.isSafeInteger(value)) {
+    throw markCliUsageError(
+      new Error(`invalid value for argument: ${flagName}`),
+    );
+  }
+  return value;
+}
 function runCli() {
   const { values, help } = parseCliArgs(
     process.argv.slice(2),
@@ -62,17 +76,13 @@ function runCli() {
   if (startableToken === undefined) {
     throw markCliUsageError(new Error('--startable is required'));
   }
-  const running = parseCanonicalIntegerOrThrow(runningToken, '--running', 0);
-  const startable = parseCanonicalIntegerOrThrow(
-    startableToken,
-    '--startable',
-    0,
-  );
+  const running = parseWorkerCountOrThrow(runningToken, '--running');
+  const startable = parseWorkerCountOrThrow(startableToken, '--startable');
   const harnessToken = values['harness-limit'];
   const harnessLimit =
     harnessToken === undefined
       ? null
-      : parseCanonicalIntegerOrThrow(harnessToken, '--harness-limit', 0);
+      : parseWorkerCountOrThrow(harnessToken, '--harness-limit');
   const policyPath = values.policy;
   const policy = loadPolicyConfig(policyPath).config;
   const { maxWorkers } = normalizePolicyConfig(policy).orchestrator;
