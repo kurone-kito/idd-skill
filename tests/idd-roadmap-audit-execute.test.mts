@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
 
@@ -30,6 +30,7 @@ import {
 } from '../src/scripts/idd-roadmap-audit-execute.mts';
 import { renderClaimedByMarker } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { fixtureEnv } from './test-utils.mts';
 
 const ROADMAP = 995;
 const CLAIM_ID = 'claim-20260626T000000Z-995';
@@ -2307,36 +2308,6 @@ test('evaluateLocalCoordinationState evaluates EVERY matched worktree, not just 
 // ---------------------------------------------------------------------------
 // evaluateLocalCoordinationState against REAL git fixtures (#2225, AC2-AC4)
 // ---------------------------------------------------------------------------
-
-// A git-config-file-safe null-device path. `node:os`'s `devNull` is the
-// Win32 device-namespace form (`\\.\nul`) on win32, which Git for Windows
-// cannot open as a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value (`fatal:
-// unable to access '//./nul': Invalid argument`); the bare `'NUL'` device
-// name is the form git itself accepts there. POSIX is unaffected -- devNull
-// there is already `/dev/null`. See kurone-kito/idd-skill#2570.
-const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
-
-// Fixture invariant mirrored from tests/worktree-guard-hook.test.mts and
-// tests/claim-lock.test.mts: fixture git processes must never read the
-// ambient git environment or the developer's config, so a signing-enabled
-// global config or an inherited GIT_DIR cannot leak into these throwaway
-// repos.
-function fixtureEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_CONFIG')) {
-      delete env[key];
-    }
-  }
-  delete env.GIT_DIR;
-  delete env.GIT_INDEX_FILE;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_COMMON_DIR;
-  delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
-  env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
-  return env;
-}
 
 function fixtureGit(cwd: string, args: string[]): void {
   execFileSync('git', args, { cwd, env: fixtureEnv(), stdio: 'pipe' });

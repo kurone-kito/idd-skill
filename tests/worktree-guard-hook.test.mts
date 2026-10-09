@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { fixtureEnv } from './test-utils.mts';
 
 // The hooks under test, shipped at the repository root.
 const HOOKS_DIR = join(
@@ -18,39 +19,6 @@ const TEMPLATE_HOOKS_DIR = join(
   'idd-template',
   '.githooks',
 );
-
-// A git-config-file-safe null-device path. `node:os`'s `devNull` is the
-// Win32 device-namespace form (`\\.\nul`) on win32, which Git for Windows
-// cannot open as a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value (`fatal:
-// unable to access '//./nul': Invalid argument`); the bare `'NUL'` device
-// name is the form git itself accepts there. POSIX is unaffected -- devNull
-// there is already `/dev/null`. See kurone-kito/idd-skill#2570.
-const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
-
-// Fixture invariant: fixture git processes must never read the ambient
-// git environment or the developer's config. Hook runs export GIT_DIR /
-// GIT_INDEX_FILE (so an unsanitized fixture would mutate the HOST
-// repository when this suite runs inside a pre-commit hook), and a
-// global config may enable commit signing (stalling fixture commits on
-// pinentry). Build the sanitized env per call so tests can poison
-// process.env and prove the isolation holds. The GIT_CONFIG_GLOBAL /
-// GIT_CONFIG_SYSTEM overrides require git >= 2.32.
-function fixtureEnv() {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_CONFIG')) {
-      delete env[key];
-    }
-  }
-  delete env.GIT_DIR;
-  delete env.GIT_INDEX_FILE;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_COMMON_DIR;
-  delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
-  env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
-  return env;
-}
 
 function git(repo: string, args: string[]): void {
   execFileSync('git', args, { cwd: repo, env: fixtureEnv(), stdio: 'pipe' });
