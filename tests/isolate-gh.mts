@@ -1996,6 +1996,84 @@ const shouldCheckExit =
   (process.env.IDD_TEST_GH_GUARD_SELF_CHECK === '1' ||
     ownerPid === process.pid);
 
+const pathShimScriptPath = fileURLToPath(
+  new URL('./isolate-gh-shim.cjs', import.meta.url),
+);
+
+function shellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/gu, "'\\''")}'`;
+}
+
+// The launcher a shell reaches when it resolves `gh` through PATH. It runs
+// the committed shim script under this Node binary, with NODE_OPTIONS cleared
+// so the shim does not load this guard a second time. The ledger fallback is
+// the owner's ledger, used only when the launch environment dropped it.
+function pathShimLauncher(ledgerFallback: string): string {
+  if (process.platform === 'win32') {
+    // cmd.exe expands `%name%` even inside quotes, so a `%` in a path has to
+    // be doubled to reach the script as written.
+    const batchEscape = (value: string): string => value.replaceAll('%', '%%');
+    return [
+      '@echo off',
+      `if not defined IDD_TEST_GH_GUARD_LEDGER set "IDD_TEST_GH_GUARD_LEDGER=${batchEscape(ledgerFallback)}"`,
+      'set "NODE_OPTIONS="',
+      `"${batchEscape(process.execPath)}" "${batchEscape(pathShimScriptPath)}" %*`,
+      '',
+    ].join('\r\n');
+  }
+  return [
+    '#!/bin/sh',
+    'if [ -z "$IDD_TEST_GH_GUARD_LEDGER" ]; then',
+    `  IDD_TEST_GH_GUARD_LEDGER=${shellSingleQuoted(ledgerFallback)}`,
+    'fi',
+    'export IDD_TEST_GH_GUARD_LEDGER',
+    'unset NODE_OPTIONS',
+    `exec ${shellSingleQuoted(process.execPath)} ${shellSingleQuoted(pathShimScriptPath)} "$@"`,
+    '',
+  ].join('\n');
+}
+
+// Writes the `gh` launcher into the guard root and puts its directory first
+// on PATH. Only the root's owner process does this: a child inherits the
+// PATH, and a repeated install in the owner is a no-op. `stubExecutable`
+// prepends its fixture directory later, so a registered stub still wins.
+function installPathShim(ledgerFallback: string): void {
+  const root = process.env.IDD_TEST_GH_GUARD_ROOT;
+  // A worker thread shares its process id with the owner, so the thread id
+  // is what tells the owner's main thread apart from a worker's copy of it.
+  if (
+    !root ||
+    workerThreads.threadId !== 0 ||
+    process.env.IDD_TEST_GH_GUARD_ROOT_OWNER_PID !== String(process.pid)
+  ) {
+    return;
+  }
+  const binDirectory = path.join(root, 'bin');
+  fs.mkdirSync(binDirectory, { recursive: true });
+  // A failed write throws on purpose: a missing launcher must abort the run,
+  // not leave `gh` unguarded. The explicit chmod keeps the execute bit that a
+  // umask could otherwise strip from the mode above.
+  const launcher = path.join(
+    binDirectory,
+    process.platform === 'win32' ? 'gh.cmd' : 'gh',
+  );
+  fs.writeFileSync(launcher, pathShimLauncher(ledgerFallback), 'utf8');
+  if (process.platform !== 'win32') fs.chmodSync(launcher, 0o755);
+  const pathKey =
+    process.platform === 'win32'
+      ? (Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ??
+        'Path')
+      : 'PATH';
+  const currentPath = process.env[pathKey] ?? '';
+  if (currentPath.split(path.delimiter)[0] !== binDirectory) {
+    process.env[pathKey] = [binDirectory, currentPath]
+      .filter(Boolean)
+      .join(path.delimiter);
+  }
+}
+
+installPathShim(ledger);
+
 function appendGuardImport(env: NodeJS.ProcessEnv, cwd: string | null): void {
   env.IDD_TEST_GH_GUARD_IMPORT = guardImport;
   const key = nodeOptionsEnvKey(env);

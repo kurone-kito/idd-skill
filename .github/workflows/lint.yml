@@ -199,12 +199,30 @@ jobs:
         # non-ASCII argument's encoding through PowerShell-to-node argv
         # on Windows is untested here -- safer to match on a unique
         # substring that avoids the question entirely.
-        run: >-
-          node --test --import ./tests/isolate-state.mts --test-name-pattern
-          "fresh acquire succeeds with no prior lock|structural invariants
-          hold under a same-claim-id race|genuinely pre-existing matching
-          lock reacquires with no racedCreate"
-          tests/claim-lock.test.mts
+        run: |
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "fresh acquire succeeds with no prior lock|structural invariants hold under a same-claim-id race|genuinely pre-existing matching lock reacquires with no racedCreate" --test-reporter=tap tests/claim-lock.test.mts | Tee-Object -FilePath claim-lock-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tap = 'claim-lock-windows.tap'
+          $file = 'tests/claim-lock.test.mts'
+          $normalizedFile = ($file -replace '\\+', '/') -replace '^\./', ''
+          $lines = Get-Content -Path $tap
+          $leaves = 0
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch '^\s*ok \d+ - (.*)$') { continue }
+            if ($lines[$i] -match '#\s*(skip|todo)\b') { continue }
+            $title = ($Matches[1] -replace '\\+', '/') -replace '^\./', ''
+            if ($title -eq $normalizedFile) { continue }
+            $isTest = $false
+            for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+              if ($lines[$j] -match '^\s*\.\.\.$' -or $lines[$j] -match '^\s*(not )?ok ' -or $lines[$j] -match '^\s*1\.\.\d+') { break }
+              if ($lines[$j] -match "type: 'test'") { $isTest = $true }
+            }
+            if ($isTest) { $leaves++ }
+          }
+          if ($leaves -eq 0) {
+            [Console]::Error.WriteLine("no leaf test selected by pattern in $file")
+            exit 1
+          }
       # The host-local read cache refuses a configured directory whose ACL
       # cannot be shown user-only (kurone-kito/idd-skill#3623). Only the
       # tests whose titles start with `windows acl` run: the fake-reader
@@ -214,9 +232,86 @@ jobs:
       # filtered like the claim-lock step above -- never the whole file --
       # and the pattern is ASCII-only for the same PowerShell reason.
       - name: Run read-cache Windows ACL tests
-        run: >-
-          node --test --import ./tests/isolate-state.mts --test-name-pattern "windows acl"
-          tests/github-api-read-cache.test.mts
+        run: |
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "windows acl" --test-reporter=tap tests/github-api-read-cache.test.mts | Tee-Object -FilePath read-cache-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tap = 'read-cache-windows.tap'
+          $file = 'tests/github-api-read-cache.test.mts'
+          $normalizedFile = ($file -replace '\\+', '/') -replace '^\./', ''
+          $lines = Get-Content -Path $tap
+          $leaves = 0
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch '^\s*ok \d+ - (.*)$') { continue }
+            if ($lines[$i] -match '#\s*(skip|todo)\b') { continue }
+            $title = ($Matches[1] -replace '\\+', '/') -replace '^\./', ''
+            if ($title -eq $normalizedFile) { continue }
+            $isTest = $false
+            for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+              if ($lines[$j] -match '^\s*\.\.\.$' -or $lines[$j] -match '^\s*(not )?ok ' -or $lines[$j] -match '^\s*1\.\.\d+') { break }
+              if ($lines[$j] -match "type: 'test'") { $isTest = $true }
+            }
+            if ($isTest) { $leaves++ }
+          }
+          if ($leaves -eq 0) {
+            [Console]::Error.WriteLine("no leaf test selected by pattern in $file")
+            exit 1
+          }
+      # The gh guard's PATH shim (kurone-kito/idd-skill#3841) is the only
+      # thing that sees a `gh` that cmd.exe or PowerShell resolves through
+      # PATH, so these two rows run here. Name filtered like the steps above,
+      # and the pattern is ASCII-only for the same PowerShell reason. Node
+      # exits 0 when a pattern matches no test, so the step counts the leaf
+      # tests in the TAP output and fails when none was selected.
+      - name: Run gh guard PATH shim Windows tests
+        run: |
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "path shim: windows" --test-reporter=tap tests/isolate-gh.test.mts | Tee-Object -FilePath path-shim-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tap = 'path-shim-windows.tap'
+          $file = 'tests/isolate-gh.test.mts'
+          $normalizedFile = ($file -replace '\\+', '/') -replace '^\./', ''
+          $lines = Get-Content -Path $tap
+          $leaves = 0
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch '^\s*ok \d+ - (.*)$') { continue }
+            if ($lines[$i] -match '#\s*(skip|todo)\b') { continue }
+            $title = ($Matches[1] -replace '\\+', '/') -replace '^\./', ''
+            if ($title -eq $normalizedFile) { continue }
+            $isTest = $false
+            for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+              if ($lines[$j] -match '^\s*\.\.\.$' -or $lines[$j] -match '^\s*(not )?ok ' -or $lines[$j] -match '^\s*1\.\.\d+') { break }
+              if ($lines[$j] -match "type: 'test'") { $isTest = $true }
+            }
+            if ($isTest) { $leaves++ }
+          }
+          if ($leaves -eq 0) {
+            [Console]::Error.WriteLine("no leaf test selected by pattern in $file")
+            exit 1
+          }
+      # The registered fixture case (kurone-kito/idd-skill#3893) hangs on
+      # native Windows when a stub is started without an argument and its
+      # caller leaves stdin open, and a hung child keeps the process alive
+      # after the test times out. `timeout-minutes` bounds that hang. The
+      # TAP check then requires this exact title to report `ok`, so a
+      # skipped or renamed case cannot pass silently.
+      - name: Run registered fixture gh paths Windows test
+        timeout-minutes: 5
+        run: |
+          node --test --test-timeout=60000 --import ./tests/isolate-state.mts --test-name-pattern "registered fixture gh paths work through nested stubs" --test-reporter=tap tests/isolate-gh.test.mts | Tee-Object -FilePath registered-fixture-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path registered-fixture-windows.tap -Pattern '^ok \d+ - registered fixture gh paths work through nested stubs and paginated workers$' -Quiet)) { throw 'registered fixture gh paths case did not pass' }
+      # Regression coverage for kurone-kito/idd-skill#3886: two tests import
+      # the gh-exec module through a file URL, because Node's ESM loader on
+      # Windows rejects an absolute path in an import specifier. The exit
+      # code alone cannot catch a pattern that matches no test, since Node
+      # exits 0 for that, so each exact title must also appear as a passing
+      # TAP line.
+      - name: Run gh-exec Windows import tests
+        run: |
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "paginated gh-exec Worker records|does not inherit Worker-invalid execArgv" --test-reporter=tap tests/isolate-gh.test.mts tests/gh-exec.test.mts | Tee-Object -FilePath gh-exec-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($title in @('the paginated gh-exec Worker records caught attempts in its owner ledger', 'ghApiJson (paginated) does not inherit Worker-invalid execArgv (\#3597)')) {
+            if (-not (Select-String -Path gh-exec-windows.tap -Pattern ('^ok \d+ - ' + [regex]::Escape($title) + '$') -Quiet)) { throw "no passing TAP line for: $title" }
+          }
       # Regression coverage for kurone-kito/idd-skill#2988: the full file
       # is now safe after #2989 bounded its production fetch calls and
       # #2990 made the fixture suite hermetic on Windows. Keep this

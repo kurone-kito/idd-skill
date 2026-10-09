@@ -90,7 +90,7 @@ function normalizeMarkerPrefix(prefix) {
  * by capitalization fall through to `not-found` even though it names the
  * same issue (kurone-kito/idd-skill#2901 review, Copilot round 4).
  */
-function sameIssueRef(a, b) {
+export function sameIssueRef(a, b) {
   return a.toLowerCase() === b.toLowerCase();
 }
 /**

@@ -6,7 +6,7 @@ Lite profile for weak/local models. Same semantics as
 ## Helper runtime contract
 
 1. **When helper runtime is enabled** (`package-manager`, `ephemeral-npx`,
-   or vendored-node): resolve each `node scripts/<h>.mjs` to its
+   `user-global`, or vendored-node): resolve each `node scripts/<h>.mjs` to its
    profile-selected form via `docs/idd-helper-scripts.md`, then run the
    commands below. If a helper is **missing, fails, returns invalid
    JSON, or disagrees with live GitHub state** → **stop and ask**. Do
@@ -36,12 +36,12 @@ Map helper fields to actions below.
 ## Required signals (collect once)
 
 Collect once: active `{claim-id}`/agent/branch from trusted markers (or
-unclaimed); trusted `forced-handoff: human-gated` proof (actor, displaced
-claim, branch, PR, URL; mismatches are Step 0 STOP); open PR+HEAD or
-`none`; latest issue/PR activity; PR-HEAD CI; and local worktree/branch/
-status/HEAD. When an open PR backs the claim, the proof must also have
-`contextScope: issue-plus-pr` with `linkedPr` naming that live PR.
-Never invent or post forced-handoff markers.
+unclaimed); trusted `forced-handoff: human-gated` proof (actor, displaced claim,
+branch, PR, URL; mismatches are Step 0 STOP); open PR+HEAD or `none`; latest
+issue/PR activity; PR-HEAD CI; and local worktree/branch/ status/HEAD. When an
+open PR backs the claim, the proof must have `contextScope: issue-plus-pr` with
+`linkedPr` naming it, or be issue-only before its first commit. Never invent or
+post forced-handoff markers.
 
 Use GitHub **server** timestamps only. Stale age default: **24 h**
 (`claim-stale-age` / `claimTiming.staleAge`).

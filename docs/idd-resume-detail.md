@@ -15,10 +15,18 @@ provides the detail needed when a branch requires careful judgment.
 ## §FH — Forced-Handoff Recovery
 
 A forced-handoff recovery path applies when the repository records
-`forced-handoff: human-gated` and valid trusted evidence exists for the
-selected issue. Collect evidence under the contract in `docs/customization.md`:
-record the approving human, old claim ID, branch, linked PR (if any), and
-evidence URL.
+`forcedHandoff.mode: human-gated` in the working directory's copy of
+`.github/idd/config.json`, which Resume reads. A handoff to a successor is
+posted only when the copies the pre-flight reads record it too. With a PR open,
+those are the PR base branch and the claim branch. With no PR, they are the
+default branch and the claim branch once it exists on the remote. F2 reads the
+base copy at merge. Valid trusted evidence must also exist for the selected
+issue. The `release` keyword posts an `unclaimed-by` marker without that
+pre-flight, but it still needs `human-gated` in the working directory's copy.
+The copies and the recovery sequence are described in
+[customization](customization.md#forced-handoff-copies-and-recovery). Collect
+evidence under the contract in `docs/customization.md`: record the approving
+human, old claim ID, branch, linked PR (if any), and evidence URL.
 
 The recommended operator path for collecting that evidence is the
 interactive `idd-force-handoff` helper. It asks for the issue number
@@ -40,10 +48,12 @@ forced-handoff if:
 - Any field required by the current approval-note format is missing or
   contradictory.
 - An open PR exists and the approval text does not name that PR (an
-  issue-only approval is insufficient for PR-scoped recovery).
-- The evidence `{claim-id}`, branch, or linked PR does not match the live
-  active claim or inheritable released branch/PR state — stop and report
-  the mismatch; do not claim, push, or mutate review state.
+  issue-only approval is insufficient for PR-scoped recovery unless it
+  predates the first commit of every open PR that backs the claim, the
+  earliest one when several do, kurone-kito/idd-skill#3871).
+- The evidence `{claim-id}`, branch, or linked PR (when it names one) does not
+  match the live active claim or inheritable released branch/PR state — stop and
+  report the mismatch; do not claim, push, or mutate review state.
 - The forced-handoff **authorization gate** does not hold. See
   [`idd-claim.instructions.md` rule 7](../.github/instructions/idd-claim.instructions.md#claim-state-parsing)
   for the full criteria — apply it in addition to the checks above; it
@@ -455,8 +465,9 @@ node scripts/delete-remote-branch.mjs \
 ```
 
 Use the helper runtime manifest's canonical command form for
-package-manager or ephemeral-npx. If helper runtime is unavailable, hold
-and ask an authorized operator to perform the atomic deletion; do not
+package-manager, ephemeral-npx, or user-global. If helper runtime is
+unavailable, hold and ask an authorized operator to perform the atomic
+deletion; do not
 wrap, quote, or otherwise disguise a command that the active tool policy
 denies. This keeps compare-and-delete available through the explicitly
 permitted helper surface (PR `#3741` Codex review comment
@@ -882,7 +893,11 @@ against an unrelated branch, and none has an observed incident of its own
    replay tip, not the pre-operation tip: read the pre-operation tip
    from `$(git -C <path> rev-parse --git-path rebase-merge)/orig-head`
    or `rebase-apply/orig-head` (whichever the detection above matched)
-   instead.
+   instead. For an in-progress bisect, `HEAD` is the commit under test,
+   not the pre-operation position: read that position from
+   `BISECT_START` instead. A branch name there means the current tip of
+   that branch is the intended tip, and a commit id there (a detached
+   start) is the intended tip itself.
 
    Before the first step-3 mutation, acquire the
    [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock) for the
@@ -910,8 +925,7 @@ against an unrelated branch, and none has an observed incident of its own
    - Probe:
 
      ```sh
-     git -C <path> submodule foreach --recursive 'git status
-     --porcelain --ignored --untracked-files=normal; git stash list; git rev-list --exclude=refs/tags/\* --glob=refs/\* --count --not --remotes || exit; git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count'
+     git -C <path> submodule foreach --recursive 'git status --porcelain --ignored --untracked-files=normal && git stash list && git rev-list --exclude=refs/tags/\* --glob=refs/\* --count --not --remotes && { git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count; }'
      ```
 
    Let `<tag>` be `idd-lwr <claim-id>`, or `idd-lwr legacy` when step 1
@@ -944,7 +958,8 @@ against an unrelated branch, and none has an observed incident of its own
    backup alone as sufficient preservation. Preserve unpushed commits
    — this worktree's own and every submodule's — on a backup ref:
    record the intended tip first (`git -C <path> rev-parse HEAD`, or
-   the pre-operation tip captured above for an in-progress rebase),
+   the pre-operation tip captured above for an in-progress rebase, or
+   the position `BISECT_START` names for an in-progress bisect),
    then `git -C <path> update-ref refs/idd-lwr/<branch> <that-sha>`
    (or the same scoped to a submodule's own path), or a bundle,
    instead of pushing them to the issue branch. A stale

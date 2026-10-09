@@ -272,6 +272,9 @@
         },
         {
           "value": "ephemeral-npx"
+        },
+        {
+          "value": "user-global"
         }
       ],
       "mapsToConfig": "/helperRuntime/profile"

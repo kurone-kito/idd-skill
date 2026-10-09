@@ -3490,6 +3490,15 @@ test('runVerify blocks when manifest completeness or placeholder residue fails',
 // checkPackagePinWarning / runVerify's packagePinWarning field (#2987)
 // ---------------------------------------------------------------------------
 
+test('checkPackagePinWarning keeps ephemeral-npx when a launcher is configured (idd-skill#3830)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'ephemeral-npx', launcher: 'auto' });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'ephemeral-npx');
+  assert.equal(result.applicable, true);
+});
+
 test('checkPackagePinWarning warns for package-manager with no packageSpec configured', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
@@ -3530,6 +3539,24 @@ test('checkPackagePinWarning warns for ephemeral-npx with no packageSpec configu
   // ephemeral-npx embeds the pin directly in its own invocation string
   // (`npx --yes --package <spec> idd-*`), unlike package-manager above.
   assert.match(result.warning as string, /resolve against/);
+});
+
+test('checkPackagePinWarning warns for user-global with no packageSpec configured', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  setHelperRuntime(targetRoot, { profile: 'user-global' });
+  const result = checkPackagePinWarning(targetRoot);
+  assert.equal(result.profile, 'user-global');
+  assert.equal(result.applicable, true);
+  assert.equal(result.packageSpecConfigured, false);
+  assert.ok(result.warning !== null);
+  assert.match(result.warning as string, /mutable default archive URL/);
+  // user-global installs the operator's global copy, so its warning names the
+  // operator install instead of a repository dependency or invocation string.
+  assert.match(
+    result.warning as string,
+    /installs its helper bins for the operator/,
+  );
 });
 
 test('checkPackagePinWarning reports no warning once packageSpec is configured', () => {

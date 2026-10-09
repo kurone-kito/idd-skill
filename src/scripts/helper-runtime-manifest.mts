@@ -5,6 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
@@ -16,7 +17,10 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { inspectHelperRuntimeConfig } from './policy-helpers.mts';
+import {
+  HELPER_RUNTIME_LAUNCHERS,
+  inspectHelperRuntimeConfig,
+} from './policy-helpers.mts';
 
 // Resolve the package/bundle root via the shared resolveBundleRoot (issue
 // #3238): the nearest ancestor containing schemas/policy.schema.json,
@@ -104,6 +108,7 @@ interface Recommendation {
 
 interface ProfileEntry {
   profile: string;
+  launcher?: LauncherResolution;
   description: string;
   packageManager: string;
   installCommand: string;
@@ -117,11 +122,26 @@ interface ProfileEntry {
   // .gitattributes lines (one per managed file). Other profiles omit
   // this field entirely.
   recommendedGitattributes?: string[];
+  // Only the user-global profile has an operator-level uninstall step,
+  // so only it carries this field; other profiles omit it.
+  uninstallCommand?: string;
+  // Set only when installCommand is empty for a reason the operator can act
+  // on (for example Yarn Berry under user-global, or no package manager
+  // detected), so the report says why instead of leaving the operator to
+  // guess. Profiles that always have an install step omit this field.
+  installUnavailableReason?: string;
 }
+
+// Yarn Berry (2 or later) has no global install, so the user-global profile
+// cannot be installed through it. "classic" is Yarn 1; "unknown" means the
+// repository declares a Yarn flavor we could not read, and the install
+// command is withheld rather than guessed.
+type YarnFlavor = 'classic' | 'berry' | 'unknown';
 
 interface ManifestArgs {
   help: boolean;
   profile: string;
+  launcher?: string;
   fromProfile: string;
   packageManager: string;
   packageSpec: string;
@@ -131,14 +151,25 @@ interface ManifestArgs {
 const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'];
 // Exported so other onboarding-stage CLIs (e.g. idd-onboard.mts's --import
 // mode) can validate a --profile flag against the same canonical set
-// instead of hand-maintaining a second copy of these four names.
+// instead of hand-maintaining a second copy of these names.
 export const PROFILE_NAMES = [
   'package-manager',
   'vendored-node',
   'ephemeral-npx',
   'instructions-only',
+  'user-global',
 ];
 const PACKAGE_NAME = '@kurone-kito/idd-skill';
+// Every global uninstall a user-global install could have been made with. The
+// repository cannot tell which manager installed the operator's copy, so a
+// switch away from user-global lists all of them and the operator runs the one
+// that matches their own install. Declared above the import.meta.main trigger
+// below, which can run main() before later module-level consts are initialized.
+const USER_GLOBAL_UNINSTALL_COMMANDS = [
+  `npm uninstall -g ${PACKAGE_NAME}`,
+  `pnpm remove -g ${PACKAGE_NAME}`,
+  `yarn global remove ${PACKAGE_NAME}`,
+];
 const DEFAULT_PACKAGE_SPEC =
   'https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main';
 const SOURCE_REPOSITORY = 'github:kurone-kito/idd-skill';
@@ -721,6 +752,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
     description:
       'Fetch-driven hide-on-supersede sweep for authoring-owner / authoring-publication-intent markers: fetches one or more issues via GraphQL, classifies and filters superseded candidates, and minimizes them via minimize-superseded-markers.mjs.',
   },
+  {
+    id: 'worker-report',
+    scriptName: 'idd:worker-report',
+    binName: 'idd-worker-report',
+    entryPath: 'scripts/idd-worker-report.mjs',
+    vendoredCommand: 'node scripts/idd-worker-report.mjs',
+    description:
+      "Validate and append a worker's final report to the local per-user store, or summarize that store; nothing is posted to GitHub.",
+    contractPaths: ['schemas/worker-report.schema.json'],
+  },
 ];
 
 /**
@@ -741,10 +782,12 @@ export function resolveHelperCommandForProfile({
   helperId,
   profile,
   packageSpec = '',
+  launcher = 'npx',
 }: {
   helperId: string;
   profile: string;
   packageSpec?: string;
+  launcher?: HelperLauncher;
 }): string | null {
   const command = HELPER_COMMANDS.find((entry) => entry.id === helperId);
   if (!command) {
@@ -762,11 +805,151 @@ export function resolveHelperCommandForProfile({
       // wrong for at least one manager, which is worse than the bug this
       // resolver exists to fix.
       return command.binName;
+    case 'user-global':
+      // The operator's global install puts each bin on PATH, so the bare
+      // bin name is the invocation for user-global exactly as it is for
+      // package-manager (no repository-local node_modules is involved).
+      return command.binName;
     case 'ephemeral-npx':
-      return `npx --yes --package ${normalizePackageSpec(packageSpec)} ${command.binName}`;
+      return ephemeralLauncherCommand(
+        launcher,
+        normalizePackageSpec(packageSpec),
+        command.binName,
+      );
     default:
       return null;
   }
+}
+
+/**
+ * Lowest pnpm major the `pnpm dlx --package <git-hosted spec>` acceptance
+ * runs covered (#3830): the codeload runs on the merge commit of #3829
+ * passed on pnpm 10, 11 and 12. Older majors were not tested, so the floor
+ * does not go below 10.
+ */
+export const PNPM_DLX_MIN_MAJOR = 10;
+
+/** Upper bound on the `pnpm --version` probe, so a hung binary cannot stall the manifest. */
+const PNPM_PROBE_TIMEOUT_MS = 5_000;
+
+export type HelperLauncher = 'npx' | 'pnpm-dlx';
+
+export interface LauncherResolution {
+  configured: string | null;
+  resolved: HelperLauncher;
+  reason: string;
+}
+
+/**
+ * Resolve the configured ephemeral-npx launcher (#3830). `auto` picks
+ * `pnpm-dlx` only when the target pnpm major is at least
+ * PNPM_DLX_MIN_MAJOR; an unset value keeps `npx`, the historical form.
+ */
+export function resolveLauncher(
+  configured: string | undefined,
+  pnpmMajor: number | null,
+): LauncherResolution {
+  if (configured === undefined || configured === '') {
+    return {
+      configured: null,
+      resolved: 'npx',
+      reason: 'no launcher is configured; npx is the default',
+    };
+  }
+  if (configured === 'npx' || configured === 'pnpm-dlx') {
+    return {
+      configured,
+      resolved: configured,
+      reason: `launcher ${configured} is set explicitly`,
+    };
+  }
+  if (configured === 'auto') {
+    if (pnpmMajor === null) {
+      return {
+        configured,
+        resolved: 'npx',
+        reason: 'auto: the pnpm version could not be detected, so npx is used',
+      };
+    }
+    if (pnpmMajor >= PNPM_DLX_MIN_MAJOR) {
+      return {
+        configured,
+        resolved: 'pnpm-dlx',
+        reason: `auto: pnpm ${pnpmMajor} is at least ${PNPM_DLX_MIN_MAJOR}`,
+      };
+    }
+    return {
+      configured,
+      resolved: 'npx',
+      reason: `auto: pnpm ${pnpmMajor} is below ${PNPM_DLX_MIN_MAJOR}, so npx is used`,
+    };
+  }
+  return {
+    configured,
+    resolved: 'npx',
+    reason: `unsupported launcher ${JSON.stringify(configured)}; npx is used`,
+  };
+}
+
+/**
+ * Injectable probe: run `pnpm --version` in `cwd` and return its standard
+ * output, throwing on any failure (#3830).
+ */
+export type PnpmVersionProbe = (cwd: string, timeoutMs: number) => string;
+
+/**
+ * The real probe. It runs without a shell, as the #3830 decision records: a
+ * pnpm installed as a `.cmd` shim on native Windows cannot be spawned that
+ * way, so the probe fails there and `auto` resolves to `npx`.
+ */
+function defaultPnpmVersionProbe(cwd: string, timeoutMs: number): string {
+  return execFileSync('pnpm', ['--version'], {
+    cwd,
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+}
+
+/**
+ * The pnpm major that `pnpm --version` reports in `cwd`, the target root.
+ * Returns `null` on any failure (missing binary, timeout, non-zero exit,
+ * unparseable output) and never throws (#3830).
+ */
+export function detectPnpmMajor({
+  probe = defaultPnpmVersionProbe,
+  cwd,
+  timeoutMs = PNPM_PROBE_TIMEOUT_MS,
+}: {
+  probe?: PnpmVersionProbe;
+  cwd: string;
+  timeoutMs?: number;
+}): number | null {
+  try {
+    const match = /^\s*(\d+)/.exec(probe(cwd, timeoutMs));
+    return match ? Number(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function ephemeralLauncherCommand(
+  launcher: HelperLauncher,
+  packageSpec: string,
+  binName: string,
+): string {
+  return launcher === 'pnpm-dlx'
+    ? `pnpm dlx --package ${packageSpec} ${binName}`
+    : `npx --yes --package ${packageSpec} ${binName}`;
+}
+
+/**
+ * Bin names of every helper this build ships, in HELPER_COMMANDS order. The
+ * user-global doctor check resolves exactly this set over PATH, so the bin
+ * list is never maintained a second time.
+ */
+export function listHelperBinNames(): string[] {
+  return HELPER_COMMANDS.map((command) => command.binName);
 }
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -784,6 +967,7 @@ const HELPER_RUNTIME_MANIFEST_FLAG_SPEC = {
   '--from-profile': { type: 'string' },
   '--package-manager': { type: 'string' },
   '--package-spec': { type: 'string' },
+  '--launcher': { type: 'string' },
   '--target-root': { type: 'string' },
 } as const;
 
@@ -809,6 +993,7 @@ function main(): HelperCliResult {
     packageManager: args.packageManager,
     packageSpec: args.packageSpec,
     targetRoot: args.targetRoot,
+    launcher: args.launcher,
   });
 
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
@@ -846,24 +1031,84 @@ function resolveConfiguredPackageSpec(targetRoot: string): string {
   return '';
 }
 
+/**
+ * Resolve `targetRoot`s configured `helperRuntime.launcher` (#3830) with the
+ * same fail-closed rules as resolveConfiguredPackageSpec. Returns `""` when
+ * unset or invalid.
+ */
+function resolveConfiguredLauncher(targetRoot: string): string {
+  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
+    const absolutePath = resolve(targetRoot, file);
+    if (!existsSync(absolutePath)) {
+      continue;
+    }
+    let config: unknown;
+    try {
+      config = JSON.parse(readFileSync(absolutePath, 'utf8'));
+    } catch {
+      return '';
+    }
+    const helperRuntime = inspectHelperRuntimeConfig(config);
+    return helperRuntime.status === 'ok' ? (helperRuntime.launcher ?? '') : '';
+  }
+  return '';
+}
+
+/**
+ * Validate a `--launcher` value (#3830). An absent value (`undefined`) passes
+ * through. Any other value must be one of the three launchers, so an explicit
+ * empty string is a usage error, the same as an unsupported `--profile`.
+ */
+function normalizeLauncher(launcher: string | undefined): string | undefined {
+  if (launcher === undefined || HELPER_RUNTIME_LAUNCHERS.has(launcher)) {
+    return launcher;
+  }
+  throw markCliUsageError(new Error(`unsupported launcher: ${launcher}`));
+}
+
 export function buildHelperRuntimeManifest({
   profile = '',
   fromProfile = '',
   packageManager = '',
   packageSpec = '',
   targetRoot = process.cwd(),
+  launcher,
+  probe,
 }: {
   profile?: string;
   fromProfile?: string;
   packageManager?: string;
   packageSpec?: string;
   targetRoot?: string;
+  launcher?: string;
+  probe?: PnpmVersionProbe;
 } = {}) {
   const packageRoot = PACKAGE_ROOT;
   const packageMetadata = resolveSourcePackageMetadata(packageRoot);
   const normalizedProfile = normalizeProfile(profile);
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
   const normalizedTargetRoot = targetRoot || process.cwd();
+  // Precedence: explicit --launcher > configured helperRuntime.launcher >
+  // unset (npx). The pnpm probe runs only when `auto` could change the
+  // output, that is when the ephemeral-npx entry is emitted (no --profile,
+  // or --profile ephemeral-npx).
+  const configuredLauncher =
+    normalizeLauncher(launcher) ??
+    resolveConfiguredLauncher(normalizedTargetRoot);
+  const emitsEphemeral =
+    normalizedProfile === '' || normalizedProfile === 'ephemeral-npx';
+  const pnpmMajor =
+    configuredLauncher === 'auto' && emitsEphemeral
+      ? detectPnpmMajor({
+          probe,
+          cwd: normalizedTargetRoot,
+          timeoutMs: PNPM_PROBE_TIMEOUT_MS,
+        })
+      : null;
+  const launcherResolution = resolveLauncher(
+    configuredLauncher || undefined,
+    pnpmMajor,
+  );
   // Precedence: explicit --package-spec > configured helperRuntime.packageSpec
   // > DEFAULT_PACKAGE_SPEC (idd-skill#1731). normalizePackageSpec's own `||
   // DEFAULT_PACKAGE_SPEC` fallback is unchanged; this only widens what feeds
@@ -883,6 +1128,8 @@ export function buildHelperRuntimeManifest({
     managedFiles,
     packageManager: normalizedPackageManager,
     packageSpec: normalizedPackageSpec,
+    launcherResolution,
+    yarnFlavor: detectYarnFlavor(normalizedTargetRoot),
   });
 
   const selectedProfiles: Record<string, ProfileEntry> = normalizedProfile
@@ -1152,14 +1399,22 @@ function buildProfileCatalog({
   managedFiles,
   packageManager,
   packageSpec,
+  yarnFlavor,
+  launcherResolution,
 }: {
   packageMetadata: PackageMetadata;
   managedFiles: ManagedFile[];
   packageManager: string;
   packageSpec: string;
+  yarnFlavor: YarnFlavor;
+  launcherResolution: LauncherResolution;
 }): Record<string, ProfileEntry> {
   const packageManagerScripts = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [command.scriptName, command.binName]),
+  );
+  const userGlobalUnavailableReason = userGlobalInstallUnavailableReason(
+    packageManager,
+    yarnFlavor,
   );
   const vendoredCommands = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [
@@ -1170,7 +1425,11 @@ function buildProfileCatalog({
   const ephemeralCommands = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [
       command.scriptName,
-      `npx --yes --package ${packageSpec} ${command.binName}`,
+      ephemeralLauncherCommand(
+        launcherResolution.resolved,
+        packageSpec,
+        command.binName,
+      ),
     ]),
   );
 
@@ -1220,7 +1479,9 @@ function buildProfileCatalog({
     'ephemeral-npx': {
       profile: 'ephemeral-npx',
       description:
-        'Resolve helper commands one-shot through npx without copying files into the repository.',
+        launcherResolution.resolved === 'pnpm-dlx'
+          ? 'Resolve helper commands one-shot through pnpm dlx without copying files into the repository.'
+          : 'Resolve helper commands one-shot through npx without copying files into the repository.',
       packageManager: '',
       installCommand: '',
       managedDependencies: {
@@ -1230,7 +1491,39 @@ function buildProfileCatalog({
       managedFiles: [],
       commands: ephemeralCommands,
       notes: [
-        'This profile requires Node.js and npm with npx available at execution time.',
+        launcherResolution.resolved === 'pnpm-dlx'
+          ? 'This profile requires Node.js and pnpm 10 or later with pnpm dlx available at execution time.'
+          : 'This profile requires Node.js and npm with npx available at execution time.',
+        PACKAGE_SPEC_PIN_HINT,
+      ],
+      launcher: launcherResolution,
+    },
+    'user-global': {
+      profile: 'user-global',
+      description:
+        'Install the helper bins once per operator with a global package-manager install, so every repository resolves them from PATH without copying files or adding a dependency.',
+      packageManager,
+      installCommand: buildUserGlobalInstallCommand(
+        packageManager,
+        packageSpec,
+        yarnFlavor,
+      ),
+      uninstallCommand: buildUserGlobalUninstallCommand(
+        packageManager,
+        yarnFlavor,
+      ),
+      ...(userGlobalUnavailableReason
+        ? { installUnavailableReason: userGlobalUnavailableReason }
+        : {}),
+      managedDependencies: {
+        devDependencies: {},
+      },
+      managedPackageJsonScripts: {},
+      managedFiles: [],
+      commands: packageManagerScripts,
+      notes: [
+        'Nothing is written to the target repository: the global install lives outside it, and each helper bin resolves from PATH.',
+        'Run the install command once per operator machine; re-run it after changing helperRuntime.packageSpec.',
         PACKAGE_SPEC_PIN_HINT,
       ],
     },
@@ -1290,6 +1583,13 @@ function buildSwitchPlan({
         )
         .sort(([left], [right]) => left.localeCompare(right)),
     ),
+    // Only a switch that leaves user-global leaves an operator-level install
+    // behind, so the removal commands are emitted only for that transition. A
+    // no-op switch (user-global to user-global) removes nothing, and other
+    // switches keep their existing output shape.
+    ...(fromProfile === 'user-global' && toProfile !== 'user-global'
+      ? { removeGlobalInstallCommands: USER_GLOBAL_UNINSTALL_COMMANDS }
+      : {}),
   };
 }
 
@@ -1320,6 +1620,89 @@ function buildPackageManagerInstallCommand(
   throw new Error(`unsupported package manager: ${packageManager}`);
 }
 
+/**
+ * Reads the target repository's Yarn flavor. Berry is declared by a
+ * `packageManager` pin to yarn@2 or later, or by a `.yarnrc.yml` at the root
+ * (a Berry-only config file). A `package.json` that exists but is not valid
+ * JSON is "unknown", not "classic", so an ambiguous repository never receives
+ * a Yarn Classic install command (fail closed).
+ */
+function detectYarnFlavor(root: string): YarnFlavor {
+  if (existsSync(resolve(root, '.yarnrc.yml'))) {
+    return 'berry';
+  }
+  const packageJsonPath = resolve(root, 'package.json');
+  if (!existsSync(packageJsonPath)) {
+    return 'classic';
+  }
+  let packageManagerPin: unknown;
+  try {
+    packageManagerPin = (
+      JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+        packageManager?: unknown;
+      }
+    ).packageManager;
+  } catch {
+    return 'unknown';
+  }
+  const match = /^yarn@(\d+)/u.exec(
+    typeof packageManagerPin === 'string' ? packageManagerPin : '',
+  );
+  if (match === null) {
+    return 'classic';
+  }
+  return Number(match[1]) >= 2 ? 'berry' : 'classic';
+}
+
+function buildUserGlobalInstallCommand(
+  packageManager: string,
+  packageSpec: string,
+  yarnFlavor: YarnFlavor,
+): string {
+  if (packageManager === 'npm') {
+    return `npm install -g ${packageSpec}`;
+  }
+  if (packageManager === 'pnpm') {
+    return `pnpm add -g ${packageSpec}`;
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'classic') {
+    return `yarn global add ${packageSpec}`;
+  }
+  return '';
+}
+
+function buildUserGlobalUninstallCommand(
+  packageManager: string,
+  yarnFlavor: YarnFlavor,
+): string {
+  if (packageManager === 'npm') {
+    return `npm uninstall -g ${PACKAGE_NAME}`;
+  }
+  if (packageManager === 'pnpm') {
+    return `pnpm remove -g ${PACKAGE_NAME}`;
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'classic') {
+    return `yarn global remove ${PACKAGE_NAME}`;
+  }
+  return '';
+}
+
+function userGlobalInstallUnavailableReason(
+  packageManager: string,
+  yarnFlavor: YarnFlavor,
+): string | undefined {
+  if (!packageManager) {
+    return 'No package manager was given or detected for the target repository; pass --package-manager <npm|pnpm|yarn> to emit the global install command.';
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'berry') {
+    return 'Yarn Berry (2 or later) has no global install, so the user-global profile is unsupported for this repository; use npm, pnpm, or Yarn Classic for the operator install.';
+  }
+  if (packageManager === 'yarn' && yarnFlavor === 'unknown') {
+    return "The target repository's package.json is not valid JSON, so its Yarn flavor cannot be determined and no global install command is emitted.";
+  }
+  return undefined;
+}
+
 function parseArgs(argv: string[]): ManifestArgs {
   const { values, help } = parseCliArgs(
     argv,
@@ -1328,6 +1711,7 @@ function parseArgs(argv: string[]): ManifestArgs {
   return {
     help,
     profile: (values.profile as string | undefined) ?? '',
+    launcher: values.launcher as string | undefined,
     fromProfile: (values['from-profile'] as string | undefined) ?? '',
     packageManager: (values['package-manager'] as string | undefined) ?? '',
     packageSpec: (values['package-spec'] as string | undefined) ?? '',
@@ -1339,9 +1723,12 @@ function printHelp(): void {
   process.stdout.write(`usage: node scripts/helper-runtime-manifest.mjs [options]
 
 Options:
-  --profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
-  --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
+  --profile <package-manager|vendored-node|ephemeral-npx|instructions-only|user-global>
+  --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only|user-global>
   --package-manager <npm|pnpm|yarn>
+  --launcher <auto|npx|pnpm-dlx>
+                        ephemeral-npx only: the command launcher. auto picks
+                        pnpm dlx on pnpm 10 or later (#3830).
   --package-spec <npm-spec-or-tarball-url>
                         Affects package-spec-derived output only (each
                         profile's composed install/invocation strings, the

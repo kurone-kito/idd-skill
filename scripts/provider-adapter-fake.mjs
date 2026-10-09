@@ -133,6 +133,10 @@ export function createFakeProviderAdapter(fixture) {
       }
     },
     getWorkItemClosingPullRequestsPage(number) {
+      const errorMessage = fixture.closingPullRequestPageErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       const pages = fixture.closingPullRequestPages?.[number] ?? [];
       const index = closingPageCallIndex[number] ?? 0;
       closingPageCallIndex[number] = index + 1;
@@ -374,6 +378,10 @@ export function createFakeProviderAdapter(fixture) {
       return fixture.renamedFromPaths?.[number] ?? [];
     },
     listChangeRequestCommits(number) {
+      const errorMessage = fixture.changeRequestCommitErrors?.[number];
+      if (errorMessage !== undefined) {
+        throw new Error(errorMessage);
+      }
       return fixture.changeRequestCommits?.[number] ?? [];
     },
     listChangeRequestReviewThreadsWithComments(number) {

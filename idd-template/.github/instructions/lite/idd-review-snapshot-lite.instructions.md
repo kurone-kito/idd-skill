@@ -39,7 +39,7 @@ GitHub side effect, confirm all of the following:
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
    --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
    the package-manager-profile `idd:claim-lock` command with the same
-   arguments, or the ephemeral-npx equivalent (see
+   arguments, or the profile-selected equivalent (see
    `docs/idd-helper-scripts.md`). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`

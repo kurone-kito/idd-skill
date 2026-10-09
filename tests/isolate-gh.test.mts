@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
+import {
+  execFile,
+  execFileSync,
+  type SpawnSyncReturns,
+  spawn,
+  spawnSync,
+} from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -762,17 +768,21 @@ test('eval Worker bridge preserves a leading strict-mode directive', async () =>
     `'use strict';\nconst { parentPort } = require('node:worker_threads');\nparentPort.postMessage((function () { return this; })() === undefined);`,
     { eval: true, execArgv: [] },
   );
-  const result = await new Promise<boolean>((resolve, reject) => {
+  // Both listeners are registered before the first await: a Worker that posts
+  // one message and returns can emit `exit` before a listener added after the
+  // `message` await would exist, leaving that promise pending forever.
+  const messagePromise = new Promise<boolean>((resolve, reject) => {
     worker.once('message', resolve);
     worker.once('error', reject);
   });
-  await new Promise<void>((resolve, reject) => {
+  const exitPromise = new Promise<void>((resolve, reject) => {
     worker.once('error', reject);
     worker.once('exit', (code) => {
       if (code === 0) resolve();
       else reject(new Error(`worker exited with code ${code}`));
     });
   });
+  const [result] = await Promise.all([messagePromise, exitPromise]);
   assert.equal(result, true);
 });
 
@@ -1378,7 +1388,7 @@ test('the paginated gh-exec Worker records caught attempts in its owner ledger',
   const substitutionCommand = 'printf "%s" "$(gh api repos/o/r)"';
   const backtickCommand = 'printf "%s" "`gh api repos/o/r`"';
   const source = `
-import { ghApiJson } from ${JSON.stringify(modulePath)};
+import { ghApiJson } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 import { Worker } from 'node:worker_threads';
 try {
   ghApiJson('repos/o/r/issues', { paginate: true, timeout: 1000 });
@@ -1511,15 +1521,24 @@ test('registered fixture gh paths work through nested stubs and paginated worker
       'outer-fixture',
     );
     const callbackOutput = await new Promise<string>((resolve, reject) => {
-      execFile(outerPath, [], { encoding: 'utf8' }, (error, stdout) => {
-        if (error) reject(error);
-        else resolve(stdout);
-      });
+      execFile(
+        outerPath,
+        ['idd-stub-stay-alive'],
+        { encoding: 'utf8' },
+        (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        },
+      );
     });
     assert.equal(callbackOutput, 'outer-fixture');
-    const promisedOutput = await promisify(execFile)(outerPath, [], {
-      encoding: 'utf8',
-    });
+    const promisedOutput = await promisify(execFile)(
+      outerPath,
+      ['idd-stub-stay-alive'],
+      {
+        encoding: 'utf8',
+      },
+    );
     assert.equal(promisedOutput.stdout, 'outer-fixture');
     assert.equal(promisedOutput.stderr, '');
 
@@ -1541,7 +1560,7 @@ test('registered fixture gh paths work through nested stubs and paginated worker
 
       const modulePath = join(process.cwd(), 'src/scripts/gh-exec.mts');
       const source = `
-import { ghApiJson } from ${JSON.stringify(modulePath)};
+import { ghApiJson } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 process.stdout.write(JSON.stringify(ghApiJson('repos/o/r/issues', { paginate: true })));
 `;
       const result = spawnSync(
@@ -1570,7 +1589,7 @@ process.stdout.write(JSON.stringify(ghApiJson('repos/o/r/issues', { paginate: tr
       "const { parentPort, workerData } = require('node:worker_threads');",
       "const { execFile } = require('node:child_process');",
       "const { promisify } = require('node:util');",
-      "const result = promisify(execFile)(workerData.ghPath, [], { encoding: 'utf8' });",
+      "const result = promisify(execFile)(workerData.ghPath, ['idd-stub-stay-alive'], { encoding: 'utf8' });",
       'result.then(({ stdout, stderr }) => {',
       '  parentPort.postMessage({ stdout, stderr, hasChild: Boolean(result.child) });',
       '}, (error) => {',
@@ -1595,4 +1614,228 @@ process.stdout.write(JSON.stringify(ghApiJson('repos/o/r/issues', { paginate: tr
   } finally {
     restoreOuter();
   }
+});
+
+// The PATH shim (tests/isolate-gh-shim.cjs, launched by the `gh` file or
+// `gh.cmd` that the owner process writes into the guard root's `bin`
+// directory) is what catches these spellings. The in-process parser misses
+// each one, and the shell resolves `gh` through PATH to the shim instead.
+// Each payload runs as its own child with its own ledger.
+function runGuardedChild(
+  childSource: string,
+  extraFiles: Record<string, string> = {},
+): {
+  result: SpawnSyncReturns<string>;
+  attempts: Array<Record<string, unknown>>;
+  ledgerText: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), 'idd-gh-path-shim-'));
+  try {
+    const ledgerPath = join(root, 'attempts.jsonl');
+    for (const [file, body] of Object.entries(extraFiles)) {
+      writeFileSync(join(root, file), body, { encoding: 'utf8', mode: 0o755 });
+    }
+    const scriptPath = join(root, 'payload.cjs');
+    writeFileSync(scriptPath, childSource, 'utf8');
+    const result = spawnSync(process.execPath, [scriptPath], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        IDD_TEST_GH_GUARD_ROOT: root,
+        IDD_TEST_GH_GUARD_LEDGER: ledgerPath,
+        IDD_TEST_GH_GUARD_SELF_CHECK: '1',
+      },
+    });
+    const ledgerText = existsSync(ledgerPath)
+      ? readFileSync(ledgerPath, 'utf8')
+      : '';
+    return {
+      result,
+      attempts: ledgerText ? readAttempts(ledgerPath) : [],
+      ledgerText,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function shellPayloadChild(command: string): string {
+  return [
+    "const childProcess = require('node:child_process');",
+    'try {',
+    `  process.stdout.write(childProcess.execSync(${JSON.stringify(command)}, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));`,
+    '} catch (error) {',
+    '  process.stderr.write(String(error.stderr || error.message));',
+    '  process.exitCode = error.status || 1;',
+    '}',
+    '',
+  ].join('\n');
+}
+
+function assertCaughtByShim(
+  run: ReturnType<typeof runGuardedChild>,
+  expectedApi = 'path-shim',
+): void {
+  assert.notEqual(run.result.status, 0, run.result.stderr);
+  assert.match(run.result.stderr, /IDD_UNEXPECTED_REAL_GH/u);
+  assert.doesNotMatch(run.result.stdout, /gh version/u);
+  assert.equal(run.attempts.length, 1, run.ledgerText);
+  assert.equal(run.attempts[0]?.api, expectedApi, run.ledgerText);
+  assert.equal(run.attempts[0]?.executable, 'gh', run.ledgerText);
+  assert.equal(run.attempts[0]?.resolvedExecutable, null, run.ledgerText);
+}
+
+const posixShellPayloads = [
+  { name: 'dot-sourced script', command: '. "./source-gh.sh"' },
+  {
+    name: 'default expansion word',
+    command: `unset tool; "\${tool:-gh}" --version`,
+  },
+  { name: 'command substitution word', command: '$(printf gh) --version' },
+  { name: 'IFS separator', command: `gh\${IFS} --version` },
+  { name: 'empty quotes inside the name', command: 'g""h --version' },
+];
+
+function posixProbeChild(method: 'execFileSync' | 'spawnSync'): string {
+  return method === 'execFileSync'
+    ? [
+        "const childProcess = require('node:child_process');",
+        'try {',
+        "  process.stdout.write(childProcess.execFileSync('./probe.sh', [], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));",
+        '} catch (error) {',
+        '  process.stderr.write(String(error.stderr || error.message));',
+        '  process.exitCode = error.status || 1;',
+        '}',
+        '',
+      ].join('\n')
+    : [
+        "const childProcess = require('node:child_process');",
+        "const probe = childProcess.spawnSync('./probe.sh', [], { encoding: 'utf8' });",
+        'process.stdout.write(probe.stdout ?? "");',
+        'process.stderr.write(probe.stderr ?? "");',
+        'if (probe.status !== 0) process.exitCode = probe.status ?? 1;',
+        '',
+      ].join('\n');
+}
+
+// Every POSIX payload, shell and executable probe alike, with the files the
+// shell forms and the probes read. The shim and fixture tests share this list.
+const posixPayloadRuns = [
+  ...posixShellPayloads.map((payload) => ({
+    name: payload.name,
+    child: shellPayloadChild(payload.command),
+  })),
+  {
+    name: 'executable probe via execFileSync',
+    child: posixProbeChild('execFileSync'),
+  },
+  {
+    name: 'executable probe via spawnSync',
+    child: posixProbeChild('spawnSync'),
+  },
+];
+const posixPayloadFiles = {
+  'source-gh.sh': 'gh --version\n',
+  'probe.sh': '#!/bin/sh\ngh --version\n',
+};
+
+for (const run of posixPayloadRuns) {
+  test(`path shim: posix ${run.name} never reaches the real CLI`, {
+    skip: process.platform === 'win32',
+  }, () => {
+    assertCaughtByShim(runGuardedChild(run.child, posixPayloadFiles));
+  });
+}
+
+test('path shim: a shim-launched attempt stores credential-shaped arguments redacted', {
+  skip: process.platform === 'win32',
+}, () => {
+  const run = runGuardedChild(
+    shellPayloadChild('g""h --token=secret-token-value api repos/o/r'),
+  );
+  assertCaughtByShim(run);
+  assert.deepEqual(run.attempts[0]?.args, [
+    '--token=[redacted]',
+    'api',
+    'repos/o/r',
+  ]);
+  assert.doesNotMatch(run.ledgerText, /secret-token-value/u);
+});
+
+test('path shim: a registered gh fixture still runs ahead of the shim for every posix payload', {
+  skip: process.platform === 'win32',
+}, () => {
+  const restore = stubExecutable(
+    'gh',
+    "process.stdout.write('gh version fixture');",
+  );
+  try {
+    for (const payload of posixPayloadRuns) {
+      const run = runGuardedChild(payload.child, posixPayloadFiles);
+      assert.equal(
+        run.result.status,
+        0,
+        `${payload.name}: ${run.result.stderr}`,
+      );
+      assert.equal(run.result.stdout, 'gh version fixture', payload.name);
+      assert.equal(
+        run.attempts.length,
+        0,
+        `${payload.name}: ${run.ledgerText}`,
+      );
+    }
+  } finally {
+    restore();
+  }
+});
+
+test('path shim: the owner process puts the guard bin first on PATH', {
+  skip: !process.env.IDD_TEST_GH_GUARD_ROOT,
+}, () => {
+  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+  const binDirectory = join(process.env.IDD_TEST_GH_GUARD_ROOT ?? '', 'bin');
+  assert.ok(
+    (process.env[pathKey] ?? '').split(delimiter)[0]?.toLowerCase() ===
+      binDirectory.toLowerCase() ||
+      (process.env[pathKey] ?? '').split(delimiter)[0] === binDirectory,
+    `PATH should start with ${binDirectory}`,
+  );
+  assert.ok(
+    existsSync(
+      join(binDirectory, process.platform === 'win32' ? 'gh.cmd' : 'gh'),
+    ),
+  );
+});
+
+test('path shim: windows cmd resolves gh through the guard bin', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const run = runGuardedChild(
+    [
+      "const childProcess = require('node:child_process');",
+      "const probe = childProcess.spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', '%GH% --version'], { encoding: 'utf8', env: { ...process.env, GH: 'gh' } });",
+      'process.stdout.write(probe.stdout ?? "");',
+      'process.stderr.write(probe.stderr ?? "");',
+      'if (probe.status !== 0) process.exitCode = probe.status ?? 1;',
+      '',
+    ].join('\n'),
+  );
+  assertCaughtByShim(run);
+});
+
+test('path shim: windows powershell resolves gh through the guard bin', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const run = runGuardedChild(
+    [
+      "const childProcess = require('node:child_process');",
+      "const probe = childProcess.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:GH --version'], { encoding: 'utf8', env: { ...process.env, GH: 'gh' } });",
+      'process.stdout.write(probe.stdout ?? "");',
+      'process.stderr.write(probe.stderr ?? "");',
+      'if (probe.status !== 0) process.exitCode = probe.status ?? 1;',
+      '',
+    ].join('\n'),
+  );
+  assertCaughtByShim(run);
 });

@@ -500,7 +500,7 @@ reviewer instead of the per-agent mechanism. When helper runtime is
 enabled, resolve the effective `critiqueLoop.delegate` with the
 [`idd-critique-delegate`](../../docs/idd-helper-scripts.md#effective-c1-critique-delegate)
 helper — `node scripts/idd-critique-delegate.mjs` for source-repo /
-vendored-node profiles; for package-manager / ephemeral-npx, resolve
+vendored-node profiles; for package-manager / ephemeral-npx / user-global, resolve
 the profile-selected command from `docs/idd-helper-scripts.md` rather
 than hardcoding that bare binary name — instead of hand-deriving it;
 for `instructions-only` execution, apply the

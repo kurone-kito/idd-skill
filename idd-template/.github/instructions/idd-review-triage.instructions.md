@@ -358,20 +358,18 @@ PATH B — Advisory items (completed review of current HEAD):
   (and any thread resolution) is posted.
 
 **`review-ack:` marker — Clause 1 vs Clause 2.** Posting `**Accepted**`/
-`**Rejected**` above satisfies advisory-convergence's Clause 2 (thread/
-comment disposition) only. When the latest Copilot review on current
-HEAD also reports `suppressedCount > 0` (a finding folded into a
-`<details><summary>Suppressed comments (N)</summary>` block with no
-thread/comment ID of its own — see `docs/idd-helper-scripts.md`),
-Clause 1's `suppressedCount` term needs its own coverage
-(`suppressedCount === 0 || hasValidReviewAck`) regardless of any Clause
-2 disposition elsewhere in the review. After confirming the suppressed
-finding(s) are handled (fixed, or judged as needing no action), post
-`review-ack:` for the current HEAD SHA — only a
-`trustedMarkerActors`-authored marker counts; an untrusted poster's is
-ignored, not rejected at post time (helper-first: `post-idd-marker
---type review-ack --from-pr <pr-number> --agent-id <id> --timestamp
-<ISO8601> --apply`):
+`**Rejected**` above satisfies advisory-convergence's Clause 2 (thread/comment
+disposition) only. When the latest primary bot review on current HEAD also needs
+an ack (the snapshot's `latestPrimaryBotReview.reviewAckNeeded`: a thread-less
+finding in a recognized review body shape, or, for the default Copilot bot, an
+unrecognized body; see `docs/idd-helper-scripts.md`), Clause 1 needs
+`latestPrimaryBotReview.reviewAckCovers === true` regardless of any Clause 2
+disposition elsewhere in the review. After confirming every review body finding
+is handled (fixed, or judged as needing no action), post `review-ack:` for the
+current HEAD SHA — only a `trustedMarkerActors`-authored marker counts; an
+untrusted poster's is ignored, not rejected at post time (helper-first:
+`post-idd-marker --type review-ack --from-pr <pr-number> --agent-id <id>
+--timestamp <ISO8601> --apply`):
 
 ```text
 review-ack: {agent-id} {PR_HEAD_SHA} {ISO8601-acknowledged-at}

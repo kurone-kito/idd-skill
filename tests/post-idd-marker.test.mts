@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
+import { parseAuthoringOwnerComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildMarkerBody,
   describeUnaddressedActivity,
@@ -20,7 +20,9 @@ import {
   parseArgs,
   parseIssueReference,
   runOperationLocalSnapshotWatermark,
+  selectAuthoringOwnerOpeningMarkers,
   validateAuthoringOwnerModeDigestCoupling,
+  validateAuthoringOwnerPostIdentity,
   validateAuthoringOwnerSupersedesModeCoupling,
   validateAuthoringPublicationIntentStateIssueCoupling,
   watermarkFieldsFromSnapshot,
@@ -6715,4 +6717,722 @@ test('--operation-local CLI still refuses a genuinely new post-disposition bot f
     result.envelope.operationLocal.reason ?? '',
     /newly actionable same-HEAD activity/,
   );
+});
+
+// #3910: the identity check of `--apply --type authoring-owner`. The gh stub
+// serves the GraphQL comment log (or a raw reply a test asks for), the
+// live-body GET the digest derivation makes, and the POST. It appends every
+// POST body and every GraphQL call to a file, so a test can assert what was
+// sent and whether a read happened at all.
+const OWNER_ID_TARGET = 'o/r#42';
+const OWNER_ID_SET = 'set-8fc92e8e9b28760e';
+const OWNER_ID_MANGLED_SET = 'set-8fc92e9b28760e';
+const OWNER_ID_OWNER = 'owner-d805d0d1';
+const OWNER_ID_PRIOR_OWNER = 'owner-prior-1111';
+const OWNER_ID_SESSION = 'session-1';
+const OWNER_ID_LIVE_BODY = 'Fresh live body for #42.';
+// The explicit --body-sha256 is verified against the live body the stub
+// serves, so the fixture digest must be that body's real digest.
+const OWNER_ID_DIGEST = createHash('sha256')
+  .update(OWNER_ID_LIVE_BODY, 'utf8')
+  .digest('hex');
+
+interface OwnerIdComment {
+  id: number;
+  body: string;
+  author?: string;
+  lastEditedAt?: string | null;
+  minimizedReason?: string | null;
+}
+
+/** The flags of one authoring-owner post; `overrides` replaces any of them. */
+function ownerIdFlags(
+  mode: string,
+  overrides: Record<string, string> = {},
+): Record<string, string> {
+  const anchorOnly = mode === 'release-guard' || mode === 'release-complete';
+  const opening = mode === 'acquire' || mode === 'bootstrap';
+  return {
+    'marker-target': OWNER_ID_TARGET,
+    anchor: OWNER_ID_TARGET,
+    mode,
+    'marker-owner': OWNER_ID_OWNER,
+    set: OWNER_ID_SET,
+    session: OWNER_ID_SESSION,
+    'body-sha256': anchorOnly ? 'none' : OWNER_ID_DIGEST,
+    'snapshot-sha256': mode === 'release-complete' ? OWNER_ID_DIGEST : 'none',
+    supersedes: opening ? 'none' : OWNER_ID_OWNER,
+    ...overrides,
+  };
+}
+
+/** The body the renderer posts for `flags`: an opening marker or any other. */
+function ownerIdBody(flags: Record<string, string>): string {
+  return buildMarkerBody('authoring-owner', {
+    'marker-prefix': 'idd-skill',
+    ...flags,
+  });
+}
+
+function withOwnerIdStub(options: {
+  comments?: OwnerIdComment[];
+  graphqlReply?: { stdout: string } | { stderr: string };
+}): { postsFile: string; readsFile: string; restore: () => void } {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-identity-'));
+  const postsFile = join(tempRoot, 'posts.txt');
+  const readsFile = join(tempRoot, 'reads.txt');
+  const nodes = (options.comments ?? []).map((comment) => ({
+    databaseId: comment.id,
+    lastEditedAt: comment.lastEditedAt ?? null,
+    createdAt: TS,
+    updatedAt: TS,
+    body: comment.body,
+    author: { login: comment.author ?? 'kurone-kito' },
+    isMinimized: (comment.minimizedReason ?? null) !== null,
+    minimizedReason: comment.minimizedReason ?? null,
+  }));
+  const page = JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          comments: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  });
+  const reply = options.graphqlReply ?? { stdout: page };
+  const replyCode =
+    'stdout' in reply
+      ? `out(${JSON.stringify(reply.stdout)});`
+      : `fail(${JSON.stringify(reply.stderr)});`;
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+function out(s) { fs.writeSync(1, s); process.exit(0); }
+function fail(s) { fs.writeSync(2, s); process.exit(1); }
+if (args.includes('graphql')) {
+  fs.appendFileSync(${JSON.stringify(readsFile)}, 'graphql\\n');
+  ${replyCode}
+}
+if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
+  out(JSON.stringify({ number: 42, body: ${JSON.stringify(OWNER_ID_LIVE_BODY)} }));
+}
+if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
+  const raw = fs.readFileSync(0, 'utf8');
+  fs.appendFileSync(${JSON.stringify(postsFile)}, raw + '\\n');
+  out(JSON.stringify({ id: 555, html_url: 'https://github.com/o/r/issues/42#issuecomment-555', body: JSON.parse(raw).body }));
+}
+fail('unexpected gh invocation: ' + args.join(' '));
+`,
+  );
+  return {
+    postsFile,
+    readsFile,
+    restore: () => {
+      restore();
+      rmSync(tempRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+function readOwnerIdLines(file: string): string[] {
+  return existsSync(file)
+    ? readFileSync(file, 'utf8').split('\n').filter(Boolean)
+    : [];
+}
+
+function runOwnerIdPost(
+  flags: Record<string, string>,
+  options: { apply?: boolean; cwd?: string; trustedLogins?: string } = {},
+): { status: number | null; stderr: string; kind: string | undefined } {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    IDD_HELPER_ERROR_ENVELOPE: '1',
+  };
+  delete env.IDD_TRUSTED_MARKER_ACTORS;
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'authoring-owner',
+      '--target',
+      'issue',
+      '42',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      ...Object.entries(flags).flatMap(([flag, value]) => [`--${flag}`, value]),
+      ...(options.trustedLogins === undefined
+        ? []
+        : ['--trusted-marker-logins', options.trustedLogins]),
+      ...(options.apply === false ? [] : ['--apply']),
+    ],
+    { cwd: options.cwd ?? REPO_ROOT, encoding: 'utf8', env },
+  );
+  const lines = result.stderr.trim().split('\n');
+  let kind: string | undefined;
+  try {
+    kind = (
+      JSON.parse(lines[lines.length - 1]) as {
+        iddHelperError?: { kind?: string };
+      }
+    ).iddHelperError?.kind;
+  } catch {
+    kind = undefined;
+  }
+  return { status: result.status, stderr: result.stderr, kind };
+}
+
+const OWNER_ID_ACQUIRE_OPENER: OwnerIdComment = {
+  id: 101,
+  body: ownerIdBody(ownerIdFlags('acquire')),
+};
+
+test('authoring-owner --apply refuses a release whose set id lost two characters, names both ids, and sends nothing (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('release', { set: OWNER_ID_MANGLED_SET }),
+    );
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      new RegExp(`posted ${OWNER_ID_MANGLED_SET}, found ${OWNER_ID_SET}`),
+    );
+    assert.match(run.stderr, /comment #101 \(mode=acquire\)/);
+    assert.match(run.stderr, /claim\.verifySettleDelay/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply sends a release whose set id matches the opening marker (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('release'));
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses a heartbeat whose anchor differs from the opening marker (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat', { anchor: 'o/r#7' }));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /anchor: posted o\/r#7, found o\/r#42/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses a heartbeat whose owner differs from the opening marker (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('heartbeat', {
+        'marker-owner': 'owner-other',
+        supersedes: 'owner-other',
+      }),
+    );
+    assert.equal(run.status, 1);
+    assert.match(
+      run.stderr,
+      new RegExp(`owner: posted owner-other, found ${OWNER_ID_OWNER}`),
+    );
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply sends a release from another session with the same set, anchor and owner (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('release', { session: 'session-2' }),
+    );
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply sends a corrected release after a mangled release is already in the log (#3910)', () => {
+  const stub = withOwnerIdStub({
+    comments: [
+      OWNER_ID_ACQUIRE_OPENER,
+      {
+        id: 102,
+        body: ownerIdBody(
+          ownerIdFlags('release', { set: OWNER_ID_MANGLED_SET }),
+        ),
+      },
+    ],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('release'));
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("authoring-owner --apply sends a heartbeat of the first set while a second set's opener lost the race (#3910)", () => {
+  const stub = withOwnerIdStub({
+    comments: [
+      {
+        id: 101,
+        body: ownerIdBody(
+          ownerIdFlags('acquire', {
+            set: 'set-first',
+            'marker-owner': 'owner-first',
+          }),
+        ),
+      },
+      {
+        id: 102,
+        body: ownerIdBody(
+          ownerIdFlags('acquire', {
+            set: 'set-second',
+            'marker-owner': 'owner-second',
+          }),
+        ),
+      },
+    ],
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('heartbeat', {
+        set: 'set-first',
+        'marker-owner': 'owner-first',
+        supersedes: 'owner-first',
+      }),
+    );
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply sends a resume whose --supersedes names an opening owner with the same set and anchor (#3910)', () => {
+  const stub = withOwnerIdStub({
+    comments: [
+      {
+        id: 101,
+        body: ownerIdBody(
+          ownerIdFlags('acquire', { 'marker-owner': OWNER_ID_PRIOR_OWNER }),
+        ),
+      },
+    ],
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('resume', {
+        'marker-owner': OWNER_ID_OWNER,
+        supersedes: OWNER_ID_PRIOR_OWNER,
+      }),
+    );
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses a resume whose set differs from the opening marker (#3910)', () => {
+  const stub = withOwnerIdStub({
+    comments: [
+      {
+        id: 101,
+        body: ownerIdBody(
+          ownerIdFlags('acquire', { 'marker-owner': OWNER_ID_PRIOR_OWNER }),
+        ),
+      },
+    ],
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('resume', {
+        'marker-owner': OWNER_ID_OWNER,
+        supersedes: OWNER_ID_PRIOR_OWNER,
+        set: OWNER_ID_MANGLED_SET,
+      }),
+    );
+    assert.equal(run.status, 1);
+    assert.match(
+      run.stderr,
+      new RegExp(`set: posted ${OWNER_ID_MANGLED_SET}, found ${OWNER_ID_SET}`),
+    );
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses a resume that no opening marker owner matches (#3910)', () => {
+  const stub = withOwnerIdStub({
+    comments: [
+      {
+        id: 101,
+        body: ownerIdBody(
+          ownerIdFlags('acquire', { 'marker-owner': OWNER_ID_PRIOR_OWNER }),
+        ),
+      },
+    ],
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('resume', {
+        'marker-owner': OWNER_ID_OWNER,
+        supersedes: 'owner-unknown',
+      }),
+    );
+    assert.equal(run.status, 1);
+    assert.match(
+      run.stderr,
+      new RegExp(
+        `owner \\(--supersedes\\): posted owner-unknown, found ${OWNER_ID_PRIOR_OWNER}`,
+      ),
+    );
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses a heartbeat when the target has no opening marker (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [] });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /no counted opening marker/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses a heartbeat whose only opening marker was edited after posting (#3910)', () => {
+  const stub = withOwnerIdStub({
+    comments: [
+      { ...OWNER_ID_ACQUIRE_OPENER, lastEditedAt: '2026-10-09T01:00:00Z' },
+    ],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /no counted opening marker/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses a heartbeat whose opening marker is by a login outside the trusted set (#3910)', () => {
+  const stub = withOwnerIdStub({
+    comments: [{ ...OWNER_ID_ACQUIRE_OPENER, author: 'stranger' }],
+  });
+  try {
+    // Run from the repository root, whose configuration trusts
+    // kurone-kito; the flag names a different login so the author is outside.
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'), {
+      trustedLogins: 'someone-else',
+    });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /no counted opening marker/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply still counts a minimized opening marker (#3910)', () => {
+  const stub = withOwnerIdStub({
+    comments: [{ ...OWNER_ID_ACQUIRE_OPENER, minimizedReason: 'outdated' }],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply counts any login when the working directory configures no trusted logins (#3910)', () => {
+  const isolatedCwd = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-cwd-'));
+  const stub = withOwnerIdStub({
+    comments: [{ ...OWNER_ID_ACQUIRE_OPENER, author: 'stranger' }],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'), {
+      cwd: isolatedCwd,
+    });
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+    rmSync(isolatedCwd, { recursive: true, force: true });
+  }
+});
+
+test('authoring-owner --apply checks release-guard and release-complete against the anchor opening marker (#3910)', () => {
+  for (const mode of ['release-guard', 'release-complete']) {
+    const matching = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+    try {
+      assert.equal(runOwnerIdPost(ownerIdFlags(mode)).status, 0, mode);
+      assert.equal(readOwnerIdLines(matching.postsFile).length, 1, mode);
+    } finally {
+      matching.restore();
+    }
+    const differingOverrides: Record<string, string>[] = [
+      { set: OWNER_ID_MANGLED_SET },
+      { 'marker-owner': 'owner-other', supersedes: 'owner-other' },
+    ];
+    for (const overrides of differingOverrides) {
+      const differing = withOwnerIdStub({
+        comments: [OWNER_ID_ACQUIRE_OPENER],
+      });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode, overrides));
+        assert.equal(run.status, 1, mode);
+        assert.equal(run.kind, 'gate', mode);
+        assert.deepEqual(readOwnerIdLines(differing.postsFile), [], mode);
+      } finally {
+        differing.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner --apply sends acquire and bootstrap posts with no GraphQL read (#3910)', () => {
+  for (const mode of ['acquire', 'bootstrap']) {
+    const stub = withOwnerIdStub({ comments: [] });
+    try {
+      const run = runOwnerIdPost(ownerIdFlags(mode));
+      assert.equal(run.status, 0, mode);
+      assert.deepEqual(readOwnerIdLines(stub.readsFile), [], mode);
+      assert.equal(readOwnerIdLines(stub.postsFile).length, 1, mode);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner dry run makes no GraphQL read and posts nothing (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [] });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'), { apply: false });
+    assert.equal(run.status, 0);
+    assert.deepEqual(readOwnerIdLines(stub.readsFile), []);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses, sending nothing, when the GraphQL read fails with HTTP 503 (#3910)', () => {
+  const stub = withOwnerIdStub({
+    graphqlReply: { stderr: 'gh: Service Unavailable (HTTP 503)' },
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'transport');
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply refuses, sending nothing, on an incomplete GraphQL read, as internal and never a gate (#3910)', () => {
+  const incomplete: { stdout: string }[] = [
+    // A repeated cursor: the third request reuses "c1" and the reader stops.
+    {
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [],
+                pageInfo: { hasNextPage: true, endCursor: 'c1' },
+              },
+            },
+          },
+        },
+      }),
+    },
+    { stdout: JSON.stringify({ errors: [{ message: 'boom' }] }) },
+    { stdout: 'not json' },
+    {
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [
+                  {
+                    lastEditedAt: null,
+                    createdAt: TS,
+                    updatedAt: TS,
+                    body: 'x',
+                    author: { login: 'kurone-kito' },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      }),
+    },
+  ];
+  for (const reply of incomplete) {
+    const stub = withOwnerIdStub({ graphqlReply: reply });
+    try {
+      const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
+      assert.equal(run.status, 1, reply.stdout);
+      assert.equal(run.kind, 'internal', reply.stdout);
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), [], reply.stdout);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner --apply compares the set as rendered, so padding around an equal set is sent (#3910)', () => {
+  const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('release', { set: ` ${OWNER_ID_SET} ` }),
+    );
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('selectAuthoringOwnerOpeningMarkers counts only acquire, bootstrap and resume markers naming the target, ignoring case (#3910)', () => {
+  const comment = (id: number, body: string) => ({
+    id,
+    authorLogin: 'kurone-kito',
+    body,
+    createdAt: TS,
+    updatedAt: TS,
+    lastEditedAt: null,
+  });
+  const comments = [
+    comment(
+      1,
+      ownerIdBody(
+        ownerIdFlags('acquire', {
+          'marker-target': 'O/R#42',
+          anchor: 'O/R#42',
+        }),
+      ),
+    ),
+    comment(2, ownerIdBody(ownerIdFlags('release'))),
+    comment(
+      3,
+      ownerIdBody(
+        ownerIdFlags('acquire', {
+          'marker-target': 'o/r#99',
+          anchor: 'o/r#99',
+        }),
+      ),
+    ),
+  ];
+  const openers = selectAuthoringOwnerOpeningMarkers(comments, {
+    target: OWNER_ID_TARGET,
+    markerPrefix: 'idd-skill',
+    trustedLogins: new Set(),
+    requireUnedited: true,
+  });
+  assert.deepEqual(
+    openers.map((opener) => opener.id),
+    [1],
+  );
+});
+
+test('validateAuthoringOwnerPostIdentity names the earliest opening marker when two are equally close (#3910)', () => {
+  const comments = [201, 202].map((id) => ({
+    id,
+    authorLogin: 'kurone-kito',
+    body: ownerIdBody(ownerIdFlags('acquire', { set: `set-${id}` })),
+    createdAt: TS,
+    updatedAt: TS,
+    lastEditedAt: null,
+  }));
+  const post = parseAuthoringOwnerComment(
+    ownerIdBody(ownerIdFlags('heartbeat')),
+    'idd-skill',
+  );
+  assert.ok(post);
+  const refusal = validateAuthoringOwnerPostIdentity(
+    post,
+    selectAuthoringOwnerOpeningMarkers(comments, {
+      target: OWNER_ID_TARGET,
+      markerPrefix: 'idd-skill',
+      trustedLogins: new Set(),
+      requireUnedited: true,
+    }),
+  );
+  assert.match(refusal ?? '', /comment #201 \(mode=acquire\)/);
+  assert.doesNotMatch(refusal ?? '', /#202/);
+});
+
+test('validateAuthoringOwnerPostIdentity breaks an equal-distance tie by comment id, not array order (#3910)', () => {
+  const comments = [201, 202].map((id) => ({
+    id,
+    authorLogin: 'kurone-kito',
+    body: ownerIdBody(ownerIdFlags('acquire', { set: `set-${id}` })),
+    createdAt: TS,
+    updatedAt: TS,
+    lastEditedAt: null,
+  }));
+  const post = parseAuthoringOwnerComment(
+    ownerIdBody(ownerIdFlags('heartbeat')),
+    'idd-skill',
+  );
+  assert.ok(post);
+  const refusal = validateAuthoringOwnerPostIdentity(
+    post,
+    selectAuthoringOwnerOpeningMarkers([...comments].reverse(), {
+      target: OWNER_ID_TARGET,
+      markerPrefix: 'idd-skill',
+      trustedLogins: new Set(),
+      requireUnedited: true,
+    }),
+  );
+  assert.match(refusal ?? '', /comment #201 \(mode=acquire\)/);
+  assert.doesNotMatch(refusal ?? '', /#202/);
+});
+
+test('post-idd-marker --help describes the authoring-owner identity check (#3910)', () => {
+  const help = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  assert.match(help, /is refused, with exit 1 and nothing posted,/);
+  assert.match(help, /\(#3910\)/);
 });

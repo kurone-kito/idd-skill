@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import { SKIP_REASON_CODES } from '../src/scripts/audit-pr-cleanup.mts';
 import {
   type CleanupReport,
   computeReportSummary,
@@ -307,4 +309,152 @@ test('computeReportSummary: time-budget-exhausted sits between failed and the ex
   });
   computeReportSummary(unaffected);
   assert.equal(unaffected.status, 'applied');
+});
+
+// kurone-kito/idd-skill#3857: the per-reason counts and their one-line form
+// are computed once, on every status, and leave `summary` and `status` alone.
+test('computeReportSummary counts skipped rows by reason code, sorted, on a dry run (#3857)', () => {
+  const report = createReport({
+    candidates: [{ subjectId: 'candidate-1' }],
+    skipped: [
+      { subjectId: 'a', skipReasonCode: 'thread-superseded-by-reply' },
+      { subjectId: 'b', skipReasonCode: 'pr-not-merged' },
+      { subjectId: 'c', skipReasonCode: 'thread-superseded-by-reply' },
+    ],
+  });
+
+  computeReportSummary(report);
+
+  assert.deepEqual(report.skipReasonCounts, {
+    'pr-not-merged': 1,
+    'thread-superseded-by-reply': 2,
+  });
+  assert.equal(
+    report.skipReasonSummary,
+    'pr-not-merged 1, thread-superseded-by-reply 2',
+  );
+  assert.equal(report.status, 'needs-apply');
+  assert.equal(report.summary?.skipped, 3);
+});
+
+test('computeReportSummary sets the per-reason fields on every apply outcome (#3857)', () => {
+  const skipped = [
+    { subjectId: 'a', skipReasonCode: 'already-minimized', isMinimized: true },
+  ];
+  const outcomes: {
+    name: string;
+    overrides: Partial<CleanupReport>;
+    status: string;
+  }[] = [
+    {
+      name: 'rescan-failed',
+      overrides: { rescanError: 'gh failed' },
+      status: 'rescan-failed',
+    },
+    {
+      name: 'failed',
+      overrides: { failed: [{ subjectId: 'x' }] },
+      status: 'failed',
+    },
+    {
+      name: 'time-budget-exhausted',
+      overrides: { timeBudgetExhausted: true },
+      status: 'time-budget-exhausted',
+    },
+    {
+      name: 'incomplete',
+      overrides: {
+        skipped: [
+          {
+            subjectId: 'y',
+            skipReasonCode: 'viewer-cannot-minimize-comment',
+            viewerCanMinimize: false,
+            isMinimized: false,
+          },
+        ],
+      },
+      status: 'incomplete',
+    },
+    {
+      name: 'applied',
+      overrides: { applied: [{ subjectId: 'z' }] },
+      status: 'applied',
+    },
+    { name: 'clean', overrides: {}, status: 'clean' },
+  ];
+
+  for (const outcome of outcomes) {
+    const report = createReport({
+      mode: 'apply',
+      skipped: outcome.overrides.skipped ?? skipped,
+      ...outcome.overrides,
+    });
+    computeReportSummary(report);
+    assert.equal(report.status, outcome.status, outcome.name);
+    assert.ok(report.skipReasonSummary !== undefined, outcome.name);
+    assert.ok(report.skipReasonCounts !== undefined, outcome.name);
+  }
+});
+
+test('computeReportSummary leaves the per-reason fields empty when nothing was skipped (#3857)', () => {
+  const report = createReport({ candidates: [] });
+
+  computeReportSummary(report);
+
+  assert.deepEqual(report.skipReasonCounts, {});
+  assert.equal(report.skipReasonSummary, '');
+});
+
+test('computeReportSummary counts a missing or malformed reason code as unknown (#3857)', () => {
+  const report = createReport({
+    skipped: [
+      { subjectId: 'no-code' },
+      { subjectId: 'not-a-string', skipReasonCode: 42 },
+      { subjectId: 'uppercase', skipReasonCode: 'Not-Kebab' },
+      { subjectId: 'injected', skipReasonCode: 'a,b\nc' },
+      { subjectId: 'good', skipReasonCode: 'pr-not-merged' },
+    ],
+  });
+
+  computeReportSummary(report);
+
+  assert.deepEqual(report.skipReasonCounts, { 'pr-not-merged': 1, unknown: 4 });
+  assert.equal(report.skipReasonSummary, 'pr-not-merged 1, unknown 4');
+  assert.doesNotMatch(report.skipReasonSummary ?? '', /[\n,]\s*[\n,]/);
+});
+
+// kurone-kito/idd-skill#3857: the evidence docs list the closed reason codes
+// with one row each. The table and the exported list must agree both ways.
+test('the minimization doc lists exactly the closed skip reason codes (#3857)', () => {
+  const doc = readFileSync(
+    new URL('../docs/idd-comment-minimization.md', import.meta.url),
+    'utf8',
+  );
+  const heading = '### Skip reason codes';
+  const start = doc.indexOf(heading);
+  assert.notStrictEqual(
+    start,
+    -1,
+    'the doc must have a Skip reason codes section',
+  );
+  const rest = doc.slice(start + heading.length);
+  const nextHeading = rest.search(/\n#{1,3} /);
+  const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+  const documented = [...section.matchAll(/^\| `([a-z0-9-]+)`\s*\|/gm)].map(
+    (match) => match[1] ?? '',
+  );
+  assert.equal(
+    new Set(documented).size,
+    documented.length,
+    'no code is documented twice',
+  );
+  for (const code of SKIP_REASON_CODES) {
+    assert.ok(documented.includes(code), `the doc omits ${code}`);
+  }
+  for (const code of documented) {
+    assert.ok(
+      (SKIP_REASON_CODES as readonly string[]).includes(code),
+      `the doc names an unlisted code ${code}`,
+    );
+  }
 });

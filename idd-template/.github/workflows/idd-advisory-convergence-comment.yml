@@ -240,15 +240,19 @@ jobs:
                   (.helperRuntime) as $hr
                   | ($hr != null and ($hr|type) == "object") as $is_object
                   | if $is_object then
-                      (($hr | keys) - ["profile","packageSpec"]) as $extra
+                      (($hr | keys) - ["profile","packageSpec","launcher"]) as $extra
                       | ($hr.profile) as $profile
                       | ($extra | length == 0) as $keys_ok
-                      | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only"] | index($profile)) != null) as $profile_ok
+                      | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only","user-global"] | index($profile)) != null) as $profile_ok
                       | (if ($hr | has("packageSpec")) then
                            ($hr.packageSpec) as $spec
                            | ($spec != null and ($spec|type) == "string" and ($spec | test("\\A[A-Za-z0-9@:/_.+^#%-]+\\z")))
                          else true end) as $spec_ok
-                      | if ($keys_ok and $profile_ok and $spec_ok) then
+                      | (if ($hr | has("launcher")) then
+                          ($hr.launcher) as $launcher_value
+                          | ($launcher_value != null and ($launcher_value|type) == "string" and (["auto","npx","pnpm-dlx"] | index($launcher_value)) != null)
+                        else true end) as $launcher_ok
+                      | if ($keys_ok and $profile_ok and $spec_ok and $launcher_ok) then
                           "\($hr.profile)\t\($hr.packageSpec // "")"
                         else empty end
                     else empty end
@@ -405,7 +409,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-review-comment-origin
               ;;
@@ -477,7 +481,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-advisory-comment-debounce --pr "$PR_NUMBER" --triggered-at "$TRIGGERED_AT"
               ;;
@@ -565,7 +569,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               # shellcheck disable=SC2086
               npx --yes --package "$SPEC" idd-rerun-advisory-convergence --pr "$PR_NUMBER" $REFRESH_FLAG --apply

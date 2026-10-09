@@ -15,7 +15,7 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
 ## Helper runtime contract
 
 1. **When helper runtime is enabled** (`package-manager`, vendored-node,
-   or any profile that ships the helpers): run the commands below
+   `user-global`, or any profile that ships the helpers): run the commands below
    first. If a helper is **missing, fails, returns invalid JSON, or
    disagrees with live GitHub state** → **stop and ask**. Do **not**
    fall through to the written tables in that situation.
@@ -27,7 +27,7 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
 vendored-node** invocation form. Under `package-manager` /
-`ephemeral-npx` profiles, `scripts/` is not vendored — resolve each
+`ephemeral-npx` / `user-global` profiles, `scripts/` is not vendored — resolve each
 command's profile-selected equivalent from
 `docs/idd-helper-scripts.md`. A helper missing on the active profile
 is a missing-helper case under rule 1 (stop and ask), not a reason to
@@ -197,9 +197,9 @@ is authorized under `forcedHandoff.authorityPolicy`;
 `forcedHandoff.mode` is `human-gated`; `oldAgentId` / `oldClaimId` /
 `branch` all match the active claim; and, when an open PR already backs
 this claim, the marker's evidence has `contextScope` of
-`issue-plus-pr` with `linkedPr` naming that PR — an issue-only
-handoff is not enough once a PR exists. On success, the
-successor claim is **sticky**: adopt
+`issue-plus-pr` with `linkedPr` naming that PR — an issue-only handoff is not
+enough once a PR exists, unless it predates the PR's first commit. On success,
+the successor claim is **sticky**: adopt
 `newAgentId` / `newClaimId` **verbatim** as your own for the rest of
 the run (do not mint a fresh pair), and still post your own
 activation-nonce for `newClaimId` (see Claim verification below) — this
@@ -208,12 +208,12 @@ failure, the active claim is unchanged; treat it under the rules above.
 
 ### (d) Open PR
 
-No helper. Re-check live GitHub state: an open PR may close or reference
-this issue only when its head branch matches an inheritable claim — the
-verified active, stale, released, forced-handoff (matching branch and
-linked PR), or legacy migration source. Check linked issues and PR-body
-closing keywords (bare mentions and `Refs #N` do not count). A
-non-inheritable match → **STOP**.
+No helper. Re-check live GitHub state: an open PR may close or reference this
+issue only when its head branch matches an inheritable claim — the verified
+active, stale, released, forced-handoff (matching branch, and linked PR when it
+names one), or legacy migration source. Check linked issues and PR-body closing
+keywords (bare mentions and `Refs #N` do not count). A non-inheritable match →
+**STOP**.
 
 ### (e) Branch collision
 

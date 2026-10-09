@@ -205,7 +205,7 @@ this order:
    resolvable one-shot helper command already exists
 4. `instructions-only` fallback when none of the above applies
 
-Repositories without Node.js remain fully supported through
+Repositories without Node.js remain supported through
 `instructions-only`.
 
 Run this manifest helper from the target repository root when helper
@@ -229,8 +229,8 @@ template into `kurone-kito/kurone-kito` (`kurone-kito/kurone-kito#18` ->
 `#29`, merged; tracked upstream via issue `#2973` item 14): an adopter
 completed the whole hearing/import/substitute/record-policy sequence
 with `ephemeral-npx` or `package-manager` selected and simply never set
-`helperRuntime.packageSpec`, silently leaving every helper invocation
-backed by the mutable default archive URL — embedded directly in the
+`helperRuntime.packageSpec`, silently leaving helper calls
+on the mutable default archive URL — embedded directly in the
 `ephemeral-npx` invocation string, or resolved through
 `package-manager`'s installed dependency (see
 [Helper Runtime Profile](../idd-helper-scripts.md#profile-wiring-surface)
@@ -240,8 +240,9 @@ own header comment about this same gap. The
 2026-09-15 Groom hearing for issue `#2987` chose to surface this as a
 non-blocking advisory rather than a blocking check: `idd-onboard.mjs
 --verify` (and its underlying `runVerify` / `checkPackagePinWarning`
-API) reports a stable, non-blocking warning whenever the effective
-`helperRuntime.profile` is `ephemeral-npx` or `package-manager` and no
+API) warns without blocking whenever the effective
+`helperRuntime.profile` is `ephemeral-npx`, `package-manager`, or `user-global`
+and no
 `helperRuntime.packageSpec` is configured, naming the mutable default
 archive URL and pointing back to this section — but it never fails
 `--verify` or changes its exit code, since a repository may deliberately
@@ -587,7 +588,7 @@ repository default branch)
 
 ### Helper Runtime Profile
 
-**Profile**: `{instructions-only | package-manager | vendored-node | ephemeral-npx}`
+**Profile**: `{instructions-only | package-manager | vendored-node | ephemeral-npx | user-global}`
 
 ### Issue-Author Approval Gate
 
@@ -674,12 +675,12 @@ Keep these rules in mind:
 - keep `helperRuntime.profile` aligned with the human-readable helper
   runtime section when helper support is enabled
 - set `helperRuntime.packageSpec` only when the repository has pinned a
-  reviewed tarball, mirror URL, or commit archive for its `ephemeral-npx`
-  or `package-manager` helper install; omit it to keep the mutable
-  default archive URL for either profile — an omitted `packageSpec`
-  under `ephemeral-npx` or `package-manager` is a deliberate, supported
-  choice, but `idd-onboard.mjs --verify` surfaces it as a non-blocking
-  reminder (see [Helper runtime profile](#helper-runtime-profile) above)
+  reviewed tarball, mirror URL, or commit archive for its `ephemeral-npx`,
+  `package-manager`, or `user-global` install; omit it to keep the mutable
+  default archive URL. An omitted `packageSpec` under these profiles is a
+  deliberate, supported choice, but
+  `idd-onboard.mjs --verify` surfaces it as a non-blocking reminder (see
+  [Helper runtime profile](#helper-runtime-profile) above)
 
 The file validates against the canonical schema at:
 

@@ -11,6 +11,7 @@ import type {
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
 import type { IddRoadmapAuditExecuteVerdict } from '../src/scripts/idd-roadmap-audit-execute.mts';
+import type { WorkerReport } from '../src/scripts/idd-worker-report.mts';
 import type { UserGlobalPolicyDocument } from '../src/scripts/layered-policy.mts';
 import type {
   OnboardingHearingCatalog,
@@ -220,7 +221,8 @@ interface PolicyConfigFile {
       | 'package-manager'
       | 'vendored-node'
       | 'ephemeral-npx'
-      | 'instructions-only';
+      | 'instructions-only'
+      | 'user-global';
   };
   issueScope?: 'roadmap' | 'roadmap-first' | 'orphan-first';
   orphanFirstPolicy?: 'none' | 'maintainer-approved' | 'public-disabled';
@@ -595,6 +597,25 @@ export const tokenCostEventKeys = [
   'usage',
 ] as const satisfies readonly (keyof TokenCostEvent)[];
 
+export const workerReportKeys = [
+  'schemaVersion',
+  'issue',
+  'pullRequest',
+  'claimId',
+  'harness',
+  'workerHandle',
+  'terminalPhase',
+  'outcome',
+  'verifiedAt',
+  'recordedAt',
+  'vendorSessionId',
+  'reviewRounds',
+  'stalls',
+  'deviations',
+  'frictions',
+  'followUps',
+] as const satisfies readonly (keyof WorkerReport)[];
+
 export const tokenCostSnapshotKeys = [
   'schemaVersion',
   'generatedAt',
@@ -751,6 +772,7 @@ export const preMergeReadinessKeys = [
   'waiverEvidence',
   'advisoryConvergenceWaiverPrecondition',
   'claimIdentityInstalledAt',
+  'ignoredForcedHandoffs',
   'staleSelfWaiver',
   'branchCurrency',
   'trustedMarkerActors',
@@ -875,6 +897,10 @@ const exhaustivenessWitnesses: {
     TokenCostSnapshot,
     (typeof tokenCostSnapshotKeys)[number]
   >;
+  workerReport: CoversAllKeysOf<
+    WorkerReport,
+    (typeof workerReportKeys)[number]
+  >;
 } = {
   advisoryWaitState: true,
   branchConflictState: true,
@@ -896,6 +922,7 @@ const exhaustivenessWitnesses: {
   tokenCostSample: true,
   tokenCostEvent: true,
   tokenCostSnapshot: true,
+  workerReport: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -1358,6 +1385,31 @@ const tokenCostEventFixture = {
   at: '2026-08-25T15:10:00Z',
   vendor: 'claude',
 } satisfies TokenCostEvent;
+
+const workerReportFixture = {
+  schemaVersion: 1,
+  issue: 'kurone-kito/idd-skill#3836',
+  pullRequest: null,
+  claimId: 'e6afe472-bb40-4395-9019-7723167c6d57',
+  harness: 'claude-code',
+  workerHandle: 'agent-a1b2c3',
+  terminalPhase: 'F4',
+  outcome: 'merged',
+  verifiedAt: '2026-10-08T12:40:00Z',
+  recordedAt: '2026-10-08T12:41:30Z',
+  vendorSessionId: null,
+  reviewRounds: 2,
+  stalls: [{ phase: 'D', summary: 'CI queue delayed the first check.' }],
+  deviations: [{ phase: 'E4', summary: 'Replied before the watermark.' }],
+  frictions: [
+    {
+      phase: 'B1',
+      summary: 'The naming rule was easy to misread.',
+      file: '.github/instructions/idd-work.instructions.md',
+    },
+  ],
+  followUps: ['kurone-kito/idd-skill#3851'],
+} satisfies WorkerReport;
 
 const tokenCostZeroPercentiles = { p25: 0, p50: 0, p75: 0 };
 const tokenCostZeroUsagePercentiles = {
@@ -1901,6 +1953,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
   'token-cost-snapshot.schema.json': {
     keys: tokenCostSnapshotKeys,
     fixture: tokenCostSnapshotFixture,
+  },
+  'worker-report.schema.json': {
+    keys: workerReportKeys,
+    fixture: workerReportFixture,
   },
   'discover-roadmap-union.schema.json': {
     keys: discoverRoadmapUnionKeys,

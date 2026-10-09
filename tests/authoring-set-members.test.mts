@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -148,7 +149,7 @@ test('an edited trusted marker that no longer parses fails closed', () => {
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    'edited trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 8675)',
+    'edited trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 8675); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan',
   );
 });
 
@@ -192,7 +193,7 @@ test('an unedited unparseable trusted marker fails closed', () => {
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    'unparseable trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 9142)',
+    'unparseable trusted authoring-owner marker (kurone-kito/idd-skill#3469, comment id 9142); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan',
   );
 });
 
@@ -214,7 +215,7 @@ test('a trusted marker whose target is a different issue fails closed', () => {
   assert.deepEqual(result.issues, []);
   assert.equal(
     result.reason,
-    'authoring-owner marker target does not match its host issue (kurone-kito/idd-skill#3468, comment id 7301)',
+    'authoring-owner marker target does not match its host issue (kurone-kito/idd-skill#3468, comment id 7301); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan',
   );
 });
 
@@ -710,9 +711,10 @@ test('a non-minimized marker with empty body-sha256 fails closed as unparseable'
   assert.deepEqual(result.issues, []);
 });
 
-test('a parseable marker minimized as outdated is not a set member', () => {
-  // Even a well-formed, correctly-targeted marker is skipped (not counted)
-  // when it is minimized as outdated -- AC from issue #3553.
+test('a parseable marker minimized as outdated is not a set member, and fails the scan when it is the only marker on its issue', () => {
+  // A well-formed, correctly-targeted marker is never counted when it is
+  // minimized as outdated (#3553). When it is the set's only marker on its
+  // issue, the scan is incomplete instead of reporting a smaller set (#3880).
   const result = evaluateAuthoringSetMembers({
     set: SET,
     markerPrefix: PREFIX,
@@ -726,10 +728,17 @@ test('a parseable marker minimized as outdated is not a set member', () => {
       }),
     ],
   });
-  // The only marker was skipped, so there are no members
-  assert.equal(result.complete, true);
+  assert.equal(result.complete, false);
   assert.equal(result.soleMember, false);
   assert.deepEqual(result.issues, []);
+  assert.equal(
+    result.reason,
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#3468, comment id 1); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
+  );
+  assert.deepEqual(result.skippedMarkers, [
+    { issueNumber: 3468, commentId: 1, kind: 'requested-set', mode: 'acquire' },
+  ]);
+  assert.equal(result.skippedElsewhere, 0);
 });
 
 test('a parseable minimized-resolved marker counts as a set member (resolved is not outdated)', () => {
@@ -752,4 +761,592 @@ test('a parseable minimized-resolved marker counts as a set member (resolved is 
   assert.equal(result.complete, true);
   assert.equal(result.soleMember, true);
   assert.deepEqual(result.issues, [3468]);
+});
+
+// ── hidden requested-set markers and the skip report (issue #3880) ─────────
+
+const OTHER_SET = '0b7f0e5a-1c2d-4e3f-9a8b-7c6d5e4f3a2b';
+const REPOSITORY = { owner: 'kurone-kito', repo: 'idd-skill' };
+const HIDDEN = { isMinimized: true, minimizedReason: 'outdated' };
+
+function markerWithMode(
+  issue: number,
+  mode: 'acquire' | 'heartbeat',
+  set = SET,
+): string {
+  const target = `kurone-kito/idd-skill#${issue}`;
+  return renderAuthoringOwnerMarker({
+    markerPrefix: PREFIX,
+    target,
+    anchor: target,
+    mode,
+    owner: '9e59701c-d1da-4b07-ba66-1ca3f025cfe5',
+    set,
+    session: '3dad4bd4-7bde-40ed-b6da-0b0cf94cdfa9',
+    bodySha256: DIGEST,
+    snapshotSha256: 'none',
+    supersedes: 'none',
+  });
+}
+
+function evaluate(comments: SetMemberComment[]) {
+  return evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: REPOSITORY,
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+    comments,
+  });
+}
+
+test('#3880: a lone hidden marker on a sibling fails the scan and names the sibling', () => {
+  const result = evaluate([
+    comment(10, marker(10), 'kurone-kito', null, 1),
+    comment(20, marker(20), 'kurone-kito', null, 2, HIDDEN),
+  ]);
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, []);
+  assert.equal(
+    result.reason,
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 2); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
+  );
+});
+
+test('#3880: a hidden marker with a later visible marker of the set keeps the members', () => {
+  const result = evaluate([
+    comment(20, marker(20), 'kurone-kito', null, 1, HIDDEN),
+    comment(20, marker(20), 'kurone-kito', null, 2),
+    comment(10, marker(10), 'kurone-kito', null, 3),
+  ]);
+  assert.equal(result.complete, true);
+  assert.equal(result.soleMember, false);
+  assert.deepEqual(result.issues, [10, 20]);
+  assert.deepEqual(result.skippedMarkers, [
+    { issueNumber: 20, commentId: 1, kind: 'requested-set', mode: 'acquire' },
+  ]);
+});
+
+test('#3880: the lost-race shape (hidden acquire and heartbeat, then a visible marker of another set) fails naming the last hidden comment', () => {
+  const result = evaluate([
+    comment(10, marker(10), 'kurone-kito', null, 9),
+    comment(20, markerWithMode(20, 'acquire'), 'kurone-kito', null, 1, HIDDEN),
+    comment(
+      20,
+      markerWithMode(20, 'heartbeat'),
+      'kurone-kito',
+      null,
+      2,
+      HIDDEN,
+    ),
+    comment(20, marker(20, OTHER_SET), 'kurone-kito', null, 3),
+  ]);
+  assert.equal(result.complete, false);
+  assert.equal(
+    result.reason,
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 2); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
+  );
+  assert.deepEqual(result.skippedMarkers, [
+    { issueNumber: 20, commentId: 1, kind: 'requested-set', mode: 'acquire' },
+    { issueNumber: 20, commentId: 2, kind: 'requested-set', mode: 'heartbeat' },
+  ]);
+});
+
+test('#3880: an unparseable hidden marker (the #3553 shape) does not fail and names the set', () => {
+  const result = evaluate([
+    comment(10, marker(10), 'kurone-kito', null, 1),
+    comment(
+      2689,
+      minimizedMarker(2689),
+      'kurone-kito',
+      null,
+      5577810398,
+      HIDDEN,
+    ),
+  ]);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.issues, [10]);
+  assert.deepEqual(result.skippedMarkers, [
+    {
+      issueNumber: 2689,
+      commentId: 5577810398,
+      kind: 'unattributable',
+      namesRequestedSet: true,
+    },
+  ]);
+  assert.equal(result.skippedElsewhere, 0);
+});
+
+test('#3880: an edited hidden marker is unattributable; namesRequestedSet reads its current text', () => {
+  const result = evaluate([
+    comment(10, marker(10), 'kurone-kito', null, 1),
+    comment(20, marker(20), 'kurone-kito', '2026-10-01T00:00:00Z', 4, HIDDEN),
+    comment(
+      30,
+      marker(30, OTHER_SET),
+      'kurone-kito',
+      '2026-10-01T00:00:00Z',
+      5,
+      HIDDEN,
+    ),
+  ]);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.skippedMarkers, [
+    {
+      issueNumber: 20,
+      commentId: 4,
+      kind: 'unattributable',
+      namesRequestedSet: true,
+    },
+    {
+      issueNumber: 30,
+      commentId: 5,
+      kind: 'unattributable',
+      namesRequestedSet: false,
+    },
+  ]);
+});
+
+test('#3880: a hidden marker targeting another issue is unattributable; the flag is its parsed set', () => {
+  const result = evaluate([
+    comment(10, marker(10), 'kurone-kito', null, 1),
+    comment(20, marker(30), 'kurone-kito', null, 5, HIDDEN),
+    comment(20, marker(30, OTHER_SET), 'kurone-kito', null, 6, HIDDEN),
+  ]);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.skippedMarkers, [
+    {
+      issueNumber: 20,
+      commentId: 5,
+      kind: 'unattributable',
+      namesRequestedSet: true,
+    },
+    {
+      issueNumber: 20,
+      commentId: 6,
+      kind: 'unattributable',
+      namesRequestedSet: false,
+    },
+  ]);
+});
+
+test('#3880: a hidden marker of another set is counted, not listed', () => {
+  const result = evaluate([
+    comment(10, marker(10), 'kurone-kito', null, 1),
+    comment(20, marker(20, OTHER_SET), 'kurone-kito', null, 7, HIDDEN),
+  ]);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.issues, [10]);
+  assert.deepEqual(result.skippedMarkers, []);
+  assert.equal(result.skippedElsewhere, 1);
+});
+
+test('#3880: a run with no skipped marker reports an empty list and zero', () => {
+  const result = evaluate([comment(10, marker(10), 'kurone-kito', null, 1)]);
+  assert.deepEqual(result.skippedMarkers, []);
+  assert.equal(result.skippedElsewhere, 0);
+});
+
+test('#3880: a fail-closed result for another reason still carries the skipped markers', () => {
+  const result = evaluate([
+    comment(10, minimizedMarker(10), 'kurone-kito', null, 2),
+    comment(20, marker(20), 'kurone-kito', null, 1, HIDDEN),
+  ]);
+  assert.equal(result.complete, false);
+  assert.match(result.reason, /^unparseable trusted authoring-owner marker/);
+  assert.deepEqual(result.skippedMarkers, [
+    { issueNumber: 20, commentId: 1, kind: 'requested-set', mode: 'acquire' },
+  ]);
+});
+
+test('#3880: the verdict and the sorted skipped list do not depend on the order of issues', () => {
+  const block20 = [
+    comment(20, marker(20), 'kurone-kito', null, 2, HIDDEN),
+    comment(20, marker(20), 'kurone-kito', null, 3, HIDDEN),
+  ];
+  const block30 = [comment(30, marker(30), 'kurone-kito', null, 4, HIDDEN)];
+  const block10 = [comment(10, marker(10), 'kurone-kito', null, 1)];
+  const forward = evaluate([...block10, ...block20, ...block30]);
+  const reversed = evaluate([...block30, ...block20, ...block10]);
+  assert.deepEqual(reversed, forward);
+  assert.equal(forward.complete, false);
+  assert.equal(
+    forward.reason,
+    "hidden authoring-owner marker is the set's only marker on its issue (kurone-kito/idd-skill#20, comment id 3); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan",
+  );
+});
+
+test('#3880: enumeration that did not finish reports an empty skip list', () => {
+  const result = evaluateAuthoringSetMembers({
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: REPOSITORY,
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: false,
+    comments: [comment(20, marker(20), 'kurone-kito', null, 1, HIDDEN)],
+  });
+  assert.equal(result.reason, 'enumeration incomplete');
+  assert.deepEqual(result.skippedMarkers, []);
+  assert.equal(result.skippedElsewhere, 0);
+});
+
+function skipCliScript(comments: Record<number, string>, items: number[]) {
+  return `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: ${items.length},
+        incomplete_results: false,
+        items: ${JSON.stringify(items.map((number) => ({ number })))}
+      }));
+      process.exit(0);
+    }
+    if (joined.includes('state=all')) {
+      process.stdout.write('[]');
+      process.exit(0);
+    }
+    if (args.includes('graphql')) {
+      const table = ${JSON.stringify(comments)};
+      const issue = Number((joined.match(/number=(\\d+)/) || [])[1]);
+      const nodes = (table[issue] ? JSON.parse(table[issue]) : []);
+      process.stdout.write(JSON.stringify({
+        data: { repository: { issue: { comments: {
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null }
+        } } } }
+      }));
+      process.exit(0);
+    }
+    process.stderr.write('unexpected gh ' + joined);
+    process.exit(2);
+  `;
+}
+
+function cliNode(body: string, id: number, hidden: boolean): string {
+  return JSON.stringify([
+    {
+      databaseId: id,
+      lastEditedAt: null,
+      createdAt: '2026-09-25T18:00:00Z',
+      updatedAt: '2026-09-25T18:00:00Z',
+      body,
+      author: { login: 'kurone-kito' },
+      isMinimized: hidden,
+      minimizedReason: hidden ? 'outdated' : null,
+    },
+  ]);
+}
+
+function runSetMembers(args: string[]) {
+  return execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/authoring-set-members.mjs'), ...args],
+    { encoding: 'utf8' },
+  );
+}
+
+test('#3880 CLI: a hidden requested-set marker fails the run and prints both fields', () => {
+  const restore = stubExecutable(
+    'gh',
+    skipCliScript(
+      {
+        3468: cliNode(marker(3468), 1, false),
+        3469: cliNode(marker(3469), 9, true),
+      },
+      [3468, 3469],
+    ),
+  );
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+        '--set',
+        SET,
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failure = error as { status?: number; stdout?: string };
+    assert.equal(failure.status, 1);
+    const output = JSON.parse(failure.stdout ?? '');
+    assert.equal(output.complete, false);
+    assert.match(output.reason, /#3469, comment id 9\)/);
+    assert.deepEqual(output.skippedMarkers, [
+      {
+        issueNumber: 3469,
+        commentId: 9,
+        kind: 'requested-set',
+        mode: 'acquire',
+      },
+    ]);
+    assert.equal(output.skippedElsewhere, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('#3880 CLI: a hidden marker of another set is counted and the run passes', () => {
+  const restore = stubExecutable(
+    'gh',
+    skipCliScript(
+      {
+        3468: cliNode(marker(3468), 1, false),
+        3469: cliNode(marker(3469, OTHER_SET), 9, true),
+      },
+      [3468, 3469],
+    ),
+  );
+  try {
+    const output = JSON.parse(
+      runSetMembers([
+        '--set',
+        SET,
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ]),
+    );
+    assert.equal(output.complete, true);
+    assert.deepEqual(output.issues, [3468]);
+    assert.deepEqual(output.skippedMarkers, []);
+    assert.equal(output.skippedElsewhere, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('#3880 CLI: --help lists the skip fields in its output schema', () => {
+  const help = runSetMembers(['--help']);
+  assert.match(help, /"skippedMarkers"/);
+  assert.match(help, /"skippedElsewhere"/);
+});
+
+test('#3881: the heading that the fail-closed reasons point to exists in the docs', () => {
+  const docs = readFileSync(
+    join(REPO_ROOT, 'docs/idd-comment-minimization.md'),
+    'utf8',
+  );
+  assert.match(docs, /^### Clearing a comment that blocks the scan$/m);
+});
+
+// #3901: the search and index-lag pages are read through the unbounded gh
+// reader, so a page over the 1 MiB ghApiJson buffer still yields a verdict.
+test('CLI: a search page larger than 1 MiB still yields the verdict (#3901)', () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    } else if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468, body: 'x'.repeat(1100000) }]
+      }), () => process.exit(0));
+    } else if (joined.includes('state=all')) {
+      process.stdout.write('[]');
+      process.exit(0);
+    } else if (args.includes('graphql')) {
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [{
+                  databaseId: 1,
+                  lastEditedAt: null,
+                  createdAt: '2026-09-25T18:00:00Z',
+                  updatedAt: '2026-09-25T18:00:00Z',
+                  body: ${JSON.stringify(marker(3468))},
+                  author: { login: 'kurone-kito' }
+                }],
+                pageInfo: { hasNextPage: false, endCursor: null }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    } else {
+      process.stderr.write('unexpected gh ' + joined);
+      process.exit(2);
+    }
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+          '--set',
+          SET,
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.complete, true);
+    assert.equal(output.soleMember, true);
+    assert.deepEqual(output.issues, [3468]);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: an index-lag page larger than 1 MiB still yields the verdict (#3901)', () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    } else if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468 }]
+      }));
+      process.exit(0);
+    } else if (joined.includes('state=all')) {
+      process.stdout.write(JSON.stringify([{ number: 3470, body: 'y'.repeat(1100000) }]), () => process.exit(0));
+    } else if (args.includes('graphql')) {
+      const nodes = joined.includes('number=3470')
+        ? []
+        : [{
+            databaseId: 1,
+            lastEditedAt: null,
+            createdAt: '2026-09-25T18:00:00Z',
+            updatedAt: '2026-09-25T18:00:00Z',
+            body: ${JSON.stringify(marker(3468))},
+            author: { login: 'kurone-kito' }
+          }];
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes,
+                pageInfo: { hasNextPage: false, endCursor: null }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    } else {
+      process.stderr.write('unexpected gh ' + joined);
+      process.exit(2);
+    }
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    const output = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+          '--set',
+          SET,
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--trusted-marker-logins',
+          'kurone-kito',
+        ],
+        { encoding: 'utf8' },
+      ),
+    );
+    assert.equal(output.complete, true);
+    assert.equal(output.soleMember, true);
+    assert.deepEqual(output.issues, [3468]);
+  } finally {
+    restore();
+  }
+});
+
+test('CLI: a failed search exits non-zero even after it wrote a valid page (#3901)', () => {
+  const script = `
+    const args = process.argv.slice(2);
+    const joined = args.join(' ');
+    if (joined.includes('search/issues') && !joined.includes('authoring-owner')) {
+      process.stderr.write('search query is not the owner-marker token\\n');
+      process.exit(2);
+    } else if (joined.includes('search/issues')) {
+      process.stdout.write(JSON.stringify({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{ number: 3468 }]
+      }), () => process.exit(1));
+    } else if (joined.includes('state=all')) {
+      process.stdout.write('[]');
+      process.exit(0);
+    } else if (args.includes('graphql')) {
+      process.stdout.write(JSON.stringify({
+        data: {
+          repository: {
+            issue: {
+              comments: {
+                nodes: [{
+                  databaseId: 1,
+                  lastEditedAt: null,
+                  createdAt: '2026-09-25T18:00:00Z',
+                  updatedAt: '2026-09-25T18:00:00Z',
+                  body: ${JSON.stringify(marker(3468))},
+                  author: { login: 'kurone-kito' }
+                }],
+                pageInfo: { hasNextPage: false, endCursor: null }
+              }
+            }
+          }
+        }
+      }));
+      process.exit(0);
+    } else {
+      process.stderr.write('unexpected gh ' + joined);
+      process.exit(2);
+    }
+  `;
+  const restore = stubExecutable('gh', script);
+  try {
+    const failure = spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/authoring-set-members.mjs'),
+        '--set',
+        SET,
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(failure.status, 1);
+    assert.doesNotMatch(failure.stdout, /"complete": true/);
+  } finally {
+    restore();
+  }
 });

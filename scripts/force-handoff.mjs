@@ -26,7 +26,10 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadIddConfig } from './idd-config.mjs';
+import {
+  evaluateForcedHandoffPreflight,
+  loadIddConfig,
+} from './idd-config.mjs';
 import { renderUnclaimedByMarker } from './marker-helpers.mjs';
 import {
   parsePaginatedGhNdjson,
@@ -54,6 +57,7 @@ export async function runHandoff(options = {}) {
     postComment,
     invalidateHints = invalidateDiscoverHints,
     mode,
+    preflight,
     write = (chunk) => {
       process.stdout.write(chunk);
     },
@@ -160,7 +164,7 @@ export async function runHandoff(options = {}) {
           '--state',
           'open',
           '--json',
-          'number,headRefName',
+          'number,headRefName,baseRefName',
         ]);
     let planOptions = resolveOpts;
     let plan = planHandoff(issueComments, linkedPrs, planOptions);
@@ -254,6 +258,20 @@ export async function runHandoff(options = {}) {
       throw new Error(
         'cannot generate forced-handoff marker: check that forced-handoff mode is human-gated and the actor is authorized',
       );
+    }
+    // #3872: refuse before the operator confirms. The successor would stop at
+    // Resume or F2 unless the trusted copies those gates read for the PR the
+    // operator named confirm the opt-in. An unrelated open PR on the branch
+    // does not block it.
+    const preflightResult = evaluateForcedHandoffPreflight({
+      owner,
+      repo: name,
+      claimBranch: plan.branch,
+      openPrs: linkedPrs.filter((pr) => Number(pr.number) === resolvedPrNumber),
+      deps: preflight,
+    });
+    if (!preflightResult.ok) {
+      throw new Error(preflightResult.refusal ?? 'forced handoff refused');
     }
     const { newAgentId, newClaimId } = plan.successorIds;
     const successorUnchanged = newAgentId === plan.activeClaim.agentId;

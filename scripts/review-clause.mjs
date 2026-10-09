@@ -28,10 +28,13 @@
 // `copilot-review-body.mts` itself only imports `markdown-code.mts` (which
 // has no imports of its own), so this adds no heavy dependency surface to
 // that caller either.
+import { DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN } from './advisory-wait-policy.mjs';
 import { classifyCopilotReviewBody } from './copilot-review-body.mjs';
 import {
+  hasTrustedReviewAckAfter,
   isCopilotErrorReviewBody,
   isCopilotReviewerLogin,
+  normalizeTrustedMarkerLogins,
 } from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 
@@ -237,4 +240,74 @@ export function fetchHeadObservedAt(
   port = createGithubProviderAdapter(owner, repo),
 ) {
   return port.getChangeRequestHeadObservedAt(prNumber);
+}
+/**
+ * Clause 1's ack rule for the review that matches HEAD (kurone-kito/idd-skill#3907):
+ * `suppressedCount > 0`, or an `unrecognized` body with the default Copilot
+ * bot. It mirrors `advisory-convergence.mts`'s Clause 1 ack term and covers
+ * that rule only; it does not say whether Clause 1 applies at all
+ * (`reviewPolicy`, `convergenceScope`, waivers). The same rule still lives in
+ * `advisory-convergence.mts` (two sites) and `merged-pr-feedback-sweep.mts`;
+ * moving those onto this function is a follow-up. A pin test keeps the Clause 1
+ * copy from drifting in the meantime.
+ */
+export function copilotReviewAckNeeded(input) {
+  return (
+    input.suppressedCount > 0 ||
+    (input.bodyShape === 'unrecognized' &&
+      input.primaryBotLogin.trim().toLowerCase() ===
+        DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN)
+  );
+}
+/**
+ * Select the primary bot's review with the gate's own selector
+ * ({@link resolveLatestCopilotReviewClause}) and report its ack state
+ * (kurone-kito/idd-skill#3907). Returns `null` when there is no counted review
+ * or the HEAD is not 40 hexadecimal characters after lowercasing.
+ * `comments` must be normalized (`author.login`, `lastEditedAt`), and `trustedMarkerLogins` the
+ * resolved set, not a viewer-augmented one.
+ */
+export function resolveLatestPrimaryBotReviewEvidence(input) {
+  const headSha = input.prHeadSha.toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(headSha)) {
+    return null;
+  }
+  // Normalize the login as the gate does (advisory-convergence.mts), so the
+  // selector and the reported login agree with the gate's view.
+  const primaryBotLogin =
+    input.primaryBotLogin.trim().toLowerCase() ||
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const clause = resolveLatestCopilotReviewClause(
+    input.reviews,
+    headSha,
+    primaryBotLogin,
+  );
+  if (!clause.found) {
+    return null;
+  }
+  const reviewAckNeeded =
+    clause.matchesHead &&
+    copilotReviewAckNeeded({
+      suppressedCount: clause.suppressedCount,
+      bodyShape: clause.bodyShape,
+      primaryBotLogin,
+    });
+  const reviewAckCovers = clause.matchesHead
+    ? hasTrustedReviewAckAfter(
+        input.comments,
+        normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
+        clause.submittedAt,
+        headSha,
+      )
+    : null;
+  return {
+    primaryBotLogin,
+    reviewId: clause.reviewId,
+    commitId: clause.commitId,
+    matchesHead: clause.matchesHead,
+    bodyShape: clause.bodyShape,
+    suppressedCount: clause.suppressedCount,
+    reviewAckNeeded,
+    reviewAckCovers,
+  };
 }

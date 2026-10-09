@@ -292,11 +292,13 @@ through the **single** shared `resolveActiveClaim`, so there is no forked
 claim-state logic. They deliberately pass **different** forced-handoff options,
 and that difference is intentional policy, not drift:
 
-- **Resume routing is strict.** It sets `requireAuthorMatchesForcedBy: true`
-  (rule 7's author/`forcedBy` binding) and never passes `prFirstCommitAt`.
-  Resume is a _takeover_ decision, so it must block the same-identity
-  self-signed hijack and reject an issue-only handoff that targets a PR-backed
-  claim.
+- **Resume routing is strict on the author binding.** It sets
+  `requireAuthorMatchesForcedBy: true` (rule 7's author/`forcedBy` binding), so
+  it blocks the same-identity self-signed hijack. Since
+  kurone-kito/idd-skill#3871 it also applies the merge gate's first-commit time
+  to an issue-only handoff that targets a PR-backed claim: honored only when the
+  handoff predates the first commit of the open PR (the earliest one, when
+  several back the claim).
 - **The merge write-gate is lenient.** It leaves `requireAuthorMatchesForcedBy`
   at its off default and passes `prFirstCommitAt`, applying the Part-B allowance
   (kurone-kito/idd-skill#1058, an issue-only handoff predating the PR). The
@@ -313,9 +315,12 @@ and that difference is intentional policy, not drift:
 
 Because the two callers apply different strictness, they can return **different
 verdicts for the same corrected-handoff state** — resume may report
-`already_owned` while the merge gate reports `claimLost`. This is expected: the
-verdicts answer different questions (may I take over? vs. does this verified
-session still own the write?).
+`already_owned` while the merge gate reports `claimLost`. For a displaced
+session whose handoff was relayed by an account other than its approver, this
+is expected: Resume, the strict side, still sees the displaced session as
+owner, while the merge gate sees the successor. In general the verdicts answer
+different questions (may I take over? vs. does this verified session still own
+the write?).
 
 The split is kept intentionally (see kurone-kito/idd-skill#1155): the structural
 risk the adopter raised — two divergent resolvers — is already removed by the
@@ -356,6 +361,23 @@ regardless of `linkedPrLookupFailed`, so its behavior is unchanged. The
 merge-side `summarizeClaimValidation` path (and its `prFirstCommitAt`
 Part-B allowance above) never shared this lookup either, and is untouched
 by this fix.
+
+**Linked-PR detection and the first-commit time (kurone-kito/idd-skill#3871).**
+Resume's PR-backed-claim detection now reads two provider signals and takes
+their union: the connected timeline (a manual Development link, a
+`CONNECTED_EVENT` reconciled against `DISCONNECTED_EVENT`) and the closing
+references (an open pull request of this repository whose body closes the issue
+with a closing keyword, which produces no `ConnectedEvent`). Before this change
+Resume could not see the second kind and honored an issue-only handoff that the
+merge gate then refused. One limit remains: GitHub processes a closing keyword
+only for a pull request that targets the repository's default branch, so a
+repository whose pull requests target a `developmentBranch` gets no closing
+reference and stays exposed on the Resume side. Resume now applies the same
+first-commit time rule as the merge gate, and a time that cannot be read rejects
+the handoff. This overturns the time half of the note recorded under
+kurone-kito/idd-skill#1155 (that the allowance is "applied by pre-merge but not
+by resume routing"); the author binding of kurone-kito/idd-skill#1155
+(`requireAuthorMatchesForcedBy`) is unchanged.
 
 ### Activation-nonce: why a separate marker, and what stays deferred
 
@@ -521,7 +543,7 @@ race the round-6 finding raised.
 **Candidate files (if ever pursued)**, named as they land once imported
 (the `idd-template/` prefix drops from this document's own path, and
 `src/scripts/*.mts` never ships — an adopter's `vendored-node` profile
-gets the generated `.mjs` copy instead; `package-manager`/`ephemeral-npx`
+gets the generated `.mjs` copy instead; `package-manager`/`ephemeral-npx`/`user-global`
 resolve the same logic through the installed package rather than a
 local file; `instructions-only` has no helper runtime at all, so this
 deferred work would need direct instruction-level parsing rules there
@@ -1336,6 +1358,19 @@ below.
   immediately, so the deferred issue does not wait for a human
   release request.
 
+#### E6 bundles one follow-up per pass (kurone-kito/idd-skill#3866)
+
+E6 bundles one E5 pass's deferred items into one follow-up issue and
+says not to append to it. Read alone, that is a bare rule, and a reader
+may treat the append ban as a limitation to work around: a private
+downstream adopter proposed one rolling follow-up per pull request on
+2026-10-05 for that reason (#3222 records why the ban exists). The
+narrow auto-release of a defer-source follow-up compares the live
+body's SHA-256 with the `body-sha256` pinned by the first
+`mode=acquire` marker. A body appended later no longer matches that
+pin, so it loses the auto-release. Keep one follow-up per pass, and
+create a new one for the next pass rather than appending.
+
 #### Severity-tiered urgency (kurone-kito/idd-skill#3589)
 
 `severity-tiered` is a third `deferByUrgency` value. It replaces the
@@ -2029,6 +2064,70 @@ explicit adopter demand with a concrete use case the raw-URL path does
 not already serve; or a bounded pilot of `skills/issue-authoring/`
 alone. A project that reaches this same conclusion independently should
 record it here rather than re-running the investigation.
+
+## Helper runtime launchers
+
+<!-- cspell:words bunx -->
+
+The `ephemeral-npx` profile resolved every helper through
+`npx --yes --package <spec> idd-*`. On 2026-10-08, on WSL2 (Linux
+6.18.40.1-microsoft-standard-WSL2) with Node 22.23.2, npm 10.9.8, pnpm
+12.9.1 and bun 1.4.2 installed from the bun npm package, `idd-helper-bundle-manifest
+--help` ran against the default mutable spec
+`https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main`
+(about 8.9 MB gzipped), each launcher with its own isolated cache. The hyperfine
+means were: `npx --yes --package`, 2.96 s cold, 917 ms warm, and a timeout at
+the 60 s cap with the network blocked; `pnpm dlx --package`, 1.46 s cold, 71 ms
+warm, and it runs with the network blocked; `bunx --package`, 0.59 s cold, 57 ms
+warm, and it runs with the network blocked. On the same machine the
+`package-manager` forms cost 52 ms for `node` on the bin directly, 56 ms for
+`node_modules/.bin/idd-*`, 68 ms for `pnpm run` and `pnpm exec`, and 132 ms for
+`npm run`. The repository pin makes the pnpm shim report 12.4.1 inside its own
+checkout, which is why the launcher probe runs in the target root.
+
+pnpm refuses a codeload archive for some references when the manifest has a
+`prepare` script. Against git+file toy repositories under pnpm 12.9.1 the
+script keys `prepare`, `prepublish`, `prepack` and `publish` trigger the refusal,
+and `prepublishOnly`, `postpack`, `preinstall`, `install`, `postinstall`, `test`
+and `build` do not. The commit-SHA form
+was refused under every pnpm version tried, with ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED
+under pnpm 12, and the `refs/heads/main` form was refused under pnpm 10. The fix
+is kurone-kito/idd-skill#3829,
+which removed the script. The pre-fix matrix, by ref shape and pnpm version, is:
+
+| Ref shape in the URL | pnpm 12.9.1 | pnpm 11   | pnpm 10   |
+| -------------------- | ----------- | --------- | --------- |
+| `refs/heads/main`    | runs        | runs      | refused   |
+| `refs/tags/v0.14.0`  | runs        | not tried | not tried |
+| a commit SHA         | refused     | refused   | refused   |
+
+The codeload acceptance runs on its merge commit
+`bb9d7d7bca5cea2df863333102882491916a900a` passed `pnpm dlx` under pnpm 10, 11
+and 12, and `pnpm add -D` under pnpm 12.
+
+A cached launcher serves a stale copy of a mutable URL. A second run still ran
+the first version of a tarball after the server began serving a different one on
+the same URL, under npx, pnpm dlx and bunx alike, so a faster launcher does not
+change freshness. pnpm's `dlxCacheMaxAge` defaults to 1440 minutes. The default
+spec is mutable, which is the argument for pinning, not against the launcher.
+
+`auto` floors at `PNPM_DLX_MIN_MAJOR`, which the merged source sets to 10.
+pnpm 9 reads `--package` as a package name and answers 404, so it is excluded,
+and pnpm
+10 is the lowest major the acceptance runs covered.
+
+Bun was measured and not adopted. Its warm advantage over pnpm dlx is 14 ms,
+about the spread of the package-manager forms above. Its cold advantage is about
+0.9 s once per cache lifetime. bunx creates one temporary install directory per
+bin, so each further helper costs about 0.5 s even with the global cache warm,
+where pnpm dlx shares one install across bins at 60 to 110 ms. bunx honours the
+Node shebang and runs under Node in a probe package, because only `bunx --bun`
+switches the runtime, so it is a launcher change with no runtime benefit here.
+bun 1.4.2 also has open Windows defects: oven-sh/bun#44033 (opened 2026-09-26; the
+fix pull request oven-sh/bun#44058 was not merged at the time of writing),
+oven-sh/bun#39357 (opened 2026-08-16) and oven-sh/bun#36826 (opened 2026-08-03).
+Bun ran the commit-SHA URL that pnpm dlx refused, so omitting it is sound only
+once the first track has landed.
 
 ## Documentation conventions
 

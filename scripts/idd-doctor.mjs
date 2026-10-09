@@ -9,11 +9,20 @@ import {
   accessSync,
   existsSync,
   constants as fsConstants,
+  lstatSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
 } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path';
 import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitabilityMarker,
@@ -27,7 +36,12 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { resolveHelperCommandForProfile } from './helper-runtime-manifest.mjs';
+import {
+  detectPnpmMajor,
+  listHelperBinNames,
+  resolveHelperCommandForProfile,
+  resolveLauncher,
+} from './helper-runtime-manifest.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import {
   isValidIsoTimestamp,
@@ -64,6 +78,7 @@ export function runDoctor({
   cleanupBacklogBootstrapCutoff,
   workshopCrossRefAllowMissing,
   strict,
+  pathValue,
 }) {
   const files = listFiles(root);
   const textFiles = files.filter(isTextLikeFile);
@@ -85,6 +100,7 @@ export function runDoctor({
   );
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
+  checkUserGlobalHelperBins(root, report, pathValue ?? process.env.PATH ?? '');
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
   checkMergePolicyAcknowledgement(root, report);
@@ -1014,6 +1030,181 @@ function checkHelperRuntimeConfig(root, report) {
     );
   }
 }
+const IDD_PACKAGE_NAME = '@kurone-kito/idd-skill';
+/**
+ * Resolves each helper bin over `pathValue` and reads the version of the
+ * package that owns each resolved bin. `pathValue` is the operator's PATH,
+ * passed in rather than read from process.env so tests can stub it. A bin is
+ * owned by the nearest `package.json` above its real path, and the version is
+ * reported only when that package is `@kurone-kito/idd-skill`.
+ */
+export function inspectUserGlobalHelperBins({ pathValue, binNames }) {
+  return binNames.map((bin) => {
+    const resolvedPath = resolveBinOnPath(bin, pathValue);
+    return {
+      bin,
+      resolvedPath,
+      version:
+        resolvedPath === null ? null : readOwningPackageVersion(resolvedPath),
+    };
+  });
+}
+function resolveBinOnPath(bin, pathValue) {
+  const extensions =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';')
+      : [''];
+  for (const directory of pathValue.split(delimiter)) {
+    if (directory === '') {
+      continue;
+    }
+    for (const extension of extensions) {
+      const candidate = join(directory, `${bin}${extension}`);
+      if (isExecutableFile(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+function isExecutableFile(path) {
+  try {
+    const stats = statSync(path);
+    return (
+      stats.isFile() &&
+      (process.platform === 'win32' || (stats.mode & 0o111) !== 0)
+    );
+  } catch {
+    return false;
+  }
+}
+// pnpm writes a regular shell shim instead of a symlink, and the shim names
+// its real bin on a `# cmd-shim-target=<absolute path>` line. Reading that line
+// lets the owning package be found. The shim is read only when it is small,
+// and the path it names is trusted only to locate package metadata.
+const CMD_SHIM_TARGET_PATTERN = /^# cmd-shim-target=(.+)$/mu;
+const MAX_CMD_SHIM_BYTES = 64 * 1024;
+/**
+ * The real file behind a PATH-resolved bin: the symlink target for an npm
+ * symlink, the `cmd-shim-target` path for a pnpm shim, or the bin's own real
+ * path otherwise. Returns null when nothing can be read.
+ */
+function resolveRealBinPath(binPath) {
+  let entry;
+  try {
+    entry = lstatSync(binPath);
+  } catch {
+    return null;
+  }
+  if (!entry.isSymbolicLink() && entry.size <= MAX_CMD_SHIM_BYTES) {
+    const shimTarget = readCmdShimTarget(binPath);
+    if (shimTarget !== null) {
+      return shimTarget;
+    }
+  }
+  try {
+    return realpathSync(binPath);
+  } catch {
+    return null;
+  }
+}
+function readCmdShimTarget(binPath) {
+  let contents;
+  try {
+    contents = readFileSync(binPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const target = CMD_SHIM_TARGET_PATTERN.exec(contents)?.[1]?.trim() ?? '';
+  if (target === '' || !isAbsolute(target) || !exists(target)) {
+    return null;
+  }
+  try {
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+function readOwningPackageVersion(binPath) {
+  const realBinPath = resolveRealBinPath(binPath);
+  if (realBinPath === null) {
+    return null;
+  }
+  const packageJsonPath = findNearestPackageJson(dirname(realBinPath));
+  if (packageJsonPath === null) {
+    return null;
+  }
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    return packageJson.name === IDD_PACKAGE_NAME &&
+      typeof packageJson.version === 'string'
+      ? packageJson.version
+      : null;
+  } catch {
+    return null;
+  }
+}
+function findNearestPackageJson(directory) {
+  const packageJsonPath = join(directory, 'package.json');
+  if (exists(packageJsonPath)) {
+    return packageJsonPath;
+  }
+  const parent = dirname(directory);
+  return parent === directory ? null : findNearestPackageJson(parent);
+}
+/**
+ * Reports the user-global helper runtime: every helper bin should resolve on
+ * the operator's PATH, and all of them should come from one
+ * `@kurone-kito/idd-skill` version. Runs only when the configured profile is
+ * `user-global`, so other profiles keep their existing output unchanged.
+ */
+function checkUserGlobalHelperBins(root, report, pathValue) {
+  if (resolveConfiguredHelperRuntimeProfile(root) !== 'user-global') {
+    return;
+  }
+  const bins = inspectUserGlobalHelperBins({
+    pathValue,
+    binNames: listHelperBinNames(),
+  });
+  const missing = bins
+    .filter((entry) => entry.resolvedPath === null)
+    .map((entry) => entry.bin);
+  const present = bins.filter((entry) => entry.resolvedPath !== null);
+  const unreadable = present
+    .filter((entry) => entry.version === null)
+    .map((entry) => entry.bin);
+  const versions = [
+    ...new Set(
+      present
+        .map((entry) => entry.version)
+        .filter((version) => version !== null),
+    ),
+  ];
+  if (missing.length > 0) {
+    report.warnings.push(
+      `user-global helper runtime: ${missing.length} helper bin(s) not found on PATH (${missing.join(', ')}); run the user-global installCommand from idd-helper-bundle-manifest once per operator`,
+    );
+  }
+  if (unreadable.length > 0) {
+    report.warnings.push(
+      `user-global helper runtime: version could not be read for ${unreadable.join(', ')}; ownership by ${IDD_PACKAGE_NAME} could not be verified for these bins`,
+    );
+  }
+  if (versions.length > 1) {
+    report.warnings.push(
+      `user-global helper runtime: helper bins report different versions (${versions.join(', ')}); reinstall so every bin comes from one version`,
+    );
+  }
+  if (
+    missing.length === 0 &&
+    unreadable.length === 0 &&
+    versions.length === 1
+  ) {
+    report.passes.push(
+      `user-global helper runtime: all ${bins.length} helper bins resolve on PATH at version ${versions[0]}`,
+    );
+  }
+}
 // The two live-config filenames idd-doctor already recognizes elsewhere in
 // this file (checkHelperRuntimeConfig's and checkTemplateVersionSignal's own
 // candidate lists): `.github/idd/config.json` is canonical, `idd-policy.json`
@@ -1069,17 +1260,18 @@ function resolveConfiguredHelperRuntime(root) {
     try {
       config = JSON.parse(readFileSync(absolutePath, 'utf8'));
     } catch {
-      return { profile: 'instructions-only', packageSpec: '' };
+      return { profile: 'instructions-only', packageSpec: '', launcher: '' };
     }
     const helperRuntime = inspectHelperRuntimeConfig(config);
     return helperRuntime.status === 'ok'
       ? {
           profile: helperRuntime.profile,
           packageSpec: helperRuntime.packageSpec ?? '',
+          launcher: helperRuntime.launcher ?? '',
         }
-      : { profile: 'instructions-only', packageSpec: '' };
+      : { profile: 'instructions-only', packageSpec: '', launcher: '' };
   }
-  return { profile: 'instructions-only', packageSpec: '' };
+  return { profile: 'instructions-only', packageSpec: '', launcher: '' };
 }
 // audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveConfiguredHelperRuntimeProfile(root) {
@@ -1097,6 +1289,21 @@ export function resolveConfiguredHelperRuntimeProfile(root) {
 // audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveConfiguredHelperRuntimePackageSpec(root) {
   return resolveConfiguredHelperRuntime(root).packageSpec;
+}
+/**
+ * Resolve the ephemeral-npx launcher that the cleanup-backlog remediation
+ * names (idd-skill#3830). Only `auto` under the `ephemeral-npx` profile
+ * needs a pnpm probe, which runs `pnpm --version` in `root`, the repository
+ * being checked. Every other configuration resolves without one, and an
+ * unset value keeps `npx`.
+ */
+export function resolveCleanupBacklogLauncher(root, { probe } = {}) {
+  const { profile, launcher } = resolveConfiguredHelperRuntime(root);
+  const pnpmMajor =
+    profile === 'ephemeral-npx' && launcher === 'auto'
+      ? detectPnpmMajor({ probe, cwd: root })
+      : null;
+  return resolveLauncher(launcher || undefined, pnpmMajor).resolved;
 }
 /**
  * Resolve the repository's live IDD config document, preferring the
@@ -2394,16 +2601,25 @@ const CLEANUP_BACKLOG_DOCS_POINTER = 'docs/idd-comment-minimization.md';
  * archive URL under `ephemeral-npx`, unchanged from before this pin
  * existed.
  *
+ * The optional `launcher` (idd-skill#3830) is the resolved ephemeral-npx
+ * launcher from `resolveCleanupBacklogLauncher`. It defaults to `npx`, so
+ * an unset launcher produces the same text as before.
+ *
  * The `docs/idd-comment-minimization.md` pointer stays in every profile,
  * including `instructions-only`, which has no runnable command at all --
  * the pointer alone is then the whole remediation clause.
  */
-export function formatCleanupBacklogRemediation(profile, packageSpec = '') {
+export function formatCleanupBacklogRemediation(
+  profile,
+  packageSpec = '',
+  launcher = 'npx',
+) {
   const docsClause = `see ${CLEANUP_BACKLOG_DOCS_POINTER}`;
   const command = resolveHelperCommandForProfile({
     helperId: CLEANUP_BACKLOG_HELPER_ID,
     profile,
     packageSpec,
+    launcher,
   });
   if (!command) {
     return `Remediation: ${docsClause}.`;
@@ -2528,7 +2744,7 @@ function latestTrustedCleanupEvidenceStatus(stdout, trustedLogins) {
   }
   return latest;
 }
-function checkPostMergeCleanupBacklog(root, options, report) {
+function checkPostMergeCleanupBacklog(root, options, report, { probe } = {}) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
   const bootstrapCutoff = options.bootstrapCutoff;
@@ -2713,7 +2929,12 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       ? ` (${bootstrapEra.size} bootstrap-era, merged before ${bootstrapCutoff})`
       : '';
   const { profile, packageSpec } = resolveConfiguredHelperRuntime(root);
-  const remediation = formatCleanupBacklogRemediation(profile, packageSpec);
+  const launcher = resolveCleanupBacklogLauncher(root, { probe });
+  const remediation = formatCleanupBacklogRemediation(
+    profile,
+    packageSpec,
+    launcher,
+  );
   // State the scoping explicitly (idd-skill#1936) so an operator reading a
   // low count does not misread it as "no merged PRs in the window" --
   // non-IDD merges (Dependabot bumps, etc.) are already excluded above and

@@ -366,7 +366,7 @@ that is `transport`, carrying `retryAt` when known, never `gate`.
 | ---------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `discover-orphan-filter.mjs`       | an unknown flag, an invalid `--pr`, a bare `--now`, or a malformed claim-state `--now` | none today (no arguments is `transport`)                                                                                                                    |
 | `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                      | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid flag value, or an unknown flag                          | none today                                                                                                                                                  |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid value, a flag-combination error, or an unknown flag     | none today                                                                                                                                                  |
 | `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                               | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                | none today                                                                                                                                                  |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                    | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
@@ -418,25 +418,26 @@ rather than returning a value, so it classifies its own envelope
 manually before exiting rather than through `runHelperCli`'s normal
 outcome path.
 
-| Helper                               | `usage`                                                                                                                                                                                                                                | `not-found` / `transport`                                                                                               | `gate`                                                                                                                                                                                                                                                                                                                      | `internal`                                                                                                                                      |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `post-idd-marker.mjs`                | missing/invalid `--type`, `--target`, positional number, `--from-pr` combination, `--marker-target`/`--anchor`/`--journal` format, a mode/digest coupling error, or the canonical-body round-trip check, or an unknown flag (exit `1`) | a `gh` failure deriving `--from-pr` fields, resolving the current repository, or fetching `--marker-target`'s live body | refusing to post a watermark whose live HEAD moved past the stored `--expected-head-sha`; with `--operation-local`, a `refuse` decision (`same-head-activity`, `prior-head`, `ci-completion`) also exits `1` and prints the envelope on stdout, while a `defer` (required checks not passing) exits `0` and is not a `gate` | an unexpected exception (e.g. `--marker-target` not found, a digest mismatch)                                                                   |
-| `minimize-superseded-markers.mjs`    | missing/invalid `--classifier`, `--format`, or `--subject-ids`, no trusted marker logins, or an unknown flag (exit `2`)                                                                                                                | —                                                                                                                       | the sweep's own non-zero exit (a candidate failed to minimize)                                                                                                                                                                                                                                                              | an unexpected exception                                                                                                                         |
-| `sweep-authoring-markers.mjs`        | missing `--issue`, an invalid `--classifier`/`--format`, no trusted marker logins, no marker prefix resolved, an invalid `--issue` token, or an unknown flag (exit `2`)                                                                | a `gh` failure resolving the current repository                                                                         | `computeSweepExitCode`'s own non-zero verdict                                                                                                                                                                                                                                                                               | an unexpected exception                                                                                                                         |
-| `live-status-digest.mjs`             | missing `--issue`/`--pr`, a conflicting flag combination, or an unknown flag (exit `2`)                                                                                                                                                | a `gh` failure resolving the repository, comments, or applying the digest                                               | the digest report is a duplicate (dry-run or apply alike)                                                                                                                                                                                                                                                                   | an unexpected exception (e.g. a repair-report invariant violation)                                                                              |
-| `forced-handoff-marker.mjs`          | missing `--issue`/`--forced-by`/`--reason`/`--new-agent-id`/`--new-claim-id`, an invalid `--repo`, or an unknown flag                                                                                                                  | a `gh` failure resolving issue comments or the linked pull request                                                      | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception (no active claim, `--forced-by` not authorized, branch mismatch)                                                        |
-| `force-handoff.mjs`                  | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | a non-interactive invocation (`NON_TTY_ERROR`), or an unexpected exception                                                                      |
-| `provider-health.mjs`                | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure resolving the repository or classifying health                                                           | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception                                                                                                                         |
-| `provider-outage-declaration.mjs`    | missing/invalid `--service`, `--expires`/`--expires-in`, `--pr`, `--head-sha`, a conflicting mode combination, an invalid `--repo`, or an unknown flag (exit `1`)                                                                      | a `gh` failure resolving issue comments                                                                                 | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception (not authorized, no active declaration, actor mismatch)                                                                 |
-| `provider-outage-park.mjs`           | missing `--service`/`--agent-id`/`--claim-id`, an invalid `--pr`/`--issue`, `--park` and `--parked-issues` together, or an unknown flag (exit `1`)                                                                                     | a `gh` failure resolving the repository                                                                                 | `--park` reports an ineligible park (exit `1`)                                                                                                                                                                                                                                                                              | an unexpected exception                                                                                                                         |
-| `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure reached during a live check                                                                              | the report contains at least one error (exit `1`)                                                                                                                                                                                                                                                                           | an unexpected exception                                                                                                                         |
-| `idd-delete-remote-branch.mjs`       | missing/empty `--branch`, missing/invalid `--expected-sha`, or an unknown flag (exit `1`)                                                                                                                                              | —                                                                                                                       | invalid ref, unreadable remote/default-branch state, expected-SHA mismatch, refused default branch, failed delete, or unconfirmed deletion (exit `1`)                                                                                                                                                                       | an unexpected exception                                                                                                                         |
-| `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, an unknown argument, or a missing flag value (exit `2`)                                      | a `gh` failure reached during any stage (exit `2`)                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, or `--hear`/`--record-policy` report a schema-invalid transcript (exit `1`)                                                                                                                                                                                 | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`) |
-| `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception                                                                                                                         |
-| `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
-| `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception (deterministic, network-free)                                                                                           |
-| `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                       | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                |
-| `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                               | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)        | —                                                                                                                                                                                                                                                                                                                           | an unexpected exception                                                                                                                         |
+| Helper                               | `usage`                                                                                                                                                                                                                                | `not-found` / `transport`                                                                                                                                                               | `gate`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `internal`                                                                                                                                                                                                                  |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `post-idd-marker.mjs`                | missing/invalid `--type`, `--target`, positional number, `--from-pr` combination, `--marker-target`/`--anchor`/`--journal` format, a mode/digest coupling error, or the canonical-body round-trip check, or an unknown flag (exit `1`) | a `gh` failure deriving `--from-pr` fields, resolving the current repository, or fetching `--marker-target`'s live body, or reading its comments for the identity check (issue `#3910`) | refusing to post a watermark whose live HEAD moved past the stored `--expected-head-sha`; with `--operation-local`, a `refuse` decision (`same-head-activity`, `prior-head`, `ci-completion`) also exits `1` and prints the envelope on stdout, while a `defer` (required checks not passing) exits `0` and is not a `gate`; an `authoring-owner` heartbeat, release, release-guard, release-complete or resume whose set, anchor or owner contradicts its opening markers (`--apply` only, issue `#3910`) also exits `1` as a `gate` | an unexpected exception (e.g. `--marker-target` not found, a digest mismatch), or a malformed or incomplete comment read for the identity check (a repeated cursor, GraphQL `errors`, unparseable JSON, an unmappable node) |
+| `minimize-superseded-markers.mjs`    | missing/invalid `--classifier`, `--format`, or `--subject-ids`, no trusted marker logins, or an unknown flag (exit `2`)                                                                                                                | —                                                                                                                                                                                       | the sweep's own non-zero exit (a candidate failed to minimize)                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | an unexpected exception                                                                                                                                                                                                     |
+| `sweep-authoring-markers.mjs`        | missing `--issue`, an invalid `--classifier`/`--format`, no trusted marker logins, no marker prefix resolved, an invalid `--issue` token, or an unknown flag (exit `2`)                                                                | a `gh` failure resolving the current repository                                                                                                                                         | `computeSweepExitCode`'s own non-zero verdict                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | an unexpected exception                                                                                                                                                                                                     |
+| `live-status-digest.mjs`             | missing `--issue`/`--pr`, a conflicting flag combination, or an unknown flag (exit `2`)                                                                                                                                                | a `gh` failure resolving the repository, comments, or applying the digest                                                                                                               | the digest report is a duplicate (dry-run or apply alike)                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | an unexpected exception (e.g. a repair-report invariant violation)                                                                                                                                                          |
+| `forced-handoff-marker.mjs`          | missing `--issue`/`--forced-by`/`--reason`/`--new-agent-id`/`--new-claim-id`, an invalid `--repo`, or an unknown flag                                                                                                                  | a `gh` failure resolving issue comments or the linked pull request                                                                                                                      | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception (no active claim, `--forced-by` not authorized, branch mismatch)                                                                                                                                    |
+| `force-handoff.mjs`                  | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | a non-interactive invocation (`NON_TTY_ERROR`), or an unexpected exception                                                                                                                                                  |
+| `provider-health.mjs`                | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure resolving the repository or classifying health                                                                                                                           | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception                                                                                                                                                                                                     |
+| `provider-outage-declaration.mjs`    | missing/invalid `--service`, `--expires`/`--expires-in`, `--pr`, `--head-sha`, a conflicting mode combination, an invalid `--repo`, or an unknown flag (exit `1`)                                                                      | a `gh` failure resolving issue comments                                                                                                                                                 | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception (not authorized, no active declaration, actor mismatch)                                                                                                                                             |
+| `provider-outage-park.mjs`           | missing `--service`/`--agent-id`/`--claim-id`, an invalid `--pr`/`--issue`, `--park` and `--parked-issues` together, or an unknown flag (exit `1`)                                                                                     | a `gh` failure resolving the repository                                                                                                                                                 | `--park` reports an ineligible park (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | an unexpected exception                                                                                                                                                                                                     |
+| `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                             | a `gh` failure reached during a live check                                                                                                                                              | the report contains at least one error (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception                                                                                                                                                                                                     |
+| `idd-delete-remote-branch.mjs`       | missing/empty `--branch`, missing/invalid `--expected-sha`, or an unknown flag (exit `1`)                                                                                                                                              | —                                                                                                                                                                                       | invalid ref, unreadable remote/default-branch state, expected-SHA mismatch, refused default branch, failed delete, or unconfirmed deletion (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                 | an unexpected exception                                                                                                                                                                                                     |
+| `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, an unknown argument, or a missing flag value (exit `2`)                                      | a `gh` failure reached during any stage (exit `2`)                                                                                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, or `--hear`/`--record-policy` report a schema-invalid transcript (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                           | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`)                                                                             |
+| `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception                                                                                                                                                                                                     |
+| `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
+| `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
+| `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                             | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                                                                                            |
+| `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                               | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)                                                                        | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception                                                                                                                                                                                                     |
+| `idd-worker-report.mjs`              | a missing or unknown mode, an unknown flag, a bad `--file`/`--stdin`/`--since` combination or value, or a record that is unreadable, not JSON, or fails the schema (exit `1`)                                                          | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | an unexpected exception, including a store lock that could not be acquired (network-free)                                                                                                                                   |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
 every `bin/idd-*.mjs` and checks this table mechanically against a
@@ -850,6 +851,23 @@ in this preamble, since the fallback differs per helper.
   the reliable JSON path that HTML-comment-first bodies require
   (referenced in
   [kurone-kito/idd-skill#1047](https://github.com/kurone-kito/idd-skill/issues/1047))
+  For the `authoring-owner` marker (issue `#3910`), `--apply` runs one
+  more check before the POST. A `heartbeat`, `release`, `release-guard`,
+  `release-complete` or `resume` post is refused, with exit `1` and
+  nothing posted, unless its `set`, `anchor` and `owner` (for `resume`,
+  its `--supersedes`) agree with an opening marker already on
+  `--marker-target`. An opening marker is an `acquire`, `bootstrap` or
+  `resume` marker that is unedited and, when trusted logins are
+  configured, written by one of them. The comments are read over GraphQL,
+  paginated to completion. A failed or incomplete read refuses the post
+  too. The check exists because a `release` carrying the mangled set id
+  `set-8fc92e9b28760e` (for `set-8fc92e8e9b28760e`) was posted on the
+  three issues `#3556`, `#3557` and `#3559` on 2026-09-27, about 20
+  seconds before the corrected marker. Markers cannot be retracted, so
+  those stay in the log; issue `#3880` reports the incident. The check
+  runs only with `--apply`: a dry run keeps its current behavior and makes
+  no extra read. The contract's direct JSON post stays available in a
+  window where only REST works, and that post is not checked.
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
   [kurone-kito/idd-skill#394](https://github.com/kurone-kito/idd-skill/issues/394))
@@ -891,6 +909,13 @@ in this preamble, since the fallback differs per helper.
   is trusted executable configuration and can transmit the issue draft
   the caller sends it (referenced in
   [kurone-kito/idd-skill#3599](https://github.com/kurone-kito/idd-skill/issues/3599))
+- `scripts/idd-worker-report.mjs` for a local store of each worker's final
+  report (referenced in
+  [kurone-kito/idd-skill#3836](https://github.com/kurone-kito/idd-skill/issues/3836)):
+  `append` validates one record against `schemas/worker-report.schema.json`
+  and appends it as one line under the per-user state root, and `summary`
+  reads the store back. Network-free: it makes no `gh` call and posts
+  nothing to GitHub.
 - `scripts/authoring-owner-provenance.mjs` for the defer-source
   auto-release exception's provenance check
   (`skills/issue-authoring/references/contract.md`): computes the sha256
@@ -1158,8 +1183,9 @@ future inventory reviews do not need to re-infer their role from code.
   `--cleanup-backlog-window-days 1` to keep it fast, mirroring CI.
 - `scripts/helper-runtime-manifest.mjs` (`idd-helper-bundle-manifest`) —
   import helper and manifest inspector; emits machine-readable helper wiring
-  for all four profiles (`package-manager`, `vendored-node`,
-  `ephemeral-npx`, and `instructions-only`). Its output always carries a
+  for all five profiles (`package-manager`, `vendored-node`,
+  `ephemeral-npx`, `instructions-only`, and `user-global`). Its output always
+  carries a
   `runningBuild: { version, commandListScope: "running-build" }` field
   disclosing that `commandCatalog` describes only the currently running
   helper build, independent of any `--package-spec` target -- a per-profile
@@ -1279,6 +1305,11 @@ future inventory reviews do not need to re-infer their role from code.
     --upstream-base-path <previous-idd-skill>/idd-template \
     --report-reverted-overlays
   ```
+
+  Before any retained local difference is called an overlay or given a
+  divergence marker, quote the target-side text and confirm the difference
+  still exists against the target: an older local workaround may have been
+  adopted upstream between pins, and then the overlay is dropped.
 
   For every modified, non-JSON path that the previous upstream version also
   has, the report lists each pre-import line that is absent from that previous
@@ -1430,11 +1461,12 @@ default below is unchanged.
     `inaccessibleReferenceCount: number, unresolvedReferenceCount: number,`
     `maxDepth: number }`
 - **Cross-roadmap autopilot mode (`--all-roadmaps`)**: discovers every
-  **open** roadmap root (an open issue carrying the `roadmap` label **or**
-  an `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: ... -->` marker **or** a
+  **open** roadmap root (an open issue carrying an
+  `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: ... -->` marker, or a
   configured `discover.legacyRoots` issue number, deduped against the
-  label/marker roots), runs the single-root enumeration above from each
-  root, and returns a **union** of open execution leaves. The output
+  marker roots; the `roadmap` label alone never makes a root), runs the
+  single-root enumeration above from each root, and returns a **union**
+  of open execution leaves. The output
   shape differs from single-root mode:
   - `mode`: `"all-roadmaps"`
   - `roots`: `[{ number: number, title: string, state: string,`
@@ -1593,29 +1625,27 @@ default below is unchanged.
     result.
 - **Legacy roots (`discover.legacyRoots`, #1315)**: a repository that
   adopted IDD after already running an ad-hoc "umbrella issue"
-  convention may have legacy roots that predate both the `roadmap`
-  label and the `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, so they
-  are never found by the two searches above (the graph walker still
-  follows their `Blocked by #NNN` references once reached from
-  elsewhere; only root _discovery_ has no path to them). Two
-  independent mitigations, usable together or separately:
-  - **Retro-label** the legacy umbrella with the configured roadmap
-    label — the label search is exact and complete, so this alone
-    makes it discoverable with no config change.
+  convention may have legacy roots that predate the
+  `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, so the marker search
+  never finds them (the graph walker still follows their
+  `Blocked by #NNN` references once reached from elsewhere; only root
+  _discovery_ has no path to them). Either of these makes such a root
+  discoverable:
+  - **Add the marker** to the legacy umbrella.
   - **`discover.legacyRoots`** in `.github/idd/config.json` — an array
     of issue numbers (schema: integers, minimum `1`) unioned into the
     root set on every `--all-roadmaps` run and deduped against the
-    label/marker roots. No extra `gh` search or fetch: the configured
+    marker roots. No extra `gh` search or fetch: the configured
     numbers are added directly, and each still goes through the normal
     per-root enumeration, so a stale or now-closed configured root is
-    handled the same way a race-closed label/marker root already is. A
+    handled the same way a race-closed marker root already is. A
     missing or invalid value (non-array, or any non-positive-integer
     entry) fails safe to no extra roots — the whole array is rejected
     rather than silently dropping just the bad entry.
-    Use retro-labeling when the legacy umbrella should also pick up other
-    label-driven behavior; use `discover.legacyRoots` when it should not
-    (e.g. the label would incorrectly surface it in label-based UI
-    elsewhere).
+
+  Labeling the umbrella with the roadmap label does not make it a root:
+  root discovery ignores the `roadmap` label, and the roadmap-id marker
+  alone identifies a root.
 - **Error conditions**: missing `--issue` (and no `--all-roadmaps`),
   combining `--issue` with `--all-roadmaps`, unknown flags, an unreadable
   root roadmap, or incomplete `subIssues` GraphQL data throw. Missing or
@@ -1766,8 +1796,8 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
   <id1,id2,...>` (default
   `bundle-core,bundle-review-triage-phase,bundle-review-fix-phase,bundle-merge-phase`),
-  `--now <ISO8601>`, and
-  `--check-overlap`. The cross-issue active-set discovery (open PRs plus the
+  `--now <ISO8601>`, `--check-overlap`, and the batch options below. The
+  cross-issue active-set discovery (open PRs plus the
   claim comments of issues that have a remote `issue/<n>-*` branch, resolved
   with the shared claim-state rules and the configured claim stale age) is
   **gated behind `--check-overlap`** because it adds GitHub API cost; without it
@@ -1778,6 +1808,35 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   pushed, paginated to the end), so a non-stale claim held by another session is
   detected even when it is outside the unclaimed candidate set being ranked. A
   claim whose branch is not yet pushed is picked up once it appears remotely.
+- **Batch options** (`#3838`): an orchestrator that fills several worker
+  slots at once asks for a batch of candidates that do not overlap.
+  - `--batch <k>` (a plain positive integer): walk `recommendedOrder` and
+    keep a candidate unless its high-contention files intersect an
+    in-flight issue, a candidate already in the batch, or, with
+    `--check-overlap`, an actively-claimed or open-PR issue. Stop at `k`
+    picks. A batch larger than the candidate count returns what fits.
+  - `--in-flight <n1,n2,...>` (repeatable; an empty value is an empty set):
+    the issues the orchestrator's workers are already running. Their
+    `## Candidate files` seed the comparison set whether or not their
+    branches are pushed, which `--check-overlap` cannot see. A candidate
+    that is itself in flight is not pickable and is reported first in
+    `batchSkipped`.
+  - `--desync-token <token>` (non-empty): the session's desync token. The
+    helper takes the first non-empty group of candidates, known candidate
+    files first, then the band of its top-`effectiveScore` members, taken
+    only when that score is at or above the suitability floor, sorted by
+    ascending issue number. `selectDesyncedIndex` from the
+    `select-desynced-index` helper picks the index, and that candidate is
+    tried first. It goes through the same overlap check as every other
+    candidate, so a dropped pick lands in `batchSkipped` and the walk
+    continues in `recommendedOrder`, skipping candidates already tried.
+    The helper never reads `discover.selectionDesync`: an orchestrator whose
+    policy is `off` omits the token. With no token, an empty or single-entry
+    band, or a below-floor top score (which includes the suitability kill
+    switch being off, since every effective score is then 0), the walk starts
+    at the head of the first non-empty group, in `recommendedOrder`.
+  - `--in-flight` and `--desync-token` without `--batch` are usage errors,
+    never a silent no-op.
 - **High-contention set**: the union of the named bundles' member files plus
   `audit/sync-manifest.json`. Instruction files are keyed by their repo-wide
   unique basename so a source path, mirror path, or bare citation all match.
@@ -1800,11 +1859,33 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
     `reason: "claim" | "pr", files: string[] }], overlapFlag: boolean }]`
   - `recommendedOrder`: `number[]` — candidate numbers after the soft
     tie-breaker (score desc, then non-overlapping first within a score band,
-    then issue number). It does **not** apply `discover.selectionDesync`; the
-    agent layers the overlap nudge after its own desync pick. Advisory only;
+    then issue number). It does **not** apply `discover.selectionDesync`;
+    outside batch mode the agent layers the overlap nudge after its own desync
+    pick, and `--desync-token` does that inside `--batch`. Advisory only;
     never a hard gate.
   - `summary`: `{ candidateCount: number, flaggedCount: number,`
     `activeIssueCount: number }`
+  - Only with `--batch` (every key below is absent without it, so the
+    output above is unchanged):
+    - `batch`: `number[]` — the picked candidates, in pick order.
+    - `batchSkipped`: `[{ number: number, collidedWith: number,`
+      `reason: "in-flight" | "batch" | "claim" | "pr", files: string[] }]` —
+      the in-flight candidates first, then each candidate dropped in walk
+      order, with the first thing it collided with (precedence: in-flight,
+      then an earlier batch member, then a claim or open-PR overlap) and the
+      sorted shared paths. A candidate that is itself in flight reports its
+      own number as `collidedWith` and `files: []`. A skipped candidate is
+      not excluded: it stays in the graph for the next refill. A candidate
+      the walk never reached, because the batch filled up, appears in neither
+      list.
+    - `inFlight`: `[{ number: number, filesUnknown: boolean,`
+      `highContentionTouched: string[] }]` — each in-flight issue, so the
+      orchestrator sees which running workers could not be compared.
+    - On each `candidates[]` entry, `filesUnknown: boolean` — `true` when the
+      candidate has no parseable candidate files (no `## Candidate files`
+      section, or one that lists no usable path). Such a candidate joins the
+      batch only after every candidate with known files, and can never
+      collide, so a batch that relies on it has no overlap protection.
 - **Behavior boundary**: evidence-only and heuristic. `## Candidate files` are
   advisory cues, not an exhaustive manifest, so the overlap signal must stay a
   soft A4 Step 2 tie-breaker — never a claim gate. The written discover
@@ -1814,7 +1895,11 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   regardless of real file contention, not a signal that no contention exists
   (`#2462`); the
   `issue-authoring` skill's roadmap-child contract requires the section for
-  exactly this reason.
+  exactly this reason. `--batch` does not filter by suitability score, as
+  `recommendedOrder` does not: the caller passes only the A4 survivors at or
+  above `autopilotSuitability.floor`. With `manifestMissing: true` the
+  high-contention set is empty, so a batch is simply the first `k`
+  candidates in walk order with no overlap protection.
 
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same
@@ -2222,12 +2307,13 @@ cannot add it, so they fall back to the 60-second backoff.
 When a repository imports the IDD template, helper support should be
 selected from one of these profiles:
 
-| Profile             | Intended use                                                                                                                | Dependency model                                                               | Portability expectation                                                                                                                 |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `package-manager`   | The adopter already uses pnpm, npm, or yarn for the repository.                                                             | Reuse the repository's existing package manager and pre-resolved dependencies. | Preferred when a package manager project already exists; do not fall back to ad hoc `npx` in this mode.                                 |
-| `vendored-node`     | The adopter has Node.js available but does not want helper execution to depend on registry resolution at runtime.           | Copy a local helper bundle into the repository during import.                  | Keeps helper execution repository-local while remaining optional.                                                                       |
-| `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands.                      | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`. |
-| `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.           | First-class supported fallback; no helper config is required.                                                                           |
+| Profile             | Intended use                                                                                                                | Dependency model                                                                                                                                                                                                        | Portability expectation                                                                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `package-manager`   | The adopter already uses pnpm, npm, or yarn for the repository.                                                             | Reuse the repository's existing package manager and pre-resolved dependencies.                                                                                                                                          | Preferred when a package manager project already exists; do not fall back to ad hoc `npx` in this mode.                                                       |
+| `vendored-node`     | The adopter has Node.js available but does not want helper execution to depend on registry resolution at runtime.           | Copy a local helper bundle into the repository during import.                                                                                                                                                           | Keeps helper execution repository-local while remaining optional.                                                                                             |
+| `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands, or through the `pnpm-dlx` launcher when `helperRuntime.launcher` selects it.                                                                                  | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`.                       |
+| `user-global`       | The operator installs the helper bins once per machine, and repositories resolve them from PATH without copying files.      | A global install through the operator's own npm, pnpm, or Yarn Classic (`yarn global add`), outside the repository. No repository file or dev dependency is added. Yarn Berry has no global install and is unsupported. | Pin `helperRuntime.packageSpec` so every operator installs the same build. `idd-doctor` reports bins missing from PATH and bins reporting different versions. |
+| `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.                                                                                                                                                    | First-class supported fallback; no helper config is required.                                                                                                 |
 
 **`package-manager`-profile consumers install this package's own
 `package.json`, `engines`/`packageManager` fields included.** A
@@ -2248,12 +2334,33 @@ at a consumer's install time). `kurone-kito/idd-skill#3043` removed
 `engines.pnpm` and replaced its contributor-facing safety net with an
 explicit pnpm-version check inside its own `verify-install-deps`
 helper instead, which is never exposed via `package.json`'s `bin` and
-so never reaches a consumer's install. The principle for any project
-that vends its own helper package under this profile: an `engines`
-field added for contributor-local-dev reasons is not scoped to that
-project alone -- pnpm's `engineStrict` enforces `engines` against every
-consumer using the `package-manager` profile, so any such field needs
-the same consumer-impact check before landing.
+so never reaches a consumer's install.
+
+**A lifecycle script can also reach consumers through the git-hosted gate.**
+pnpm's git-hosted gate can refuse, for some references and versions, an
+install of a git-hosted package whose manifest carries a `prepare`,
+`prepublish`, `prepack`, or `publish` script. The key list was measured with
+git+file toy repositories. The exact spec can be allow-listed (for example
+through `allowBuilds` in `pnpm-workspace.yaml`), and the pnpm 10 error names
+`onlyBuiltDependencies`. A pnpm dlx run of the commit-SHA URL was refused as
+well, and neither an --allow-build flag nor a workspace entry for the exact
+`<name>@<resolved URL>` key stopped it on pnpm 12.9.1. The refusal was
+observed on 2026-10-08, and `kurone-kito/idd-skill#3829` is the second case
+of the leak class that `kurone-kito/idd-skill#3043` fixed for engines.pnpm.
+Under pnpm dlx, before this change, a commit-SHA URL
+(kurone-kito/idd-skill@92a20cb) was refused on pnpm 10, 11, and 12.9.1; the
+refs/heads/main URL of kurone-kito/idd-skill was refused on pnpm 10 only
+while that branch still carried `prepare`; and a refs/tags/v0.14.0 URL ran
+on pnpm 12.9.1 (pnpm 10 and 11 were not tried). The guard test
+`tests/package-lifecycle-scripts.test.mts` (source repo only) fails when one of
+the four keys above returns to this package's `package.json`. The principle for
+any project that vends its own helper package under this profile: an `engines`
+field or lifecycle script added for contributor-local-dev reasons is not scoped
+to that project alone -- pnpm's `engineStrict` enforces `engines` against every
+consumer using the `package-manager` profile, and pnpm's git-hosted gate can
+refuse a lifecycle script for any consumer that installs the package from a
+git-hosted URL, so any such field or script needs the same consumer-impact
+check before landing.
 
 ## Import-Time Selection Order
 
@@ -2327,7 +2434,8 @@ Node.js helper path.
   `linguist-generated` artifacts; only `vendored-node` vends files, so
   only it emits the recommendation.
 - `ephemeral-npx`: use the manifest's one-shot `npx --yes --package
-  <helper-package-spec> idd-*` commands without copying helper files
+  <helper-package-spec> idd-*` commands (the default launcher; see the launcher
+  paragraph below) without copying helper files
   into the repository. The default helper package spec is an HTTPS
   archive URL, and `--package-spec` lets adopters pin a reviewed tarball
   or mirror URL explicitly. Persist that same pin in
@@ -2342,8 +2450,69 @@ Node.js helper path.
   instead — its emitted helper commands are bare `idd-*` bin names, not
   a parameterized invocation string, so the pin never appears inside
   those commands themselves. `idd-onboard.mjs --verify` reports a
-  non-blocking advisory for either profile when no `packageSpec` is
-  configured.
+  non-blocking advisory for each profile that uses `packageSpec` when none
+  is configured.
+
+  The launcher is a separate setting: `helperRuntime.launcher` in
+  `.github/idd/config.json`, or the `--launcher` flag of the manifest CLI
+  (which wins over the configured value), takes `npx` (the default and the
+  historical form), `pnpm-dlx`, or `auto`. With `pnpm-dlx`, the emitted
+  commands run the same package spec and bin through pnpm dlx instead of
+  `npx --yes --package <helper-package-spec> idd-*`. `auto` selects
+  `pnpm-dlx` only when pnpm --version, run in the target repository root,
+  reports major 10 or later. A missing or unparsable pnpm, or a probe that
+  takes longer than 5 seconds, selects `npx`. On native Windows, pnpm is a
+  `.cmd` shim that cannot be spawned without a shell, so `auto` selects
+  `npx` there. The `ephemeral-npx` entry records the choice in a `launcher`
+  object (`configured`, `resolved`, `reason`); an unset or `npx` launcher
+  leaves its commands, description and notes unchanged.
+
+  Pin guidance for the `pnpm-dlx` launcher: the minimum reference is a
+  commit at or after the merge commit of kurone-kito/idd-skill#3829 on
+  main, `bb9d7d7bca5cea2df863333102882491916a900a`, or the first release
+  tag that contains it once one exists; no release tag contains it yet.
+  A ref that predates that commit still carries the `prepare` script, which
+  pnpm can refuse for a git-hosted package. Before the fix, the commit-SHA
+  form was refused by every pnpm version tried, and the `refs/heads/main`
+  form was refused by pnpm 10; the `refs/tags` form under pnpm 10 and 11 was
+  not tried. At the merge commit, the codeload archive ran under pnpm dlx on
+  pnpm 10, 11 and 12, and pnpm add -D ran under pnpm 12. A mutable
+  `refs/heads/main` spec is served from the launcher cache for up to the
+  cache lifetime (pnpm's `dlxCacheMaxAge`, default 1440 minutes), so pin a
+  reviewed commit when freshness matters.
+
+  Upgrade order: before a repository sets `helperRuntime.launcher`, raise its
+  pinned helper package to a version that knows the key, and refresh the
+  three copied workflows (`post-merge-cleanup.yml`,
+  `idd-advisory-convergence.yml` and `idd-advisory-convergence-comment.yml`).
+  An older helper or workflow rejects the unknown key and falls back to
+  `instructions-only`.
+- `user-global`: install the helper bins once per operator with the
+  `installCommand` the manifest emits (npm's `npm install -g`, pnpm's global
+  add, or Yarn Classic's `yarn global add`), and let every repository resolve
+  them
+  from `PATH`. Nothing is written into the repository, so no helper files or
+  dependency pins are added. `helperRuntime.packageSpec` (or `--package-spec`)
+  pins that global install. The manifest's `uninstallCommand` removes the
+  install for the current manager. A switch away from this profile lists every
+  global uninstall instead, because the repository cannot tell which manager
+  the operator installed with. Yarn Berry has no global install, so the
+  manifest reports it as unsupported with an `installUnavailableReason`
+  (preventive; no observed incident yet).
+  `idd-doctor` checks this profile only: each helper bin must resolve on
+  `PATH`, and the bins must report one `@kurone-kito/idd-skill` version.
+  Repository evidence never proposes this profile; the operator chooses it
+  explicitly, because its helper bins live outside the repository. The
+  distributed CI workflows (advisory convergence, its comment job, and
+  post-merge cleanup) dispatch this profile through the same pinned-archive
+  path as `ephemeral-npx`: each run executes the helper through `npx`, from
+  `helperRuntime.packageSpec` when it is set, so CI runs the build named
+  there rather than anything on an operator's `PATH`. CI reads only the
+  committed policy files: `.github/idd/config.json`, falling back to the
+  legacy root `idd-policy.json`. When `packageSpec` is unset, CI falls back
+  to the mutable default archive URL, as `ephemeral-npx` does, and
+  `idd-onboard --verify` warns about it (#2987). Pin `packageSpec` to the
+  same reviewed build the operators install.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 
@@ -2351,12 +2520,14 @@ Node.js helper path.
 canonical invocation is `node scripts/<name>.mjs`; the `package-manager` / `npx`
 `bin/` facade (the `idd-*` bin wrappers) is **redundant** in this profile and
 may be skipped — keeping it only adds a second surface to align with the
-instruction files for no portability gain. Under `package-manager` and
-`ephemeral-npx`, the `bin/` facade (`idd-*` bins, invoked through the
-`package.json` scripts or `npx`) **is** the authoritative surface and should be
-retained. `instructions-only` uses neither. When an instruction shows a
-`node scripts/...` command, resolve it to your profile's authoritative surface
-rather than maintaining both.
+instruction files for no portability gain. Under `package-manager`,
+`ephemeral-npx`, and `user-global`, the `bin/` facade (`idd-*` bins, invoked
+through the `package.json` scripts for `package-manager`, through `npx` for
+`ephemeral-npx` (or the pnpm-dlx launcher), or from the operator's PATH for
+`user-global`) **is** the
+authoritative surface and should be retained. `instructions-only` uses neither.
+When an instruction shows a `node scripts/...` command, resolve it to your
+profile's authoritative surface rather than maintaining both.
 
 **Authoring rule for instructions/docs.** A mandatory helper step (one
 with no skip/fallback wording) must always name an `instructions-only`
@@ -2380,6 +2551,13 @@ not a general `node_modules` invocation form and must not be used by
 `tests/helper-invocation-profile.test.mts` enforces the first two
 rules mechanically, and `tests/repository-inventory-audit.test.mts`
 enforces the third rule (`unpointed-source-form`).
+
+**Launcher substitution.** Where a literal `npx --yes --package
+<helper-package-spec> idd-*` block shows a command an agent or an operator
+runs, the `pnpm-dlx` launcher runs the same package spec and bin through
+pnpm dlx instead. Write this rule once rather than duplicating the block. The
+shipped CI workflows keep the `npx` form and are not affected by the
+launcher.
 
 To switch profiles later, rerun the manifest with both
 `--profile <target-profile>` and `--from-profile <current-profile>`. The
@@ -2481,10 +2659,10 @@ The adopted helper boundaries are intentionally narrow:
 - (`#2021`) a `valid` waiver for the `idd-advisory-convergence` selector
   specifically only becomes `coveredByWaiver: true` once the SAME
   deadline/terminal precondition `advisory-convergence.mjs`'s own gate
-  enforces has also opened — a 24h deadline anchored on when GitHub
-  first recorded the current HEAD (its earliest check suite,
-  `#3253`), or proven terminal Copilot
-  unavailability. The output's `advisoryConvergenceWaiverPrecondition`
+  enforces has also opened — the configured deadline (default 24h)
+  anchored on when GitHub first recorded the current HEAD (its earliest
+  check suite, `#3253`), or proven terminal Copilot unavailability. The
+  output's `advisoryConvergenceWaiverPrecondition`
   field always reports this evaluation (`deadlineMinutes`,
   `headCommittedAt` (informational only), `headObservedAt` (the actual
   clock), `elapsedMinutes`, `deadlinePassed`,
@@ -2604,6 +2782,12 @@ The adopted helper boundaries are intentionally narrow:
   omitting the flag leaves apply-mode behavior unchanged
 - known review-bot regular comments are considered only after merge and
   only when they match a completed-review or stale-notification signal
+- every skipped row carries a `skipReasonCode` from a closed list
+  (documented with its meaning in `docs/idd-comment-minimization.md`,
+  under Skip reason codes). The report also has `skipReasonCounts` (the
+  count per code, sorted by code) and `skipReasonSummary` (the same as
+  one line, `code n, code n`, for the evidence comment; empty when nothing
+  was skipped). Neither changes `summary` or `status`
 - cleanup remains best-effort and never becomes a merge gate
 - direct GraphQL fallback commands remain documented in
   `docs/idd-comment-minimization.md`
@@ -2758,6 +2942,12 @@ The adopted helper boundaries are intentionally narrow:
   - prints the resolved successor IDs and marker preview -- with a
     warning when the resolved successor still matches the displaced
     agent-id -- before the final confirmation
+  - before the final confirmation, reads `forcedHandoff.mode` at each
+    trusted copy that Resume and F2 read, and refuses, posting nothing,
+    unless every copy confirms `human-gated`: the base branch of the PR the
+    operator names (or the live default branch when no PR is open), and
+    the claim branch itself when a PR head or a remote branch
+    exists; a refusal names the copy and any read error
   - posts nothing unless the final confirmation is exactly `y`
 
 - Command: `node scripts/forced-handoff-marker.mjs --issue <number> --plan ...`
@@ -2768,11 +2958,51 @@ The adopted helper boundaries are intentionally narrow:
   - render or inspect canonical forced-handoff marker payloads
   - support audited debugging or manual review of the exact body
   - stay distinct from the interactive operator facade above
+- Preflight: with an open PR on the claim branch, a non-plan run needs
+  `--pr <number>`, and that PR must be open. Before it renders, the run
+  refuses (non-zero exit, empty stdout) unless every copy that the
+  facade's preflight reads confirms `human-gated`. `--plan` reports the
+  same check as a read-only `preflight` field, for the PR that `--pr`
+  names, or for every open PR's base when no PR is named. It omits
+  `markerBody` when the check would refuse, and it still exits `0`.
 
 The references in this subsection apply only when a repository
-explicitly installs the matching helpers and records a human-gated
-forced-handoff policy. Repositories that stay on the default disabled
-policy must not expose either helper as an active recovery path.
+explicitly installs the matching helpers and records
+`forcedHandoff.mode: human-gated` in `.github/idd/config.json` on the
+copies that the gates read. With an open PR on the claim branch, those are
+the PR's base branch and the claim branch: the operator commits the opt-in
+to the base branch through its normal pull-request path, then merges that
+branch into the PR branch and pushes the merge. With no open PR, they are
+the default branch and, when it exists on the remote, the claim branch.
+The operator commits the opt-in to the default branch the same way. On
+the claim branch, the operator sets `forcedHandoff.mode: human-gated` when
+the branch sets another mode. When the branch has no `forcedHandoff` block,
+the operator merges the PR's base branch (with an open PR) or the default
+branch (with none) into it and pushes the merge. A lookup that failed is
+restored. A committed config that the error reports as invalid JSON, or as
+not a JSON object, is repaired at its source through its normal path. The
+merge gate reads the base-branch config, so only the base branch's opt-in
+counts for it, and the preflight reads the remote copies. Repositories that
+stay on the default disabled policy must not expose either helper as an
+active recovery path.
+
+Observed 2026-10-04 in a private downstream adopter (pinned v0.11.0): the
+opt-in was enabled in the primary checkout only and left uncommitted. The
+helper posted a valid marker, but Resume from the claimed branch's
+worktree refused it with `forced-handoff mode is not enabled`, and the
+merge gate refused it with `claim-id-mismatch`. The report is recorded in
+issue `#3872`.
+
+Since issue `#3873`, the warning names the refusal cause instead of always
+saying the mode is off. `mode-disabled` keeps the mode wording. A marker
+whose linked PR does not back the claim reports that the linked PR does not
+back the active claim. An issue-only marker posted at or after the PR's
+first commit, or one whose first-commit time is unknown, and a failed
+linked-PR lookup each have their own wording. The merge gate reports the
+same causes in its top-level `ignoredForcedHandoffs` field (`oldClaimId`,
+`newClaimId`, `cause`). That field is present only when a marker for the
+active claim was refused, and the causes are appended to the
+`claim-ownership` blocker.
 
 The references in this section apply only when a repository explicitly
 installs the matching helper scripts. Repositories that stay on the
@@ -3170,8 +3400,8 @@ needs a live per-marker run lookup no other consumer needs):
 4. that same response's `event` field is exactly `pull_request_target`,
    never `pull_request` -- closing the gap where a same-repository PR
    editing the workflow YAML can still trigger a `pull_request`-triggered
-   run of it: the workflow's own `on:` block declares only
-   `pull_request_target` (kurone-kito/idd-skill#2764 Phase 2), but a PR
+   run of it: the workflow's own `on:` block names `pull_request_target` as
+   its only pull-request trigger (kurone-kito/idd-skill#2764 Phase 2), but a PR
    can still reintroduce a `pull_request` trigger to its own copy of that
    YAML, and this condition rejects a marker citing a run from that
    reintroduced trigger the same way it always did;
@@ -3303,7 +3533,9 @@ allowlisted pull request until the base carries the scope: its step
 while the verdict job `idd-advisory-convergence`, which still runs after
 a failed posting job, can pass. A rerun is not expected to clear it, and
 when that signature and a diff that adds a scope to that `permissions:`
-block both match, there is no second cause to look for. This applies
+block both match, there is no second cause to look for. A
+`workflow_dispatch` run does not clear it either: that job is guarded by
+`github.event_name == 'pull_request_target'` and skips by design. This applies
 only where that step runs (not for a fork pull request, and under the
 `instructions-only` profile the job runs its own notice step instead and
 stays green). Until the base carries the scope, even a private
@@ -3384,7 +3616,7 @@ other case leaves the PR `in-loop`:
 
 Post it with the profile-selected `post-idd-marker` command -- see
 [Post operational markers](#post-operational-markers-write-side) above
-for the source-repo / package-manager / ephemeral-npx forms;
+for the source-repo / package-manager / ephemeral-npx / user-global forms;
 source-repo example: `node scripts/post-idd-marker.mjs --type
 out-of-loop --target pr <n> --agent-id <id> --timestamp <iso8601>
 --apply`. `pr:` is derived from `--target pr <n>`'s own positional
@@ -5145,6 +5377,14 @@ to post it is the consuming track's job.
   established (unreadable, or genuinely not yet covered) leaves the
   historical hold exactly as before this recovery path existed --
   fail-closed, never an invented rerun (#1806)
+- Also reports `workflowDefinitionNote` (#3859): a fixed note, non-empty
+  only when a `plan` command belongs to a `pull_request_target` run. It is
+  printed after `planCaveat`, and the same text is appended to the
+  maintainer-decision `rerunPolicyHoldNotice` when a withheld
+  rerun-eligible `pull_request_target` run is held. It is not added for a
+  recovery-refresh candidate or in the `--refresh-latest` variant. The
+  per-event workflow-definition rules live in the stale-definition
+  paragraph of `idd-ci.instructions.md` §Rerun mechanics, not here
 - Also reports a `recoveryRefreshPlan` when the rollup is stuck on a
   bot-gated instance alongside an already-passing non-bot
   pull_request-family instance — populated even alongside a non-empty
@@ -5357,6 +5597,62 @@ reflexively as any other CLI option.
   2,048-character cap, and the cap was kept there as a documented limit;
   no missed remark was involved, so reading an empty array as "no remark"
   is only a risk so far (preventive; no observed incident yet).
+- Copilot overview labels (kurone-kito/idd-skill#3868): the snapshot
+  also emits `copilotOverviewLabels`, one row for the last non-error
+  Copilot `COMMENTED` review in list order, or `null` when there is no
+  such review. The row's `kind` is `v2` when the body's `Open` and
+  `Previously missed` sections agree with their own declared counts,
+  `unparsed` when they do not, `legacy` for a legacy overview, and
+  `other` for any other shape. Each row carries `reviewId`, `commitId`,
+  `kind`, `items`, `previouslyMissed`, and `reason`. For `v2` and
+  `unparsed`, `items` lists each `Open` item as `discussionId`,
+  `severity`, and `isNew` (the `· New` marker), and `previouslyMissed`
+  holds per-severity counts (`high`, `medium`, `low`); a
+  `Previously missed` item has no thread, so it has no per-item
+  severity. For `legacy` and `other`, `items` is empty and
+  `previouslyMissed` is `null`. `reason` is set only for `unparsed`.
+  An `unparsed` row's `items` is a partial list kept for diagnosis
+  only: it must not be used as an eligibility floor, because the parser
+  could not account for every item the body declares. The helper never
+  supplies a severity the body does not carry. The field is evidence
+  only: no counter or `effective` value reads it, and no instruction
+  points to it yet. The row is historical, so compare `commitId` with
+  `headSha`, as for `reviewBodyRemarks`.
+- Primary bot review ack state (kurone-kito/idd-skill#3907): the snapshot
+  also emits `latestPrimaryBotReview` when the CLI runs at E1. It is
+  `null` when the review method is missing, the fetch fails, the HEAD is
+  not 40 hexadecimal characters after lowercasing, or no counted review
+  exists. Otherwise it names the review the merge gate's Clause 1
+  selects (the same selector, `resolveLatestCopilotReviewClause`) and reports
+  `reviewId`, `commitId`, `matchesHead`, `bodyShape`, `suppressedCount`,
+  `primaryBotLogin`, `reviewAckNeeded`, and `reviewAckCovers`. Off-HEAD,
+  `reviewId` is empty, `bodyShape` is `null`, `suppressedCount` is `0`,
+  `reviewAckNeeded` is `false`, and `reviewAckCovers` is `null`. On-HEAD,
+  `reviewAckNeeded` is Clause 1's ack rule (`suppressedCount > 0`, or an
+  `unrecognized` body with the default Copilot bot), and `reviewAckCovers`
+  says whether a trusted, unedited `review-ack:` for this HEAD was created
+  after the review. The invariant is one-directional: `reviewAckCovers:
+  true` implies the gate's ack check passes under the same flag,
+  environment and config, but `false` only means the ack is not provably
+  present. An ack is outstanding only when `reviewAckNeeded &&
+  reviewAckCovers !== true`, because a clean review has `reviewAckCovers:
+  false` too. `reviewAckNeeded` describes the rule, not coverage, and it
+  does not say whether Clause 1 applies at all (`reviewPolicy`,
+  `convergenceScope`, waivers). `null` does not prove that the review has
+  no thread-less finding; the review body stays the full source. The field
+  differs from `copilotOverviewLabels` (kurone-kito/idd-skill#3868), which
+  reads the last non-error `COMMENTED` review in REST order, so the two can
+  name different reviews. On kurone-kito/idd-skill#3849, a thread-less
+  finding under a `Previously missed` block was not shown as needing an ack
+  at E1, and a manual `rerun-advisory-convergence --apply` then spent the
+  run's rerun-once budget. Post the `review-ack` before any manual
+  `rerun-advisory-convergence --apply`: the ack comment itself triggers the
+  companion workflow's refresh of the required check, so a manual
+  `--apply` is normally unnecessary. This protection comes from this
+  evidence and the E6 text, not from a new gate. The field requires a
+  current helper copy, and it costs one extra paginated GraphQL review read
+  per snapshot run, the same query the gate runs. The CLI requests the
+  field; the in-process call from `post-idd-marker --from-pr` does not.
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, optional `--nonce <token>` (this session's own
@@ -5933,7 +6229,8 @@ reflexively as any other CLI option.
   the current HEAD, `pending` is `true` and the gate is not ready. After
   `advisoryWait.convergenceDeadline` (default 24h; see
   [policy constants](policy-constants.md#advisory-review-defaults)) has
-  elapsed since the current HEAD commit's own timestamp, the only pass
+  elapsed from when GitHub first recorded the current HEAD (its earliest
+  check suite), the only pass
   path is a valid maintainer external-check waiver for that HEAD under the
   selector `idd-advisory-convergence` (reusing the same
   `<!-- idd-external-check-waiver: ... -->` marker format and validity
@@ -5999,9 +6296,11 @@ reflexively as any other CLI option.
   only advisory-bot thread comments whose `lastEditedAt` postdates
   their thread's latest IDD disposition, in one batched call when
   there is at least one such comment and none otherwise. Every other
-  consumer (the merged-PR feedback sweep, `audit-pr-cleanup.mjs`)
-  never fetches it, so an edited comment keeps `updatedAt` dating
-  there, unchanged.
+  consumer never fetches it. The merged-PR feedback sweep does not, so an
+  edited comment keeps `updatedAt` dating there, unchanged. The F4 cleanup
+  audit (`audit-pr-cleanup.mjs`) fetches it with a bounded call of its own
+  (kurone-kito/idd-skill#3791), so its thread comments are dated by the
+  same rule.
   `missingThreads[].inPlaceEditOnly` / `soleCauseInPlaceEditOnly` stay a
   separate, coarser, revision-content-blind heuristic
   (`classifyThreadAckOnlyPostDisposition`), unaffected by this dating
@@ -6844,6 +7143,117 @@ same as `AW4`/`AW5`.
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).
 
+### Worker final report store
+
+- Source repo / vendored-node commands:
+
+  ```sh
+  node scripts/idd-worker-report.mjs append --file <path>
+  node scripts/idd-worker-report.mjs append --stdin
+  node scripts/idd-worker-report.mjs summary [--since <ISO8601>]
+  ```
+
+- Package-manager command: run the profile-selected `idd:worker-report`
+  package script. The examples use `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:worker-report -- append --file <path>
+  npm run idd:worker-report -- summary [--since <ISO8601>]
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:worker-report`
+  command from the helper runtime manifest wiring above; the literal
+  invocations are:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-worker-report append --file <path>
+
+  npx --yes --package <helper-package-spec> \
+    idd-worker-report summary [--since <ISO8601>]
+  ```
+
+- Purpose: an orchestrator that disposes of each worker once its outcome
+  is verified keeps what the worker did not post to its issue or pull
+  request: review rounds, stalls, deviations from the documented
+  procedure, instruction text that caused friction, and the follow-up
+  issues it filed. The store is local to the operator; nothing is posted
+  to GitHub, and the helper makes no `gh` call.
+- Store: `idd-skill/worker-reports/reports.jsonl` under the per-user
+  state root, one JSON object per line. The root is an absolute
+  `XDG_STATE_HOME`, otherwise `~/.local/state`; on Windows an absolute
+  `LOCALAPPDATA`, otherwise `~/AppData/Local`. A relative value is ignored,
+  the same rule as the GitHub API load-control directory. The directory is
+  created on the first append with mode `0700` and the store with mode
+  `0600`, because records can hold friction text and session ids. On POSIX, a
+  directory or store that already exists with group or world access is
+  tightened to those modes before the append, and one owned by another user
+  is refused; on Windows the profile's own access control applies. `append` also
+  requires the store directory and the store file to be real, not symbolic
+  links, and a regular directory and file, not a FIFO or a device: anything
+  else is refused before it reads or writes the store (parent directories
+  may be links). `summary` only reads, so it never changes a mode and
+  does not refuse a link to a regular file, but it still refuses a
+  non-regular file or a store file that is a dangling link.
+- Record: `schemas/worker-report.schema.json` (schema version 1). Required
+  are `schemaVersion` (always `1`), `issue` and `pullRequest`
+  (`owner/repo#number`, the latter or `null`),
+  `claimId`, `harness` (`claude-code`, `codex-cli`, `opencode`,
+  `grok-build`, `cursor-cli`, `copilot-cli`, `antigravity-cli`, or `other`),
+  `workerHandle`, `terminalPhase`, `outcome` (`merged`, `handed-off`,
+  `held`, `abandoned`, or `failed`), `verifiedAt`, and `recordedAt`.
+  Optional are `vendorSessionId`, `reviewRounds`, `stalls`, `deviations`,
+  `frictions` (an entry may name the instruction or doc path in `file`),
+  and `followUps`. `terminalPhase` and each `phase` take a phase id such as
+  `F4`, `E4`, or the canonical underscore form `F2_5` from
+  `schemas/phase-graph.json` (a dot, as in `F2.5`, is accepted too). Every
+  string is length-bounded. The helper stores the
+  record verbatim: it stamps no timestamp and adds no field, so the caller
+  supplies `schemaVersion` and both timestamps. `verifiedAt` and
+  `recordedAt` must be RFC 3339 date-times with an uppercase `T`, a `Z` or
+  numeric offset, and seconds `00` to `59`, that name a real instant: a day
+  that does not exist (`2026-02-30`), hour 24, or an out-of-range offset is
+  rejected rather than silently normalized.
+- `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
+  record. An invalid record exits `1`, writes nothing, and creates no
+  directory. A record whose `claimId`, `workerHandle`, and `terminalPhase`
+  match an existing line is not appended and prints
+  `{"status":"duplicate"}` with exit `0`, so a retried append is safe,
+  while a replacement worker on the same claim has its own `workerHandle`
+  and gets its own record. A new line prints `{"status":"appended"}`.
+- `summary`: read-only; it takes no lock and creates nothing. It prints
+  JSON with the outcome counts (all five outcomes, zero-filled), the
+  distribution of `reviewRounds`, the ten most frequent `frictions`
+  `file` values, and `invalidLines`, the count of lines that are not valid
+  records. `--since <ISO8601>` keeps only records whose `recordedAt` is at
+  or after that instant; it takes a real date-time with an offset, such as
+  `2026-10-08T02:00:00Z` or `2026-10-08T11:00:00+09:00`, not a bare date.
+- Concurrency: the duplicate check and the write happen together under an
+  exclusive lock file next to the store (`reports.jsonl.lock`, created
+  with `O_EXCL`). A waiter retries for up to ten seconds; a lock older than
+  five seconds is treated as left by a dead holder and taken over by
+  renaming it aside. The waiter then checks that the moved file is the lock
+  it judged stale, by its inode, modification time, and token, and puts a
+  fresh lock back if the holder changed in between. The holder refreshes
+  the lock's age before it reads the store and about every second between
+  lines while it scans them (the read, the split into lines, and one very
+  long line cannot be interrupted). The holder releases the lock the same
+  way a waiter takes one over: it renames the lock aside, checks the token,
+  and restores a lock that is not its own.
+  A store whose last line has no trailing newline gets a newline first, so
+  a new record is never glued onto a torn one. The record is one `O_APPEND`
+  write. Residual risk: if two writers ever hold the lock together (a
+  process suspended past the stale age, or a new lock created in the
+  instant between the rename and the restore), the worst outcome is a
+  duplicate row, never a torn line. Two delays are bounded: a restored lock
+  whose holder had already released lingers until it ages out (at most five
+  seconds), and on a filesystem whose inode changes across a rename a waiter
+  times out with `could not acquire the lock` instead of taking over.
+- In this source repository, `vendorSessionId` joins the token-cost events
+  (`schemas/token-cost-event.schema.json`), matched on `claimId`; elsewhere
+  it is informational.
+
 ### F4 branch-failure routes
 
 Reference detail for `idd-merge.instructions.md` F4 step 4 and step 5
@@ -7174,7 +7584,7 @@ Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
 unsigned).
 
-## Dead-export audit ({{PROJECT_MARKER_PREFIX}}#3478)
+## Dead-export audit (kurone-kito/idd-skill#3478)
 
 `node scripts/audit-dead-exports.mjs --check` (source repository /
 vendored-node profile only — a repository-local lint check, not an

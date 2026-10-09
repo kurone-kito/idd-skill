@@ -70,10 +70,12 @@ const REVIEWED_CHECKOUT_INPUTS: Readonly<Record<string, string>> = {
 // digest is sha256 over the sorted closure (the entry script, its static
 // relative imports, dynamic import('./…') literals, and, when the entry
 // probes helpers, every documented scripts/*.mjs plus that graph).
-// pull_request CI checks out the merge with main, which carries main's
-// bytes of these files; this branch does not edit them and is behind
-// main, so both the branch-tree digest and main's digest are reviewed.
-// A third digest, including a one-byte edit, is not.
+// pull_request CI checks out the merge with main. Helper scripts already
+// on main moved the audit-docs closure after the earlier pins; this
+// branch does not change that closure. Issue #3775 edits
+// scripts/lint-source-boundaries.mjs, the only boundaries-closure file
+// whose bytes differ from main, so that command has its own added
+// digests. A further digest, including a one-byte edit, is not reviewed.
 const REVIEWED_PRE_FLOOR_RUNS: readonly {
   command: string;
   digests: readonly string[];
@@ -83,12 +85,13 @@ const REVIEWED_PRE_FLOOR_RUNS: readonly {
     digests: [
       '8da091bc5c9aa25ed977013f3d78d85ae1a50ab9e5919debd8f19d50b84fab1b',
       'ad4b8b704d8bb2185c0838877351f2fedfb9f7b4a5092ee826c9ae6ce5973716',
+      '42d6d094e4555bfc7a3e1cb5c66ee6c03448dbe91f207d3e88324e50e27dbb31',
     ],
   },
   {
     // Bare-node audits that already precede the floor assertion on main.
     // pull_request CI tests the merge with main, which runs these steps
-    // (issues #3748 and #3751). They are absent from this branch's tree.
+    // (issues #3748 and #3751).
     command: 'node scripts/lint-source-contracts.mjs',
     digests: [
       '60f567d2ff88a072780130e813dacb67a8f1efb34d242b0979feeeeef569eb37',
@@ -98,6 +101,13 @@ const REVIEWED_PRE_FLOOR_RUNS: readonly {
     command: 'node scripts/lint-source-boundaries.mjs',
     digests: [
       'de1b710b0e268c1148897cbbe89bef0d9bda398e3c26b007db7d90cdbcbe0162',
+      '70dd318737656256481c8264e3371ece519a9a77c76b860d5a4e9eed4665fd69',
+      'a4e7f37c6b32715f6c30d9b0fb9cac8626035343c67298016713a90f40e42c98',
+      '0e2436a7ae19ad016c49f8473c3b7dc303b3aacc54a41f2f5d007784b74a8911',
+      '2b6412ac4e50299fb0d38e9de21259bc80e44d8a037efabd82657ae4f303793a',
+      'fc6810afe62a98082ac29e669bf8972ccca3194bc5b1b59096641f93bb0d68cb',
+      '9935e270ab2c491b35dcf605fdca15efc2027c11225b7077b4007a4c851a70e4',
+      'eb4931c4d6d2aa5aa70177eb40ed58ac60205540c2db0e562e9622b5cff3f13a',
     ],
   },
   {

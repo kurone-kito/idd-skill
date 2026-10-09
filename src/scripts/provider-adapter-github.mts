@@ -2769,7 +2769,7 @@ export function createGithubProviderAdapter(
   repository(owner:$owner,name:$repo){
     issue(number:$number){
       closedByPullRequestsReferences(first:50,after:$after,includeClosedPrs:false){
-        nodes { state }
+        nodes { state number repository { nameWithOwner } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -2795,26 +2795,71 @@ export function createGithubProviderAdapter(
           repository?: {
             issue?: {
               closedByPullRequestsReferences?: {
-                nodes?: { state?: unknown }[];
+                nodes?: {
+                  state?: unknown;
+                  number?: unknown;
+                  repository?: { nameWithOwner?: unknown } | null;
+                }[];
                 pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
               };
             } | null;
           } | null;
         };
       };
+      // #3871: the same response checks as getConnectedPullRequestEventsPage
+      // (#3276). A GraphQL `errors` entry, a connection without `nodes` or
+      // `pageInfo`, or a non-boolean `hasNextPage` is a failed read, not an
+      // empty terminal page that would hide a PR the lookup never saw.
+      assertNoGraphqlErrors(parsed, 'getWorkItemClosingPullRequestsPage');
       const connection =
         parsed.data?.repository?.issue?.closedByPullRequestsReferences;
-      if (!connection) {
+      if (
+        !connection ||
+        !Array.isArray(connection.nodes) ||
+        connection.pageInfo == null ||
+        typeof connection.pageInfo !== 'object' ||
+        typeof connection.pageInfo.hasNextPage !== 'boolean'
+      ) {
         throw new Error(
-          'closedByPullRequestsReferences: connection is null/absent',
+          'closedByPullRequestsReferences: connection is null/absent or malformed (missing nodes/pageInfo/hasNextPage)',
         );
       }
       return {
-        nodes: (connection.nodes ?? []).map((node) => ({
-          state: node.state === undefined ? undefined : String(node.state),
-        })),
-        hasNextPage: connection.pageInfo?.hasNextPage ?? false,
-        endCursor: connection.pageInfo?.endCursor ?? null,
+        nodes: connection.nodes.map((node) => {
+          // A node without a string state is malformed, and it must not reach
+          // a reader that skips a non-OPEN node: that could read an open
+          // closing reference as absent (fail closed, #3276).
+          // GraphQL's PullRequestState has exactly these three values; any
+          // other value is malformed data, not a state to skip.
+          if (
+            typeof node.state !== 'string' ||
+            !['OPEN', 'CLOSED', 'MERGED'].includes(node.state)
+          ) {
+            throw new Error(
+              'closedByPullRequestsReferences: node without a known PullRequest state',
+            );
+          }
+          // An absent or non-integer number stays undefined: the reader
+          // treats it as a failed lookup rather than guessing a PR.
+          return {
+            state: node.state,
+            number:
+              typeof node.number === 'number' && Number.isInteger(node.number)
+                ? node.number
+                : undefined,
+            repository:
+              typeof node.repository?.nameWithOwner === 'string'
+                ? node.repository.nameWithOwner
+                : undefined,
+          };
+        }),
+        hasNextPage: connection.pageInfo.hasNextPage,
+        // A non-string cursor becomes null, so a page that says it has more
+        // without a usable cursor fails the pagination check in the reader.
+        endCursor:
+          typeof connection.pageInfo.endCursor === 'string'
+            ? connection.pageInfo.endCursor
+            : null,
       };
     },
 

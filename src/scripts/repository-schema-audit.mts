@@ -226,6 +226,11 @@ export const SCHEMA_TYPE_CATALOG = [
     exportedType: 'StalledSessionQuietCheckReport',
     owningModule: 'src/scripts/stalled-session-quiet-check.mts',
   },
+  {
+    schemaFile: 'worker-report.schema.json',
+    exportedType: 'WorkerReport',
+    owningModule: 'src/scripts/idd-worker-report.mts',
+  },
 ] as const;
 
 /** The schema file names `SCHEMA_TYPE_CATALOG` lists. */
@@ -316,6 +321,15 @@ export const SCHEMA_OUTPUT_COVERAGE: readonly CoverageEntry[] = [
       'token-cost-snapshot.schema.json is a source-repo measurement ' +
       'contract, not a helper stdout envelope -- fixture coverage lives in ' +
       'discoverSchemaCases / scripts/validate-schemas.mjs.',
+  },
+  {
+    schema: 'worker-report.schema.json',
+    status: 'uncovered',
+    reason:
+      'worker-report.schema.json is the persisted store record an ' +
+      "orchestrator hands to idd-worker-report's append mode, not a helper " +
+      'stdout envelope -- no helper builds one from real output, so fixture ' +
+      'coverage lives in discoverSchemaCases / scripts/validate-schemas.mjs.',
   },
   {
     schema: 'discover-roadmap-union.schema.json',

@@ -2209,10 +2209,268 @@ function isCodeIdentifierProcessMention(
   return CODE_IDENTIFIER_PROCESS_PROPERTY_ACCESS_PATTERN.test(after);
 }
 
+// #3891: `ignore` is a real value of a Node `stdio` option (and of the other
+// std* keys), so `{ stdio: 'ignore' }` in a code range is an option value,
+// not an instruction to ignore a policy. The exemption is narrow on purpose:
+// the verb must be exactly lowercase `ignore`, it must be a whole quoted
+// literal, and its key must be one of the four std* keys, with only
+// whitespace, `[`, commas and other quoted literals between the colon and
+// the literal. A key with a prefix, another key in between, an unquoted
+// value, or a capital I still fails the check.
+const STDIO_OPTION_KEY_PATTERN =
+  /(?<=^|[\s{,([])(?:stdio|stdin|stdout|stderr)\s*:/gu;
+// The longest run, in characters, between a key's colon and its literal. An
+// array of option values fits well inside it; a longer run fails closed. The
+// cap also bounds the cost of each candidate literal.
+const STDIO_OPTION_MAX_SEGMENT_CHARS = 256;
+const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
+
+// Marks each UTF-16 code unit of `source` that is not code: the inside of a
+// single-, double- or backtick-quoted string, a `//` line comment, a `/* */`
+// block comment, or an HTML comment. The opening quote of a string is code, so
+// a literal can be checked for sitting outside any other string. Indices are
+// code units, the same units as string and regex indices, so an astral
+// character cannot shift the mask. An unclosed string or comment marks the rest
+// of the source as not code, which only makes the exemption fail closed.
+function findNonCodeMask(source: string): boolean[] {
+  const masked = new Array<boolean>(source.length).fill(false);
+  let quote: string | null = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  let htmlComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (htmlComment) {
+      masked[index] = true;
+      if (source.startsWith('-->', index)) {
+        masked[index + 1] = true;
+        masked[index + 2] = true;
+        index += 2;
+        htmlComment = false;
+      }
+      continue;
+    }
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+      } else {
+        masked[index] = true;
+      }
+      continue;
+    }
+    if (blockComment) {
+      masked[index] = true;
+      if (character === '*' && next === '/') {
+        masked[index + 1] = true;
+        index += 1;
+        blockComment = false;
+      }
+      continue;
+    }
+    if (quote !== null) {
+      masked[index] = true;
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      masked[index] = true;
+      masked[index + 1] = true;
+      index += 1;
+    } else if (character === '/' && next === '*') {
+      blockComment = true;
+      masked[index] = true;
+      masked[index + 1] = true;
+      index += 1;
+    } else if (source.startsWith('<!--', index)) {
+      htmlComment = true;
+      masked[index] = true;
+      masked[index + 1] = true;
+      masked[index + 2] = true;
+      masked[index + 3] = true;
+      index += 3;
+    } else if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+    }
+  }
+  return masked;
+}
+
+interface StdioScanCache {
+  // "start:end" keys of the ranges the parser classifies as fenced code.
+  fencedKeys: ReadonlySet<string>;
+  scans: Map<number, StdioRangeScan>;
+}
+
+interface StdioRangeScan {
+  // Local index where the code body begins, or -1 when no literal in the
+  // range can be exempt (its opening line is an info string with no end).
+  bodyStart: number;
+  // Non-code flags, indexed by local position in the range.
+  masked: boolean[];
+  // Local start and end of each std* key that is code, ascending.
+  keyStarts: number[];
+  keyEnds: number[];
+  // Local index of the first `/` that is code, or -1.
+  firstCodeSlash: number;
+}
+
+const NO_STDIO_EXEMPTION: StdioRangeScan = {
+  bodyStart: -1,
+  masked: [],
+  keyStarts: [],
+  keyEnds: [],
+  firstCodeSlash: -1,
+};
+
+// Scans one code range in a single pass, so each candidate literal in it costs
+// a binary search and a short segment check, not a rescan of the range.
+function scanStdioRange(region: string, isFence: boolean): StdioRangeScan {
+  // The parser decides what a range is. A fence's delimiter is its first
+  // backtick or tilde run of three or more markers, whatever indentation or
+  // container prefix precedes it, and its opening line's info string is
+  // skipped. An inline span's delimiter is the backtick run at the start of
+  // the range, on one line. Any other range, such as an indented code block or
+  // several blocks merged, is not exempt.
+  let openerEnd = 0;
+  if (isFence) {
+    const delimiterAt = region.search(/[`~]/);
+    if (delimiterAt >= 0) {
+      const markerChar = region[delimiterAt];
+      let runEnd = delimiterAt;
+      while (region[runEnd] === markerChar) {
+        runEnd += 1;
+      }
+      if (runEnd - delimiterAt >= 3) {
+        // The info string is metadata, not code, so the whole opening line is
+        // skipped; a literal on it fails closed.
+        const lineEnd = region.indexOf('\n', runEnd);
+        if (lineEnd < 0) {
+          return NO_STDIO_EXEMPTION;
+        }
+        openerEnd = lineEnd + 1;
+      }
+    }
+  } else if (region[0] === '`' && !region.includes('\n')) {
+    while (region[openerEnd] === '`') {
+      openerEnd += 1;
+    }
+  } else {
+    // Any other range has backtick parity the lexer cannot trust, so it gets
+    // no exemption.
+    return NO_STDIO_EXEMPTION;
+  }
+  const masked = [
+    ...new Array<boolean>(openerEnd).fill(true),
+    ...findNonCodeMask(region.slice(openerEnd)),
+  ];
+  // The key scan runs over the whole region so its left boundary sees any
+  // prefix character; a key found in the delimiter is masked and dropped.
+  const keyStarts: number[] = [];
+  const keyEnds: number[] = [];
+  // The delimiter is replaced by spaces, so a key that starts the body sees a
+  // separator on its left rather than the delimiter itself.
+  const keyScan = ' '.repeat(openerEnd) + region.slice(openerEnd);
+  const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN);
+  for (
+    let found = keyPattern.exec(keyScan);
+    found !== null;
+    found = keyPattern.exec(keyScan)
+  ) {
+    if (!masked[found.index]) {
+      keyStarts.push(found.index);
+      keyEnds.push(found.index + found[0].length);
+    }
+  }
+  let firstCodeSlash = -1;
+  for (let position = openerEnd; position < region.length; position += 1) {
+    if (region[position] === '/' && !masked[position]) {
+      firstCodeSlash = position;
+      break;
+    }
+  }
+  return {
+    bodyStart: openerEnd,
+    masked,
+    keyStarts,
+    keyEnds,
+    firstCodeSlash,
+  };
+}
+
+function isStdioIgnoreOptionValue(
+  text: string,
+  index: number,
+  verb: string,
+  getCodeRangeAt: (start: number) => { start: number; end: number } | null,
+  cache: StdioScanCache,
+): boolean {
+  if (verb !== 'ignore') {
+    return false;
+  }
+  const quote = text[index - 1];
+  if ((quote !== "'" && quote !== '"') || text[index + verb.length] !== quote) {
+    return false;
+  }
+  const codeRange = getCodeRangeAt(index);
+  if (!codeRange) {
+    return false;
+  }
+  let scan = cache.scans.get(codeRange.start);
+  if (scan === undefined) {
+    scan = scanStdioRange(
+      text.slice(codeRange.start, codeRange.end),
+      cache.fencedKeys.has(`${codeRange.start}:${codeRange.end}`),
+    );
+    cache.scans.set(codeRange.start, scan);
+  }
+  // Local index of the literal's opening quote within the range.
+  const literal = index - 1 - codeRange.start;
+  if (scan.bodyStart < 0 || literal < scan.bodyStart || scan.masked[literal]) {
+    return false;
+  }
+  // A `/` outside strings and comments may open a regex literal, whose text
+  // can hold a key that is not an option, so it disqualifies the exemption.
+  if (scan.firstCodeSlash !== -1 && scan.firstCodeSlash < literal) {
+    return false;
+  }
+  // The nearest code key before the literal, found by binary search.
+  let low = 0;
+  let high = scan.keyStarts.length - 1;
+  let nearest = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (scan.keyStarts[middle] < literal) {
+      nearest = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  if (nearest < 0) {
+    return false;
+  }
+  const keyEnd = scan.keyEnds[nearest];
+  if (literal - keyEnd > STDIO_OPTION_MAX_SEGMENT_CHARS) {
+    return false;
+  }
+  const between = text.slice(codeRange.start + keyEnd, index - 1);
+  return STDIO_OPTION_VALUE_SEGMENT_PATTERN.test(between);
+}
+
 function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
+  fencedRanges: ReadonlySet<string>,
 ): { index: number; text: string } | null {
   // #2408: POLICY_OVERRIDE_PATTERN's own greedy `[\s\S]{0,N}` backtracks
   // from the far end of the window inward, so its own noun capture (group
@@ -2286,6 +2544,10 @@ function findPolicyOverrideMatch(
   // pass intentionally removes that token, so inspect raw matches as a
   // fallback and retain only matches that are not wholly inside code.
   const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
+  const stdioScans: StdioScanCache = {
+    fencedKeys: fencedRanges,
+    scans: new Map(),
+  };
   let match: RegExpExecArray | null;
   while (true) {
     match = pattern.exec(text);
@@ -2306,11 +2568,12 @@ function findPolicyOverrideMatch(
         index,
         verb,
         getCodeRangeAt,
-      )
+      ) ||
+      isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt, stdioScans)
     ) {
-      // Same rewind as the masked-pass loop above: a negated or
-      // ordinary-compound match's own greedy span can swallow a later,
-      // genuine trigger.
+      // Same rewind as the masked-pass loop above: a negated, ordinary-
+      // compound, or std* option-value match's own greedy span can swallow
+      // a later, genuine trigger.
       pattern.lastIndex = index + (verb.length || 1);
       continue;
     }
@@ -3080,6 +3343,12 @@ export function checkTrustSafety(context: Context): CheckOutcome {
   // even when a fenced block precedes the match.
   const bodyOffset = issue.title.length + 1;
   const bodyCodeRanges = findMarkdownCodeRanges(issue.body);
+  // Keys are shifted by the title offset, to match the scan text's coordinates.
+  const bodyFencedRanges = new Set(
+    findFencedCodeRanges(issue.body).map(
+      (range) => `${range.start + bodyOffset}:${range.end + bodyOffset}`,
+    ),
+  );
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body, bodyCodeRanges)}`,
@@ -3099,6 +3368,7 @@ export function checkTrustSafety(context: Context): CheckOutcome {
             end: range.end + bodyOffset,
           };
     },
+    bodyFencedRanges,
   );
   if (policyMatch) {
     return {

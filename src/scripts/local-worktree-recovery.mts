@@ -360,10 +360,16 @@ export interface ConfirmBlockOutcome {
 
 /** Filesystem identity for a directory whose path may be reused by a
  * concurrent worktree replacement. String values keep the verdict and test
- * seams serializable across POSIX and Windows bigint stat implementations. */
+ * seams serializable across POSIX and Windows bigint stat implementations.
+ * `birthtimeNs` and `ctimeNs` are optional: `null`, an absent field, and
+ * `"0"` for the birth time all mean that no birth time is carried, and a
+ * `null` or absent change time means the read carries none. An identity
+ * without the fields compares by `dev` and `ino` alone. */
 export interface DirectoryIdentity {
   dev: string;
   ino: string;
+  birthtimeNs?: string | null;
+  ctimeNs?: string | null;
 }
 
 interface TargetWorktreeIdentity {
@@ -378,14 +384,50 @@ function readDirectoryIdentity(path: string): DirectoryIdentity {
   if (!stat.isDirectory()) {
     throw new Error(`not a directory: ${path}`);
   }
-  return { dev: stat.dev.toString(), ino: stat.ino.toString() };
+  return {
+    dev: stat.dev.toString(),
+    ino: stat.ino.toString(),
+    birthtimeNs: stat.birthtimeNs.toString(),
+    ctimeNs: stat.ctimeNs.toString(),
+  };
 }
 
+/** A read carries a birth time when it reports a non-zero one and a change
+ * time. `0`, `null`, and an absent field all mean no birth time. */
+function carriesBirthTime(identity: DirectoryIdentity): boolean {
+  const birth = identity.birthtimeNs;
+  return (
+    birth !== undefined &&
+    birth !== null &&
+    birth !== '0' &&
+    identity.ctimeNs !== undefined &&
+    identity.ctimeNs !== null
+  );
+}
+
+/** A pair of reads has a usable birth time when both reads carry one and at
+ * least one read's birth time differs from that same read's change time. */
+function hasUsableBirthTime(
+  left: DirectoryIdentity,
+  right: DirectoryIdentity,
+): boolean {
+  return (
+    carriesBirthTime(left) &&
+    carriesBirthTime(right) &&
+    (left.birthtimeNs !== left.ctimeNs || right.birthtimeNs !== right.ctimeNs)
+  );
+}
+
+/** Device and inode must match. When the pair has a usable birth time, the
+ * birth times must match too, which catches a replacement that reused the
+ * inode number. Otherwise the comparison stays `dev` and `ino` alone. */
 function sameDirectoryIdentity(
   left: DirectoryIdentity,
   right: DirectoryIdentity,
 ): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  if (left.dev !== right.dev || left.ino !== right.ino) return false;
+  if (!hasUsableBirthTime(left, right)) return true;
+  return left.birthtimeNs === right.birthtimeNs;
 }
 
 function resolveTargetWorktreeIdentity(
@@ -922,9 +964,11 @@ export interface LocalWorktreeRecoveryDeps {
    * destructive shortcut decisions. */
   pathPresence?: (path: string) => PathPresence;
   /** Read the filesystem identity of a directory before and after the
-   * clone-lock wait. Device/inode identity distinguishes a worktree or its
-   * private git-admin directory being removed and recreated at the same
-   * path while preservation is in progress. */
+   * clone-lock wait. Device/inode identity, with the birth time where the
+   * reads carry one, distinguishes a worktree or its private git-admin
+   * directory being removed and recreated at the same path while preservation
+   * is in progress. Reads that carry no usable birth time keep the
+   * device/inode comparison alone. */
   readDirectoryIdentity: (path: string) => DirectoryIdentity;
   realpathOrNull: (path: string) => string | null;
   readlinkOrNull: (path: string) => string | null;
@@ -4745,8 +4789,9 @@ export function runLocalWorktreeRecovery(
   // and recreate the same worktree path while this invocation is preserving
   // the original checkout; matching routing/claim state after the wait is
   // not enough to prove that the cached preservation plan belongs to the
-  // checkout that will be removed. Device/inode identity closes that
-  // replacement-worktree window, mirroring claim-lock's acquisition guard.
+  // checkout that will be removed. Device/inode identity, plus the birth time
+  // where the reads carry one, closes that replacement-worktree window,
+  // mirroring claim-lock's acquisition guard.
   let initialTargetIdentity: TargetWorktreeIdentity | null = null;
   if (
     args.apply &&

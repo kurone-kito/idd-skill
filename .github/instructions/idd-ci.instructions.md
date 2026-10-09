@@ -22,7 +22,7 @@ policy helper command as the canonical read-only policy resolver.
 # source repo / vendored-node profile
 node scripts/ci-wait-policy.mjs
 
-# package-manager / ephemeral-npx profile
+# package-manager / ephemeral-npx / user-global profile
 <profile-selected-ci-wait-policy-command>
 ```
 
@@ -150,7 +150,7 @@ that set instead of re-deriving it.
    # source repo / vendored-node profile
    node scripts/ci-wait-state.mjs --pr {pr-number}
 
-   # package-manager / ephemeral-npx profile
+   # package-manager / ephemeral-npx / user-global profile
    <profile-selected-ci-wait-state-command> --pr {pr-number}
    ```
 
@@ -266,7 +266,7 @@ zero-pending checks; see helper docs.
 # source repo / vendored-node profile
 node scripts/rerun-advisory-convergence.mjs --pr <n> [--apply]
 
-# package-manager / ephemeral-npx profile
+# package-manager / ephemeral-npx / user-global profile
 <profile-selected-rerun-advisory-convergence-command> --pr <n> [--apply]
 ```
 
@@ -298,17 +298,16 @@ waiver kind is evaluated independent of the deadline/terminal-unavailable
 gate. This does not replace the manual flow for any other reason token,
 actor, or check.
 
-**Stale workflow definition on the PR branch.** `gh run rerun`
-re-resolves the failing check against the workflow **definition
-file** as it exists on the PR branch, not on `main` — a sibling
-track's already-merged fix to a shared CI check's own `.yml` file is
-invisible to a rerun here until this branch pulls that fix in. If a
-required check keeps failing the same way after a rerun and its
-workflow file changed recently on `main`, diff the PR branch's copy
-against `main`'s; a mismatch means a branch-sync merge (merge `main`
-in, never rebase — see the E-phase branch-sync check in
-`idd-review-triage.instructions.md`) is the diagnostic recovery step.
-Treat this as reachable at D4/pre-review, not only after E8 — the
+**Stale workflow definition after a rerun.** `gh run rerun` reuses the
+original event's commit and workflow definition (`pull_request`: that
+event's merge commit; `pull_request_target`: the base branch's copy at
+that time), so a later workflow-file change is invisible to it. Run-time
+fetches, such as the verdict job's `ref: main` checkout, are current. If
+a required check keeps failing the same way after a rerun and its
+workflow file changed on `main` since, the recovery is a new event: a
+branch-sync merge (merge `main` in, never rebase — see the E-phase
+branch-sync check in `idd-review-triage.instructions.md`) or reopening
+the PR. Treat this as reachable at D4/pre-review, not only after E8 — the
 ordering dependency a shared check-definition change creates is
 invisible to disjoint-file-set track planning.
 

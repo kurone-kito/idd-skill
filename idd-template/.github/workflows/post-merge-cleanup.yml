@@ -39,15 +39,16 @@
 #     content, but it is a wider execution surface than this source
 #     repository's own dogfooded copy (which only ever runs its single
 #     tracked `scripts/audit-pr-cleanup.mjs`), so it is called out here
-#     explicitly. Under `ephemeral-npx` specifically, when the repository
-#     has not configured `helperRuntime.packageSpec`, the invocation
-#     falls back to fetching a **mutable** default archive URL
+#     explicitly. Under `ephemeral-npx` and `user-global` specifically, when
+#     the repository has not configured `helperRuntime.packageSpec`, the
+#     invocation falls back to fetching a **mutable** default archive URL
 #     (`https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main`)
 #     over the network at run time -- not base-branch-tracked content and
 #     not a declared dependency either. This is a real, wider execution
-#     surface than the other profiles; adopters on `ephemeral-npx` should
-#     pin `helperRuntime.packageSpec` to a reviewed tarball or mirror URL
-#     (see docs/idd-helper-scripts.md's "Profile Wiring Surface" section)
+#     surface than the other profiles; adopters on `ephemeral-npx` or
+#     `user-global` should pin `helperRuntime.packageSpec` to a reviewed
+#     tarball or mirror URL (see docs/idd-helper-scripts.md's "Profile
+#     Wiring Surface" section)
 #     to close this gap.
 #   - The `pr_number` value (a `workflow_dispatch` number input, not
 #     strictly enforced as numeric for direct API dispatches) is passed
@@ -207,15 +208,19 @@ jobs:
                 (.helperRuntime) as $hr
                 | ($hr != null and ($hr|type) == "object") as $is_object
                 | if $is_object then
-                    (($hr | keys) - ["profile","packageSpec"]) as $extra
+                    (($hr | keys) - ["profile","packageSpec","launcher"]) as $extra
                     | ($hr.profile) as $profile
                     | ($extra | length == 0) as $keys_ok
-                    | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only"] | index($profile)) != null) as $profile_ok
+                    | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only","user-global"] | index($profile)) != null) as $profile_ok
                     | (if ($hr | has("packageSpec")) then
                          ($hr.packageSpec) as $spec
                          | ($spec != null and ($spec|type) == "string" and ($spec | test("\\A[A-Za-z0-9@:/_.+^#%-]+\\z")))
                        else true end) as $spec_ok
-                    | if ($keys_ok and $profile_ok and $spec_ok) then
+                    | (if ($hr | has("launcher")) then
+                        ($hr.launcher) as $launcher_value
+                        | ($launcher_value != null and ($launcher_value|type) == "string" and (["auto","npx","pnpm-dlx"] | index($launcher_value)) != null)
+                      else true end) as $launcher_ok
+                    | if ($keys_ok and $profile_ok and $spec_ok and $launcher_ok) then
                         "\($hr.profile)\t\($hr.packageSpec // "")"
                       else empty end
                   else empty end
@@ -394,7 +399,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               # shellcheck disable=SC2086
               JSON=$(npx --yes --package "$SPEC" idd-audit-pr-cleanup --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)
@@ -418,6 +423,7 @@ jobs:
             BLOCKED=$(printf '%s' "$JSON" | jq -r '[(.skipped // [])[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
             RETRY_ATTEMPTS=$(printf '%s' "$JSON" | jq -r '.retryAttempts // 0')
             RETRY_BOUND_EXHAUSTED=$(printf '%s' "$JSON" | jq -r '.retryBoundExhausted // false')
+            SKIP_REASON_SUMMARY=$(printf '%s' "$JSON" | jq -r '.skipReasonSummary // ""')
             if [ "$HELPER_EXIT" -ne 0 ]; then
               echo "::warning::audit-pr-cleanup exited $HELPER_EXIT but emitted a valid JSON report; using helper status \"$STATUS\""
             fi
@@ -430,6 +436,7 @@ jobs:
             BLOCKED=0
             RETRY_ATTEMPTS=0
             RETRY_BOUND_EXHAUSTED=false
+            SKIP_REASON_SUMMARY=""
           fi
           {
             echo "pr_number=$PR_NUMBER"
@@ -440,6 +447,7 @@ jobs:
             echo "blocked=$BLOCKED"
             echo "retry_attempts=$RETRY_ATTEMPTS"
             echo "retry_bound_exhausted=$RETRY_BOUND_EXHAUSTED"
+            echo "skip_reason_summary=$SKIP_REASON_SUMMARY"
           } >> "$GITHUB_OUTPUT"
       - name: Post cleanup evidence comment
         if: always() && steps.cleanup.outcome != 'skipped'
@@ -458,6 +466,7 @@ jobs:
           BLOCKED: ${{ steps.cleanup.outputs.blocked }}
           RETRY_ATTEMPTS: ${{ steps.cleanup.outputs.retry_attempts }}
           RETRY_BOUND_EXHAUSTED: ${{ steps.cleanup.outputs.retry_bound_exhausted }}
+          SKIP_REASON_SUMMARY: ${{ steps.cleanup.outputs.skip_reason_summary }}
         run: |
           # A killed cleanup step writes no outputs. Leave before any
           # gh call when the PR number is still unknown, and map an
@@ -562,7 +571,12 @@ jobs:
             "| Retry attempts (bound-exhausted) | ${RETRY_ATTEMPTS} (${RETRY_BOUND_EXHAUSTED}) |" \
             "| Posted by          | post-merge-cleanup workflow |" \
           )
+          # The Notes row starts on its own line directly after the Posted by row:
+          # a blank line would end the GFM table, so the row would render below it.
+          if [ -n "$SKIP_REASON_SUMMARY" ]; then
+            NOTES_ROW="| Notes              | Skipped by reason: ${SKIP_REASON_SUMMARY} |"
+          fi
           if [ -n "$NOTES_ROW" ]; then
-            BODY="${BODY}${NOTES_ROW}"$'\n'
+            BODY="${BODY}"$'\n'"${NOTES_ROW}"$'\n'
           fi
           printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --body-file -

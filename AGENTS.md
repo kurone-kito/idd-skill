@@ -107,8 +107,9 @@ layered on top of the distributed IDD defaults:
   policy (applies only to `kurone-kito/idd-skill`), giving a trusted
   maintainer a human off-ramp when the autonomous advisory-convergence
   loop cannot converge on its own (Refs #1465): once the configured
-  convergence deadline (default 24h) has elapsed since the current PR
-  HEAD's own commit timestamp, a trusted maintainer can post a valid
+  convergence deadline (default 24h) has elapsed from when GitHub first
+  recorded the current PR HEAD (its earliest check suite), a trusted
+  maintainer can post a valid
   external-check waiver for `idd-advisory-convergence` to unblock the
   gate. Treat this the same as any other merge-gate bypass — a
   deliberate, short-lived, maintainer-authorized exception for a

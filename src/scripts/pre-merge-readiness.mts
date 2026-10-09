@@ -1076,11 +1076,9 @@ export function collectPreMergeReadiness(
   }
   // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
   // a legitimate issue-only handoff that predates the PR is honored even
-  // against a PR-backed claim. This allowance is applied on the merge side
-  // only; resume-claim-routing.mts intentionally never passes prFirstCommitAt
-  // (an issue-only handoff against a PR-backed claim stays rejected there) —
-  // the merge-only half of the documented strict-resume vs. lenient-relay-merge
-  // split (see docs/idd-design-rationale.md, "Claim resolution"). Resolve it
+  // against a PR-backed claim. Resume routing applies the same time rule since
+  // #3871; the author binding is what still differs between the two (see
+  // docs/idd-design-rationale.md, "Forced-handoff strictness"). Resolve it
   // only when forced handoffs are enabled and the commit list actually read,
   // and fail closed to `null` (reject) otherwise so a transient commits-API
   // failure never aborts the readiness gate.
@@ -1201,18 +1199,16 @@ export function collectPreMergeReadiness(
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedReviews = reviews.map(normalizeReview);
 
-  // #2021: fetch the current HEAD commit's own `committedDate`, plus every
-  // PR review, via the SAME GraphQL query `advisory-convergence.mts`'s own
-  // deadline clock and Clause-1 review evidence both read
-  // (`fetchReviewsAndHeadCommit`, extracted to `review-clause.mts` precisely
-  // so a second, independent caller can reuse this exact evidence instead of
-  // a second ad-hoc GraphQL path that could drift out of sync with it -- see
-  // that module's header). Deliberately uncaught, same rationale as
-  // `copilotUnavailable` below: a lookup failure must crash this evidence
-  // collector rather than silently resolve to an empty `headCommittedAt`,
-  // which would make `advisoryConvergenceDeadlinePassed` fail closed to
-  // `false` for the wrong reason (masking a genuinely-open deadline as
-  // unreadable evidence instead of surfacing the fetch failure).
+  // #2021: fetch the current HEAD commit's `committedDate` (informational
+  // only; the convergence deadline clock is `headObservedAt`, a sibling fetch
+  // below), plus every PR review, via the GraphQL query that Clause-1 review
+  // evidence reads (`fetchReviewsAndHeadCommit`, extracted to
+  // `review-clause.mts` so a second, independent caller reuses this exact
+  // evidence instead of a second ad-hoc GraphQL path that could drift out of
+  // sync with it -- see that module's header). Deliberately uncaught, same
+  // rationale as `copilotUnavailable` below: a lookup failure must crash this
+  // evidence collector rather than silently resolve to an empty review or
+  // HEAD record, which would hide the fetch failure as absent evidence.
   const {
     reviews: advisoryConvergenceReviews,
     headCommittedAt: advisoryConvergenceHeadCommittedAt,

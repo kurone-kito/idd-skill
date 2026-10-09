@@ -31,12 +31,15 @@ import {
 } from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
-import type { ClaimValidationSummary } from './protocol-helpers.mts';
+import type {
+  ClaimValidationSummary,
+  FreshDispositionCause,
+} from './protocol-helpers.mts';
 import {
   classifyIddPrComment,
   classifyRegularBotComment,
   classifyThreadAckOnlyPostDisposition,
-  hasFreshDisposition,
+  explainFreshDisposition,
   indexLatestGatingReviewsByAuthor,
   indexThreadsByReview,
   isDispositionComment,
@@ -48,13 +51,80 @@ import {
   resolveAdvisoryBotLogins,
   summarizeClaimValidationForWriteGate,
   unionTrustedMarkerActorSources,
-  unsafeTextReason,
+  unsafeTextFinding,
 } from './protocol-helpers.mts';
 import {
   fetchLastEditedAtByNodeId,
   fetchReviewThreadCommentUserContentEdits,
 } from './provider-adapter-github.mts';
 import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mts';
+
+/**
+ * Every code a skipped row can carry. A row's `skipReasonCode` is one of
+ * these, so a report consumer can branch on the cause without parsing the
+ * free-text `skipReason`. The codes are kebab case and describe the cause:
+ * `viewer-cannot-minimize` is the evidence header's token for a flag count,
+ * so the minimize refusals below each carry a more specific code.
+ */
+export const SKIP_REASON_CODES = [
+  'operational-marker-not-recognized',
+  'operational-marker-untrusted-author',
+  'forced-handoff-evidence',
+  'pr-not-merged',
+  'already-minimized',
+  'viewer-cannot-minimize-comment',
+  'viewer-cannot-minimize-review',
+  'viewer-cannot-minimize-review-comment',
+  'review-bot-no-completed-review',
+  'review-changes-requested-active',
+  'review-no-threads',
+  'review-threads-truncated',
+  'review-threads-unresolved',
+  'review-threads-no-fresh-disposition',
+  'thread-unresolved',
+  'thread-data-truncated',
+  'thread-no-disposition',
+  'thread-disposition-edited',
+  'thread-disposition-time-unreadable',
+  'thread-superseded-by-reply',
+  'thread-superseded-by-edit',
+  'unsafe-awaiting-maintainer-decision',
+  'unsafe-active-hold',
+  'unsafe-failed-ci',
+  'pre-minimize-subject-missing',
+  'pre-minimize-already-minimized',
+  'pre-minimize-viewer-cannot-minimize',
+] as const;
+
+export type SkipReasonCode = (typeof SKIP_REASON_CODES)[number];
+
+/** The thread-freshness causes, each with its own code and reason text. */
+const THREAD_FRESHNESS_SKIPS: Record<
+  Exclude<FreshDispositionCause, 'fresh'>,
+  { code: SkipReasonCode; reason: string }
+> = {
+  'no-disposition': {
+    code: 'thread-no-disposition',
+    reason: 'review thread is missing an IDD accept/reject disposition',
+  },
+  'disposition-edited': {
+    code: 'thread-disposition-edited',
+    reason:
+      "the thread's IDD disposition was edited, or its edit state could not be read",
+  },
+  'disposition-time-unreadable': {
+    code: 'thread-disposition-time-unreadable',
+    reason: "the thread's IDD disposition has no readable time",
+  },
+  'superseded-by-reply': {
+    code: 'thread-superseded-by-reply',
+    reason: "a later reply follows the thread's IDD disposition",
+  },
+  'superseded-by-edit': {
+    code: 'thread-superseded-by-edit',
+    reason: "a thread comment was edited after the thread's IDD disposition",
+  },
+};
 
 /** Author reference embedded in GraphQL payloads. */
 interface GqlAuthorPayload {
@@ -186,6 +256,7 @@ type ReportRow = SubjectInfo & {
   missingDispositionThreads?: number;
   reason?: string;
   skipReason?: string;
+  skipReasonCode?: SkipReasonCode;
   error?: string;
 };
 
@@ -1164,6 +1235,7 @@ export function evaluateOperationalComment(
     addSkipped(
       report,
       subject,
+      'operational-marker-not-recognized',
       'IDD operational comment outside OPERATIONAL_MARKERS (live-status digest or CI-posted bookkeeping marker)',
     );
     return true;
@@ -1172,33 +1244,48 @@ export function evaluateOperationalComment(
   const subject = subjectFromNode(comment, 'IssueComment', 'OUTDATED');
 
   if (!trusted) {
-    addSkipped(report, subject, 'operational marker author is not trusted');
+    addSkipped(
+      report,
+      subject,
+      'operational-marker-untrusted-author',
+      'operational marker author is not trusted',
+    );
     return true;
   }
 
   if (prefix === '<!-- forced-handoff:') {
-    addSkipped(report, subject, 'forced-handoff markers remain audit evidence');
+    addSkipped(
+      report,
+      subject,
+      'forced-handoff-evidence',
+      'forced-handoff markers remain audit evidence',
+    );
     return true;
   }
 
   if (!pr.merged) {
-    addSkipped(report, subject, 'PR is not merged');
+    addSkipped(report, subject, 'pr-not-merged', 'PR is not merged');
     return true;
   }
 
-  const unsafeReason = unsafeTextReason(comment.body);
-  if (unsafeReason) {
-    addSkipped(report, subject, unsafeReason);
+  const unsafe = unsafeTextFinding(comment.body);
+  if (unsafe) {
+    addSkipped(report, subject, unsafe.code, unsafe.reason);
     return true;
   }
 
   if (comment.isMinimized) {
-    addSkipped(report, subject, 'already minimized');
+    addSkipped(report, subject, 'already-minimized', 'already minimized');
     return true;
   }
 
   if (!comment.viewerCanMinimize) {
-    addSkipped(report, subject, 'viewer cannot minimize this comment');
+    addSkipped(
+      report,
+      subject,
+      'viewer-cannot-minimize-comment',
+      'viewer cannot minimize this comment',
+    );
     return true;
   }
 
@@ -1238,23 +1325,28 @@ function evaluateRegularBotComment(
   );
 
   if (!pr.merged) {
-    addSkipped(report, subject, 'PR is not merged');
+    addSkipped(report, subject, 'pr-not-merged', 'PR is not merged');
     return;
   }
 
-  const unsafeReason = unsafeTextReason(comment.body ?? '');
-  if (unsafeReason) {
-    addSkipped(report, subject, unsafeReason);
+  const unsafe = unsafeTextFinding(comment.body ?? '');
+  if (unsafe) {
+    addSkipped(report, subject, unsafe.code, unsafe.reason);
     return;
   }
 
   if (comment.isMinimized) {
-    addSkipped(report, subject, 'already minimized');
+    addSkipped(report, subject, 'already-minimized', 'already minimized');
     return;
   }
 
   if (!comment.viewerCanMinimize) {
-    addSkipped(report, subject, 'viewer cannot minimize this comment');
+    addSkipped(
+      report,
+      subject,
+      'viewer-cannot-minimize-comment',
+      'viewer cannot minimize this comment',
+    );
     return;
   }
 
@@ -1262,6 +1354,7 @@ function evaluateRegularBotComment(
     addSkipped(
       report,
       subject,
+      'review-bot-no-completed-review',
       'known review-bot regular comment lacks a completed-review signal',
     );
     return;
@@ -1274,7 +1367,7 @@ function evaluateRegularBotComment(
   });
 }
 
-function evaluateReviewParent(
+export function evaluateReviewParent(
   review: ReviewNode,
   pr: PullRequestNode,
   threadIndex: Map<string, AssociatedThreadStats>,
@@ -1297,23 +1390,28 @@ function evaluateReviewParent(
   const latestGatingReview = latestGatingReviews.get(author.toLowerCase());
 
   if (!pr.merged) {
-    addSkipped(report, subject, 'PR is not merged');
+    addSkipped(report, subject, 'pr-not-merged', 'PR is not merged');
     return;
   }
 
-  const unsafeReason = unsafeTextReason(review.body ?? '');
-  if (unsafeReason) {
-    addSkipped(report, subject, unsafeReason);
+  const unsafe = unsafeTextFinding(review.body ?? '');
+  if (unsafe) {
+    addSkipped(report, subject, unsafe.code, unsafe.reason);
     return;
   }
 
   if (review.isMinimized) {
-    addSkipped(report, subject, 'already minimized');
+    addSkipped(report, subject, 'already-minimized', 'already minimized');
     return;
   }
 
   if (!review.viewerCanMinimize) {
-    addSkipped(report, subject, 'viewer cannot minimize this review');
+    addSkipped(
+      report,
+      subject,
+      'viewer-cannot-minimize-review',
+      'viewer cannot minimize this review',
+    );
     return;
   }
 
@@ -1324,13 +1422,19 @@ function evaluateReviewParent(
     addSkipped(
       report,
       subject,
+      'review-changes-requested-active',
       'review author still has an active changes-requested state',
     );
     return;
   }
 
   if (associated.total === 0) {
-    addSkipped(report, subject, 'review has no associated review threads');
+    addSkipped(
+      report,
+      subject,
+      'review-no-threads',
+      'review has no associated review threads',
+    );
     return;
   }
 
@@ -1343,6 +1447,7 @@ function evaluateReviewParent(
         unresolvedThreads: associated.unresolved,
         missingDispositionThreads: associated.missingDisposition,
       },
+      'review-threads-truncated',
       'associated review threads have truncated comment data',
     );
     return;
@@ -1357,6 +1462,7 @@ function evaluateReviewParent(
         unresolvedThreads: associated.unresolved,
         missingDispositionThreads: associated.missingDisposition,
       },
+      'review-threads-unresolved',
       'review has unresolved associated review threads',
     );
     return;
@@ -1371,7 +1477,8 @@ function evaluateReviewParent(
         unresolvedThreads: 0,
         missingDispositionThreads: associated.missingDisposition,
       },
-      'associated review threads are missing IDD accept/reject dispositions',
+      'review-threads-no-fresh-disposition',
+      'associated review threads have no fresh IDD accept/reject disposition',
     );
     return;
   }
@@ -1419,23 +1526,28 @@ export function evaluateReviewComment(
   const latestGatingReview = latestGatingReviews.get(author.toLowerCase());
 
   if (!pr.merged) {
-    addSkipped(report, subject, 'PR is not merged');
+    addSkipped(report, subject, 'pr-not-merged', 'PR is not merged');
     return;
   }
 
-  const unsafeReason = unsafeTextReason(comment.body ?? '');
-  if (unsafeReason) {
-    addSkipped(report, subject, unsafeReason);
+  const unsafe = unsafeTextFinding(comment.body ?? '');
+  if (unsafe) {
+    addSkipped(report, subject, unsafe.code, unsafe.reason);
     return;
   }
 
   if (comment.isMinimized) {
-    addSkipped(report, subject, 'already minimized');
+    addSkipped(report, subject, 'already-minimized', 'already minimized');
     return;
   }
 
   if (!comment.viewerCanMinimize) {
-    addSkipped(report, subject, 'viewer cannot minimize this review comment');
+    addSkipped(
+      report,
+      subject,
+      'viewer-cannot-minimize-review-comment',
+      'viewer cannot minimize this review comment',
+    );
     return;
   }
 
@@ -1443,6 +1555,7 @@ export function evaluateReviewComment(
     addSkipped(
       report,
       subject,
+      'review-changes-requested-active',
       'review author still has an active changes-requested state',
     );
     return;
@@ -1452,6 +1565,7 @@ export function evaluateReviewComment(
     addSkipped(
       report,
       { ...subject, threadId: thread.id },
+      'thread-unresolved',
       'review thread is unresolved',
     );
     return;
@@ -1461,31 +1575,35 @@ export function evaluateReviewComment(
     addSkipped(
       report,
       { ...subject, threadId: thread.id },
+      'thread-data-truncated',
       'review thread comment data is truncated',
     );
     return;
   }
 
+  const freshness = explainFreshDisposition(thread, {
+    isDispositionAuthor: makeIddDispositionAuthorPredicate(
+      report.trustedMarkerActors,
+    ),
+    // #3791: indexThreadsByReview already forwards these logins. Without
+    // them an attached userContentEdits history is ignored and the
+    // comment stays dated by updatedAt.
+    advisoryBotLogins: configuredAdvisoryBotLogins(),
+  });
   if (
-    !hasFreshDisposition(thread, {
-      isDispositionAuthor: makeIddDispositionAuthorPredicate(
-        report.trustedMarkerActors,
-      ),
-      // #3791: indexThreadsByReview already forwards these logins. Without
-      // them an attached userContentEdits history is ignored and the
-      // comment stays dated by updatedAt.
-      advisoryBotLogins: configuredAdvisoryBotLogins(),
-    }) &&
+    !freshness.fresh &&
     !classifyThreadAckOnlyPostDisposition(thread, {
       iddAgentLogins: report.trustedMarkerActors,
       advisoryBotLogins: configuredAdvisoryBotLogins(),
       prAuthorLogin: pr.author?.login,
     }).ackOnlyPostDisposition
   ) {
+    const skip = THREAD_FRESHNESS_SKIPS[freshness.cause];
     addSkipped(
       report,
       { ...subject, threadId: thread.id },
-      'review thread is missing an IDD accept/reject disposition',
+      skip.code,
+      skip.reason,
     );
     return;
   }
@@ -1518,10 +1636,12 @@ function subjectFromNode(
 function addSkipped(
   report: CleanupAuditReport,
   subject: ReportRow,
+  code: SkipReasonCode,
   reason: string,
 ): void {
   report.skipped.push({
     ...subject,
+    skipReasonCode: code,
     skipReason: reason,
   });
 }
@@ -2056,6 +2176,7 @@ async function revalidateCandidate(
     addSkipped(
       report,
       candidate,
+      'pre-minimize-subject-missing',
       'pre-minimize revalidation failed: subject no longer exists',
     );
     return null;
@@ -2081,6 +2202,7 @@ async function revalidateCandidate(
     addSkipped(
       report,
       { ...candidate, ...freshFields },
+      'pre-minimize-already-minimized',
       'pre-minimize revalidation failed: candidate is already minimized (likely cascade-minimized with a parent)',
     );
     return null;
@@ -2090,6 +2212,7 @@ async function revalidateCandidate(
     addSkipped(
       report,
       { ...candidate, ...freshFields },
+      'pre-minimize-viewer-cannot-minimize',
       'pre-minimize revalidation failed: viewer cannot minimize this comment',
     );
     return null;

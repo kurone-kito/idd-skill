@@ -440,7 +440,7 @@ test('resolveViewerLoginSafe reports unavailable on a blank-but-successful respo
 // optional chain here, so both are covered.
 // ---------------------------------------------------------------------------
 
-test('getWorkItemClosingPullRequestsPage returns a normal page', () => {
+test('getWorkItemClosingPullRequestsPage returns a normal page with number and repository (#3871)', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',
     'idd-skill',
@@ -451,7 +451,13 @@ test('getWorkItemClosingPullRequestsPage returns a normal page', () => {
             repository: {
               issue: {
                 closedByPullRequestsReferences: {
-                  nodes: [{ state: 'OPEN' }],
+                  nodes: [
+                    {
+                      state: 'OPEN',
+                      number: 3875,
+                      repository: { nameWithOwner: 'kurone-kito/idd-skill' },
+                    },
+                  ],
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
               },
@@ -461,10 +467,193 @@ test('getWorkItemClosingPullRequestsPage returns a normal page', () => {
     }),
   );
   assert.deepEqual(port.getWorkItemClosingPullRequestsPage(1048, null), {
-    nodes: [{ state: 'OPEN' }],
+    nodes: [
+      {
+        state: 'OPEN',
+        number: 3875,
+        repository: 'kurone-kito/idd-skill',
+      },
+    ],
     hasNextPage: false,
     endCursor: null,
   });
+});
+
+test('getWorkItemClosingPullRequestsPage leaves a missing number or repository undefined (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: 'OPEN', number: 'x', repository: null }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const [node] = port.getWorkItemClosingPullRequestsPage(1048, null).nodes;
+  assert.equal(node?.number, undefined);
+  assert.equal(node?.repository, undefined);
+});
+
+test('getWorkItemClosingPullRequestsPage throws on a node without a string state (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: null, number: 1, repository: null }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(1048, null),
+    /without a known PullRequest state/,
+  );
+});
+
+test('getWorkItemClosingPullRequestsPage throws on an unknown PullRequest state (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: 'UNKNOWN', number: 1, repository: null }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(1048, null),
+    /without a known PullRequest state/,
+  );
+});
+
+test('getWorkItemClosingPullRequestsPage turns a non-string cursor into null (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: 'OPEN', number: 1, repository: null }],
+                  pageInfo: { hasNextPage: true, endCursor: 7 },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  const page = port.getWorkItemClosingPullRequestsPage(1048, null);
+  assert.equal(page.endCursor, null);
+  assert.equal(page.hasNextPage, true);
+});
+
+test('getWorkItemClosingPullRequestsPage throws on a GraphQL errors entry (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+          errors: [{ message: 'rate limited' }],
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(1048, null),
+    /rate limited|getWorkItemClosingPullRequestsPage/,
+  );
+});
+
+test('getWorkItemClosingPullRequestsPage throws on a connection without nodes or pageInfo (#3871)', () => {
+  const withoutNodes = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => withoutNodes.getWorkItemClosingPullRequestsPage(1048, null),
+    /malformed/,
+  );
+  const nonBooleanHasNext = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: 'no' },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => nonBooleanHasNext.getWorkItemClosingPullRequestsPage(1048, null),
+    /malformed/,
+  );
 });
 
 test('getWorkItemClosingPullRequestsPage throws when the issue node is null/absent', () => {

@@ -368,6 +368,43 @@ function replaceFixturePatternEverywhere(
   return { path, contents: original.replace(pattern, replacement) };
 }
 
+/**
+ * #3860: moves the removal proof's comment out of the pending-only removal
+ * branch, to the line after its closing `fi`, where it guards nothing.
+ */
+function moveRemovalProofOutsidePendingBranch(
+  documents: RepositoryPolicyDocuments,
+): RuleViolationMutation {
+  const path = 'idd-template/docs/idd-advisory-wait-shell-fallback.md';
+  const original = documents.get(path);
+  assert.ok(original, `${path} must be covered by the positive fixture`);
+  const phrase = '# Removal proof (#3860)';
+  const phraseAt = original.indexOf(phrase);
+  assert.notEqual(phraseAt, -1, `${path} must carry the removal proof`);
+  const renamed =
+    original.slice(0, phraseAt) +
+    '# Removal check (#3860)' +
+    original.slice(phraseAt + phrase.length);
+  const pendingBranchStart = renamed.indexOf(
+    'if [ "$AW3S_ENTRY" = "pending" ]; then',
+  );
+  const pendingBranchEnd = renamed.indexOf(
+    '\nfi\n\n# Step 3',
+    pendingBranchStart,
+  );
+  assert.notEqual(
+    pendingBranchEnd,
+    -1,
+    `${path} must close the pending-only removal branch`,
+  );
+  const insertAt = pendingBranchEnd + '\nfi'.length;
+  return {
+    path,
+    contents:
+      renamed.slice(0, insertAt) + '\n' + phrase + renamed.slice(insertAt),
+  };
+}
+
 function moveAw3sEntryValidationAfterPendingRemoval(
   documents: RepositoryPolicyDocuments,
 ): RuleViolationMutation {
@@ -913,6 +950,18 @@ test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) 
     `advisory-fallback-order did not report its relative path:\n${String(orderResult.stderr)}`,
   );
   writeFileSync(join(fixtureRoot, orderMutation.path), orderOriginal);
+
+  const proofMutation = moveRemovalProofOutsidePendingBranch(initialContents);
+  const proofSnapshot = new Map(initialContents);
+  proofSnapshot.set(proofMutation.path, proofMutation.contents);
+  assert.ok(
+    collectRepositoryPolicyViolationsFromDocuments(proofSnapshot).some(
+      (violation) =>
+        violation.ruleId === 'advisory-fallback-order' &&
+        violation.path === proofMutation.path,
+    ),
+    'advisory-fallback-order must reject a removal proof outside the pending branch',
+  );
 
   for (const [path, contents] of initialContents) {
     assert.equal(

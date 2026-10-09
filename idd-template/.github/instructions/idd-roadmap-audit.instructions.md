@@ -13,7 +13,7 @@ path.
 # source repo / vendored-node
 node scripts/idd-roadmap-audit-execute.mjs --roadmap <number>
 
-# package-manager / ephemeral-npx
+# package-manager / ephemeral-npx / user-global
 <profile-selected-roadmap-audit-execute-command> --roadmap <number>
 ```
 
@@ -40,7 +40,7 @@ repository already states for its own helper:
 node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> \
   --claim-id <claim-id> --agent-id <agent-id> --apply
 
-# package-manager / ephemeral-npx
+# package-manager / ephemeral-npx / user-global
 <profile-selected-roadmap-audit-execute-command> --roadmap <number> \
   --claim-id <claim-id> --agent-id <agent-id> --apply
 ```

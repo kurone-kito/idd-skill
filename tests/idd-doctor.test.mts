@@ -76,6 +76,7 @@ import {
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   resolveAutopilotSuitabilityPolicy,
+  resolveCleanupBacklogLauncher,
   resolveConfiguredHelperRuntimePackageSpec,
   resolveConfiguredHelperRuntimeProfile,
   resolveTargetGhHostname,
@@ -2595,6 +2596,24 @@ test('resolveConfiguredHelperRuntimePackageSpec reads a configured pin, defaults
   }
 });
 
+test('resolveConfiguredHelperRuntimeProfile accepts a configured launcher without falling back (idd-skill#3830)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-helper-launcher-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        helperRuntime: { profile: 'ephemeral-npx', launcher: 'pnpm-dlx' },
+      }),
+    );
+    // An unsupported key would make the resolver fall back to
+    // instructions-only; a supported launcher keeps the profile.
+    assert.equal(resolveConfiguredHelperRuntimeProfile(dir), 'ephemeral-npx');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('resolveConfiguredHelperRuntimePackageSpec also reads the legacy idd-policy.json path', () => {
   const dir = mkdtempSync(
     join(tmpdir(), 'idd-doctor-helper-package-spec-legacy-'),
@@ -2637,6 +2656,80 @@ test('formatCleanupBacklogRemediation uses a configured packageSpec under epheme
   );
 });
 
+test('formatCleanupBacklogRemediation names pnpm dlx only for the pnpm-dlx launcher (idd-skill#3830)', () => {
+  assert.equal(
+    formatCleanupBacklogRemediation(
+      'ephemeral-npx',
+      'https://example.com/pinned-idd-skill.tgz',
+      'pnpm-dlx',
+    ),
+    'Remediation: see docs/idd-comment-minimization.md or run `pnpm dlx --package https://example.com/pinned-idd-skill.tgz idd-audit-pr-cleanup --pr <N> --apply --skip-claim-check`.',
+  );
+
+  // The launcher only changes the ephemeral-npx command; every other profile
+  // keeps the text it had before the launcher existed.
+  assert.equal(
+    formatCleanupBacklogRemediation('package-manager', '', 'pnpm-dlx'),
+    formatCleanupBacklogRemediation('package-manager'),
+  );
+});
+
+test('resolveCleanupBacklogLauncher probes pnpm only for auto under ephemeral-npx (idd-skill#3830)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-cleanup-launcher-'));
+  let probeCalls = 0;
+  const probeReporting = (output: string) => () => {
+    probeCalls += 1;
+    return output;
+  };
+  const probeFailing = () => {
+    probeCalls += 1;
+    throw new Error('spawn pnpm ENOENT');
+  };
+  const writeConfig = (helperRuntime: Record<string, unknown>) => {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ helperRuntime }),
+    );
+  };
+  try {
+    writeConfig({ profile: 'ephemeral-npx', launcher: 'auto' });
+    assert.equal(
+      resolveCleanupBacklogLauncher(dir, { probe: probeReporting('10.2.0\n') }),
+      'pnpm-dlx',
+    );
+    assert.equal(
+      resolveCleanupBacklogLauncher(dir, { probe: probeReporting('9.15.4\n') }),
+      'npx',
+    );
+    assert.equal(
+      resolveCleanupBacklogLauncher(dir, { probe: probeFailing }),
+      'npx',
+    );
+    assert.equal(probeCalls, 3, 'auto under ephemeral-npx probes each time');
+
+    writeConfig({ profile: 'ephemeral-npx', launcher: 'pnpm-dlx' });
+    assert.equal(
+      resolveCleanupBacklogLauncher(dir, { probe: probeFailing }),
+      'pnpm-dlx',
+    );
+
+    writeConfig({ profile: 'package-manager', launcher: 'auto' });
+    assert.equal(
+      resolveCleanupBacklogLauncher(dir, { probe: probeFailing }),
+      'npx',
+    );
+
+    writeConfig({ profile: 'ephemeral-npx' });
+    assert.equal(
+      resolveCleanupBacklogLauncher(dir, { probe: probeFailing }),
+      'npx',
+    );
+    assert.equal(probeCalls, 3, 'only auto under ephemeral-npx may probe pnpm');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 test('readCleanupEvidenceTrustedLogins includes configured trustedMarkerActors plus github-actions[bot], excludes untrusted logins (idd-skill#1691, PR#1759)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-cleanup-evidence-trust-'));
   try {

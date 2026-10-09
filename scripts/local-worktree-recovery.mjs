@@ -293,10 +293,41 @@ function readDirectoryIdentity(path) {
   if (!stat.isDirectory()) {
     throw new Error(`not a directory: ${path}`);
   }
-  return { dev: stat.dev.toString(), ino: stat.ino.toString() };
+  return {
+    dev: stat.dev.toString(),
+    ino: stat.ino.toString(),
+    birthtimeNs: stat.birthtimeNs.toString(),
+    ctimeNs: stat.ctimeNs.toString(),
+  };
 }
+/** A read carries a birth time when it reports a non-zero one and a change
+ * time. `0`, `null`, and an absent field all mean no birth time. */
+function carriesBirthTime(identity) {
+  const birth = identity.birthtimeNs;
+  return (
+    birth !== undefined &&
+    birth !== null &&
+    birth !== '0' &&
+    identity.ctimeNs !== undefined &&
+    identity.ctimeNs !== null
+  );
+}
+/** A pair of reads has a usable birth time when both reads carry one and at
+ * least one read's birth time differs from that same read's change time. */
+function hasUsableBirthTime(left, right) {
+  return (
+    carriesBirthTime(left) &&
+    carriesBirthTime(right) &&
+    (left.birthtimeNs !== left.ctimeNs || right.birthtimeNs !== right.ctimeNs)
+  );
+}
+/** Device and inode must match. When the pair has a usable birth time, the
+ * birth times must match too, which catches a replacement that reused the
+ * inode number. Otherwise the comparison stays `dev` and `ino` alone. */
 function sameDirectoryIdentity(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
+  if (left.dev !== right.dev || left.ino !== right.ino) return false;
+  if (!hasUsableBirthTime(left, right)) return true;
+  return left.birthtimeNs === right.birthtimeNs;
 }
 function resolveTargetWorktreeIdentity(targetPath, deps) {
   const gitDir = deps.runGit(['rev-parse', '--absolute-git-dir'], targetPath);
@@ -3998,8 +4029,9 @@ export function runLocalWorktreeRecovery(args, deps) {
   // and recreate the same worktree path while this invocation is preserving
   // the original checkout; matching routing/claim state after the wait is
   // not enough to prove that the cached preservation plan belongs to the
-  // checkout that will be removed. Device/inode identity closes that
-  // replacement-worktree window, mirroring claim-lock's acquisition guard.
+  // checkout that will be removed. Device/inode identity, plus the birth time
+  // where the reads carry one, closes that replacement-worktree window,
+  // mirroring claim-lock's acquisition guard.
   let initialTargetIdentity = null;
   if (
     args.apply &&

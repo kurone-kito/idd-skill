@@ -29,7 +29,11 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadIddConfig } from './idd-config.mts';
+import {
+  evaluateForcedHandoffPreflight,
+  type ForcedHandoffPreflightDeps,
+  loadIddConfig,
+} from './idd-config.mts';
 import { renderUnclaimedByMarker } from './marker-helpers.mts';
 import {
   parsePaginatedGhNdjson,
@@ -54,10 +58,14 @@ interface IssueCommentPayload {
   lastEditedAt?: string | null;
 }
 
-/** Linked-PR row returned by `gh pr list --json number,headRefName`. */
+/**
+ * Linked-PR row returned by `gh pr list --json number,headRefName,baseRefName`.
+ * `baseRefName` decides which trusted copy the preflight reads (#3872).
+ */
 interface LinkedPrPayload {
   number?: number | string | null;
   headRefName?: string | null;
+  baseRefName?: string | null;
 }
 
 /** Posted-comment payload fields consumed by this helper. */
@@ -86,6 +94,13 @@ interface RunHandoffOptions {
     body: string,
   ) => Promise<PostedCommentPayload> | PostedCommentPayload;
   mode?: string;
+  /**
+   * Reads behind the successor preflight: the trusted copies Resume and F2
+   * would read must confirm `human-gated` before the operator is asked to
+   * confirm (#3872). Defaults hit GitHub; tests inject fakes so they stay
+   * hermetic. The `release` keyword path does not run it.
+   */
+  preflight?: ForcedHandoffPreflightDeps;
   /**
    * Drops the cached Discover hints after a handoff comment posts (#3588).
    * Defaults to the real best-effort invalidation; tests inject a no-op or a
@@ -138,6 +153,7 @@ export async function runHandoff(
     postComment,
     invalidateHints = invalidateDiscoverHints,
     mode,
+    preflight,
     write = (chunk: string) => {
       process.stdout.write(chunk);
     },
@@ -257,7 +273,7 @@ export async function runHandoff(
           '--state',
           'open',
           '--json',
-          'number,headRefName',
+          'number,headRefName,baseRefName',
         ]) as LinkedPrPayload[]);
 
     let planOptions: ForceHandoffPlanOptions = resolveOpts;
@@ -355,6 +371,21 @@ export async function runHandoff(
       throw new Error(
         'cannot generate forced-handoff marker: check that forced-handoff mode is human-gated and the actor is authorized',
       );
+    }
+
+    // #3872: refuse before the operator confirms. The successor would stop at
+    // Resume or F2 unless the trusted copies those gates read for the PR the
+    // operator named confirm the opt-in. An unrelated open PR on the branch
+    // does not block it.
+    const preflightResult = evaluateForcedHandoffPreflight({
+      owner,
+      repo: name,
+      claimBranch: plan.branch,
+      openPrs: linkedPrs.filter((pr) => Number(pr.number) === resolvedPrNumber),
+      deps: preflight,
+    });
+    if (!preflightResult.ok) {
+      throw new Error(preflightResult.refusal ?? 'forced handoff refused');
     }
 
     const { newAgentId, newClaimId } = plan.successorIds;

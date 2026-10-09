@@ -63,6 +63,7 @@ import {
   GH_SEARCH_RESULT_CAP,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import { CLOSING_KEYWORD_ALTERNATION } from './supersession-detection.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // GitHub's search API returns at most 1000 results for a single query
@@ -89,8 +90,13 @@ const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
 // cross the hyphen boundary — GitHub itself does not recognize a compound
 // hyphenated word as a closing keyword, so this also matches real close
 // semantics, not just this repo's own heuristic.
-const KEYWORD_REFERENCE_REGEX =
-  /(?<!-)\b(Closes|Close|Closed|Fixes|Fixed|Fix|Resolves|Resolved|Resolve|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
+// The nine closing words come from the shared alternation (#3877) so the graph
+// cannot drift from the PR-side consumers; the colon is not part of the graph
+// grammar, which strips a leading colon itself.
+const KEYWORD_REFERENCE_REGEX = new RegExp(
+  `(?<!-)\\b((?:${CLOSING_KEYWORD_ALTERNATION})|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\\b`,
+  'giu',
+);
 // #1964: a recognized closing/dependency/sub-issue keyword sitting next to a
 // `#N` reference inside a negation clause (e.g. issue 1931's own merged
 // body — a field-report narrative about an unrelated already-closed
@@ -996,7 +1002,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
  * roadmap root" failures {@link enumerateRoadmapGraph} throws for
  * `rootNumber` itself (not found / inaccessible / is a pull request) — the
  * only cases a configured `discover.legacyRoots` entry (#1315) or a
- * race-closed label/marker root can legitimately hit. Matched by exact
+ * race-closed marker root can legitimately hit. Matched by exact
  * message text against this specific root number so an unrelated error
  * that happens to share wording never matches by accident.
  *
@@ -1108,7 +1114,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
     } catch (error) {
       // #1315: a configured `discover.legacyRoots` entry is static,
       // human-entered config that can go stale (typo, deleted or
-      // transferred issue) far more easily than a label/marker root, which
+      // transferred issue) far more easily than a marker root, which
       // a live search just confirmed exists moments earlier. Skip the
       // unusable root with a NON-FATAL warning (mirrors
       // warnOnSearchResultCap's degraded-but-not-fatal precedent) instead
@@ -3285,7 +3291,7 @@ export function buildOpenRoadmapRootsLoader(
 /**
  * GitHub's search API caps a single query at 1000 results
  * ({@link GH_SEARCH_RESULT_CAP}). When a root search returns the full cap it
- * may have been truncated, so a repo with >= 1000 label or marker-token hits
+ * may have been truncated, so a repo with >= 1000 marker-token hits
  * could silently yield an incomplete root set.
  *
  * This is NON-FATAL: the body-marker search can legitimately match many prose

@@ -43,7 +43,8 @@
 // instead of forking its logic, the #1208 shared-module convention
 // `check-pnpm-boundary.mts` already uses), a package-pin advisory
 // (#2987: warns, but never blocks, when the target's effective
-// `helperRuntime.profile` is `ephemeral-npx`/`package-manager` with no
+// `helperRuntime.profile` is `ephemeral-npx`/`package-manager`/`user-global`
+// with no
 // `helperRuntime.packageSpec` configured, so helper commands silently
 // resolve against the mutable default archive URL instead of an audited
 // pin), and a held-schema drift advisory (#3215: warns, but never
@@ -1888,8 +1889,8 @@ export function checkStaleImportSignal(targetRoot) {
 // ---------------------------------------------------------------------------
 /**
  * `helperRuntime.profile` values whose helper commands resolve a package
- * spec (`npx --yes --package <spec> idd-*`, or the equivalent
- * `package.json` dependency pin) -- the two profiles
+ * spec (`npx --yes --package <spec> idd-*`, the equivalent `package.json`
+ * dependency pin, or the operator-level global install) -- the profiles
  * `helperRuntime.packageSpec` actually affects. `instructions-only` never
  * runs a helper command, and `vendored-node` copies helper files into the
  * repository instead of resolving them from a package spec, so a missing
@@ -1898,6 +1899,7 @@ export function checkStaleImportSignal(targetRoot) {
 const PACKAGE_SPEC_APPLICABLE_PROFILES = new Set([
   'ephemeral-npx',
   'package-manager',
+  'user-global',
 ]);
 /**
  * Check whether the target's effective helper runtime profile can silently
@@ -1970,7 +1972,9 @@ export function checkPackagePinWarning(targetRoot) {
     applicable && !packageSpecConfigured
       ? profile === 'ephemeral-npx'
         ? `helper commands for the "ephemeral-npx" helper runtime profile resolve against the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
-        : `the "package-manager" helper runtime profile installs its helper dependency from the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
+        : profile === 'user-global'
+          ? `the "user-global" helper runtime profile installs its helper bins for the operator from the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
+          : `the "package-manager" helper runtime profile installs its helper dependency from the mutable default archive URL because helperRuntime.packageSpec is not configured; see docs/onboarding/policy-decisions.md#helper-runtime-profile for pinning guidance.`
       : null;
   return { profile, applicable, packageSpecConfigured, warning };
 }
@@ -6742,7 +6746,7 @@ blocking; not applicable, and spawns nothing, for any other profile),
 staleImportSignal (idd-doctor's content-based stale-import detector re-run
 against the target's imported files — informational only, never blocking),
 packagePinWarning (advisory only, never blocking: flags an
-ephemeral-npx/package-manager helperRuntime.profile with no configured
+ephemeral-npx/package-manager/user-global helperRuntime.profile with no configured
 helperRuntime.packageSpec, so helper commands silently resolve against the
 mutable default archive URL instead of an audited pin), and
 heldSchemaDrift (advisory only, never blocking: for each schema
