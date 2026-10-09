@@ -432,6 +432,9 @@
         "profile": {
           "$ref": "policy.schema.json#/properties/helperRuntime/properties/profile"
         },
+        "launcher": {
+          "$ref": "policy.schema.json#/properties/helperRuntime/properties/launcher"
+        },
         "packageSpec": {
           "$ref": "policy.schema.json#/properties/helperRuntime/properties/packageSpec"
         }
