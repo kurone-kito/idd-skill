@@ -152,7 +152,12 @@ case "$*" in
   "pr edit "*) exit "\${STUB_PR_EDIT_EXIT:-0}" ;;
   "api graphql"*)
     case "$*" in
-      *reviewRequests*) cat "$STUB_PROOF" ;;
+      *reviewRequests*)
+        if [ "$(grep -c reviewRequests "$GH_CALLS")" -le 1 ]; then
+          cat "$STUB_PROOF_BEFORE"
+        else
+          cat "$STUB_PROOF"
+        fi ;;
       *reviewThreads*) answer "$STUB_THREADS" ;;
       *"comments(first"*) answer "$STUB_EDIT" ;;
       *) echo "stub: unrecognised graphql query" >&2; exit 1 ;;
@@ -174,6 +179,7 @@ interface Fixtures {
   reviews?: unknown;
   reviewComments?: unknown;
   proof?: string;
+  proofBefore?: string;
   restFail?: boolean;
   prEditExit?: number;
 }
@@ -222,11 +228,12 @@ function makeSandbox(fixtures: Fixtures): string {
     ],
   );
   write('review-comments.json', fixtures.reviewComments ?? []);
-  write(
-    'proof.json',
+  const proof =
     fixtures.proof ??
-      '{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}',
-  );
+    '{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}';
+  write('proof.json', proof);
+  // The first removal read is the baseline; it defaults to the same evidence.
+  write('proof-before.json', fixtures.proofBefore ?? proof);
   write('head.txt', HEAD_SHA);
   write('pr-edit-exit.txt', String(fixtures.prEditExit ?? 0));
   write('rest-fail.txt', fixtures.restFail ? '1' : '0');
@@ -301,6 +308,7 @@ function runScript(
         STUB_REVIEWS: join(root, 'reviews.json'),
         STUB_REVIEW_COMMENTS: join(root, 'review-comments.json'),
         STUB_PROOF: join(root, 'proof.json'),
+        STUB_PROOF_BEFORE: join(root, 'proof-before.json'),
         STUB_PR_EDIT_EXIT: readFileSync(
           join(root, 'pr-edit-exit.txt'),
           'utf8',
@@ -501,13 +509,77 @@ test('AW3-S requests again only after the removal proof shows the bot gone (#386
   assert.equal(run.registrationCalls, 1);
 });
 
+const listedBot = (login: string, extra = ''): string =>
+  `{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Bot","login":"${login}"}}]},"timelineItems":{"nodes":[${extra}]}}}}}`;
+const removedEvent = (id: string, login: string): string =>
+  `{"id":"${id}","createdAt":"2999-01-01T00:00:00Z","requestedReviewer":{"__typename":"Bot","login":"${login}"}}`;
+
 test('AW3-S stops on an unreadable removal proof (#3860)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const run = runAw3s({ prEditExit: 0, proof: 'not json' });
+  const run = runAw3s({
+    prEditExit: 0,
+    proofBefore: PROOF_BOT_GONE,
+    proof: 'not json',
+  });
   assert.equal(run.status, 2, run.stderr);
   assert.equal(run.registrationCalls, 0);
   assert.match(run.stderr, /removal proof unreadable; route to AW4/);
+});
+
+test('AW3-S stops on an unreadable baseline before it removes anything (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw3s({ prEditExit: 0, proofBefore: 'not json' });
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.prEdits, 0);
+  assert.equal(run.registrationCalls, 0);
+  assert.match(run.stderr, /removal baseline unreadable; route to AW4/);
+});
+
+test('AW3-S ignores a removal event that existed before the attempt (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const existing = listedBot(BOT_LOGIN, removedEvent('E1', BOT_LOGIN));
+  const run = runAw3s({
+    prEditExit: 0,
+    proofBefore: existing,
+    proof: existing,
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.registrationCalls, 0);
+  assert.match(
+    run.stderr,
+    /removal not proven: bot still requested; route to AW4/,
+  );
+});
+
+test('AW3-S accepts a removal event that is new since the baseline (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const before = listedBot(BOT_LOGIN, removedEvent('E1', BOT_LOGIN));
+  const after = listedBot(
+    BOT_LOGIN,
+    `${removedEvent('E1', BOT_LOGIN)},${removedEvent('E2', BOT_LOGIN)}`,
+  );
+  const run = runAw3s({ prEditExit: 0, proofBefore: before, proof: after });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.registrationCalls, 1);
+});
+
+test('AW3-S reads the [bot] spelling of the primary Copilot login as the same bot (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw3s({
+    prEditExit: 0,
+    proof: listedBot(`${BOT_LOGIN}[bot]`),
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.registrationCalls, 0);
+  assert.match(
+    run.stderr,
+    /removal not proven: bot still requested; route to AW4/,
+  );
 });
 
 test('AW3-S stops when the proof still lists the bot and shows no removal event (#3860)', {
@@ -757,4 +829,55 @@ test('F2 clears a regular comment answered by an unedited disposition (#3860)', 
   });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.missingRegularComments, 0);
+});
+
+test('F2 stops when the regular-comment read fails (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2({
+    threads: threadsResponse([
+      thread([
+        finding(`${BOT_LOGIN}[bot]`, F2_FINDING_TIME),
+        disposition(F2_DISPOSITION_TIME, null),
+      ]),
+    ]),
+    edit: f2Edit([]),
+    restFail: true,
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(
+    run.stderr,
+    /F2 regular-comment read failed; not converged \(#3860\)/,
+  );
+});
+
+test('F2 stops when the regular-comment read is empty (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2({
+    threads: threadsResponse([
+      thread([
+        finding(`${BOT_LOGIN}[bot]`, F2_FINDING_TIME),
+        disposition(F2_DISPOSITION_TIME, null),
+      ]),
+    ]),
+    edit: f2Edit([]),
+    rest: '',
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(
+    run.stderr,
+    /F2 regular-comment read empty; not converged \(#3860\)/,
+  );
+});
+
+test('F2 counts a bare Copilot thread author as the Copilot reviewer (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2({
+    threads: threadsResponse([thread([finding('Copilot', F2_FINDING_TIME)])]),
+    edit: f2Edit([]),
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.conjuncts, ['true', 'true', 'false']);
 });

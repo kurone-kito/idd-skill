@@ -533,6 +533,38 @@ revalidate_head() {
   }
 }
 
+# One read of the removal evidence (#3860 review): reviewRequests plus the
+# review_request_removed events, each event with its id, so the baseline and
+# the proof compare event ids. The JSON goes to REMOVAL_SNAPSHOT_JSON; a failed
+# read or an unexpected shape returns non-zero.
+read_removal_snapshot() {
+  REMOVAL_SNAPSHOT_JSON=$(
+    gh api graphql -f query='
+      query($owner:String!, $repo:String!, $number:Int!) {
+        repository(owner:$owner, name:$repo) {
+          pullRequest(number:$number) {
+            reviewRequests(first:100) {
+              nodes { requestedReviewer { __typename ... on Bot { login } ... on User { login } } }
+            }
+            timelineItems(last:50, itemTypes:[REVIEW_REQUEST_REMOVED_EVENT]) {
+              nodes {
+                ... on ReviewRequestRemovedEvent {
+                  id
+                  createdAt
+                  requestedReviewer { __typename ... on Bot { login } ... on User { login } }
+                }
+              }
+            }
+          }
+        }
+      }' -F owner="{owner}" -F repo="{repo}" -F number={pr-number}
+  ) || return 2
+  printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -e '
+    .data.repository.pullRequest
+    | (.reviewRequests.nodes | type == "array") and (.timelineItems.nodes | type == "array")
+  ' > /dev/null || return 2
+}
+
 # Resolve and validate the entry before any destructive mutation. A
 # non-pending entry starts at Step 3 and must not remove a request that may
 # have become visible during propagation (#2327, #3507).
@@ -560,6 +592,16 @@ esac
 # start at Step 3 instead.
 if [ "$AW3S_ENTRY" = "pending" ]; then
   revalidate_head || exit 2
+  # Baseline (#3860 review): the removal events that exist before this attempt.
+  # A second-precision timestamp cannot tell an older event from one this
+  # removal creates, so only an event id absent from this list counts.
+  read_removal_snapshot || {
+    echo "AW3-S removal baseline unreadable; route to AW4" >&2
+    exit 2
+  }
+  REMOVED_IDS_BEFORE=$(printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -c '
+    [.data.repository.pullRequest.timelineItems.nodes[].id | select(. != null)]
+  ') || exit 2
   REMOVE_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   # Bounded retry (#3503, #3860): a failed removal is retried alone, three
   # attempts in all, before any AW4 hold. A 422 "Could not resolve to a User
@@ -584,47 +626,40 @@ if [ "$AW3S_ENTRY" = "pending" ]; then
   # Removal proof (#3860): the bot must be gone from reviewRequests, or a
   # review_request_removed event for it must follow REMOVE_STARTED_AT. A
   # proof that cannot be read, or that shows the bot still requested with no
-  # such event, stops here, before the request step.
-  REMOVAL_PROOF_JSON=$(
-    gh api graphql -f query='
-      query($owner:String!, $repo:String!, $number:Int!) {
-        repository(owner:$owner, name:$repo) {
-          pullRequest(number:$number) {
-            reviewRequests(first:100) {
-              nodes { requestedReviewer { __typename ... on Bot { login } ... on User { login } } }
-            }
-            timelineItems(last:50, itemTypes:[REVIEW_REQUEST_REMOVED_EVENT]) {
-              nodes {
-                ... on ReviewRequestRemovedEvent {
-                  createdAt
-                  requestedReviewer { __typename ... on Bot { login } ... on User { login } }
-                }
-              }
-            }
-          }
-        }
-      }' -F owner="{owner}" -F repo="{repo}" -F number={pr-number}
-  ) || {
+  # such event, stops here, before the request step. Logins follow the runtime
+  # identity contract: the three default Copilot logins are one identity, and a
+  # bare login equals its [bot] form. Only an event id absent from the baseline
+  # counts, since a second-precision timestamp cannot separate the two.
+  read_removal_snapshot || {
     echo "AW3-S removal proof unreadable; route to AW4" >&2
     exit 2
   }
-  printf '%s' "$REMOVAL_PROOF_JSON" | jq -e '
-    .data.repository.pullRequest
-    | (.reviewRequests.nodes | type == "array") and (.timelineItems.nodes | type == "array")
-  ' > /dev/null || {
-    echo "AW3-S removal proof unreadable; route to AW4" >&2
-    exit 2
-  }
-  BOT_STILL_REQUESTED=$(printf '%s' "$REMOVAL_PROOF_JSON" | jq -r --arg bot "{primary-advisory-bot-login}" '
-    ($bot | ascii_downcase) as $b
+  BOT_STILL_REQUESTED=$(printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -r --arg bot "{primary-advisory-bot-login}" '
+    def canon($l):
+      ($l | ascii_downcase) as $n
+      | if ($n == "copilot" or $n == "copilot-pull-request-reviewer"
+            or $n == "copilot-pull-request-reviewer[bot]") then "copilot"
+        elif ($n | endswith("[bot]")) then $n[0:($n | length) - 5]
+        else $n end;
+    canon($bot) as $b
     | [.data.repository.pullRequest.reviewRequests.nodes[]
-        | (.requestedReviewer.login? // "") | ascii_downcase]
+        | (.requestedReviewer.login? // "") | select(. != "") | canon(.)]
     | index($b) != null
   ') || exit 2
-  BOT_REMOVED_SINCE=$(printf '%s' "$REMOVAL_PROOF_JSON" | jq -r --arg bot "{primary-advisory-bot-login}" --arg since "$REMOVE_STARTED_AT" '
-    ($bot | ascii_downcase) as $b
+  BOT_REMOVED_SINCE=$(printf '%s' "$REMOVAL_SNAPSHOT_JSON" | jq -r \
+    --arg bot "{primary-advisory-bot-login}" --arg since "$REMOVE_STARTED_AT" \
+    --argjson before "$REMOVED_IDS_BEFORE" '
+    def canon($l):
+      ($l | ascii_downcase) as $n
+      | if ($n == "copilot" or $n == "copilot-pull-request-reviewer"
+            or $n == "copilot-pull-request-reviewer[bot]") then "copilot"
+        elif ($n | endswith("[bot]")) then $n[0:($n | length) - 5]
+        else $n end;
+    canon($bot) as $b
     | [.data.repository.pullRequest.timelineItems.nodes[]
-        | select(((.requestedReviewer.login? // "") | ascii_downcase) == $b)
+        | select((.requestedReviewer.login? // "") != "")
+        | select(canon(.requestedReviewer.login) == $b)
+        | select((.id as $id | $before | index($id)) == null)
         | select(.createdAt >= $since)]
     | length > 0
   ') || exit 2
@@ -838,9 +873,9 @@ CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" --
     | .comments.nodes | any(is_disp and ($fb == null or .createdAt > $fb));
   add
   | map(select(
-      ((.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
-        or (.comments.nodes[0].author.login
-            == "copilot-pull-request-reviewer[bot]"))
+      (((.comments.nodes[0].author.login // "") | ascii_downcase) as $a
+        | ["copilot", "copilot-pull-request-reviewer", "copilot-pull-request-reviewer[bot]"]
+        | index($a) != null)
       and (.comments.nodes | any((.commit.oid // "") == $sha))
     ))
   | all((.comments.pageInfo.hasNextPage | not)
@@ -851,10 +886,17 @@ CONVERGED=$([ "${CONJUNCT1}" = true ] && [ "${CONJUNCT2}" = true ] && [ "${CONJU
 
 # dispositionEvidence: later **Accepted** / **Rejected** markers, 1:1
 # by count (E6). Non-agent regular comments and every review thread.
-COMMENTS_JSON=$(
-  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
-    | jq -s 'add // []'
-)
+# A failed or empty REST read stops here (#3860 review): `jq -s` over no input
+# yields [], which would read as "no regular comments" and let F2 converge.
+COMMENTS_RAW=$(gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate) || {
+  echo "F2 regular-comment read failed; not converged (#3860)" >&2
+  exit 2
+}
+[ -n "$COMMENTS_RAW" ] || {
+  echo "F2 regular-comment read empty; not converged (#3860)" >&2
+  exit 2
+}
+COMMENTS_JSON=$(printf '%s' "$COMMENTS_RAW" | jq -s 'add // []') || exit 2
 # Edit state for the same comments (#3860): REST rows carry no
 # lastEditedAt, so join the GraphQL value by databaseId = REST id. An
 # unmatched row is "unresolved", and only an explicitly unedited disposition
