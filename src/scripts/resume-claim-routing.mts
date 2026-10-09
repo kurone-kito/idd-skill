@@ -1013,11 +1013,12 @@ export function resolveAssertOutcome(result: {
     result.state === 'owner_evidence_required' && result.evidence.owner_evidence
       ? firstFailedOwnerProof(result.evidence.owner_evidence)
       : null;
-  // A claim-lock mismatch is cured by acquiring the lock on the linked
-  // worktree, so name that step instead of leaving only the proof name.
+  // The lock is absent or held elsewhere. Acquire only when `--check` shows
+  // it absent: an unconditional `--acquire` returns a collision when another
+  // claim holds it, so name the inspection step first.
   const remedy =
     failedProof === 'claim_lock_matches'
-      ? ' remedy="claim-lock --acquire --worktree <linked-worktree>"'
+      ? ' remedy="inspect claim-lock --check --worktree <linked-worktree>; acquire only if the lock is absent"'
       : '';
   return {
     exitCode: 1,
