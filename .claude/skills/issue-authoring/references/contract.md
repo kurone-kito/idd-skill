@@ -2189,7 +2189,10 @@ only approval boundary.
   whose JSON has `soleMember: true`, `issues` equal to that one target,
   and no `skippedMarkers` entry with `namesRequestedSet: true` is the only
   passing result (an edited entry's flag reflects only the comment's
-  current text). The helper exits non-zero when
+  current text). A `requested-set` entry on the target itself is that
+  target's own hidden marker, which the sweep routinely leaves behind, so
+  it does not block; one on any other issue already changes `issues` or
+  fails the scan. The helper exits non-zero when
   enumeration does not finish, including a search response with
   `incomplete_results` or an index-lag window that does not finish.
   The candidate search is the owner-marker token, so an edited marker
@@ -2286,7 +2289,8 @@ only approval boundary.
   `<marker-prefix>-roadmap-id` marker, and
   `node scripts/authoring-set-members.mjs --set <id>` reports
   `soleMember: true` with `issues` equal to this one target and no
-  `skippedMarkers` entry with `namesRequestedSet: true`; that
+  `skippedMarkers` entry with `namesRequestedSet: true` (a `requested-set`
+  entry on the target itself does not block); that
   helper is exactly the mechanical proof this fast path's own
   `|set|==1` premise rests on, so skipping it here would be a genuine
   weakening, not a condensation, and a non-zero exit (including

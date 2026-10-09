@@ -1667,7 +1667,10 @@ node scripts/authoring-set-members.mjs --set <id>
 A zero exit whose JSON has `soleMember: true`, `issues` equal to that
 one target, and no `skippedMarkers` entry with `namesRequestedSet: true`
 is the only passing result (an edited entry's flag reflects only the
-comment's current text). The helper exits non-zero when
+comment's current text). A `requested-set` entry on the target itself is
+that target's own hidden marker, which the sweep routinely leaves behind,
+so it does not block; one on any other issue already changes `issues` or
+fails the scan. The helper exits non-zero when
 enumeration does not finish, including a search response with
 `incomplete_results` or an index-lag window that does not finish.
 The candidate search is the owner-marker token, so an edited marker

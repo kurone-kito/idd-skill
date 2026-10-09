@@ -407,8 +407,9 @@ approval boundary that hands off to IDD execution.
   `<marker-prefix>-roadmap-id` marker (never a roadmap anchor), and
   `node scripts/authoring-set-members.mjs --set <id>` reports
   `soleMember: true` with `issues` equal to that one target and no
-  `skippedMarkers` entry with `namesRequestedSet: true`. The helper exits
-  non-zero when enumeration does not finish, including a
+  `skippedMarkers` entry with `namesRequestedSet: true` (a `requested-set`
+  entry on the target itself does not block). The helper exits non-zero
+  when enumeration does not finish, including a
   search response with `incomplete_results` or an index-lag window
   that does not finish. The candidate search is the owner-marker
   token, so an edited marker that dropped the set is still fetched
