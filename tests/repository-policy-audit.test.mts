@@ -855,6 +855,24 @@ test('load-control dogfood check ignores JSON property order', () => {
   );
 });
 
+test('orchestrator dogfood rejects a local entry in the distributed template', () => {
+  const documents = readPositiveFixture();
+  const templatePath = 'idd-template/.github/idd/config.json';
+  const templateContents = documents.get(templatePath);
+  assert.ok(templateContents);
+  const template = JSON.parse(templateContents) as Record<string, unknown>;
+  template.orchestrator = { maxWorkers: 4 };
+  documents.set(templatePath, JSON.stringify(template, null, 2));
+
+  assert.ok(
+    collectRepositoryPolicyViolationsFromDocuments(documents).some(
+      (violation) =>
+        violation.ruleId === 'orchestrator-worker-cap-dogfood' &&
+        violation.path === templatePath,
+    ),
+  );
+});
+
 test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-repository-policy-audit-'));
   t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
