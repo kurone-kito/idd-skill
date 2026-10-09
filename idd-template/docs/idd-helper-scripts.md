@@ -2873,9 +2873,9 @@ The adopted helper boundaries are intentionally narrow:
     agent-id -- before the final confirmation
   - before the final confirmation, reads `forcedHandoff.mode` at each
     trusted copy that Resume and F2 read, and refuses, posting nothing,
-    unless every copy confirms `human-gated`: the base branch of each open
-    PR on the claim branch (or the live default branch when no PR is
-    open), and the claim branch itself when a PR head or a remote branch
+    unless every copy confirms `human-gated`: the base branch of the PR the
+    operator names (or the live default branch when no PR is open), and
+    the claim branch itself when a PR head or a remote branch
     exists; a refusal names the copy and any read error
   - posts nothing unless the final confirmation is exactly `y`
 
@@ -2888,21 +2888,31 @@ The adopted helper boundaries are intentionally narrow:
   - support audited debugging or manual review of the exact body
   - stay distinct from the interactive operator facade above
 - Preflight: with an open PR on the claim branch, a non-plan run needs
-  `--pr <number>`. Before it renders, the run refuses (non-zero exit,
-  empty stdout) unless every copy that the facade's preflight reads
-  confirms `human-gated`. `--plan` reports the same check as a read-only
-  `preflight` field and omits `markerBody` when it would refuse; it still
-  exits `0`.
+  `--pr <number>`, and that PR must be open. Before it renders, the run
+  refuses (non-zero exit, empty stdout) unless every copy that the
+  facade's preflight reads confirms `human-gated`. `--plan` reports the
+  same check as a read-only `preflight` field, for the PR that `--pr`
+  names, or for every open PR's base when no PR is named. It omits
+  `markerBody` when the check would refuse, and it still exits `0`.
 
 The references in this subsection apply only when a repository
 explicitly installs the matching helpers and records
-`forcedHandoff.mode: human-gated` in `.github/idd/config.json` on the PR
-base branch and on the claim branch. The operator commits the opt-in to
-the base branch through its normal pull-request path, then merges that
-branch into the PR branch and pushes the merge. A pull request cannot
-enable the mode for itself, because the merge gate reads the base-branch
-config and the preflight reads the remote copies. Repositories that stay
-on the default disabled policy must not expose either helper as an
+`forcedHandoff.mode: human-gated` in `.github/idd/config.json` on the
+copies that the gates read. With an open PR on the claim branch, those are
+the PR's base branch and the claim branch: the operator commits the opt-in
+to the base branch through its normal pull-request path, then merges that
+branch into the PR branch and pushes the merge. With no open PR, they are
+the default branch and, when it exists on the remote, the claim branch.
+The operator commits the opt-in to the default branch the same way. On
+the claim branch, the operator sets `forcedHandoff.mode: human-gated` when
+the branch sets another mode. When the branch has no `forcedHandoff` block,
+the operator merges the PR's base branch (with an open PR) or the default
+branch (with none) into it and pushes the merge. A lookup that failed is
+restored. A committed config that the error reports as invalid JSON, or as
+not a JSON object, is repaired at its source through its normal path. The
+merge gate reads the base-branch config, so only the base branch's opt-in
+counts for it, and the preflight reads the remote copies. Repositories that
+stay on the default disabled policy must not expose either helper as an
 active recovery path.
 
 Observed 2026-10-04 in a private downstream adopter (pinned v0.11.0): the
