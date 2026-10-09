@@ -423,6 +423,7 @@ jobs:
             BLOCKED=$(printf '%s' "$JSON" | jq -r '[(.skipped // [])[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
             RETRY_ATTEMPTS=$(printf '%s' "$JSON" | jq -r '.retryAttempts // 0')
             RETRY_BOUND_EXHAUSTED=$(printf '%s' "$JSON" | jq -r '.retryBoundExhausted // false')
+            SKIP_REASON_SUMMARY=$(printf '%s' "$JSON" | jq -r '.skipReasonSummary // ""')
             if [ "$HELPER_EXIT" -ne 0 ]; then
               echo "::warning::audit-pr-cleanup exited $HELPER_EXIT but emitted a valid JSON report; using helper status \"$STATUS\""
             fi
@@ -435,6 +436,7 @@ jobs:
             BLOCKED=0
             RETRY_ATTEMPTS=0
             RETRY_BOUND_EXHAUSTED=false
+            SKIP_REASON_SUMMARY=""
           fi
           {
             echo "pr_number=$PR_NUMBER"
@@ -445,6 +447,7 @@ jobs:
             echo "blocked=$BLOCKED"
             echo "retry_attempts=$RETRY_ATTEMPTS"
             echo "retry_bound_exhausted=$RETRY_BOUND_EXHAUSTED"
+            echo "skip_reason_summary=$SKIP_REASON_SUMMARY"
           } >> "$GITHUB_OUTPUT"
       - name: Post cleanup evidence comment
         if: always() && steps.cleanup.outcome != 'skipped'
@@ -463,6 +466,7 @@ jobs:
           BLOCKED: ${{ steps.cleanup.outputs.blocked }}
           RETRY_ATTEMPTS: ${{ steps.cleanup.outputs.retry_attempts }}
           RETRY_BOUND_EXHAUSTED: ${{ steps.cleanup.outputs.retry_bound_exhausted }}
+          SKIP_REASON_SUMMARY: ${{ steps.cleanup.outputs.skip_reason_summary }}
         run: |
           # A killed cleanup step writes no outputs. Leave before any
           # gh call when the PR number is still unknown, and map an
@@ -567,7 +571,12 @@ jobs:
             "| Retry attempts (bound-exhausted) | ${RETRY_ATTEMPTS} (${RETRY_BOUND_EXHAUSTED}) |" \
             "| Posted by          | post-merge-cleanup workflow |" \
           )
+          # The Notes row starts on its own line directly after the Posted by row:
+          # a blank line would end the GFM table, so the row would render below it.
+          if [ -n "$SKIP_REASON_SUMMARY" ]; then
+            NOTES_ROW="| Notes              | Skipped by reason: ${SKIP_REASON_SUMMARY} |"
+          fi
           if [ -n "$NOTES_ROW" ]; then
-            BODY="${BODY}${NOTES_ROW}"$'\n'
+            BODY="${BODY}"$'\n'"${NOTES_ROW}"$'\n'
           fi
           printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --body-file -

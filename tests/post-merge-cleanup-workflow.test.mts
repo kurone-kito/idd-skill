@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { test } from 'node:test';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, test } from 'node:test';
 
 const WORKFLOW_PATHS = [
   '.github/workflows/post-merge-cleanup.yml',
   'idd-template/.github/workflows/post-merge-cleanup.yml',
 ] as const;
+
+// Fixture directories for the evidence-body tests below, removed at the end.
+const tempDirs: string[] = [];
+after(() => {
+  for (const dir of tempDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function readWorkflow(rel: string): string {
   return readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
@@ -276,3 +293,173 @@ test('cleanup step timeout is below the job timeout and evidence still runs afte
     }
   }
 });
+
+// kurone-kito/idd-skill#3857: the evidence comment carries the per-reason
+// skip summary on a Notes row, directly after the Posted by row.
+const POST_LINE = `printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --body-file -`;
+
+/**
+ * The evidence step's run block, de-indented. Returns the lines that build the
+ * timeout status and the comment body, without the duplicate-evidence lookup
+ * (which calls `gh api`), so the body can run in bash with no gh call.
+ */
+function evidenceBodyScript(text: string): string {
+  const lines = text.split('\n');
+  const nameIndex = lines.findIndex((line) =>
+    line.includes('name: Post cleanup evidence comment'),
+  );
+  assert.notStrictEqual(nameIndex, -1, 'evidence step must exist');
+  const runIndex = lines.findIndex(
+    (line, index) => index > nameIndex && line === '        run: |',
+  );
+  assert.notStrictEqual(runIndex, -1, 'evidence step must have a run block');
+  const block: string[] = [];
+  for (let index = runIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (line.trim() !== '' && !line.startsWith('          ')) {
+      break;
+    }
+    block.push(line.slice(10));
+  }
+  const trimmed = block.map((line) => line.trim());
+  const notesStart = trimmed.indexOf('NOTES_ROW=""');
+  assert.notStrictEqual(notesStart, -1, 'run block must reset NOTES_ROW');
+  const timeoutRow = trimmed.findIndex((line) =>
+    line.startsWith('NOTES_ROW="| Notes              | The cleanup step ended'),
+  );
+  assert.notStrictEqual(timeoutRow, -1, 'run block must keep the timeout row');
+  const timeoutEnd = trimmed.findIndex(
+    (line, index) => index > timeoutRow && line === 'fi',
+  );
+  const bodyStart = trimmed.findIndex((line) =>
+    line.startsWith('BODY=$(printf'),
+  );
+  assert.notStrictEqual(bodyStart, -1, 'run block must build BODY');
+  const postLine = trimmed.indexOf(POST_LINE);
+  assert.notStrictEqual(postLine, -1, 'run block must post the body');
+  return [
+    ...block.slice(notesStart, timeoutEnd + 1),
+    ...block.slice(bodyStart, postLine + 1),
+  ].join('\n');
+}
+
+/** Run the body segment in bash and return the body it would post. */
+function runEvidenceBody(
+  text: string,
+  env: Record<string, string>,
+): { status: number | null; stderr: string; body: string } {
+  const workDir = mkdtempSync(join(tmpdir(), 'post-merge-body-'));
+  tempDirs.push(workDir);
+  const scriptPath = join(workDir, 'evidence-body.sh');
+  const bodyOut = join(workDir, 'body.md');
+  const script = evidenceBodyScript(text);
+  // The posting line writes the body to a file instead of calling gh.
+  writeFileSync(
+    scriptPath,
+    script.replace(POST_LINE, `printf '%s' "$BODY" > "$BODY_OUT"`),
+  );
+  const result = spawnSync('bash', [scriptPath], {
+    cwd: workDir,
+    encoding: 'utf8',
+    env: { ...process.env, ...env, BODY_OUT: bodyOut },
+  });
+  let body = '';
+  try {
+    body = readFileSync(bodyOut, 'utf8');
+  } catch {
+    body = '';
+  }
+  return { status: result.status, stderr: result.stderr, body };
+}
+
+test('both workflow copies pass the per-reason summary to the evidence step (#3857)', () => {
+  for (const path of WORKFLOW_PATHS) {
+    const text = readWorkflow(path);
+    assert.match(
+      text,
+      /SKIP_REASON_SUMMARY=\$\(printf '%s' "\$JSON" \| jq -r '\.skipReasonSummary \/\/ ""'\)/,
+      `${path} must read .skipReasonSummary with an empty fallback`,
+    );
+    assert.match(
+      text,
+      /echo "skip_reason_summary=\$SKIP_REASON_SUMMARY"/,
+      `${path} must write the skip_reason_summary step output`,
+    );
+    assert.match(
+      text,
+      /SKIP_REASON_SUMMARY: \$\{\{ steps\.cleanup\.outputs\.skip_reason_summary \}\}/,
+      `${path} must pass the step output as SKIP_REASON_SUMMARY`,
+    );
+    assert.match(
+      text,
+      /SKIP_REASON_SUMMARY=""\n\s*fi\n/,
+      `${path} must leave the summary empty on the helper-error branch`,
+    );
+    assert.match(
+      text,
+      /<!-- idd-cleanup-evidence: \$\{STATUS\} applied:/,
+      `${path} must keep the marker header line`,
+    );
+  }
+});
+
+const POSIX_ONLY = process.platform === 'win32' && 'needs a POSIX shell';
+
+for (const path of WORKFLOW_PATHS) {
+  test(`the evidence body places the Notes row directly after Posted by in ${path} (#3857)`, {
+    skip: POSIX_ONLY,
+  }, () => {
+    const text = readWorkflow(path);
+    const base = {
+      PR_NUMBER: '7',
+      APPLIED: '0',
+      FAILED: '0',
+      SKIPPED: '2',
+      BLOCKED: '0',
+      RETRY_ATTEMPTS: '0',
+      RETRY_BOUND_EXHAUSTED: 'false',
+    };
+
+    const withSummary = runEvidenceBody(text, {
+      ...base,
+      STATUS: 'applied',
+      SKIP_REASON_SUMMARY: 'pr-not-merged 1, thread-superseded-by-reply 2',
+    });
+    assert.equal(withSummary.status, 0, withSummary.stderr);
+    const summaryLines = withSummary.body.split('\n');
+    const postedBy = summaryLines.findIndex((line) =>
+      line.startsWith('| Posted by'),
+    );
+    assert.notStrictEqual(postedBy, -1);
+    assert.equal(
+      summaryLines[postedBy + 1],
+      '| Notes              | Skipped by reason: pr-not-merged 1, thread-superseded-by-reply 2 |',
+    );
+
+    const withoutSummary = runEvidenceBody(text, {
+      ...base,
+      STATUS: 'clean',
+      SKIP_REASON_SUMMARY: '',
+    });
+    assert.equal(withoutSummary.status, 0, withoutSummary.stderr);
+    assert.doesNotMatch(withoutSummary.body, /\| Notes /);
+  });
+
+  test(`the timeout Notes row also sits directly after Posted by in ${path} (#3857)`, {
+    skip: POSIX_ONLY,
+  }, () => {
+    const timeout = runEvidenceBody(readWorkflow(path), {
+      PR_NUMBER: '7',
+      STATUS: '',
+      SKIP_REASON_SUMMARY: '',
+    });
+    assert.equal(timeout.status, 0, timeout.stderr);
+    const lines = timeout.body.split('\n');
+    const postedBy = lines.findIndex((line) => line.startsWith('| Posted by'));
+    assert.notStrictEqual(postedBy, -1);
+    assert.match(
+      lines[postedBy + 1] ?? '',
+      /^\| Notes {14}\| The cleanup step ended without reporting a status/,
+    );
+  });
+}
