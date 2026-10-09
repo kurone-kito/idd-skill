@@ -62,6 +62,12 @@ package.json script through the configured package manager, such as
 npx --yes --package <helper-package-spec> idd-doctor
 ```
 
+When the repository sets `helperRuntime.launcher` to `pnpm-dlx`, or to `auto`
+on a machine where it resolves to `pnpm-dlx`, run the same helper through pnpm
+instead: `pnpm dlx --package <helper-package-spec> idd-doctor`. The
+[helper script reference](idd-helper-scripts.md) explains the launcher values
+and the upgrade order.
+
 The `instructions-only` profile has no doctor helper, so skip this
 optional check.
 

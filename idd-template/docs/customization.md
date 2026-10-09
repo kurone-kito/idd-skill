@@ -161,6 +161,12 @@ This choice is separate from the project command placeholders. A
 repository without Node.js can still import and run IDD with the written
 instructions alone.
 
+For `ephemeral-npx`, the repository may also set `helperRuntime.launcher` to
+`npx` (the default), `pnpm-dlx`, or `auto`. `auto` uses the pnpm launcher only
+when the pnpm in the repository reports major 10 or later. Read the
+[helper script reference](idd-helper-scripts.md) for the values, the probe and
+the upgrade order before setting it.
+
 When a repository does opt into helper support, run the manifest helper
 from the target repository root to get the concrete import surface for
 the chosen profile:

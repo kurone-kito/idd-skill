@@ -2430,6 +2430,41 @@ Node.js helper path.
   those commands themselves. `idd-onboard.mjs --verify` reports a
   non-blocking advisory for each profile that uses `packageSpec` when none
   is configured.
+
+  The launcher is a separate setting: `helperRuntime.launcher` in
+  `.github/idd/config.json`, or the `--launcher` flag of the manifest CLI
+  (which wins over the configured value), takes `npx` (the default and the
+  historical form), `pnpm-dlx`, or `auto`. With `pnpm-dlx`, the emitted
+  commands run the same package spec and bin through pnpm dlx instead of
+  `npx --yes --package <helper-package-spec> idd-*`. `auto` selects
+  `pnpm-dlx` only when pnpm --version, run in the target repository root,
+  reports major 10 or later. A missing or unparsable pnpm, or a probe that
+  takes longer than 5 seconds, selects `npx`. On native Windows, pnpm is a
+  `.cmd` shim that cannot be spawned without a shell, so `auto` selects
+  `npx` there. The `ephemeral-npx` entry records the choice in a `launcher`
+  object (`configured`, `resolved`, `reason`); an unset or `npx` launcher
+  leaves its commands, description and notes unchanged.
+
+  Pin guidance for the `pnpm-dlx` launcher: the minimum reference is a
+  commit at or after the merge commit of kurone-kito/idd-skill#3829 on
+  main, `bb9d7d7bca5cea2df863333102882491916a900a`, or the first release
+  tag that contains it once one exists; no release tag contains it yet.
+  A ref that predates that commit still carries the `prepare` script, which
+  pnpm can refuse for a git-hosted package. Before the fix, the commit-SHA
+  form was refused by every pnpm version tried, and the `refs/heads/main`
+  form was refused by pnpm 10; the `refs/tags` form under pnpm 10 and 11 was
+  not tried. At the merge commit, the codeload archive ran under pnpm dlx on
+  pnpm 10, 11 and 12, and pnpm add -D ran under pnpm 12. A mutable
+  `refs/heads/main` spec is served from the launcher cache for up to the
+  cache lifetime (pnpm's `dlxCacheMaxAge`, default 1440 minutes), so pin a
+  reviewed commit when freshness matters.
+
+  Upgrade order: before a repository sets `helperRuntime.launcher`, raise its
+  pinned helper package to a version that knows the key, and refresh the
+  three copied workflows (`post-merge-cleanup.yml`,
+  `idd-advisory-convergence.yml` and `idd-advisory-convergence-comment.yml`).
+  An older helper or workflow rejects the unknown key and falls back to
+  `instructions-only`.
 - `user-global`: install the helper bins once per operator with the
   `installCommand` the manifest emits (npm's `npm install -g`, pnpm's global
   add, or Yarn Classic's `yarn global add`), and let every repository resolve
@@ -2493,6 +2528,13 @@ not a general `node_modules` invocation form and must not be used by
 `tests/helper-invocation-profile.test.mts` enforces the first two
 rules mechanically, and `tests/repository-inventory-audit.test.mts`
 enforces the third rule (`unpointed-source-form`).
+
+**Launcher substitution.** Where a literal `npx --yes --package
+<helper-package-spec> idd-*` block shows a command an agent or an operator
+runs, the `pnpm-dlx` launcher runs the same package spec and bin through
+pnpm dlx instead. Write this rule once rather than duplicating the block. The
+shipped CI workflows keep the `npx` form and are not affected by the
+launcher.
 
 To switch profiles later, rerun the manifest with both
 `--profile <target-profile>` and `--from-profile <current-profile>`. The
