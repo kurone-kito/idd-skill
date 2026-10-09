@@ -251,6 +251,22 @@ function checkWorkflowDispatchCheckoutRef(path, text, report) {
     return;
   }
   const checkoutWith = withBlockOf(checkoutStep);
+  // Only the inputs this checkout needs. An extra input such as repository:
+  // would fetch another tree into a job that holds write access.
+  const extraInputs = [
+    ...checkoutWith.matchAll(/^ {10}["']?([A-Za-z0-9_-]+)["']?[ \t]*:/gm),
+  ]
+    .map((match) => (match[1] ?? '').toLowerCase())
+    .filter(
+      (key) => !['ref', 'fetch-depth', 'persist-credentials'].includes(key),
+    );
+  if (extraInputs.length > 0) {
+    report(
+      RWA004,
+      path,
+      'checkout with: must declare only ref, fetch-depth, and persist-credentials',
+    );
+  }
   const refLines = checkoutWith.match(/^ {10}["']?ref["']?\s*:.*$/gim) ?? [];
   if (
     refLines.length !== 1 ||

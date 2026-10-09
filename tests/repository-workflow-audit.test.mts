@@ -4074,6 +4074,46 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout that adds a repository override beside the pinned ref',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(`${ref}          repository: attacker/fork\n`);
+      },
+    },
+    expected: [
+      {
+        message:
+          'checkout with: must declare only ref, fetch-depth, and persist-credentials',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a template cleanup checkout that adds a repository override beside the pinned ref',
+    path: 'idd-template/.github/workflows/post-merge-cleanup.yml',
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(`${ref}          repository: attacker/fork\n`);
+      },
+    },
+    expected: [
+      {
+        message:
+          'checkout with: must declare only ref, fetch-depth, and persist-credentials',
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
