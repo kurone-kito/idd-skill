@@ -297,7 +297,10 @@ the output by these outcomes before judging the proposal:
 - **Complete:** every summary line says `incomplete=false`, the `page=`
   values add up to `total=`, and no `#number` line appears twice (a page
   shift can repeat one issue and drop another while the sum still
-  matches). Judge the proposal against the listed titles.
+  matches). GitHub does not promise a snapshot across pages, so this is a best-
+  effort read: an item added and another removed during the traversal can keep
+  the totals equal, and a repeated run that gives the same result confirms it.
+  Judge the proposal against the listed titles.
 - **Search not finished:** `incomplete=true` on any line means the
   provider timed out and the list is partial. Retry once, then narrow the
   query.
@@ -314,6 +317,11 @@ the output by these outcomes before judging the proposal:
 An incomplete search is not a completed previously-declined check. Do not
 publish the proposal as `ready` until a narrower query completes, or
 route it to `needs-decision` and record the incompleteness.
+
+Observed 2026-10-08: reproduced read-only on `cli/cli` with the noun `pr`, where
+`--limit 100` returned 100 of 288 matches with exit 0 and empty stderr. That is
+a reproduction, not an incident recorded in this repository, so the failure mode
+is preventive for adopters.
 
 When the proposal changes an existing mechanism, identify the PR that
 introduced or last reshaped it (for example from `git log -S` on the
