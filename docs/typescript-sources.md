@@ -174,10 +174,11 @@ runtime-file lists in item 4, which were checked against the source.
      (`scripts/<stem>.mjs`), `vendoredCommand` (`node scripts/<stem>.mjs`) and
      `description`. Keep the `id` values in ascending order
      (`helper-command-order`).
-   - `contractPaths` on this entry lists the schemas that are the command's own
-     contract. If a module reads a file that its imports do not reach, a schema
-     included, list that file in `EXTRA_RUNTIME_FILES` in the same file, keyed by
-     the module that reads it, `scripts/<stem>.mjs`. The
+   - Put a schema that defines this command's contract in `contractPaths` on
+     this entry. Put any other file that the helper reads at runtime, and that
+     its imports do not reach, in `EXTRA_RUNTIME_FILES` in the same file. Key it
+     by the module that reads it, `scripts/<stem>.mjs`. This includes a schema
+     that is not the command's contract. Both lists feed `managedFiles`. The
      drift guard in `tests/helper-runtime-manifest.test.mts` compares the
      manifest with these lists, and it checks the files that `validate-schemas`
      reads. It does not find a missing data file for another helper. To check
@@ -233,9 +234,12 @@ runtime-file lists in item 4, which were checked against the source.
      `limitBytes` fails with `near-ceiling-ratchet`, even when the new content
      fits. A budget bump cannot pass in that case.
    - If the change would take a bundle above the limit, it cannot land until the
-     budget is decided. Record the options for the maintainer (split, raise
-     with a callout, or exemption), and stop. Do not trim instruction text in
-     this change to make room.
+     budget is decided. Record the options for the maintainer, and stop. For a
+     bundle over its `limitBytes`, the options are a split into a separate
+     change, a trim in a separate change, or a raised limit with a callout,
+     subject to the near-ceiling ratchet. An exemption covers only a
+     context-ceiling violation, so it is not an option here. Do not trim
+     instruction text in this change to make room.
 6. Run `node scripts/audit-docs.mjs --check`, then
    `node --test tests/help-text-flags.test.mts` (any helper with a flag spec)
    and `node --test tests/helper-cli-contract.test.mts` (an adopter-shipped
