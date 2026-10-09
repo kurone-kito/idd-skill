@@ -268,22 +268,21 @@ function checkWorkflowDispatchCheckoutRef(
 ): void {
   // Read as declarations: a commented-out checkout cannot stand in for the real one.
   const declared = declarationText(text);
-  // Every mention of actions/checkout counts, in any key spelling, quoting, letter
-  // case, or step style, and in a block scalar body. Full-line comments are
-  // skipped, but trailing text is not cut, so a quoted hash cannot hide a mention
-  // in a flow mapping. A step name or trailing comment that names the action
-  // counts too, so the count fails closed on it.
+  // Every line that names actions/checkout@ counts, comments included. A quoted
+  // value can continue on a line that starts with a hash, which YAML reads as
+  // content, so skipping comment lines would hide a mention. The cost is that a
+  // comment naming the action is reported too, which fails closed.
   const mentions = text
     .split('\n')
-    .filter((line) => !/^[ \t]*#/.test(line))
     .filter((line) => /actions\\?\/checkout@/i.test(line));
+  // Reported without returning, so the pinned step's own ref check still runs and
+  // a commented decoy above the real checkout cannot hide a PR-controlled ref.
   if (mentions.length > 1) {
     report(
       RWA004,
       path,
       'must mention actions/checkout only once, in its pinned step',
     );
-    return;
   }
   const checkoutStart = declared.search(
     /^[ \t]*(?:- )?["']?uses["']?\s*:\s*["']?actions\/checkout@/im,
