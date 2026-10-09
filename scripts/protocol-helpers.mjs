@@ -285,14 +285,17 @@ const REVIEW_BOT_LOGINS = new Set([
 ]);
 const UNSAFE_TEXT_RULES = [
   {
+    code: 'unsafe-awaiting-maintainer-decision',
     pattern: /\*\*Awaiting maintainer decision\*\*/i,
     reason: 'contains an awaiting-maintainer-decision marker',
   },
   {
+    code: 'unsafe-active-hold',
     pattern: /\bactive hold\b/i,
     reason: 'contains active hold context',
   },
   {
+    code: 'unsafe-failed-ci',
     pattern:
       /\bfailed[- ]ci\b|\bfailing ci\b|\bci failure\b|\bci failed\b|\bfailed checks?\b/i,
     reason: 'contains failed-CI context',
@@ -1356,13 +1359,20 @@ export function applyDigestUpsert(io) {
   }
   return { planned, outcome: 'noop' };
 }
-export function unsafeTextReason(body) {
+/**
+ * The first unsafe-text rule `body` matches, with its closed code, or null.
+ * `unsafeTextReason` returns only the reason text from the same rule.
+ */
+export function unsafeTextFinding(body) {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {
-      return rule.reason;
+      return { code: rule.code, reason: rule.reason };
     }
   }
   return null;
+}
+export function unsafeTextReason(body) {
+  return unsafeTextFinding(body)?.reason ?? null;
 }
 // #2473: Copilot's PR-level review object reports a `[bot]`-suffixed slug
 // login (`copilot-pull-request-reviewer[bot]`), but its inline
@@ -2439,7 +2449,19 @@ function inferReviewerReopenedAt(thread) {
   }
   return '';
 }
+/**
+ * Whether the thread has an IDD disposition that no later feedback supersedes.
+ * Delegates to `explainFreshDisposition`, so the boolean and the cause come
+ * from one decision.
+ */
 export function hasFreshDisposition(thread, options = {}) {
+  return explainFreshDisposition(thread, options).fresh;
+}
+/**
+ * Explains `hasFreshDisposition`. `fresh` is decided exactly as before; `cause`
+ * is classified only when the disposition is not fresh.
+ */
+export function explainFreshDisposition(thread, options = {}) {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
   // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
   // options.isDispositionAuthor with an IDD-scoped predicate (e.g., via summarizeDispositionEvidenceForGate).
@@ -2498,7 +2520,7 @@ export function hasFreshDisposition(thread, options = {}) {
       )
       .filter(isValidIsoTimestamp),
   );
-  return comments.some((comment) => {
+  const fresh = comments.some((comment) => {
     if (!isIddDisposition(comment)) {
       return false;
     }
@@ -2514,6 +2536,56 @@ export function hasFreshDisposition(thread, options = {}) {
       compareIsoTimestamps(dispositionActivityAt, latestFeedbackAt) > 0
     );
   });
+  if (fresh) {
+    return { fresh: true, cause: 'fresh' };
+  }
+  // Not fresh: name the cause. The author predicate applies to edited
+  // disposition-shaped comments too, so an edited comment from a non-IDD
+  // author is not counted as an IDD disposition here.
+  const iddAuthorDispositionShaped = comments.filter((comment) => {
+    const authorLogin = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    return isDisposition(comment) && dispositionAuthorPredicate(authorLogin);
+  });
+  const uneditedIddDispositions = comments.filter((comment) =>
+    isIddDisposition(comment),
+  );
+  if (uneditedIddDispositions.length === 0) {
+    return {
+      fresh: false,
+      cause:
+        iddAuthorDispositionShaped.length > 0
+          ? 'disposition-edited'
+          : 'no-disposition',
+    };
+  }
+  const readableDispositionAts = uneditedIddDispositions
+    .map((comment) =>
+      effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+    )
+    .filter(isValidIsoTimestamp);
+  if (readableDispositionAts.length === 0) {
+    return { fresh: false, cause: 'disposition-time-unreadable' };
+  }
+  // Not fresh with a readable disposition means some feedback is at or after
+  // the latest such disposition. Feedback created at or after it is a reply;
+  // otherwise the supersession came from an edit.
+  const latestDispositionAt = maxIsoTimestamp(readableDispositionAts);
+  const supersededByReply = comments.some((comment) => {
+    if (isIddDisposition(comment)) {
+      return false;
+    }
+    const createdAt = String(comment.createdAt ?? '');
+    return (
+      isValidIsoTimestamp(createdAt) &&
+      compareIsoTimestamps(createdAt, latestDispositionAt) >= 0
+    );
+  });
+  return {
+    fresh: false,
+    cause: supersededByReply ? 'superseded-by-reply' : 'superseded-by-edit',
+  };
 }
 /**
  * #3269: for each thread, finds the maximum content-activity timestamp

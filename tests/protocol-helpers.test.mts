@@ -11,6 +11,7 @@ import {
   DEFAULT_STALE_AGE_MS,
   detectMalformedReviewWatermarkComments,
   EDITED_AFTER_DISPOSITION_HINT,
+  explainFreshDisposition,
   hasFreshDisposition,
   hasTrustedReviewAckAfter,
   isDispositionComment,
@@ -4871,6 +4872,175 @@ test('hasFreshDisposition: an edited or edit-state-unresolved disposition reply 
     },
   };
   assert.equal(hasFreshDisposition(minimizedThread), true);
+});
+
+// kurone-kito/idd-skill#3856: `explainFreshDisposition` names why an IDD
+// disposition is or is not fresh. Its `fresh` field must be the boolean
+// `hasFreshDisposition` returns for the same input.
+type ExplainedThread = Parameters<typeof explainFreshDisposition>[0];
+function explainedThread(nodes: Record<string, unknown>[]): ExplainedThread {
+  return {
+    id: 'T-explain',
+    isResolved: false,
+    comments: { pageInfo: { hasNextPage: false }, nodes },
+  } as ExplainedThread;
+}
+const explainRequest = {
+  author: { login: 'reviewer-a' },
+  body: 'please fix',
+  createdAt: '2026-05-12T00:00:00Z',
+  lastEditedAt: null,
+};
+const explainDisposition = (overrides: Record<string, unknown> = {}) => ({
+  author: { login: 'idd-bot' },
+  body: '**Accepted** — done',
+  createdAt: '2026-05-12T00:01:00Z',
+  lastEditedAt: null,
+  ...overrides,
+});
+const explainReply = (overrides: Record<string, unknown> = {}) => ({
+  author: { login: 'reviewer-a' },
+  body: 'still broken',
+  createdAt: '2026-05-12T00:02:00Z',
+  lastEditedAt: null,
+  ...overrides,
+});
+
+test('explainFreshDisposition names the cause of every freshness outcome', () => {
+  const cases: {
+    name: string;
+    nodes: Record<string, unknown>[];
+    cause: string;
+    fresh: boolean;
+  }[] = [
+    {
+      name: 'an unedited disposition with no later feedback is fresh',
+      nodes: [explainRequest, explainDisposition()],
+      cause: 'fresh',
+      fresh: true,
+    },
+    {
+      name: 'no IDD disposition at all',
+      nodes: [explainRequest],
+      cause: 'no-disposition',
+      fresh: false,
+    },
+    {
+      name: 'an edited IDD disposition with no unedited one',
+      nodes: [
+        explainRequest,
+        explainDisposition({ lastEditedAt: '2026-05-12T00:02:00Z' }),
+      ],
+      cause: 'disposition-edited',
+      fresh: false,
+    },
+    {
+      name: 'an IDD disposition whose edit state is unknown',
+      nodes: [
+        explainRequest,
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          createdAt: '2026-05-12T00:01:00Z',
+        },
+      ],
+      cause: 'disposition-edited',
+      fresh: false,
+    },
+    {
+      name: 'an unedited IDD disposition with no readable time',
+      nodes: [explainRequest, explainDisposition({ createdAt: undefined })],
+      cause: 'disposition-time-unreadable',
+      fresh: false,
+    },
+    {
+      name: 'a later reply supersedes the disposition',
+      nodes: [explainRequest, explainDisposition(), explainReply()],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+    {
+      name: 'a reply in the same second as the disposition supersedes it',
+      nodes: [
+        explainRequest,
+        explainDisposition(),
+        explainReply({ createdAt: '2026-05-12T00:01:00Z' }),
+      ],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+    {
+      name: 'an earlier comment edited after the disposition supersedes it',
+      nodes: [
+        explainRequest,
+        explainDisposition(),
+        {
+          ...explainRequest,
+          createdAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: '2026-05-12T00:05:00Z',
+          updatedAt: '2026-05-12T00:05:00Z',
+        },
+      ],
+      cause: 'superseded-by-edit',
+      fresh: false,
+    },
+    {
+      name: 'a reply and an edit both after the disposition: the reply wins',
+      nodes: [
+        {
+          ...explainRequest,
+          lastEditedAt: '2026-05-12T00:05:00Z',
+          updatedAt: '2026-05-12T00:05:00Z',
+        },
+        explainDisposition(),
+        explainReply(),
+      ],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+    {
+      name: 'an edited disposition-shaped comment after an unedited disposition',
+      nodes: [
+        explainRequest,
+        explainDisposition(),
+        explainDisposition({
+          createdAt: '2026-05-12T00:03:00Z',
+          lastEditedAt: '2026-05-12T00:04:00Z',
+        }),
+      ],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const thread = explainedThread(testCase.nodes);
+    const explained = explainFreshDisposition(thread);
+    assert.equal(explained.fresh, testCase.fresh, testCase.name);
+    assert.equal(explained.cause, testCase.cause, testCase.name);
+    assert.equal(hasFreshDisposition(thread), testCase.fresh, testCase.name);
+  }
+});
+
+test('explainFreshDisposition ignores an edited disposition-shaped comment from a non-IDD author', () => {
+  const thread = explainedThread([
+    explainRequest,
+    {
+      author: { login: 'reviewer-b' },
+      body: '**Accepted** — done',
+      createdAt: '2026-05-12T00:01:00Z',
+      lastEditedAt: '2026-05-12T00:02:00Z',
+    },
+  ]);
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'idd-bot',
+  };
+
+  assert.deepEqual(explainFreshDisposition(thread, options), {
+    fresh: false,
+    cause: 'no-disposition',
+  });
+  assert.equal(hasFreshDisposition(thread, options), false);
 });
 
 // kurone-kito/idd-skill#3248: an edited trusted activation-nonce marker
