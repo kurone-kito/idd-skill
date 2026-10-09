@@ -62,7 +62,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadJson, validate } from './validate-schemas.mjs';
+import { isRfc3339DateTime, loadJson, validate } from './validate-schemas.mjs';
 
 const SCHEMA_PATH = 'schemas/worker-report.schema.json';
 // Loaded once: `summary` validates every stored line.
@@ -86,9 +86,6 @@ const RETRYABLE_OPEN_CODES = new Set(
 );
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
-/** RFC 3339 date-time with an offset, captured by component. */
-const RFC3339_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/;
 /** How many `frictions[].file` values `summary` lists. */
 const FRICTION_FILE_LIMIT = 10;
 const OUTCOMES = ['merged', 'handed-off', 'held', 'abandoned', 'failed'];
@@ -165,52 +162,10 @@ export function resolveWorkerReportStore(
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
-function daysInMonth(year, month) {
-  if (month === 2) {
-    return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
-  }
-  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
-}
-/**
- * True when `value` is an RFC 3339 date-time with an offset that names a real
- * instant: month 1-12, a day that exists in that month and year, hour 0-23,
- * minute and second 0-59, and an offset within 23:59. The schema validator's
- * `date-time` format only asks `Date.parse`, which normalizes `02-30` to
- * March 2 and `T24:00:00` to the next day, so the record would otherwise be
- * stored under a different instant than the one written.
- */
-function isRealTimestamp(value) {
-  const match = RFC3339_PATTERN.exec(value);
-  if (!match) return false;
-  const [year, month, day, hour, minute, second] = match
-    .slice(1, 7)
-    .map(Number);
-  if (month < 1 || month > 12) return false;
-  if (day < 1 || day > daysInMonth(year, month)) return false;
-  if (hour > 23 || minute > 59 || second > 59) return false;
-  if (
-    match[7] !== undefined &&
-    (Number(match[7]) > 23 || Number(match[8]) > 59)
-  ) {
-    return false;
-  }
-  return !Number.isNaN(Date.parse(value));
-}
 /** Schema errors for one candidate record; an empty list means valid. */
 export function validateWorkerReport(record) {
   cachedSchema ??= loadJson(SCHEMA_PATH);
-  const errors = validate(record, cachedSchema);
-  for (const field of ['verifiedAt', 'recordedAt']) {
-    const value = record?.[field];
-    if (
-      typeof value === 'string' &&
-      !errors.some((error) => error.startsWith(`$.${field}:`)) &&
-      !isRealTimestamp(value)
-    ) {
-      errors.push(`$.${field}: "${value}" is not a real calendar date-time`);
-    }
-  }
-  return errors;
+  return validate(record, cachedSchema);
 }
 // ---------------------------------------------------------------------------
 // Lock
@@ -747,7 +702,7 @@ function runCli() {
         new Error('--file and --stdin apply to append only'),
       );
     }
-    if (since !== undefined && !isRealTimestamp(since)) {
+    if (since !== undefined && !isRfc3339DateTime(since)) {
       throw markCliUsageError(
         new Error(
           `--since must be a real ISO 8601 date-time with an offset, got "${since}"`,

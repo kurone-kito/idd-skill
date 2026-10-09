@@ -1958,6 +1958,44 @@ test('checkSchemaKeywords accepts supported format: date-time', () => {
   assert.deepEqual(checkSchemaKeywords(goodSchema), []);
 });
 
+test('format date-time accepts RFC 3339 and rejects other shapes and impossible instants (#3889)', () => {
+  const schema = { type: 'string', format: 'date-time' };
+  const accepted = [
+    '2026-10-08T13:11:23Z',
+    '2026-10-08T13:11:23.123456+09:00',
+    '2026-10-08t13:11:23z',
+    '2028-02-29T00:00:00Z',
+    '2000-02-29T00:00:00Z',
+  ];
+  const rejected = [
+    '2026',
+    '2026-10',
+    '10/08/2026',
+    'Oct 8 2026',
+    '2026-10-08',
+    '2026-10-08T00:00:00',
+    '2026-10-08 00:00:00Z',
+    '2026-02-31T00:00:00Z',
+    '2026-04-31T00:00:00Z',
+    '2027-02-29T00:00:00Z',
+    '2100-02-29T00:00:00Z',
+    '2026-10-08T24:00:00Z',
+    '2026-10-08T12:00:00+0900',
+    '2026-10-08T12:60:00Z',
+    '2026-10-08T12:00:60Z',
+    '2026-10-08T12:00:00+24:00',
+    '2026-10-08T12:00:00+09:60',
+  ];
+  for (const value of accepted) {
+    assert.deepEqual(validate(value, schema), [], value);
+  }
+  for (const value of rejected) {
+    const errors = validate(value, schema);
+    assert.equal(errors.length, 1, value);
+    assert.match(errors[0], /invalid date-time value/, value);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Duration regex — must reject "P" and "PT" (no numeric component)
 // ---------------------------------------------------------------------------
