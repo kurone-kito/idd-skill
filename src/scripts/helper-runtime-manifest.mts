@@ -249,6 +249,15 @@ const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
 
 const HELPER_COMMANDS: HelperCommand[] = [
   {
+    id: 'activation',
+    scriptName: 'idd:activation',
+    binName: 'idd-activation',
+    entryPath: 'scripts/idd-activation.mjs',
+    vendoredCommand: 'node scripts/idd-activation.mjs',
+    description:
+      'Decide whether IDD applies to the current repository and report the instructions root to read, without network access or writes.',
+  },
+  {
     id: 'advisory-comment-debounce',
     scriptName: 'idd:advisory-comment-debounce',
     binName: 'idd-advisory-comment-debounce',

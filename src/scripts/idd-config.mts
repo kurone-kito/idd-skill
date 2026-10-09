@@ -653,7 +653,7 @@ function describeJsonValueKind(value: unknown): string {
  * Rejects relative paths and Windows current-drive roots such as `\config`,
  * which `path.isAbsolute` treats as absolute on win32.
  */
-function isQualifiedConfigRoot(value: string): boolean {
+export function isQualifiedConfigRoot(value: string): boolean {
   if (process.platform === 'win32') {
     return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
   }

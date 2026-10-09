@@ -48,6 +48,7 @@ export const COVERED_HELPERS = [
   'claim-lock',
   'clone-lock',
   'copilot-review-wave-audit',
+  'idd-activation',
   'token-cost-event',
   'token-cost-harvest',
   'token-cost-report',
