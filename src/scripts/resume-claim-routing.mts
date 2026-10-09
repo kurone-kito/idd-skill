@@ -260,7 +260,10 @@ if (import.meta.main) {
  *   `linkedPrLookupFailed` false/omitted) → honor an `issue-only` handoff
  *   as before;
  * - an open linked PR backs the claim → require `contextScope` of
- *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs.
+ *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs, or an
+ *   `issue-only` handoff that predates the first commit of every expected PR
+ *   (#3871, the merge gate's #1058 time rule; `prFirstCommitAt` absent or
+ *   null rejects it).
  * - `linkedPrLookupFailed: true` (#3276, Groom hearing 2026-09-24): the
  *   lookup itself failed, so PR state is unknown rather than genuinely
  *   empty. An `issue-plus-pr` handoff still delegates to the shared gate
@@ -845,8 +848,9 @@ function runCli(): HelperCliResult {
   const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
   const permissionCache: CollaboratorPermissionCache = new Map();
   // A forced handoff that displaces a PR-backed claim must carry
-  // issue-plus-pr evidence naming that PR; detect the open linked PR(s)
-  // so the gate below can enforce it (fail-safe to no enforcement, except
+  // issue-plus-pr evidence naming that PR, or an issue-only one that predates
+  // the PR's first commit (#3871); detect the open linked PR(s) so the gate
+  // below can enforce it (fail-safe to no enforcement, except
   // #3276's own new issue-only-on-failure rejection below). Skip the
   // lookup entirely when forced-handoff mode is off — the gate never
   // honors a handoff then, so the PR context would go unused.

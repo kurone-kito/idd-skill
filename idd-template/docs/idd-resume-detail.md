@@ -40,7 +40,8 @@ forced-handoff if:
 - Any field required by the current approval-note format is missing or
   contradictory.
 - An open PR exists and the approval text does not name that PR (an
-  issue-only approval is insufficient for PR-scoped recovery).
+  issue-only approval is insufficient for PR-scoped recovery unless it
+  predates that PR's first commit, kurone-kito/idd-skill#3871).
 - The evidence `{claim-id}`, branch, or linked PR does not match the live
   active claim or inheritable released branch/PR state — stop and report
   the mismatch; do not claim, push, or mutate review state.
