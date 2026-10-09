@@ -69,10 +69,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.pr_number) || format('{0}-{1}', github.event_name, github.event.pull_request.number || inputs.pr_number) }}
 on:
   # Trigger-migration finished state (kurone-kito/idd-skill#2764 Phase
-  # 2): only pull_request_target is declared below. GitHub always
-  # evaluates it against the BASE branch's own workflow YAML, never the
-  # pull request's own merge ref, so a same-repository PR cannot edit
-  # its own copy of this file to force its required check green.
+  # 2): pull_request_target is the only pull-request trigger declared
+  # below. GitHub always evaluates it against the BASE branch's own
+  # workflow YAML, never the pull request's own merge ref, so a
+  # same-repository PR cannot edit its own copy of this file to force its
+  # required check green.
   # Trade-off, accepted (kurone-kito/idd-skill Groom hearing,
   # 2026-09-24): a PR that edits this workflow is itself checked by the
   # base branch's unmodified copy, so its own workflow changes are never
@@ -227,7 +228,7 @@ jobs:
                   (.helperRuntime) as $hr
                   | ($hr != null and ($hr|type) == "object") as $is_object
                   | if $is_object then
-                      (($hr | keys) - ["profile","packageSpec"]) as $extra
+                      (($hr | keys) - ["profile","packageSpec","launcher"]) as $extra
                       | ($hr.profile) as $profile
                       | ($extra | length == 0) as $keys_ok
                       | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only","user-global"] | index($profile)) != null) as $profile_ok
@@ -235,7 +236,11 @@ jobs:
                            ($hr.packageSpec) as $spec
                            | ($spec != null and ($spec|type) == "string" and ($spec | test("\\A[A-Za-z0-9@:/_.+^#%-]+\\z")))
                          else true end) as $spec_ok
-                      | if ($keys_ok and $profile_ok and $spec_ok) then
+                      | (if ($hr | has("launcher")) then
+                          ($hr.launcher) as $launcher_value
+                          | ($launcher_value != null and ($launcher_value|type) == "string" and (["auto","npx","pnpm-dlx"] | index($launcher_value)) != null)
+                        else true end) as $launcher_ok
+                      | if ($keys_ok and $profile_ok and $spec_ok and $launcher_ok) then
                           "\($hr.profile)\t\($hr.packageSpec // "")"
                         else empty end
                     else empty end
@@ -248,13 +253,6 @@ jobs:
                 break
               fi
             done
-          fi
-          if [ "$PROFILE" = "user-global" ]; then
-            # user-global is an operator-local install. CI runners do not have it,
-            # and this workflow does not dispatch it, so stop here rather than
-            # falling back to instructions-only silently.
-            echo "::error::helperRuntime.profile is user-global, an operator-local install that CI runners do not have. This workflow cannot dispatch it. Use package-manager, vendored-node, or ephemeral-npx in .github/idd/config.json to run this check in CI."
-            exit 1
           fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
@@ -415,14 +413,14 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-advisory-convergence --pr "$PR_NUMBER" --assert
               ;;
             *)
               # Unreachable by construction (the profile-resolution step
               # only ever emits one of the five known profile values, and
-              # instructions-only and user-global already stopped the job above), but a
+              # instructions-only already stopped the job above), but a
               # required check must never silently no-op and report
               # success on an unexpected profile value.
               echo "::error::unrecognized helper-runtime profile \"$PROFILE\""
@@ -519,7 +517,7 @@ jobs:
                   (.helperRuntime) as $hr
                   | ($hr != null and ($hr|type) == "object") as $is_object
                   | if $is_object then
-                      (($hr | keys) - ["profile","packageSpec"]) as $extra
+                      (($hr | keys) - ["profile","packageSpec","launcher"]) as $extra
                       | ($hr.profile) as $profile
                       | ($extra | length == 0) as $keys_ok
                       | ($profile != null and ($profile|type) == "string" and ($profile|length) > 0 and (["vendored-node","package-manager","ephemeral-npx","instructions-only","user-global"] | index($profile)) != null) as $profile_ok
@@ -527,7 +525,11 @@ jobs:
                            ($hr.packageSpec) as $spec
                            | ($spec != null and ($spec|type) == "string" and ($spec | test("\\A[A-Za-z0-9@:/_.+^#%-]+\\z")))
                          else true end) as $spec_ok
-                      | if ($keys_ok and $profile_ok and $spec_ok) then
+                      | (if ($hr | has("launcher")) then
+                          ($hr.launcher) as $launcher_value
+                          | ($launcher_value != null and ($launcher_value|type) == "string" and (["auto","npx","pnpm-dlx"] | index($launcher_value)) != null)
+                        else true end) as $launcher_ok
+                      | if ($keys_ok and $profile_ok and $spec_ok and $launcher_ok) then
                           "\($hr.profile)\t\($hr.packageSpec // "")"
                         else empty end
                     else empty end
@@ -537,13 +539,6 @@ jobs:
                 break
               fi
             done
-          fi
-          if [ "$PROFILE" = "user-global" ]; then
-            # user-global is an operator-local install. CI runners do not have it,
-            # and this workflow does not dispatch it, so stop here rather than
-            # falling back to instructions-only silently.
-            echo "::error::helperRuntime.profile is user-global, an operator-local install that CI runners do not have. This workflow cannot dispatch it. Use package-manager, vendored-node, or ephemeral-npx in .github/idd/config.json to run this check in CI."
-            exit 1
           fi
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "package-spec=$PACKAGE_SPEC" >> "$GITHUB_OUTPUT"
@@ -883,7 +878,7 @@ jobs:
                   ;;
               esac
               ;;
-            ephemeral-npx)
+            ephemeral-npx|user-global)
               SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
               npx --yes --package "$SPEC" idd-external-check-waiver --pr "$PR_NUMBER" --check idd-advisory-convergence --reason self-referential-bootstrap-auto --run-id "$GITHUB_RUN_ID" --auto-bootstrap --apply --yes | tee /tmp/idd-waiver-report.json
               ;;

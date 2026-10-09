@@ -671,7 +671,7 @@
         },
         {
           "from": "| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |",
-          "to": "| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |"
+          "to": "| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |"
         },
         {
           "from": "| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |",
@@ -959,6 +959,12 @@
       "glob": "**/*.md",
       "pattern": "\\b(thirteen|13)\\s+`?idd-\\*\\.instructions\\.md`?\\s+files\\b",
       "message": "Avoid hard-coded IDD instruction file counts. Use a generated block or count-free wording."
+    },
+    {
+      "id": "marker-placeholder-issue-reference",
+      "glob": "idd-template/**/*.md",
+      "pattern": "\\{\\{[A-Z][A-Z0-9_]*\\}\\}#[0-9]+",
+      "message": "Qualify an upstream issue with owner/repo: a marker placeholder followed by an issue number resolves against the adopter repository (#3478)."
     }
   ],
   "rootMarkdownAllowlist": {

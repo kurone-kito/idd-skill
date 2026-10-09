@@ -400,21 +400,78 @@ const BARE_NOUN_EXTERNAL_ACTOR_PATTERN = new RegExp(
   String.raw`\b${CREDENTIAL_EXTERNAL_ACTOR_PATTERN}\b(?!-\w)`,
   'i',
 );
-function cueRule(id, pattern) {
-  return { id, matches: (windowText) => pattern.test(windowText) };
+// #3890: a bare `key` or `token` directly followed by a present-tense `need`
+// or `require` verb and then an article is configuration prose ("The new key
+// needs a default value."). The entry for that verb takes every such verb out
+// of the window before its own cue is read. The noun and the article stay, so
+// any other cue in the window still counts. The noun must start after a
+// non-word character, so the lookbehind is `(?<=\W)` rather than `\b`: a window
+// cut inside a longer word (`passkey`) starts at index 0, where `\b` would match
+// and wrongly read `key` as a bare noun. `replace` resets a global pattern's
+// `lastIndex` itself, so these carry the `g` flag, which the two-sentence row
+// in list F needs in order to remove both verbs.
+//
+// The same refusal applies at the start of any window that begins with a real
+// word, because the window cannot tell a cut from the start of the corpus. So
+// when a later noun's window begins at a bare key that opens the corpus, that
+// key's verb stays in the window, and the later noun can fail. A window that
+// starts inside an earlier noun, or at its verb, fails the same way, because the
+// shape then cannot see a whole bare noun. Every such failure is closed, and the
+// issue prefers a false positive to a false negative.
+const BARE_NOUN_NEED_SHAPE_PATTERN =
+  /(?<=\W)((?:keys?|tokens?)\s+)needs?\s+(?=(?:a|an|the)\b)/gi;
+const BARE_NOUN_REQUIRE_SHAPE_PATTERN =
+  /(?<=\W)((?:keys?|tokens?)\s+)requires?\s+(?=(?:a|an|the)\b)/gi;
+// The vocabulary match is bounded by ASCII `\b`, so a noun glued to a non-ASCII
+// letter (for example a Cyrillic or CJK word), a non-ASCII digit, a combining
+// mark, an invisible format character (a zero-width joiner) or a connector
+// punctuation mark reaches this route as `key`. That word is not a bare key, so
+// no verb is taken out for its window. Only the text before the noun is checked;
+// `corpus` and `matchEnd` are the values the rule receives. The classes are wide
+// on purpose, and the cost is a closed failure: a format character directly
+// before a bare key, such as a byte-order mark at the start of a body, also makes
+// the key glued, so its sentence fails. The issue prefers that to a false
+// negative.
+const BARE_NOUN_AT_END_PATTERN = /(?:keys?|tokens?)$/i;
+const WORD_CHARACTER_AT_END_PATTERN = /[\p{L}\p{M}\p{N}\p{Pc}\p{Cf}]$/u;
+function isBareNounAt(corpus, matchEnd) {
+  const head = corpus.slice(0, matchEnd);
+  const noun = BARE_NOUN_AT_END_PATTERN.exec(head);
+  if (noun === null) {
+    return false;
+  }
+  return !WORD_CHARACTER_AT_END_PATTERN.test(head.slice(0, noun.index));
+}
+function cueRule(id, pattern, shape) {
+  return {
+    id,
+    matches: (windowText, corpus, matchEnd) =>
+      pattern.test(
+        shape && isBareNounAt(corpus, matchEnd)
+          ? windowText.replace(shape, '$1')
+          : windowText,
+      ),
+  };
 }
 /**
  * The dependency cues (each verb in its inflected forms, with a few common
- * `re-` forms), plus the two shapes the file already has. No table covers
- * every wording; the tests pin what it does cover. The array is exported, and
+ * `re-` forms), plus the `actor` and `forward` entries. No table covers every
+ * wording; the tests pin what it does cover. The array is exported, and
  * deliberately mutable, only so the tests can remove one entry at a time and
  * prove that a row passes without it; production code never mutates it. Keep
- * every pattern free of the `g` and `y` flags, because `RegExp.prototype.test`
- * is then stateful.
+ * every cue pattern free of the `g` and `y` flags, because
+ * `RegExp.prototype.test` is then stateful. The two shape patterns above are
+ * the exception: they are only ever given to `replace`, which resets
+ * `lastIndex` itself, and they must carry `g`, so that every matching verb in
+ * a window is removed, not only the first.
  */
 export const BARE_NOUN_DEPENDENCY_RULES = [
-  cueRule('need', /\bneed(?:s|ed|ing)?\b/i),
-  cueRule('require', /\brequir(?:e|es|ed|ing)\b/i),
+  cueRule('need', /\bneed(?:s|ed|ing)?\b/i, BARE_NOUN_NEED_SHAPE_PATTERN),
+  cueRule(
+    'require',
+    /\brequir(?:e|es|ed|ing)\b/i,
+    BARE_NOUN_REQUIRE_SHAPE_PATTERN,
+  ),
   cueRule('wait', /\bwait(?:s|ed|ing)?\b/i),
   cueRule('await', /\bawait(?:s|ed|ing)?\b/i),
   cueRule('blocked', /\bblock(?:ed|ing)\b/i),

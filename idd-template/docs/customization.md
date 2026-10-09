@@ -33,7 +33,7 @@ behavior change too.
 | Stall recovery safety               | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Forced handoff contract             | Disabled unless the repository explicitly records a human-gated policy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Keep forced handoff separate from trusted marker-author authority. Record the opt-in state, human approval authority, canonical consent text, and marker contract in the repository-local policy block here, then keep the always-loaded overview pointer aligned with those docs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | CI commands                         | Project-specific command rows in the overview file                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview-core.instructions.md` during onboarding.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Helper runtime                      | `instructions-only` by default, with evidence-based helper support proposals that still require explicit operator confirmation during onboarding                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Use [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions) together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Auto-propose helper support only when repository evidence shows a real package-manager or Node.js helper path, keep operator confirmation explicit, prefer `package-manager` when supported package-manager evidence exists, and otherwise prefer `vendored-node` before `ephemeral-npx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Helper runtime                      | `instructions-only` by default, with evidence-based helper support proposals that still require explicit operator confirmation during onboarding                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Use [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions) together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Auto-propose helper support only when repository evidence shows a real package-manager or Node.js helper path, keep operator confirmation explicit, prefer `package-manager` when supported package-manager evidence exists, and otherwise prefer `vendored-node` before `ephemeral-npx`. For `ephemeral-npx`, `helperRuntime.launcher` selects `npx` (the default), `pnpm-dlx`, or `auto`; read the [helper script reference](idd-helper-scripts.md) for the pin minimum before choosing `pnpm-dlx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Issue scope                         | Roadmap-first discovery (roadmap path first, orphan fallback)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Default is `roadmap-first`. Set `issue-scope` to `roadmap` for strict roadmap-only discovery (no orphan fallback), or to `orphan-first` when unblocked orphan issues should be considered before roadmap traversal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Orphan-first approval               | No extra gate beyond orphan readiness checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Issue-author approval               | Secure-by-default target contract; unattended work needs a self-authorizing issue author or explicit approval unless the repository opts out                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Record the gate decision, approval actors, freshness rule, approval signals, and opt-out semantics in repository-local policy docs and onboarding. Keep this contract aligned with the discovery/claim behavior that already ships, and update both surfaces together if local policy changes later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -154,12 +154,20 @@ When helper support is being proposed, follow the import-time order from
    copied into the repository, but package-manager evidence is missing
    or ambiguous
 3. `ephemeral-npx` only when a resolvable one-shot helper command
-   already exists and vendoring is not preferred
+   already exists and vendoring is not preferred. Its `pnpm-dlx` launcher
+   needs a pinned reference at or after the minimum that the helper script
+   reference names.
 4. `instructions-only` fallback when none of the above applies
 
 This choice is separate from the project command placeholders. A
 repository without Node.js can still import and run IDD with the written
 instructions alone.
+
+For `ephemeral-npx`, the repository may also set `helperRuntime.launcher` to
+`npx` (the default), `pnpm-dlx`, or `auto`. `auto` uses the pnpm launcher only
+when the pnpm in the repository reports major 10 or later. Read the
+[helper script reference](idd-helper-scripts.md) for the values, the probe and
+the upgrade order before setting it.
 
 When a repository does opt into helper support, run the manifest helper
 from the target repository root to get the concrete import surface for
@@ -1556,7 +1564,12 @@ supports these keys:
 - `critiqueLoop.deferAfterRounds` (default `12`)
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
-  `low` and `low-and-medium`.
+  `low` and `low-and-medium`. Under `low` and `low-and-medium`, clause
+  (d) of the adopt-now test cascades: once one finding of a pass is
+  Accepted, another finding of that pass whose fix stays within that
+  push's files is adopt-now and is not deferred. `severity-tiered` has
+  no clause (d), so it is the mode without that cascade; its `high`
+  urgency still reads adopt-now conditions (a)-(c).
 - `critiqueLoop.deferRelaxAtRounds` (optional array of one or two
   positive integers, strictly ascending, at most two; recommended
   `[4, 7]`; omit the key to turn it off). The thresholds are PR-wide
@@ -2077,6 +2090,87 @@ open-PR operational markers such as `claimed-by`, `review-watermark`,
 `review-baseline`, or `advisory-wait`. The successor session must rerun
 the relevant freshness and review gates instead of mutating away the old
 evidence.
+
+### Forced-handoff copies and recovery
+
+The readers that take `forcedHandoff.mode` take it from one of the copies of
+`.github/idd/config.json` listed below. The exceptions follow the list.
+
+- `resume-claim-routing`, `idd-force-handoff`, `idd-forced-handoff-marker`,
+  `resolve-review-thread`, `disposition-non-review-notices`,
+  `live-status-digest` and `audit-pr-cleanup` read the working directory's
+  copy. The Discover annotations (`discover-orphan-filter` and
+  `discover-roadmap-graph`) read it as a soft signal that treats any
+  trusted-author handoff as honored once the mode is on.
+- `pre-merge-readiness` and `idd-merge-execute` read the copy at the PR base
+  branch through the trusted loader.
+- The required `idd-advisory-convergence` check reads the checkout of the
+  default branch, whatever the PR base is. The shipped workflow pins that
+  checkout to `main`, so an adopter whose default branch differs sets the
+  checkout `ref:` to it. The check honors a forced handoff only when the
+  default branch carries the opt-in.
+- The external-check waiver honors a forced handoff whatever the mode says.
+- `idd-roadmap-audit-execute`, `suitability-close-execute` and
+  `discover-shared-file-overlap` never read the mode, so they never honor a
+  forced handoff. `suitability-close-execute` acts only with `--apply`, and
+  `discover-shared-file-overlap` checks overlap only with `--check-overlap`.
+
+The pre-flight runs on the successor path of `idd-force-handoff`, and in
+`idd-forced-handoff-marker`, before either posts or renders a marker. With a
+PR named, the copies it checks are the PR base branch and the pushed claim
+branch. With no PR, they are the live default branch and the pushed claim
+branch. A copy that does not set `human-gated`, or cannot be read, refuses the
+handoff. The `release` keyword does not run the pre-flight.
+
+Commit the opt-in to the PR base branch through a normal pull request, and
+merge that branch into the PR branch. Doing so before an incident is
+recommended, because the pre-flight checks the copies when a handoff is
+posted. An opt-in that exists
+only in the operator's checkout is not enough: Resume honors it from that
+checkout, and F2 rejects the handoff with `claim-id-mismatch`.
+
+A pull request cannot enable recovery for itself in CI, because CI ignores a
+PR-edited config. For a stalled change that would add the opt-in, the stale
+takeover after `claimTiming.staleAge` (default `PT24H`) needs no opt-in. The
+`release` keyword works only from a checkout whose own
+`.github/idd/config.json` already sets `human-gated`, and it needs an
+authorized actor (the authenticated `gh` login). It posts an `unclaimed-by`
+marker that no gate conditions on the mode. A checkout of the PR branch that
+commits the opt-in has that copy, so it can release. Other checkouts can
+release once they pull the change after it merges to the default branch.
+
+Every reader that consults the mode evaluates it each time it reads a marker,
+not when the marker was posted. Enabling `human-gated` on the default branch
+therefore lifts the mode gate for every earlier forced-handoff marker that a
+reader of the default-branch copy checks: the working-directory readers, once
+each working directory pulls the change, and the required check, once the
+change merges to the default branch. A pull request into another base reads
+that base's
+copy, so its gate stays closed until that copy carries the opt-in. Find those
+markers as the issue comments whose body starts with `<!-- forced-handoff:`,
+and review them before enabling the mode. A private downstream adopter reported
+this on 2026-10-06 as low severity; preventive; no observed incident yet.
+
+The sequence that recovers a stalled handoff: commit the opt-in to the PR base
+branch through a normal pull request, and once that pull request has merged,
+merge the base branch into the PR branch and push the merge. Pull the change
+into each working directory that runs Resume, rerun Resume Step 1, then hand
+off. The claim branch copy is read from the remote. When the PR base is not the
+default branch, also commit the opt-in to the default branch through a normal
+pull request, because the required check reads that copy. A claim branch that
+has set its own `forcedHandoff.mode` needs `human-gated` set on that branch by
+an edit, because a merge keeps a change the branch made itself; a block that
+the branch inherited unchanged takes the default branch's new value on merge. For
+a claim with no open PR, commit the opt-in to the default branch through a
+normal pull request, then, once that pull request has merged, merge the
+default branch into the claim branch and push the merge.
+
+`--import --force` overwrites `.github/idd/config.json`, including
+`forcedHandoff`, and only the `commands` table is restored afterwards. The
+overlay re-import procedure passes one `--hold` per owned path, with
+`.github/idd/config.json` as the default example. Any other forced re-import
+must re-record the opt-in. A private downstream adopter reported this on
+2026-10-04 as not observed; preventive; no observed incident yet.
 
 ### Example configurations
 

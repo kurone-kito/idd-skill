@@ -160,9 +160,14 @@ export type ProviderCollaboratorPermissionResult =
 /** One `CONNECTED_EVENT`/`DISCONNECTED_EVENT` timeline node, GitHub-shaped. */
 export type ProviderConnectedPrEvent = Record<string, unknown>;
 
-/** One page of `closedByPullRequestsReferences`, GitHub-shaped nodes. */
+/**
+ * One page of `closedByPullRequestsReferences`. `number` and `repository`
+ * (`owner/repo`, from `nameWithOwner`) are optional so existing fixtures
+ * that carry only `state` still typecheck; a reader that needs them treats
+ * an absent value as a failed lookup (#3871).
+ */
 export interface ProviderClosingPullRequestsPage {
-  nodes: { state?: string }[];
+  nodes: { state?: string; number?: number; repository?: string }[];
   hasNextPage: boolean;
   endCursor: string | null;
 }
@@ -907,8 +912,8 @@ export interface ProviderPort {
   /**
    * work-items. `gh search issues`, the distinct server-side search
    * technique `discover-roadmap-graph.mts`'s `buildOpenRoadmapRootsLoader`
-   * uses for `--all-roadmaps` root discovery (a label search and a
-   * body-marker search, unioned by the caller) -- not `listOpenWorkItems`/
+   * uses for `--all-roadmaps` root discovery (a body-marker search, unioned
+   * by the caller with the configured legacy roots) -- not `listOpenWorkItems`/
    * `searchWorkItems`'s REST list/search shape. `limit` is GitHub search's
    * own hard per-query result cap (not a caller-tunable advisory bound like
    * `listIssueNumbersClosedByOpenChangeRequests`'s), passed through rather

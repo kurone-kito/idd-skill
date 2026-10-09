@@ -217,6 +217,31 @@ Before you publish a `ready` issue, confirm:
   [contract.md's worked example](contract.md#codebase-fidelity-validation))
 - values that are mutable at runtime are flagged to specify a live read
   at the point of use rather than a one-time capture at construction
+- when a draft changes a documented rule, its candidate-file list names
+  every restating site of the old statement, found by `git grep -n -F`;
+  remedy: see the worked example below
+
+## Rule-change candidate-file example
+
+A rule change names the code and the main paragraph, then adds each
+restating site the search finds. Two phrases of the old statement are
+selected here. The first is "measured from the head"; the same command
+runs again for the second phrase, and the hits of both are merged:
+
+```text
+git grep -n -F "measured from the head" -- docs idd-template .github \
+  schemas skills src tests AGENTS.md CLAUDE.md GEMINI.md \
+  .github/copilot-instructions.md
+```
+
+Its hits become the candidate-file list:
+
+- `src/scripts/example-deadline.mts` (the code)
+- `docs/policy-constants.md` (the main paragraph)
+- `docs/example-helper-reference.md` (restating site: the helper reference
+  still gives the old anchor)
+- `schemas/example.schema.json` (restating site: the description still
+  gives the old anchor)
 
 ## Example orphan issue
 
@@ -363,13 +388,14 @@ automatically execution-order-independent: if one track edits a shared
 CI check's own workflow _definition_ (e.g. a `.yml` file), any other
 in-flight track whose CI run relies on that check inherits a hidden
 ordering dependency, even though the tracks' own edited files never
-overlap. `gh run rerun` re-resolves against the PR branch's own copy
-of the workflow file, so a fix merged to `main` on a sibling track
-stays invisible until the dependent branch pulls it in (see
-`.github/instructions/idd-ci.instructions.md`'s Rerun mechanics). Note
-this dependency in
-the roadmap's parallel note rather than assuming disjoint files always
-mean safe parallelism.
+overlap. `gh run rerun` reuses the original event's workflow definition,
+so a fix merged to `main` on a sibling track stays invisible to a rerun
+until a new event (a branch-sync merge of `main`, or reopening the PR)
+picks it up (see `.github/instructions/idd-ci.instructions.md`'s Rerun
+mechanics). Observed 2026-10-05 in a private adopter and reproduced on
+2026-10-09 (issue `#3859`). Note this dependency in the roadmap's
+parallel note rather than assuming disjoint files always mean safe
+parallelism.
 
 ### Artificial decomposition
 

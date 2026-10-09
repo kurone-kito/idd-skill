@@ -284,9 +284,44 @@ six days after. Search closed issues using the proposal's core nouns
 rather than its new framing, plus at least one alternative phrasing:
 
 ```sh
-gh issue list --repo <owner>/<repo> --state closed --limit 100 \
-  --search 'reason:"not planned" <core-nouns>'
+gh api -X GET search/issues --paginate \
+  -f q='repo:<owner>/<repo> is:issue is:closed reason:"not planned" <core-nouns>' \
+  -f per_page=100 \
+  --jq '(.items[] | "#\(.number) \(.title)"), "-- total=\(.total_count) incomplete=\(.incomplete_results) page=\(.items | length)"'
 ```
+
+A fixed `--limit` cannot prove that nothing was missed: it silently stops
+at the limit, and the search API caps every query at 1,000 results. Read
+the output by these outcomes before judging the proposal:
+
+- **Complete:** every summary line says `incomplete=false`, the `page=`
+  values add up to `total=`, and no `#number` line appears twice (a page
+  shift can repeat one issue and drop another while the sum still
+  matches). GitHub does not promise a snapshot across pages, so this is a best-
+  effort read: an item added and another removed during the traversal can keep
+  the totals equal, and a repeated run that gives the same result confirms it.
+  Judge the proposal against the listed titles.
+- **Search not finished:** `incomplete=true` on any line means the
+  provider timed out and the list is partial. Retry once, then narrow the
+  query.
+- **Over the 1,000-result ceiling:** every `gh` call exited 0 with
+  nothing on stderr, the `total=` values agree, and the `page=` values add
+  up to fewer than `total=`. Narrow the query with a `closed:` date range
+  and run it again. Do not add nouns to narrow it, because nouns can hide
+  the declined match.
+- **Not a completed check:** a non-zero exit or any stderr from `gh` (for
+  example a rate limit or a server error part-way through the pages),
+  `total=` values that differ between lines (the search moved under the
+  reader), or a `#number` line that appears twice. Run it again.
+
+An incomplete search is not a completed previously-declined check. Do not
+publish the proposal as `ready` until a narrower query completes, or
+route it to `needs-decision` and record the incompleteness.
+
+Observed 2026-10-08: reproduced read-only on `cli/cli` with the noun `pr`, where
+`--limit 100` returned 100 of 288 matches with exit 0 and empty stderr. That is
+a reproduction, not an incident recorded in this repository, so the failure mode
+is preventive for adopters.
 
 When the proposal changes an existing mechanism, identify the PR that
 introduced or last reshaped it (for example from `git log -S` on the
@@ -596,6 +631,25 @@ Ask these checks:
    [Context ceiling](https://github.com/kurone-kito/idd-skill/blob/main/docs/policy-constants.md#context-ceiling)
    section as the authoritative policy reference instead of copying its
    mechanics into the issue.
+7. When a draft changes a documented rule, default, threshold, name, or
+   behavior, find every restating site of the old statement, not only the
+   code and the main paragraph the issue names. Pick two or three
+   distinctive phrases of the old statement and run `git grep -n -F` once
+   per phrase across the directories and agent entry files the checkout
+   has (in this repository: `docs/`, `idd-template/`, `.github/`,
+   `schemas/`, `skills/`, `src/`, `tests/`, `AGENTS.md`, `CLAUDE.md`,
+   `GEMINI.md`, `.github/copilot-instructions.md`). `git grep` ignores a
+   path the checkout lacks, so the list may be trimmed to what exists, but
+   a directory left out is a restating site the search cannot find.
+   `git grep` cannot tell a comment from a rule, so judge each hit. List
+   every restating site that still states the old rule under
+   `## Candidate files`, or give a one-line reason in the body for leaving
+   it. Where a phrase is distinctive enough that its
+   return would be a regression, add an acceptance criterion that it
+   cannot return, such as a data-only `forbiddenPatterns` entry in
+   `audit/sync-manifest.json` enforced by `audit-docs --check`. A
+   restating site outside the issue's scope is filed as its own issue,
+   not left in a pull request description.
 
 ## Live-observed claim citation
 
@@ -2072,7 +2126,14 @@ only approval boundary.
   label in place until the checklist passes and the user explicitly requests
   release from the authoring hold, except for the narrow auto-release
   exception below. Keep the set anchor held until every other
-  target's label removal is verified, and remove the anchor label last. For
+  target's label removal is verified, and remove the anchor label last. Every
+  label removal in this release, the anchor label included, and every restore
+  that follows uses `gh issue edit <number> --remove-label "<authoring label>"`
+  or `gh issue edit <number> --add-label "<authoring label>"`, with `--repo
+  <owner>/<repo>` outside the repository. The IDD template's opt-in Claude Code
+  baseline denies the `gh api -X DELETE` spelling and does not allowlist `gh
+  api`, so that spelling is not used (observed on issue #3841, 2026-10-08; see
+  issue #3898). For
   every target, first re-fetch owner comments during release-marker preflight.
   **Mandatory release-time hide-on-supersede sweep (#2896, #2935).** At
   this same point -- before the reuse-or-append decision below, so a
@@ -2167,21 +2228,32 @@ only approval boundary.
   that this target is the only issue whose trusted `authoring-owner`
   marker carries that exact `set`
   (`node scripts/authoring-set-members.mjs --set <id>`). A zero exit
-  whose JSON has `soleMember: true` and `issues` equal to that one
-  target is the only passing result. The helper exits non-zero when
+  whose JSON has `soleMember: true`, `issues` equal to that one target,
+  and no `skippedMarkers` entry with `namesRequestedSet: true` is the only
+  passing result (an edited entry's flag reflects only the comment's
+  current text). A `requested-set` entry on the target itself is that
+  target's own hidden marker, which the sweep routinely leaves behind, so
+  it does not block; one on any other issue already changes `issues` or
+  fails the scan. The helper exits non-zero when
   enumeration does not finish, including a search response with
   `incomplete_results` or an index-lag window that does not finish.
   The candidate search is the owner-marker token, so an edited marker
   that dropped the set is still fetched and fails closed. An
   unparseable trusted comment that still carries the token fails
   closed too. A trusted marker whose target names a different
-  issue than the comment's host fails closed as well.
+  issue than the comment's host fails closed as well. Each such reason
+  ends with a pointer to how a maintainer clears the comment:
+  `docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`.
   **Exception:** a trusted owner marker that GitHub has minimized
-  with `minimizedReason: outdated` (case-insensitive) is silently
-  skipped rather than failing closed; it is a superseded comment
-  that the maintainer or an IDD tool has hidden as stale, and it
-  cannot prove or disprove current membership.
-  Any other result is inconclusive and blocks
+  with `minimizedReason: outdated` (case-insensitive) is not counted
+  as a member, because it cannot prove current membership. When it is
+  the set's only marker on its own issue, the helper fails closed
+  instead, naming that issue and comment. `skippedMarkers` lists each
+  skipped marker that could bear on the requested set, and
+  `skippedElsewhere` counts the markers of other sets. An edited,
+  unparseable or mistargeted skipped marker never fails the scan, but
+  its entry records whether it names the requested set
+  (`namesRequestedSet`). Any other result is inconclusive and blocks
   this exception the same way. A sibling's marker lives on the
   sibling's own issue and never appears in the marked target's own
   comment log. If either condition fails, or the helper cannot
@@ -2260,7 +2332,9 @@ only approval boundary.
   the sole member of its authoring set -- it carries no
   `<marker-prefix>-roadmap-id` marker, and
   `node scripts/authoring-set-members.mjs --set <id>` reports
-  `soleMember: true` with `issues` equal to this one target; that
+  `soleMember: true` with `issues` equal to this one target and no
+  `skippedMarkers` entry with `namesRequestedSet: true` (a `requested-set`
+  entry on the target itself does not block); that
   helper is exactly the mechanical proof this fast path's own
   `|set|==1` premise rests on, so skipping it here would be a genuine
   weakening, not a condensation, and a non-zero exit (including
@@ -2283,9 +2357,10 @@ only approval boundary.
   paginated log, and require the expected owner token, the shared set,
   anchor, and session, the recorded release-marker comment, and the
   expected label/body snapshot before the removal itself; (5) removing
-  that one authoring
-  label and re-fetching to verify the release marker, absent label,
-  and expected body snapshot; (6) the mandatory sweep again, against
+  that one authoring label with `gh issue edit <number> --remove-label
+  "<authoring label>"` (the release bullet above gives the reason) and
+  re-fetching to verify the release marker, absent label, and expected body
+  snapshot; (6) the mandatory sweep again, against
   the same issue and the journal issue, before the release-complete
   reuse-or-append decision; (7) the anchor-only `mode=release-complete`
   marker, verified via bounded-retry paginated re-fetch; (8) the

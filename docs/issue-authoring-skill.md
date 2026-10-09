@@ -636,6 +636,25 @@ Ask these checks:
    [Context ceiling](policy-constants.md#context-ceiling) section as the
    authoritative policy reference instead of copying its mechanics into
    the issue.
+7. When a draft changes a documented rule, default, threshold, name, or
+   behavior, find every restating site of the old statement, not only the
+   code and the main paragraph the issue names. Pick two or three
+   distinctive phrases of the old statement and run `git grep -n -F` once
+   per phrase across the directories and agent entry files the checkout
+   has (in this repository: `docs/`, `idd-template/`, `.github/`,
+   `schemas/`, `skills/`, `src/`, `tests/`, `AGENTS.md`, `CLAUDE.md`,
+   `GEMINI.md`, `.github/copilot-instructions.md`). `git grep` ignores a
+   path the checkout lacks, so the list may be trimmed to what exists, but
+   a directory left out is a restating site the search cannot find.
+   `git grep` cannot tell a comment from a rule, so judge each hit. List
+   every restating site that still states the old rule under
+   `## Candidate files`, or give a one-line reason in the body for leaving
+   it. Where a phrase is distinctive enough that its
+   return would be a regression, add an acceptance criterion that it
+   cannot return, such as a data-only `forbiddenPatterns` entry in
+   `audit/sync-manifest.json` enforced by `audit-docs --check`. A
+   restating site outside the issue's scope is filed as its own issue,
+   not left in a pull request description.
 
 ## Live-observed claim citation
 
@@ -1542,8 +1561,14 @@ release from the authoring hold (see the
 [Narrow auto-release exception](#narrow-auto-release-exception)
 below for the one marker-scoped exception to this precondition). Keep the
 set anchor held until every other
-target's label removal is verified, and remove the anchor label last. First
-re-fetch owner comments during release-marker preflight.
+target's label removal is verified, and remove the anchor label last. Every
+label removal in this release, the anchor label included, and every restore that
+follows uses `gh issue edit <number> --remove-label "<authoring label>"` or `gh
+issue edit <number> --add-label "<authoring label>"`, with `--repo
+<owner>/<repo>` outside the repository. The IDD template's opt-in Claude Code
+baseline denies the `gh api -X DELETE` spelling and does not allowlist `gh api`,
+so that spelling is not used (observed on issue #3841, 2026-10-08; see
+issue #3898). First re-fetch owner comments during release-marker preflight.
 
 **Mandatory release-time hide-on-supersede sweep (#2896, #2935).** At
 this same point -- before the reuse-or-append decision below, so a
@@ -1645,20 +1670,32 @@ marker carries that exact `set`:
 node scripts/authoring-set-members.mjs --set <id>
 ```
 
-A zero exit whose JSON has `soleMember: true` and `issues` equal to that
-one target is the only passing result. The helper exits non-zero when
+A zero exit whose JSON has `soleMember: true`, `issues` equal to that
+one target, and no `skippedMarkers` entry with `namesRequestedSet: true`
+is the only passing result (an edited entry's flag reflects only the
+comment's current text). A `requested-set` entry on the target itself is
+that target's own hidden marker, which the sweep routinely leaves behind,
+so it does not block; one on any other issue already changes `issues` or
+fails the scan. The helper exits non-zero when
 enumeration does not finish, including a search response with
 `incomplete_results` or an index-lag window that does not finish.
 The candidate search is the owner-marker token, so an edited marker
 that dropped the set is still fetched and fails closed. An
 unparseable trusted comment that still carries the token fails
 closed too. A trusted marker whose target names a different
-issue than the comment's host fails closed as well.
+issue than the comment's host fails closed as well. Each such reason ends
+with a pointer to how a maintainer clears the comment:
+`docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`.
 **Exception:** a trusted owner marker that GitHub has minimized
-with `minimizedReason: outdated` (case-insensitive) is silently
-skipped rather than failing closed; it is a superseded comment
-that the maintainer or an IDD tool has hidden as stale, and it
-cannot prove or disprove current membership.
+with `minimizedReason: outdated` (case-insensitive) is not counted
+as a member, because it cannot prove current membership. When it is
+the set's only marker on its own issue, the helper fails closed
+instead, naming that issue and comment. `skippedMarkers` lists each
+skipped marker that could bear on the requested set, and
+`skippedElsewhere` counts the markers of other sets. An edited,
+unparseable or mistargeted skipped marker never fails the scan, but
+its entry records whether it names the requested set
+(`namesRequestedSet`).
 Any other result is inconclusive and blocks this
 exception the same way. A sibling's marker lives on the sibling's own
 issue and never appears in the marked target's own comment log. If either
@@ -2009,9 +2046,33 @@ the proposal's core nouns rather than its new framing, plus at least
 one alternative phrasing:
 
 ```sh
-gh issue list --repo <owner>/<repo> --state closed --limit 100 \
-  --search 'reason:"not planned" <core-nouns>'
+gh api -X GET search/issues --paginate \
+  -f q='repo:<owner>/<repo> is:issue is:closed reason:"not planned" <core-nouns>' \
+  -f per_page=100 \
+  --jq '(.items[] | "#\(.number) \(.title)"), "-- total=\(.total_count) incomplete=\(.incomplete_results) page=\(.items | length)"'
 ```
+
+A fixed `--limit` cannot prove that nothing was missed: it stops at the limit
+silently, and the search API caps every query at 1,000 results. The skill should
+read the output by these outcomes. Complete: every summary line says
+`incomplete=false`, the `page=` values add up to `total=`, and no `#number` line
+appears twice. GitHub does not promise a snapshot across pages, so this is a
+best-effort read: an item added and another removed during the traversal can
+keep the totals equal, and a repeated run that gives the same result confirms
+it. Search not finished: `incomplete=true` on any line, so retry once and then
+narrow the query. Over the 1,000-result ceiling: every `gh` call exited 0 with
+nothing on stderr, the `total=` values agree, and the `page=` values add up to
+fewer than `total=`. Only then split the query with a `closed:` date range (do
+not add nouns, which can hide the match). A short page sum without those guards
+is a pagination failure or a result set that moved, not the ceiling. Not a
+completed check: a non-zero exit, any stderr from `gh`, `total=` values that
+differ between lines, or a `#number` line that appears twice. An incomplete
+search is not a completed check, so the proposal is not published as `ready`
+until a narrower query completes or it is routed to `needs-decision` with the
+incompleteness recorded. Observed 2026-10-08: reproduced read-only on `cli/cli`
+with the noun `pr`, where `--limit 100` returned 100 of 288 matches with exit 0
+and empty stderr. That is a reproduction, not an incident recorded in this
+repository, so the failure mode is preventive for adopters.
 
 When the proposal changes an existing mechanism, the skill should
 identify the PR that introduced or last reshaped it (for example from

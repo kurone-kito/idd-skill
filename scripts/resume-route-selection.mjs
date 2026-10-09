@@ -35,7 +35,7 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
-import { CLOSING_KEYWORD_ALTERNATION } from './supersession-detection.mjs';
+import { CLOSING_KEYWORD_PATTERN } from './supersession-detection.mjs';
 
 /** A GitHub task-list checkbox after a list marker, with its padding. */
 const TASK_CHECKBOX_PREFIX = /^\[[ xX]\][ \t]+/u;
@@ -505,7 +505,7 @@ function findIssueRelatedOpenPrs({ port, issueNumber }) {
       pr.body,
     );
     const d35ClosingKeyword = new RegExp(
-      `\\b(${CLOSING_KEYWORD_ALTERNATION})(\\s+)(#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
+      `\\b(${CLOSING_KEYWORD_PATTERN})(\\s+)(#\\d+|[\\w.-]+/[\\w.-]+#\\d+)\\b`,
       'gi',
     );
     const maskedBody = maskMarkdownForScan(bodyWithoutBlockQuotes);

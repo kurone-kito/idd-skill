@@ -14,7 +14,7 @@
 // unfinished listing, exits non-zero and never reports `soleMember: true`.
 import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { ghApiJson } from './gh-exec.mjs';
+import { ghTextUnbounded } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -171,7 +171,10 @@ function looksLikeOwnerMarker(body, markerPrefix) {
  * set do not count. A parsed marker whose target is not the issue
  * the comment was fetched from fails closed: counting the host
  * issue instead could collapse two targets into one member. One
- * issue with several markers for the set is still one member. Every
+ * issue with several markers for the set is still one member. A trusted
+ * marker minimized as `outdated` is never a member: it is reported in
+ * `skippedMarkers`, and a requested-set marker hidden with no visible
+ * marker of the set on its issue makes the listing incomplete. Every
  * per-comment fail-closed `reason` (an edited, unparseable, or
  * mistargeted marker) names the triggering comment's host issue
  * (`<owner>/<repo>#<issueNumber>`) and comment id so the exact
@@ -185,12 +188,18 @@ export function evaluateAuthoringSetMembers(input) {
       soleMember: false,
       issues: [],
       reason: 'enumeration incomplete',
+      skippedMarkers: [],
+      skippedElsewhere: 0,
     };
   }
   const trusted = new Set(
     input.trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
   );
-  const issues = new Set();
+  // Classify the skipped markers first, so the live evaluation below sees
+  // exactly the comments it always has and keeps its reasons and order.
+  const live = [];
+  const skippedMarkers = [];
+  let skippedElsewhere = 0;
   for (const comment of input.comments) {
     const login = comment.authorLogin.trim().toLowerCase();
     if (!trusted.has(login)) {
@@ -199,15 +208,92 @@ export function evaluateAuthoringSetMembers(input) {
     if (!looksLikeOwnerMarker(comment.body, input.markerPrefix)) {
       continue;
     }
-    // A trusted marker GitHub has minimized as "outdated" is a
-    // superseded comment -- silently skip it rather than fail closed.
-    if (
-      comment.isMinimized === true &&
-      typeof comment.minimizedReason === 'string' &&
-      comment.minimizedReason.toLowerCase() === 'outdated'
-    ) {
+    if (!isOutdatedMinimized(comment)) {
+      live.push(comment);
       continue;
     }
+    const skipped = classifySkippedMarker(comment, input);
+    if (skipped === 'other-set') {
+      skippedElsewhere += 1;
+    } else {
+      skippedMarkers.push(skipped);
+    }
+  }
+  // Stable sort: comment order is kept within one issue.
+  skippedMarkers.sort((left, right) => left.issueNumber - right.issueNumber);
+  const liveResult = evaluateLiveMarkers(live, input);
+  if (!liveResult.complete) {
+    return { ...liveResult, skippedMarkers, skippedElsewhere };
+  }
+  // A requested-set marker hidden with no visible marker of the set on its
+  // issue would let the set look smaller than it is, so the scan stops.
+  const members = new Set(liveResult.issues);
+  const hidden = skippedMarkers.filter(
+    (entry) =>
+      entry.kind === 'requested-set' && !members.has(entry.issueNumber),
+  );
+  if (hidden.length > 0) {
+    const lowest = Math.min(...hidden.map((entry) => entry.issueNumber));
+    const onLowest = hidden.filter((entry) => entry.issueNumber === lowest);
+    const last = onLowest[onLowest.length - 1];
+    const hostRef = `${input.repository.owner}/${input.repository.repo}#${lowest}`;
+    return {
+      complete: false,
+      soleMember: false,
+      issues: [],
+      reason: `hidden authoring-owner marker is the set's only marker on its issue (${hostRef}, comment id ${last?.commentId ?? 0}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
+      skippedMarkers,
+      skippedElsewhere,
+    };
+  }
+  return { ...liveResult, skippedMarkers, skippedElsewhere };
+}
+function isOutdatedMinimized(comment) {
+  return (
+    comment.isMinimized === true &&
+    typeof comment.minimizedReason === 'string' &&
+    comment.minimizedReason.toLowerCase() === 'outdated'
+  );
+}
+/**
+ * Classify one skipped (outdated-minimized) trusted marker. An unedited,
+ * parseable marker whose target is its host issue names its own set:
+ * the requested set is listed as `requested-set`, another set is counted
+ * as `other-set`. Anything else is `unattributable`.
+ */
+function classifySkippedMarker(comment, input) {
+  const base = { issueNumber: comment.issueNumber, commentId: comment.id };
+  if (comment.lastEditedAt !== null) {
+    return {
+      ...base,
+      kind: 'unattributable',
+      namesRequestedSet: comment.body.includes(input.set),
+    };
+  }
+  const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+  if (!parsed) {
+    return {
+      ...base,
+      kind: 'unattributable',
+      namesRequestedSet: comment.body.includes(input.set),
+    };
+  }
+  const hostRef = `${input.repository.owner}/${input.repository.repo}#${comment.issueNumber}`;
+  if (parsed.target.toLowerCase() !== hostRef.toLowerCase()) {
+    return {
+      ...base,
+      kind: 'unattributable',
+      namesRequestedSet: parsed.set === input.set,
+    };
+  }
+  if (parsed.set !== input.set) {
+    return 'other-set';
+  }
+  return { ...base, kind: 'requested-set', mode: parsed.mode };
+}
+function evaluateLiveMarkers(comments, input) {
+  const issues = new Set();
+  for (const comment of comments) {
     const hostRef = `${input.repository.owner}/${input.repository.repo}#${comment.issueNumber}`;
     const locator = `${hostRef}, comment id ${comment.id}`;
     if (comment.lastEditedAt !== null) {
@@ -215,7 +301,7 @@ export function evaluateAuthoringSetMembers(input) {
         complete: false,
         soleMember: false,
         issues: [],
-        reason: `edited trusted authoring-owner marker (${locator})`,
+        reason: `edited trusted authoring-owner marker (${locator}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
       };
     }
     const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
@@ -224,7 +310,7 @@ export function evaluateAuthoringSetMembers(input) {
         complete: false,
         soleMember: false,
         issues: [],
-        reason: `unparseable trusted authoring-owner marker (${locator})`,
+        reason: `unparseable trusted authoring-owner marker (${locator}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
       };
     }
     if (parsed.target.toLowerCase() !== hostRef.toLowerCase()) {
@@ -232,7 +318,7 @@ export function evaluateAuthoringSetMembers(input) {
         complete: false,
         soleMember: false,
         issues: [],
-        reason: `authoring-owner marker target does not match its host issue (${locator})`,
+        reason: `authoring-owner marker target does not match its host issue (${locator}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
       };
     }
     if (parsed.set !== input.set) {
@@ -269,8 +355,24 @@ export function collectIndexLagIssueNumbers(items, pageFull) {
   ].sort((left, right) => left - right);
   return { complete: true, numbers, reason: '' };
 }
+/**
+ * Read one REST page through the unbounded `gh` reader (#3901). A page of
+ * full issue resources can be larger than the 1 MiB buffer that ghApiJson
+ * gives its child process, so the response goes to a temporary file, as the
+ * sibling authoring helpers read theirs. An empty response parses as `{}`,
+ * and an unparseable one as `undefined`, so the caller shape check reports
+ * either as an unreadable page.
+ */
+function ghApiPageUnbounded(apiPath) {
+  const raw = ghTextUnbounded(['api', apiPath]);
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    return undefined;
+  }
+}
 function fetchIndexLagIssues(owner, repo, sinceIso) {
-  const payload = ghApiJson(
+  const payload = ghApiPageUnbounded(
     `repos/${owner}/${repo}/issues?state=all&since=${encodeURIComponent(sinceIso)}&per_page=${INDEX_LAG_PAGE_SIZE}&page=1`,
   );
   if (!Array.isArray(payload)) {
@@ -312,7 +414,12 @@ Output schema:
   "complete": true,
   "soleMember": false,
   "issues": [1, 2],
-  "reason": ""
+  "reason": "",
+  "skippedMarkers": [
+    {"issueNumber": 2, "commentId": 5577810398, "kind": "requested-set", "mode": "acquire"},
+    {"issueNumber": 3, "commentId": 6000000001, "kind": "unattributable", "namesRequestedSet": false}
+  ],
+  "skippedElsewhere": 0
 }
 `);
 }
@@ -341,7 +448,7 @@ function parseArgs(argv) {
 function fetchSearchPages(query) {
   const pages = [];
   for (let page = 1; page <= SEARCH_MAX_PAGES; page += 1) {
-    const payload = ghApiJson(
+    const payload = ghApiPageUnbounded(
       `search/issues?q=${encodeURIComponent(query)}&per_page=${SEARCH_PAGE_SIZE}&page=${page}`,
     );
     const parsed = parseIssueSearchPage(payload);
@@ -452,6 +559,8 @@ function runCli() {
         soleMember: evaluation.soleMember,
         issues: evaluation.issues,
         reason,
+        skippedMarkers: evaluation.skippedMarkers,
+        skippedElsewhere: evaluation.skippedElsewhere,
       },
       null,
       2,

@@ -27,7 +27,11 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadIddConfig } from './idd-config.mts';
+import {
+  evaluateForcedHandoffPreflight,
+  type ForcedHandoffPreflightCheck,
+  loadIddConfig,
+} from './idd-config.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
@@ -53,10 +57,14 @@ interface IssueCommentPayload {
   lastEditedAt?: string | null;
 }
 
-/** Linked-PR row returned by `gh pr list --json number,headRefName`. */
+/**
+ * Linked-PR row returned by `gh pr list --json number,headRefName,baseRefName`.
+ * `baseRefName` decides which trusted copy the preflight reads (#3872).
+ */
 interface LinkedPrPayload {
   number?: number | string | null;
   headRefName?: string | null;
+  baseRefName?: string | null;
 }
 
 /** Active claim resolved from the trusted claim-marker stream. */
@@ -249,6 +257,47 @@ export function planHandoff(
   };
 }
 
+/** `--plan`'s read-only preflight (#3872); see {@link planPreflight}. */
+type PlanPreflight =
+  | { status: 'not-evaluated'; reason: string }
+  | { status: 'ok'; checks: ForcedHandoffPreflightCheck[] }
+  | {
+      status: 'refused';
+      checks: ForcedHandoffPreflightCheck[];
+      refusal: string | null;
+    };
+
+/**
+ * Run the successor preflight for `--plan` without refusing. A local mode that
+ * is not human-gated is `not-evaluated` and makes no GitHub read. Otherwise the
+ * trusted copies are read and the result is `ok` or `refused`. A null claim
+ * branch never reaches here in practice, because `planHandoff` throws first for
+ * a plan with no active claim; the guard only narrows the type.
+ */
+function planPreflight(
+  modeEnabled: boolean,
+  claimBranch: string | null,
+  owner: string,
+  repo: string,
+  openPrs: LinkedPrPayload[],
+): PlanPreflight {
+  if (!modeEnabled) {
+    return { status: 'not-evaluated', reason: 'local-mode-disabled' };
+  }
+  if (claimBranch === null) {
+    return { status: 'not-evaluated', reason: 'no-active-claim' };
+  }
+  const result = evaluateForcedHandoffPreflight({
+    owner,
+    repo,
+    claimBranch,
+    openPrs,
+  });
+  return result.ok
+    ? { status: 'ok', checks: result.checks }
+    : { status: 'refused', checks: result.checks, refusal: result.refusal };
+}
+
 export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
   const args = parseArgs(argv);
 
@@ -342,7 +391,7 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
         '--state',
         'open',
         '--json',
-        'number,headRefName',
+        'number,headRefName,baseRefName',
       ]) as LinkedPrPayload[];
     }
 
@@ -366,6 +415,20 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
       staleAgeMs,
     });
 
+    // #3872: the preflight is read-only and never throws. A refusal drops
+    // markerBody, so a caller cannot post a marker the trusted copies would
+    // not honor.
+    const { markerBody, ...planWithoutBody } = plan;
+    // Same PR selection as the marker run: the PR named by --pr, if any.
+    const preflight = planPreflight(
+      modeEnabled,
+      tempClaim ? tempClaim.branch : null,
+      owner,
+      name,
+      args.prNumber === undefined
+        ? linkedPrs
+        : linkedPrs.filter((pr) => Number(pr.number) === args.prNumber),
+    );
     console.log(
       JSON.stringify(
         {
@@ -374,7 +437,9 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
           modeEnabled,
           trustedMarkerActors: [...trustedMarkerLogins].sort(),
           trustedMarkerActorsSources,
-          ...plan,
+          ...planWithoutBody,
+          ...(preflight.status === 'refused' ? {} : { markerBody }),
+          preflight,
         },
         null,
         2,
@@ -478,6 +543,7 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
   }
 
   let linkedPr = '';
+  let namedPrBase = '';
   if (args.prNumber) {
     const pr = ghJson([
       'pr',
@@ -486,17 +552,61 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
       '-R',
       `${owner}/${name}`,
       '--json',
-      'headRefName,url',
+      'headRefName,url,baseRefName,state',
       '--jq',
       '.',
-    ]) as { headRefName?: unknown };
+    ]) as { headRefName?: unknown; baseRefName?: unknown; state?: unknown };
     const headRefName = String(pr.headRefName ?? '');
     if (headRefName !== activeClaim.branch) {
       throw new Error(
         `PR #${args.prNumber} head branch ${headRefName} does not match active claim branch ${activeClaim.branch}`,
       );
     }
+    // A closed or merged PR is not the handoff's PR: the copies its base names
+    // are not the ones Resume and F2 read for an open claim (#3872).
+    if (String(pr.state ?? '') !== 'OPEN') {
+      throw new Error(
+        `PR #${args.prNumber} is not open; --pr must name an open pull request on claim branch ${activeClaim.branch}`,
+      );
+    }
+    namedPrBase = String(pr.baseRefName ?? '');
     linkedPr = String(args.prNumber);
+  }
+
+  // #3872: the successor must not take over unless the trusted copies that
+  // Resume and F2 read for the PR it names confirm the opt-in. With an open PR
+  // on the claim branch, --pr is required, and an unrelated open PR is not
+  // checked. Without one, the default branch and the claim branch are checked.
+  let preflightPrs: { number: number; baseRefName: string }[] = [];
+  if (args.prNumber) {
+    preflightPrs = [{ number: args.prNumber, baseRefName: namedPrBase }];
+  } else {
+    const openPrs = ghJson([
+      'pr',
+      'list',
+      '--repo',
+      `${owner}/${name}`,
+      '--head',
+      activeClaim.branch,
+      '--state',
+      'open',
+      '--json',
+      'number,headRefName,baseRefName',
+    ]) as LinkedPrPayload[];
+    if (openPrs.length > 0) {
+      throw new Error(
+        `issue #${args.issueNumber} has an open PR on claim branch ${activeClaim.branch} (#${openPrs.map((pr) => pr.number).join(', #')}); rerun with --pr <number>`,
+      );
+    }
+  }
+  const preflightResult = evaluateForcedHandoffPreflight({
+    owner,
+    repo: name,
+    claimBranch: activeClaim.branch,
+    openPrs: preflightPrs,
+  });
+  if (!preflightResult.ok) {
+    throw new Error(preflightResult.refusal ?? 'forced handoff refused');
   }
 
   const payload = {
@@ -808,8 +918,12 @@ function printUsage(): void {
 
 Options:
   --plan                           derive live PR context and emit a structured execution plan;
-                                   --new-agent-id and --new-claim-id become optional (auto-generated)
-  --pr <number>                    optional PR number for issue-plus-pr context
+                                   --new-agent-id and --new-claim-id become optional (auto-generated);
+                                   explicit --new-agent-id and --new-claim-id stay accepted with --plan.
+                                   The plan's read-only preflight field reports the trusted copies,
+                                   and its markerBody is omitted when the preflight would refuse.
+  --pr <number>                    open PR for issue-plus-pr context (required when the claim
+                                   branch has an open PR; a PR that is not open is refused)
   --new-agent-id <id>              successor session agent id (required without --plan)
   --new-claim-id <id>              successor claim id (required without --plan)
   --forced-by <actor>              approving human actor recorded in the marker

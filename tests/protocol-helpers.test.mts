@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseClaimComment } from '../src/scripts/marker-helpers.mts';
 import {
+  parseClaimComment,
+  parseForcedHandoffComment,
+  renderForcedHandoffComment,
+} from '../src/scripts/marker-helpers.mts';
+import {
+  applyClaimEvent,
   buildActivitySnapshotSummary,
+  buildForcedHandoffEnableGate,
+  buildForcedHandoffRefusalExplainer,
   classifyCommentEditState,
   classifyThreadAckOnlyPostDisposition,
   compareClaimEventOrder,
@@ -11,6 +18,7 @@ import {
   DEFAULT_STALE_AGE_MS,
   detectMalformedReviewWatermarkComments,
   EDITED_AFTER_DISPOSITION_HINT,
+  explainFreshDisposition,
   hasFreshDisposition,
   hasTrustedReviewAckAfter,
   isDispositionComment,
@@ -18,9 +26,11 @@ import {
   LIVE_STATUS_DIGEST_MARKER,
   listBlockingPresentRunNames,
   MALFORMED_DISPOSITION_PREFIX_HINT,
+  normalizeLinkedPrReference,
   orderClaimEvents,
   resolveActiveClaim,
   resolveActiveClaimForWriteGate,
+  resolveActiveClaimWithForcedHandoffTrace,
   resolveLatestReviewWatermark,
   resolvePresentRunConclusion,
   STALE_THREAD_DISPOSITION_HINT,
@@ -4873,6 +4883,271 @@ test('hasFreshDisposition: an edited or edit-state-unresolved disposition reply 
   assert.equal(hasFreshDisposition(minimizedThread), true);
 });
 
+// kurone-kito/idd-skill#3856: `explainFreshDisposition` names why an IDD
+// disposition is or is not fresh. Its `fresh` field must be the boolean
+// `hasFreshDisposition` returns for the same input.
+type ExplainedThread = Parameters<typeof explainFreshDisposition>[0];
+function explainedThread(nodes: Record<string, unknown>[]): ExplainedThread {
+  return {
+    id: 'T-explain',
+    isResolved: false,
+    comments: { pageInfo: { hasNextPage: false }, nodes },
+  } as ExplainedThread;
+}
+const explainRequest = {
+  author: { login: 'reviewer-a' },
+  body: 'please fix',
+  createdAt: '2026-05-12T00:00:00Z',
+  lastEditedAt: null,
+};
+const explainDisposition = (overrides: Record<string, unknown> = {}) => ({
+  author: { login: 'idd-bot' },
+  body: '**Accepted** — done',
+  createdAt: '2026-05-12T00:01:00Z',
+  lastEditedAt: null,
+  ...overrides,
+});
+const explainReply = (overrides: Record<string, unknown> = {}) => ({
+  author: { login: 'reviewer-a' },
+  body: 'still broken',
+  createdAt: '2026-05-12T00:02:00Z',
+  lastEditedAt: null,
+  ...overrides,
+});
+
+test('explainFreshDisposition names the cause of every freshness outcome', () => {
+  const cases: {
+    name: string;
+    nodes: Record<string, unknown>[];
+    cause: string;
+    fresh: boolean;
+  }[] = [
+    {
+      name: 'an unedited disposition with no later feedback is fresh',
+      nodes: [explainRequest, explainDisposition()],
+      cause: 'fresh',
+      fresh: true,
+    },
+    {
+      name: 'no IDD disposition at all',
+      nodes: [explainRequest],
+      cause: 'no-disposition',
+      fresh: false,
+    },
+    {
+      name: 'an edited IDD disposition with no unedited one',
+      nodes: [
+        explainRequest,
+        explainDisposition({ lastEditedAt: '2026-05-12T00:02:00Z' }),
+      ],
+      cause: 'disposition-edited',
+      fresh: false,
+    },
+    {
+      name: 'an IDD disposition whose edit state is unknown',
+      nodes: [
+        explainRequest,
+        {
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — done',
+          createdAt: '2026-05-12T00:01:00Z',
+        },
+      ],
+      cause: 'disposition-edited',
+      fresh: false,
+    },
+    {
+      name: 'an unedited IDD disposition with no readable time',
+      nodes: [explainRequest, explainDisposition({ createdAt: undefined })],
+      cause: 'disposition-time-unreadable',
+      fresh: false,
+    },
+    {
+      name: 'a later reply supersedes the disposition',
+      nodes: [explainRequest, explainDisposition(), explainReply()],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+    {
+      name: 'a reply in the same second as the disposition supersedes it',
+      nodes: [
+        explainRequest,
+        explainDisposition(),
+        explainReply({ createdAt: '2026-05-12T00:01:00Z' }),
+      ],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+    {
+      name: 'an earlier comment edited after the disposition supersedes it',
+      nodes: [
+        explainRequest,
+        explainDisposition(),
+        {
+          ...explainRequest,
+          createdAt: '2026-05-12T00:00:00Z',
+          lastEditedAt: '2026-05-12T00:05:00Z',
+          updatedAt: '2026-05-12T00:05:00Z',
+        },
+      ],
+      cause: 'superseded-by-edit',
+      fresh: false,
+    },
+    {
+      name: 'a reply and an edit both after the disposition: the reply wins',
+      nodes: [
+        {
+          ...explainRequest,
+          lastEditedAt: '2026-05-12T00:05:00Z',
+          updatedAt: '2026-05-12T00:05:00Z',
+        },
+        explainDisposition(),
+        explainReply(),
+      ],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+    {
+      name: 'an edited disposition-shaped comment after an unedited disposition',
+      nodes: [
+        explainRequest,
+        explainDisposition(),
+        explainDisposition({
+          createdAt: '2026-05-12T00:03:00Z',
+          lastEditedAt: '2026-05-12T00:04:00Z',
+        }),
+      ],
+      cause: 'superseded-by-reply',
+      fresh: false,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const thread = explainedThread(testCase.nodes);
+    const explained = explainFreshDisposition(thread);
+    assert.equal(explained.fresh, testCase.fresh, testCase.name);
+    assert.equal(explained.cause, testCase.cause, testCase.name);
+    assert.equal(hasFreshDisposition(thread), testCase.fresh, testCase.name);
+  }
+});
+
+test('explainFreshDisposition ignores an edited disposition-shaped comment from a non-IDD author', () => {
+  const thread = explainedThread([
+    explainRequest,
+    {
+      author: { login: 'reviewer-b' },
+      body: '**Accepted** — done',
+      createdAt: '2026-05-12T00:01:00Z',
+      lastEditedAt: '2026-05-12T00:02:00Z',
+    },
+  ]);
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'idd-bot',
+  };
+
+  assert.deepEqual(explainFreshDisposition(thread, options), {
+    fresh: false,
+    cause: 'no-disposition',
+  });
+  assert.equal(hasFreshDisposition(thread, options), false);
+});
+
+test('explainFreshDisposition classifies a reply with no creation time by its edit state (#3856)', () => {
+  const disposition = explainDisposition();
+  const request = explainRequest;
+  // No `createdAt`: an unedited reply is dated by its updatedAt, which is
+  // after the disposition, so it supersedes the disposition as a reply.
+  const uneditedReply = explainedThread([
+    request,
+    disposition,
+    {
+      author: { login: 'reviewer-a' },
+      body: 'still broken',
+      updatedAt: '2026-05-12T00:02:00Z',
+      lastEditedAt: null,
+    },
+  ]);
+  assert.deepEqual(explainFreshDisposition(uneditedReply), {
+    fresh: false,
+    cause: 'superseded-by-reply',
+  });
+
+  // The same comment after an edit is an edit, not a reply.
+  const editedReply = explainedThread([
+    request,
+    disposition,
+    {
+      author: { login: 'reviewer-a' },
+      body: 'still broken',
+      updatedAt: '2026-05-12T00:03:00Z',
+      lastEditedAt: '2026-05-12T00:03:00Z',
+    },
+  ]);
+  assert.deepEqual(explainFreshDisposition(editedReply), {
+    fresh: false,
+    cause: 'superseded-by-edit',
+  });
+});
+
+test('explainFreshDisposition agrees with the three existing hasFreshDisposition fixtures (#3856)', () => {
+  // The same three threads `hasFreshDisposition` is asserted against above.
+  // Each expected boolean and cause is stated here, not derived from
+  // `hasFreshDisposition`, so the explainer is checked against the original
+  // expectations.
+  const editedThread = explainedThread([
+    {
+      author: { login: 'reviewer-a' },
+      body: 'please fix',
+      createdAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      author: { login: 'idd-bot' },
+      body: '**Accepted** — done',
+      createdAt: '2026-05-12T00:01:00Z',
+      lastEditedAt: '2026-05-12T00:02:00Z',
+    },
+  ]);
+  const unknownThread = explainedThread([
+    {
+      author: { login: 'reviewer-a' },
+      body: 'please fix',
+      createdAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      author: { login: 'idd-bot' },
+      body: '**Accepted** — done',
+      createdAt: '2026-05-12T00:01:00Z',
+    },
+  ]);
+  const minimizedThread = explainedThread([
+    {
+      author: { login: 'reviewer-a' },
+      body: 'please fix',
+      createdAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      author: { login: 'idd-bot' },
+      body: '**Accepted** — done',
+      lastEditedAt: null,
+      createdAt: '2026-05-12T00:01:00Z',
+      updatedAt: '2026-05-12T00:03:00Z',
+    },
+  ]);
+
+  assert.deepEqual(explainFreshDisposition(editedThread), {
+    fresh: false,
+    cause: 'disposition-edited',
+  });
+  assert.deepEqual(explainFreshDisposition(unknownThread), {
+    fresh: false,
+    cause: 'disposition-edited',
+  });
+  assert.deepEqual(explainFreshDisposition(minimizedThread), {
+    fresh: true,
+    cause: 'fresh',
+  });
+});
+
 // kurone-kito/idd-skill#3248: an edited trusted activation-nonce marker
 // must never be considered by the activation-nonce-winner check --
 // dropped the same way an edited claimed-by/unclaimed-by is dropped from
@@ -5184,4 +5459,269 @@ test('isDispositionComment credits an urgency deferral reply that carries the st
     true,
   );
   assert.equal(isDispositionComment({ body: `Not a marker: ${reply}` }), false);
+});
+
+// Forced-handoff refusal causes (kurone-kito/idd-skill#3873). The explainer
+// and the boolean gate share one check order, so these tests pin both.
+const REFUSAL_ACTIVE_CLAIM = {
+  agentId: 'old-agent',
+  claimId: 'old-claim',
+  supersedes: 'none',
+  branch: 'issue/1-task',
+  createdAt: '2026-05-12T09:00:00Z',
+};
+
+function refusalMarker(
+  contextScope: 'issue-plus-pr' | 'issue-only',
+  createdAt: string,
+  linkedPr = '341',
+) {
+  const payload: Record<string, unknown> = {
+    oldAgentId: REFUSAL_ACTIVE_CLAIM.agentId,
+    oldClaimId: REFUSAL_ACTIVE_CLAIM.claimId,
+    newAgentId: 'new-agent',
+    newClaimId: 'new-claim',
+    branch: REFUSAL_ACTIVE_CLAIM.branch,
+    forcedBy: 'maintainer',
+    reason: 'operator-approved-recovery',
+    timestamp: createdAt,
+    contextScope,
+  };
+  if (contextScope === 'issue-plus-pr') payload.linkedPr = linkedPr;
+  const marker = parseForcedHandoffComment(
+    renderForcedHandoffComment(payload),
+    createdAt,
+  );
+  assert.ok(marker, 'the rendered forced-handoff marker must parse');
+  return marker;
+}
+
+const REFUSAL_EXPECTED_PRS = new Set([normalizeLinkedPrReference('341')]);
+const REFUSAL_PR_FIRST_COMMIT = '2026-05-12T11:00:00Z';
+
+test('refusal explainer names the cause of each refusal, and null when the gate honors the marker', () => {
+  const issuePlus = refusalMarker('issue-plus-pr', '2026-05-12T11:30:00Z');
+  const onlyBefore = refusalMarker('issue-only', '2026-05-12T10:00:00Z');
+  const onlyAfter = refusalMarker('issue-only', '2026-05-12T12:00:00Z');
+  const explain = (overrides: Record<string, unknown>) =>
+    buildForcedHandoffRefusalExplainer({
+      forcedHandoffEnabled: true,
+      expectedLinkedPrReferences: REFUSAL_EXPECTED_PRS,
+      prFirstCommitAt: REFUSAL_PR_FIRST_COMMIT,
+      ...overrides,
+    });
+
+  assert.equal(
+    explain({ forcedHandoffEnabled: false })(issuePlus),
+    'mode-disabled',
+  );
+  assert.equal(
+    explain({ forcedHandoffEnabled: false })(onlyBefore),
+    'mode-disabled',
+  );
+  assert.equal(
+    explain({ linkedPrLookupFailed: true })(onlyBefore),
+    'linked-pr-lookup-failed',
+  );
+  assert.equal(
+    explain({ linkedPrLookupFailed: true, prFirstCommitAt: null })(onlyBefore),
+    'linked-pr-lookup-failed',
+    'a failed commit read must be reported as the lookup failure, not as an unknown first-commit time',
+  );
+  assert.equal(explain({ linkedPrLookupFailed: true })(issuePlus), null);
+  assert.equal(explain({})(issuePlus), null);
+  assert.equal(
+    explain({ expectedLinkedPrReferences: new Set(['999']) })(issuePlus),
+    'pr-scope-mismatch',
+  );
+  assert.equal(explain({})(onlyBefore), null);
+  assert.equal(explain({})(onlyAfter), 'issue-only-not-before-first-commit');
+  assert.equal(
+    explain({ prFirstCommitAt: null })(onlyBefore),
+    'first-commit-time-unknown',
+  );
+  assert.equal(
+    explain({ expectedLinkedPrReferences: new Set() })(onlyAfter),
+    null,
+    'with no open linked PR backing the claim, every marker is honored',
+  );
+});
+
+test('the boolean gate honors exactly the markers the refusal explainer does not refuse', () => {
+  const markers = [
+    refusalMarker('issue-plus-pr', '2026-05-12T11:30:00Z'),
+    refusalMarker('issue-plus-pr', '2026-05-12T11:30:00Z', '999'),
+    refusalMarker('issue-only', '2026-05-12T10:00:00Z'),
+    refusalMarker('issue-only', '2026-05-12T12:00:00Z'),
+  ];
+  for (const enabled of [true, false]) {
+    for (const refs of [REFUSAL_EXPECTED_PRS, new Set<string>()]) {
+      for (const prFirstCommitAt of [REFUSAL_PR_FIRST_COMMIT, null]) {
+        const options = {
+          forcedHandoffEnabled: enabled,
+          expectedLinkedPrReferences: refs,
+          prFirstCommitAt,
+        };
+        const gate = buildForcedHandoffEnableGate(options);
+        const explain = buildForcedHandoffRefusalExplainer(options);
+        for (const marker of markers) {
+          assert.equal(gate(marker), explain(marker) === null);
+        }
+      }
+    }
+  }
+});
+
+function refusalEvent(body: string) {
+  return {
+    author: { login: 'maintainer' },
+    body,
+    createdAt: '2026-05-12T11:30:00Z',
+    lastEditedAt: null,
+  };
+}
+
+function refusalEventBody(scope: 'issue-plus-pr', linkedPr: string) {
+  return renderForcedHandoffComment({
+    oldAgentId: REFUSAL_ACTIVE_CLAIM.agentId,
+    oldClaimId: REFUSAL_ACTIVE_CLAIM.claimId,
+    newAgentId: 'new-agent',
+    newClaimId: 'new-claim',
+    branch: REFUSAL_ACTIVE_CLAIM.branch,
+    linkedPr,
+    forcedBy: 'maintainer',
+    reason: 'operator-approved-recovery',
+    timestamp: '2026-05-12T11:30:00Z',
+    contextScope: scope,
+  });
+}
+
+test('applyClaimEvent reports the explained cause of a refused marker, and mode-disabled without the option', () => {
+  const body = refusalEventBody('issue-plus-pr', '341');
+  const reasons: string[] = [];
+  const onIgnoredForcedHandoff = ({ reason }: { reason: string }) => {
+    reasons.push(reason);
+  };
+  const base = {
+    isTrustedAuthor: () => true,
+    isForcedHandoffEnabled: () => false,
+    onIgnoredForcedHandoff,
+  };
+
+  assert.deepEqual(
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), base),
+    REFUSAL_ACTIVE_CLAIM,
+  );
+  assert.deepEqual(
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+      ...base,
+      explainForcedHandoffRefusal: () => 'pr-scope-mismatch',
+    }),
+    REFUSAL_ACTIVE_CLAIM,
+  );
+  assert.deepEqual(
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+      ...base,
+      explainForcedHandoffRefusal: () => null,
+    }),
+    REFUSAL_ACTIVE_CLAIM,
+  );
+  assert.deepEqual(reasons, [
+    'mode-disabled',
+    'pr-scope-mismatch',
+    'mode-disabled',
+  ]);
+});
+
+test('applyClaimEvent reports a failed check the caller enabled, not the gate cause', () => {
+  const body = refusalEventBody('issue-plus-pr', '341');
+  const reasons: string[] = [];
+  const base = {
+    isTrustedAuthor: () => true,
+    isForcedHandoffEnabled: () => false,
+    onIgnoredForcedHandoff: ({ reason }: { reason: string }) => {
+      reasons.push(reason);
+    },
+    explainForcedHandoffRefusal: () => 'mode-disabled' as const,
+  };
+
+  // The marker names 'maintainer' as forcedBy. An author who is not
+  // 'maintainer' fails the enabled author-match check, so that reason wins.
+  applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+    ...base,
+    requireAuthorMatchesForcedBy: true,
+    isAuthorizedForcedHandoff: () => true,
+  });
+  applyClaimEvent(
+    REFUSAL_ACTIVE_CLAIM,
+    { ...refusalEvent(body), author: { login: 'someone-else' } },
+    { ...base, requireAuthorMatchesForcedBy: true },
+  );
+  // An enabled authorization check that refuses wins over the gate cause,
+  // even while the mode is off.
+  applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+    ...base,
+    isAuthorizedForcedHandoff: () => false,
+  });
+
+  assert.deepEqual(reasons, [
+    'mode-disabled',
+    'author-forced-by-mismatch',
+    'forced-by-unauthorized',
+  ]);
+});
+
+test('applyClaimEvent reports the gate cause when the authorization lookup throws for a refused marker', () => {
+  const body = refusalEventBody('issue-plus-pr', '341');
+  const reasons: string[] = [];
+  assert.doesNotThrow(() => {
+    applyClaimEvent(REFUSAL_ACTIVE_CLAIM, refusalEvent(body), {
+      isTrustedAuthor: () => true,
+      isForcedHandoffEnabled: () => false,
+      isAuthorizedForcedHandoff: () => {
+        throw new Error('permission API unavailable');
+      },
+      explainForcedHandoffRefusal: () => 'pr-scope-mismatch',
+      onIgnoredForcedHandoff: ({ reason }) => {
+        reasons.push(reason);
+      },
+    });
+  });
+  assert.deepEqual(reasons, ['pr-scope-mismatch']);
+});
+
+test('a legacy caller that passes only the boolean gate still reports mode-disabled through the trace', () => {
+  // resolveActiveClaimWithForcedHandoffTrace normalizes its options before
+  // applyClaimEvent sees them. The omitted explainer and authorization must
+  // still count as omitted, so the reason stays mode-disabled.
+  const events = [
+    {
+      author: { login: 'kurone-kito' },
+      createdAt: '2026-05-12T09:00:00Z',
+      lastEditedAt: null,
+      body: '<!-- claimed-by: old-agent old-claim supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+    },
+    refusalEvent(refusalEventBody('issue-plus-pr', '341')),
+  ];
+  const reasons: string[] = [];
+  resolveActiveClaimWithForcedHandoffTrace(events, {
+    isTrustedAuthor: () => true,
+    isForcedHandoffEnabled: () => false,
+    onIgnoredForcedHandoff: ({ reason }) => {
+      reasons.push(reason);
+    },
+  });
+  assert.deepEqual(reasons, ['mode-disabled']);
+});
+
+test('an unparseable first-commit time is reported as unknown, like a missing one', () => {
+  const explain = buildForcedHandoffRefusalExplainer({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(['341']),
+    prFirstCommitAt: 'not-a-date',
+  });
+  assert.equal(
+    explain(refusalMarker('issue-only', '2026-05-12T10:00:00Z')),
+    'first-commit-time-unknown',
+  );
 });

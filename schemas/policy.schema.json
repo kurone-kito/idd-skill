@@ -167,6 +167,11 @@
           ],
           "description": "Selects which helper-runtime import surface this repository uses. Required within this object; the whole `helperRuntime` key defaults to the instructions-only fallback when absent. `user-global` expects the helper bins to be installed once per operator on PATH rather than per repository."
         },
+        "launcher": {
+          "type": "string",
+          "enum": ["auto", "npx", "pnpm-dlx"],
+          "description": "Optional launcher for the ephemeral-npx profile. `npx` (the default) emits `npx --yes --package <spec> <bin>`; `pnpm-dlx` emits `pnpm dlx --package <spec> <bin>`; `auto` picks `pnpm-dlx` when the target repository's pnpm is major 10 or later and `npx` otherwise. Accepted under any profile and ignored outside ephemeral-npx."
+        },
         "packageSpec": {
           "type": "string",
           "description": "Optional pinned npm spec, tarball URL, or reviewed commit archive for ephemeral-npx, package-manager, and user-global helper invocations. Absent falls back to the mutable main archive URL. Restricted to a shell-safe character set (letters, digits, and @:/_.+^#%-) because the value is embedded unquoted into copy-pasteable shell command text; shell metacharacters such as ; & | $ backticks quotes and spaces are rejected to prevent corrupting or injecting into that command.",
@@ -358,7 +363,7 @@
         "convergenceDeadline": {
           "type": "string",
           "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
-          "description": "Whole-minute ISO 8601 duration from the HEAD commit's own timestamp after which the advisory-convergence check can only turn green via a maintainer waiver, not a fresh review. Optional; defaults to `PT24H`."
+          "description": "Whole-minute ISO 8601 duration from when GitHub first recorded the HEAD (its earliest check suite) after which the advisory-convergence check can only turn green via a maintainer waiver, not a fresh review. Optional; defaults to `PT24H`."
         },
         "sameHeadRerollCap": {
           "type": "integer",
@@ -673,7 +678,7 @@
             "type": "integer",
             "minimum": 1
           },
-          "description": "Issue numbers of legacy roadmap roots that predate the `roadmap` label and `<prefix>-roadmap-id` marker (e.g. an ad-hoc umbrella convention adopted before IDD). Unioned into `--all-roadmaps` root discovery and deduped against label/marker roots; a missing or invalid value fails safe to no extra roots."
+          "description": "Issue numbers of legacy roadmap roots that predate the `<prefix>-roadmap-id` marker (e.g. an ad-hoc umbrella convention adopted before IDD). Unioned into `--all-roadmaps` root discovery and deduped against marker roots; a missing or invalid value fails safe to no extra roots."
         },
         "milestoneScope": {
           "type": "string",
@@ -716,7 +721,7 @@
         "deferByUrgency": {
           "type": "string",
           "enum": ["off", "low", "low-and-medium", "severity-tiered"],
-          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: ignores the adopt-now test and defers by the severity-and-urgency matrix; at relax step 0 (the whole matrix while `deferRelaxAtRounds` below is unset or invalid) that includes High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
+          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. Under either mode, clause (d) of the adopt-now test cascades: once one finding of a pass is Accepted, another finding of that pass whose fix stays within that push's files is adopt-now and is not deferred. `severity-tiered`: the mode without that cascade. It does not apply the binary adopt-now gate; it defers by the severity-and-urgency matrix, whose `high` urgency still reads adopt-now conditions (a)-(c). At relax step 0 (the whole matrix while `deferRelaxAtRounds` below is unset or invalid) that includes High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
         },
         "deferRelaxAtRounds": {
           "type": "array",
@@ -907,7 +912,7 @@
         },
         "refuseBaseBranchCommits": {
           "type": "boolean",
-          "description": "Opt-in stricter mode (default false; absent means false; #2801): also refuses a commit/push made from the primary worktree while HEAD is on the configured `developmentBranch` itself, catching a session that skips B1 entirely and commits directly on the base branch -- a gap the `branchPatterns` check above does not cover, since the base branch never matches an implementation-branch glob. Compares against `developmentBranch` only; the pure-POSIX-sh hook has no network access to resolve the live GitHub default branch, so an absent `developmentBranch` leaves this check a no-op even when enabled. A direct base-branch commit from the primary worktree is also legitimate routine action for a human maintainer working outside an IDD session, so this stays opt-in rather than becoming the default."
+          "description": "Opt-in stricter mode (default false; absent means false; #2801): also refuses a commit/push made from the primary worktree while HEAD is on the configured `developmentBranch` itself, catching a session that skips B1 entirely and commits directly on the base branch -- a gap the `branchPatterns` check above does not cover, since the base branch never matches an implementation-branch glob. For a push, refuses unless every pushed ref is a deletion of a ref other than `developmentBranch` (#3854), so a merged feature branch can be deleted from the primary worktree while a push that creates or updates a ref is still refused. Compares against `developmentBranch` only; the pure-POSIX-sh hook has no network access to resolve the live GitHub default branch, so an absent `developmentBranch` leaves this check a no-op even when enabled. A direct base-branch commit from the primary worktree is also legitimate routine action for a human maintainer working outside an IDD session, so this stays opt-in rather than becoming the default."
         }
       },
       "description": "Container for the disposable-worktree guard's enablement and protected branch-name patterns. Optional; omitting it keeps the guard's historical advisory-only behavior."
@@ -930,7 +935,7 @@
         "roadmapLabelName": {
           "type": "string",
           "minLength": 1,
-          "description": "GitHub label name (or umbrella marker) that identifies a roadmap issue. Optional; defaults to `roadmap`."
+          "description": "GitHub label name applied to roadmap issues. Root discovery ignores it: the `<prefix>-roadmap-id` marker alone identifies a roadmap root. Discover and idd-doctor still read it. Optional; defaults to `roadmap`."
         },
         "blockedByHumanLabelName": {
           "type": "string",

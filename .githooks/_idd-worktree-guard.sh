@@ -21,6 +21,27 @@
 # access to resolve the live GitHub default branch the way
 # `idd-work.instructions.md`'s B1 does, so an absent `developmentBranch`
 # leaves this stricter check a no-op even when the opt-in is set.
+#
+# For a push, that opt-in refuses unless every ref line on stdin deletes a
+# ref other than the development branch (#3854). Git passes those lines to
+# pre-push on stdin as `<local ref> <local sha> <remote ref> <remote sha>`,
+# and a deletion has the local ref `(delete)`. So a merged feature branch can
+# be deleted from the primary worktree, while a push that creates or updates
+# any ref, or that touches the development branch, is refused. A push with no
+# ref lines (an up-to-date push) or with no readable stdin keeps the HEAD-based
+# refusal.
+#
+# Stdin can be read once. Chaining the guard after a hook manager has two
+# shapes (see idd-template/docs/onboarding/optional-host-setup.md):
+#   - `exec ".../pre-push" "$@"` as the last line: if an earlier command in
+#     the chain (for example `git lfs pre-push`) already read stdin, the
+#     guard sees EOF and falls back to the HEAD-based refusal, so F4 step 6
+#     still fails for that adopter.
+#   - `".../pre-push" "$@" || exit $?` before the manager's own command:
+#     the guard reads stdin first, so a later reader gets no ref lines. Only a
+#     deletion of another ref gets through, and a deletion transfers no objects,
+#     so such a reader has nothing to upload. The guard reads only after the
+#     checks that put the push in scope.
 
 idd_worktree_guard_check() {
   # $1: human-readable action word ("commit" or "push").
@@ -111,13 +132,40 @@ _IDD_WTG_EOF_
           ;;
       esac
       if [ -n "$development_branch" ] && [ "$branch" = "$development_branch" ]; then
-        printf 'IDD worktree guard: refusing to %s directly on "%s" from the primary worktree (%s).\n' \
-          "$action" "$branch" "$repo_root" >&2
-        printf 'worktreeGuard.refuseBaseBranchCommits is enabled: implementation work must go\n' >&2
-        printf 'through B1 (create a sibling worktree on an implementation branch) first.\n' >&2
-        printf 'See B1 in .github/instructions/idd-work.instructions.md.\n' >&2
-        printf '(To bypass intentionally, re-run the git command with --no-verify.)\n' >&2
-        return 1
+        # For a push, refuse unless every ref line on stdin deletes a ref other
+        # than the base branch (#3854). The lines are read here, once the checks
+        # above have put the push in scope. A terminal, an empty stream (an
+        # up-to-date push) or a closed stdin leaves refuse at 1, so those keep the
+        # HEAD-based refusal.
+        refuse=1
+        if [ "$action" = push ] && [ ! -t 0 ]; then
+          ref_lines=$(cat 2>/dev/null) || ref_lines=''
+          if [ -n "$ref_lines" ]; then
+            refuse=0
+            while IFS=' ' read -r local_ref _local_sha remote_ref _remote_sha; do
+              if [ "$local_ref" != "(delete)" ] ||
+                [ "$remote_ref" = "refs/heads/$development_branch" ]; then
+                refuse=1
+                break
+              fi
+            done <<_IDD_WTG_REFS_
+$ref_lines
+_IDD_WTG_REFS_
+          fi
+        fi
+        if [ "$refuse" = 1 ]; then
+          printf 'IDD worktree guard: refusing to %s directly on "%s" from the primary worktree (%s).\n' \
+            "$action" "$branch" "$repo_root" >&2
+          printf 'worktreeGuard.refuseBaseBranchCommits is enabled: implementation work must go\n' >&2
+          printf 'through B1 (create a sibling worktree on an implementation branch) first.\n' >&2
+          printf 'See B1 in .github/instructions/idd-work.instructions.md.\n' >&2
+          printf '(To bypass intentionally, re-run the git command with --no-verify.)\n' >&2
+          return 1
+        fi
+        # An accepted deletion (refuse=0) is final. Return before the
+        # implementation-branch pattern check below, so a developmentBranch that
+        # also matches branchPatterns, such as issue/main, still allows it.
+        return 0
       fi
       ;;
   esac

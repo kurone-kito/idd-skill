@@ -1848,6 +1848,32 @@ test('policy schema accepts a pinned helperRuntime.packageSpec (idd-skill#1731)'
   assert.deepEqual(errors, []);
 });
 
+test('policy schema accepts each helperRuntime.launcher value (idd-skill#3830)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const launcher of ['auto', 'npx', 'pnpm-dlx']) {
+    const instance = loadJson(
+      'fixtures/schemas/policy.valid.json',
+    ) as PolicyFixture;
+    instance.helperRuntime = { profile: 'ephemeral-npx', launcher };
+    assert.deepEqual(validate(instance, schema), [], `launcher ${launcher}`);
+  }
+});
+
+test('policy schema rejects an unsupported helperRuntime.launcher (idd-skill#3830)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const launcher of ['pnpm', 'npm', '', 1]) {
+    const instance = loadJson(
+      'fixtures/schemas/policy.valid.json',
+    ) as PolicyFixture;
+    instance.helperRuntime = { profile: 'ephemeral-npx', launcher };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) => error.includes('$.helperRuntime.launcher')),
+      `launcher ${JSON.stringify(launcher)} must be rejected`,
+    );
+  }
+});
+
 test('policy schema rejects an empty helperRuntime.packageSpec', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = loadJson(
@@ -1930,6 +1956,44 @@ test('checkSchemaKeywords reports unsupported format values', () => {
 test('checkSchemaKeywords accepts supported format: date-time', () => {
   const goodSchema = { type: 'string', format: 'date-time' };
   assert.deepEqual(checkSchemaKeywords(goodSchema), []);
+});
+
+test('format date-time accepts RFC 3339 and rejects other shapes and impossible instants (#3889)', () => {
+  const schema = { type: 'string', format: 'date-time' };
+  const accepted = [
+    '2026-10-08T13:11:23Z',
+    '2026-10-08T13:11:23.123456+09:00',
+    '2026-10-08t13:11:23z',
+    '2028-02-29T00:00:00Z',
+    '2000-02-29T00:00:00Z',
+  ];
+  const rejected = [
+    '2026',
+    '2026-10',
+    '10/08/2026',
+    'Oct 8 2026',
+    '2026-10-08',
+    '2026-10-08T00:00:00',
+    '2026-10-08 00:00:00Z',
+    '2026-02-31T00:00:00Z',
+    '2026-04-31T00:00:00Z',
+    '2027-02-29T00:00:00Z',
+    '2100-02-29T00:00:00Z',
+    '2026-10-08T24:00:00Z',
+    '2026-10-08T12:00:00+0900',
+    '2026-10-08T12:60:00Z',
+    '2026-10-08T12:00:60Z',
+    '2026-10-08T12:00:00+24:00',
+    '2026-10-08T12:00:00+09:60',
+  ];
+  for (const value of accepted) {
+    assert.deepEqual(validate(value, schema), [], value);
+  }
+  for (const value of rejected) {
+    const errors = validate(value, schema);
+    assert.equal(errors.length, 1, value);
+    assert.match(errors[0], /invalid date-time value/, value);
+  }
 });
 
 // ---------------------------------------------------------------------------

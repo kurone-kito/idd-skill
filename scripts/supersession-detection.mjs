@@ -95,7 +95,7 @@ export function findCandidateFileOverlap(files, candidateSet) {
  * case-insensitive) shared by every closing-keyword-adjacent `#<n>` scanner
  * in this file, matching the grammar `idd-pr-submit.instructions.md`'s D3.5
  * steps 3/6/7 already document
- * (`\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b`). Exported so
+ * (`\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+#<N>\b`). Exported so
  * `pre-merge-readiness.mts`'s commit-message stray-close scan (#3298) reuses
  * this exact alternation instead of a second hand-written copy that could
  * drift out of sync with it.
@@ -103,15 +103,24 @@ export function findCandidateFileOverlap(files, candidateSet) {
 export const CLOSING_KEYWORD_ALTERNATION =
   'close[sd]?|fix(?:e[sd])?|resolve[sd]?';
 /**
+ * {@link CLOSING_KEYWORD_ALTERNATION} followed by GitHub's optional colon, so
+ * `Closes: #N` and `CLOSES: #N` match the same way `Closes #N` does (GitHub's
+ * "Linking a pull request to an issue" grammar accepts a colon after the
+ * keyword). Every PR-side consumer below builds its regex from this source
+ * instead of adding its own colon, so the vocabulary cannot diverge.
+ */
+export const CLOSING_KEYWORD_PATTERN = `(?:${CLOSING_KEYWORD_ALTERNATION}):?`;
+/**
  * Closing-keyword-adjacent `#<issueNumber>` cross-reference test (#1878;
  * narrowed by #1888), matched against a merged PR's
  * `closingIssuesReferences` connection first, falling back to a regex scan
  * of `title`/`body`. That regex scan **requires** a recognized GitHub
  * closing keyword (`close(s|d)?`, `fix(es|ed)?`, `resolve(s|d)?`,
- * case-insensitive) immediately before the reference, separated only by
- * whitespace -- the same grammar `idd-pr-submit.instructions.md`'s D3.5
- * step already documents for closing-keyword detection
- * (`\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b`). A bare `#<n>`
+ * case-insensitive, optionally followed by a colon as GitHub accepts)
+ * immediately before the reference, separated only by whitespace -- the same
+ * grammar `idd-pr-submit.instructions.md`'s D3.5 step already documents for
+ * closing-keyword detection
+ * (`\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+#<N>\b`). A bare `#<n>`
  * mention with no adjacent closing keyword no longer counts as a reference:
  * PR #1886 (closes only #1878) bare-mentioned "#1862" once as a narrative
  * reproduction-example citation ("observed live: issue #1862 vs. merged PR
@@ -173,7 +182,7 @@ export function prReferencesIssue(pr, issueNumber) {
   // `issueNumber: 1862`). Case-insensitive so `Closes`, `closes`, `CLOSES`,
   // etc. all match.
   const pattern = new RegExp(
-    `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+#${issueNumber}\\b`,
+    `\\b${CLOSING_KEYWORD_PATTERN}\\s+#${issueNumber}\\b`,
     'i',
   );
   const title = typeof pr.title === 'string' ? pr.title : '';
@@ -183,7 +192,7 @@ export function prReferencesIssue(pr, issueNumber) {
 /**
  * Scan every commit's full message for `idd-pr-submit.instructions.md`'s
  * D3.5 step 7 pattern
- * (`(?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#(\d+)\b`), generalized
+ * (`(?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+#(\d+)\b`), generalized
  * to any issue number instead of {@link prReferencesIssue}'s fixed `<N>`,
  * and return every match whose captured number falls **outside**
  * `expectedIssueNumbers` -- a stray commit-message close
@@ -198,7 +207,7 @@ export function prReferencesIssue(pr, issueNumber) {
 export function findStrayCommitCloses(commits, expectedIssueNumbers) {
   const expected = new Set(expectedIssueNumbers);
   const pattern = new RegExp(
-    `\\b(?:${CLOSING_KEYWORD_ALTERNATION})\\s+#(\\d+)\\b`,
+    `\\b${CLOSING_KEYWORD_PATTERN}\\s+#(\\d+)\\b`,
     'gi',
   );
   const strays = [];

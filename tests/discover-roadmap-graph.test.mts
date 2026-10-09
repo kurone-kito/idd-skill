@@ -2670,7 +2670,7 @@ test('all-roadmaps requires the open-roadmap-roots loader', async () => {
 test('all-roadmaps skips an unresolvable root with a warning instead of aborting the union (#1315)', async () => {
   // A configured `discover.legacyRoots` entry is static, human-entered
   // config that can go stale (typo, deleted/transferred issue) far more
-  // easily than a label/marker root, which a live search just confirmed
+  // easily than a marker root, which a live search just confirmed
   // exists. Root 999 is unresolvable (loadIssue returns null for it, so
   // enumerateRoadmapGraph throws "root issue #999 was not found"); the
   // union must skip it with a stderr warning and still return the other

@@ -797,6 +797,17 @@ interface ClaimResolutionOptions {
     forcedHandoff: ParsedForcedHandoffMarker;
     event: CommentLike;
   }) => void;
+  /**
+   * Explain a refused forced-handoff marker (#3873). When supplied, a refused
+   * marker is reported with the author and authorization reason of any check
+   * this caller enabled, and otherwise with this explanation; a `null`
+   * explanation keeps `mode-disabled`. Absent, every refusal is reported as
+   * `mode-disabled`, as before.
+   */
+  explainForcedHandoffRefusal?: (
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentLike,
+  ) => ForcedHandoffRefusalCause | null;
 }
 
 /** Fully-defaulted form of {@link ClaimResolutionOptions}. */
@@ -1094,19 +1105,22 @@ const REVIEW_BOT_LOGINS = new Set([
 
 const UNSAFE_TEXT_RULES = [
   {
+    code: 'unsafe-awaiting-maintainer-decision',
     pattern: /\*\*Awaiting maintainer decision\*\*/i,
     reason: 'contains an awaiting-maintainer-decision marker',
   },
   {
+    code: 'unsafe-active-hold',
     pattern: /\bactive hold\b/i,
     reason: 'contains active hold context',
   },
   {
+    code: 'unsafe-failed-ci',
     pattern:
       /\bfailed[- ]ci\b|\bfailing ci\b|\bci failure\b|\bci failed\b|\bfailed checks?\b/i,
     reason: 'contains failed-CI context',
   },
-];
+] as const;
 // Exported (kurone-kito/idd-skill#3223) so copilot-review-wave-audit.mts can
 // classify a reply as a recognized-but-non-accept/reject disposition using
 // the exact same loose, no-em-dash-required marker this file's own
@@ -2424,13 +2438,24 @@ export function applyDigestUpsert<P extends DigestUpsertPlanLike>(
   return { planned, outcome: 'noop' };
 }
 
-export function unsafeTextReason(body: string): string | null {
+/**
+ * The first unsafe-text rule `body` matches, with its closed code, or null.
+ * `unsafeTextReason` returns only the reason text from the same rule.
+ */
+export function unsafeTextFinding(
+  body: string,
+): { code: (typeof UNSAFE_TEXT_RULES)[number]['code']; reason: string } | null {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {
-      return rule.reason;
+      return { code: rule.code, reason: rule.reason };
     }
   }
   return null;
+}
+
+// audit:ignore-dead-export: kept for the advisory-wait test callers after #3856 moved the audit to unsafeTextFinding; no production caller remains
+export function unsafeTextReason(body: string): string | null {
+  return unsafeTextFinding(body)?.reason ?? null;
 }
 
 // #2473: Copilot's PR-level review object reports a `[bot]`-suffixed slug
@@ -3709,20 +3734,55 @@ function inferReviewerReopenedAt(thread: ThreadLike): string {
   return '';
 }
 
+type FreshDispositionOptions = {
+  isDispositionAuthor?: (login: string) => boolean;
+  // #3269: forwarded to `effectiveThreadCommentActivityAt`'s own
+  // verified-cosmetic-edit dating -- see that function's doc comment.
+  // Omitted (the default) by every caller outside the F2/F3
+  // disposition-evidence path and F4 `audit-pr-cleanup.mts` (#3791).
+  // Those callers never verify an edited comment as cosmetic
+  // regardless of any attached `userContentEdits`, unchanged
+  // pre-#3269 `updatedAt` dating.
+  advisoryBotLogins?: unknown[] | null;
+};
+
+/**
+ * Whether the thread has an IDD disposition that no later feedback supersedes.
+ * Delegates to `explainFreshDisposition`, so the boolean and the cause come
+ * from one decision.
+ */
 export function hasFreshDisposition(
   thread: ThreadLike,
-  options: {
-    isDispositionAuthor?: (login: string) => boolean;
-    // #3269: forwarded to `effectiveThreadCommentActivityAt`'s own
-    // verified-cosmetic-edit dating -- see that function's doc comment.
-    // Omitted (the default) by every caller outside the F2/F3
-    // disposition-evidence path and F4 `audit-pr-cleanup.mts` (#3791).
-    // Those callers never verify an edited comment as cosmetic
-    // regardless of any attached `userContentEdits`, unchanged
-    // pre-#3269 `updatedAt` dating.
-    advisoryBotLogins?: unknown[] | null;
-  } = {},
+  options: FreshDispositionOptions = {},
 ): boolean {
+  return explainFreshDisposition(thread, options).fresh;
+}
+
+/** Why a thread's IDD disposition is, or is not, fresh. */
+export type FreshDispositionCause =
+  | 'fresh'
+  | 'no-disposition'
+  | 'disposition-edited'
+  | 'disposition-time-unreadable'
+  | 'superseded-by-reply'
+  | 'superseded-by-edit';
+
+/**
+ * A freshness explanation. The cause is narrowed to a stale cause once `fresh`
+ * is false, so a caller can index a per-cause table without a cast.
+ */
+export type FreshDispositionExplanation =
+  | { fresh: true; cause: 'fresh' }
+  | { fresh: false; cause: Exclude<FreshDispositionCause, 'fresh'> };
+
+/**
+ * Explains `hasFreshDisposition`. `fresh` is decided exactly as before; `cause`
+ * is classified only when the disposition is not fresh.
+ */
+export function explainFreshDisposition(
+  thread: ThreadLike,
+  options: FreshDispositionOptions = {},
+): FreshDispositionExplanation {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
   // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
   // options.isDispositionAuthor with an IDD-scoped predicate (e.g., via summarizeDispositionEvidenceForGate).
@@ -3782,7 +3842,7 @@ export function hasFreshDisposition(
       .filter(isValidIsoTimestamp),
   );
 
-  return comments.some((comment) => {
+  const fresh = comments.some((comment) => {
     if (!isIddDisposition(comment)) {
       return false;
     }
@@ -3798,6 +3858,67 @@ export function hasFreshDisposition(
       compareIsoTimestamps(dispositionActivityAt, latestFeedbackAt) > 0
     );
   });
+  if (fresh) {
+    return { fresh: true, cause: 'fresh' };
+  }
+
+  // Not fresh: name the cause. The author predicate applies to edited
+  // disposition-shaped comments too, so an edited comment from a non-IDD
+  // author is not counted as an IDD disposition here.
+  const iddAuthorDispositionShaped = comments.filter((comment) => {
+    const authorLogin = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    return isDisposition(comment) && dispositionAuthorPredicate(authorLogin);
+  });
+  const uneditedIddDispositions = comments.filter((comment) =>
+    isIddDisposition(comment),
+  );
+  if (uneditedIddDispositions.length === 0) {
+    return {
+      fresh: false,
+      cause:
+        iddAuthorDispositionShaped.length > 0
+          ? 'disposition-edited'
+          : 'no-disposition',
+    };
+  }
+  const readableDispositionAts = uneditedIddDispositions
+    .map((comment) =>
+      effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+    )
+    .filter(isValidIsoTimestamp);
+  if (readableDispositionAts.length === 0) {
+    return { fresh: false, cause: 'disposition-time-unreadable' };
+  }
+  // Not fresh with a readable disposition means some feedback is at or after
+  // the latest such disposition. Feedback created at or after it is a reply;
+  // otherwise the supersession came from an edit.
+  const latestDispositionAt = maxIsoTimestamp(readableDispositionAts);
+  const supersededByReply = comments.some((comment) => {
+    if (isIddDisposition(comment)) {
+      return false;
+    }
+    // A comment with a readable creation time is a reply when it was created
+    // at or after the disposition. Without one, only an explicitly unedited
+    // comment counts as a reply by its activity time; an edit never does.
+    const createdAt = String(comment.createdAt ?? '');
+    const activityAt = effectiveThreadCommentActivityAt(
+      comment,
+      advisoryBotLogins,
+    );
+    return (
+      isValidIsoTimestamp(activityAt) &&
+      compareIsoTimestamps(activityAt, latestDispositionAt) >= 0 &&
+      (isValidIsoTimestamp(createdAt)
+        ? compareIsoTimestamps(createdAt, latestDispositionAt) >= 0
+        : classifyCommentEditState(comment) === 'unedited')
+    );
+  });
+  return {
+    fresh: false,
+    cause: supersededByReply ? 'superseded-by-reply' : 'superseded-by-edit',
+  };
 }
 
 /**
@@ -4954,7 +5075,8 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 // 1. Whole-comment length ≤ CODEX_NOTICE_MAX_LENGTH — defends against a long
 //    structured review whose *last* sentence happens to coincidentally
 //    match (the longest known real wording — current wording plus its
-//    two-sentence trailer, see below — is 199 characters).
+//    two-sentence trailer, see below — is 361 characters, and #3885 raises the
+//    cap to 400 to leave room for the optional fourth sentence).
 // 2. Text before the matched span ≤ CODEX_NOTICE_MAX_PREFIX_LENGTH once
 //    trimmed — defends against a narrative lead-in preceding an otherwise
 //    bare match (known real prefixes are 0 and 9 characters).
@@ -5022,11 +5144,17 @@ const CODEX_NOTICE_TRAILER_SENTENCE_2 =
   '\\bcredits must be used\\b[\\s\\S]{0,40}?\\benable\\b[\\s\\S]{0,40}?\\brepository\\b[\\s\\S]{0,40}?\\b(?:code )?reviews?\\b';
 const CODEX_NOTICE_TRAILER_SENTENCE_3 =
   '\\byou can see your limits\\b[\\s\\S]{0,60}?\\bCodex usage dashboard\\b(?:\\]\\([^)]*\\))?';
+// #3885: the dashboard wording above is followed by a second generated sentence
+// that names the upgrade and credits path and links the settings page. It is
+// optional, and only after SENTENCE_3, so the shorter dashboard-only wording still
+// matches. Each gap is bounded like the other sentences.
+const CODEX_NOTICE_TRAILER_SENTENCE_4 =
+  '\\bTo continue using code reviews\\b[\\s\\S]{0,60}?\\bupgrade your account\\b[\\s\\S]{0,60}?\\benable them for code reviews\\b(?:\\s+in your\\s+(?:settings|\\[settings\\]\\([^)]*\\)))?';
 const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN = new RegExp(
-  `^${CODEX_NOTICE_TRAILER_LEAD_IN}(?:${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?|${CODEX_NOTICE_TRAILER_SENTENCE_3})[.!,;:\\s]*$`,
+  `^${CODEX_NOTICE_TRAILER_LEAD_IN}(?:${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?|${CODEX_NOTICE_TRAILER_SENTENCE_3}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_4})?)[.!,;:\\s]*$`,
   'i',
 );
-const CODEX_NOTICE_MAX_LENGTH = 220;
+const CODEX_NOTICE_MAX_LENGTH = 400;
 const CODEX_NOTICE_MAX_PREFIX_LENGTH = 20;
 // Anchored to the *entire* trimmed remainder (not a starts-with check), so
 // trailing prose that happens to begin with a comma or period is still
@@ -10518,6 +10646,10 @@ export function resolvePrFirstCommitAt(
  * Semantics:
  *
  * - forced-handoff mode disabled → never honor;
+ * - `linkedPrLookupFailed` (the Resume lookup exception, #3276): a marker
+ *   that is not `issue-plus-pr` is refused whatever the PR set, because an
+ *   unreadable PR state cannot prove that no PR backs the claim. An
+ *   `issue-plus-pr` marker is judged by the PR set as usual.
  * - no open linked PR backs the claim (`expectedLinkedPrReferences` empty) →
  *   honor an `issue-only` (or any) handoff as before;
  * - an open linked PR backs the claim:
@@ -10536,26 +10668,84 @@ export function buildForcedHandoffEnableGate(options: {
   forcedHandoffEnabled: boolean;
   expectedLinkedPrReferences: Set<string>;
   prFirstCommitAt?: string | null;
+  linkedPrLookupFailed?: boolean;
 }): (forcedHandoff: ParsedForcedHandoffMarker) => boolean {
+  const explain = buildForcedHandoffRefusalExplainer(options);
+  return (forcedHandoff: ParsedForcedHandoffMarker) =>
+    explain(forcedHandoff) === null;
+}
+
+/**
+ * Why a forced-handoff marker is not honored (#3873). The closed set the
+ * Resume and merge-gate readers report instead of one generic reason.
+ */
+export type ForcedHandoffRefusalCause =
+  | 'mode-disabled'
+  | 'linked-pr-lookup-failed'
+  | 'pr-scope-mismatch'
+  | 'issue-only-not-before-first-commit'
+  | 'first-commit-time-unknown';
+
+/**
+ * Explain why {@link buildForcedHandoffEnableGate} refuses a marker. It takes
+ * the same inputs and returns the cause of a refusal, or `null` when the gate
+ * honors the marker. The checks run in this order, so the gate and the
+ * explanation cannot disagree:
+ *
+ * 1. forced-handoff mode disabled → `mode-disabled`;
+ * 2. linked-PR lookup failed, for a marker that is not `issue-plus-pr` →
+ *    `linked-pr-lookup-failed` (checked before the first-commit time, because
+ *    a failed commit read also leaves that time unknown, and the #3276
+ *    override depends on the lookup cause);
+ * 3. no open linked PR backs the claim → honored;
+ * 4. `issue-plus-pr` marker whose `linkedPr` is not an expected PR →
+ *    `pr-scope-mismatch`;
+ * 5. `issue-only` marker that predates the PR's first commit → honored;
+ *    with no first-commit time supplied → `first-commit-time-unknown`;
+ *    otherwise → `issue-only-not-before-first-commit`.
+ */
+export function buildForcedHandoffRefusalExplainer(options: {
+  forcedHandoffEnabled: boolean;
+  expectedLinkedPrReferences: Set<string>;
+  prFirstCommitAt?: string | null;
+  linkedPrLookupFailed?: boolean;
+}): (
+  forcedHandoff: ParsedForcedHandoffMarker,
+) => ForcedHandoffRefusalCause | null {
   const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
   const prFirstCommitAt =
     typeof options.prFirstCommitAt === 'string' ? options.prFirstCommitAt : '';
   return (forcedHandoff: ParsedForcedHandoffMarker) => {
     if (!forcedHandoffEnabled) {
-      return false;
+      return 'mode-disabled';
+    }
+    if (
+      options.linkedPrLookupFailed === true &&
+      forcedHandoff.contextScope !== 'issue-plus-pr'
+    ) {
+      return 'linked-pr-lookup-failed';
     }
     if (expectedLinkedPrReferences.size === 0) {
-      return true;
+      return null;
     }
     if (forcedHandoff.contextScope === 'issue-plus-pr') {
       return expectedLinkedPrReferences.has(
         normalizeLinkedPrReference(forcedHandoff.linkedPr),
-      );
+      )
+        ? null
+        : 'pr-scope-mismatch';
     }
     // issue-only handoff against a PR-backed claim: accept only when it
     // predates the PR's first commit (a robust ISO compare; either side
     // unparseable → fail closed = reject).
-    return isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt);
+    if (isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt)) {
+      return null;
+    }
+    // An unparseable first-commit time is no usable time at all, so it is
+    // reported like a missing one (#3873).
+    return Number.isNaN(Date.parse(prFirstCommitAt))
+      ? 'first-commit-time-unknown'
+      : 'issue-only-not-before-first-commit';
   };
 }
 
@@ -10629,6 +10819,20 @@ export function resolveActiveClaimForWriteGate(
   });
 }
 
+/** A forced-handoff marker the merge-side gate refused for the active claim (#3873). */
+export interface IgnoredForcedHandoffEntry {
+  oldClaimId: string;
+  newClaimId: string;
+  cause: string;
+}
+
+/** Side-channel fields {@link summarizeClaimValidation} writes for its caller. */
+export interface ClaimValidationTraceCapture {
+  activeSince?: string;
+  /** Present only when at least one refused marker names the active claim. */
+  ignoredForcedHandoffs?: IgnoredForcedHandoffEntry[];
+}
+
 export function summarizeClaimValidation(
   claimEvents: CommentLike[] = [],
   options: {
@@ -10673,7 +10877,7 @@ export function summarizeClaimValidation(
    * argument and is completely unaffected; `buildPreMergeReadinessSummary`
    * is the sole caller that supplies one today.
    */
-  captureTraceInto?: { activeSince?: string },
+  captureTraceInto?: ClaimValidationTraceCapture,
 ): ClaimValidationSummary {
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
@@ -10706,9 +10910,9 @@ export function summarizeClaimValidation(
   // still honored — authorization rests on `isAuthorizedForcedHandoff` alone —
   // and it passes `prFirstCommitAt` so the Part-B allowance (#1058, an
   // issue-only handoff predating the PR) applies. resume-claim-routing.mts
-  // deliberately does the opposite (`requireAuthorMatchesForcedBy: true`, no
-  // `prFirstCommitAt`) because a takeover decision must block the same-identity
-  // self-signed hijack. The two callers can therefore return different verdicts
+  // keeps the stricter author binding (`requireAuthorMatchesForcedBy: true`,
+  // which blocks the same-identity self-signed hijack) and applies the same
+  // time rule since #3871. The two callers can therefore return different verdicts
   // for the same corrected-handoff state (resume `already_owned` vs. merge
   // `claimLost`) by design; both still funnel through the single
   // resolveActiveClaim resolver.
@@ -10718,6 +10922,19 @@ export function summarizeClaimValidation(
   // reduction, just no longer discarding the extra field. Every existing
   // caller only ever read `.activeClaim` off `resolveActiveClaim`'s own
   // return, so this is behavior-identical for that value.
+  // The default gate and its refusal cause come from one set of inputs, so the
+  // report names the cause the gate actually applied (#3873). A caller's own
+  // gate has no known inputs, so its refusals keep the generic reason.
+  const defaultGateInputs = {
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    expectedLinkedPrReferences,
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
+  };
+  // The old agent id is kept here, not in the report entry, so the filter
+  // below can match the full claim identity that applyClaimEvent matched.
+  const ignoredForcedHandoffs: Array<
+    IgnoredForcedHandoffEntry & { oldAgentId: string }
+  > = [];
   const { activeClaim, activeSince } = resolveActiveClaimWithForcedHandoffTrace(
     claimEvents,
     {
@@ -10725,11 +10942,19 @@ export function summarizeClaimValidation(
       isForcedHandoffEnabled:
         typeof options.isForcedHandoffEnabled === 'function'
           ? options.isForcedHandoffEnabled
-          : buildForcedHandoffEnableGate({
-              forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-              expectedLinkedPrReferences,
-              prFirstCommitAt: options.prFirstCommitAt ?? null,
-            }),
+          : buildForcedHandoffEnableGate(defaultGateInputs),
+      explainForcedHandoffRefusal:
+        typeof options.isForcedHandoffEnabled === 'function'
+          ? undefined
+          : buildForcedHandoffRefusalExplainer(defaultGateInputs),
+      onIgnoredForcedHandoff: ({ reason, forcedHandoff }) => {
+        ignoredForcedHandoffs.push({
+          oldAgentId: forcedHandoff.oldAgentId,
+          oldClaimId: forcedHandoff.oldClaimId,
+          newClaimId: forcedHandoff.newClaimId,
+          cause: reason,
+        });
+      },
       isAuthorizedForcedHandoff:
         typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
@@ -10748,6 +10973,28 @@ export function summarizeClaimValidation(
   );
   if (captureTraceInto) {
     captureTraceInto.activeSince = activeSince;
+    // Only refusals of a marker whose old claim is the claim this evaluation
+    // resolved as active belong in the report (#3873).
+    const ignoredForActive = activeClaim
+      ? ignoredForcedHandoffs
+          .filter(
+            (entry) =>
+              entry.oldAgentId === activeClaim.agentId &&
+              entry.oldClaimId === activeClaim.claimId,
+          )
+          .map(({ oldClaimId, newClaimId, cause }) => ({
+            oldClaimId,
+            newClaimId,
+            cause,
+          }))
+      : [];
+    // Set or clear the field every time: a reused capture object must not keep
+    // the refusals of an earlier evaluation (#3873).
+    if (ignoredForActive.length > 0) {
+      captureTraceInto.ignoredForcedHandoffs = ignoredForActive;
+    } else {
+      delete captureTraceInto.ignoredForcedHandoffs;
+    }
   }
 
   const expectedNonce = String(options.expectedNonce ?? '').trim();
@@ -10820,7 +11067,7 @@ export function summarizeClaimValidationForWriteGate(
     NonNullable<Parameters<typeof summarizeClaimValidation>[1]>,
     'staleAgeMs'
   > & { staleAgeMs: number },
-  captureTraceInto?: { activeSince?: string },
+  captureTraceInto?: ClaimValidationTraceCapture,
 ): ClaimValidationSummary {
   return summarizeClaimValidation(claimEvents, options, captureTraceInto);
 }
@@ -11389,11 +11636,36 @@ export function computePreMergeReadinessBlockers(
 
   const claim = preMergeAsRecord(report.claim);
   if (claim.matchesExpectedClaim !== true) {
+    // #3873: name the refusal cause of any forced-handoff marker that was
+    // ignored for the active claim. The field is absent when there is none,
+    // so the text is unchanged in that case.
+    // A malformed entry is skipped rather than read: the blocker must never
+    // throw while describing a claim that is already not owned.
+    const ignoredCauses = Array.isArray(report.ignoredForcedHandoffs)
+      ? [
+          ...new Set(
+            report.ignoredForcedHandoffs
+              .map((entry: unknown) =>
+                entry !== null && typeof entry === 'object'
+                  ? (entry as { cause?: unknown }).cause
+                  : undefined,
+              )
+              .filter(
+                (cause: unknown): cause is string =>
+                  typeof cause === 'string' && cause.length > 0,
+              ),
+          ),
+        ]
+      : [];
+    const ignoredNote =
+      ignoredCauses.length > 0
+        ? `; ignored forced-handoff: ${ignoredCauses.join(', ')}`
+        : '';
     blockers.push({
       gate: 'claim-ownership',
       detail: `claim ownership does not match (reason="${String(
         claim.reason ?? 'unknown',
-      )}")`,
+      )}")${ignoredNote}`,
     });
   }
 
@@ -12210,7 +12482,7 @@ export function buildPreMergeReadinessSummary(
   // parameter's own doc comment. Left `{}` (never populated) on the
   // `claimless` branch below, matching that branch's own synthetic,
   // not-applicable claim shape.
-  const claimTrace: { activeSince?: string } = {};
+  const claimTrace: ClaimValidationTraceCapture = {};
   const claim = options.claimless
     ? {
         expectedClaimId: 'none',
@@ -13015,6 +13287,11 @@ export function buildPreMergeReadinessSummary(
     // `discover-roadmap-union.schema.json`), so this stays a top-level,
     // pre-merge-readiness-only field instead.
     claimIdentityInstalledAt,
+    // #3873: present only when a forced-handoff marker was refused for the
+    // active claim, so a report with no ignored handoff is unchanged.
+    ...(claimTrace.ignoredForcedHandoffs
+      ? { ignoredForcedHandoffs: claimTrace.ignoredForcedHandoffs }
+      : {}),
     staleSelfWaiver,
     branchCurrency,
   };
@@ -13628,6 +13905,32 @@ export function applyClaimEvent(
 ): ParsedClaimMarker | null {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
+  // The explanation path (#3873) must know which checks the caller enabled.
+  // Detect the omitted defaults by identity, not by the shape of `options`:
+  // resolveActiveClaimWithForcedHandoffTrace normalizes first, so a function
+  // is always present here, and a default that is still the shared constant
+  // means the caller supplied nothing.
+  const explainsRefusal =
+    normalizedOptions.explainForcedHandoffRefusal !== OMITTED_EXPLAINER;
+  const authorizationEnabled =
+    normalizedOptions.isAuthorizedForcedHandoff !== OMITTED_AUTHORIZATION;
+  // The authorization lookup runs here only to report a refusal. A lookup that
+  // throws must not turn a refusal into an exception, so the gate's cause is
+  // reported instead; the marker is refused either way.
+  const isAuthorizedForReporting = (
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentLike,
+  ): boolean => {
+    try {
+      return normalizedOptions.isAuthorizedForcedHandoff(
+        forcedHandoff.forcedBy,
+        forcedHandoff,
+        event,
+      );
+    } catch {
+      return true;
+    }
+  };
   // kurone-kito/idd-skill#3248: defense in depth for a direct caller that
   // bypasses `resolveActiveClaimWithForcedHandoffTrace`'s own pre-filter --
   // every event reaching this point from that trace has already passed the
@@ -13703,8 +14006,35 @@ export function applyClaimEvent(
     forcedHandoff.branch === activeClaim.branch
   ) {
     if (!normalizedOptions.isForcedHandoffEnabled(forcedHandoff, event)) {
+      // A marker that fails a check this caller enabled is reported with that
+      // check's reason, not with the gate's cause (#3873). Without the
+      // explanation option the reason stays `mode-disabled`, as before.
+      let refusalReason = 'mode-disabled';
+      if (explainsRefusal) {
+        const authorLoginLower = String(authorLogin).trim().toLowerCase();
+        const forcedByLower = String(forcedHandoff.forcedBy ?? '')
+          .trim()
+          .toLowerCase();
+        if (
+          normalizedOptions.requireAuthorMatchesForcedBy &&
+          (!authorLoginLower || authorLoginLower !== forcedByLower)
+        ) {
+          refusalReason = 'author-forced-by-mismatch';
+        } else if (
+          authorizationEnabled &&
+          !isAuthorizedForReporting(forcedHandoff, event)
+        ) {
+          refusalReason = 'forced-by-unauthorized';
+        } else {
+          refusalReason =
+            normalizedOptions.explainForcedHandoffRefusal(
+              forcedHandoff,
+              event,
+            ) ?? 'mode-disabled';
+        }
+      }
       normalizedOptions.onIgnoredForcedHandoff({
-        reason: 'mode-disabled',
+        reason: refusalReason,
         forcedHandoff,
         event,
       });
@@ -13758,6 +14088,12 @@ export function applyClaimEvent(
   return activeClaim;
 }
 
+// Shared defaults for the two options a caller may leave omitted (#3873).
+// Identity marks "not supplied", so the check survives a second normalization
+// (resolveActiveClaimWithForcedHandoffTrace normalizes before applyClaimEvent).
+const OMITTED_AUTHORIZATION = (): boolean => false;
+const OMITTED_EXPLAINER = (): ForcedHandoffRefusalCause | null => null;
+
 function normalizeClaimResolutionOptions(
   optionsOrPredicate:
     | ClaimResolutionOptions
@@ -13769,11 +14105,12 @@ function normalizeClaimResolutionOptions(
     return {
       isTrustedAuthor: optionsOrPredicate,
       isForcedHandoffEnabled: () => false,
-      isAuthorizedForcedHandoff: () => false,
+      isAuthorizedForcedHandoff: OMITTED_AUTHORIZATION,
       isStale: isStaleAt,
       requireAuthorMatchesForcedBy: false,
       onAnomalousHeartbeat: () => {},
       onIgnoredForcedHandoff: () => {},
+      explainForcedHandoffRefusal: OMITTED_EXPLAINER,
     };
   }
 
@@ -13790,7 +14127,7 @@ function normalizeClaimResolutionOptions(
     isAuthorizedForcedHandoff:
       typeof options.isAuthorizedForcedHandoff === 'function'
         ? options.isAuthorizedForcedHandoff
-        : () => false,
+        : OMITTED_AUTHORIZATION,
     isStale:
       typeof options.isStale === 'function' ? options.isStale : isStaleAt,
     requireAuthorMatchesForcedBy: Boolean(options.requireAuthorMatchesForcedBy),
@@ -13802,6 +14139,10 @@ function normalizeClaimResolutionOptions(
       typeof options.onIgnoredForcedHandoff === 'function'
         ? options.onIgnoredForcedHandoff
         : () => {},
+    explainForcedHandoffRefusal:
+      typeof options.explainForcedHandoffRefusal === 'function'
+        ? options.explainForcedHandoffRefusal
+        : OMITTED_EXPLAINER,
   };
 }
 

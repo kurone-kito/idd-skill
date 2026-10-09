@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 // #2919: the real workflow-file-path constant, imported here (a test file,
 // no import-cycle constraint applies) to pin protocol-helpers.mts's own
@@ -19,6 +20,7 @@ import {
 import {
   renderClaimedByMarker,
   renderExternalCheckWaiverComment,
+  renderForcedHandoffComment,
   renderOutOfLoopMarker,
   renderReviewReplyStamp,
   renderUnclaimedByMarker,
@@ -42,6 +44,7 @@ import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary as buildPreMergeReadinessSummaryImpl,
+  type ClaimValidationTraceCapture,
   CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
   CODERABBIT_REVIEW_PAUSED_MARKER,
   CODERABBIT_SUMMARY_MARKER,
@@ -10106,8 +10109,8 @@ test('#1570: buildPreMergeReadinessSummary blocks on copilot-terminal-unavailabl
 // #2021: a posted, otherwise-valid `idd-advisory-convergence` waiver must
 // only make the REQUIRED CHECK itself `coveredByWaiver` once the SAME
 // deadline/terminal precondition `advisory-convergence.mts`'s own gate
-// enforces has also opened -- a 24h deadline anchored on the current HEAD
-// commit's own committedDate, or proven terminal Copilot unavailability.
+// enforces has also opened -- the configured deadline anchored on when GitHub first recorded the current HEAD
+// or proven terminal Copilot unavailability.
 // Before this fix, `pre-merge-readiness.mjs` reported `coveredByWaiver: true`
 // (and therefore `ready: true`) the moment a valid waiver marker existed,
 // regardless of whether either precondition had opened -- sending a session
@@ -17140,4 +17143,356 @@ test('collectPreMergeReadiness: an empty search adds no deferred-follow-up gate 
     items: [],
   });
   assert.ok(!gates.some((gate) => gate.startsWith('deferred-followup-')));
+});
+
+// kurone-kito/idd-skill#3885: the live two-sentence Codex usage-limit notice.
+const CODEX_LIVE_NOTICE_3885 =
+  'You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).\nTo continue using code reviews, you can upgrade your account or add credits to your account and enable them for code reviews in your [settings](https://chatgpt.com/codex/cloud/settings/code-review).';
+
+test('isAdvisoryNonReviewNotice matches the live two-sentence Codex usage-limit notice (#3885)', () => {
+  assert.equal(isAdvisoryNonReviewNotice(CODEX_LIVE_NOTICE_3885), true);
+});
+
+test('isAdvisoryNonReviewNotice rejects a review that embeds the live notice after a narrative lead-in (#3885)', () => {
+  const embedded = `Retry logic looks right overall. ${CODEX_LIVE_NOTICE_3885.replace(/\n/g, ' ')}`;
+  assert.equal(isAdvisoryNonReviewNotice(embedded), false);
+});
+
+test('the Codex notice gap bound is 60 characters: a 70-character gap is rejected and a 60-character gap accepted (#3885)', () => {
+  const withGap = (fill: number) =>
+    CODEX_LIVE_NOTICE_3885.replace(
+      ' or add credits to your account and ',
+      ` ${'x'.repeat(fill)} `,
+    );
+  assert.equal(isAdvisoryNonReviewNotice(withGap(68)), false);
+  assert.equal(isAdvisoryNonReviewNotice(withGap(58)), true);
+});
+
+test('the Codex notice settings tail accepts only the whole plain or linked forms (#3885)', () => {
+  const linked =
+    ' in your [settings](https://chatgpt.com/codex/cloud/settings/code-review).';
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(linked, ' in your settings.'),
+    ),
+    true,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(linked, ' in your [settings.'),
+    ),
+    false,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      CODEX_LIVE_NOTICE_3885.replace(
+        linked,
+        ' in your settings](https://chatgpt.com/codex/cloud/settings/code-review).',
+      ),
+    ),
+    false,
+  );
+});
+
+// #3873: the merge side names why a forced handoff for the active claim was
+// refused, and the claim-ownership blocker carries that cause only when the
+// report field is present.
+const REFUSED_HANDOFF_OPTIONS = {
+  trustedMarkerLogins: ['cli-old', 'cli-new', 'kurone-kito', 'attacker'],
+  forcedHandoffEnabled: true,
+  expectedLinkedPrs: ['#359'],
+  prFirstCommitAt: '2026-05-12T10:00:00Z',
+};
+
+test('merge-side summary names the cause of a refused forced handoff for the active claim', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => ({
+      oldClaimId: entry.oldClaimId,
+      cause: entry.cause,
+    })),
+    [
+      {
+        oldClaimId: 'claim-20260512T090000Z-337-old',
+        cause: 'issue-only-not-before-first-commit',
+      },
+    ],
+  );
+});
+
+test('merge-side summary reports an unauthorized forced handoff with its authorization reason', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, authorizedForcedHandoffLogins: [] },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['forced-by-unauthorized'],
+  );
+});
+
+test('merge-side summary adds no ignored-handoff field when no marker was refused', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, forcedHandoffEnabled: false },
+    capture,
+  );
+  assert.equal('ignoredForcedHandoffs' in capture, false);
+});
+
+test('claim-ownership blocker names the ignored-handoff cause only when the field is present', () => {
+  const ownership = (report: Record<string, unknown>) =>
+    computePreMergeReadinessBlockers(report).find(
+      (blocker) => blocker.gate === 'claim-ownership',
+    )?.detail;
+  const claim = { matchesExpectedClaim: false, reason: 'claim-id-mismatch' };
+  assert.equal(
+    ownership({ claim }),
+    'claim ownership does not match (reason="claim-id-mismatch")',
+  );
+  assert.equal(
+    ownership({
+      claim,
+      ignoredForcedHandoffs: [
+        {
+          oldClaimId: 'claim-old',
+          newClaimId: 'claim-new',
+          cause: 'pr-scope-mismatch',
+        },
+      ],
+    }),
+    'claim ownership does not match (reason="claim-id-mismatch"); ignored forced-handoff: pr-scope-mismatch',
+  );
+});
+
+test('merge-side summary does not report a refused handoff whose old agent differs from the active claim', () => {
+  // Same claim id, different old agent: not the active claim's identity, so
+  // the marker is never a refusal of the active claim and must not be listed.
+  const event = wgHandoffEvent();
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([
+      wgClaimEvent(),
+      {
+        ...event,
+        body: event.body.replace(
+          '"old-agent-id":"cli-old"',
+          '"old-agent-id":"someone-else"',
+        ),
+      },
+    ]) as Parameters<typeof summarizeClaimValidationImpl>[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.equal('ignoredForcedHandoffs' in capture, false);
+});
+
+test('claim-ownership blocker skips malformed ignored-handoff entries instead of throwing', () => {
+  const claim = { matchesExpectedClaim: false, reason: 'claim-id-mismatch' };
+  const detail = computePreMergeReadinessBlockers({
+    claim,
+    ignoredForcedHandoffs: [
+      null,
+      'not-an-entry',
+      { cause: '' },
+      { cause: 'pr-scope-mismatch' },
+    ],
+  }).find((blocker) => blocker.gate === 'claim-ownership')?.detail;
+  assert.equal(
+    detail,
+    'claim ownership does not match (reason="claim-id-mismatch"); ignored forced-handoff: pr-scope-mismatch',
+  );
+});
+
+test('a reused trace capture drops an ignored-handoff field from an earlier evaluation', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, authorizedForcedHandoffLogins: [] },
+    capture,
+  );
+  assert.ok(capture.ignoredForcedHandoffs);
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    { ...REFUSED_HANDOFF_OPTIONS, forcedHandoffEnabled: false },
+    capture,
+  );
+  assert.equal('ignoredForcedHandoffs' in capture, false);
+});
+
+test('buildPreMergeReadinessSummary carries an ignored handoff for the active claim as a top-level field', () => {
+  // End to end: a refused handoff for the active claim reaches the report, and
+  // the claim is still the one the fixture expects, so ownership still matches.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const claimed = fixture.input.claimEvents[0];
+  const branch = /branch: (\S+)/.exec(String(claimed.body))?.[1] ?? '';
+  const handoff = {
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-12T00:00:00Z',
+    lastEditedAt: null,
+    body: renderForcedHandoffComment({
+      oldAgentId: 'github-copilot-cli',
+      oldClaimId: 'claim-123',
+      newAgentId: 'github-copilot-cli-new',
+      newClaimId: 'claim-456',
+      branch,
+      forcedBy: 'kurone-kito',
+      reason: 'handoff',
+      timestamp: '2026-05-12T00:00:00Z',
+      contextScope: 'issue-only',
+    }),
+  };
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, claimEvents: [claimed, handoff] },
+    fixture.options,
+  );
+  assert.deepEqual(summary.ignoredForcedHandoffs, [
+    {
+      oldClaimId: 'claim-123',
+      newClaimId: 'claim-456',
+      cause: 'forced-by-unauthorized',
+    },
+  ]);
+  assert.equal(
+    (summary.claim as { matchesExpectedClaim: boolean }).matchesExpectedClaim,
+    true,
+  );
+});
+
+test('merge-side summary reports an authorized handoff refused while the mode is disabled as mode-disabled', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      forcedHandoffEnabled: false,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['mode-disabled'],
+  );
+});
+
+test('merge-side summary reports a relayed, authorized handoff with its gate cause, not an author mismatch', () => {
+  // The merge side leaves the author-match check off (a maintainer-authorized
+  // handoff may be relayed by automation), so the gate cause is what applies.
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([
+      wgClaimEvent(),
+      wgHandoffEvent({ author: 'attacker' }),
+    ]) as Parameters<typeof summarizeClaimValidationImpl>[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['issue-only-not-before-first-commit'],
+  );
+});
+
+test('merge-side summary names first-commit-time-unknown when no first-commit time is supplied', () => {
+  const capture: ClaimValidationTraceCapture = {};
+  summarizeClaimValidationImpl(
+    withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+      typeof summarizeClaimValidationImpl
+    >[0],
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      prFirstCommitAt: null,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    capture,
+  );
+  assert.deepEqual(
+    capture.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['first-commit-time-unknown'],
+  );
+});
+
+test('every ignored-handoff cause the merge report produces is in the published schema enum', () => {
+  // The schema is the published contract, so a cause the code can emit must be
+  // one the schema accepts. Cover each merge-side refusal the tests exercise.
+  const schema = JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL('../schemas/pre-merge-readiness.schema.json', import.meta.url),
+      ),
+      'utf8',
+    ),
+  ) as {
+    properties: {
+      ignoredForcedHandoffs: {
+        items: { properties: { cause: { enum: string[] } } };
+      };
+    };
+  };
+  const allowed = new Set(
+    schema.properties.ignoredForcedHandoffs.items.properties.cause.enum,
+  );
+  const scenarios = [
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    { ...REFUSED_HANDOFF_OPTIONS, authorizedForcedHandoffLogins: [] },
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      forcedHandoffEnabled: false,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+    {
+      ...REFUSED_HANDOFF_OPTIONS,
+      prFirstCommitAt: null,
+      authorizedForcedHandoffLogins: ['kurone-kito'],
+    },
+  ];
+  for (const options of scenarios) {
+    const capture: ClaimValidationTraceCapture = {};
+    summarizeClaimValidationImpl(
+      withClaimEditState([wgClaimEvent(), wgHandoffEvent()]) as Parameters<
+        typeof summarizeClaimValidationImpl
+      >[0],
+      options,
+      capture,
+    );
+    for (const entry of capture.ignoredForcedHandoffs ?? []) {
+      assert.ok(
+        allowed.has(entry.cause),
+        `cause ${entry.cause} is not in the schema enum`,
+      );
+    }
+  }
 });

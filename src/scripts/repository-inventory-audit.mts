@@ -41,6 +41,7 @@ export const COVERED_HELPERS = [
   'authoring-owner-provenance',
   'branch-conflict-state',
   'branch-name',
+  'check-stray-commit-closes',
   'ci-wait-policy',
   'ci-wait-state',
   'claim-approval-gate',
@@ -155,6 +156,8 @@ const INTERNAL_ENTRY_REASONS: Readonly<Record<string, string>> = {
   'scripts/actions-usage-report.mjs': 'source-repository Actions report',
   'scripts/token-cost-event.mjs': 'source-repository token-cost event logger',
   'scripts/token-cost-harvest.mjs': 'source-repository token-cost log reader',
+  'scripts/check-stray-commit-closes.mjs':
+    'source-repository pre-push closing-keyword check',
   'scripts/idd-critique-harvest.mjs': 'source-repository critique log reader',
   'scripts/idd-critique-report.mjs': 'source-repository critique report',
   'scripts/copilot-review-wave-audit.mjs':
@@ -185,6 +188,8 @@ const DOGFOOD_ONLY_TOOLS: Readonly<Record<string, string>> = {
     'repository-local Markdown authoring guard, not distributed',
   'scripts/token-cost-report.mjs':
     'source-repository token-cost reporter, not an adopter CLI',
+  'scripts/check-stray-commit-closes.mjs':
+    'source-repository pre-push check, not an adopter CLI',
 };
 const BIN_ALLOWLIST: Readonly<Record<string, string>> = {
   'idd-onboard':

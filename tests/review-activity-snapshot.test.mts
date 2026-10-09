@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCodeRabbitEmbeddedFindings,
+  buildCopilotOverviewLabels,
   buildCopilotReviewBodyRemarks,
   collectReviewActivitySnapshot,
   normalizeComment,
@@ -324,6 +326,10 @@ function runSnapshot(
     commitId: string;
     remark: string;
   }[];
+  latestPrimaryBotReview?: {
+    matchesHead: boolean;
+    reviewAckNeeded: boolean;
+  } | null;
 } {
   const restore = stubExecutable(
     'gh',
@@ -677,6 +683,348 @@ test('review-activity snapshot serializes reviewBodyRemarks from REST review dat
   );
 });
 
+// kurone-kito/idd-skill#3907: the opt-in `latestPrimaryBotReview` field.
+const LATEST_HEAD = 'c'.repeat(40);
+const LATEST_COPILOT = 'copilot-pull-request-reviewer[bot]';
+
+function latestPort(options: {
+  fetchReviews?: () => unknown;
+  comments?: object[];
+  viewerLogin?: string;
+}) {
+  const port: Record<string, unknown> = {
+    resolveViewerLoginSafe: () =>
+      options.viewerLogin === undefined
+        ? { viewerLogin: '', viewerLoginUnavailable: true }
+        : { viewerLogin: options.viewerLogin, viewerLoginUnavailable: false },
+    getChangeRequestHeadShaAndAuthor: () => ({
+      headSha: LATEST_HEAD,
+      authorLogin: 'someone',
+    }),
+    listChangeRequestChecks: () => [],
+    listReviews: () => [],
+    listWorkItemComments: () => options.comments ?? [],
+    listChangeRequestReviewThreadsWithComments: () => [],
+    getReviewThreadCommentUserContentEdits: () => [],
+  };
+  if (options.fetchReviews) {
+    port.getChangeRequestReviewsWithHeadCommitDate = options.fetchReviews;
+  }
+  return port;
+}
+
+function latestSnapshot(
+  options: Parameters<typeof latestPort>[0] & {
+    include: boolean;
+    trustedMarkerLoginsFlag?: string;
+    headSha?: string;
+    config?: object;
+  },
+) {
+  const port = latestPort(options) as Parameters<
+    typeof collectReviewActivitySnapshot
+  >[0]['port'];
+  if (options.headSha !== undefined) {
+    (port as Record<string, unknown>).getChangeRequestHeadShaAndAuthor =
+      () => ({
+        headSha: options.headSha,
+        authorLogin: 'someone',
+      });
+  }
+  return collectReviewActivitySnapshot({
+    prNumber: 3907,
+    owner: 'o',
+    repo: 'r',
+    trustedMarkerLoginsFlag: options.trustedMarkerLoginsFlag ?? '',
+    advisoryBotLoginsFlag: '',
+    envTrustedMarkerActors: '',
+    envAdvisoryBotLogins: '',
+    iddConfig: (options.config ?? {}) as never,
+    includeLatestPrimaryBotReview: options.include,
+    port,
+  });
+}
+
+function providerReviewNode(
+  id: string,
+  body: string,
+  overrides: {
+    commitId?: string;
+    replyOnly?: boolean;
+    authorLogin?: string;
+  } = {},
+) {
+  return {
+    id,
+    authorLogin: overrides.authorLogin ?? LATEST_COPILOT,
+    authorTypename: 'Bot',
+    submittedAt: '2026-10-09T01:00:00Z',
+    commitId: overrides.commitId ?? LATEST_HEAD,
+    commentCount: 0,
+    body,
+    replyOnly: overrides.replyOnly ?? false,
+  };
+}
+
+test('latestPrimaryBotReview is omitted and no review request is made when the opt-in is off (#3907)', () => {
+  const calls: string[] = [];
+  const snapshot = latestSnapshot({
+    include: false,
+    fetchReviews: () => {
+      calls.push('reviews');
+      return { reviews: [], headCommittedAt: '' };
+    },
+  });
+  assert.equal('latestPrimaryBotReview' in snapshot, false);
+  assert.deepEqual(calls, []);
+});
+
+test('the opt-in reports the Previously-missed Copilot review with explicit values (#3907)', () => {
+  const body = readFileSync(
+    join(REPO_ROOT, 'tests/fixtures/bot-comment-corpus/corpus.json'),
+    'utf8',
+  );
+  const entry = (JSON.parse(body) as { id: string; body: string }[]).find(
+    (candidate) => candidate.id === 'copilot-v2-previously-missed-3196',
+  );
+  assert.ok(entry);
+  const snapshot = latestSnapshot({
+    include: true,
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [providerReviewNode('PRR_latest', entry.body)],
+    }),
+  });
+  assert.deepEqual(snapshot.latestPrimaryBotReview, {
+    primaryBotLogin: 'copilot',
+    reviewId: 'PRR_latest',
+    commitId: LATEST_HEAD,
+    matchesHead: true,
+    bodyShape: 'overview-v2',
+    suppressedCount: 1,
+    reviewAckNeeded: true,
+    reviewAckCovers: false,
+  });
+});
+
+test('a configured non-default primary bot is followed, not Copilot (#3907)', () => {
+  const config = { advisoryWait: { primaryBotLogin: 'acme-review' } };
+  const snapshot = latestSnapshot({
+    include: true,
+    config,
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_acme',
+          'Something the classifier does not know.',
+          {
+            authorLogin: 'acme-review[bot]',
+          },
+        ),
+        providerReviewNode(
+          'PRR_copilot',
+          corpusEntryBody('copilot-v2-previously-missed-3196'),
+        ),
+      ],
+    }),
+  });
+  // The Copilot review is later in the list but is not this bot's review.
+  assert.deepEqual(snapshot.latestPrimaryBotReview, {
+    primaryBotLogin: 'acme-review',
+    reviewId: 'PRR_acme',
+    commitId: LATEST_HEAD,
+    matchesHead: true,
+    bodyShape: 'unrecognized',
+    suppressedCount: 0,
+    reviewAckNeeded: false,
+    reviewAckCovers: false,
+  });
+});
+
+test('an invalid advisoryWait section falls back to the default Copilot bot (#3907)', () => {
+  const snapshot = latestSnapshot({
+    include: true,
+    config: { advisoryWait: { primaryBotLogin: 123 } },
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_bad',
+          'Something the classifier does not know.',
+        ),
+      ],
+    }),
+  });
+  const evidence = snapshot.latestPrimaryBotReview as {
+    primaryBotLogin: string;
+    bodyShape: string | null;
+    reviewAckNeeded: boolean;
+  } | null;
+  assert.equal(evidence?.primaryBotLogin, 'copilot');
+  assert.equal(evidence?.bodyShape, 'unrecognized');
+  assert.equal(evidence?.reviewAckNeeded, true);
+});
+
+test('the opt-in makes exactly one review fetch (#3907)', () => {
+  let calls = 0;
+  latestSnapshot({
+    include: true,
+    fetchReviews: () => {
+      calls += 1;
+      return { headCommittedAt: '', reviews: [] };
+    },
+  });
+  assert.equal(calls, 1);
+});
+
+test('a failing fetch yields null and leaves every other key unchanged (#3907)', () => {
+  const off = latestSnapshot({ include: false });
+  const failing = latestSnapshot({
+    include: true,
+    fetchReviews: () => {
+      throw new Error('graphql unavailable');
+    },
+  });
+  assert.equal(failing.latestPrimaryBotReview, null);
+  const { latestPrimaryBotReview: _ignored, ...rest } = failing;
+  assert.deepEqual(rest, off);
+});
+
+test('an absent review method or a malformed HEAD yields null (#3907)', () => {
+  assert.equal(latestSnapshot({ include: true }).latestPrimaryBotReview, null);
+  const malformed = latestSnapshot({
+    include: true,
+    headSha: 'not-a-sha',
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [providerReviewNode('PRR_x', 'body')],
+    }),
+  });
+  assert.equal(malformed.latestPrimaryBotReview, null);
+});
+
+test('a trusted, unedited review-ack after the review sets reviewAckCovers (#3907)', () => {
+  const snapshot = latestSnapshot({
+    include: true,
+    trustedMarkerLoginsFlag: 'kurone-kito',
+    comments: [
+      {
+        id: 'ACK1',
+        authorLogin: 'kurone-kito',
+        body: `review-ack: claude-f3ef1280 ${LATEST_HEAD} 2026-10-09T02:00:00Z`,
+        createdAt: '2026-10-09T02:00:00Z',
+        updatedAt: '2026-10-09T02:00:00Z',
+        lastEditedAt: null,
+      },
+    ],
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_ack',
+          corpusEntryBody('copilot-v2-previously-missed-3196'),
+        ),
+      ],
+    }),
+  });
+  const evidence = snapshot.latestPrimaryBotReview as {
+    reviewAckCovers: boolean | null;
+  } | null;
+  assert.equal(evidence?.reviewAckCovers, true);
+});
+
+test('a review-ack from the viewer login is not a trusted ack (#3907)', () => {
+  const snapshot = latestSnapshot({
+    include: true,
+    trustedMarkerLoginsFlag: 'kurone-kito',
+    viewerLogin: 'viewer-bot',
+    comments: [
+      {
+        id: 'ACK2',
+        authorLogin: 'viewer-bot',
+        body: `review-ack: claude-f3ef1280 ${LATEST_HEAD} 2026-10-09T02:00:00Z`,
+        createdAt: '2026-10-09T02:00:00Z',
+        updatedAt: '2026-10-09T02:00:00Z',
+        lastEditedAt: null,
+      },
+    ],
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_viewer',
+          corpusEntryBody('copilot-v2-previously-missed-3196'),
+        ),
+      ],
+    }),
+  });
+  // The reported trust set is the configured one, not the viewer-augmented
+  // activity set, so the viewer's ack must not satisfy reviewAckCovers.
+  assert.deepEqual(snapshot.trustedMarkerActors, ['kurone-kito']);
+  const evidence = snapshot.latestPrimaryBotReview as {
+    reviewAckCovers: boolean | null;
+  } | null;
+  assert.equal(evidence?.reviewAckCovers, false);
+});
+
+function latestPrimaryBotGraphql(reviewBody: string): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [],
+          },
+          reviews: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'PRR_cli',
+                commit: { oid: SNAPSHOT_HEAD },
+                submittedAt: '2026-10-09T01:00:00Z',
+                author: { login: LATEST_COPILOT, __typename: 'Bot' },
+                comments: { totalCount: 0, nodes: [] },
+                body: reviewBody,
+              },
+            ],
+          },
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-10-09T00:00:00Z' } }],
+          },
+        },
+      },
+    },
+  });
+}
+
+test('the CLI prints a non-null latestPrimaryBotReview at E1 (#3907)', () => {
+  const report = runSnapshot(
+    latestPrimaryBotGraphql(
+      corpusEntryBody('copilot-v2-previously-missed-3196'),
+    ),
+  );
+  assert.ok(
+    report.latestPrimaryBotReview !== null &&
+      typeof report.latestPrimaryBotReview === 'object',
+  );
+  assert.equal(report.latestPrimaryBotReview?.reviewAckNeeded, true);
+  assert.equal(report.latestPrimaryBotReview?.matchesHead, true);
+});
+
+function corpusEntryBody(id: string): string {
+  const entries = JSON.parse(
+    readFileSync(
+      join(REPO_ROOT, 'tests/fixtures/bot-comment-corpus/corpus.json'),
+      'utf8',
+    ),
+  ) as { id: string; body: string }[];
+  const entry = entries.find((candidate) => candidate.id === id);
+  assert.ok(entry, `corpus entry ${id} must exist`);
+  return entry.body;
+}
+
 function snapshotWithReviews(reviews: readonly object[]) {
   return collectReviewActivitySnapshot({
     prNumber: 3672,
@@ -727,8 +1075,250 @@ test('a remark-only snapshot keeps effective, counters and every other field unc
   // The review still counts as one item either way, and nothing else moves.
   assert.deepEqual(withRemark.counts, { comments: 0, reviews: 1, threads: 0 });
   assert.deepEqual(withRemark.effective, withoutRemark.effective);
-  const { reviewBodyRemarks: _withRemark, ...restWithRemark } = withRemark;
-  const { reviewBodyRemarks: _withoutRemark, ...restWithoutRemark } =
-    withoutRemark;
+  // #3868: the overview-labels key is evidence only too, so it is dropped here
+  // as well; the remaining fields must match exactly.
+  const {
+    reviewBodyRemarks: _withRemark,
+    copilotOverviewLabels: _withRemarkLabels,
+    ...restWithRemark
+  } = withRemark;
+  const {
+    reviewBodyRemarks: _withoutRemark,
+    copilotOverviewLabels: _withoutRemarkLabels,
+    ...restWithoutRemark
+  } = withoutRemark;
   assert.deepEqual(restWithRemark, restWithoutRemark);
+});
+
+// --- #3868: copilotOverviewLabels ------------------------------------------
+
+interface CorpusEntry {
+  id: string;
+  body: string;
+  expectedLabels: Record<string, { shape?: string }>;
+}
+
+const CORPUS: CorpusEntry[] = Object.values(
+  JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL('./fixtures/bot-comment-corpus/corpus.json', import.meta.url),
+      ),
+      'utf8',
+    ),
+  ) as Record<string, CorpusEntry>,
+);
+
+function corpusBody(id: string): string {
+  const entry = CORPUS.find((candidate) => candidate.id === id);
+  assert.ok(entry, `corpus entry ${id} exists`);
+  return entry.body;
+}
+
+function corpusBodyWithShape(shape: string): string {
+  const entry = CORPUS.find(
+    (candidate) =>
+      candidate.expectedLabels['copilot-review-body']?.shape === shape,
+  );
+  assert.ok(entry, `a corpus entry with shape ${shape} exists`);
+  return entry.body;
+}
+
+function copilotReview(
+  body: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    node_id: 'PRR_labels',
+    commit_id: 'a'.repeat(40),
+    user: { login: COPILOT_LOGIN },
+    state: 'COMMENTED',
+    submitted_at: '2026-10-01T00:00:00Z',
+    body,
+    ...overrides,
+  };
+}
+
+// Two Open items, one carrying `· New`, with the same badge markup the parser
+// reads in real bodies (`alt="<Level> severity"` before the discussion link).
+const TWO_OPEN_ITEMS_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '## Copilot review overview',
+  '',
+  '**Findings:** 2 <picture><img alt="High severity"></picture>',
+  '',
+  '<details>',
+  '<summary><strong>Open (2)</strong></summary>',
+  '',
+  '- <picture><source srcset="h.svg"><img alt="High severity" src="h.svg"></picture> [Fix the parser](#discussion_r111) · New',
+  '- <picture><img alt="Low severity" src="l.svg"></picture> [Tidy the docs](#discussion_r222)',
+  '',
+  '</details>',
+  '',
+].join('\n');
+
+test('copilotOverviewLabels reads a v2 Open item: severity, discussion id, isNew, shape', () => {
+  assert.deepEqual(
+    buildCopilotOverviewLabels([
+      copilotReview(corpusBody('copilot-v2-clean-3245')),
+    ]),
+    {
+      reviewId: 'PRR_labels',
+      commitId: 'a'.repeat(40),
+      kind: 'v2',
+      items: [{ discussionId: 4086537940, severity: 'medium', isNew: true }],
+      previouslyMissed: { high: 0, medium: 0, low: 0 },
+      reason: null,
+    },
+  );
+});
+
+test('copilotOverviewLabels yields every Open item of a multi-item body, with `· New` only where present', () => {
+  assert.deepEqual(
+    buildCopilotOverviewLabels([copilotReview(TWO_OPEN_ITEMS_BODY)]),
+    {
+      reviewId: 'PRR_labels',
+      commitId: 'a'.repeat(40),
+      kind: 'v2',
+      items: [
+        { discussionId: 111, severity: 'high', isNew: true },
+        { discussionId: 222, severity: 'low', isNew: false },
+      ],
+      previouslyMissed: { high: 0, medium: 0, low: 0 },
+      reason: null,
+    },
+  );
+});
+
+test('copilotOverviewLabels counts Previously missed per severity and gives no per-item severity', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBody('copilot-v2-previously-missed-3196')),
+  ]);
+  assert.equal(row?.kind, 'v2');
+  assert.deepEqual(row?.items, []);
+  assert.deepEqual(row?.previouslyMissed, { high: 0, medium: 1, low: 0 });
+  assert.equal(row?.reason, null);
+});
+
+test('copilotOverviewLabels reports a legacy body as legacy with no items', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBodyWithShape('overview-legacy')),
+  ]);
+  assert.deepEqual(
+    {
+      kind: row?.kind,
+      items: row?.items,
+      previouslyMissed: row?.previouslyMissed,
+    },
+    { kind: 'legacy', items: [], previouslyMissed: null },
+  );
+});
+
+test('copilotOverviewLabels does not read a v2 marker quoted in a code span as v2', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(
+      'The marker is written as `<!-- ccr-overview-v2 -->` in this review.\n\n**Findings:** None\n',
+    ),
+  ]);
+  assert.equal(row?.kind, 'other');
+  assert.deepEqual(row?.items, []);
+  assert.equal(row?.previouslyMissed, null);
+});
+
+test('copilotOverviewLabels: an Open item with no label is unparsed, keeps the partial list, invents no severity', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '',
+    '<details>',
+    '<summary><strong>Open (2)</strong></summary>',
+    '',
+    '- <picture><img alt="Medium severity" src="m.svg"></picture> [Labelled](#discussion_r301)',
+    '- Plain item with no badge [Unlabelled](#discussion_r302)',
+    '',
+    '</details>',
+    '',
+  ].join('\n');
+  assert.deepEqual(buildCopilotOverviewLabels([copilotReview(body)]), {
+    reviewId: 'PRR_labels',
+    commitId: 'a'.repeat(40),
+    kind: 'unparsed',
+    items: [{ discussionId: 301, severity: 'medium', isNew: false }],
+    previouslyMissed: { high: 0, medium: 0, low: 0 },
+    reason: 'Open header declared 2 but 1 were parsed',
+  });
+});
+
+test('copilotOverviewLabels returns the last listed review, even when an earlier one was submitted later', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBody('copilot-v2-clean-3245'), {
+      node_id: 'PRR_later_submitted',
+      submitted_at: '2026-10-02T00:00:00Z',
+    }),
+    copilotReview(corpusBody('copilot-v2-previously-missed-3196'), {
+      node_id: 'PRR_listed_last',
+      submitted_at: '2026-10-01T00:00:00Z',
+    }),
+  ]);
+  assert.equal(row?.reviewId, 'PRR_listed_last');
+  assert.equal(row?.kind, 'v2');
+});
+
+test('copilotOverviewLabels skips an error-bodied last review and returns the earlier v2 review', () => {
+  const row = buildCopilotOverviewLabels([
+    copilotReview(corpusBody('copilot-v2-clean-3245'), {
+      node_id: 'PRR_v2',
+    }),
+    copilotReview(corpusBodyWithShape('error'), {
+      node_id: 'PRR_error_last',
+    }),
+  ]);
+  assert.equal(row?.reviewId, 'PRR_v2');
+  assert.equal(row?.kind, 'v2');
+  assert.equal(row?.items.length, 1);
+});
+
+test('copilotOverviewLabels is null when no Copilot COMMENTED review exists', () => {
+  assert.equal(
+    buildCopilotOverviewLabels([
+      copilotReview(corpusBody('copilot-v2-clean-3245'), {
+        state: 'APPROVED',
+      }),
+      copilotReview(corpusBody('copilot-v2-clean-3245'), {
+        user: { login: 'human-reviewer' },
+      }),
+    ]),
+    null,
+  );
+  assert.equal(buildCopilotOverviewLabels([]), null);
+});
+
+test('copilotOverviewLabels is evidence only: the other fields match the same review with a body that carries no labels', () => {
+  for (const id of [
+    'copilot-v2-clean-3245',
+    'copilot-v2-previously-missed-3196',
+  ]) {
+    const withLabels = snapshotWithReviews([
+      copilotReview(corpusBody(id), { node_id: `PRR_${id}` }),
+    ]);
+    const withoutLabels = snapshotWithReviews([
+      copilotReview('**Findings:** None', { node_id: `PRR_${id}` }),
+    ]);
+    assert.notEqual(
+      withLabels.copilotOverviewLabels,
+      null,
+      `${id} yields a row`,
+    );
+    const {
+      copilotOverviewLabels: _withLabels,
+      reviewBodyRemarks: _withRemarks,
+      ...restWithLabels
+    } = withLabels;
+    const {
+      copilotOverviewLabels: _withoutLabels,
+      reviewBodyRemarks: _withoutRemarks,
+      ...restWithoutLabels
+    } = withoutLabels;
+    assert.deepEqual(restWithLabels, restWithoutLabels, id);
+  }
 });

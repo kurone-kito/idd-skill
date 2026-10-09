@@ -1262,17 +1262,76 @@ widening it to a broader mode this session never selected.
   Discover run that returned this empty pool, so it does not recur on a
   timer. Wait for an external change instead of re-running Discover on a
   timer: poll with one GraphQL query shape, paginated by cursor until
-  every page is read, for the open issues' numbers, labels, and state
-  (not per-issue REST reads) about every 2 minutes, and re-run Discover
-  only on one of three events: an issue closed, a new issue without an
-  authoring or blocking label appeared, or such a label was removed —
-  those events, not elapsed time, are what make the graph stale here.
-  The interval is deliberately shorter than the roughly 4-minute race
-  seen in a downstream adopter's run (reported 2026-09-30,
-  kurone-kito/idd-skill#3677): a second orchestrator claimed the next
-  serial issue about 4 minutes after its blocker closed, so the wait
-  also decides who wins. A helper for the query is optional and not part
-  of this guidance.
+  every page is read, for the open issues' number, state, labels, last
+  edit time, sub-issue total and parent (not per-issue REST reads), about
+  every 2 minutes, and re-run Discover only on the events below, not on
+  a timer. Those events, not elapsed time, are what make the graph stale
+  here, apart from the changes listed under unobserved below. An
+  exhausted orchestrator therefore sees a released or expired claim only
+  at its next event.
+
+  ```graphql
+  query($owner: String!, $name: String!, $cursor: String) {
+    repository(owner: $owner, name: $name) {
+      issues(first: 100, after: $cursor, states: OPEN) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          number
+          state
+          labels(first: 100) { nodes { name } }
+          lastEditedAt
+          subIssuesSummary { total }
+          parent { number }
+        }
+      }
+    }
+  }
+  ```
+
+  An orchestrator that stays alive polls before each Discover run it
+  starts. Each poll is compared with the last complete poll, and a failed
+  or refused poll replaces nothing. An event is any of these: no complete
+  poll before a run, in which case the next complete poll re-runs Discover
+  once; an open issue that the last complete poll lacked, which is a new or
+  reopened issue (the poll cannot tell them apart) without an authoring or
+  blocking label (by default `status:authoring`, `status:blocked-by-human`
+  or `status:needs-decision`); an open issue that the poll no longer
+  returns, which is normally a closed issue; an authoring or blocking label
+  removed from an open issue; the ready label (`idd:ready` by default) added
+  to or removed from an open issue; or a changed `lastEditedAt`, sub-issue
+  total or parent on an issue present in both polls, graph member or not.
+  The comparison uses only GitHub's own values, so no clock is involved.
+  Every body edit to an open issue present in both polls is therefore
+  expected to re-run a full Discover, which is the cost of seeing
+  relationship edits without polling comments. The observed case that moves
+  `lastEditedAt` is a roadmap body edit (kurone-kito/idd-skill#3878); other
+  body edits, such as a task-list, marker or `Blocked by` line edit, are
+  expected to move it too. A native sub-issue link is expected to move the
+  sub-issue total or the parent.
+  `updatedAt` is not polled, because comments (claim markers included) and
+  label changes are expected to move it (see kurone-kito/idd-skill#3878).
+  The following stay unobserved (each preventive; no observed incident yet):
+  approval comments such as `IDD ready`; changes made through comments,
+  including claim releases; the stale-claim threshold, which is time-based;
+  body or label changes to closed issues that the graph still traverses;
+  sub-issue links between closed issues; an unlinked issue opened and closed
+  between two polls, or an issue closed and reopened between two polls; a
+  body edit to an issue absent from the last complete poll (new or reopened)
+  with an authoring or blocking label, made before the next complete poll
+  (it has no earlier `lastEditedAt` to compare; its label removal is itself
+  an event); changes to configured label names; and title edits, which the
+  poll sees only if they also move `lastEditedAt`. Reported 2026-10-05 and
+  replayed on
+  `origin/main` at `c9d082386` on 2026-10-08 (kurone-kito/idd-skill#3878):
+  with the earlier fields (number, state and labels), the poll values stayed
+  identical while the graph changed.
+
+  The poll interval is deliberately shorter than the roughly 4-minute race seen
+  in a downstream adopter's run (reported 2026-09-30,
+  kurone-kito/idd-skill#3677): a second orchestrator claimed the next serial
+  issue about 4 minutes after its blocker closed, so the wait also decides
+  who wins. A helper for the query is optional and not part of this
+  guidance.
 - **Optional hint cache**: this section decides _when_ to re-run.
   With `githubApi.readCache.enabled`, a re-run inside `maxAge` is served
   from a hint instead (see the helper-script
