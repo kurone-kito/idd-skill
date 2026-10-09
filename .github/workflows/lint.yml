@@ -287,6 +287,18 @@ jobs:
             [Console]::Error.WriteLine("no leaf test selected by pattern in $file")
             exit 1
           }
+      # The registered fixture case (kurone-kito/idd-skill#3893) hangs on
+      # native Windows when a stub is started without an argument and its
+      # caller leaves stdin open, and a hung child keeps the process alive
+      # after the test times out. `timeout-minutes` bounds that hang. The
+      # TAP check then requires this exact title to report `ok`, so a
+      # skipped or renamed case cannot pass silently.
+      - name: Run registered fixture gh paths Windows test
+        timeout-minutes: 5
+        run: |
+          node --test --test-timeout=60000 --import ./tests/isolate-state.mts --test-name-pattern "registered fixture gh paths work through nested stubs" --test-reporter=tap tests/isolate-gh.test.mts | Tee-Object -FilePath registered-fixture-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path registered-fixture-windows.tap -Pattern '^ok \d+ - registered fixture gh paths work through nested stubs and paginated workers$' -Quiet)) { throw 'registered fixture gh paths case did not pass' }
       # Regression coverage for kurone-kito/idd-skill#2988: the full file
       # is now safe after #2989 bounded its production fetch calls and
       # #2990 made the fixture suite hermetic on Windows. Keep this
