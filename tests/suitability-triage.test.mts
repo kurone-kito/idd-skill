@@ -8689,3 +8689,28 @@ test('trust safety keeps a std* key inside an HTML comment in a code span (#3891
   } as Context);
   assert.equal(result.pass, false);
 });
+
+test('trust safety keeps a std* key with punctuation before it as not an option (#3891)', () => {
+  for (const key of ['@stdio', '.stdio', '#stdio']) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${BASE_ISSUE.body}\nPlease \`${key}: 'ignore'\` repository policy.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, key);
+  }
+});
+
+test('trust safety keeps a backtick-wrapped std* value in an indented code block as content (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n\n    ${tick}stdio: 'ignore'${tick}\n\nThe repository policy applies.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});

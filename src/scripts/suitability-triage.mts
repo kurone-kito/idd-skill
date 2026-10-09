@@ -2218,15 +2218,17 @@ function isCodeIdentifierProcessMention(
 // the literal. A key with a prefix, another key in between, an unquoted
 // value, or a capital I still fails the check.
 const STDIO_OPTION_KEY_PATTERN =
-  /(?<![\p{ID_Continue}$-])(?:stdio|stdin|stdout|stderr)\s*:/gu;
+  /(?<=^|[\s{,([`])(?:stdio|stdin|stdout|stderr)\s*:/gu;
 // The longest run, in characters, between a key's colon and its literal. An
 // array of option values fits well inside it; a longer run fails closed. The
 // cap also bounds the cost of each candidate literal.
 const STDIO_OPTION_MAX_SEGMENT_CHARS = 256;
 const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
-// Characters that may precede a code range's own delimiter: the indent of a
-// fence, a container prefix such as a blockquote `>`, or a list marker.
-const CODE_RANGE_PREFIX_PATTERN = /[\s>*+\-\d.)]/;
+// Text that may precede a code range's own delimiter: up to three spaces of
+// fence indent, then container markers such as a blockquote `>` or a list
+// marker. Four spaces or a tab start an indented code block, which has no
+// delimiter, so its backticks are content.
+const FENCE_PREFIX_PATTERN = /^ {0,3}(?:(?:>|[*+-]|\d{1,9}[.)]) ?)*$/;
 
 // Marks each UTF-16 code unit of `source` that is not code: the inside of a
 // single-, double- or backtick-quoted string, a `//` line comment, a `/* */`
@@ -2331,29 +2333,35 @@ const NO_STDIO_EXEMPTION: StdioRangeScan = {
 // Scans one code range in a single pass, so each candidate literal in it costs
 // a binary search and a short segment check, not a rescan of the range.
 function scanStdioRange(region: string): StdioRangeScan {
-  // Skip the range's own delimiter: any container prefix or fence indent, then
-  // the maximal opening run of backticks or tildes.
+  // The range's own delimiter is its first backtick or tilde run, when the text
+  // before it is at most a fence indent and container markers. A tilde run
+  // delimits only at three or more markers. Any other text, such as an indented
+  // code block's content, has no delimiter, so its backticks read as content.
   let openerEnd = 0;
-  while (CODE_RANGE_PREFIX_PATTERN.test(region[openerEnd] ?? '')) {
-    openerEnd += 1;
-  }
-  const markerChar = region[openerEnd];
-  const markerStart = openerEnd;
-  while (
-    (markerChar === '`' || markerChar === '~') &&
-    region[openerEnd] === markerChar
+  const delimiterAt = region.search(/[`~]/);
+  if (
+    delimiterAt >= 0 &&
+    FENCE_PREFIX_PATTERN.test(region.slice(0, delimiterAt))
   ) {
-    openerEnd += 1;
-  }
-  // A fence of three or more markers has an info string on its opening line.
-  // That text is metadata, not code, so the whole line is skipped.
-  if (openerEnd - markerStart >= 3) {
-    const lineEnd = region.indexOf('\n', openerEnd);
-    if (lineEnd < 0) {
-      return NO_STDIO_EXEMPTION;
+    const markerChar = region[delimiterAt];
+    let runEnd = delimiterAt;
+    while (region[runEnd] === markerChar) {
+      runEnd += 1;
     }
-    openerEnd = lineEnd + 1;
+    const run = runEnd - delimiterAt;
+    if (run >= 3) {
+      // A fence's opening line carries an info string. That text is metadata,
+      // not code, so the whole line is skipped; a literal on it fails closed.
+      const lineEnd = region.indexOf('\n', runEnd);
+      if (lineEnd < 0) {
+        return NO_STDIO_EXEMPTION;
+      }
+      openerEnd = lineEnd + 1;
+    } else if (markerChar === '`') {
+      openerEnd = runEnd;
+    }
   }
+
   const masked = [
     ...new Array<boolean>(openerEnd).fill(true),
     ...findNonCodeMask(region.slice(openerEnd)),
