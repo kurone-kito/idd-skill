@@ -295,8 +295,9 @@ layered on top of the distributed IDD defaults:
   merged from 2026-09-29 to 2026-10-07 (`#3608` to `#3815`), the number of
   pull requests open at once had a median of 2, a 90th percentile of 4, and a
   maximum of 9. The cap is per orchestrator session, so concurrent
-  orchestrator sessions multiply it, and only the host checks in
-  `idd-worker-budget` limit the total. To opt out, remove the
+  orchestrator sessions multiply it, and only the host and GitHub API checks
+  in `idd-worker-budget` (load, memory, and REST or GraphQL rate-limit
+  headroom) limit the total. To opt out, remove the
   `orchestrator` field and the `orchestrator-worker-cap-dogfood` rule together,
   because the rule pins the value to exactly 4 and the field alone is not
   enough (refs `#3839`).
