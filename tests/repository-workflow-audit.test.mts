@@ -3684,6 +3684,42 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ prefix: 'checkout must pin ref:' }],
   },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose refresh job loses its plain-issue guard while another step keeps it',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const job = `    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`;
+        const classify = '      - name: Classify review comment\n';
+        anchored(text, job);
+        anchored(text, classify);
+        return text
+          .split(job)
+          .join('')
+          .split(classify)
+          .join(
+            `${classify}        if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`,
+          );
+      },
+    },
+    expected: [{ message: 'must skip a plain-issue issue_comment event' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a comment-refresh whose refresh job guard is prefixed with true ||',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const job = `    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null\n`;
+        anchored(text, job);
+        return text
+          .split(job)
+          .join(`    if: true || ${job.slice('    if: '.length)}`);
+      },
+    },
+    expected: [{ message: 'must skip a plain-issue issue_comment event' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

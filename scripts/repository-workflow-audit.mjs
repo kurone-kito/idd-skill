@@ -2159,9 +2159,14 @@ function checkCommentRefreshTriggers(root, report) {
     ) {
       report(RWA005, path, 'on: must include issue_comment');
     }
+    const refreshIf =
+      jobBlocks(declared)
+        ?.get('refresh-if-idd-originated')
+        ?.match(/^ {4}if: (.*)$/m)?.[1]
+        ?.trim() ?? '';
     if (
-      !/github\.event_name\s*!=\s*'issue_comment'\s*\|\|\s*github\.event\.issue\.pull_request\s*!=\s*null/.test(
-        declared,
+      !/^github\.event_name\s*!=\s*'issue_comment'\s*\|\|\s*github\.event\.issue\.pull_request\s*!=\s*null$/.test(
+        refreshIf,
       )
     ) {
       report(RWA005, path, 'must skip a plain-issue issue_comment event');
