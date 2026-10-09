@@ -542,9 +542,11 @@ function resolveAcquireWorktreeFacts(worktree: string): {
  * in the replacement worktree. Device/inode identity distinguishes that
  * replacement without treating ordinary child-file changes as a mismatch.
  * Some filesystems hand a deleted directory's inode number to the next
- * directory created, so the git-admin comparison also uses the birth time
- * (see {@link sameAdminDirectoryIdentity}); the change time is read only to
- * tell whether a birth time is genuine.
+ * directory created, so the git-admin comparison also uses the birth time,
+ * but only when the pair of reads has a usable birth time (see
+ * {@link sameAdminDirectoryIdentity}); the change time is read only to tell
+ * whether a birth time is genuine. The common git directory is compared by
+ * device and inode alone, since recovery never replaces it.
  */
 interface DirectoryIdentity {
   dev: bigint;
