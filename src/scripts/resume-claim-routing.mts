@@ -856,16 +856,25 @@ function runCli(): HelperCliResult {
   // honors a handoff then, so the PR context would go unused.
   // #3871: the first-commit time is read only when an issue-only handoff is
   // among the fetched comments, the only marker that time can judge.
-  const hasIssueOnlyHandoff = comments.some(
-    (comment) =>
-      parseForcedHandoffComment(comment.body ?? '', comment.created_at ?? '')
-        ?.contextScope === 'issue-only',
+  // The linked-PR state only judges forced-handoff markers, so it is read only
+  // when one is among the comments (a run without one makes no extra reads).
+  const forcedHandoffMarkers = comments
+    .map((comment) =>
+      parseForcedHandoffComment(comment.body ?? '', comment.created_at ?? ''),
+    )
+    .filter((marker) => marker !== null);
+  const hasIssueOnlyHandoff = forcedHandoffMarkers.some(
+    (marker) => marker.contextScope === 'issue-only',
   );
   const linkedPr = resolveResumeLinkedPrState(
     port,
     args.issue,
     `${owner}/${repo}`,
-    { forcedHandoffEnabled, hasIssueOnlyHandoff },
+    {
+      forcedHandoffEnabled:
+        forcedHandoffEnabled && forcedHandoffMarkers.length > 0,
+      hasIssueOnlyHandoff,
+    },
   );
   const linkedPrLookupFailed = linkedPr.lookupFailed;
 
