@@ -753,6 +753,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Fetch-driven hide-on-supersede sweep for authoring-owner / authoring-publication-intent markers: fetches one or more issues via GraphQL, classifies and filters superseded candidates, and minimizes them via minimize-superseded-markers.mjs.',
   },
   {
+    id: 'worker-budget',
+    scriptName: 'idd:worker-budget',
+    binName: 'idd-worker-budget',
+    entryPath: 'scripts/idd-worker-budget.mjs',
+    vendoredCommand: 'node scripts/idd-worker-budget.mjs',
+    description:
+      'Calculate how many workers one orchestrator session may start from its cap, host load, memory, API quota, harness limit, and startable candidates.',
+  },
+  {
     id: 'worker-report',
     scriptName: 'idd:worker-report',
     binName: 'idd-worker-report',

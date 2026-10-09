@@ -21,5 +21,8 @@
   },
   "advisoryWait": {
     "requestCap": 0
+  },
+  "orchestrator": {
+    "maxWorkers": 9
   }
 }

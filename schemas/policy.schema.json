@@ -657,6 +657,19 @@
       },
       "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations, `readCache` opts in to the host-local REST read cache, and `loadControl` opts in to host-local admission and a shared throttle cooldown. Optional; omitting the container keeps telemetry disabled, every read live, and every request uncoordinated. `telemetry` does not wire Discover; an enabled `readCache` lets Discover helpers serve a hint."
     },
+    "orchestrator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxWorkers": {
+          "type": "integer",
+          "minimum": 1,
+          "enum": [1, 2, 3, 4, 5, 6, 7, 8],
+          "description": "Maximum workers running in one orchestrator session. Optional; defaults to `2`. A value of `1` allows one worker."
+        }
+      },
+      "description": "Per-session worker concurrency settings. Optional; omitting it keeps the default cap."
+    },
     "discover": {
       "type": "object",
       "additionalProperties": false,

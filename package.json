@@ -74,6 +74,7 @@
     "idd-suitability-close-execute": "./bin/idd-suitability-close-execute.mjs",
     "idd-suitability-triage": "./bin/idd-suitability-triage.mjs",
     "idd-sweep-authoring-markers": "./bin/idd-sweep-authoring-markers.mjs",
+    "idd-worker-budget": "./bin/idd-worker-budget.mjs",
     "idd-worker-report": "./bin/idd-worker-report.mjs"
   },
   "scripts": {

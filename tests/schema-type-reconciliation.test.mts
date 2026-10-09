@@ -277,6 +277,7 @@ interface PolicyConfigFile {
     selectionDesync?: 'off' | 'session-offset';
     legacyRoots?: readonly number[];
   };
+  orchestrator?: { maxWorkers?: number };
   claim?: { verifySettleDelay?: string };
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: number;
@@ -642,6 +643,7 @@ export const policyConfigKeys = [
   'developmentBranch',
   'provider',
   'mergePolicy',
+  'orchestrator',
   'mergePolicyAck',
   'reviewPolicy',
   'threadResolutionPolicy',
