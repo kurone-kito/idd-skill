@@ -2128,35 +2128,37 @@ only in the operator's checkout is not enough: Resume honors it from that
 checkout, and F2 rejects the handoff with `claim-id-mismatch`.
 
 A pull request cannot enable recovery for itself, because CI ignores a
-PR-edited config. For a stalled change that would add the opt-in, the recovery
-is the stale takeover after `claimTiming.staleAge` (default `PT24H`), or the
-`release` keyword. The `release` keyword works only where the local copy
-already sets `human-gated`, and it needs an authorized actor (the authenticated
-`gh` login). It posts an `unclaimed-by` marker that no gate conditions on the
-mode. A change that adds the opt-in does not set it locally until it merges, so
-`release` is not a recovery for that change.
+PR-edited config. For a stalled change that would add the opt-in, the stale
+takeover after `claimTiming.staleAge` (default `PT24H`) needs no opt-in. The
+`release` keyword works only from a checkout whose own copy already sets
+`human-gated`, and it needs an authorized actor (the authenticated `gh` login).
+It posts an `unclaimed-by` marker that no gate conditions on the mode. A change
+that adds the opt-in does not set the mode in that checkout until it merges.
 
 Every reader that consults the mode evaluates it each time it reads a marker,
 not when the marker was posted. Enabling `human-gated` on the default branch
-therefore lifts the mode gate for every earlier forced-handoff marker. The
-required check reads `main` directly, so the lift reaches it when the change
-merges to `main`; each working directory sees it after it pulls. Find those
+therefore lifts the mode gate for every earlier forced-handoff marker that a
+reader of the default-branch copy checks: the working-directory readers, once
+each working directory pulls the change, and the required check, once the
+change merges to `main`. A pull request into another base reads that base's
+copy, so its gate stays closed until that copy carries the opt-in. Find those
 markers as the issue comments whose body starts with `<!-- forced-handoff:`,
-and review them before enabling the mode. A private downstream adopter
-reported this on 2026-10-06 as low severity; preventive; no observed incident
-yet.
+and review them before enabling the mode. A private downstream adopter reported
+this on 2026-10-06 as low severity; preventive; no observed incident yet.
 
-The sequence that recovers a stalled handoff: commit the opt-in to the base
-branch through a normal pull request, merge the base branch into the PR branch
-and push the merge, pull the change into each working directory that runs
-Resume, rerun Resume Step 1, then hand off. The claim branch copy is read from
-the remote. When the PR base is not the default branch, also commit the opt-in
-to the default branch, because the required check reads that copy. A claim
-branch that sets its own mode needs `forcedHandoff.mode: human-gated` set on
-that branch, because a merge does not change that setting. For a claim with no
-open PR, commit the opt-in to the default branch instead, and merge the default
-branch into the claim branch and
-push the merge.
+The sequence that recovers a stalled handoff: commit the opt-in to the PR base
+branch through a normal pull request, and once that pull request has merged,
+merge the base branch into the PR branch and push the merge. Pull the change
+into each working directory that runs Resume, rerun Resume Step 1, then hand
+off. The claim branch copy is read from the remote. When the PR base is not the
+default branch, also commit the opt-in to the default branch through a normal
+pull request, because the required check reads that copy. A claim branch that
+has set its own `forcedHandoff.mode` needs `human-gated` set on that branch by
+an edit, because a merge keeps a change the branch made itself; a block the
+branch inherited unchanged takes main's new value on merge. For a claim with no
+open PR, commit the opt-in to the default branch through a normal pull request,
+then, once that pull request has merged, merge the default branch into the
+claim branch and push the merge.
 
 `--import --force` overwrites `.github/idd/config.json`, including
 `forcedHandoff`, and only the `commands` table is restored afterwards. The

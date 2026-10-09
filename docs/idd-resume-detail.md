@@ -16,12 +16,12 @@ provides the detail needed when a branch requires careful judgment.
 
 A forced-handoff recovery path applies when the repository records
 `forcedHandoff.mode: human-gated` in the working directory's copy of
-`.github/idd/config.json`, which Resume reads, and on the PR base branch and
-the claim branch (or the default branch when there is no PR). Committing it
-there before an incident is recommended, because the pre-flight checks those
-copies when a handoff is posted. Valid trusted evidence must also exist for
-the selected issue.
-The copies and the recovery sequence are described in
+`.github/idd/config.json`, which Resume reads. A handoff is posted only when
+the copies on the PR base branch and the claim branch (or the default branch
+when there is no PR) record it too: the pre-flight checks those copies when
+the handoff is posted, and F2 reads the base copy at merge. Valid trusted
+evidence must also exist for the selected issue. The copies and the recovery
+sequence are described in
 [customization](customization.md#forced-handoff-copies-and-recovery). Collect
 evidence under the contract in `docs/customization.md`: record the approving
 human, old claim ID, branch, linked PR (if any), and evidence URL.
