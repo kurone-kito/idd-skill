@@ -2825,22 +2825,29 @@ export function createGithubProviderAdapter(
         );
       }
       return {
-        nodes: connection.nodes.map((node) => ({
-          // Only a real string is a state: a malformed value (null, a number)
-          // stays undefined so the reader fails the lookup instead of reading
-          // it as a non-OPEN node and skipping it.
-          state: typeof node.state === 'string' ? node.state : undefined,
+        nodes: connection.nodes.map((node) => {
+          // A node without a string state is malformed, and it must not reach
+          // a reader that skips a non-OPEN node: that could read an open
+          // closing reference as absent (fail closed, #3276).
+          if (typeof node.state !== 'string') {
+            throw new Error(
+              'closedByPullRequestsReferences: node without a string state',
+            );
+          }
           // An absent or non-integer number stays undefined: the reader
           // treats it as a failed lookup rather than guessing a PR.
-          number:
-            typeof node.number === 'number' && Number.isInteger(node.number)
-              ? node.number
-              : undefined,
-          repository:
-            typeof node.repository?.nameWithOwner === 'string'
-              ? node.repository.nameWithOwner
-              : undefined,
-        })),
+          return {
+            state: node.state,
+            number:
+              typeof node.number === 'number' && Number.isInteger(node.number)
+                ? node.number
+                : undefined,
+            repository:
+              typeof node.repository?.nameWithOwner === 'string'
+                ? node.repository.nameWithOwner
+                : undefined,
+          };
+        }),
         hasNextPage: connection.pageInfo.hasNextPage,
         // A non-string cursor becomes null, so a page that says it has more
         // without a usable cursor fails the pagination check in the reader.

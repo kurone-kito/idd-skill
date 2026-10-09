@@ -504,7 +504,7 @@ test('getWorkItemClosingPullRequestsPage leaves a missing number or repository u
   assert.equal(node?.repository, undefined);
 });
 
-test('getWorkItemClosingPullRequestsPage keeps only a string state and a string cursor (#3871)', () => {
+test('getWorkItemClosingPullRequestsPage throws on a node without a string state (#3871)', () => {
   const port = createGithubProviderAdapter(
     'kurone-kito',
     'idd-skill',
@@ -516,6 +516,32 @@ test('getWorkItemClosingPullRequestsPage keeps only a string state and a string 
               issue: {
                 closedByPullRequestsReferences: {
                   nodes: [{ state: null, number: 1, repository: null }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(1048, null),
+    /without a string state/,
+  );
+});
+
+test('getWorkItemClosingPullRequestsPage turns a non-string cursor into null (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: 'OPEN', number: 1, repository: null }],
                   pageInfo: { hasNextPage: true, endCursor: 7 },
                 },
               },
@@ -525,7 +551,6 @@ test('getWorkItemClosingPullRequestsPage keeps only a string state and a string 
     }),
   );
   const page = port.getWorkItemClosingPullRequestsPage(1048, null);
-  assert.equal(page.nodes[0]?.state, undefined);
   assert.equal(page.endCursor, null);
   assert.equal(page.hasNextPage, true);
 });
