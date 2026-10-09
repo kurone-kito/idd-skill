@@ -312,9 +312,12 @@ and that difference is intentional policy, not drift:
 
 Because the two callers apply different strictness, they can return **different
 verdicts for the same corrected-handoff state** — resume may report
-`already_owned` while the merge gate reports `claimLost`. This is expected: the
-verdicts answer different questions (may I take over? vs. does this verified
-session still own the write?).
+`already_owned` while the merge gate reports `claimLost`. For a displaced
+session whose handoff was relayed by an account other than its approver, this
+is expected: Resume, the strict side, still sees the displaced session as
+owner, while the merge gate sees the successor. In general the verdicts answer
+different questions (may I take over? vs. does this verified session still own
+the write?).
 
 The split is kept intentionally (see kurone-kito/idd-skill#1155): the structural
 risk the adopter raised — two divergent resolvers — is already removed by the
