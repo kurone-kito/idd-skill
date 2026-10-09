@@ -3622,6 +3622,68 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ message: 'must declare exactly one actions/checkout step' }],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose ref moves from with: to env:',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        const uses = `      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n`;
+        anchored(text, ref);
+        anchored(text, uses);
+        return text
+          .split(ref)
+          .join('')
+          .split(uses)
+          .join(`${uses}        env:\n${ref}`);
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose with: block carries a second ref after the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text.split(ref).join(`${ref}          ref: main\n`);
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose pinned value sits under a key that merely ends in ref',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text
+          .split(ref)
+          .join(ref.replace('          ref:', '          my_ref:'));
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout that declares its with: block twice',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        const fetch = '          fetch-depth: 1\n';
+        const withLine = '        with:\n';
+        anchored(text, ref + fetch);
+        return text.split(ref + fetch).join(`${ref}${withLine}${fetch}`);
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

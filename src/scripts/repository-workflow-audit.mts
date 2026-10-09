@@ -247,6 +247,18 @@ function checkWorkflowDispatchMergedGuard(
   }
 }
 
+// The checkout step's own with: block, from its only with: key to the next key
+// at the step's indentation. A duplicated or missing with: key yields '' so
+// that no ref can satisfy the check from outside the block.
+function withBlockOf(stepText: string): string {
+  if ((stepText.match(/^ {8}with:[ \t]*$/gm) ?? []).length !== 1) {
+    return '';
+  }
+  const rest = stepText.slice(stepText.search(/^ {8}with:[ \t]*$/m));
+  const next = rest.slice(1).search(/\n {8}\S/);
+  return next === -1 ? rest : rest.slice(0, next + 1);
+}
+
 function checkWorkflowDispatchCheckoutRef(
   path: string,
   text: string,
@@ -279,9 +291,11 @@ function checkWorkflowDispatchCheckoutRef(
     report(RWA004, path, 'checkout step must keep its fetch-depth: input');
     return;
   }
-  const checkoutWith = checkoutStep.slice(0, fetchDepthStart);
+  const checkoutWith = withBlockOf(checkoutStep);
+  const refLines = checkoutWith.match(/^ {10}ref:.*$/gm) ?? [];
   if (
-    !/ref: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.event\.repository\.default_branch \|\| github\.sha \}\}/.test(
+    refLines.length !== 1 ||
+    !/^ {10}ref: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.event\.repository\.default_branch \|\| github\.sha \}\}$/m.test(
       checkoutWith,
     )
   ) {
