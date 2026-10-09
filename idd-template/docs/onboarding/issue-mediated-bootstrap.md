@@ -633,13 +633,14 @@ Disposition:
   review profile requires a reviewer or maintainer resolution, not
   merely an approval. Do not patch the vendored copy just to silence
   the comment.
-- **`resolve-review-thread.mjs --claimless` needs a bootstrap marker** on this
-  PR: a trusted, unedited `idd-out-of-loop` marker with `reason: bootstrap`
-  (shape in `idd-helper-scripts.md`) makes it eligible, re-checked before each
-  mutation (2026-09-23; `#3229`, `#3328`). Without one: (a) a fresh,
-  trusted-actor `claimed-by` marker (`supersedes: none`) bound to the PR head
-  branch, unlocking `--claim-issue`/`--claim-id`, released (`unclaimed-by`)
-  afterward; or, with no helper runtime, (b) a maintainer replies and resolves.
+- **`resolve-review-thread.mjs --claimless` needs a bootstrap marker** when the
+  PR closes its bootstrap issue: a trusted, unedited `idd-out-of-loop` marker
+  with `reason: bootstrap` (`idd-helper-scripts.md`) makes it eligible,
+  re-checked per mutation (2026-09-23; `#3229`, `#3328`). Without one:
+  (a) a fresh, trusted-actor `claimed-by` marker (`supersedes: none`) bound to
+  the PR head branch, unlocking `--claim-issue`/`--claim-id`, released
+  (`unclaimed-by`) afterward; or, with no helper runtime, (b) a maintainer
+  replies and resolves.
 - **After merge, qualify before escalating.**
   [Upstream-candidate escalation][upstream-candidate] is opt-in
   (`upstreamEscalation.enabled`, default `false`) and only accepts

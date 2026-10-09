@@ -354,7 +354,7 @@ and its mirror check passed. Order:
 
 1. Record pre-import ref, old upstream tag/commit and upstream target commit
    in policy record; classify each retained difference by the target-side rule
-   in `idd-helper-scripts.md` first. Check out a clean worktree: the
+   in `idd-helper-scripts.md`. Check out a clean worktree: the
    `--upstream-base-path` source.
 2. On a fresh branch run `idd-onboard --import --force` (Step 2; same
    `--profile`; `--allow-root` if `--source` is outside cwd) and one
