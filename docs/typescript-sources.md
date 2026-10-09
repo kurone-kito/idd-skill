@@ -115,6 +115,19 @@ The placeholders below are not all the same name:
 - `<binName>` is the packaged command name. It starts with `idd-`, and it names
   the wrapper `src/bin/<binName>.mts` and the file `bin/<binName>.mjs`.
 
+Whenever an edit changes a `.mts` source, run `pnpm run build` and commit every
+file it regenerates. That includes `.gitattributes`, the regenerated
+`scripts/*.mjs` files, the generated `bin/*.mjs` files and any instruction
+mirror that `sync-docs` writes. Run `pnpm run build:check` only after that
+commit.
+
+The `unbacked-helper` and `instruction-helper-registration` failures were
+observed on 2026-10-09 in issue `#3955`. A helper change left
+`audit-docs --check` failing with messages that name the audit but not the fix.
+The other failure claims below are preventive; no observed incident yet. A
+throwaway probe checked them, except item 5 and the runtime-file lists in
+item 4, which were checked against the source.
+
 1. Write `src/scripts/<stem>.mts` with the banner
    `// idd-generated-from: src/scripts/<stem>.mts` in its first 200 bytes; put
    it on the line after the shebang. `audit-docs --check` fails without it.
