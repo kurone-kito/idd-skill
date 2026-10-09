@@ -20,10 +20,9 @@ Activate fan-out only when every condition holds:
 
 - the harness has an eligible row in the
   [worker mechanism table](../../docs/idd-workflow.md#worker-delegation);
--
-  - the effective `orchestrator.maxWorkers` is at least 2 (run
-    `idd-worker-budget --running 0 --startable 0` and read `maxWorkers` from its
-    output);
+- the effective `orchestrator.maxWorkers` is at least 2 (run
+  `idd-worker-budget --running 0 --startable 0` and read `maxWorkers` from its
+  output);
 - the session is not on the lite profile;
 - the session was not started for one explicit issue (A0-T), and the operator
   did not ask for a single-issue session;
