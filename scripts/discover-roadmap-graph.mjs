@@ -1002,7 +1002,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
  * roadmap root" failures {@link enumerateRoadmapGraph} throws for
  * `rootNumber` itself (not found / inaccessible / is a pull request) — the
  * only cases a configured `discover.legacyRoots` entry (#1315) or a
- * race-closed label/marker root can legitimately hit. Matched by exact
+ * race-closed marker root can legitimately hit. Matched by exact
  * message text against this specific root number so an unrelated error
  * that happens to share wording never matches by accident.
  *
@@ -1114,7 +1114,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
     } catch (error) {
       // #1315: a configured `discover.legacyRoots` entry is static,
       // human-entered config that can go stale (typo, deleted or
-      // transferred issue) far more easily than a label/marker root, which
+      // transferred issue) far more easily than a marker root, which
       // a live search just confirmed exists moments earlier. Skip the
       // unusable root with a NON-FATAL warning (mirrors
       // warnOnSearchResultCap's degraded-but-not-fatal precedent) instead
@@ -3291,7 +3291,7 @@ export function buildOpenRoadmapRootsLoader(
 /**
  * GitHub's search API caps a single query at 1000 results
  * ({@link GH_SEARCH_RESULT_CAP}). When a root search returns the full cap it
- * may have been truncated, so a repo with >= 1000 label or marker-token hits
+ * may have been truncated, so a repo with >= 1000 marker-token hits
  * could silently yield an incomplete root set.
  *
  * This is NON-FATAL: the body-marker search can legitimately match many prose

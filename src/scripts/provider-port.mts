@@ -907,8 +907,8 @@ export interface ProviderPort {
   /**
    * work-items. `gh search issues`, the distinct server-side search
    * technique `discover-roadmap-graph.mts`'s `buildOpenRoadmapRootsLoader`
-   * uses for `--all-roadmaps` root discovery (a label search and a
-   * body-marker search, unioned by the caller) -- not `listOpenWorkItems`/
+   * uses for `--all-roadmaps` root discovery (a body-marker search, unioned
+   * by the caller with the configured legacy roots) -- not `listOpenWorkItems`/
    * `searchWorkItems`'s REST list/search shape. `limit` is GitHub search's
    * own hard per-query result cap (not a caller-tunable advisory bound like
    * `listIssueNumbersClosedByOpenChangeRequests`'s), passed through rather

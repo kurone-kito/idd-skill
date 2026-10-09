@@ -959,6 +959,12 @@
       "glob": "**/*.md",
       "pattern": "\\b(thirteen|13)\\s+`?idd-\\*\\.instructions\\.md`?\\s+files\\b",
       "message": "Avoid hard-coded IDD instruction file counts. Use a generated block or count-free wording."
+    },
+    {
+      "id": "marker-placeholder-issue-reference",
+      "glob": "idd-template/**/*.md",
+      "pattern": "\\{\\{[A-Z][A-Z0-9_]*\\}\\}#[0-9]+",
+      "message": "Qualify an upstream issue with owner/repo: a marker placeholder followed by an issue number resolves against the adopter repository (#3478)."
     }
   ],
   "rootMarkdownAllowlist": {
