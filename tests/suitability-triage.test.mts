@@ -8750,3 +8750,28 @@ test('trust safety keeps a std* value after three backticks in indented code as 
   } as Context);
   assert.equal(result.pass, false);
 });
+
+test('trust safety classifies a body-only indented block by the body, not the title-prefixed scan text (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      title: '- prior list item',
+      body: `    ${tick.repeat(3)}\n    stdio: 'ignore'\n\nThe repository policy applies.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety keeps a std* value in an indented block that touches a fence as not fenced (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${tick.repeat(3)}js\nconsole.log(1);\n${tick.repeat(3)}\n    ${tick.repeat(3)}\n    stdio: 'ignore'\n\nThe repository policy applies.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});

@@ -2085,8 +2085,8 @@ function scanStdioRange(region, isFence) {
   // backtick or tilde run of three or more markers, whatever indentation or
   // container prefix precedes it, and its opening line's info string is
   // skipped. An inline span's delimiter is the backtick run at the start of
-  // the range. Any other range, such as an indented code block, has no
-  // delimiter, so its backticks read as content.
+  // the range, on one line. Any other range, such as an indented code block or
+  // several blocks merged, is not exempt.
   let openerEnd = 0;
   if (isFence) {
     const delimiterAt = region.search(/[`~]/);
@@ -2106,10 +2106,14 @@ function scanStdioRange(region, isFence) {
         openerEnd = lineEnd + 1;
       }
     }
-  } else if (region[0] === '`') {
+  } else if (region[0] === '`' && !region.includes('\n')) {
     while (region[openerEnd] === '`') {
       openerEnd += 1;
     }
+  } else {
+    // Any other range has backtick parity the lexer cannot trust, so it gets
+    // no exemption.
+    return NO_STDIO_EXEMPTION;
   }
   const masked = [
     ...new Array(openerEnd).fill(true),
@@ -2148,14 +2152,6 @@ function scanStdioRange(region, isFence) {
     firstCodeSlash,
   };
 }
-function createStdioScanCache(text) {
-  return {
-    fencedStarts: new Set(
-      findFencedCodeRanges(text).map((range) => range.start),
-    ),
-    scans: new Map(),
-  };
-}
 function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt, cache) {
   if (verb !== 'ignore') {
     return false;
@@ -2172,7 +2168,7 @@ function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt, cache) {
   if (scan === undefined) {
     scan = scanStdioRange(
       text.slice(codeRange.start, codeRange.end),
-      cache.fencedStarts.has(codeRange.start),
+      cache.fencedKeys.has(`${codeRange.start}:${codeRange.end}`),
     );
     cache.scans.set(codeRange.start, scan);
   }
@@ -2209,7 +2205,12 @@ function isStdioIgnoreOptionValue(text, index, verb, getCodeRangeAt, cache) {
   const between = text.slice(codeRange.start + keyEnd, index - 1);
   return STDIO_OPTION_VALUE_SEGMENT_PATTERN.test(between);
 }
-function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
+function findPolicyOverrideMatch(
+  text,
+  maskedText,
+  getCodeRangeAt,
+  fencedRanges,
+) {
   // #2408: POLICY_OVERRIDE_PATTERN's own greedy `[\s\S]{0,N}` backtracks
   // from the far end of the window inward, so its own noun capture (group
   // 2) is whichever syntactically valid noun sits FARTHEST from the verb,
@@ -2281,7 +2282,10 @@ function findPolicyOverrideMatch(text, maskedText, getCodeRangeAt) {
   // pass intentionally removes that token, so inspect raw matches as a
   // fallback and retain only matches that are not wholly inside code.
   const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
-  const stdioScans = createStdioScanCache(text);
+  const stdioScans = {
+    fencedKeys: fencedRanges,
+    scans: new Map(),
+  };
   let match;
   while (true) {
     match = pattern.exec(text);
@@ -3056,6 +3060,12 @@ export function checkTrustSafety(context) {
   // even when a fenced block precedes the match.
   const bodyOffset = issue.title.length + 1;
   const bodyCodeRanges = findMarkdownCodeRanges(issue.body);
+  // Keys are shifted by the title offset, to match the scan text's coordinates.
+  const bodyFencedRanges = new Set(
+    findFencedCodeRanges(issue.body).map(
+      (range) => `${range.start + bodyOffset}:${range.end + bodyOffset}`,
+    ),
+  );
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body, bodyCodeRanges)}`,
@@ -3075,6 +3085,7 @@ export function checkTrustSafety(context) {
             end: range.end + bodyOffset,
           };
     },
+    bodyFencedRanges,
   );
   if (policyMatch) {
     return {

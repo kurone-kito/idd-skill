@@ -2305,8 +2305,8 @@ function findNonCodeMask(source: string): boolean[] {
 }
 
 interface StdioScanCache {
-  // Start indices of the ranges the parser classifies as fenced code.
-  fencedStarts: ReadonlySet<number>;
+  // "start:end" keys of the ranges the parser classifies as fenced code.
+  fencedKeys: ReadonlySet<string>;
   scans: Map<number, StdioRangeScan>;
 }
 
@@ -2338,8 +2338,8 @@ function scanStdioRange(region: string, isFence: boolean): StdioRangeScan {
   // backtick or tilde run of three or more markers, whatever indentation or
   // container prefix precedes it, and its opening line's info string is
   // skipped. An inline span's delimiter is the backtick run at the start of
-  // the range. Any other range, such as an indented code block, has no
-  // delimiter, so its backticks read as content.
+  // the range, on one line. Any other range, such as an indented code block or
+  // several blocks merged, is not exempt.
   let openerEnd = 0;
   if (isFence) {
     const delimiterAt = region.search(/[`~]/);
@@ -2359,10 +2359,14 @@ function scanStdioRange(region: string, isFence: boolean): StdioRangeScan {
         openerEnd = lineEnd + 1;
       }
     }
-  } else if (region[0] === '`') {
+  } else if (region[0] === '`' && !region.includes('\n')) {
     while (region[openerEnd] === '`') {
       openerEnd += 1;
     }
+  } else {
+    // Any other range has backtick parity the lexer cannot trust, so it gets
+    // no exemption.
+    return NO_STDIO_EXEMPTION;
   }
   const masked = [
     ...new Array<boolean>(openerEnd).fill(true),
@@ -2402,15 +2406,6 @@ function scanStdioRange(region: string, isFence: boolean): StdioRangeScan {
   };
 }
 
-function createStdioScanCache(text: string): StdioScanCache {
-  return {
-    fencedStarts: new Set(
-      findFencedCodeRanges(text).map((range) => range.start),
-    ),
-    scans: new Map(),
-  };
-}
-
 function isStdioIgnoreOptionValue(
   text: string,
   index: number,
@@ -2433,7 +2428,7 @@ function isStdioIgnoreOptionValue(
   if (scan === undefined) {
     scan = scanStdioRange(
       text.slice(codeRange.start, codeRange.end),
-      cache.fencedStarts.has(codeRange.start),
+      cache.fencedKeys.has(`${codeRange.start}:${codeRange.end}`),
     );
     cache.scans.set(codeRange.start, scan);
   }
@@ -2475,6 +2470,7 @@ function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
+  fencedRanges: ReadonlySet<string>,
 ): { index: number; text: string } | null {
   // #2408: POLICY_OVERRIDE_PATTERN's own greedy `[\s\S]{0,N}` backtracks
   // from the far end of the window inward, so its own noun capture (group
@@ -2548,7 +2544,10 @@ function findPolicyOverrideMatch(
   // pass intentionally removes that token, so inspect raw matches as a
   // fallback and retain only matches that are not wholly inside code.
   const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
-  const stdioScans = createStdioScanCache(text);
+  const stdioScans: StdioScanCache = {
+    fencedKeys: fencedRanges,
+    scans: new Map(),
+  };
   let match: RegExpExecArray | null;
   while (true) {
     match = pattern.exec(text);
@@ -3344,6 +3343,12 @@ export function checkTrustSafety(context: Context): CheckOutcome {
   // even when a fenced block precedes the match.
   const bodyOffset = issue.title.length + 1;
   const bodyCodeRanges = findMarkdownCodeRanges(issue.body);
+  // Keys are shifted by the title offset, to match the scan text's coordinates.
+  const bodyFencedRanges = new Set(
+    findFencedCodeRanges(issue.body).map(
+      (range) => `${range.start + bodyOffset}:${range.end + bodyOffset}`,
+    ),
+  );
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body, bodyCodeRanges)}`,
@@ -3363,6 +3368,7 @@ export function checkTrustSafety(context: Context): CheckOutcome {
             end: range.end + bodyOffset,
           };
     },
+    bodyFencedRanges,
   );
   if (policyMatch) {
     return {
