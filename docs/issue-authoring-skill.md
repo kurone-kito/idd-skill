@@ -1677,7 +1677,9 @@ The candidate search is the owner-marker token, so an edited marker
 that dropped the set is still fetched and fails closed. An
 unparseable trusted comment that still carries the token fails
 closed too. A trusted marker whose target names a different
-issue than the comment's host fails closed as well.
+issue than the comment's host fails closed as well. Each such reason ends
+with a pointer to how a maintainer clears the comment:
+`docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`.
 **Exception:** a trusted owner marker that GitHub has minimized
 with `minimizedReason: outdated` (case-insensitive) is not counted
 as a member, because it cannot prove current membership. When it is

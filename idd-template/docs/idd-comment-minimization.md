@@ -647,6 +647,67 @@ with an empty `body-sha256` on closed issue #2689 caused
 `authoring-set-members` to fail closed on the Stage 2 release of
 issue #3547.
 
+### Clearing a comment that blocks the scan
+
+When the helper's reason names a comment, it is an edited, unparseable or
+target-mismatch comment that is still visible, or a hidden marker that is
+the set's only marker on its issue. The seven statements below say who may
+clear it and how.
+
+1. Only a maintainer or an operator acting outside the IDD loop may hide
+   the named comment, never the session whose helper run failed, because
+   minimizing is irreversible under the autonomy contract
+   (`idd-autonomy-contract.md`, "GitHub-minimize convention") and a hide by
+   that session would turn its own fail-closed result into a pass; that
+   session falls back to the explicit human release, reports the locator,
+   and agents never edit or delete an owner marker.
+2. Read the comment's `set=` field first and hide it only when that set has
+   finished (its anchor carries a visible `release-complete`) or the comment
+   names no set, because a hidden comment that names a live set keeps
+   refusing that set's pass sentence on every later run and does not go
+   away; when it names the set under release, another set that is still
+   running, or a set that cannot be read (an edited comment's current text
+   is untrusted, so read its earliest revision from the edit history or
+   treat it as possibly naming the set), use the explicit human release.
+3. Clear one comment per run, because the reason names one comment: convert
+   the REST comment id in the locator to a node id with
+   `gh api repos/{owner}/{repo}/issues/comments/{comment_id} -q '.node_id'`,
+   hide it with the minimize helper (its `--subject-ids`, `--classifier
+   OUTDATED`, `--trusted-marker-logins` and `--apply` options, as shown
+   below the list) or with the GraphQL `minimizeComment` mutation and the
+   `OUTDATED` classifier, never `resolved`, and run the helper again; repeat
+   while the reason names an edited, unparseable or target-mismatch comment,
+   and for an `incomplete_results` or `index-lag window exceeded` result wait
+   out the one-hour index-lag window before running it again; stop at any
+   other reason and go to statement 6.
+4. The comment stays on the issue, hidden as `OUTDATED`, and the next run
+   lists it in `skippedMarkers` as `unattributable`, with `namesRequestedSet`
+   read from its current text, so the helper's own report is the record and
+   nothing is deleted.
+5. Two shapes to avoid: minimizing the newest parseable marker of a live set
+   when no other visible marker of that set remains on its issue, which turns
+   the issue into the hidden-only reason; and quoting the owner-marker string
+   in prose, which a trusted comment can carry as an unparseable marker.
+6. For the hidden-only reason, the safe default is the explicit human release,
+   which never depends on this helper, because the issue is usually hidden-only
+   when another set's marker is newer than the set's own or a maintainer
+   minimized the newest marker by hand, which is the very shape that reason
+   exists to catch; undoing the minimization of the named comment is a
+   maintainer action outside the loop, the next sweep hides it again while
+   the newer marker stands, and for a genuine sibling the scan still reports
+   `complete: true` with `soleMember: false`, so the exception still does not
+   apply.
+7. A recurrence, meaning a trusted owner comment that is edited, unparseable
+   or mistargeted although an IDD session posted it correctly, is a producer
+   bug and should be reported with its locator, because the producer is not
+   identified and clearing the comment treats only the symptom.
+
+The hide command for statement 3, run from the source repository, is:
+
+```sh
+node scripts/minimize-superseded-markers.mjs --subject-ids <node-id> --classifier OUTDATED --trusted-marker-logins <login> --apply
+```
+
 ## Dry Run Shape
 
 In the idd-skill source repository, the helper is available; start with
