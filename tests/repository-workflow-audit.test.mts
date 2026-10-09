@@ -3496,6 +3496,84 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [{ message: 'must invoke the advisory-comment-debounce helper' }],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a merged-PR guard declared twice, with the drifted copy after a compliant one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const name = 'Require a merged PR for workflow_dispatch';
+        const gate = "        if: github.event_name == 'workflow_dispatch'\n";
+        const start = anchored(text, `      - name: ${name}\n`);
+        const end = text.indexOf('\n      - ', start + 1);
+        const compliant = text.slice(start, end === -1 ? text.length : end + 1);
+        const drifted = replaceInStep(text, name, gate, '');
+        const at = drifted.indexOf(`      - name: ${name}\n`);
+        return drifted.slice(0, at) + compliant + drifted.slice(at);
+      },
+    },
+    expected: [
+      {
+        message:
+          'the "Require a merged PR for workflow_dispatch" step must be declared exactly once',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a merged-PR guard that ends its job, while the next job carries the gate',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        // The guard stays before the cleanup step, and the cleanup steps move to a
+        // second job whose gate follows the guard, so the guard is the last step of
+        // the first job.
+        const name = 'Require a merged PR for workflow_dispatch';
+        const gate = "        if: github.event_name == 'workflow_dispatch'\n";
+        const start = anchored(text, `      - name: ${name}\n`);
+        const next = text.indexOf('\n      - ', start + 1) + 1;
+        assert.ok(
+          next > start,
+          'fixture anchor not found: step after the guard',
+        );
+        const guard = text.slice(start, next).split(gate).join('');
+        return (
+          text.slice(0, start) +
+          guard +
+          "  next-job:\n    if: github.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-latest\n    steps:\n" +
+          text.slice(next)
+        );
+      },
+    },
+    expected: [{ message: 'guard step must be gated on workflow_dispatch' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a rerun step declared twice, with the drifted copy after a compliant one',
+    path: ROOT_COMMENT,
+    mutation: {
+      transform: (text: string) => {
+        const name = 'Rerun required HEAD check';
+        const start = anchored(text, `      - name: ${name}\n`);
+        const end = text.indexOf('\n      - ', start + 1);
+        const compliant = text.slice(start, end === -1 ? text.length : end + 1);
+        const drifted = replaceInStep(
+          text,
+          name,
+          'scripts/rerun-advisory-convergence.mjs',
+          'scripts/rerun-disabled.mjs',
+        );
+        const at = drifted.indexOf(`      - name: ${name}\n`);
+        return drifted.slice(0, at) + compliant + drifted.slice(at);
+      },
+    },
+    expected: [
+      {
+        message:
+          'the "Rerun required HEAD check" step must be declared exactly once',
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {

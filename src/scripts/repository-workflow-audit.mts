@@ -128,6 +128,27 @@ function checkDuplicateEvidenceSkipBlock(
   }
 }
 
+// Reports a step name that is declared more than once. The audit reads the first
+// declaration with a name, so a compliant copy placed before the real step would
+// otherwise stand in for it.
+function stepNameIsUnique(
+  path: string,
+  text: string,
+  name: string,
+  ruleId: string,
+  report: Report,
+): void {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declarations = [
+    ...declarationText(text).matchAll(
+      new RegExp(`^ {6}- name: ${escaped}\\s*$`, 'gm'),
+    ),
+  ];
+  if (declarations.length > 1) {
+    report(ruleId, path, `the "${name}" step must be declared exactly once`);
+  }
+}
+
 // A declared step, read twice: its keys from the declaration view and its run body
 // from the token view. A comment cannot supply either, and the step text ends at the
 // next step bullet, so text in a neighboring step cannot satisfy these checks.
@@ -145,6 +166,20 @@ function checkWorkflowDispatchMergedGuard(
   text: string,
   report: Report,
 ): void {
+  stepNameIsUnique(
+    path,
+    text,
+    'Require a merged PR for workflow_dispatch',
+    RWA004,
+    report,
+  );
+  stepNameIsUnique(
+    path,
+    text,
+    'Run F4 cleanup (server-side fallback)',
+    RWA004,
+    report,
+  );
   const guard = declaredStep(text, 'Require a merged PR for workflow_dispatch');
   if (guard === undefined) {
     report(
@@ -304,6 +339,14 @@ function checkCleanupTimeoutAndEvidence(
   text: string,
   report: Report,
 ): void {
+  stepNameIsUnique(
+    path,
+    text,
+    'Run F4 cleanup (server-side fallback)',
+    RWA004,
+    report,
+  );
+  stepNameIsUnique(path, text, 'Post cleanup evidence comment', RWA004, report);
   const cleanup = declaredStep(text, 'Run F4 cleanup (server-side fallback)');
   if (cleanup === undefined) {
     report(RWA004, path, 'must define the cleanup step');
@@ -1293,7 +1336,6 @@ function concurrencyOf(declared: string): string {
 }
 
 // The character offset of the `- name:` line of the named step in a view, or -1.
-// The step names passed here contain no regular-expression metacharacters.
 // The character offset of the `- name:` line of the named step in a view, or -1.
 // The name is escaped, so a step name may carry parentheses or other punctuation.
 function stepOffset(view: string, name: string): number {
@@ -1702,9 +1744,12 @@ function jobPermissionsBlock(jobBody: string): string | undefined {
 
 // The text of one step, from its marker to the next step bullet. A bullet is
 // any `- ` at the steps indentation, so an unnamed step ends the step too.
+// The text of one step, from its marker to the next step bullet. A line indented less
+// than the steps, such as a job-level key or the next job, also ends the step, so the
+// last step of a job cannot absorb the keys of the job after it.
 function stepTextFrom(text: string, index: number): string {
-  const next = text.indexOf('\n      - ', index + 1);
-  return text.slice(index, next === -1 ? undefined : next);
+  const next = text.slice(index + 1).search(/\n(?: {0,5}\S| {6}-)/);
+  return text.slice(index, next === -1 ? undefined : index + 1 + next);
 }
 
 function firstIfLine(stepText: string): string | undefined {
@@ -2236,6 +2281,8 @@ function checkCommentRefreshIdentity(root: string, report: Report): void {
     }
     const declared = declarationText(text);
     const tokens = tokenText(text);
+    stepNameIsUnique(path, text, 'Rerun required HEAD check', RWA005, report);
+    stepNameIsUnique(path, text, 'Classify review comment', RWA005, report);
     if (/^ {2}idd-advisory-convergence:$/m.test(declared)) {
       report(RWA005, path, 'must not reuse the required job id');
     }
@@ -2360,6 +2407,13 @@ function checkCommentRefreshDebounce(root: string, report: Report): void {
     }
     const declared = declarationText(text);
     const tokens = tokenText(text);
+    stepNameIsUnique(
+      path,
+      text,
+      'Check for newer qualifying event',
+      RWA005,
+      report,
+    );
     if (stepOffset(declared, 'Check for newer qualifying event') === -1) {
       report(
         RWA005,
