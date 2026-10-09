@@ -204,13 +204,15 @@ function checkWorkflowDispatchMergedGuard(path, text, report) {
   }
 }
 // The checkout step's own with: block, from its only with: key to the next key
-// at the step's indentation. A duplicated or missing with: key yields '' so
-// that no ref can satisfy the check from outside the block.
+// at the step's indentation. A duplicated or missing with: key, quoted or not,
+// yields '' so that no ref can satisfy the check from outside the block.
 function withBlockOf(stepText) {
-  if ((stepText.match(/^ {8}with:[ \t]*$/gm) ?? []).length !== 1) {
+  const keys = stepText.match(/^ {8}["']?with["']?\s*:/gm) ?? [];
+  const start = stepText.search(/^ {8}with:[ \t]*$/m);
+  if (keys.length !== 1 || start === -1) {
     return '';
   }
-  const rest = stepText.slice(stepText.search(/^ {8}with:[ \t]*$/m));
+  const rest = stepText.slice(start);
   const next = rest.slice(1).search(/\n {8}\S/);
   return next === -1 ? rest : rest.slice(0, next + 1);
 }
@@ -248,7 +250,7 @@ function checkWorkflowDispatchCheckoutRef(path, text, report) {
     return;
   }
   const checkoutWith = withBlockOf(checkoutStep);
-  const refLines = checkoutWith.match(/^ {10}ref:.*$/gm) ?? [];
+  const refLines = checkoutWith.match(/^ {10}["']?ref["']?\s*:.*$/gm) ?? [];
   if (
     refLines.length !== 1 ||
     !/^ {10}ref: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.event\.repository\.default_branch \|\| github\.sha \}\}$/m.test(

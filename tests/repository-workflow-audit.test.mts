@@ -3796,6 +3796,35 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout whose with: block carries a second quoted ref key beside the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        anchored(text, ref);
+        return text.split(ref).join(`${ref}          "ref": main\n`);
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
+  {
+    ruleId: 'RWA004',
+    name: 'a cleanup checkout that declares a second quoted with: block after the pinned one',
+    path: ROOT_CLEANUP,
+    mutation: {
+      transform: (text: string) => {
+        const ref = `          ref: \${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.sha }}\n`;
+        const fetch = '          fetch-depth: 1\n';
+        anchored(text, ref + fetch);
+        return text
+          .split(ref + fetch)
+          .join(`${ref}${fetch}        "with":\n          ref: main\n`);
+      },
+    },
+    expected: [{ prefix: 'checkout must pin ref:' }],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
