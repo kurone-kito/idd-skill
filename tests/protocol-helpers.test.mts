@@ -5043,6 +5043,65 @@ test('explainFreshDisposition ignores an edited disposition-shaped comment from 
   assert.equal(hasFreshDisposition(thread, options), false);
 });
 
+test('explainFreshDisposition agrees with the three existing hasFreshDisposition fixtures (#3856)', () => {
+  // The same three threads `hasFreshDisposition` is asserted against above.
+  // Each expected boolean and cause is stated here, not derived from
+  // `hasFreshDisposition`, so the explainer is checked against the original
+  // expectations.
+  const editedThread = explainedThread([
+    {
+      author: { login: 'reviewer-a' },
+      body: 'please fix',
+      createdAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      author: { login: 'idd-bot' },
+      body: '**Accepted** — done',
+      createdAt: '2026-05-12T00:01:00Z',
+      lastEditedAt: '2026-05-12T00:02:00Z',
+    },
+  ]);
+  const unknownThread = explainedThread([
+    {
+      author: { login: 'reviewer-a' },
+      body: 'please fix',
+      createdAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      author: { login: 'idd-bot' },
+      body: '**Accepted** — done',
+      createdAt: '2026-05-12T00:01:00Z',
+    },
+  ]);
+  const minimizedThread = explainedThread([
+    {
+      author: { login: 'reviewer-a' },
+      body: 'please fix',
+      createdAt: '2026-05-12T00:00:00Z',
+    },
+    {
+      author: { login: 'idd-bot' },
+      body: '**Accepted** — done',
+      lastEditedAt: null,
+      createdAt: '2026-05-12T00:01:00Z',
+      updatedAt: '2026-05-12T00:03:00Z',
+    },
+  ]);
+
+  assert.deepEqual(explainFreshDisposition(editedThread), {
+    fresh: false,
+    cause: 'disposition-edited',
+  });
+  assert.deepEqual(explainFreshDisposition(unknownThread), {
+    fresh: false,
+    cause: 'disposition-edited',
+  });
+  assert.deepEqual(explainFreshDisposition(minimizedThread), {
+    fresh: true,
+    cause: 'fresh',
+  });
+});
+
 // kurone-kito/idd-skill#3248: an edited trusted activation-nonce marker
 // must never be considered by the activation-nonce-winner check --
 // dropped the same way an edited claimed-by/unclaimed-by is dropped from
