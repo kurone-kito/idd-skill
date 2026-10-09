@@ -2829,9 +2829,14 @@ export function createGithubProviderAdapter(
           // A node without a string state is malformed, and it must not reach
           // a reader that skips a non-OPEN node: that could read an open
           // closing reference as absent (fail closed, #3276).
-          if (typeof node.state !== 'string') {
+          // GraphQL's PullRequestState has exactly these three values; any
+          // other value is malformed data, not a state to skip.
+          if (
+            typeof node.state !== 'string' ||
+            !['OPEN', 'CLOSED', 'MERGED'].includes(node.state)
+          ) {
             throw new Error(
-              'closedByPullRequestsReferences: node without a string state',
+              'closedByPullRequestsReferences: node without a known PullRequest state',
             );
           }
           // An absent or non-integer number stays undefined: the reader

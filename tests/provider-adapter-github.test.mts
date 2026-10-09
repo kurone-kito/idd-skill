@@ -526,7 +526,33 @@ test('getWorkItemClosingPullRequestsPage throws on a node without a string state
   );
   assert.throws(
     () => port.getWorkItemClosingPullRequestsPage(1048, null),
-    /without a string state/,
+    /without a known PullRequest state/,
+  );
+});
+
+test('getWorkItemClosingPullRequestsPage throws on an unknown PullRequest state (#3871)', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                closedByPullRequestsReferences: {
+                  nodes: [{ state: 'UNKNOWN', number: 1, repository: null }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+    }),
+  );
+  assert.throws(
+    () => port.getWorkItemClosingPullRequestsPage(1048, null),
+    /without a known PullRequest state/,
   );
 });
 
