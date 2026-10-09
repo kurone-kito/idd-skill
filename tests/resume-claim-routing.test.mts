@@ -2028,7 +2028,7 @@ test('fetchOpenLinkedPrReferences walks every page and reconciles CONNECTED/DISC
       ],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, false);
   assert.deepEqual([...result.references], ['77']);
 });
@@ -2037,7 +2037,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true (not an empty succe
   const port = createFakeProviderAdapter({
     connectedPrEventPageErrors: { 11: 'simulated gh failure' },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -2048,7 +2048,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true on an incomplete pa
       11: [{ events: [], hasNextPage: true, endCursor: null }],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -2066,7 +2066,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true on an immediate rep
       ],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -2081,7 +2081,7 @@ test('fetchOpenLinkedPrReferences reports lookupFailed: true on a multi-cursor c
       ],
     },
   });
-  const result = fetchOpenLinkedPrReferences(port, 11);
+  const result = fetchOpenLinkedPrReferences(port, 11, 'kurone-kito/idd-skill');
   assert.equal(result.lookupFailed, true);
   assert.equal(result.references.size, 0);
 });
@@ -5177,4 +5177,181 @@ process.exit(1);
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+// #3871: fetchOpenLinkedPrReferences also reads the closing references, so a
+// pull request whose body closes the issue (no ConnectedEvent) backs the claim.
+const REPO = 'kurone-kito/idd-skill';
+
+function closingNode(
+  number: number | undefined,
+  state: string | undefined,
+  repository: string | undefined,
+) {
+  return { state, number, repository };
+}
+
+test('#3871: an open closing reference of this repository backs the claim without a ConnectedEvent', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, false);
+  assert.deepEqual([...result.references], ['3875']);
+});
+
+test('#3871: a PR that is both a closing reference and a ConnectedEvent appears once', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        {
+          events: [
+            {
+              __typename: 'ConnectedEvent',
+              subject: {
+                __typename: 'PullRequest',
+                number: 3875,
+                state: 'OPEN',
+              },
+            },
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.deepEqual([...result.references], ['3875']);
+});
+
+test('#3871: a merged or closed closing reference and another repository are not expected references', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [
+            closingNode(3801, 'MERGED', REPO),
+            closingNode(3802, 'CLOSED', REPO),
+            closingNode(3803, 'OPEN', 'someone-else/other-repo'),
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, false);
+  assert.deepEqual([...result.references], []);
+});
+
+test('#3871: the repository comparison is case-insensitive', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(3875, 'OPEN', 'Kurone-Kito/IDD-Skill')],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.deepEqual(
+    [...fetchOpenLinkedPrReferences(port, 11, REPO).references],
+    ['3875'],
+  );
+});
+
+test('#3871: an open closing reference without a number or repository is a lookup failure', () => {
+  for (const node of [
+    closingNode(undefined, 'OPEN', REPO),
+    closingNode(3875, 'OPEN', undefined),
+  ]) {
+    const port = createFakeProviderAdapter({
+      closingPullRequestPages: {
+        11: [{ nodes: [node], hasNextPage: false, endCursor: null }],
+      },
+    });
+    const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+    assert.equal(result.lookupFailed, true);
+    assert.deepEqual([...result.references], []);
+  }
+});
+
+test('#3871: a failed closing-references read is a lookup failure, as is a closing page without a cursor or a repeated one', () => {
+  const thrown = createFakeProviderAdapter({
+    closingPullRequestPageErrors: { 11: 'closing page unavailable' },
+  });
+  assert.equal(
+    fetchOpenLinkedPrReferences(thrown, 11, REPO).lookupFailed,
+    true,
+  );
+
+  const noCursor = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [{ nodes: [], hasNextPage: true, endCursor: null }],
+    },
+  });
+  assert.equal(
+    fetchOpenLinkedPrReferences(noCursor, 11, REPO).lookupFailed,
+    true,
+  );
+
+  const repeated = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        { nodes: [], hasNextPage: true, endCursor: 'same' },
+        { nodes: [], hasNextPage: true, endCursor: 'same' },
+      ],
+    },
+  });
+  assert.equal(
+    fetchOpenLinkedPrReferences(repeated, 11, REPO).lookupFailed,
+    true,
+  );
+});
+
+test('#3871: a DISCONNECTED_EVENT removes a manually linked PR that the closing page does not list', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPages: {
+      11: [
+        {
+          events: [
+            {
+              __typename: 'ConnectedEvent',
+              subject: { __typename: 'PullRequest', number: 88, state: 'OPEN' },
+            },
+            {
+              __typename: 'DisconnectedEvent',
+              subject: { __typename: 'PullRequest', number: 88 },
+            },
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, false);
+  assert.deepEqual([...result.references], []);
 });

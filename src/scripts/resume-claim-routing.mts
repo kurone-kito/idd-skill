@@ -840,7 +840,7 @@ function runCli(): HelperCliResult {
   // lookup entirely when forced-handoff mode is off — the gate never
   // honors a handoff then, so the PR context would go unused.
   const linkedPrLookup = forcedHandoffEnabled
-    ? fetchOpenLinkedPrReferences(port, args.issue)
+    ? fetchOpenLinkedPrReferences(port, args.issue, `${owner}/${repo}`)
     : { references: new Set<string>(), lookupFailed: false };
   const expectedLinkedPrReferences = linkedPrLookup.references;
   const linkedPrLookupFailed = linkedPrLookup.lookupFailed;
@@ -1615,27 +1615,36 @@ function applyConnectedPrEventNode(
 
 /**
  * Resolve the set of open pull requests that back this issue's claim, as
- * normalized PR references, plus whether the lookup itself failed. Uses a
- * precise signal — a PR connected to the issue via `CONNECTED_EVENT`
- * (reconciled against later `DISCONNECTED_EVENT`s) that is currently `OPEN`
- * — rather than a bare cross-reference/mention, so an unrelated open PR
- * merely mentioning the issue does not falsely block a legitimate
- * `issue-only` forced handoff.
+ * normalized PR references, plus whether the lookup itself failed. A PR
+ * counts when either provider signal shows it open and linked:
+ *
+ * - the connected timeline: a PR connected to the issue via
+ *   `CONNECTED_EVENT` (reconciled against later `DISCONNECTED_EVENT`s) that
+ *   is currently `OPEN` (a manual Development link, #3276);
+ * - the closing references: an open PR of this repository whose body closes
+ *   the issue with a closing keyword (`Closes #N`), which is how IDD pull
+ *   requests link and which produces no `ConnectedEvent` (#3871). A closing
+ *   reference naming another repository is ignored.
+ *
+ * Both signals are read to the end with the same cursor-progress checks, so a
+ * failure in either one is a lookup failure. A bare cross-reference or mention
+ * never counts, so an unrelated open PR that merely mentions the issue does
+ * not falsely block a legitimate `issue-only` forced handoff.
  *
  * #3276: paginates {@link ProviderPort.getConnectedPullRequestEventsPage}
  * (which throws on a failed or malformed page, matching
  * `idd-roadmap-audit-execute.mts`'s `hasOpenConnectedPr` precedent) instead
- * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle` --
- * removing the prior silent `last:100` truncation as a side effect. A
- * genuine lookup failure now surfaces as `lookupFailed: true` with an empty
- * `references` set, distinct from a successful lookup that legitimately
- * found no connected PR (`lookupFailed: false`, empty set). Callers must not
+ * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle`.
+ * A genuine lookup failure surfaces as `lookupFailed: true` with an empty
+ * `references` set, distinct from a successful lookup that legitimately found
+ * no open linked PR (`lookupFailed: false`, empty set). Callers must not
  * treat the two the same -- see
  * {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}.
  */
 export function fetchOpenLinkedPrReferences(
   port: ProviderPort,
   issueNumber: number | null,
+  repository: string,
 ): { references: Set<string>; lookupFailed: boolean } {
   const references = new Set<string>();
   if (!Number.isInteger(issueNumber)) {
@@ -1643,48 +1652,51 @@ export function fetchOpenLinkedPrReferences(
   }
   const connected = new Map<number, boolean>();
   const states = new Map<number, string>();
+  const closing = new Set<number>();
+  const issueRepository = repository.trim().toLowerCase();
   try {
-    let after: string | null = null;
-    // #3276 (CodeRabbit review, PR #3386): the adapter returns whatever
-    // cursor the GraphQL response carries with no progress guarantee of its
-    // own -- a repeated non-empty cursor (immediate or a multi-cursor
-    // cycle) would otherwise make this loop request the same page
-    // indefinitely. Track every cursor seen and throw on a repeat rather
-    // than imposing an arbitrary page cap, which could wrongly reject a
-    // genuinely long timeline.
-    const seenCursors = new Set<string>();
-    for (;;) {
-      // Number.isInteger(issueNumber) above already excludes null; TS can't
-      // narrow a plain boolean-returning call the way a type predicate would.
-      const page = port.getConnectedPullRequestEventsPage(
-        issueNumber as number,
-        after,
-      );
-      for (const node of page.events) {
-        applyConnectedPrEventNode(node, connected, states);
-      }
-      if (!page.hasNextPage) {
-        break;
-      }
-      const nextCursor = page.endCursor ?? null;
-      if (!nextCursor) {
-        // hasNextPage with no endCursor: reconciling a truncated timeline
-        // could miss a later CONNECTED/DISCONNECTED event and silently read
-        // as a smaller, wrong PR set -- exactly the ambiguity this issue
-        // exists to close. Throw so the caller treats it as a lookup
-        // failure instead of trusting the partial stream.
-        throw new Error(
-          'incomplete connected-PR pagination: hasNextPage with no endCursor',
-        );
-      }
-      if (seenCursors.has(nextCursor)) {
-        throw new Error(
-          'non-progressing connected-PR pagination: repeated endCursor',
-        );
-      }
-      seenCursors.add(nextCursor);
-      after = nextCursor;
-    }
+    // Number.isInteger(issueNumber) above already excludes null; TS can't
+    // narrow a plain boolean-returning call the way a type predicate would.
+    readAllPages(
+      (after) =>
+        port.getConnectedPullRequestEventsPage(issueNumber as number, after),
+      (page) => {
+        for (const node of page.events) {
+          applyConnectedPrEventNode(node, connected, states);
+        }
+      },
+    );
+    readAllPages(
+      (after) =>
+        port.getWorkItemClosingPullRequestsPage(issueNumber as number, after),
+      (page) => {
+        for (const node of page.nodes) {
+          // An unknown state could be an open PR this lookup would miss, so
+          // it fails the lookup instead of being skipped.
+          if (node.state === undefined) {
+            throw new Error('closing-reference node without a state');
+          }
+          if (node.state !== 'OPEN') {
+            continue;
+          }
+          // A missing number or repository must not read as "another
+          // repository" or as no PR at all: fail the lookup (#3871).
+          if (
+            typeof node.number !== 'number' ||
+            !Number.isInteger(node.number) ||
+            typeof node.repository !== 'string'
+          ) {
+            throw new Error(
+              'open closing-reference node without a number or repository',
+            );
+          }
+          if (node.repository.trim().toLowerCase() !== issueRepository) {
+            continue;
+          }
+          closing.add(node.number);
+        }
+      },
+    );
   } catch {
     return { references: new Set(), lookupFailed: true };
   }
@@ -1693,5 +1705,41 @@ export function fetchOpenLinkedPrReferences(
       references.add(normalizeLinkedPrReference(number));
     }
   }
+  for (const number of closing) {
+    references.add(normalizeLinkedPrReference(number));
+  }
   return { references, lookupFailed: false };
+}
+
+/**
+ * Walk every page of a cursor-paginated provider read, handing each page to
+ * `consume`. A page that reports more results without a cursor, or a cursor
+ * that repeats (immediately or in a cycle), throws: either would otherwise
+ * read as a smaller, wrong set (#3276, CodeRabbit review, PR #3386). No page
+ * cap is imposed, so a genuinely long timeline is still read in full.
+ */
+function readAllPages<
+  T extends { hasNextPage: boolean; endCursor: string | null },
+>(readPage: (after: string | null) => T, consume: (page: T) => void): void {
+  let after: string | null = null;
+  const seenCursors = new Set<string>();
+  for (;;) {
+    const page = readPage(after);
+    consume(page);
+    if (!page.hasNextPage) {
+      return;
+    }
+    const nextCursor = page.endCursor ?? null;
+    if (!nextCursor) {
+      // hasNextPage with no endCursor: a truncated read could miss a later
+      // event and silently read as a smaller set, which this lookup exists to
+      // rule out.
+      throw new Error('incomplete pagination: hasNextPage with no endCursor');
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error('non-progressing pagination: repeated endCursor');
+    }
+    seenCursors.add(nextCursor);
+    after = nextCursor;
+  }
 }
