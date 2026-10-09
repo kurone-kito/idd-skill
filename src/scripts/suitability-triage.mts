@@ -2238,9 +2238,20 @@ function findNonCodeMask(source: string): boolean[] {
   let escaped = false;
   let lineComment = false;
   let blockComment = false;
+  let htmlComment = false;
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
     const next = source[index + 1];
+    if (htmlComment) {
+      masked[index] = true;
+      if (source.startsWith('-->', index)) {
+        masked[index + 1] = true;
+        masked[index + 2] = true;
+        index += 2;
+        htmlComment = false;
+      }
+      continue;
+    }
     if (lineComment) {
       if (character === '\n') {
         lineComment = false;
@@ -2279,6 +2290,13 @@ function findNonCodeMask(source: string): boolean[] {
       masked[index] = true;
       masked[index + 1] = true;
       index += 1;
+    } else if (source.startsWith('<!--', index)) {
+      htmlComment = true;
+      masked[index] = true;
+      masked[index + 1] = true;
+      masked[index + 2] = true;
+      masked[index + 3] = true;
+      index += 3;
     } else if (character === "'" || character === '"' || character === '`') {
       quote = character;
     }
@@ -2318,8 +2336,23 @@ function isStdioIgnoreOptionValue(
   while (CODE_RANGE_PREFIX_PATTERN.test(scanned[openerEnd] ?? '')) {
     openerEnd += 1;
   }
-  while (scanned[openerEnd] === '`') {
+  const markerChar = scanned[openerEnd];
+  const markerStart = openerEnd;
+  while (
+    (markerChar === '`' || markerChar === '~') &&
+    scanned[openerEnd] === markerChar
+  ) {
     openerEnd += 1;
+  }
+  // A fence of three or more markers has an info string on its opening line.
+  // That text is metadata, not code, so the whole line is skipped; a literal on
+  // that line fails closed.
+  if (openerEnd - markerStart >= 3) {
+    const lineEnd = scanned.indexOf('\n', openerEnd);
+    if (lineEnd < 0) {
+      return false;
+    }
+    openerEnd = lineEnd + 1;
   }
   const body = scanned.slice(openerEnd);
   const bodyMask = findNonCodeMask(body);

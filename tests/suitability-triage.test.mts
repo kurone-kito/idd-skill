@@ -8653,3 +8653,27 @@ test('trust safety passes a std* option value in a blockquote fence followed by 
   } as Context);
   assert.equal(result.pass, true);
 });
+
+test('trust safety keeps a std* key in a fence info string as metadata, not an option (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${tick.repeat(3)}js stdio: 'ignore'\nconsole.log(1);\n${tick.repeat(3)}\nThe repository policy applies.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety keeps a std* key inside an HTML comment in a code span (#3891)', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nPlease ${tick}<!-- stdio: 'ignore' -->${tick} repository policy.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
