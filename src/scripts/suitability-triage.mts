@@ -2220,6 +2220,29 @@ function isCodeIdentifierProcessMention(
 const STDIO_OPTION_KEY_PATTERN = /(?<![\w-])(?:stdio|stdin|stdout|stderr)\s*:/g;
 const STDIO_OPTION_VALUE_SEGMENT_PATTERN = /^(?:\s|\[|,|'[^'\n]*'|"[^"\n]*")*$/;
 
+// Marks each character of `source` that sits inside a single- or
+// double-quoted string, so a key or literal inside another string is not read
+// as code. An unclosed quote marks the rest of the source as inside, which only
+// makes the exemption fail closed.
+function findQuotedStringMask(source: string): boolean[] {
+  const inside: boolean[] = [];
+  let quote: string | null = null;
+  for (const character of source) {
+    if (quote !== null) {
+      inside.push(true);
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    inside.push(false);
+    if (character === "'" || character === '"') {
+      quote = character;
+    }
+  }
+  return inside;
+}
+
 function isStdioIgnoreOptionValue(
   text: string,
   index: number,
@@ -2237,7 +2260,13 @@ function isStdioIgnoreOptionValue(
   if (!codeRange) {
     return false;
   }
-  const before = text.slice(codeRange.start, index - 1);
+  // Scan from the code range start through the opening quote of the literal.
+  const scanned = text.slice(codeRange.start, index);
+  const inside = findQuotedStringMask(scanned);
+  if (inside[scanned.length - 1]) {
+    return false;
+  }
+  const before = scanned.slice(0, -1);
   const keyPattern = new RegExp(STDIO_OPTION_KEY_PATTERN.source, 'g');
   let lastKey: RegExpExecArray | null = null;
   for (
@@ -2245,7 +2274,9 @@ function isStdioIgnoreOptionValue(
     found !== null;
     found = keyPattern.exec(before)
   ) {
-    lastKey = found;
+    if (!inside[found.index]) {
+      lastKey = found;
+    }
   }
   if (lastKey === null) {
     return false;
