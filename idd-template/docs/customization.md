@@ -2159,8 +2159,8 @@ off. The claim branch copy is read from the remote. When the PR base is not the
 default branch, also commit the opt-in to the default branch through a normal
 pull request, because the required check reads that copy. A claim branch that
 has set its own `forcedHandoff.mode` needs `human-gated` set on that branch by
-an edit, because a merge keeps a change the branch made itself; a block the
-branch inherited unchanged takes the default branch's new value on merge. For
+an edit, because a merge keeps a change the branch made itself; a block that
+the branch inherited unchanged takes the default branch's new value on merge. For
 a claim with no open PR, commit the opt-in to the default branch through a
 normal pull request, then, once that pull request has merged, merge the
 default branch into the claim branch and push the merge.
