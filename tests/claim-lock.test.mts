@@ -3388,12 +3388,13 @@ function gitOutput(cwd: string, args: string[]): string {
 async function runSyntheticAcquire(
   fixture: { primary: string; worktree: string },
   identities: { admin: SyntheticReads; common: SyntheticReads },
+  target: string = fixture.worktree,
 ): Promise<SyntheticAcquireRun> {
   const adminPath = realpathSync(
-    gitOutput(fixture.worktree, ['rev-parse', '--absolute-git-dir']),
+    gitOutput(target, ['rev-parse', '--absolute-git-dir']),
   );
   const commonPath = realpathSync(
-    gitOutput(fixture.worktree, [
+    gitOutput(target, [
       'rev-parse',
       '--path-format=absolute',
       '--git-common-dir',
@@ -3454,7 +3455,7 @@ async function runSyntheticAcquire(
       eval: true,
       workerData: {
         moduleUrl: pathToFileURL(CLI_PATH).href,
-        worktree: fixture.worktree,
+        worktree: target,
         paths: { admin: [adminPath], common: [commonPath] },
         identities: identities,
       },
@@ -3693,3 +3694,29 @@ for (const [title, second] of [
     }
   });
 }
+
+test('git-admin identity rule (primary worktree): the admin directory is the common directory and keeps the device and inode comparison', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    // A present lock keeps the acquire on its clone-mutex path, where the
+    // post-wait identity comparison runs for the primary worktree.
+    writeFileSync(resolveClaimLockPath(fixture.primary), 'present-lock\n');
+    const run = await runSyntheticAcquire(
+      fixture,
+      {
+        admin: {
+          first: syntheticRead(1000, 2000),
+          second: syntheticRead(3000, 4000),
+        },
+        common: UNCHANGED_COMMON,
+      },
+      fixture.primary,
+    );
+    // The present lock is someone else's, so the acquire reports a collision;
+    // the point of the case is that no identity error is raised first.
+    assert.equal(run.error, null);
+    assert.equal(run.outcome?.mode, 'collision');
+  } finally {
+    teardown(fixture);
+  }
+});

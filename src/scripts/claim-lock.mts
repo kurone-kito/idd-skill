@@ -1009,12 +1009,18 @@ export function acquireClaimLock(
     // filesystem identity changed. In particular, a reused worktree-admin
     // name must not make a stale acquisition look like the original target.
     const postWaitFacts = resolveAcquireWorktreeFacts(worktree);
+    // A primary worktree's git-admin directory is the common directory, which
+    // is compared by device and inode alone, so the same directory must not
+    // be held to the birth-time rule here.
+    const sameAdminIdentity = postWaitFacts.isPrimary
+      ? sameDirectoryIdentity
+      : sameAdminDirectoryIdentity;
     if (
       postWaitFacts.path !== initialFacts.path ||
       postWaitFacts.isPrimary !== initialFacts.isPrimary ||
       postWaitFacts.adminDir !== initialFacts.adminDir ||
       postWaitFacts.commonDir !== initialFacts.commonDir ||
-      !sameAdminDirectoryIdentity(
+      !sameAdminIdentity(
         postWaitFacts.adminIdentity,
         initialFacts.adminIdentity,
       ) ||
