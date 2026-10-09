@@ -493,7 +493,12 @@ function readDirectoryIdentity(path) {
     if (!stat.isDirectory()) {
       throw new Error('not a directory');
     }
-    return { dev: stat.dev, ino: stat.ino };
+    return {
+      dev: stat.dev,
+      ino: stat.ino,
+      birthtimeNs: stat.birthtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
   } catch (error) {
     throw new Error(
       `could not establish git-admin directory identity for ${path}: ${error instanceof Error ? error.message : String(error)}`,
@@ -502,6 +507,39 @@ function readDirectoryIdentity(path) {
 }
 function sameDirectoryIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
+}
+/**
+ * A single read carries a birth time when the filesystem reports a non-zero
+ * one. Platforms without a birth time report `0n`, which must never count as
+ * a replacement.
+ */
+function carriesBirthTime(identity) {
+  return identity.birthtimeNs !== 0n;
+}
+/**
+ * A pair of reads has a usable birth time when both reads carry one and at
+ * least one read's birth time differs from that same read's change time. A
+ * platform that mirrors the change time into the birth time, or a directory
+ * that has had no child write since creation, does not qualify.
+ */
+function hasUsableBirthTime(left, right) {
+  return (
+    carriesBirthTime(left) &&
+    carriesBirthTime(right) &&
+    (left.birthtimeNs !== left.ctimeNs || right.birthtimeNs !== right.ctimeNs)
+  );
+}
+/**
+ * Compare a git-admin directory across the clone-mutex wait. Device and inode
+ * must match; when the pair has a usable birth time, the birth times must
+ * match too. This catches a replacement that reused the inode number, and it
+ * still accepts an unchanged directory on a platform whose birth time is
+ * missing or mirrors the change time.
+ */
+function sameAdminDirectoryIdentity(left, right) {
+  if (!sameDirectoryIdentity(left, right)) return false;
+  if (!hasUsableBirthTime(left, right)) return true;
+  return left.birthtimeNs === right.birthtimeNs;
 }
 /**
  * Resolve the lock file's path inside `worktree`'s own private git-admin
@@ -818,12 +856,18 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
     // filesystem identity changed. In particular, a reused worktree-admin
     // name must not make a stale acquisition look like the original target.
     const postWaitFacts = resolveAcquireWorktreeFacts(worktree);
+    // A primary worktree's git-admin directory is the common directory, which
+    // is compared by device and inode alone, so the same directory must not
+    // be held to the birth-time rule here.
+    const sameAdminIdentity = postWaitFacts.isPrimary
+      ? sameDirectoryIdentity
+      : sameAdminDirectoryIdentity;
     if (
       postWaitFacts.path !== initialFacts.path ||
       postWaitFacts.isPrimary !== initialFacts.isPrimary ||
       postWaitFacts.adminDir !== initialFacts.adminDir ||
       postWaitFacts.commonDir !== initialFacts.commonDir ||
-      !sameDirectoryIdentity(
+      !sameAdminIdentity(
         postWaitFacts.adminIdentity,
         initialFacts.adminIdentity,
       ) ||
