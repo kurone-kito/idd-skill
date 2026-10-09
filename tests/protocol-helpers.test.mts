@@ -5642,7 +5642,7 @@ test('applyClaimEvent reports a failed check the caller enabled, not the gate ca
     onIgnoredForcedHandoff: ({ reason }: { reason: string }) => {
       reasons.push(reason);
     },
-    explainForcedHandoffRefusal: () => 'mode-disabled',
+    explainForcedHandoffRefusal: () => 'mode-disabled' as const,
   };
 
   // The marker names 'maintainer' as forcedBy. An author who is not
@@ -5712,4 +5712,16 @@ test('a legacy caller that passes only the boolean gate still reports mode-disab
     },
   });
   assert.deepEqual(reasons, ['mode-disabled']);
+});
+
+test('an unparseable first-commit time is reported as unknown, like a missing one', () => {
+  const explain = buildForcedHandoffRefusalExplainer({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(['341']),
+    prFirstCommitAt: 'not-a-date',
+  });
+  assert.equal(
+    explain(refusalMarker('issue-only', '2026-05-12T10:00:00Z')),
+    'first-commit-time-unknown',
+  );
 });

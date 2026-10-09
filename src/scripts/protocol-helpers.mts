@@ -807,7 +807,7 @@ interface ClaimResolutionOptions {
   explainForcedHandoffRefusal?: (
     forcedHandoff: ParsedForcedHandoffMarker,
     event: CommentLike,
-  ) => string | null;
+  ) => ForcedHandoffRefusalCause | null;
 }
 
 /** Fully-defaulted form of {@link ClaimResolutionOptions}. */
@@ -10741,7 +10741,9 @@ export function buildForcedHandoffRefusalExplainer(options: {
     if (isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt)) {
       return null;
     }
-    return prFirstCommitAt === ''
+    // An unparseable first-commit time is no usable time at all, so it is
+    // reported like a missing one (#3873).
+    return Number.isNaN(Date.parse(prFirstCommitAt))
       ? 'first-commit-time-unknown'
       : 'issue-only-not-before-first-commit';
   };
@@ -14090,7 +14092,7 @@ export function applyClaimEvent(
 // Identity marks "not supplied", so the check survives a second normalization
 // (resolveActiveClaimWithForcedHandoffTrace normalizes before applyClaimEvent).
 const OMITTED_AUTHORIZATION = (): boolean => false;
-const OMITTED_EXPLAINER = (): string | null => null;
+const OMITTED_EXPLAINER = (): ForcedHandoffRefusalCause | null => null;
 
 function normalizeClaimResolutionOptions(
   optionsOrPredicate:

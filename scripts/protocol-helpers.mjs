@@ -8643,7 +8643,9 @@ export function buildForcedHandoffRefusalExplainer(options) {
     if (isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt)) {
       return null;
     }
-    return prFirstCommitAt === ''
+    // An unparseable first-commit time is no usable time at all, so it is
+    // reported like a missing one (#3873).
+    return Number.isNaN(Date.parse(prFirstCommitAt))
       ? 'first-commit-time-unknown'
       : 'issue-only-not-before-first-commit';
   };
