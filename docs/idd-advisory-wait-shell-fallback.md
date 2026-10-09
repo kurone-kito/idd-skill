@@ -144,8 +144,10 @@ EDIT_STATE_RAW=$(
   echo "AW2 edit-state read failed; comment list not trusted (#3860)" >&2
   exit 2
 }
+# A node that lacks either field is left out of the map, so its comment stays
+# "unresolved" and never reads as an explicit null (#3860 review).
 EDIT_STATE_JSON=$(printf '%s\n' "${EDIT_STATE_RAW}" \
-  | jq -s 'map({key: (.databaseId | tostring), value: .lastEditedAt}) | from_entries') || exit 2
+  | jq -s 'map(select(has("databaseId") and has("lastEditedAt")) | {key: (.databaseId | tostring), value: .lastEditedAt}) | from_entries') || exit 2
 ADVISORY_COMMENTS_JSON=$(
   printf '%s' "${ADVISORY_COMMENTS_JSON}" | jq --argjson edit "${EDIT_STATE_JSON}" '
     map(. + {lastEditedAt: ((.id | tostring) as $k
@@ -939,8 +941,10 @@ EDIT_STATE_RAW=$(
   echo "F2 edit-state read failed; not converged (#3860)" >&2
   exit 2
 }
+# A node that lacks either field is left out of the map, so its comment stays
+# "unresolved" and never reads as an explicit null (#3860 review).
 EDIT_STATE_JSON=$(printf '%s\n' "${EDIT_STATE_RAW}" \
-  | jq -s 'map({key: (.databaseId | tostring), value: .lastEditedAt}) | from_entries') || exit 2
+  | jq -s 'map(select(has("databaseId") and has("lastEditedAt")) | {key: (.databaseId | tostring), value: .lastEditedAt}) | from_entries') || exit 2
 COMMENTS_JSON=$(
   printf '%s' "${COMMENTS_JSON}" | jq --argjson edit "${EDIT_STATE_JSON}" '
     map(. + {lastEditedAt: ((.id | tostring) as $k

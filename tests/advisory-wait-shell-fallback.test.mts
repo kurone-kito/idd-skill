@@ -356,11 +356,15 @@ function aw2Rest(): unknown {
   ];
 }
 
-function aw2Edit(lastEditedAt: string | null | 'missing'): unknown {
+function aw2Edit(
+  lastEditedAt: string | null | 'missing' | 'absent-field',
+): unknown {
   const node =
     lastEditedAt === 'missing'
       ? { databaseId: 999 }
-      : { databaseId: AW2_MARKER_ID, lastEditedAt };
+      : lastEditedAt === 'absent-field'
+        ? { databaseId: AW2_MARKER_ID }
+        : { databaseId: AW2_MARKER_ID, lastEditedAt };
   return {
     data: {
       repository: {
@@ -913,4 +917,14 @@ test('F2 stops on a malformed regular-comment list instead of reading it as empt
     run.stderr,
     /F2 regular-comment read malformed; not converged \(#3860\)/,
   );
+});
+
+test('AW2 treats a GraphQL row without lastEditedAt as unresolved, not as unedited (#3860)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw2({ rest: aw2Rest(), edit: aw2Edit('absent-field') });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.values.EARLIEST, '');
+  assert.equal(run.values.PRESENT, 'false');
+  assert.equal(run.values.COUNT, '1');
 });
