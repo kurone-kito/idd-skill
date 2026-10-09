@@ -4,6 +4,11 @@
 // The scripts/review-activity-snapshot.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import {
+  advisoryWaitSectionIsValid,
+  DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  resolveAdvisoryPrimaryBotLogin,
+} from './advisory-wait-policy.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { parseOverviewSections } from './copilot-overview-sections.mjs';
 import {
@@ -31,6 +36,10 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import {
+  fetchReviewsAndHeadCommit,
+  resolveLatestPrimaryBotReviewEvidence,
+} from './review-clause.mjs';
 import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mjs';
 
 /** REST logins `REVIEW_BOT_LOGINS` lists for CodeRabbit. Codex connector
@@ -73,6 +82,9 @@ if (import.meta.main) {
  * Collect one PR's review activity and derive the snapshot JSON.
  * Callers that also need watermark fields must reuse this object in the
  * same operation. A later operation calls this again; nothing here is cached.
+ * `includeLatestPrimaryBotReview` (off by default) adds the
+ * `latestPrimaryBotReview` evidence field; when it is off the field is
+ * omitted and no extra review request is made.
  */
 export function collectReviewActivitySnapshot(input) {
   const iddConfig = input.iddConfig ?? loadIddConfig();
@@ -147,6 +159,17 @@ export function collectReviewActivitySnapshot(input) {
       prAuthorLogin,
     },
   );
+  const latestPrimaryBotReview = input.includeLatestPrimaryBotReview
+    ? buildLatestPrimaryBotReview(input.port, {
+        owner: input.owner,
+        repo: input.repo,
+        prNumber: input.prNumber,
+        headSha,
+        iddConfig,
+        normalizedComments,
+        trustedMarkerLogins,
+      })
+    : undefined;
   return {
     headSha,
     trustedMarkerActors: trustedMarkerLogins,
@@ -168,7 +191,45 @@ export function collectReviewActivitySnapshot(input) {
     embeddedFindings,
     reviewBodyRemarks: buildCopilotReviewBodyRemarks(reviews),
     copilotOverviewLabels: buildCopilotOverviewLabels(reviews),
+    ...(latestPrimaryBotReview === undefined ? {} : { latestPrimaryBotReview }),
   };
+}
+/**
+ * The review the gate's Clause 1 selects, plus its ack state
+ * (kurone-kito/idd-skill#3907). Evidence only: `null` when the review method
+ * is absent, the fetch fails, the HEAD is malformed, or no counted review
+ * exists. No other snapshot key depends on it.
+ */
+function buildLatestPrimaryBotReview(port, input) {
+  const fetchReviewsWithHead = port.getChangeRequestReviewsWithHeadCommitDate;
+  if (typeof fetchReviewsWithHead !== 'function') {
+    return null;
+  }
+  // Only the fetch is guarded: a failed fetch is evidence-absent, while a
+  // logic error in the selection should surface rather than read as null.
+  let reviews;
+  try {
+    ({ reviews } = fetchReviewsAndHeadCommit(
+      input.owner,
+      input.repo,
+      input.prNumber,
+      {
+        getChangeRequestReviewsWithHeadCommitDate: (prNumber) =>
+          fetchReviewsWithHead.call(port, prNumber),
+      },
+    ));
+  } catch {
+    return null;
+  }
+  return resolveLatestPrimaryBotReviewEvidence({
+    reviews,
+    prHeadSha: input.headSha,
+    primaryBotLogin: advisoryWaitSectionIsValid(input.iddConfig)
+      ? resolveAdvisoryPrimaryBotLogin(input.iddConfig)
+      : DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+    comments: input.normalizedComments,
+    trustedMarkerLogins: input.trustedMarkerLogins,
+  });
 }
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
@@ -197,6 +258,7 @@ function main() {
     advisoryBotLoginsFlag: args.advisoryBotLogins,
     envTrustedMarkerActors: process.env.IDD_TRUSTED_MARKER_ACTORS,
     envAdvisoryBotLogins: process.env.IDD_ADVISORY_BOT_LOGINS,
+    includeLatestPrimaryBotReview: true,
     port: createGithubProviderAdapter(owner, repo),
   });
   process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

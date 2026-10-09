@@ -29,13 +29,16 @@
 // has no imports of its own), so this adds no heavy dependency surface to
 // that caller either.
 
+import { DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN } from './advisory-wait-policy.mts';
 import {
   type CopilotReviewBodyShape,
   classifyCopilotReviewBody,
 } from './copilot-review-body.mts';
 import {
+  hasTrustedReviewAckAfter,
   isCopilotErrorReviewBody,
   isCopilotReviewerLogin,
+  normalizeTrustedMarkerLogins,
 } from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 import type { ProviderPort } from './provider-port.mts';
@@ -306,7 +309,10 @@ export function fetchReviewsAndHeadCommit(
   owner: string,
   repo: string,
   prNumber: number,
-  port: ProviderPort = createGithubProviderAdapter(owner, repo),
+  port: Pick<
+    ProviderPort,
+    'getChangeRequestReviewsWithHeadCommitDate'
+  > = createGithubProviderAdapter(owner, repo),
 ): { reviews: ReviewPayload[]; headCommittedAt: string } {
   const { reviews: nodes, headCommittedAt } =
     port.getChangeRequestReviewsWithHeadCommitDate(prNumber);
@@ -339,4 +345,101 @@ export function fetchHeadObservedAt(
   port: ProviderPort = createGithubProviderAdapter(owner, repo),
 ): string {
   return port.getChangeRequestHeadObservedAt(prNumber);
+}
+
+/**
+ * Clause 1's ack rule for the review that matches HEAD (kurone-kito/idd-skill#3907):
+ * `suppressedCount > 0`, or an `unrecognized` body with the default Copilot
+ * bot. It mirrors `advisory-convergence.mts`'s Clause 1 ack term and covers
+ * that rule only; it does not say whether Clause 1 applies at all
+ * (`reviewPolicy`, `convergenceScope`, waivers). The same rule still lives in
+ * `advisory-convergence.mts` (two sites) and `merged-pr-feedback-sweep.mts`;
+ * moving those onto this function is a follow-up. A pin test keeps the Clause 1
+ * copy from drifting in the meantime.
+ */
+export function copilotReviewAckNeeded(input: {
+  suppressedCount: number;
+  bodyShape: CopilotReviewBodyShape | null;
+  primaryBotLogin: string;
+}): boolean {
+  return (
+    input.suppressedCount > 0 ||
+    (input.bodyShape === 'unrecognized' &&
+      input.primaryBotLogin.trim().toLowerCase() ===
+        DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN)
+  );
+}
+
+/** The review the gate's Clause 1 selects, plus its ack state (#3907). */
+export interface LatestPrimaryBotReviewEvidence {
+  primaryBotLogin: string;
+  reviewId: string;
+  commitId: string;
+  matchesHead: boolean;
+  bodyShape: CopilotReviewBodyShape | null;
+  suppressedCount: number;
+  reviewAckNeeded: boolean;
+  /** `null` off-HEAD; otherwise whether a trusted, unedited `review-ack:`
+   * for this HEAD was created after the review. Evidence only: `false` does
+   * not prove that no ack exists under another trust set. */
+  reviewAckCovers: boolean | null;
+}
+
+/**
+ * Select the primary bot's review with the gate's own selector
+ * ({@link resolveLatestCopilotReviewClause}) and report its ack state
+ * (kurone-kito/idd-skill#3907). Returns `null` when there is no counted review
+ * or the HEAD is not 40 hexadecimal characters after lowercasing.
+ * `comments` must be normalized (`author.login`, `lastEditedAt`), and `trustedMarkerLogins` the
+ * resolved set, not a viewer-augmented one.
+ */
+export function resolveLatestPrimaryBotReviewEvidence(input: {
+  reviews: ReviewPayload[];
+  prHeadSha: string;
+  primaryBotLogin: string;
+  comments: Parameters<typeof hasTrustedReviewAckAfter>[0];
+  trustedMarkerLogins: readonly string[];
+}): LatestPrimaryBotReviewEvidence | null {
+  const headSha = input.prHeadSha.toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(headSha)) {
+    return null;
+  }
+  // Normalize the login as the gate does (advisory-convergence.mts), so the
+  // selector and the reported login agree with the gate's view.
+  const primaryBotLogin =
+    input.primaryBotLogin.trim().toLowerCase() ||
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const clause = resolveLatestCopilotReviewClause(
+    input.reviews,
+    headSha,
+    primaryBotLogin,
+  );
+  if (!clause.found) {
+    return null;
+  }
+  const reviewAckNeeded =
+    clause.matchesHead &&
+    copilotReviewAckNeeded({
+      suppressedCount: clause.suppressedCount,
+      bodyShape: clause.bodyShape,
+      primaryBotLogin,
+    });
+  const reviewAckCovers = clause.matchesHead
+    ? hasTrustedReviewAckAfter(
+        input.comments,
+        normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
+        clause.submittedAt,
+        headSha,
+      )
+    : null;
+  return {
+    primaryBotLogin,
+    reviewId: clause.reviewId,
+    commitId: clause.commitId,
+    matchesHead: clause.matchesHead,
+    bodyShape: clause.bodyShape,
+    suppressedCount: clause.suppressedCount,
+    reviewAckNeeded,
+    reviewAckCovers,
+  };
 }

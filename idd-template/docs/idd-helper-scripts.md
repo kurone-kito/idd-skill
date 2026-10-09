@@ -5590,6 +5590,41 @@ reflexively as any other CLI option.
   only: no counter or `effective` value reads it, and no instruction
   points to it yet. The row is historical, so compare `commitId` with
   `headSha`, as for `reviewBodyRemarks`.
+- Primary bot review ack state (kurone-kito/idd-skill#3907): the snapshot
+  also emits `latestPrimaryBotReview` when the CLI runs at E1. It is
+  `null` when the review method is missing, the fetch fails, the HEAD is
+  not 40 hexadecimal characters after lowercasing, or no counted review
+  exists. Otherwise it names the review the merge gate's Clause 1
+  selects (the same selector, `resolveLatestCopilotReviewClause`) and reports
+  `reviewId`, `commitId`, `matchesHead`, `bodyShape`, `suppressedCount`,
+  `primaryBotLogin`, `reviewAckNeeded`, and `reviewAckCovers`. Off-HEAD,
+  `reviewId` is empty, `bodyShape` is `null`, `suppressedCount` is `0`,
+  `reviewAckNeeded` is `false`, and `reviewAckCovers` is `null`. On-HEAD,
+  `reviewAckNeeded` is Clause 1's ack rule (`suppressedCount > 0`, or an
+  `unrecognized` body with the default Copilot bot), and `reviewAckCovers`
+  says whether a trusted, unedited `review-ack:` for this HEAD was created
+  after the review. The invariant is one-directional: `reviewAckCovers:
+  true` implies the gate's ack check passes under the same flag,
+  environment and config, but `false` only means the ack is not provably
+  present. An ack is outstanding only when `reviewAckNeeded &&
+  reviewAckCovers !== true`, because a clean review has `reviewAckCovers:
+  false` too. `reviewAckNeeded` describes the rule, not coverage, and it
+  does not say whether Clause 1 applies at all (`reviewPolicy`,
+  `convergenceScope`, waivers). `null` does not prove that the review has
+  no thread-less finding; the review body stays the full source. The field
+  differs from `copilotOverviewLabels` (kurone-kito/idd-skill#3868), which
+  reads the last non-error `COMMENTED` review in REST order, so the two can
+  name different reviews. On kurone-kito/idd-skill#3849, a thread-less
+  finding under a `Previously missed` block was not shown as needing an ack
+  at E1, and a manual `rerun-advisory-convergence --apply` then spent the
+  run's rerun-once budget. Post the `review-ack` before any manual
+  `rerun-advisory-convergence --apply`: the ack comment itself triggers the
+  companion workflow's refresh of the required check, so a manual
+  `--apply` is normally unnecessary. This protection comes from this
+  evidence and the E6 text, not from a new gate. The field requires a
+  current helper copy, and it costs one extra paginated GraphQL review read
+  per snapshot run, the same query the gate runs. The CLI requests the
+  field; the in-process call from `post-idd-marker --from-pr` does not.
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, optional `--nonce <token>` (this session's own
