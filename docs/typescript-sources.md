@@ -148,8 +148,9 @@ runtime-file lists in item 4, which were checked against the source.
    the regenerated `scripts/repository-inventory-audit.mjs` with it.
    `audit-docs --check` fails with `help-flag-coverage` when a helper that
    declares a flag spec is missing from `COVERED_HELPERS`. A helper that cannot
-   declare a flag spec may go into `EXCLUDED_HELPERS` in the same file, with a
-   reason. It must not declare one.
+   declare a flag spec must go into `EXCLUDED_HELPERS` in the same file, with a
+   reason, and must not declare one. The audit checks only the entries already
+   listed, so it does not catch a helper left out of both lists.
 3. If a Markdown file invokes the helper as a bare `node scripts/<stem>.mjs`,
    and the helper has no runtime catalog entry (item 4), add entries for it in
    `src/scripts/repository-inventory-audit.mts`:
@@ -212,11 +213,13 @@ runtime-file lists in item 4, which were checked against the source.
    The command table is rendered into
    `.github/instructions/idd-overview-core.instructions.md`, which `bundle-core`
    loads. `audit-docs --check` prints a notice for a bundle at the
-   `noticeUtilizationPct` in `contextCeiling` (`audit/sync-manifest.json`), and
-   fails above `maxUtilizationPct`. `bundle-work-phase` is exempt from that
-   error only: it still gets the notice, and its byte total is still checked
-   against its own `limitBytes`. Measure each bundle the change touches before
-   you edit. A successful audit prints a figure only at or above
+   `noticeUtilizationPct` in `contextCeiling` (`audit/sync-manifest.json`). It
+   fails a bundle that is not exempt in two cases: its configured `limitBytes`
+   is above `maxBundleLimitBytes`, even below the utilization limit, or its
+   utilization is above `maxUtilizationPct`. `bundle-work-phase` is exempt from
+   both ceiling errors. It still gets the notice, and its byte total is still
+   checked against its own `limitBytes`. Measure each bundle the change touches
+   before you edit. A successful audit prints a figure only at or above
    `noticeUtilizationPct`. Below that, sum the byte length of each file in the
    bundle's `bundleBudgets` entry in `audit/sync-manifest.json`, with the
    `idd-generated-from` banner removed, and compare the total with `limitBytes`.
