@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -290,6 +291,122 @@ test('loadPolicyConfig default path: throws (not silently absent) on a permissio
     } finally {
       chmodSync(configPath, 0o644);
     }
+  });
+});
+
+function setEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
+// #3820: run with an optional user-global file under a throwaway
+// XDG_CONFIG_HOME, and with GITHUB_ACTIONS pinned, so the outcome never
+// depends on the host operator's config or on the CI runner executing this
+// suite.
+function withUserGlobal<T>(
+  body: string | null,
+  githubActions: string | undefined,
+  run: () => T,
+): T {
+  const saved = {
+    xdg: process.env.XDG_CONFIG_HOME,
+    ci: process.env.GITHUB_ACTIONS,
+  };
+  const configHome = mkdtempSync(join(tmpdir(), 'idd-idd-config-global-'));
+  if (body !== null) {
+    mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
+    writeFileSync(join(configHome, 'idd-skill', 'config.json'), body);
+  }
+  setEnv('XDG_CONFIG_HOME', configHome);
+  setEnv('GITHUB_ACTIONS', githubActions);
+  try {
+    return run();
+  } finally {
+    setEnv('XDG_CONFIG_HOME', saved.xdg);
+    setEnv('GITHUB_ACTIONS', saved.ci);
+    rmSync(configHome, { recursive: true, force: true });
+  }
+}
+
+// #3820: the default loaders read the user-global layers as well as the
+// repository file. A repository-owned field from the user-global base is
+// ignored once a repository file exists (see REPOSITORY_POLICY_FIELDS).
+test('loadIddConfig reads the user-global base when the repository has no policy file (#3820)', () => {
+  withSandboxCwd(() =>
+    withUserGlobal('{"reviewPolicy":"copilot-advisory"}', undefined, () => {
+      assert.deepEqual(loadIddConfig(), { reviewPolicy: 'copilot-advisory' });
+    }),
+  );
+});
+
+test('repository leaves win over the user-global base, and a repository-owned field from the base is ignored (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeConfig(sandbox, '{"reviewPolicy":"repo-choice"}');
+    withUserGlobal(
+      '{"reviewPolicy":"global-choice","threadResolutionPolicy":"fast-agent-resolve","trustedMarkerActors":["global-login"]}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), {
+          reviewPolicy: 'repo-choice',
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+      },
+    );
+  });
+});
+
+test('under GITHUB_ACTIONS=true the user-global layers are never read (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    withUserGlobal('{"reviewPolicy":"global-choice"}', 'true', () => {
+      assert.equal(loadIddConfig(), null);
+      writeConfig(sandbox, '{"reviewPolicy":"repo-choice"}');
+      assert.deepEqual(loadIddConfig(), { reviewPolicy: 'repo-choice' });
+    });
+  });
+});
+
+test('an explicit --policy path reads only that file, never the user-global layers (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeRepositoryPolicy(
+      sandbox,
+      'policy.json',
+      '{"reviewPolicy":"explicit"}',
+    );
+    withUserGlobal('{"threadResolutionPolicy":"global"}', undefined, () => {
+      assert.deepEqual(loadPolicyConfig('policy.json').config, {
+        reviewPolicy: 'explicit',
+      });
+    });
+  });
+});
+
+test('the legacy idd-policy.json is never read as the local policy (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeRepositoryPolicy(
+      sandbox,
+      'idd-policy.json',
+      '{"reviewPolicy":"legacy"}',
+    );
+    withUserGlobal(null, undefined, () => {
+      assert.equal(loadIddConfig(), null);
+      assert.equal(loadPolicyConfig().config, null);
+    });
+  });
+});
+
+test('a malformed repository file keeps the null contract even with a user-global file present (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeConfig(sandbox, '{"reviewPolicy":');
+    withUserGlobal('{"threadResolutionPolicy":"global"}', undefined, () => {
+      assert.equal(loadIddConfig(), null);
+      assert.throws(
+        () => loadPolicyConfig(),
+        /failed to load policy from .*config\.json/,
+      );
+    });
   });
 });
 

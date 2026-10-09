@@ -40,6 +40,10 @@ import {
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
+  deriveRepositoryIdentity,
+  resolveLayeredPolicy,
+} from './layered-policy.mjs';
+import {
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectIssueAuthoringDelegateLayer,
@@ -64,13 +68,99 @@ export {
  * for why this does not memoize.
  */
 export function loadIddConfig() {
+  const loaded = loadLayeredLocalPolicy();
+  // A present but unreadable or malformed repository file still collapses to
+  // null, as it always has. The user-global layers never mask that failure.
+  if (loaded.local.diagnostic !== undefined) return null;
+  return loaded.config;
+}
+/** The repository policy file at the canonical path, with no legacy fallback. */
+function readCanonicalRepositoryPolicy(cwd) {
+  const path = join(cwd, DEFAULT_POLICY_CONFIG_PATH);
+  let text;
   try {
-    return JSON.parse(
-      readFileSync(resolve(process.cwd(), '.github/idd/config.json'), 'utf8'),
-    );
-  } catch {
-    return null;
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    if (isEnoentError(error)) return { exists: false, path };
+    return {
+      exists: true,
+      path,
+      diagnostic: `cannot read repository policy ${path}: ${errorText(error)}`,
+    };
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    return {
+      exists: true,
+      path,
+      diagnostic: `cannot parse repository policy ${path}: ${errorText(error)}`,
+    };
+  }
+  if (!isPlainObject(parsed)) {
+    // Worded like `loadPolicyConfig`'s own top-level check, which callers and
+    // tests match; the caller prefixes the path when it throws.
+    return {
+      exists: true,
+      path,
+      diagnostic: `expected a JSON object at the top level, got ${describeJsonValueKind(parsed)}`,
+    };
+  }
+  return { exists: true, path, config: parsed };
+}
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+/**
+ * Repository identity for override matching. Git is consulted only when a
+ * user-global file actually carries overrides; a non-git directory falls back
+ * to a path-only identity, so no override matches by repository slug.
+ */
+function deriveIdentityOrFallback(cwd) {
+  try {
+    return deriveRepositoryIdentity({ cwd });
+  } catch {
+    return { githubSlug: null, hasGithubOrigin: false, mainWorktreeRoot: cwd };
+  }
+}
+/**
+ * Read the effective local policy through the layered resolver (#3820).
+ *
+ * Tier 1 is the repository's canonical policy file. Tiers 2 and 3 are the
+ * user-global override selected by identity and the user-global base. Under
+ * `GITHUB_ACTIONS=true` tiers 2 and 3 are never read, so a CI helper sees the
+ * repository file alone, the same rule the critique-delegate CLI applies to
+ * its own fragment. The legacy `idd-policy.json` is never read here.
+ */
+export function loadLayeredLocalPolicy(options = {}) {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const env = options.env ?? process.env;
+  const local = readCanonicalRepositoryPolicy(cwd);
+  const userGlobal =
+    env.GITHUB_ACTIONS === 'true'
+      ? undefined
+      : loadUserGlobalPolicyDocument({ env, homedir: options.homedir });
+  const globalConfig =
+    userGlobal?.status === 'present' && isPlainObject(userGlobal.config)
+      ? userGlobal.config
+      : undefined;
+  const identity =
+    globalConfig !== undefined && Array.isArray(globalConfig.overrides)
+      ? deriveIdentityOrFallback(cwd)
+      : { githubSlug: null, hasGithubOrigin: false, mainWorktreeRoot: cwd };
+  const resolution = resolveLayeredPolicy({
+    localDocument: local,
+    userGlobalConfig: globalConfig,
+    identity,
+  });
+  return {
+    local,
+    config:
+      local.exists || globalConfig !== undefined ? resolution.config : null,
+    userGlobalContributed: globalConfig !== undefined,
+    diagnostics: resolution.diagnostics,
+  };
 }
 /**
  * Resolve the opt-in `upstreamEscalation.enabled` toggle from an
@@ -461,6 +551,17 @@ export function loadPolicyConfig(policyPath) {
     process.cwd(),
     explicit ? policyPath : DEFAULT_POLICY_CONFIG_PATH,
   );
+  if (!explicit) {
+    // #3820: the default path reads tiers 1-3. An explicit `--policy` path
+    // still reads only that file, so the layered loader is not used for it.
+    const loaded = loadLayeredLocalPolicy();
+    if (loaded.local.diagnostic !== undefined) {
+      throw new Error(
+        `failed to load policy from ${path}: ${loaded.local.diagnostic}`,
+      );
+    }
+    return { path, config: loaded.config };
+  }
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
     if (!isPlainObject(parsed)) {
