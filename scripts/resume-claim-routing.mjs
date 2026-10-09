@@ -1346,8 +1346,13 @@ export function fetchOpenLinkedPrReferences(port, issueNumber, repository) {
   const states = new Map();
   const closing = new Set();
   const issueRepository = repository.trim().toLowerCase();
+  // Each signal is read on its own, so a failed read never hides the other
+  // one (#3871). Any failure fails the lookup, but the references that each
+  // successful read found are kept. A connected map from a failed read is
+  // partial, so it is not used.
   // Number.isInteger(issueNumber) above already excludes null; TS can't
   // narrow a plain boolean-returning call the way a type predicate would.
+  let connectedFailed = false;
   try {
     readAllPages(
       (after) => port.getConnectedPullRequestEventsPage(issueNumber, after),
@@ -1358,12 +1363,8 @@ export function fetchOpenLinkedPrReferences(port, issueNumber, repository) {
       },
     );
   } catch {
-    // Without the connected timeline nothing is known, so no reference.
-    return { references: new Set(), lookupFailed: true };
+    connectedFailed = true;
   }
-  // The closing references are read on their own. A failed read keeps the
-  // connected references, which are complete on their own, and still fails
-  // the lookup, so an issue-plus-pr handoff naming one of them still matches.
   let closingFailed = false;
   try {
     readAllPages(
@@ -1400,9 +1401,11 @@ export function fetchOpenLinkedPrReferences(port, issueNumber, repository) {
   } catch {
     closingFailed = true;
   }
-  for (const [number, isConnected] of connected) {
-    if (isConnected && states.get(number) === 'OPEN') {
-      references.add(normalizeLinkedPrReference(number));
+  if (!connectedFailed) {
+    for (const [number, isConnected] of connected) {
+      if (isConnected && states.get(number) === 'OPEN') {
+        references.add(normalizeLinkedPrReference(number));
+      }
     }
   }
   if (!closingFailed) {
@@ -1410,7 +1413,7 @@ export function fetchOpenLinkedPrReferences(port, issueNumber, repository) {
       references.add(normalizeLinkedPrReference(number));
     }
   }
-  return { references, lookupFailed: closingFailed };
+  return { references, lookupFailed: connectedFailed || closingFailed };
 }
 /**
  * Walk every page of a cursor-paginated provider read, handing each page to

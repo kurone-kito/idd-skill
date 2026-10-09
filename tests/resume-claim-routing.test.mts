@@ -5660,3 +5660,13 @@ test('#3871: a non-array commits response is a failed read, not an unknown time'
   assert.equal(state.lookupFailed, true);
   assert.equal(state.prFirstCommitAt, null);
 });
+
+test('#3871: a failed connected read still reads the closing references, which are kept, and fails the lookup', () => {
+  const port = createFakeProviderAdapter({
+    connectedPrEventPageErrors: { 11: 'timeline unavailable' },
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+  });
+  const result = fetchOpenLinkedPrReferences(port, 11, REPO);
+  assert.equal(result.lookupFailed, true);
+  assert.deepEqual([...result.references], ['77']);
+});
