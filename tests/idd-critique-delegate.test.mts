@@ -77,6 +77,51 @@ test('reports usable:false, reason repository-local-explicit-disable for a null 
   });
 });
 
+// #3820: the fragment resolver reads the user-global layers through the
+// layered resolver, so an override selected for this checkout supplies the
+// delegate when the repository has none. The path override matches because
+// the checkout is not a git repository here, so its identity is the path.
+test('a user-global override selected for this checkout supplies the delegate when local is absent (#3820)', () => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-critique-delegate-override-'),
+  );
+  const checkout = join(sandbox, 'checkout-override');
+  mkdirSync(checkout);
+  const globalPath = join(sandbox, 'config.json');
+  writeFileSync(
+    globalPath,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'base-review' } },
+      overrides: [
+        {
+          match: { path: 'checkout-override' },
+          config: {
+            critiqueLoop: { delegate: { command: 'override-review' } },
+          },
+        },
+      ],
+    }),
+  );
+  const previousCwd = process.cwd();
+  process.chdir(checkout);
+  try {
+    const report = buildCritiqueDelegateReport({
+      localConfig: {},
+      globalConfigPath: globalPath,
+      env: {},
+    });
+    assert.deepEqual(report, {
+      usable: true,
+      source: 'user-global',
+      command: 'override-review',
+      mode: 'fallback',
+      reason: null,
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
 test('a malformed repository-local delegate fails closed and never inherits a configured global delegate', () => {
   const sandbox = mkdtempSync(
     join(tmpdir(), 'idd-critique-delegate-malformed-'),

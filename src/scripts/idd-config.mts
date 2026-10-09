@@ -955,6 +955,39 @@ export function resolveUserGlobalConfigPath(
 }
 
 /**
+ * #3820: the user-global layers a fragment resolver reads, with the override
+ * selected for this repository already applied through the layered resolver.
+ * The repository-local fragment still wins outright, as before. Under
+ * `GITHUB_ACTIONS=true` the user-global layers are not read. A present file
+ * whose top level is not an object is returned unchanged, so the resolver's
+ * own malformed-value handling still applies.
+ */
+function resolveUserGlobalFragmentSource(options?: {
+  env?: NodeJS.ProcessEnv;
+  globalConfigPath?: string;
+  homedir?: string;
+}): unknown {
+  const env = options?.env ?? process.env;
+  if (env.GITHUB_ACTIONS === 'true') return undefined;
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+  if (global.status !== 'present') return undefined;
+  if (!isPlainObject(global.config)) return global.config;
+  const cwd = process.cwd();
+  const identity = Array.isArray(global.config.overrides)
+    ? deriveIdentityOrFallback(cwd)
+    : { githubSlug: null, hasGithubOrigin: false, mainWorktreeRoot: cwd };
+  return resolveLayeredPolicy({
+    localDocument: { exists: false },
+    userGlobalConfig: global.config,
+    identity,
+  }).config;
+}
+
+/**
  * Read the operator-global policy file for C1 delegate inheritance.
  *
  * Missing, unreadable, non-JSON, and non-object documents are `absent`
@@ -1007,15 +1040,9 @@ export function resolveEffectiveCritiqueLoopDelegateFromEnv(
     return resolveEffectiveCritiqueLoopDelegate({ localConfig });
   }
 
-  const global = loadUserGlobalPolicyDocument({
-    env: options?.env,
-    path: options?.globalConfigPath,
-    homedir: options?.homedir,
-  });
-
   return resolveEffectiveCritiqueLoopDelegate({
     localConfig,
-    globalConfig: global.status === 'present' ? global.config : undefined,
+    globalConfig: resolveUserGlobalFragmentSource(options),
   });
 }
 
@@ -1054,15 +1081,9 @@ export function resolveEffectiveCritiqueLoopTelemetryHookFromEnv(
     return resolveEffectiveCritiqueLoopTelemetryHook({ localConfig });
   }
 
-  const global = loadUserGlobalPolicyDocument({
-    env: options?.env,
-    path: options?.globalConfigPath,
-    homedir: options?.homedir,
-  });
-
   return resolveEffectiveCritiqueLoopTelemetryHook({
     localConfig,
-    globalConfig: global.status === 'present' ? global.config : undefined,
+    globalConfig: resolveUserGlobalFragmentSource(options),
   });
 }
 
@@ -1098,14 +1119,8 @@ export function resolveEffectiveIssueAuthoringDelegateFromEnv(
     return resolveEffectiveIssueAuthoringDelegate({ localConfig });
   }
 
-  const global = loadUserGlobalPolicyDocument({
-    env: options?.env,
-    path: options?.globalConfigPath,
-    homedir: options?.homedir,
-  });
-
   return resolveEffectiveIssueAuthoringDelegate({
     localConfig,
-    globalConfig: global.status === 'present' ? global.config : undefined,
+    globalConfig: resolveUserGlobalFragmentSource(options),
   });
 }
