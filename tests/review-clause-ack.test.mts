@@ -261,7 +261,16 @@ test('the selector skips error-bodied and reply-only reviews, and reports explic
     comments: [],
     trustedMarkerLogins: [TRUSTED],
   });
-  assert.equal(withReply?.reviewId, 'r1');
+  assert.deepEqual(withReply, {
+    primaryBotLogin: 'copilot',
+    reviewId: 'r1',
+    commitId: HEAD,
+    matchesHead: true,
+    bodyShape: 'overview-v2',
+    suppressedCount: 1,
+    reviewAckNeeded: true,
+    reviewAckCovers: false,
+  });
 });
 
 test('no counted review, an off-HEAD review, and an uppercase HEAD', () => {

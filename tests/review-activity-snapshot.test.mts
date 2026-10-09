@@ -841,6 +841,42 @@ test('a configured non-default primary bot is followed, not Copilot (#3907)', ()
   });
 });
 
+test('an invalid advisoryWait section falls back to the default Copilot bot (#3907)', () => {
+  const snapshot = latestSnapshot({
+    include: true,
+    config: { advisoryWait: { primaryBotLogin: 123 } },
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_bad',
+          'Something the classifier does not know.',
+        ),
+      ],
+    }),
+  });
+  const evidence = snapshot.latestPrimaryBotReview as {
+    primaryBotLogin: string;
+    bodyShape: string | null;
+    reviewAckNeeded: boolean;
+  } | null;
+  assert.equal(evidence?.primaryBotLogin, 'copilot');
+  assert.equal(evidence?.bodyShape, 'unrecognized');
+  assert.equal(evidence?.reviewAckNeeded, true);
+});
+
+test('the opt-in makes exactly one review fetch (#3907)', () => {
+  let calls = 0;
+  latestSnapshot({
+    include: true,
+    fetchReviews: () => {
+      calls += 1;
+      return { headCommittedAt: '', reviews: [] };
+    },
+  });
+  assert.equal(calls, 1);
+});
+
 test('a failing fetch yields null and leaves every other key unchanged (#3907)', () => {
   const off = latestSnapshot({ include: false });
   const failing = latestSnapshot({
