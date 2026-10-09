@@ -19,6 +19,12 @@
 
 import { createHash } from 'node:crypto';
 import {
+  type AuthoringOwnerProvenanceComment,
+  fetchProvenanceCommentsGraphql,
+  inspectLastEditedAt,
+  sameIssueRef,
+} from './authoring-owner-provenance.mts';
+import {
   collectCiWaitState,
   type RequiredCiHeadAgreement,
   requiredCiHeadAgreementFromSummary,
@@ -34,7 +40,11 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
-import { isValidIsoTimestamp } from './marker-helpers.mts';
+import {
+  isValidIsoTimestamp,
+  type ParsedAuthoringOwnerMarker,
+  parseAuthoringOwnerComment,
+} from './marker-helpers.mts';
 import {
   isTrustedAuthor,
   resolveTrustedActors,
@@ -1336,6 +1346,176 @@ export function validateAuthoringPublicationIntentStateIssueCoupling(
   return null;
 }
 
+/**
+ * `authoring-owner` modes that open an owner generation. Only these count as
+ * an opening marker of a target (#3910): the first valid acquisition,
+ * bootstrap or resume marker wins within an open generation (contract.md).
+ */
+const AUTHORING_OWNER_OPENING_MODES = new Set([
+  'acquire',
+  'bootstrap',
+  'resume',
+]);
+
+/**
+ * `authoring-owner` modes whose post must agree with an opening marker of its
+ * target before it is sent (#3910). `acquire` and `bootstrap` open a
+ * generation themselves, so they are not checked and make no read.
+ */
+const AUTHORING_OWNER_IDENTITY_CHECKED_MODES = new Set([
+  'heartbeat',
+  'release',
+  'release-guard',
+  'release-complete',
+  'resume',
+]);
+
+/**
+ * Appended to every identity refusal. A post made right after its opening
+ * marker can read stale, so waiting out the settle delay and retrying tells a
+ * lagging read apart from a real mismatch. The delay is
+ * `claim.verifySettleDelay`, the one the authoring flows apply after a write
+ * (docs/issue-authoring-skill.md).
+ */
+const AUTHORING_OWNER_IDENTITY_SETTLE_HINT =
+  'A post made immediately after an opening marker can read stale: wait the settle delay (claim.verifySettleDelay, default PT5S) and retry before treating this as a real mismatch.';
+
+/** One opening marker of a post's target, as the identity check selects it. */
+export interface AuthoringOwnerOpeningMarker {
+  id: number;
+  parsed: ParsedAuthoringOwnerMarker;
+}
+
+/**
+ * The opening markers of `options.target` among `comments` (#3910). A comment
+ * counts when it parses as an owner marker whose mode is acquire, bootstrap or
+ * resume and whose `target=` names `options.target` (issue references compare
+ * without regard to case). With `requireUnedited`, a comment whose body was
+ * edited after posting, or whose edit state cannot be verified, does not count
+ * (`inspectLastEditedAt`). With a non-empty `trustedLogins`, only its authors
+ * count; an empty set applies no author filter. Minimized comments count: a
+ * sweep hides superseded markers, and the history is still evidence. The
+ * replay passes `requireUnedited: false`, because REST carries no edit state.
+ */
+export function selectAuthoringOwnerOpeningMarkers(
+  comments: readonly AuthoringOwnerProvenanceComment[],
+  options: {
+    target: string;
+    markerPrefix: string;
+    trustedLogins: Set<string>;
+    requireUnedited: boolean;
+  },
+): AuthoringOwnerOpeningMarker[] {
+  const openers: AuthoringOwnerOpeningMarker[] = [];
+  for (const comment of comments) {
+    if (options.requireUnedited && inspectLastEditedAt(comment) !== null) {
+      continue;
+    }
+    if (
+      options.trustedLogins.size > 0 &&
+      !isTrustedAuthor(comment.authorLogin, options.trustedLogins)
+    ) {
+      continue;
+    }
+    const parsed = parseAuthoringOwnerComment(
+      comment.body,
+      options.markerPrefix,
+    );
+    if (
+      parsed === null ||
+      !AUTHORING_OWNER_OPENING_MODES.has(parsed.mode) ||
+      !sameIssueRef(parsed.target, options.target)
+    ) {
+      continue;
+    }
+    openers.push({ id: comment.id, parsed });
+  }
+  return openers;
+}
+
+interface AuthoringOwnerIdentityDifference {
+  field: string;
+  posted: string;
+  found: string;
+}
+
+/**
+ * The fields on which `post` and one opening marker disagree (#3910). A resume
+ * names the owner it supersedes, so its owner is compared with the post's
+ * `--supersedes`; every other checked mode retains its owner. `session` is
+ * never compared: the contract lets a release come from another session, as
+ * the history of issue #3498 shows.
+ */
+function authoringOwnerIdentityDifferences(
+  post: ParsedAuthoringOwnerMarker,
+  opener: ParsedAuthoringOwnerMarker,
+): AuthoringOwnerIdentityDifference[] {
+  const postedOwner = post.mode === 'resume' ? post.supersedes : post.owner;
+  const differences: AuthoringOwnerIdentityDifference[] = [];
+  if (opener.set !== post.set) {
+    differences.push({ field: 'set', posted: post.set, found: opener.set });
+  }
+  if (!sameIssueRef(opener.anchor, post.anchor)) {
+    differences.push({
+      field: 'anchor',
+      posted: post.anchor,
+      found: opener.anchor,
+    });
+  }
+  if (opener.owner !== postedOwner) {
+    differences.push({
+      field: post.mode === 'resume' ? 'owner (--supersedes)' : 'owner',
+      posted: postedOwner,
+      found: opener.owner,
+    });
+  }
+  return differences;
+}
+
+/**
+ * Decide whether an `authoring-owner` post may be sent, given the opening
+ * markers of its target (#3910). Returns `null` when one opening marker agrees
+ * with the post on set, anchor and owner (resume: owner against `--supersedes`).
+ * Otherwise returns the refusal, which names the closest opening marker by
+ * comment id and each field that differs, with the value posted and the value
+ * found. The closest marker has the fewest differing fields; a tie goes to the
+ * earliest one, because the first valid opener wins its generation.
+ */
+export function validateAuthoringOwnerPostIdentity(
+  post: ParsedAuthoringOwnerMarker,
+  openers: readonly AuthoringOwnerOpeningMarker[],
+): string | null {
+  const head = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}`;
+  let closest: {
+    opener: AuthoringOwnerOpeningMarker;
+    differences: AuthoringOwnerIdentityDifference[];
+  } | null = null;
+  for (const opener of openers) {
+    const differences = authoringOwnerIdentityDifferences(post, opener.parsed);
+    if (
+      closest === null ||
+      differences.length < closest.differences.length ||
+      (differences.length === closest.differences.length &&
+        opener.id < closest.opener.id)
+    ) {
+      closest = { opener, differences };
+    }
+  }
+  if (closest === null) {
+    return `${head}: no counted opening marker (acquire, bootstrap or resume) is recorded there. ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
+  }
+  if (closest.differences.length === 0) {
+    return null;
+  }
+  const detail = closest.differences
+    .map(
+      (difference) =>
+        `${difference.field}: posted ${difference.posted}, found ${difference.found}`,
+    )
+    .join('; ');
+  return `${head}: no opening marker agrees with it. The closest is comment #${closest.opener.id} (mode=${closest.opener.parsed.mode}), which differs on ${detail}. ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
+}
+
 // Excluded from the #1446 cli-args.mts wrapper: `fields` below collects
 // per-marker-type keys dynamically (each `--type` accepts a different
 // field set) rather than a fixed declared spec. `util.parseArgs`'s
@@ -1581,6 +1761,15 @@ mode is a permanent, uncorrectable defect once it lands. --mode itself
 before any of these checks run, matching the renderers' own internal
 trimming, so a padded value cannot bypass a coupling check while still
 rendering as canonical.
+With --apply, an authoring-owner heartbeat, release, release-guard,
+release-complete or resume is refused, with exit 1 and nothing posted,
+unless its set, anchor and owner (resume: its --supersedes) agree with an
+opening marker (acquire, bootstrap or resume) already on --marker-target
+(#3910). An opening marker counts when it is unedited and, when trusted
+logins are configured, written by one of them. The comments are read over
+GraphQL, and a failed read refuses too. The check is --apply-only, and a dry
+run adds no read. The contract's direct JSON post stays available where only
+REST works, and it is not checked.
 authoring-publication-intent's --issue may be \`none\` only at
 --state pending (contract.md; mirrors audit-authored-issue.mts's own
 replay rule) -- \`--state member/cleanup/abandoned\` always require a real
@@ -1667,6 +1856,70 @@ function postMarker(
     body,
   );
   return { id: posted.id, html_url: posted.htmlUrl };
+}
+
+/**
+ * #3910: the `--apply`-only identity check of an `authoring-owner` post. It
+ * re-parses the body about to be sent, so the check compares the values the
+ * marker carries rather than the raw flags, then reads the comments of its
+ * `--marker-target` through the paginated GraphQL reader. Returns the refusal
+ * when the post contradicts an opening marker, or the failure when the comments
+ * cannot be read completely; nothing is sent in either case. Returns `null` when
+ * the post may be sent. Acquire and bootstrap are not checked and make no read.
+ */
+function checkAuthoringOwnerPostIdentity(input: {
+  body: string;
+  markerPrefix: string;
+  markerTarget: ParsedIssueReference | null;
+  trustedMarkerLoginsFlag: string;
+}): Exclude<HelperCliResult, number> | null {
+  const { markerTarget } = input;
+  if (markerTarget === null) {
+    const message = '--marker-target is required for --type authoring-owner';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
+  const post = parseAuthoringOwnerComment(input.body, input.markerPrefix);
+  if (post === null) {
+    const message =
+      'refusing to post authoring-owner marker: the rendered body does not re-parse for the identity check';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'internal', message };
+  }
+  if (!AUTHORING_OWNER_IDENTITY_CHECKED_MODES.has(post.mode)) {
+    return null;
+  }
+  let comments: AuthoringOwnerProvenanceComment[];
+  try {
+    comments = fetchProvenanceCommentsGraphql(
+      markerTarget.owner,
+      markerTarget.repo,
+      markerTarget.number,
+    );
+  } catch (error) {
+    const message = `refusing to post authoring-owner marker: the comments of ${post.target} could not be read, so its opening markers cannot be checked: ${(error as Error).message}`;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, ...classifyHelperError(error), message };
+  }
+  const { actors } = resolveTrustedActors({
+    flagValue: input.trustedMarkerLoginsFlag,
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: loadIddConfig(),
+  });
+  const refusal = validateAuthoringOwnerPostIdentity(
+    post,
+    selectAuthoringOwnerOpeningMarkers(comments, {
+      target: post.target,
+      markerPrefix: input.markerPrefix,
+      trustedLogins: new Set(actors),
+      requireUnedited: true,
+    }),
+  );
+  if (refusal === null) {
+    return null;
+  }
+  process.stderr.write(`${refusal}\n`);
+  return { exitCode: 1, kind: 'gate', message: refusal };
 }
 
 /**
@@ -2800,6 +3053,17 @@ function main(): HelperCliResult {
   const owner = args.owner || applyCurrentRepo?.owner || '';
   const repo = args.repo || applyCurrentRepo?.repo || '';
 
+  if (args.type === 'authoring-owner') {
+    const identityRefusal = checkAuthoringOwnerPostIdentity({
+      body,
+      markerPrefix: args.fields['marker-prefix'],
+      markerTarget: markerTargetRef,
+      trustedMarkerLoginsFlag: args.trustedMarkerLogins,
+    });
+    if (identityRefusal !== null) {
+      return identityRefusal;
+    }
+  }
   const posted = postMarker(owner, repo, number, body);
   if (args.type === 'claim' || args.type === 'unclaim') {
     // A claim or unclaim changes what a cached Discover hint may list, so
