@@ -299,6 +299,19 @@ jobs:
           node --test --test-timeout=60000 --import ./tests/isolate-state.mts --test-name-pattern "registered fixture gh paths work through nested stubs" --test-reporter=tap tests/isolate-gh.test.mts | Tee-Object -FilePath registered-fixture-windows.tap
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Select-String -Path registered-fixture-windows.tap -Pattern '^ok \d+ - registered fixture gh paths work through nested stubs and paginated workers$' -Quiet)) { throw 'registered fixture gh paths case did not pass' }
+      # Regression coverage for kurone-kito/idd-skill#3886: two tests import
+      # the gh-exec module through a file URL, because Node's ESM loader on
+      # Windows rejects an absolute path in an import specifier. The exit
+      # code alone cannot catch a pattern that matches no test, since Node
+      # exits 0 for that, so each exact title must also appear as a passing
+      # TAP line.
+      - name: Run gh-exec Windows import tests
+        run: |
+          node --test --import ./tests/isolate-state.mts --test-name-pattern "paginated gh-exec Worker records|does not inherit Worker-invalid execArgv" --test-reporter=tap tests/isolate-gh.test.mts tests/gh-exec.test.mts | Tee-Object -FilePath gh-exec-windows.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($title in @('the paginated gh-exec Worker records caught attempts in its owner ledger', 'ghApiJson (paginated) does not inherit Worker-invalid execArgv (\#3597)')) {
+            if (-not (Select-String -Path gh-exec-windows.tap -Pattern ('^ok \d+ - ' + [regex]::Escape($title) + '$') -Quiet)) { throw "no passing TAP line for: $title" }
+          }
       # Regression coverage for kurone-kito/idd-skill#2988: the full file
       # is now safe after #2989 bounded its production fetch calls and
       # #2990 made the fixture suite hermetic on Windows. Keep this
