@@ -2127,13 +2127,15 @@ posted. An opt-in that exists
 only in the operator's checkout is not enough: Resume honors it from that
 checkout, and F2 rejects the handoff with `claim-id-mismatch`.
 
-A pull request cannot enable recovery for itself, because CI ignores a
+A pull request cannot enable recovery for itself in CI, because CI ignores a
 PR-edited config. For a stalled change that would add the opt-in, the stale
 takeover after `claimTiming.staleAge` (default `PT24H`) needs no opt-in. The
-`release` keyword works only from a checkout whose own copy already sets
-`human-gated`, and it needs an authorized actor (the authenticated `gh` login).
-It posts an `unclaimed-by` marker that no gate conditions on the mode. A change
-that adds the opt-in does not set the mode in that checkout until it merges.
+`release` keyword works only from a checkout whose own
+`.github/idd/config.json` already sets `human-gated`, and it needs an
+authorized actor (the authenticated `gh` login). It posts an `unclaimed-by`
+marker that no gate conditions on the mode. A checkout of the PR branch that
+commits the opt-in has that copy, so it can release. Other checkouts can
+release once they pull the change after it merges to `main`.
 
 Every reader that consults the mode evaluates it each time it reads a marker,
 not when the marker was posted. Enabling `human-gated` on the default branch
