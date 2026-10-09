@@ -93,12 +93,15 @@ export interface IddConfig {
 }
 
 /**
- * Read and parse `.github/idd/config.json` from the current working
- * directory, returning `null` when the file is missing,
- * unreadable, or not valid JSON — the existing fail-safe every per-helper
- * copy already implements: treat a missing or malformed config the same as
- * "no policy configured". Always re-reads the file; see the module header
- * for why this does not memoize.
+ * Read the effective local policy for the current working directory through
+ * the layered resolver (#3820): `.github/idd/config.json` over the selected
+ * user-global override over the user-global base. The result is `null` when
+ * no tier exists at all, so a repository with no file and no user-global file
+ * still reads as "no policy configured". It is also `null` whenever the
+ * repository file is present but unreadable, malformed, or not a JSON object,
+ * so a broken repository file never falls back to the user-global layers.
+ * Always re-reads the files; see the module header for why this does not
+ * memoize.
  */
 export function loadIddConfig(): IddConfig | null {
   const loaded = loadLayeredLocalPolicy();
