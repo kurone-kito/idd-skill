@@ -266,20 +266,18 @@ enabled and default approval actors to
 | Name | Commands |
 | --- | --- |
 | **fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
-| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check` |
+| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |
 | **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm typecheck` |
 | **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"` |
 | **issue-scope** | `roadmap-first` |
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-Non-shell rows are settings, not commands.
-
 `pre-push-validate` omits auto-fix. If lint fails, run
 **fix-validate**, commit, then re-run **pre-push-validate**.
 
 If **fix-validate**/**post-fix-validate** changes files, stage and
-commit before any push, rebase, or step needing a clean tree.
+commit before any push, rebase, or clean-tree step.
 
 `install-deps` must be idempotent: re-running it in fresh, reused, or
 recreated worktrees must not need manual cleanup or leave unexpected

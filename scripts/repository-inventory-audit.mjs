@@ -128,6 +128,8 @@ const INTERNAL_ENTRY_REASONS = {
   'scripts/actions-usage-report.mjs': 'source-repository Actions report',
   'scripts/token-cost-event.mjs': 'source-repository token-cost event logger',
   'scripts/token-cost-harvest.mjs': 'source-repository token-cost log reader',
+  'scripts/check-stray-commit-closes.mjs':
+    'source-repository pre-push closing-keyword check',
   'scripts/idd-critique-harvest.mjs': 'source-repository critique log reader',
   'scripts/idd-critique-report.mjs': 'source-repository critique report',
   'scripts/copilot-review-wave-audit.mjs':
@@ -158,6 +160,8 @@ const DOGFOOD_ONLY_TOOLS = {
     'repository-local Markdown authoring guard, not distributed',
   'scripts/token-cost-report.mjs':
     'source-repository token-cost reporter, not an adopter CLI',
+  'scripts/check-stray-commit-closes.mjs':
+    'source-repository pre-push check, not an adopter CLI',
 };
 const BIN_ALLOWLIST = {
   'idd-onboard':

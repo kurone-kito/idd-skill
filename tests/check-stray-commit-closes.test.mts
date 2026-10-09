@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  checkStrayCommits,
   CHECK_STRAY_COMMIT_CLOSES_FLAG_SPEC,
+  checkStrayCommits,
 } from '../src/scripts/check-stray-commit-closes.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -160,7 +166,10 @@ test('reports a stray closing reference with exit 1, stdout only', () => {
   const run = check(work);
   assert.equal(run.status, 1);
   assert.equal(run.stderr, '');
-  assert.match(run.stdout, new RegExp(`stray closing reference: commit ${sha} names #169`));
+  assert.match(
+    run.stdout,
+    new RegExp(`stray closing reference: commit ${sha} names #169`),
+  );
   assert.match(run.stdout, /IDD_CLOSING_ISSUES/);
   assert.match(run.stdout, /--closing-issues/);
 });
@@ -307,7 +316,10 @@ for (const [label, body] of [
 }
 
 test('a failed default-branch read exits 1, with or without a development branch', () => {
-  for (const config of [undefined, JSON.stringify({ developmentBranch: 'release' })]) {
+  for (const config of [
+    undefined,
+    JSON.stringify({ developmentBranch: 'release' }),
+  ]) {
     const { work } = makeRepo();
     featureWithCommits(work, ['Closes #3876']);
     if (config !== undefined) {
@@ -325,13 +337,21 @@ test('a fetch failure exits 1 with the retry text', () => {
   breakOrigin(work);
   const run = check(work);
   assert.equal(run.status, 1);
-  assert.match(run.stderr, /could not fetch origin\/main; check the network and retry/);
+  assert.match(
+    run.stderr,
+    /could not fetch origin\/main; check the network and retry/,
+  );
 });
 
 test('an origin/main absent after fetch exits 1', () => {
   const { work, origin } = makeRepo();
   git(work, 'remote', 'set-url', 'origin', origin);
-  git(work, 'config', 'remote.origin.fetch', '+refs/heads/other:refs/remotes/origin/other');
+  git(
+    work,
+    'config',
+    'remote.origin.fetch',
+    '+refs/heads/other:refs/remotes/origin/other',
+  );
   // The push in makeRepo created origin/main; drop it so only the fetch can
   // bring it back, and the configured refspec does not map main.
   git(work, 'update-ref', '-d', 'refs/remotes/origin/main');
@@ -368,18 +388,34 @@ test('reports checkStrayCommits results for a fixed commit list', () => {
 });
 
 test('the stray fixture phrase appears in no other file', () => {
-  const found = git(
-    REPO_ROOT,
-    'grep',
-    '-l',
-    '-F',
-    '--untracked',
-    STRAY_PHRASE,
-  )
+  const found = git(REPO_ROOT, 'grep', '-l', '-F', '--untracked', STRAY_PHRASE)
     .trim()
     .split('\n')
     .filter(Boolean);
   assert.deepEqual(found, ['tests/check-stray-commit-closes.test.mts']);
+});
+
+test('pre-push-validate ends with the helper, and its manifest row matches', () => {
+  const config = JSON.parse(
+    readFileSync(join(REPO_ROOT, '.github', 'idd', 'config.json'), 'utf8'),
+  );
+  const command: string = config.commands['pre-push-validate'];
+  assert.equal(
+    command.split(' && ').at(-1),
+    'node scripts/check-stray-commit-closes.mjs',
+  );
+  const manifest = JSON.parse(
+    readFileSync(join(REPO_ROOT, 'audit', 'sync-manifest.json'), 'utf8'),
+  );
+  const from = '| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |';
+  const replacements = manifest.syncPairs.flatMap(
+    (pair: { replacements?: { from: string; to: string }[] }) =>
+      pair.replacements ?? [],
+  );
+  const row = replacements.find(
+    (replacement: { from: string }) => replacement.from === from,
+  );
+  assert.equal(row.to, `| **pre-push-validate** | \`${command}\` |`);
 });
 
 test('the flag spec lists exactly the documented flags', () => {
@@ -393,7 +429,10 @@ test('--help prints the usage to stdout and exits 0', () => {
   const { work } = makeRepo();
   const run = check(work, ['--help']);
   assert.equal(run.status, 0);
-  assert.match(run.stdout, /^usage: node scripts\/check-stray-commit-closes\.mjs/);
+  assert.match(
+    run.stdout,
+    /^usage: node scripts\/check-stray-commit-closes\.mjs/,
+  );
   assert.equal(run.stderr, '');
 });
 
@@ -406,7 +445,8 @@ test('a repeated list flag exits 2', () => {
   const { work } = makeRepo();
   featureWithCommits(work, ['Closes #3876']);
   assert.equal(
-    check(work, ['--closing-issues', '3876', '--closing-issues', '3876']).status,
+    check(work, ['--closing-issues', '3876', '--closing-issues', '3876'])
+      .status,
     2,
   );
   assert.equal(

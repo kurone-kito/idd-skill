@@ -269,13 +269,11 @@ enabled and default approval actors to
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-Non-shell rows are settings, not commands.
-
 `pre-push-validate` omits auto-fix. If lint fails, run
 **fix-validate**, commit, then re-run **pre-push-validate**.
 
 If **fix-validate**/**post-fix-validate** changes files, stage and
-commit before any push, rebase, or step needing a clean tree.
+commit before any push, rebase, or clean-tree step.
 
 `install-deps` must be idempotent: re-running it in fresh, reused, or
 recreated worktrees must not need manual cleanup or leave unexpected
