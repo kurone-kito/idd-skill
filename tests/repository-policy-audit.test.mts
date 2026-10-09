@@ -678,6 +678,14 @@ function makeRuleViolation(
           loadControl.maxConcurrent = 3;
         },
       );
+    case 'orchestrator-worker-cap-dogfood':
+      return updateFixtureJson(
+        documents,
+        '.github/idd/config.json',
+        (value) => {
+          value.orchestrator = { maxWorkers: 2 };
+        },
+      );
     case 'f4-dirty-worktree-hold':
       return replaceFixtureText(
         documents,
@@ -844,6 +852,24 @@ test('load-control dogfood check ignores JSON property order', () => {
   assert.deepEqual(
     collectRepositoryPolicyViolationsFromDocuments(documents),
     [],
+  );
+});
+
+test('orchestrator dogfood rejects a local entry in the distributed template', () => {
+  const documents = readPositiveFixture();
+  const templatePath = 'idd-template/.github/idd/config.json';
+  const templateContents = documents.get(templatePath);
+  assert.ok(templateContents);
+  const template = JSON.parse(templateContents) as Record<string, unknown>;
+  template.orchestrator = { maxWorkers: 4 };
+  documents.set(templatePath, JSON.stringify(template, null, 2));
+
+  assert.ok(
+    collectRepositoryPolicyViolationsFromDocuments(documents).some(
+      (violation) =>
+        violation.ruleId === 'orchestrator-worker-cap-dogfood' &&
+        violation.path === templatePath,
+    ),
   );
 });
 
