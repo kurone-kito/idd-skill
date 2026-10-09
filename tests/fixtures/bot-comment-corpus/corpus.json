@@ -311,6 +311,23 @@
     }
   },
   {
+    "id": "codex-usage-limit-3848",
+    "botLogin": "chatgpt-codex-connector[bot]",
+    "source": {
+      "pr": 3848,
+      "reviewId": null,
+      "commentId": 6061899090,
+      "editedAt": null
+    },
+    "surface": "pr comment",
+    "body": "You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).\nTo continue using code reviews, you can upgrade your account or add credits to your account and enable them for code reviews in your [settings](https://chatgpt.com/codex/cloud/settings/code-review).",
+    "note": "Codex usage limits for code reviews, current two-sentence trailer (issue #3885).",
+    "expectedLabels": {
+      "advisory-non-review-notice": true,
+      "advisory-terminal-notice": true
+    }
+  },
+  {
     "id": "codex-no-find-3517",
     "botLogin": "chatgpt-codex-connector[bot]",
     "source": {
