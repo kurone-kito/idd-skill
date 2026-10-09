@@ -468,12 +468,12 @@ const GUARDED_CONFIG = {
   developmentBranch: 'main',
 };
 
-test('refuseBaseBranchCommits allows pushes of other refs from the base branch in the primary worktree (#3854)', () => {
+test('refuseBaseBranchCommits allows only deletions of other refs from the base branch in the primary worktree (#3854)', () => {
   for (const [copy, hooksSource] of HOOK_COPIES) {
     const repo = setupRepo(GUARDED_CONFIG, hooksSource);
     try {
-      // Deleting a merged feature branch and pushing a feature ref both leave
-      // the base branch untouched, so both pass from the base-branch worktree.
+      // Deleting a merged feature branch leaves the base branch untouched, so
+      // it passes from the base-branch worktree, one ref or several.
       assert.equal(
         runHook(
           repo,
@@ -489,10 +489,31 @@ test('refuseBaseBranchCommits allows pushes of other refs from the base branch i
           repo,
           'pre-push',
           repo,
-          `${SHA_B} ${SHA_B} refs/heads/feature/y ${ZERO_SHA}\n`,
+          `(delete) ${ZERO_SHA} refs/heads/feature/x ${SHA_A}\n(delete) ${ZERO_SHA} refs/heads/feature/y ${SHA_B}\n`,
         ),
         0,
-        `${copy}: pushing a feature ref must be allowed`,
+        `${copy}: deleting several other refs must be allowed`,
+      );
+      // Creating or updating any ref is refused, a feature ref included.
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `${SHA_B} ${SHA_B} refs/heads/feature/y ${ZERO_SHA}\n`,
+        ),
+        1,
+        `${copy}: creating a feature ref must be refused`,
+      );
+      assert.equal(
+        runHook(
+          repo,
+          'pre-push',
+          repo,
+          `(delete) ${ZERO_SHA} refs/heads/feature/x ${SHA_A}\n${SHA_B} ${SHA_C} refs/heads/feature/y ${SHA_A}\n`,
+        ),
+        1,
+        `${copy}: a mix that updates a feature ref must be refused`,
       );
     } finally {
       rmSync(repo, { recursive: true, force: true });
