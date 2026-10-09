@@ -10,6 +10,7 @@ import {
   buildEffectiveConfigKeyReport,
   buildEffectiveConfigReport,
 } from '../src/scripts/idd-effective-config.mts';
+import { POLICY_DEFAULTS } from '../src/scripts/policy-helpers.mts';
 
 const SCRIPT = fileURLToPath(
   new URL('../scripts/idd-effective-config.mjs', import.meta.url),
@@ -116,6 +117,27 @@ test('--no-user-global skips the user-global layers entirely (#3820)', () => {
   }
 });
 
+test('the CLI reports a canonical default with source "default" (#3820)', () => {
+  const f = fixture({ local: null, global: null });
+  try {
+    const out = JSON.parse(
+      execFileSync(process.execPath, [SCRIPT, '--key', 'issueScope'], {
+        cwd: resolve(f.cwd),
+        env: { ...process.env, ...f.env, GITHUB_ACTIONS: '' },
+        encoding: 'utf8',
+      }),
+    );
+    assert.deepEqual(out, {
+      key: 'issueScope',
+      found: true,
+      value: POLICY_DEFAULTS.issueScope,
+      source: 'default',
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
 test('the CLI prints the JSON report and honors --key and --no-user-global (#3820)', () => {
   const f = fixture({
     local: null,
@@ -130,8 +152,12 @@ test('the CLI prints the JSON report and honors --key and --no-user-global (#382
           encoding: 'utf8',
         }),
       );
-    const full = run([]) as { config: unknown; userGlobalContributed: boolean };
-    assert.deepEqual(full.config, { threadResolutionPolicy: 'global-thread' });
+    // The CLI passes the canonical defaults, so the config also carries them.
+    const full = run([]) as {
+      config: Record<string, unknown>;
+      userGlobalContributed: boolean;
+    };
+    assert.equal(full.config.threadResolutionPolicy, 'global-thread');
     assert.equal(full.userGlobalContributed, true);
     assert.deepEqual(run(['--key', 'threadResolutionPolicy']), {
       key: 'threadResolutionPolicy',
@@ -139,8 +165,11 @@ test('the CLI prints the JSON report and honors --key and --no-user-global (#382
       value: 'global-thread',
       source: 'user-global',
     });
-    const bare = run(['--no-user-global']) as { config: unknown };
-    assert.equal(bare.config, null);
+    const bare = run(['--no-user-global']) as {
+      config: Record<string, unknown>;
+    };
+    assert.equal(bare.config.threadResolutionPolicy, undefined);
+    assert.equal(bare.config.issueScope, POLICY_DEFAULTS.issueScope);
   } finally {
     f.cleanup();
   }

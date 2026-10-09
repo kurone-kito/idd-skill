@@ -24,6 +24,7 @@ import {
   loadTrustedIddConfig,
   loadUserGlobalPolicyDocument,
   REPOSITORY_POLICY_FIELDS,
+  readRepositoryPolicyFile,
   readTrustedForcedHandoffMode,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
   resolveEffectiveCritiqueLoopTelemetryHookFromEnv,
@@ -394,6 +395,40 @@ test('the legacy idd-policy.json is never read as the local policy (#3820)', () 
       assert.equal(loadIddConfig(), null);
       assert.equal(loadPolicyConfig().config, null);
     });
+  });
+});
+
+test('a legacy idd-policy.json blocks user-global repository-owned fields but is never read as policy (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeRepositoryPolicy(
+      sandbox,
+      'idd-policy.json',
+      '{"reviewPolicy":"legacy"}',
+    );
+    withUserGlobal(
+      '{"trustedMarkerActors":["global-login"],"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), {
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+      },
+    );
+  });
+});
+
+test('the default loader merges the user-global layers while the raw reader stays repository-only (#3820)', () => {
+  withSandboxCwd(() => {
+    withUserGlobal(
+      '{"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.deepEqual(loadPolicyConfig().config, {
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+        assert.equal(readRepositoryPolicyFile().config, null);
+      },
+    );
   });
 });
 

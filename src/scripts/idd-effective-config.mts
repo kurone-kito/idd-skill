@@ -20,6 +20,7 @@ import {
   type LayeredLocalPolicyLoad,
   loadLayeredLocalPolicy,
 } from './idd-config.mts';
+import { POLICY_DEFAULTS } from './policy-helpers.mts';
 
 // Declared above the import.meta.main trigger below, for the same
 // temporal-dead-zone reason documented in idd-critique-delegate.mts.
@@ -111,7 +112,10 @@ function runCli(): HelperCliResult {
     printHelp();
     return 0;
   }
-  const loaded = loadLayeredLocalPolicy({ noUserGlobal: args.noUserGlobal });
+  const loaded = loadLayeredLocalPolicy({
+    noUserGlobal: args.noUserGlobal,
+    defaults: POLICY_DEFAULTS,
+  });
   const report =
     args.key === ''
       ? buildEffectiveConfigReport(loaded, '.github/idd/config.json')

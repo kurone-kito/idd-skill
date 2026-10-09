@@ -77,6 +77,36 @@ test('reports usable:false, reason repository-local-explicit-disable for a null 
   });
 });
 
+// #3820: without an explicit localConfig, the repository document is read raw,
+// so a user-global delegate is still attributed to the user-global layer.
+test('a user-global delegate with no repository file is reported as user-global (#3820)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-source-'));
+  const globalPath = join(sandbox, 'config.json');
+  writeFileSync(
+    globalPath,
+    JSON.stringify({
+      critiqueLoop: { delegate: { command: 'global-review' } },
+    }),
+  );
+  const previousCwd = process.cwd();
+  process.chdir(sandbox);
+  try {
+    const report = buildCritiqueDelegateReport({
+      globalConfigPath: globalPath,
+      env: {},
+    });
+    assert.deepEqual(report, {
+      usable: true,
+      source: 'user-global',
+      command: 'global-review',
+      mode: 'fallback',
+      reason: null,
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+});
+
 // #3820: the fragment resolver reads the user-global layers through the
 // layered resolver, so an override selected for this checkout supplies the
 // delegate when the repository has none. The path override matches because

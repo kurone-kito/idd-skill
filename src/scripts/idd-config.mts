@@ -32,7 +32,7 @@
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import {
@@ -190,6 +190,12 @@ export interface LoadLayeredLocalPolicyOptions {
   homedir?: string;
   /** Skip tiers 2 and 3 even when a user-global file exists (`--no-user-global`). */
   noUserGlobal?: boolean;
+  /**
+   * Canonical defaults for the diagnostic. Only the effective-config helper
+   * passes these: a loader that feeds the gates must never see defaults, so the
+   * gate-facing config stays exactly what the operator wrote.
+   */
+  defaults?: unknown;
 }
 
 /**
@@ -199,7 +205,13 @@ export interface LoadLayeredLocalPolicyOptions {
  * user-global override selected by identity and the user-global base. Under
  * `GITHUB_ACTIONS=true` tiers 2 and 3 are never read, so a CI helper sees the
  * repository file alone, the same rule the critique-delegate CLI applies to
- * its own fragment. The legacy `idd-policy.json` is never read here.
+ * its own fragment.
+ *
+ * The legacy `idd-policy.json` is never read as policy. Its presence alone
+ * counts as a repository file for one purpose: it stops user-global
+ * repository-owned fields from applying, the same as a canonical file would.
+ * Without that, a repository that still has only the legacy file would inherit
+ * the operator's `trustedMarkerActors` and similar fields.
  */
 export function loadLayeredLocalPolicy(
   options: LoadLayeredLocalPolicyOptions = {},
@@ -207,6 +219,8 @@ export function loadLayeredLocalPolicy(
   const cwd = resolve(options.cwd ?? process.cwd());
   const env = options.env ?? process.env;
   const local = readCanonicalRepositoryPolicy(cwd);
+  const legacyPath = join(cwd, LEGACY_POLICY_FILENAME);
+  const legacyBlocksGlobal = !local.exists && existsSync(legacyPath);
   const userGlobal =
     env.GITHUB_ACTIONS === 'true' || options.noUserGlobal === true
       ? undefined
@@ -220,14 +234,23 @@ export function loadLayeredLocalPolicy(
       ? deriveIdentityOrFallback(cwd)
       : { githubSlug: null, hasGithubOrigin: false, mainWorktreeRoot: cwd };
   const resolution = resolveLayeredPolicy({
-    localDocument: local,
+    localDocument: legacyBlocksGlobal
+      ? { exists: true, path: legacyPath }
+      : local,
     userGlobalConfig: globalConfig,
     identity,
+    defaults: options.defaults,
   });
   return {
     local,
+    // With no file at any tier the gates see `null`, as before. A diagnostic
+    // that asked for defaults gets the defaults, so it can name their source.
     config:
-      local.exists || globalConfig !== undefined ? resolution.config : null,
+      local.exists ||
+      globalConfig !== undefined ||
+      options.defaults !== undefined
+        ? resolution.config
+        : null,
     userGlobalContributed: globalConfig !== undefined,
     sourceMap: resolution.sourceMap,
     selectedOverrideIndex: resolution.selectedOverrideIndex,
@@ -259,6 +282,9 @@ export function isUpstreamEscalationEnabled(config: unknown): boolean {
 
 /** Default `.github/idd/config.json` path, relative to the process cwd. */
 export const DEFAULT_POLICY_CONFIG_PATH = '.github/idd/config.json';
+
+/** The legacy repository policy filename, read only as a presence signal (#3820). */
+const LEGACY_POLICY_FILENAME = 'idd-policy.json';
 
 /**
  * Build the `gh api` argv that reads `.github/idd/config.json` for
@@ -817,21 +843,34 @@ export interface PolicyConfigLoad {
  */
 export function loadPolicyConfig(policyPath?: string): PolicyConfigLoad {
   const explicit = typeof policyPath === 'string' && policyPath.length > 0;
+  if (explicit) return readRepositoryPolicyFile(policyPath);
+  // #3820: the default path reads tiers 1-3. An explicit `--policy` path
+  // still reads only that file, so the layered loader is not used for it.
+  const path = resolve(process.cwd(), DEFAULT_POLICY_CONFIG_PATH);
+  const loaded = loadLayeredLocalPolicy();
+  if (loaded.local.diagnostic !== undefined) {
+    throw new Error(
+      `failed to load policy from ${path}: ${loaded.local.diagnostic}`,
+    );
+  }
+  return { path, config: loaded.config };
+}
+
+/**
+ * The repository's own policy file, with no user-global layers. A caller that
+ * attributes a value to the repository (the fragment resolvers, and the
+ * issue-authoring delegate's wait ceiling) reads this, never the layered
+ * result of {@link loadPolicyConfig}. Otherwise a value from the user-global
+ * file would be reported as repository-local.
+ */
+export function readRepositoryPolicyFile(
+  policyPath?: string,
+): PolicyConfigLoad {
+  const explicit = typeof policyPath === 'string' && policyPath.length > 0;
   const path = resolve(
     process.cwd(),
     explicit ? policyPath : DEFAULT_POLICY_CONFIG_PATH,
   );
-  if (!explicit) {
-    // #3820: the default path reads tiers 1-3. An explicit `--policy` path
-    // still reads only that file, so the layered loader is not used for it.
-    const loaded = loadLayeredLocalPolicy();
-    if (loaded.local.diagnostic !== undefined) {
-      throw new Error(
-        `failed to load policy from ${path}: ${loaded.local.diagnostic}`,
-      );
-    }
-    return { path, config: loaded.config };
-  }
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
     if (!isPlainObject(parsed)) {
@@ -1042,7 +1081,7 @@ export function resolveEffectiveCritiqueLoopDelegateFromEnv(
   const localConfig =
     options && Object.hasOwn(options, 'localConfig')
       ? options.localConfig
-      : loadPolicyConfig(options?.localPolicyPath).config;
+      : readRepositoryPolicyFile(options?.localPolicyPath).config;
 
   const local = inspectCritiqueLoopDelegateLayer(localConfig);
   if (local.status !== 'absent') {
@@ -1083,7 +1122,7 @@ export function resolveEffectiveCritiqueLoopTelemetryHookFromEnv(
   const localConfig =
     options && Object.hasOwn(options, 'localConfig')
       ? options.localConfig
-      : loadPolicyConfig(options?.localPolicyPath).config;
+      : readRepositoryPolicyFile(options?.localPolicyPath).config;
 
   const local = inspectCritiqueLoopTelemetryHookLayer(localConfig);
   if (local.status !== 'absent') {
@@ -1121,7 +1160,7 @@ export function resolveEffectiveIssueAuthoringDelegateFromEnv(
   const localConfig =
     options && Object.hasOwn(options, 'localConfig')
       ? options.localConfig
-      : loadPolicyConfig(options?.localPolicyPath).config;
+      : readRepositoryPolicyFile(options?.localPolicyPath).config;
 
   const local = inspectIssueAuthoringDelegateLayer(localConfig);
   if (local.status !== 'absent') {
