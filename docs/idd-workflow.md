@@ -1262,14 +1262,13 @@ widening it to a broader mode this session never selected.
   Discover run that returned this empty pool, so it does not recur on a
   timer. Wait for an external change instead of re-running Discover on a
   timer: poll with one GraphQL query shape, paginated by cursor until
-  every page is read, for the open issues' number, labels, last edit
-  time, sub-issue total and parent (not per-issue REST reads), about
+  every page is read, for the open issues' number, state, labels, last
+  edit time, sub-issue total and parent (not per-issue REST reads), about
   every 2 minutes, and re-run Discover only on the events below, not on
   a timer. Those events, not elapsed time, are what make the graph stale
   here, apart from the changes listed under unobserved below. An
   exhausted orchestrator therefore sees a released or expired claim only
-  at its next event; a runner that cannot accept that delay can start
-  Discover on its own schedule, which this bullet does not prescribe.
+  at its next event.
 
   ```graphql
   query($owner: String!, $name: String!, $cursor: String) {
@@ -1278,6 +1277,7 @@ widening it to a broader mode this session never selected.
         pageInfo { hasNextPage endCursor }
         nodes {
           number
+          state
           labels(first: 100) { nodes { name } }
           lastEditedAt
           subIssuesSummary { total }
@@ -1317,6 +1317,13 @@ widening it to a broader mode this session never selected.
   at `c9d082386` on 2026-10-08 (kurone-kito/idd-skill#3878): with the earlier
   fields (number, state and labels), the poll values stayed identical while
   the graph changed.
+
+  The poll interval is deliberately shorter than the roughly 4-minute race seen
+  in a downstream adopter's run (reported 2026-09-30,
+  kurone-kito/idd-skill#3677): a second orchestrator claimed the next serial
+  issue about 4 minutes after its blocker closed, so the wait also decides
+  who wins. A helper for the query is optional and not part of this
+  guidance.
 - **Optional hint cache**: this section decides _when_ to re-run.
   With `githubApi.readCache.enabled`, a re-run inside `maxAge` is served
   from a hint instead (see the helper-script
