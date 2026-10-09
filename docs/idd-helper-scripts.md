@@ -2413,7 +2413,8 @@ Node.js helper path.
   `linguist-generated` artifacts; only `vendored-node` vends files, so
   only it emits the recommendation.
 - `ephemeral-npx`: use the manifest's one-shot `npx --yes --package
-  <helper-package-spec> idd-*` commands without copying helper files
+  <helper-package-spec> idd-*` commands (the default launcher; see the launcher
+  paragraph below) without copying helper files
   into the repository. The default helper package spec is an HTTPS
   archive URL, and `--package-spec` lets adopters pin a reviewed tarball
   or mirror URL explicitly. Persist that same pin in
