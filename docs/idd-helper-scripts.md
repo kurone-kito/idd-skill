@@ -2976,6 +2976,17 @@ worktree refused it with `forced-handoff mode is not enabled`, and the
 merge gate refused it with `claim-id-mismatch`. The report is recorded in
 issue `#3872`.
 
+Since issue `#3873`, the warning names the refusal cause instead of always
+saying the mode is off. `mode-disabled` keeps the mode wording. A marker
+whose linked PR does not back the claim reports that the linked PR does not
+back the active claim. An issue-only marker posted at or after the PR's
+first commit, or one whose first-commit time is unknown, and a failed
+linked-PR lookup each have their own wording. The merge gate reports the
+same causes in its top-level `ignoredForcedHandoffs` field (`oldClaimId`,
+`newClaimId`, `cause`). That field is present only when a marker for the
+active claim was refused, and the causes are appended to the
+`claim-ownership` blocker.
+
 The references in this section apply only when a repository explicitly
 installs the matching helper scripts. Repositories that stay on the
 default `instructions-only` profile keep using the written shell /
