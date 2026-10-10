@@ -2187,8 +2187,10 @@ normal pull request, then, once that pull request has merged, merge the
 default branch into the claim branch and push the merge.
 
 `--import --force` overwrites `.github/idd/config.json`, including
-`forcedHandoff`, and only the `commands` table is restored afterwards. The
-overlay re-import procedure passes one `--hold` per owned path, with
+`forcedHandoff`. Afterwards only the four `commands` entries are restored from
+the pre-import file: `install-deps` and the three validate-command rows. An entry
+that is still a placeholder is left for `--substitute`. The overlay re-import
+procedure passes one `--hold` per owned path, with
 `.github/idd/config.json` as the default example. Any other forced re-import
 must re-record the opt-in. A private downstream adopter reported this on
 2026-10-04 as not observed; preventive; no observed incident yet.
