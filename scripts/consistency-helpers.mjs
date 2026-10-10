@@ -228,10 +228,10 @@ export function parseNearCeilingRaiseApprovals(value) {
     if (typeof bundle !== 'string' || typeof limitBytes !== 'number') continue;
     // The audit trail is part of the approval: a positive issue number and a
     // stated reason are both required, or the entry is ignored.
-    if (typeof issue !== 'number' || !Number.isInteger(issue) || issue <= 0)
+    if (typeof issue !== 'number' || !Number.isSafeInteger(issue) || issue <= 0)
       continue;
     if (typeof reason !== 'string' || reason.trim() === '') continue;
-    if (!Number.isInteger(limitBytes) || limitBytes <= 0) continue;
+    if (!Number.isSafeInteger(limitBytes) || limitBytes <= 0) continue;
     approvals.set(bundle, limitBytes);
   }
   return approvals;
