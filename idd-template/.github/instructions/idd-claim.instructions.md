@@ -270,9 +270,9 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-Fresh-claim order, worktree first. Each `--record-tokens`, `--acquire` and
-`--assert` call takes `--agent-id {agent-id} --claim-id {claim-id}`; resolve
-the commands as A5(a) does.
+Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
+`--agent-id {agent-id} --claim-id {claim-id}`; `--assert` takes
+`--claim-id {claim-id} --nonce {nonce}`. Resolve the commands as A5(a) does.
 
 1. Create the worktree and branch: `git worktree add --no-track <path> -b
    <branch-name> origin/{development-branch}` (fresh-claim row of
@@ -284,7 +284,8 @@ the commands as A5(a) does.
    activation nonce.
 4. `--acquire --worktree <path>`, on the linked worktree only.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
-   --worktree <path>`. This verification alone counts.
+   --claim-id {claim-id} --nonce {nonce} --worktree <path>`. This verification
+   alone counts.
 6. Continue B1 in that worktree, from Step 3 (install dependencies) of
    `idd-work.instructions.md`.
 
