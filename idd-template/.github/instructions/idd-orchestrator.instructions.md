@@ -63,10 +63,12 @@ The roster lives in the orchestrating session.
    the worker as a `running` roster entry.
 5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
    worktree and branch removed (which deletes its lock) and leaves `--issues`
-   before any refill. A later Discover re-run may reconsider it. A failure after
-   the marker is posted is contested: follow idd-claim.instructions.md, keep its
-   claim and worktree, remove it from `--issues`, and track it as a `stalled`
-   roster entry until recovery ends.
+   before any refill. A failure after the marker is posted is contested: follow
+   idd-claim.instructions.md, keep its claim and worktree, remove it from
+   `--issues`, and track it as a `stalled` roster entry until recovery ends.
+6. Every dispatched issue also leaves `--issues`, so a refill from the cached
+   graph cannot claim it again. Only a later full Discover run reconsiders a
+   failed pick.
 
 ## 4. Waiting and refill
 
