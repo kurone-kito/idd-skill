@@ -119,9 +119,8 @@ inherit a non-stale claim. For legacy claim migration (comments without
 
 ## Thresholds
 
-Ownership timing uses the policy defaults
-`claim-stale-age` and `claim-heartbeat-interval` listed in
-`docs/policy-constants.md`.
+Ownership timing defaults (`claim-stale-age`, `claim-heartbeat-interval`)
+live in `docs/policy-constants.md`.
 
 - **Stale**: an active claim whose latest **valid** `claimed-by`
   comment's GitHub `created_at` is ≥ 24 h ago. Another session may take
@@ -141,9 +140,8 @@ IDD gates and pre-checks **must** fail closed when state is ambiguous,
 unresolvable, or otherwise unavailable, unless the specific gate
 explicitly opts out. Phase files **should** cite this default in the
 gate description instead of restating "fail closed" / "treat as
-missing" / "default to the safer outcome" for every condition. When a
-phase deliberately opts out (e.g., `skipIssueAuthorApprovalGate`), it
-states the opt-out explicitly.
+missing" / "default to the safer outcome" for every condition. A deliberate opt-out
+is stated explicitly.
 
 ## Claim revalidation gate
 
@@ -255,7 +253,10 @@ reads `.github/idd/config.json`), except `commands`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`, and
 `upstreamEscalation`, which stay on the repository-local file. Merge-gate reads
 (`mergeGate`, `ciWait`, `advisoryWait`) and trusted-base reads stay on the PR's
-base ref. `commands` overrides the table. Absent values keep the gate
+base ref. `commands` overrides the table below when `.github/idd/config.json` exists
+and validates against the canonical schema at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>;
+otherwise the table applies. Absent values keep the gate
 enabled and default approval actors to `owners-and-maintainers-only`.
 `node scripts/<name>.mjs` examples are the `vendored-node` spelling; other
 profiles use the forms in `docs/idd-helper-scripts.md`
