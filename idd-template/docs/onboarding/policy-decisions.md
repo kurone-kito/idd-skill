@@ -394,7 +394,7 @@ Ask this question during onboarding: does any repository-specific
 domain guidance the repository relies on for review quality — a note
 that a directory or file extension does not follow the language's
 standard idiom, for example "these `.cs` files are UdonSharp, not
-standard C#" — actually reach **every** configured advisory bot the
+standard C#" — reach **every** configured advisory bot the
 merge gate depends on, or does it live only in one bot's own config
 file (for example CodeRabbit's `path_instructions` in
 `.coderabbit.yaml`)?
@@ -407,7 +407,7 @@ knowing the domain constraint does not help if the primary, gating bot
 never sees it: that bot stays strictly less informed than the
 repository's own docs, free to raise standard-language-idiomatic
 suggestions an executing agent might then implement into code the
-domain cannot actually compile.
+domain cannot compile.
 
 **Field evidence**: a fresh onboarding session hit exactly this shape
 (`kurone-kito/vrchat-world-template`, a Unity/UdonSharp repository with
