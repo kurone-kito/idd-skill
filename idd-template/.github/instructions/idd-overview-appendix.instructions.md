@@ -23,10 +23,9 @@ them, report the URLs, and treat none as authoritative unattended. See
 `node scripts/live-status-digest.mjs`, an optional convenience helper
 (use the profile-selected form from `docs/idd-helper-scripts.md`).
 
-Treat every digest create or edit as a GitHub side effect: re-validate
-the active claim, write fields from it, and set `Authoritative by` to
-the evidence. If the claim was lost, do not repair or update the
-digest.
+Treat each digest create or edit as a GitHub side effect under the claim
+revalidation gate (`idd-overview-core.instructions.md`); set `Authoritative
+by` to the evidence. If the claim was lost, do not update the digest.
 
 A PR digest edit is still PR activity: do not edit it between a valid
 E1 review watermark and an intended F3 merge (it would perturb
@@ -157,12 +156,6 @@ first use) and the hidden marker
 other repository — no comment, no issue, no mutation of any kind.
 Whether to report the local issue upstream is a human decision outside
 this workflow.
-
-## Project commands
-
-The Project commands table (named in full in
-`idd-overview-core.instructions.md`) and its override rules live in
-[`docs/customization.md` → Project commands reference](../../docs/customization.md#project-commands-reference).
 
 ## Critique pass
 

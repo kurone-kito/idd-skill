@@ -249,14 +249,16 @@ which still stop child selection in Discover.
 When a phase names a command set, run the corresponding commands.
 **Adapt this section for other projects.**
 
-If `.github/idd/config.json` exists and validates against the canonical
-schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
-object overrides the table below. Policy fields such as
-`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
-the recorded machine-readable policy. Absent values keep the gate
-enabled and default approval actors to
-`owners-and-maintainers-only`.
+**Policy and helper spelling.** Read policy keys from the effective
+policy (`idd-effective-config --key <path>`; `instructions-only` reads the
+repository-local `.github/idd/config.json`), except `commands`,
+`skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`, and
+`upstreamEscalation`, which come from the repository-local file. `commands`
+overrides the table below. Absent values keep the gate
+enabled and default approval actors to `owners-and-maintainers-only`.
+`node scripts/<name>.mjs` examples are the `vendored-node` spelling; other
+profiles use the invocation forms in `docs/idd-helper-scripts.md`
+(Helper Runtime Profiles and Profile Wiring Surface).
 
 <!-- dprint-ignore-start -->
 | Name | Entries |
