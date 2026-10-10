@@ -2655,6 +2655,9 @@ The adopted helper boundaries are intentionally narrow:
   decisions
 - it does not replace the E/F gate decision tables; it only reduces
   command-copy variance when collecting canonical snapshot fields
+- its policy values (trusted marker actors and advisory bot logins) come from
+  `.github/idd/config.json` at the PR's base ref, never from the PR branch's
+  working tree (#3958)
 
 - `advisory-wait-state.mjs` is read-only, emits machine-readable AW1-AW3
   evidence plus the computed AW outcome, and never requests reviewers,

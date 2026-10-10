@@ -3669,15 +3669,17 @@ export function createGithubProviderAdapter(
         '-R',
         `${owner}/${repo}`,
         '--json',
-        'headRefOid,author',
+        'headRefOid,author,baseRefName',
       ]);
       const parsed = JSON.parse(raw) as {
         headRefOid?: unknown;
         author?: { login?: unknown } | null;
+        baseRefName?: unknown;
       };
       return {
         headSha: String(parsed.headRefOid ?? ''),
         authorLogin: String(parsed.author?.login ?? ''),
+        baseRefName: String(parsed.baseRefName ?? ''),
       };
     },
 

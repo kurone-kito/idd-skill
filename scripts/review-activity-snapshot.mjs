@@ -21,7 +21,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadIddConfig } from './idd-config.mjs';
+import { loadTrustedIddConfig } from './idd-config.mjs';
 import {
   buildActivitySnapshotSummary,
   countUncoveredCodeRabbitEmbeddedFindings,
@@ -79,6 +79,30 @@ if (import.meta.main) {
   }
 }
 /**
+ * The policy file, read at the PR's base ref (#3958). The working tree is
+ * never read: a PR branch could edit its own trusted actors and advisory bot
+ * logins and then judge its own snapshot by them. An empty base ref falls back
+ * to the live default branch, as pre-merge-readiness does. A file missing at
+ * that ref is `null`, and a loader error propagates without a working-tree
+ * fallback.
+ */
+function readTrustedPolicyConfig(input, baseRefName) {
+  const ref =
+    baseRefName ||
+    input.port.getRepositoryDefaultBranch(input.owner, input.repo);
+  if (!ref) {
+    throw new Error(
+      `cannot resolve a trusted ref for .github/idd/config.json: PR #${input.prNumber} has no baseRefName and the repository's live default branch could not be determined`,
+    );
+  }
+  const load = input.loadTrustedConfig ?? loadTrustedIddConfig;
+  // A confirmed-absent file stays absent: the user-global policy layers are
+  // outside this trust boundary, so the read opts out of their fallback.
+  return load(input.owner, input.repo, ref, undefined, undefined, {
+    userGlobalFallback: false,
+  });
+}
+/**
  * Collect one PR's review activity and derive the snapshot JSON.
  * Callers that also need watermark fields must reuse this object in the
  * same operation. A later operation calls this again; nothing here is cached.
@@ -87,7 +111,13 @@ if (import.meta.main) {
  * omitted and no extra review request is made.
  */
 export function collectReviewActivitySnapshot(input) {
-  const iddConfig = input.iddConfig ?? loadIddConfig();
+  const {
+    headSha: rawHeadSha,
+    authorLogin: rawAuthorLogin,
+    baseRefName,
+  } = input.port.getChangeRequestHeadShaAndAuthor(input.prNumber);
+  const iddConfig =
+    input.iddConfig ?? readTrustedPolicyConfig(input, baseRefName);
   const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
       flagValue: input.trustedMarkerLoginsFlag,
@@ -105,8 +135,6 @@ export function collectReviewActivitySnapshot(input) {
       trustedMarkerLogins,
       input.port.resolveViewerLoginSafe(),
     );
-  const { headSha: rawHeadSha, authorLogin: rawAuthorLogin } =
-    input.port.getChangeRequestHeadShaAndAuthor(input.prNumber);
   const headSha = rawHeadSha;
   const prAuthorLogin = rawAuthorLogin.trim().toLowerCase();
   const checks = input.port.listChangeRequestChecks(input.prNumber);
