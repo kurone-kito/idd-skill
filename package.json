@@ -97,7 +97,8 @@
     "docs:sync": "node scripts/sync-docs.mjs --apply",
     "docs:sync:check": "node scripts/sync-docs.mjs --check",
     "check": "node src/scripts/check-project.mts",
-    "audit": "node src/scripts/check-project.mts audit"
+    "audit": "node src/scripts/check-project.mts audit",
+    "doctor:github": "node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

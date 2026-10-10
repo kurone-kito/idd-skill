@@ -137,6 +137,52 @@ test('an unavailable prerequisite skips its group with the reason and exits nonz
   assert.equal(readFileSync(log, 'utf8').trim(), 'build');
 });
 
+test('the summary names each group with its status, its skip reason, and its failed checks', () => {
+  const lines: string[] = [];
+  const groups: CheckGroup[] = [
+    {
+      id: 'lint',
+      commands: [
+        {
+          label: 'biome',
+          command: process.execPath,
+          args: ['-e', 'process.exit(2)'],
+        },
+      ],
+    },
+    {
+      id: 'typecheck',
+      prerequisite: () => 'pnpm entry point unavailable',
+      commands: [],
+    },
+    {
+      id: 'audit',
+      commands: [
+        {
+          label: 'docs',
+          command: process.execPath,
+          args: ['-e', 'process.exit(0)'],
+        },
+      ],
+    },
+  ];
+
+  const outcome = runCheckGroups(groups, {
+    log: (line) => {
+      lines.push(line);
+    },
+  });
+
+  assert.equal(outcome.exitCode, 1);
+  const summaryStart = lines.indexOf('summary:');
+  assert.notEqual(summaryStart, -1);
+  assert.deepEqual(lines.slice(summaryStart + 1), [
+    '  lint: failed (biome)',
+    '  typecheck: skipped (pnpm entry point unavailable)',
+    '  audit: passed',
+  ]);
+});
+
 test('a spawn failure is a failure, never a pass', () => {
   const groups: CheckGroup[] = [
     {
@@ -275,6 +321,19 @@ test('the package scripts wire check, lint:minimum, and lint to the canonical ru
   assert.equal(scripts.lint, 'node src/scripts/check-project.mts lint');
   assert.equal(scripts.test, 'node src/scripts/check-project.mts test');
   assert.equal(scripts.audit, 'node src/scripts/check-project.mts audit');
+  // The doctor is a standalone diagnosis, kept outside the aggregate check.
+  assert.equal(
+    scripts['doctor:github'],
+    'node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1',
+  );
+  for (const group of defaultCheckGroups('/fixture/pnpm.cjs')) {
+    for (const command of group.commands) {
+      assert.ok(
+        !command.args.some((arg) => arg.includes('idd-doctor')),
+        `group ${group.id} must not run the doctor`,
+      );
+    }
+  }
   assert.equal(
     scripts['test:scripts'],
     'node --test --import ./tests/isolate-state.mts tests/*.test.mts',
