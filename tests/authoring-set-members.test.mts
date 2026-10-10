@@ -5,12 +5,16 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-owner-provenance.mts';
 import {
+  buildOwnerMarkerSearchQuery,
   collectIndexLagIssueNumbers,
   collectSearchedIssueNumbers,
   evaluateAuthoringSetMembers,
   type IssueSearchPage,
+  SEARCH_RESULT_CAP,
   type SetMemberComment,
+  selectSetBoundMarker,
 } from '../src/scripts/authoring-set-members.mts';
 import { renderAuthoringOwnerMarker } from '../src/scripts/marker-helpers.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -1349,4 +1353,178 @@ test('CLI: a failed search exits non-zero even after it wrote a valid page (#390
   } finally {
     restore();
   }
+});
+
+const TARGET = 3916;
+const SELF = `kurone-kito/idd-skill#${TARGET}`;
+const BOUND_SELECT = {
+  set: SET,
+  markerPrefix: PREFIX,
+  repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  target: TARGET,
+  trustedMarkerLogins: ['kurone-kito'],
+};
+
+function ownerMarker(anchor: string, set = SET): string {
+  return renderAuthoringOwnerMarker({
+    markerPrefix: PREFIX,
+    target: SELF,
+    anchor,
+    mode: 'acquire',
+    owner: '9e59701c-d1da-4b07-ba66-1ca3f025cfe5',
+    set,
+    session: '3dad4bd4-7bde-40ed-b6da-0b0cf94cdfa9',
+    bodySha256: DIGEST,
+    snapshotSha256: 'none',
+    supersedes: 'none',
+  });
+}
+
+function provenance(
+  body: string,
+  createdAt: string,
+  id: number,
+  extra: Partial<
+    Pick<
+      AuthoringOwnerProvenanceComment,
+      'lastEditedAt' | 'isMinimized' | 'minimizedReason'
+    >
+  > = {},
+): AuthoringOwnerProvenanceComment {
+  return {
+    id,
+    authorLogin: 'kurone-kito',
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: null,
+    ...extra,
+  };
+}
+
+test('the bound is the earliest trusted marker naming the set, even when hidden (#3916)', () => {
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(ownerMarker(SELF), '2026-10-09T12:00:00Z', 12),
+      provenance(ownerMarker(SELF), '2026-10-09T10:00:00Z', 10, {
+        isMinimized: true,
+        minimizedReason: 'outdated',
+      }),
+    ],
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.soleMember, true);
+  assert.equal(result.bound?.commentId, 10);
+  assert.equal(result.bound?.createdAt, '2026-10-09T10:00:00Z');
+});
+
+test('an edited bound marker makes the bounded run incomplete (#3916)', () => {
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(ownerMarker(SELF), '2026-10-09T10:00:00Z', 10, {
+        lastEditedAt: '2026-10-09T11:00:00Z',
+      }),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.soleMember, false);
+  assert.equal(result.bound, null);
+  assert.match(result.reason, /edited bound authoring-owner marker/);
+});
+
+test('a target with no trusted marker for the set makes the bounded run incomplete (#3916)', () => {
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(ownerMarker(SELF, 'another-set'), '2026-10-09T10:00:00Z', 10),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.bound, null);
+  assert.match(result.reason, /no trusted authoring-owner marker for set/);
+});
+
+test('a bound marker that names another anchor is complete but not a sole member (#3916)', () => {
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(
+        ownerMarker('kurone-kito/idd-skill#3744'),
+        '2026-10-09T10:00:00Z',
+        10,
+      ),
+    ],
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.soleMember, false);
+  assert.equal(result.bound?.anchor, 'kurone-kito/idd-skill#3744');
+  assert.match(result.reason, /names another anchor/);
+});
+
+test('the bounded query adds updated:>= at the bound and the unbounded query is unchanged (#3916)', () => {
+  const unbounded = buildOwnerMarkerSearchQuery({
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    markerPrefix: PREFIX,
+  });
+  assert.equal(
+    unbounded,
+    'repo:kurone-kito/idd-skill is:issue "idd-skill-authoring-owner:"',
+  );
+  const bounded = buildOwnerMarkerSearchQuery({
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    markerPrefix: PREFIX,
+    boundCreatedAt: '2026-10-09T10:00:00Z',
+  });
+  assert.equal(bounded, `${unbounded} updated:>=2026-10-09T10:00:00Z`);
+});
+
+test('a bounded window over the search cap reports the cap and is not split (#3916)', () => {
+  const result = collectSearchedIssueNumbers([page(SEARCH_RESULT_CAP + 1, [])]);
+  assert.equal(result.complete, false);
+  assert.equal(result.reason, 'search result cap exceeded');
+});
+
+test('an edited or unparseable trusted marker inside a bounded window still fails closed (#3916)', () => {
+  const base = {
+    set: SET,
+    markerPrefix: PREFIX,
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+    trustedMarkerLogins: ['kurone-kito'],
+    enumerationComplete: true,
+  };
+  const edited = evaluateAuthoringSetMembers({
+    ...base,
+    comments: [
+      comment(
+        TARGET,
+        ownerMarker(SELF),
+        'kurone-kito',
+        '2026-10-09T11:00:00Z',
+        20,
+      ),
+    ],
+  });
+  assert.equal(edited.complete, false);
+  assert.match(edited.reason, /edited trusted authoring-owner marker/);
+  const unparseable = evaluateAuthoringSetMembers({
+    ...base,
+    comments: [
+      comment(
+        TARGET,
+        `${PREFIX}-authoring-owner: not a marker`,
+        'kurone-kito',
+        null,
+        21,
+      ),
+    ],
+  });
+  assert.equal(unparseable.complete, false);
+  assert.match(
+    unparseable.reason,
+    /unparseable trusted authoring-owner marker/,
+  );
 });
