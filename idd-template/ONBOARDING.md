@@ -39,15 +39,12 @@ a new repository.
 > If your target repository was set up from an earlier import, do the
 > following once after pulling the new template files:
 >
-> 1. Move any local customizations (typically the `fix-validate`,
->    `pre-push-validate`, `post-fix-validate`, `install-deps`,
->    `issue-scope`, and `orphan-first-policy` rows you adjusted during
->    onboarding) from your old
+> 1. Move any local customizations of `fix-validate`,
+>    `pre-push-validate` and `post-fix-validate` from your old
 >    `.github/instructions/idd-overview.instructions.md` into the
->    Project commands table in
->    `.github/instructions/idd-overview-core.instructions.md`. Per-row
->    overrides via `.github/idd/config.json` `commands.*` continue to
->    work unchanged.
+>    `commands.*` object of `.github/idd/config.json`. Keep the other
+>    rows in the Project commands table of
+>    `.github/instructions/idd-overview-core.instructions.md`.
 > 2. Delete
 >    `.github/instructions/idd-overview.instructions.md` from your
 >    target repository. No machine consumer reads that path anymore.
@@ -1142,7 +1139,7 @@ After completing the steps above, confirm each item:
       already had its own differing file — the template's rule
       overrides / word list were merged into the existing file by hand
       rather than skipped, so the documented `markdownlint-cli2`/`cspell`
-      commands in the `Project commands` table still pass against the
+      commands in `commands.*` of `.github/idd/config.json` still pass against the
       imported documentation.
 - [ ] The selected PR review profile is recorded, and any non-default
       profile artifact and phase-file edits are complete.
@@ -1155,9 +1152,9 @@ After completing the steps above, confirm each item:
       bootstrap execution mode are explicitly recorded.
 - [ ] If the operator opted into issue authoring, the companion skill
       files are present under the native destination recorded in the policy.
-- [ ] No `{{...}}` placeholders remain, the `Project commands` table is
-      correct, and any `orphan-first` scope choice has a valid policy
-      value.
+- [ ] No `{{...}}` placeholders remain, the `Project commands` table and
+      `commands.*` in `.github/idd/config.json` are correct, and any
+      `orphan-first` scope choice has a valid policy value.
 - [ ] `.github/instructions/idd-overview-core.instructions.md` keeps
       `applyTo: "**"` and `excludeAgent: "code-review"` in its
       frontmatter.
