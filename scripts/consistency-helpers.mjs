@@ -41,13 +41,21 @@ export function collectPolicyConfigDrift(config, overviewText) {
     const actual = c.commands?.[key];
     if (expected === `commands.${key}`) {
       // The row names its own config entry, so the check resolves that
-      // reference: the entry must exist and hold a non-empty command.
+      // reference: the entry must exist and hold a command, not the same
+      // reference back.
       if (typeof actual !== 'string' || actual.trim() === '') {
         drifts.push({
           path: `commands.${key}`,
           expected,
           actual: actual ?? null,
           reason: `reference target commands.${key} is missing or empty`,
+        });
+      } else if (actual.trim() === `commands.${key}`) {
+        drifts.push({
+          path: `commands.${key}`,
+          expected,
+          actual,
+          reason: `reference target commands.${key} refers to itself instead of holding a command`,
         });
       }
       continue;
