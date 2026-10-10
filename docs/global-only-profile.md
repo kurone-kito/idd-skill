@@ -20,13 +20,14 @@ A repository is global-only when both of these hold.
    reason is `repository-policy-minimal-import` (a policy document only) or
    `user-global-override-match` (a user-global override). Both reasons mean
    the instructions come from the installed payload.
-2. The trusted base ref has neither
-   `.github/workflows/idd-advisory-convergence.yml` nor
+2. Neither the trusted base ref nor the pull request head has
+   `.github/workflows/idd-advisory-convergence.yml` or
    `.github/workflows/post-merge-cleanup.yml`. The cleanup workflow must be
    absent too, because the F4 skip relies on there being no cleanup run to
    race. The contents API answers "not found" both for a missing file and for
-   a caller without contents access, so the check first reads the repository
-   root listing. Only a readable root with neither file counts as absent.
+   a caller without contents access, so the check first reads each
+   repository root listing. Only a readable root with neither file counts as
+   absent.
 
 If either condition fails, or either read fails, the advisory check stays
 required, exactly as in a repository-local install.
@@ -37,8 +38,10 @@ A pull request cannot make itself global-only. Activation is read from the
 primary checkout (the main worktree), never from a linked worktree, so a
 pull request cannot add a policy document to switch the profile on. The
 base-ref check reads the PR's trusted base ref, which a pull request cannot
-change, so it
-cannot switch the advisory gate off by deleting its own workflow.
+change, so it cannot switch the advisory gate off by deleting its own
+workflow. The head check also keeps a pull request from adding either
+workflow, because the merge would then introduce the producer the profile
+assumes is absent.
 
 ## Pre-merge readiness
 
