@@ -10,24 +10,27 @@ function readTemplate(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, relativePath), 'utf8');
 }
 
-test('the full fresh-claim worktree command uses --no-track', () => {
-  assert.match(
-    readTemplate('idd-template/.github/instructions/idd-work.instructions.md'),
-    /git worktree add --no-track <path> -b <branch-name> origin\//,
-  );
+test('both fresh-claim worktree commands use --no-track', () => {
+  for (const relativePath of [
+    'idd-template/.github/instructions/idd-work.instructions.md',
+    'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
+  ]) {
+    assert.match(
+      readTemplate(relativePath),
+      /git worktree add --no-track <path> -b <branch-name> origin\//,
+      relativePath,
+    );
+  }
 });
 
-test('the lite fresh claim adopts the claim-phase worktree and creates none', () => {
+test('the lite fresh claim adopts the claim-phase worktree through step 7', () => {
   const lite = readTemplate(
     'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
   );
+  assert.match(lite, /skip steps 8-26,\s+run step 27/);
   assert.match(
     lite,
-    /a fresh claim skips this step \(step 7\s+adopts the worktree\)/,
-  );
-  assert.doesNotMatch(
-    lite,
-    /git worktree add <path> -b <branch-name> origin\/main/,
+    /continue at step 28\. Never delete or\s+recreate that branch\./,
   );
 });
 
