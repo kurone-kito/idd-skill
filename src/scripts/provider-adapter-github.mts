@@ -30,6 +30,7 @@ import {
   ghErrorText,
 } from './gh-http-status.mts';
 import {
+  findOwnLoadControlRefusal,
   isNotDispatchedRefusal,
   preserveLoadControlRefusal,
 } from './github-api-refusal.mts';
@@ -195,6 +196,22 @@ function preserveTransportEvidence<T extends Error>(
         writable: true,
       });
     }
+  }
+  // The rebuilt error is still a gh command failure, so it keeps the tag the
+  // classifier reads. An untagged original gains nothing. An original that
+  // carries its own load-control refusal is not copied: a refusal is rethrown
+  // as notDispatched, never rebuilt as a plain transport error (#3945).
+  if (
+    source?.ghCommand === true &&
+    findOwnLoadControlRefusal(source) === undefined &&
+    !Object.hasOwn(wrapper, 'ghCommand')
+  ) {
+    Object.defineProperty(wrapper, 'ghCommand', {
+      value: true,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
   }
   return wrapper;
 }
