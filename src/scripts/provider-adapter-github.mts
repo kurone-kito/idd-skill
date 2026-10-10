@@ -196,6 +196,16 @@ function preserveTransportEvidence<T extends Error>(
       });
     }
   }
+  // The rebuilt error is still a gh command failure, so it keeps the tag the
+  // classifier reads. An untagged original gains nothing (#3945).
+  if (source?.ghCommand === true && !Object.hasOwn(wrapper, 'ghCommand')) {
+    Object.defineProperty(wrapper, 'ghCommand', {
+      value: true,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
   return wrapper;
 }
 
