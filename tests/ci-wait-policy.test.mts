@@ -241,6 +241,113 @@ test('resolveCiRerunDecision honors hold policy', () => {
   );
 });
 
+// #3820: a user-global override selected for this checkout supplies ciWait when
+// the repository has none. The checkout is a readable git repository with no
+// GitHub origin, so a path override matches it.
+test('readCiWaitPolicy applies a user-global override selected for this checkout (#3820)', (t) => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-override-'));
+  const checkout = join(sandbox, 'ci-checkout-override');
+  mkdirSync(checkout);
+  execFileSync('git', ['init', '-q', checkout]);
+  const configHome = join(sandbox, 'config');
+  mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(configHome, 'idd-skill', 'config.json'),
+    JSON.stringify({
+      overrides: [
+        {
+          match: { path: 'ci-checkout-override' },
+          config: { ciWait: { runningTimeout: 'PT55M' } },
+        },
+      ],
+    }),
+  );
+  const previousCwd = process.cwd();
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  const previousCi = process.env.GITHUB_ACTIONS;
+  t.after(() => {
+    process.chdir(previousCwd);
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+    if (previousCi === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = previousCi;
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+  process.chdir(checkout);
+  process.env.XDG_CONFIG_HOME = configHome;
+  delete process.env.GITHUB_ACTIONS;
+
+  assert.equal(readCiWaitPolicy().runningTimeout, 'PT55M');
+});
+
+// #3820: an explicit path, even the default string, reads only that file. Only
+// an omitted --policy reads the layered policy, so the user-global ciWait below
+// reaches the omitted call and never the explicit one.
+test('readCiWaitPolicy with an explicit default-string path ignores the user-global ciWait (#3820)', (t) => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-explicit-'));
+  const configHome = join(sandbox, 'config');
+  mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(configHome, 'idd-skill', 'config.json'),
+    JSON.stringify({ ciWait: { runningTimeout: 'PT45M' } }),
+  );
+  const previousCwd = process.cwd();
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  const previousCi = process.env.GITHUB_ACTIONS;
+  t.after(() => {
+    process.chdir(previousCwd);
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+    if (previousCi === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = previousCi;
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+  process.chdir(sandbox);
+  process.env.XDG_CONFIG_HOME = configHome;
+  delete process.env.GITHUB_ACTIONS;
+
+  assert.notEqual(
+    readCiWaitPolicy('.github/idd/config.json').runningTimeout,
+    'PT45M',
+  );
+  // An explicit empty path is not a request for the layered policy either.
+  assert.notEqual(readCiWaitPolicy('').runningTimeout, 'PT45M');
+  assert.equal(readCiWaitPolicy().runningTimeout, 'PT45M');
+});
+
+// #3820: the default path reads the layered policy, so a user-global ciWait
+// applies to a repository with no ciWait section of its own. The process
+// environment is restored afterwards.
+test('readCiWaitPolicy default path reads a user-global ciWait when the repository has none (#3820)', (t) => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-global-'));
+  const configHome = join(sandbox, 'config');
+  mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(configHome, 'idd-skill', 'config.json'),
+    JSON.stringify({
+      ciWait: { runningTimeout: 'PT45M', generationTimeout: 'PT20M' },
+    }),
+  );
+  const previousCwd = process.cwd();
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  const previousCi = process.env.GITHUB_ACTIONS;
+  t.after(() => {
+    process.chdir(previousCwd);
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previousXdg;
+    if (previousCi === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = previousCi;
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+  process.chdir(sandbox);
+  process.env.XDG_CONFIG_HOME = configHome;
+  delete process.env.GITHUB_ACTIONS;
+
+  const policy = readCiWaitPolicy();
+  assert.equal(policy.runningTimeout, 'PT45M');
+  assert.equal(policy.generationTimeout, 'PT20M');
+});
+
 test('readCiWaitPolicy reads nested ciWait config and CLI emits the same resolution', (t) => {
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-'));
   t.after(() => rmSync(sandbox, { recursive: true, force: true }));

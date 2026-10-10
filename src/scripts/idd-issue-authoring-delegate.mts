@@ -20,8 +20,8 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import {
-  loadPolicyConfig,
   type ResolveEffectiveIssueAuthoringDelegateFromEnvOptions,
+  readRepositoryPolicyFile,
   resolveEffectiveIssueAuthoringDelegateFromEnv,
 } from './idd-config.mts';
 import { resolveIssueAuthoringAdversarialWaitCeiling } from './policy-helpers.mts';
@@ -74,7 +74,7 @@ function repositoryLocalConfig(
   if (options && Object.hasOwn(options, 'localConfig')) {
     return options.localConfig;
   }
-  return loadPolicyConfig(options?.localPolicyPath).config;
+  return readRepositoryPolicyFile(options?.localPolicyPath).config;
 }
 
 /**

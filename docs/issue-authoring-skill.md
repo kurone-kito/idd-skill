@@ -750,6 +750,9 @@ instructions.
   step-by-step runbook, so a middle-tier cloud model can implement it
   without drifting
 - candidate files, when present, are cues rather than an edit script
+- a change that loosens a fail-closed check names its region classifier and
+  its must-keep shapes under `Loosening a fail-closed check`, and the reviewer
+  checks both before the draft is published
 
 #### Resolver
 
@@ -2541,6 +2544,19 @@ Before reporting or publishing issue drafts, the skill should verify:
   [Completed-draft adversarial review](#completed-draft-adversarial-review)
   and
   [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
+
+### Loosening a fail-closed check
+
+**Region classifier:** names the parser or function that decides each region
+class the change depends on, and the coordinate system of the text that it
+reads (for example, raw lines or fence-stripped text).
+
+**Must-keep shapes:** lists the rejected shapes that the change must still
+reject, one per line. The list is not exhaustive. A reviewer checks the
+change against it and adds any shape that the change would newly accept.
+
+This subsection cites the observed incident: issue `#3891` and PR `#3934`,
+observed 2026-10-09. See `docs/idd-design-rationale.md#cite-the-observed-incident`.
 
 ## Repository-local implementation surface
 

@@ -19,9 +19,11 @@
  *
  * State-root contract:
  * - When `IDD_TEST_STATE_ROOT` is unset or empty, create a temporary
- *   directory with `state` and `cache` subdirectories, export the marker, set
- *   `XDG_STATE_HOME` and `LOCALAPPDATA` to `state` and `XDG_CACHE_HOME` to
- *   `cache`, and register one `exit` listener. When it is already set and
+ *   directory with `state`, `cache`, and `config` subdirectories, export the
+ *   marker, set `XDG_STATE_HOME` and `LOCALAPPDATA` to `state`,
+ *   `XDG_CACHE_HOME` to `cache`, and `XDG_CONFIG_HOME` to `config` (empty, so
+ *   no user-global policy file is read), and register one `exit` listener.
+ *   When it is already set and
  *   non-empty, change nothing and register nothing, so a child that receives
  *   the same preload, or that a test gives its own state variables, keeps
  *   them.
@@ -158,12 +160,18 @@ function installStateRoot(): () => void {
   const root = mkdtempSync(join(resolve(tmpdir()), 'idd-test-state-'));
   const state = join(root, 'state');
   const cache = join(root, 'cache');
+  const config = join(root, 'config');
   mkdirSync(state);
   mkdirSync(cache);
+  mkdirSync(config);
   process.env[ROOT_MARKER] = root;
   process.env.XDG_STATE_HOME = state;
   process.env.LOCALAPPDATA = state;
   process.env.XDG_CACHE_HOME = cache;
+  // #3820: an empty throwaway config home, so the user-global policy file an
+  // operator keeps under ~/.config/idd-skill never reaches a test that loads
+  // layered policy. A test that needs a user-global file sets its own root.
+  process.env.XDG_CONFIG_HOME = config;
   // Every path below comes from the captured `root`, never from the
   // environment at exit time: tests in this repository reassign these
   // variables.

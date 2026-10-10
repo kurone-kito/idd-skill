@@ -18,7 +18,7 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import {
-  loadPolicyConfig,
+  readRepositoryPolicyFile,
   resolveEffectiveIssueAuthoringDelegateFromEnv,
 } from './idd-config.mjs';
 import { resolveIssueAuthoringAdversarialWaitCeiling } from './policy-helpers.mjs';
@@ -56,7 +56,7 @@ function repositoryLocalConfig(options) {
   if (options && Object.hasOwn(options, 'localConfig')) {
     return options.localConfig;
   }
-  return loadPolicyConfig(options?.localPolicyPath).config;
+  return readRepositoryPolicyFile(options?.localPolicyPath).config;
 }
 /**
  * Map the layered resolver onto the helper report. `waitCeiling` always

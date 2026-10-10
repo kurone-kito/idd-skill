@@ -98,7 +98,10 @@ worktree removal) behind the
    `claim-lock` helper before reuse or removal. A `collision` result is
    fail-closed: do not reuse or remove the path — resolve it via the
    Claim-state rule in `idd-claim.instructions.md`, and only remove the
-   path once the current claim is authorized to take it over.
+   path once the current claim is authorized to take it over. On a fresh
+   claim whose worktree the claim phase already created, this step adopts
+   it: skip steps 8-26, run step 27 (install dependencies there), and
+   continue at step 28. Never delete or recreate that branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
@@ -118,15 +121,12 @@ worktree removal) behind the
     (`<base-branch>` is normally `main`).
 16. On Windows, use `git-wt switch --create -b <base-branch> <branch-name> -x true`,
     or the same `wt switch` form if `git-wt` is unavailable.
-17. If the `[pre-start]` hook's install command has not already been
-    approved, `wt switch --create` hangs non-interactively even with
-    `-x <noop>` (`Cannot prompt for approval in non-interactive
-    environment`). Before the first `wt switch --create` in such an
-    environment, run `wt config approvals add --yes` once from the
-    primary worktree to pre-approve it (issue `#2797`); this is scoped
-    to the git project, so sibling worktrees inherit it, and is
-    narrower than the global `-y`/`--yes` flag, which would also skip
-    approval for any other command WorkTrunk runs on that call.
+17. If the `[pre-start]` hook's install command is not yet approved,
+    `wt switch --create` hangs non-interactively, even with `-x <noop>`.
+    Before the first one, run `wt config approvals add --yes` once from the
+    primary worktree (issue `#2797`). It is scoped to the git project, so
+    sibling worktrees inherit it, and it is narrower than the global
+    `-y`/`--yes` flag.
 18. Do not use `wt new`.
 19. If WorkTrunk uses a pre-start install hook, its first command must
     acquire the worktree lock, then — as a separate call — run
@@ -140,7 +140,8 @@ worktree removal) behind the
 20. If the hook cannot acquire the lock or record tokens, create the
     worktree without the hook.
 21. If WorkTrunk is unavailable, use
-    `git worktree add <path> -b <branch-name> origin/main` for a fresh claim.
+    `git worktree add --no-track <path> -b <branch-name> origin/main`
+    for a fresh claim.
 22. If WorkTrunk is unavailable and this is a takeover, use
     `git worktree add <path> <branch-name>` with the local branch.
 23. If WorkTrunk is unavailable and only the remote branch exists, run

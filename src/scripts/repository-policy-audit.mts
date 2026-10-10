@@ -645,12 +645,38 @@ export const PR_HEAD_FRESHNESS_PINS: readonly PinnedClauseGroup[] = [
   },
 ];
 
+// The regression definition (issue #3869) is stated once in the profile doc,
+// and the adopt-now clause in the triage instruction points to it.
+export const REGRESSION_DEFINITION_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'regression-definition-doc',
+    paths: [REVIEW_POLICY_PROFILES, LIVE_REVIEW_POLICY_PROFILES],
+    phrases: [
+      '## What counts as a regression',
+      "A regression is a behavior that the claimed issue's acceptance criteria require to keep working.",
+      'a regression is a behavior of the merge base.',
+      'A gap in the narrower behavior is a regression only when a stated acceptance criterion enumerates the narrowed behavior.',
+      'A pull request that narrows behavior or imports a release is treated differently.',
+      'Clauses (b) and (c) of the adopt-now test are unaffected by this definition:',
+    ],
+  },
+  {
+    id: 'regression-definition-pointer',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      "(a) a [regression] this PR's diff introduced;",
+      '[regression]: ../../docs/idd-review-policy-profiles.md#what-counts-as-a-regression',
+    ],
+  },
+];
+
 const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
   ...WHOLE_CLASS_SWEEP_PINS,
   ...WAVE_GRADIENT_PINS,
   ...PR_HEAD_FRESHNESS_PINS,
+  ...REGRESSION_DEFINITION_PINS,
 ];
 
 const RULES: readonly RuleDefinition[] = [

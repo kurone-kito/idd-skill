@@ -124,9 +124,8 @@ inherit a non-stale claim. For legacy claim migration (comments without
 
 ## Thresholds
 
-Ownership timing uses the policy defaults
-`claim-stale-age` and `claim-heartbeat-interval` listed in
-`docs/policy-constants.md`.
+Ownership timing defaults (`claim-stale-age`, `claim-heartbeat-interval`)
+live in `docs/policy-constants.md`.
 
 - **Stale**: an active claim whose latest **valid** `claimed-by`
   comment's GitHub `created_at` is ≥ 24 h ago. Another session may take
@@ -146,9 +145,8 @@ IDD gates and pre-checks **must** fail closed when state is ambiguous,
 unresolvable, or otherwise unavailable, unless the specific gate
 explicitly opts out. Phase files **should** cite this default in the
 gate description instead of restating "fail closed" / "treat as
-missing" / "default to the safer outcome" for every condition. When a
-phase deliberately opts out (e.g., `skipIssueAuthorApprovalGate`), it
-states the opt-out explicitly.
+missing" / "default to the safer outcome" for every condition. A deliberate opt-out
+is stated explicitly.
 
 ## Claim revalidation gate
 
@@ -253,20 +251,28 @@ which still stop child selection in Discover.
 
 When a phase names a command set, run the corresponding commands.
 
-If `.github/idd/config.json` exists and validates against the canonical
-schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
-object overrides the table below. Policy fields such as
-`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are the
-recorded machine-readable policy. Absent values keep the gate
-enabled and default approval actors to
-`owners-and-maintainers-only`.
+**Policy and helper spelling.** Read policy keys from the effective policy
+(profile-selected `idd-effective-config --key <path>`; without helper output,
+the repository-local `.github/idd/config.json`, with no user-global layers),
+except `commands`,
+`skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
+`upstreamEscalation`, and `forcedHandoff`, which stay repository-local.
+Merge-gate reads (`mergeGate`, `ciGate`) and trusted-base reads stay on
+the PR's base ref. `commands` overrides the table below when
+`.github/idd/config.json` exists and validates against the canonical schema
+at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>;
+otherwise the table applies. Absent values keep the gate
+enabled and default approval actors to `owners-and-maintainers-only`.
+`node scripts/<name>.mjs` examples are the `vendored-node` spelling; other
+profiles use the forms in `docs/idd-helper-scripts.md`
+(Helper Runtime Profiles and Profile Wiring Surface).
 
 <!-- dprint-ignore-start -->
 | Name | Entries |
 | --- | --- |
 | **fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
-| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |
+| **pre-push-validate** | `pnpm run check && pnpm run doctor:github && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |
 | **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm typecheck` |
 | **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"` |
 | **issue-scope** | `roadmap-first` |

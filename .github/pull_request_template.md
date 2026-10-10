@@ -31,11 +31,10 @@ Closes #
 
 ## Verification
 
-- [ ] `pnpm lint`
-- [ ] `pnpm test`
-- [ ] `node scripts/audit-docs.mjs --check`
-- [ ] `pnpm run docs:sync:check`
-- [ ] `node scripts/idd-doctor.mjs` (if applicable)
+- [ ] `pnpm run check` passed at this commit. Record each stage outcome in the
+      summary, or name the subset you ran instead of checking this box.
+- [ ] `pnpm run doctor:github` (if applicable): online GitHub diagnosis,
+      separate from `check`.
 
 ## Safety
 

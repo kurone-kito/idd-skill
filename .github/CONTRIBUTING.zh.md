@@ -31,8 +31,7 @@ autopilot 运行能够在提交前强制执行最低限度的 lint 门槛。模�
 corepack enable
 pnpm install
 pnpm run setup:hooks # 启用 Git 钩子；每个 clone 和每个新 worktree 各运行一次
-pnpm run lint
-pnpm run test
+pnpm run check # 完整的验证套件；提交 PR 前运行
 ```
 
 Node.js 25 及以上版本不再内置 corepack。如果 `corepack enable`
@@ -40,7 +39,15 @@ Node.js 25 及以上版本不再内置 corepack。如果 `corepack enable`
 
 pre-commit 钩子运行快速且提交安全的子集
 (`pnpm run lint:precommit`: Biome、dprint 和 markdownlint);完整的
-`pnpm run lint:minimum` 套件在 CI 中运行。commit-msg 钩子通过
+`pnpm run check` 套件在 CI 中运行(`pnpm run lint:minimum` 为兼容别名)。
+
+`pnpm run check` 依次运行 lint、typecheck、构建产物、测试和审计阶段。
+如只需单个阶段,可单独运行:`pnpm run lint`(Biome、dprint、cspell、
+markdownlint 和源码检查)、`pnpm run typecheck`、`pnpm run test`、
+`pnpm run audit`,或 `pnpm run build:check`(不改写生成产物的校验)。
+`pnpm run lint:fix` 显式应用格式化和 lint 修复。`pnpm run doctor:github`
+是在线 GitHub 诊断,独立于 `check`,需要访问 GitHub。若只运行了部分命令,
+请在 PR 中写明所运行的子集。commit-msg 钩子通过
 commitlint 强制执行 Conventional Commits。
 
 编辑 `idd-template/` 下的规范源文件后,请运行 `pnpm run docs:sync`

@@ -12,8 +12,7 @@ candidate, run `idd-suitability.instructions.md` (A4.5), then
 
 With helpers, run first from `docs/idd-helper-scripts.md` for
 A0-O/A3/A3.5/A4/A4.5; tables win if absent/disagrees.
-`discover-viability-gate`/`discover-shared-file-overlap`: `--issue`/`--issues`;
-overlap aliases `--candidate`/`--candidates`.
+`discover-viability-gate`/`discover-shared-file-overlap`: `--issue`/`--issues`.
 
 **Abort conditions**: A0-T, A1 (`orphan-first`/`roadmap` scope only —
 see A0), A3 (default; see decision tree).
@@ -271,7 +270,7 @@ referenced issues. Collect only **open** issues.
 - Task-list entries in the roadmap or any recursively discovered issue
 - Issue cross-references indicating a work dependency or task
   relationship (e.g., `Closes #NNN`, `Refs #NNN`, explicit sub-issue
-  lines)
+  lines). A closing keyword counts only on a standalone line (#3876)
 - GitHub sub-issue relationships (parent → child)
 
 **Excluded from traversal**:
@@ -557,7 +556,7 @@ ascending issue-number order:
   name the gap in the run report; an unlisted parked issue may be
   picked. Under `instructions-only` (no park helper), this rule does
   not apply.
-- Scan the **top N** survivors, where `N` is `.github/idd/config.json`
+- Scan the **top N** survivors, where `N` is the effective policy's
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the shared
   claim-state rules in `idd-claim.instructions.md`, including

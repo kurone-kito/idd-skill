@@ -243,6 +243,21 @@ export function normalizeNonNegativeNumber(value) {
   return value;
 }
 /**
+ * One `report:` line for `audit-docs --check --report`. `maxBytes` is the
+ * largest total the strict utilization comparison accepts
+ * (`total * 100 > limit * pct` fails), so it is `floor(limit * pct / 100)`
+ * and `headroom` is 0 exactly at that count and negative above it. Without a
+ * valid `maxUtilizationPct` both fields print `n/a`.
+ */
+export function formatBundleReportLine(stat, maxUtilizationPct) {
+  const head = `report: ${stat.id} bytes=${stat.totalBytes} limit=${stat.limitBytes}`;
+  if (maxUtilizationPct === null) {
+    return `${head} maxBytes=n/a headroom=n/a`;
+  }
+  const maxBytes = Math.floor((stat.limitBytes * maxUtilizationPct) / 100);
+  return `${head} maxBytes=${maxBytes} headroom=${maxBytes - stat.totalBytes}`;
+}
+/**
  * Collect "context ceiling" violations: an absolute, context-window-derived
  * cap layered on top of the per-bundle `bundleBudgets` ratchet, so a future
  * exact-fit bump errors instead of drifting past the documented ~10%-margin

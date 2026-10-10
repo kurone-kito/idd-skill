@@ -174,8 +174,8 @@ scope-fenced item, an Accepted item mid-fix
   `alt="<Level> severity"` text next to its `#discussion_r<id>` link
   in the Open section of any `<!-- ccr-overview-v2 -->` review. The
   floor never replaces E4's tier: unknown severity never defers in these modes.
-  **Adopt-now** (never eligible) when any holds: (a) a regression this PR's diff
-  introduced relative to its merge base; (b) the claimed issue's
+  **Adopt-now** (never eligible) when any holds: (a) a [regression] this PR's
+  diff introduced; (b) the claimed issue's
   acceptance criteria or requirement are unmet; (c) a
   defect in shipped behavior — code, helper output, CI result, or
   instruction text that changes what an agent does — or a
@@ -651,3 +651,4 @@ of re-posting the disposition (#3324).
 
 [needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral
 [wave gradient]: ../../docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer
+[regression]: ../../docs/idd-review-policy-profiles.md#what-counts-as-a-regression

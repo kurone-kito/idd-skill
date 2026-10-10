@@ -952,7 +952,17 @@ function fixture(): Fixture {
   const root = join(parent, 'repo with spaces');
   const tmpRoot = join(parent, 'tmp');
   mkdirSync(tmpRoot, { recursive: true });
-  cpSync(templateRoot(), root, { recursive: true });
+  // Copy the working files only. Copying the template's `.git` made the
+  // fixture share its object store, which failed with ENOENT on CI (#3954).
+  // The filter matches the exact `.git` path, not a substring, so
+  // `.gitattributes` still comes across.
+  const template = templateRoot();
+  cpSync(template, root, {
+    recursive: true,
+    filter: (source) => source !== join(template, '.git'),
+  });
+  git(root, 'init', '-q');
+  commitAll(root, `fixture: ${caseCounter}`);
   return { root, tmpRoot };
 }
 
@@ -1485,4 +1495,18 @@ test('real tools: the CLI exits 0 when clean and 1 on a corrupted committed veri
   assert.match(failed.stderr, /nothing was rewritten/);
   assert.ok(!existsSync(sentinel));
   assert.deepEqual(readdirSync(clean.tmpRoot), []);
+});
+
+test('fixture: builds its own repository and does not copy the template history (#3954)', {
+  // fixture() builds the template with the real tools, so it skips in the
+  // bare-node lane the same way the real-tools tests above do.
+  skip: SKIP,
+}, () => {
+  // A copied .git would list the template's `initial` commit. The fixture
+  // makes exactly one commit of its own, named for its case number.
+  const { root } = fixture();
+  assert.equal(
+    git(root, 'log', '--format=%s').trim(),
+    `fixture: ${caseCounter}`,
+  );
 });

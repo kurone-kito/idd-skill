@@ -213,7 +213,7 @@ Immediately before posting takeover:
 7. If takeover is still eligible, use A5 race-safe claim verification
    (`idd-claim.instructions.md`) for the upcoming takeover post-and-
    verify sequence: wait for the configured settle delay from
-   `.github/idd/config.json` `claim.verifySettleDelay`
+   the effective policy's `claim.verifySettleDelay`
    (distributed default: `PT5S`) after posting, re-parse
    chronologically, and apply the same-second lexicographic `{claim-id}`
    tie-break.

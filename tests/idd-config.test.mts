@@ -4,6 +4,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,6 +25,7 @@ import {
   loadTrustedIddConfig,
   loadUserGlobalPolicyDocument,
   REPOSITORY_POLICY_FIELDS,
+  readRepositoryPolicyFile,
   readTrustedForcedHandoffMode,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
   resolveEffectiveCritiqueLoopTelemetryHookFromEnv,
@@ -290,6 +293,232 @@ test('loadPolicyConfig default path: throws (not silently absent) on a permissio
     } finally {
       chmodSync(configPath, 0o644);
     }
+  });
+});
+
+function setEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
+// #3820: run with an optional user-global file under a throwaway
+// XDG_CONFIG_HOME, and with GITHUB_ACTIONS pinned, so the outcome never
+// depends on the host operator's config or on the CI runner executing this
+// suite.
+function withUserGlobal<T>(
+  body: string | null,
+  githubActions: string | undefined,
+  run: () => T,
+): T {
+  const saved = {
+    xdg: process.env.XDG_CONFIG_HOME,
+    ci: process.env.GITHUB_ACTIONS,
+  };
+  const configHome = mkdtempSync(join(tmpdir(), 'idd-idd-config-global-'));
+  if (body !== null) {
+    mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
+    writeFileSync(join(configHome, 'idd-skill', 'config.json'), body);
+  }
+  setEnv('XDG_CONFIG_HOME', configHome);
+  setEnv('GITHUB_ACTIONS', githubActions);
+  try {
+    return run();
+  } finally {
+    setEnv('XDG_CONFIG_HOME', saved.xdg);
+    setEnv('GITHUB_ACTIONS', saved.ci);
+    rmSync(configHome, { recursive: true, force: true });
+  }
+}
+
+// #3820: the default loaders read the user-global layers as well as the
+// repository file. A repository-owned field from the user-global base is
+// ignored once a repository file exists (see REPOSITORY_POLICY_FIELDS).
+test('loadIddConfig reads the user-global base when the repository has no policy file (#3820)', () => {
+  withSandboxCwd(() =>
+    withUserGlobal('{"reviewPolicy":"copilot-advisory"}', undefined, () => {
+      assert.deepEqual(loadIddConfig(), { reviewPolicy: 'copilot-advisory' });
+    }),
+  );
+});
+
+test('repository leaves win over the user-global base, and a repository-owned field from the base is ignored (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeConfig(sandbox, '{"reviewPolicy":"repo-choice"}');
+    withUserGlobal(
+      '{"reviewPolicy":"global-choice","threadResolutionPolicy":"fast-agent-resolve","trustedMarkerActors":["global-login"]}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), {
+          reviewPolicy: 'repo-choice',
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+      },
+    );
+  });
+});
+
+test('under GITHUB_ACTIONS=true the user-global layers are never read (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    withUserGlobal('{"reviewPolicy":"global-choice"}', 'true', () => {
+      assert.equal(loadIddConfig(), null);
+      writeConfig(sandbox, '{"reviewPolicy":"repo-choice"}');
+      assert.deepEqual(loadIddConfig(), { reviewPolicy: 'repo-choice' });
+    });
+  });
+});
+
+test('an explicit --policy path reads only that file, never the user-global layers (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeRepositoryPolicy(
+      sandbox,
+      'policy.json',
+      '{"reviewPolicy":"explicit"}',
+    );
+    withUserGlobal('{"threadResolutionPolicy":"global"}', undefined, () => {
+      assert.deepEqual(loadPolicyConfig('policy.json').config, {
+        reviewPolicy: 'explicit',
+      });
+    });
+  });
+});
+
+test('the legacy idd-policy.json is never read as the local policy (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeRepositoryPolicy(
+      sandbox,
+      'idd-policy.json',
+      '{"reviewPolicy":"legacy"}',
+    );
+    withUserGlobal(null, undefined, () => {
+      assert.equal(loadIddConfig(), null);
+      assert.equal(loadPolicyConfig().config, null);
+    });
+  });
+});
+
+// #3820: a legacy file that exists but cannot be inspected still blocks the
+// user-global repository fields. The symlink target sits in a directory with no
+// search permission, so stat fails with EACCES rather than ENOENT. POSIX
+// permissions do not apply on Windows, and root ignores them.
+const canLockDirectories =
+  platform !== 'win32' &&
+  typeof process.getuid === 'function' &&
+  process.getuid() !== 0;
+test('an uninspectable legacy idd-policy.json still blocks user-global repository fields (#3820)', {
+  skip: !canLockDirectories,
+}, () => {
+  withSandboxCwd((sandbox) => {
+    const locked = join(sandbox, 'locked');
+    mkdirSync(locked);
+    writeFileSync(join(locked, 'policy.json'), '{"reviewPolicy":"legacy"}');
+    symlinkSync(join(locked, 'policy.json'), join(sandbox, 'idd-policy.json'));
+    chmodSync(locked, 0o000);
+    try {
+      withUserGlobal(
+        '{"trustedMarkerActors":["global-login"],"threadResolutionPolicy":"fast-agent-resolve"}',
+        undefined,
+        () => {
+          assert.deepEqual(loadIddConfig(), {
+            threadResolutionPolicy: 'fast-agent-resolve',
+          });
+        },
+      );
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+});
+
+// #3820: a dangling canonical symlink is an existing repository file that cannot
+// be read. The user-global layers must not stand in for it.
+test('a dangling canonical policy symlink fails closed and never falls back to user-global fields (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
+    symlinkSync(
+      join(sandbox, 'missing-target.json'),
+      join(sandbox, '.github', 'idd', 'config.json'),
+    );
+    withUserGlobal(
+      '{"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.equal(loadIddConfig(), null);
+        assert.throws(
+          () => loadPolicyConfig(),
+          /failed to load policy from .*config\.json/,
+        );
+      },
+    );
+  });
+});
+
+// #3820: a dangling symlink is still a legacy entry, so it blocks the
+// user-global repository fields too. Only a missing entry counts as absent.
+test('a dangling legacy idd-policy.json symlink still blocks user-global repository fields (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    symlinkSync(
+      join(sandbox, 'missing-target.json'),
+      join(sandbox, 'idd-policy.json'),
+    );
+    withUserGlobal(
+      '{"trustedMarkerActors":["global-login"],"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), {
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+      },
+    );
+  });
+});
+
+test('a legacy idd-policy.json blocks user-global repository-owned fields but is never read as policy (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeRepositoryPolicy(
+      sandbox,
+      'idd-policy.json',
+      '{"reviewPolicy":"legacy"}',
+    );
+    withUserGlobal(
+      '{"trustedMarkerActors":["global-login"],"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), {
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+      },
+    );
+  });
+});
+
+test('the default loader merges the user-global layers while the raw reader stays repository-only (#3820)', () => {
+  withSandboxCwd(() => {
+    withUserGlobal(
+      '{"threadResolutionPolicy":"fast-agent-resolve"}',
+      undefined,
+      () => {
+        assert.deepEqual(loadPolicyConfig().config, {
+          threadResolutionPolicy: 'fast-agent-resolve',
+        });
+        assert.equal(readRepositoryPolicyFile().config, null);
+      },
+    );
+  });
+});
+
+test('a malformed repository file keeps the null contract even with a user-global file present (#3820)', () => {
+  withSandboxCwd((sandbox) => {
+    writeConfig(sandbox, '{"reviewPolicy":');
+    withUserGlobal('{"threadResolutionPolicy":"global"}', undefined, () => {
+      assert.equal(loadIddConfig(), null);
+      assert.throws(
+        () => loadPolicyConfig(),
+        /failed to load policy from .*config\.json/,
+      );
+    });
   });
 });
 
@@ -795,6 +1024,135 @@ test('loadTrustedIddConfig returns null on a confirmed 404 (config absent at ref
     throw syntheticNotFoundError();
   });
   assert.equal(config, null);
+});
+
+// #3820: a trusted read falls back to the user-global layers only when the
+// base file and the legacy idd-policy.json are both confirmed absent (404).
+const httpNotFound = (): never => {
+  throw new Error('gh: Not Found (HTTP 404)');
+};
+const httpServerError = (): never => {
+  throw new Error('gh: Internal Server Error (HTTP 500)');
+};
+const legacyPresent = (): void => undefined;
+
+// #3820: the forced-handoff authority is repository-only. A user-global
+// human-gated mode must not authorize a handoff when the repository has no file.
+test('the forced-handoff reader ignores a user-global mode when the repository file is absent (#3820)', () => {
+  withUserGlobal('{"forcedHandoff":{"mode":"human-gated"}}', undefined, () => {
+    assert.equal(
+      readTrustedForcedHandoffMode('o', 'r', 'main', httpNotFound).status,
+      'other',
+    );
+  });
+});
+
+// #3820: the CI exclusion holds for the single-file loader too, not only for
+// loadIddConfig.
+test('loadPolicyConfig default path never reads user-global layers under GITHUB_ACTIONS=true (#3820)', () => {
+  withSandboxCwd(() => {
+    withUserGlobal(
+      '{"threadResolutionPolicy":"fast-agent-resolve"}',
+      'true',
+      () => {
+        assert.equal(loadPolicyConfig().config, null);
+      },
+    );
+  });
+});
+
+test('a trusted read with the base and legacy files absent uses the user-global layers (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.deepEqual(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpNotFound),
+      { reviewPolicy: 'global-choice' },
+    );
+  });
+});
+
+test('a trusted read with the legacy idd-policy.json present does not fall back (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.equal(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, legacyPresent),
+      null,
+    );
+  });
+});
+
+test('a trusted read whose legacy probe is not a clean 404 fails closed (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.throws(
+      () =>
+        loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpServerError),
+      /cannot confirm idd-policy\.json for o\/r@main/,
+    );
+  });
+});
+
+test('a trusted read never falls back to user-global layers under GITHUB_ACTIONS=true (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', 'true', () => {
+    assert.equal(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpNotFound),
+      null,
+    );
+  });
+});
+
+test('a trusted read with no user-global file makes no legacy probe and returns null (#3820)', () => {
+  withUserGlobal(null, undefined, () => {
+    let probed = false;
+    assert.equal(
+      loadTrustedIddConfig('o', 'r', 'main', httpNotFound, () => {
+        probed = true;
+      }),
+      null,
+    );
+    assert.equal(probed, false);
+  });
+});
+
+test('a trusted read that finds the base file uses it and ignores the user-global layers (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    const config = loadTrustedIddConfig('o', 'r', 'main', () =>
+      Buffer.from('{"reviewPolicy":"repo-choice"}', 'utf8').toString('base64'),
+    );
+    assert.deepEqual(config, { reviewPolicy: 'repo-choice' });
+  });
+});
+
+test('a trusted read with a base-file failure other than 404 fails closed even with a user-global file (#3820)', () => {
+  withUserGlobal('{"reviewPolicy":"global-choice"}', undefined, () => {
+    assert.throws(
+      () =>
+        loadTrustedIddConfig('o', 'r', 'main', httpServerError, httpNotFound),
+      /cannot confirm \.github\/idd\/config\.json for o\/r@main/,
+    );
+  });
+});
+
+test('a trusted read applies a repository-slug override and never a path override (#3820)', () => {
+  withUserGlobal(
+    JSON.stringify({
+      threadResolutionPolicy: 'global-thread',
+      overrides: [
+        { match: { repo: 'o/r' }, config: { reviewPolicy: 'slug-choice' } },
+        {
+          match: { path: 'checkout' },
+          config: { reviewPolicy: 'path-choice' },
+        },
+      ],
+    }),
+    undefined,
+    () => {
+      assert.deepEqual(
+        loadTrustedIddConfig('o', 'r', 'main', httpNotFound, httpNotFound),
+        {
+          threadResolutionPolicy: 'global-thread',
+          reviewPolicy: 'slug-choice',
+        },
+      );
+    },
+  );
 });
 
 test('loadTrustedIddConfig rethrows (fail-closed) on a non-404 failure', () => {

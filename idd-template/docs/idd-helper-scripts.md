@@ -2313,6 +2313,47 @@ non-paginated `ghApiJson`, the same additive mode as
 `githubApi.telemetry`. The generic `ghText` and `ghTextAsync` runners
 cannot add it, so they fall back to the 60-second backoff.
 
+## Effective layered policy (kurone-kito/idd-skill#3820)
+
+`scripts/idd-effective-config.mjs` is a read-only diagnostic for the layered
+policy. It prints the effective local policy as JSON, with the layer each
+leaf came from, the selected user-global override, and layering
+diagnostics. It never writes, claims, or posts.
+
+```sh
+node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
+```
+
+- **Layers, highest first**: the repository's `.github/idd/config.json`, the
+  user-global override selected for this repository, the user-global base,
+  and the built-in defaults. A repository-owned field from a user-global
+  layer is ignored once a repository file exists.
+- **Output**: `repository`, `userGlobalContributed`, `selectedOverrideIndex`,
+  `config`, `sourceMap`, and `diagnostics`. The helper passes the canonical
+  defaults, so a default reports the `default` layer. `--key` prints only
+  that value, `found`, the layer that supplied it (`source`), and every
+  distinct layer beneath the key (`sources`). An object-valued key reports
+  one `source` only when all of its leaves share a layer; otherwise `source`
+  is `null` and `sources` names the layers.
+- **`--no-user-global`** skips the user-global layers entirely.
+- **CI**: under `GITHUB_ACTIONS=true` the shared loaders, the ciWait reader,
+  and the fragment resolvers never read the user-global file, so a CI helper
+  sees the repository file alone.
+- **Unreadable repository files fail closed**: a canonical or legacy
+  `idd-policy.json` entry that exists but cannot be read, including a
+  dangling symlink, blocks the user-global repository-owned fields. A
+  canonical file that cannot be read is a diagnostic, not an absent file.
+- **Trusted reads** (the gate trusted-actor lists) fall back to the
+  user-global layers only when the base file and the legacy
+  `idd-policy.json` are both confirmed absent (HTTP 404) at the trusted
+  ref. The working tree is never read there, and a path override cannot
+  match, only a repository-slug override can.
+- **Forced handoff is repository-only.** The forced-handoff reader never uses
+  the user-global fallback. With no repository file it reads as `other`, so
+  a user-global `human-gated` mode cannot authorize a handoff.
+- **`--policy`**: an omitted `--policy` reads the layered policy. An explicit
+  path, even the default string, reads only that file.
+
 ## Helper Runtime Profiles
 
 When a repository imports the IDD template, helper support should be
@@ -7614,7 +7655,7 @@ a whole-module `export * from './y.mts'` barrel) is resolved back to its
 origin declaration rather than counted as a use in its own right. A
 `// audit:ignore-dead-export: <reason>` comment — on the declaration's
 own line, or the line immediately above it — suppresses one finding.
-Wired into `lint:minimum`.
+Wired into the `check` script.
 
 ## Friction Inventory
 

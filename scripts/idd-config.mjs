@@ -31,7 +31,7 @@
 // blast radius to match `loadPolicyConfig()`'s stricter rules is a separate,
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
@@ -39,6 +39,10 @@ import {
   readGithubRepoDefaultBranch,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import {
+  deriveRepositoryIdentity,
+  resolveLayeredPolicy,
+} from './layered-policy.mjs';
 import {
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
@@ -56,21 +60,159 @@ export {
   resolveLayeredPolicy,
 } from './layered-policy.mjs';
 /**
- * Read and parse `.github/idd/config.json` from the current working
- * directory, returning `null` when the file is missing,
- * unreadable, or not valid JSON — the existing fail-safe every per-helper
- * copy already implements: treat a missing or malformed config the same as
- * "no policy configured". Always re-reads the file; see the module header
- * for why this does not memoize.
+ * Read the effective local policy for the current working directory through
+ * the layered resolver (#3820): `.github/idd/config.json` over the selected
+ * user-global override over the user-global base. The result is `null` when
+ * no tier exists at all, so a repository with no file and no user-global file
+ * still reads as "no policy configured". It is also `null` whenever the
+ * repository file is present but unreadable, malformed, or not a JSON object,
+ * so a broken repository file never falls back to the user-global layers.
+ * Always re-reads the files; see the module header for why this does not
+ * memoize.
  */
 export function loadIddConfig() {
+  const loaded = loadLayeredLocalPolicy();
+  // A present but unreadable or malformed repository file still collapses to
+  // null, as it always has. The user-global layers never mask that failure.
+  if (loaded.local.diagnostic !== undefined) return null;
+  return loaded.config;
+}
+/** The repository policy file at the canonical path, with no legacy fallback. */
+function readCanonicalRepositoryPolicy(cwd) {
+  const path = join(cwd, DEFAULT_POLICY_CONFIG_PATH);
+  let text;
   try {
-    return JSON.parse(
-      readFileSync(resolve(process.cwd(), '.github/idd/config.json'), 'utf8'),
-    );
-  } catch {
-    return null;
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    // A dangling symlink also reads as ENOENT, so the entry itself decides
+    // whether the file is absent. A present entry that cannot be read is an
+    // existing document with a diagnostic, which fails closed.
+    if (isEnoentError(error) && !policyEntryPresent(path)) {
+      return { exists: false, path };
+    }
+    return {
+      exists: true,
+      path,
+      diagnostic: `cannot read repository policy ${path}: ${errorText(error)}`,
+    };
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    return {
+      exists: true,
+      path,
+      diagnostic: `cannot parse repository policy ${path}: ${errorText(error)}`,
+    };
+  }
+  if (!isPlainObject(parsed)) {
+    // Worded like `loadPolicyConfig`'s own top-level check, which callers and
+    // tests match; the caller prefixes the path when it throws.
+    return {
+      exists: true,
+      path,
+      diagnostic: `expected a JSON object at the top level, got ${describeJsonValueKind(parsed)}`,
+    };
+  }
+  return { exists: true, path, config: parsed };
+}
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+/**
+ * Whether a repository policy directory entry exists, for the presence checks
+ * only (the canonical file and the legacy file). `lstat` does not follow a
+ * symlink, so a dangling link still counts as present. Any failure other than
+ * ENOENT also counts as present, so an entry that cannot be inspected still
+ * blocks user-global repository fields. That is the fail-closed direction: the
+ * operator's global value must not win over a repository whose own policy
+ * cannot be read.
+ */
+function policyEntryPresent(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return !isEnoentError(error);
+  }
+}
+/**
+ * Repository identity for override matching. Git is consulted only when a
+ * user-global file actually carries overrides. An identity that cannot be read
+ * fails closed: it is reported as having a GitHub origin with no slug, so no
+ * repository override matches, and no path override matches either. A path
+ * override therefore applies only to a readable repository that has no GitHub
+ * origin, never to a checkout whose origin could not be determined.
+ */
+function deriveIdentityOrFallback(cwd) {
+  try {
+    return deriveRepositoryIdentity({ cwd });
+  } catch {
+    return { githubSlug: null, hasGithubOrigin: true, mainWorktreeRoot: cwd };
+  }
+}
+/**
+ * Read the effective local policy through the layered resolver (#3820).
+ *
+ * Tier 1 is the repository's canonical policy file. Tiers 2 and 3 are the
+ * user-global override selected by identity and the user-global base. Under
+ * `GITHUB_ACTIONS=true` tiers 2 and 3 are never read, so a CI helper sees the
+ * repository file alone, the same rule the critique-delegate CLI applies to
+ * its own fragment.
+ *
+ * The legacy `idd-policy.json` is never read as policy. Its presence alone
+ * counts as a repository file for one purpose: it stops user-global
+ * repository-owned fields from applying, the same as a canonical file would.
+ * Without that, a repository that still has only the legacy file would inherit
+ * the operator's `trustedMarkerActors` and similar fields.
+ */
+export function loadLayeredLocalPolicy(options = {}) {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const env = options.env ?? process.env;
+  const local = readCanonicalRepositoryPolicy(cwd);
+  const legacyPath = join(cwd, LEGACY_POLICY_FILENAME);
+  const legacyBlocksGlobal = !local.exists && policyEntryPresent(legacyPath);
+  const userGlobal =
+    env.GITHUB_ACTIONS === 'true' || options.noUserGlobal === true
+      ? undefined
+      : loadUserGlobalPolicyDocument({ env, homedir: options.homedir });
+  const globalConfig =
+    userGlobal?.status === 'present' && isPlainObject(userGlobal.config)
+      ? userGlobal.config
+      : undefined;
+  const identity =
+    globalConfig !== undefined && Array.isArray(globalConfig.overrides)
+      ? deriveIdentityOrFallback(cwd)
+      : { githubSlug: null, hasGithubOrigin: false, mainWorktreeRoot: cwd };
+  const resolution = resolveLayeredPolicy({
+    localDocument: legacyBlocksGlobal
+      ? { exists: true, path: legacyPath }
+      : local,
+    userGlobalConfig: globalConfig,
+    identity,
+    defaults: options.defaults,
+  });
+  return {
+    local,
+    // With no file at any tier the gates see `null`, as before. A diagnostic
+    // that asked for defaults gets the defaults, so it can name their source.
+    config:
+      local.exists ||
+      globalConfig !== undefined ||
+      options.defaults !== undefined
+        ? resolution.config
+        : null,
+    // Derived from the leaves, not from file presence: a user-global file whose
+    // only fields are repository-owned, filtered out by a repository file, did
+    // not contribute to the config.
+    userGlobalContributed: Object.values(resolution.sourceMap).some(
+      (source) => source === 'user-global' || source === 'user-global-override',
+    ),
+    sourceMap: resolution.sourceMap,
+    selectedOverrideIndex: resolution.selectedOverrideIndex,
+    diagnostics: resolution.diagnostics,
+  };
 }
 /**
  * Resolve the opt-in `upstreamEscalation.enabled` toggle from an
@@ -88,6 +230,8 @@ export function isUpstreamEscalationEnabled(config) {
 }
 /** Default `.github/idd/config.json` path, relative to the process cwd. */
 export const DEFAULT_POLICY_CONFIG_PATH = '.github/idd/config.json';
+/** The legacy repository policy filename, read only as a presence signal (#3820). */
+const LEGACY_POLICY_FILENAME = 'idd-policy.json';
 /**
  * Build the `gh api` argv that reads `.github/idd/config.json` for
  * `owner/repo` **at `ref`** via the Contents API, narrowed to `.content`
@@ -163,6 +307,8 @@ export function loadTrustedIddConfig(
       buildIddConfigContentsArgs(fetchOwner, fetchRepo, fetchRef),
       GH_TEXT_LOOP_TIMEOUT_OPTIONS,
     ),
+  probeLegacyPolicy = probeLegacyPolicyAtRef,
+  options = {},
 ) {
   try {
     const encoded = fetchEncodedConfig(owner, repo, ref);
@@ -182,13 +328,77 @@ export function loadTrustedIddConfig(
     return parsed;
   } catch (error) {
     if (deriveGhHttpStatus(error) === 404) {
-      return null;
+      // A confirmed-absent file falls back to the user-global layers, except
+      // where the caller opts out. The forced-handoff preflight opts out: a
+      // human-gated handoff authority must come from the repository alone.
+      return options.userGlobalFallback === false
+        ? null
+        : trustedUserGlobalFallback(owner, repo, ref, probeLegacyPolicy);
     }
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
       `cannot confirm .github/idd/config.json for ${owner}/${repo}@${ref}: this trusted-ref read requires the file to be readable or genuinely absent (404) at this ref, not merely unreadable -- ${message}`,
     );
   }
+}
+/**
+ * Build the `gh api` argv that probes the legacy `idd-policy.json` for
+ * `owner/repo` at `ref`. Only the status matters: a 404 confirms the file is
+ * absent, and a success confirms it is present.
+ */
+export function buildLegacyPolicyProbeArgs(owner, repo, ref) {
+  return [
+    'api',
+    `repos/${owner}/${repo}/contents/idd-policy.json`,
+    '--method',
+    'GET',
+    '-f',
+    `ref=${ref}`,
+    '--jq',
+    '.content',
+  ];
+}
+function probeLegacyPolicyAtRef(owner, repo, ref) {
+  ghText(
+    buildLegacyPolicyProbeArgs(owner, repo, ref),
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
+}
+/**
+ * #3820: tiers 2 and 3 for a trusted read. Reached only when the base file is
+ * confirmed absent (HTTP 404) at the trusted ref, and the legacy
+ * `idd-policy.json` is also confirmed absent. A present legacy file, or a
+ * probe that is not a clean 404, keeps the null or throw contract.
+ *
+ * The user-global file is consulted only when it exists, so a machine with
+ * none makes no legacy probe. Under `GITHUB_ACTIONS=true` tiers 2 and 3 are
+ * never read. The trusted read never touches the working tree, and its
+ * identity is the repository slug alone, so a path-based override cannot match.
+ */
+function trustedUserGlobalFallback(owner, repo, ref, probeLegacyPolicy) {
+  if (process.env.GITHUB_ACTIONS === 'true') return null;
+  const global = loadUserGlobalPolicyDocument();
+  if (global.status !== 'present' || !isPlainObject(global.config)) return null;
+  try {
+    probeLegacyPolicy(owner, repo, ref);
+    return null;
+  } catch (error) {
+    if (deriveGhHttpStatus(error) !== 404) {
+      throw new Error(
+        `cannot confirm idd-policy.json for ${owner}/${repo}@${ref}: this trusted-ref read requires the legacy file to be readable or genuinely absent (404) at this ref -- ${errorText(error)}`,
+      );
+    }
+  }
+  const resolution = resolveLayeredPolicy({
+    localDocument: { exists: false },
+    userGlobalConfig: global.config,
+    identity: {
+      githubSlug: `${owner}/${repo}`,
+      hasGithubOrigin: true,
+      mainWorktreeRoot: '',
+    },
+  });
+  return resolution.config;
 }
 /**
  * kurone-kito/idd-skill#3251: choose the ref a gate trusted-actor list
@@ -236,7 +446,14 @@ export function readTrustedForcedHandoffMode(
   fetchEncodedConfig,
 ) {
   try {
-    const config = loadTrustedIddConfig(owner, repo, ref, fetchEncodedConfig);
+    const config = loadTrustedIddConfig(
+      owner,
+      repo,
+      ref,
+      fetchEncodedConfig,
+      undefined,
+      { userGlobalFallback: false },
+    );
     if (config === null) {
       return { status: 'other', ref, mode: null };
     }
@@ -434,11 +651,15 @@ export function evaluateForcedHandoffPreflight({
  *   and the underlying message. An operator who passes `--policy` has
  *   stated that the file matters; silently falling back to defaults would
  *   discard that intent.
- * - The default path (`policyPath` empty or omitted) returns `{ config:
- *   null }` only when the file does not exist (`ENOENT`) — the legitimate
- *   "repository has no IDD config" case. A syntax error, permission error,
- *   or any other read failure on the default path still throws: an
- *   existing-but-broken config is never silently equivalent to "absent".
+ * - The default path (`policyPath` empty or omitted) reads the layered policy
+ *   (#3820): the repository file over the selected user-global override over
+ *   the user-global base. `config` is `null` only when no tier exists at all,
+ *   the legitimate "no IDD config anywhere" case. A repository file that
+ *   exists but cannot be read, such as a syntax error, a permission error, or
+ *   a dangling symlink, still throws: an existing-but-broken config is never
+ *   silently equivalent to "absent".
+ * - An explicit path reads only that file, with no user-global layers, and
+ *   throws when that file is missing, unreadable, or malformed.
  * - A file that parses as valid JSON but whose top-level value is not a
  *   plain object (`null`, an array, a string, a number, a boolean) is
  *   rejected the same way as a syntax error, for both the explicit and
@@ -456,6 +677,27 @@ export function evaluateForcedHandoffPreflight({
  * make.
  */
 export function loadPolicyConfig(policyPath) {
+  const explicit = typeof policyPath === 'string' && policyPath.length > 0;
+  if (explicit) return readRepositoryPolicyFile(policyPath);
+  // #3820: the default path reads tiers 1-3. An explicit `--policy` path
+  // still reads only that file, so the layered loader is not used for it.
+  const path = resolve(process.cwd(), DEFAULT_POLICY_CONFIG_PATH);
+  const loaded = loadLayeredLocalPolicy();
+  if (loaded.local.diagnostic !== undefined) {
+    throw new Error(
+      `failed to load policy from ${path}: ${loaded.local.diagnostic}`,
+    );
+  }
+  return { path, config: loaded.config };
+}
+/**
+ * The repository's own policy file, with no user-global layers. A caller that
+ * attributes a value to the repository (the fragment resolvers, and the
+ * issue-authoring delegate's wait ceiling) reads this, never the layered
+ * result of {@link loadPolicyConfig}. Otherwise a value from the user-global
+ * file would be reported as repository-local.
+ */
+export function readRepositoryPolicyFile(policyPath) {
   const explicit = typeof policyPath === 'string' && policyPath.length > 0;
   const path = resolve(
     process.cwd(),
@@ -550,6 +792,34 @@ export function resolveUserGlobalConfigPath(options) {
   );
 }
 /**
+ * #3820: the user-global layers a fragment resolver reads, with the override
+ * selected for this repository already applied through the layered resolver.
+ * The repository-local fragment still wins outright, as before. Under
+ * `GITHUB_ACTIONS=true` the user-global layers are not read. A present file
+ * whose top level is not an object is returned unchanged, so the resolver's
+ * own malformed-value handling still applies.
+ */
+function resolveUserGlobalFragmentSource(options) {
+  const env = options?.env ?? process.env;
+  if (env.GITHUB_ACTIONS === 'true') return undefined;
+  const global = loadUserGlobalPolicyDocument({
+    env: options?.env,
+    path: options?.globalConfigPath,
+    homedir: options?.homedir,
+  });
+  if (global.status !== 'present') return undefined;
+  if (!isPlainObject(global.config)) return global.config;
+  const cwd = process.cwd();
+  const identity = Array.isArray(global.config.overrides)
+    ? deriveIdentityOrFallback(cwd)
+    : { githubSlug: null, hasGithubOrigin: false, mainWorktreeRoot: cwd };
+  return resolveLayeredPolicy({
+    localDocument: { exists: false },
+    userGlobalConfig: global.config,
+    identity,
+  }).config;
+}
+/**
  * Read the operator-global policy file for C1 delegate inheritance.
  *
  * Missing, unreadable, non-JSON, and non-object documents are `absent`
@@ -587,19 +857,14 @@ export function resolveEffectiveCritiqueLoopDelegateFromEnv(options) {
   const localConfig =
     options && Object.hasOwn(options, 'localConfig')
       ? options.localConfig
-      : loadPolicyConfig(options?.localPolicyPath).config;
+      : readRepositoryPolicyFile(options?.localPolicyPath).config;
   const local = inspectCritiqueLoopDelegateLayer(localConfig);
   if (local.status !== 'absent') {
     return resolveEffectiveCritiqueLoopDelegate({ localConfig });
   }
-  const global = loadUserGlobalPolicyDocument({
-    env: options?.env,
-    path: options?.globalConfigPath,
-    homedir: options?.homedir,
-  });
   return resolveEffectiveCritiqueLoopDelegate({
     localConfig,
-    globalConfig: global.status === 'present' ? global.config : undefined,
+    globalConfig: resolveUserGlobalFragmentSource(options),
   });
 }
 /**
@@ -616,19 +881,14 @@ export function resolveEffectiveCritiqueLoopTelemetryHookFromEnv(options) {
   const localConfig =
     options && Object.hasOwn(options, 'localConfig')
       ? options.localConfig
-      : loadPolicyConfig(options?.localPolicyPath).config;
+      : readRepositoryPolicyFile(options?.localPolicyPath).config;
   const local = inspectCritiqueLoopTelemetryHookLayer(localConfig);
   if (local.status !== 'absent') {
     return resolveEffectiveCritiqueLoopTelemetryHook({ localConfig });
   }
-  const global = loadUserGlobalPolicyDocument({
-    env: options?.env,
-    path: options?.globalConfigPath,
-    homedir: options?.homedir,
-  });
   return resolveEffectiveCritiqueLoopTelemetryHook({
     localConfig,
-    globalConfig: global.status === 'present' ? global.config : undefined,
+    globalConfig: resolveUserGlobalFragmentSource(options),
   });
 }
 /**
@@ -642,18 +902,13 @@ export function resolveEffectiveIssueAuthoringDelegateFromEnv(options) {
   const localConfig =
     options && Object.hasOwn(options, 'localConfig')
       ? options.localConfig
-      : loadPolicyConfig(options?.localPolicyPath).config;
+      : readRepositoryPolicyFile(options?.localPolicyPath).config;
   const local = inspectIssueAuthoringDelegateLayer(localConfig);
   if (local.status !== 'absent') {
     return resolveEffectiveIssueAuthoringDelegate({ localConfig });
   }
-  const global = loadUserGlobalPolicyDocument({
-    env: options?.env,
-    path: options?.globalConfigPath,
-    homedir: options?.homedir,
-  });
   return resolveEffectiveIssueAuthoringDelegate({
     localConfig,
-    globalConfig: global.status === 'present' ? global.config : undefined,
+    globalConfig: resolveUserGlobalFragmentSource(options),
   });
 }

@@ -66,6 +66,7 @@ export const COVERED_HELPERS = [
   'idd-critique-report',
   'idd-critique-telemetry-hook',
   'idd-doctor',
+  'idd-effective-config',
   'idd-issue-authoring-delegate',
   'idd-roadmap-audit-execute',
   'idd-suggest-untrusted-labelers',
