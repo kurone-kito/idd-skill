@@ -51,9 +51,9 @@ The roster lives in the orchestrating session.
    workers to start now.
 3. Pick that many candidates with `discover-shared-file-overlap`, passing the
    survivors with `--issues`, `--batch <slots>`, one `--in-flight` per roster
-   issue, and `--check-overlap`. When `discover.selectionDesync` is
-   `session-offset`, also pass `--desync-token`, using the token generated once
-   at Discover entry. Pass it on every refill.
+   entry not `disposed`, and `--check-overlap`. When
+   `discover.selectionDesync` is `session-offset`, also pass `--desync-token`,
+   using the token generated once at Discover entry. Pass it on every refill.
 4. For each pick in batch order, run A4.5, then the A5 claim, then start a
    worker with the existing delegation brief.
 5. A pick that fails A4.5 or A5 is removed from `--issues` before any refill.
