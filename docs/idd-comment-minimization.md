@@ -645,7 +645,10 @@ Always skip candidates when any of these are true:
 
 When `authoring-set-members` scans for issue-authoring ownership
 markers, it evaluates every trusted `authoring-owner` comment it
-finds. Minimizing one of these comments as `OUTDATED` (GitHub returns
+finds. With `--issue <target>`, the scan is bounded to issues updated
+since the target's own first trusted marker for the set, and a hidden
+marker counts. An edited or unparseable marker inside that window still
+fails closed. Minimizing one of these comments as `OUTDATED` (GitHub returns
 the reason in lowercase: `outdated`) causes the scan to **skip** that
 comment rather than failing closed on an unparseable or malformed
 body. The comment is not counted as a set member. When it is the only

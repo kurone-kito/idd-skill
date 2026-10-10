@@ -2243,9 +2243,11 @@ only approval boundary.
   anchor), and the read-only `authoring-set-members` helper reports
   that this target is the only issue whose trusted `authoring-owner`
   marker carries that exact `set`
-  (`node scripts/authoring-set-members.mjs --set <id>`). A zero exit
-  whose JSON has `soleMember: true`, `issues` equal to that one target,
-  and no `skippedMarkers` entry with `namesRequestedSet: true` is the only
+  (`node scripts/authoring-set-members.mjs --set <id> --issue <target>`,
+  the bounded window that starts at the target's own first trusted marker
+  for the set). A zero exit whose JSON has `soleMember: true`, `issues` equal
+  to that one target, and no `skippedMarkers` entry with
+  `namesRequestedSet: true` is the only
   passing result (an edited entry's flag reflects only the comment's
   current text). A `requested-set` entry on the target itself is that
   target's own hidden marker, which the sweep routinely leaves behind, so
@@ -2347,8 +2349,9 @@ only approval boundary.
   removal in step (4): first, verify that this sole target really is
   the sole member of its authoring set -- it carries no
   `<marker-prefix>-roadmap-id` marker, and
-  `node scripts/authoring-set-members.mjs --set <id>` reports
-  `soleMember: true` with `issues` equal to this one target and no
+  `node scripts/authoring-set-members.mjs --set <id> --issue <target>`, the
+  bounded window that starts at the target's own first trusted marker for the
+  set, reports `soleMember: true` with `issues` equal to this one target and no
   `skippedMarkers` entry with `namesRequestedSet: true` (a `requested-set`
   entry on the target itself does not block); that
   helper is exactly the mechanical proof this fast path's own

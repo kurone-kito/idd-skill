@@ -1670,8 +1670,12 @@ reports that this target is the only issue whose trusted `authoring-owner`
 marker carries that exact `set`:
 
 ```sh
-node scripts/authoring-set-members.mjs --set <id>
+node scripts/authoring-set-members.mjs --set <id> --issue <target>
 ```
+
+The `--issue` argument bounds the search to the issues updated since the
+target's own first trusted marker for the set, so the proof does not scan the
+whole repository history.
 
 A zero exit whose JSON has `soleMember: true`, `issues` equal to that
 one target, and no `skippedMarkers` entry with `namesRequestedSet: true`
