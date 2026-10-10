@@ -34,9 +34,10 @@ or extends a gate defined in `.github/instructions/`.
 | Advisory bot          | Copilot's PR review integration plus any bot configured in `advisoryBotLogins` (for example CodeRabbit or a Codex connector). Not a required-reviewer or `CHANGES_REQUESTED` gate, but its review threads still count toward F2's unresolved-threads backlog gate until dispositioned and resolved.                                                 |
 | GitHub platform       | Mechanical behavior GitHub itself performs once the right input exists — closing-keyword auto-close, CI run execution, mergeability computation.                                                                                                                                                                                                    |
 
-Under the fan-out variant, the orchestrator session creates the claim marker at
-A5, while each worker creates the branch and worktree at B1. The orchestrator
-also writes the worker report record; the worker does not.
+Under the fan-out variant, the orchestrator session creates the worktree and
+claim-lock tokens, then the claim marker at A5. Each worker then runs from B1
+in that worktree. The orchestrator also writes the worker report record; the
+worker does not.
 
 ## Concept-ownership matrix
 
