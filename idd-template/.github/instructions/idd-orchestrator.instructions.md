@@ -59,8 +59,9 @@ The roster lives in the orchestrating session.
 4. For each pick in batch order, run A4.5, then the fresh-claim order in
    idd-claim.instructions.md (worktree first). Then start a
    worker with the existing delegation brief, adding the section 5 report
-   request with a per-worker report path and naming that worktree, and record
-   the worker as a `running` roster entry.
+   request with a per-worker report path and naming that pre-created worktree,
+   which the worker reuses without B1 creation. Record the worker as a `running`
+   roster entry.
 5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
    worktree and branch removed (which deletes its lock) and leaves `--issues`
    before any refill. A failure after the marker is posted is contested: follow
@@ -75,11 +76,11 @@ The roster lives in the orchestrating session.
 - On a streaming harness, handle each completion as it arrives. On a wave
   harness, wait for the whole batch. Set each finished worker's roster entry
   to `reporting` before verification.
-- After each completion or wave, call `idd-worker-budget` again and refill from
-  the cached graph. Follow the Discover re-run cadence, including the
-  target-local A3 recheck.
-- When `slots` is `0` but candidates remain: process `reporting` entries (§5)
-  and apply stalled recovery to `stalled` ones first. If every entry is
+- After each completion or wave, process `reporting` entries (§5), then call
+  `idd-worker-budget` again and refill from the cached graph. Follow the Discover
+  re-run cadence, including the target-local A3 recheck.
+- When `slots` is `0` but candidates remain: apply stalled recovery to `stalled`
+  entries first. If every entry is
   `disposed` or the roster is empty, report the budget's `limitingFactor` and
   stop. Otherwise, wait for a `running` completion, or repeat recovery when none
   is running.
