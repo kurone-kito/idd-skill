@@ -1498,7 +1498,7 @@ function assertRecordTokensWorktree(worktree) {
     }
     throw markCliUsageError(
       new Error(
-        `--record-tokens: ${worktree} is not a git worktree. Create the worktree first, for example \`git worktree add --no-track <path> -b <branch> origin/main\`, then re-run --record-tokens.`,
+        `--record-tokens: ${worktree} is not a git worktree. Create the worktree first, for example \`git worktree add --no-track <path> -b <branch> origin/<development-branch>\`, then re-run --record-tokens.`,
       ),
     );
   }
