@@ -42,7 +42,7 @@ Keep one entry per worker, with these fields:
 - the harness's worker handle;
 - the worker's state (`running`, `reporting`, `disposed`, or `stalled`).
 
-The roster lives in the orchestrating session. Workers do not read it.
+The roster lives in the orchestrating session.
 
 ## 3. Dispatch
 
@@ -71,19 +71,18 @@ The roster lives in the orchestrating session. Workers do not read it.
 - After each completion or wave, call `idd-worker-budget` again and refill from
   the cached graph. Follow the Discover re-run cadence, including the
   target-local A3 recheck.
-- When `slots` is `0` but candidates remain: if every roster entry is
-  `disposed`, or the roster is empty, report the budget's `limitingFactor` and
-  stop. Otherwise, wait for the next completion or wave, then call the budget
-  again.
+- When `slots` is `0` but candidates remain: process `reporting` entries (§5)
+  and apply stalled recovery to `stalled` ones first. If no entry is `running`,
+  report the budget's `limitingFactor` and stop. Otherwise, wait for the next
+  completion or wave, then call the budget again.
 - When the graph in hand has nothing startable, re-run Discover as that cadence
   requires. Report and stop only when that re-run finds nothing startable and every
   roster entry is `disposed`.
 
 ## 5. Report and disposal
 
-- The orchestrator's brief adds a request that the worker end with the
-  fields of `schemas/worker-report.schema.json`, which the existing
-  delegation brief does not include.
+- The orchestrator's brief asks the worker to end with the fields of
+  `schemas/worker-report.schema.json`.
 - The orchestrator verifies the outcome against live GitHub state, appends the
   record with the profile-selected `idd-worker-report append --file <path>`,
   then disposes of the worker as the table's row says and marks its roster
