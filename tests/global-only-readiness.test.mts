@@ -29,7 +29,11 @@ const REPOSITORY_LOCAL: ActivationResult = {
 
 // The root listing is the proof that contents are readable. `o/r/@main` is
 // the root path key, `o/r/<path>@main` a file key (see provider-adapter-fake).
-const READABLE_ROOT = { 'o/r/@main': [{ name: 'README.md' }] };
+const HEAD = 'a'.repeat(40);
+const READABLE_ROOT = {
+  'o/r/@main': [{ name: 'README.md' }],
+  [`o/r/@${HEAD}`]: [{ name: 'README.md' }],
+};
 
 // A passing required `lint` check run, in the shape the rollup normalizer reads.
 const LINT_PASSING = [
@@ -164,6 +168,7 @@ test('the flag off returns no names and never reads the activation', () => {
     owner: 'o',
     repo: 'r',
     trustedRef: 'main',
+    headSha: HEAD,
   });
   assert.deepEqual(names, []);
   assert.equal(read, false);
@@ -178,6 +183,7 @@ test('a global-only activation with an absent workflow ignores the advisory name
       owner: 'o',
       repo: 'r',
       trustedRef: 'main',
+      headSha: HEAD,
     }),
     [ADVISORY],
   );
@@ -192,6 +198,7 @@ test('a repository-local activation keeps the advisory name required', () => {
       owner: 'o',
       repo: 'r',
       trustedRef: 'main',
+      headSha: HEAD,
     }),
     [],
   );
@@ -208,6 +215,7 @@ test('an unavailable primary checkout keeps the advisory name required', () => {
       owner: 'o',
       repo: 'r',
       trustedRef: 'main',
+      headSha: HEAD,
     }),
     [],
   );
@@ -395,4 +403,22 @@ test('the flag keeps the advisory check when a cleanup workflow is committed', (
   });
   assert.deepEqual(ci.requiredCheckNames, [ADVISORY]);
   assert.deepEqual(ci.missingRequiredCheckNames, [ADVISORY]);
+});
+
+test('a pull request that adds the advisory workflow keeps the check required', () => {
+  const ci = collectCi(['--global-only'], GLOBAL_ONLY, {
+    ...READABLE_ROOT,
+    [`o/r/${WORKFLOW}@${HEAD}`]: { name: 'idd-advisory-convergence.yml' },
+  });
+  assert.deepEqual(ci.requiredCheckNames, [ADVISORY]);
+});
+
+test('a pull request that adds the cleanup workflow keeps the check required', () => {
+  const ci = collectCi(['--global-only'], GLOBAL_ONLY, {
+    ...READABLE_ROOT,
+    [`o/r/.github/workflows/post-merge-cleanup.yml@${HEAD}`]: {
+      name: 'post-merge-cleanup.yml',
+    },
+  });
+  assert.deepEqual(ci.requiredCheckNames, [ADVISORY]);
 });

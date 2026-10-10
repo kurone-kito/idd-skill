@@ -1218,6 +1218,7 @@ export function collectPreMergeReadiness(
     owner,
     repo,
     trustedRef: trustedConfigRef,
+    headSha: prHeadSha,
   });
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
@@ -2522,18 +2523,24 @@ export function resolveGlobalOnlyRunIgnores(input: {
   owner: string;
   repo: string;
   trustedRef: string;
+  headSha: string;
 }): string[] {
   if (!input.globalOnly) return [];
   const activation = input.activation();
   if (activation === null) return [];
-  return resolveGlobalOnlyIgnoredCheckNames({
-    activation,
-    baseWorkflowAbsent: baseWorkflowAbsentAt(
+  // The PR head is read too: a pull request that adds either workflow must not
+  // get the advisory check dropped, since its own merge would introduce it.
+  const absent =
+    baseWorkflowAbsentAt(
       input.port,
       input.owner,
       input.repo,
       input.trustedRef,
-    ),
+    ) &&
+    baseWorkflowAbsentAt(input.port, input.owner, input.repo, input.headSha);
+  return resolveGlobalOnlyIgnoredCheckNames({
+    activation,
+    baseWorkflowAbsent: absent,
   });
 }
 
