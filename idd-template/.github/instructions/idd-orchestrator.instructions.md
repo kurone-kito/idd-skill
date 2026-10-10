@@ -100,9 +100,9 @@ The roster lives in the orchestrating session.
   the draft as the worker final report store describes, appends it with the
   profile-selected `idd-worker-report append --file <path>`, then disposes of
   the worker as the table's row says and marks its roster entry `disposed`.
-- If verification or the append fails, the orchestrator keeps the worker
-  addressable and follows the worker-specific recovery in the
-  [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
+- If verification or the append fails, the orchestrator keeps it
+  addressable, marks it `stalled`, and follows the worker-specific recovery in
+  the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
 
 ## 6. Worker span
 
