@@ -45,11 +45,12 @@ advisory check is removed from the required list. Without the flag, or when
 either condition fails, nothing changes.
 
 If the primary checkout cannot be listed, or its origin remote does not name
-the target repository, activation is unavailable and the check stays
-required. An ignore entry never drops a source-pinned requirement, so a
-required check whose ruleset entry names an app stays required. A
-same-named context without such a pin cannot be told apart from the template
-check by ruleset data alone. That case remains a residual risk.
+the target repository on the GitHub server in use (GH_HOST, or
+github.com), activation is unavailable and the check stays required. An
+ignore entry never drops a source-pinned requirement, so a required check
+whose ruleset entry names an app stays required. A same-named context
+without such a pin cannot be told apart from the template check by ruleset
+data alone. That case remains a residual risk.
 
 Removing the check does not lift the CI gate's fail-closed rule. When the
 advisory check was the only required check, no required checks remain. The

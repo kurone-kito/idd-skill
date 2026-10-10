@@ -76,7 +76,7 @@ stop and report.
    1. If the PR's head branch does not follow B1's
       `issue/<number>-<slug>` naming convention
       ([B1 Worktree creation](idd-work.instructions.md#worktree-creation)),
-      **or** the PR body does not also carry a closing keyword for that
+      **or** the PR body does not carry a closing keyword for that
       same `<number>` (D3.5 step 3's regex, applied to the PR body text
       — not GitHub's `closingIssuesReferences` field, which D3.5 already
       documents as empty on a non-default `{development-branch}`

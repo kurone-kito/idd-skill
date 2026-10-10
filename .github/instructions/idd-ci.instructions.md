@@ -252,7 +252,7 @@ dedup bug — GitHub can require every same-named instance non-failing,
 not the dedup-selected latest.
 
 **Helper-first**: prints this diagnosis and ordered rerun plan, read-only
-by default; pass `--apply` to also execute it — the preferred recovery
+by default; pass `--apply` to execute it — the preferred recovery
 path when available. `--apply` reruns each
 rerun-eligible instance in order (recovery-refresh first when one
 applies), waits for each to reach a terminal state before starting the
@@ -285,10 +285,10 @@ the manual maintainer-authorized waiver flow above, a PR whose own diff
 touches `idd-advisory-convergence`'s committed trigger-file allowlist gets
 a scoped waiver posted automatically by a separate `issues: write` job in
 `idd-advisory-convergence.yml` itself — no manual waiver or rerun needed
-to unblock it, PROVIDED the adopting repository has also opted into the
+to unblock it, PROVIDED the adopting repository has opted into the
 same `ciGate.externalCheckWaivers.mode: "maintainer-authorized"` policy
 and registered `idd-advisory-convergence` under
-`ciGate.externalChecks.waivable` (helper runtime must also be configured;
+`ciGate.externalChecks.waivable` (helper runtime must be configured;
 the shipped template config leaves all of this unset, in which case the
 job is a documented no-op rather than a failure). See
 [Customizing IDD](../../docs/customization.md) for how to opt in, and
@@ -409,7 +409,7 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   await/reap it or reuse its eventual result rather than starting a
   second concurrent instance. No watch form above watches Copilot
   review state either — see
-  `idd-advisory-wait.instructions.md`, whose Scope section also covers
+  `idd-advisory-wait.instructions.md`, whose Scope section covers
   why a non-primary bot's review must not gate a custom wait either. A
   bare `sleep` may be refused (observed 2026-09-30 in Claude Code, issue
   `#3673`: `sleep 30` refused, `sleep 5` ran); in such a runtime, block a CI wait

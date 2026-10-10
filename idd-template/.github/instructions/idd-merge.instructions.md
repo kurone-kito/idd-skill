@@ -246,7 +246,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        time passes between the plain merge's failure and the retry, and
        `--admin` bypasses the entire ruleset), with a fresh GitHub merge
        state of `mergeable: "MERGEABLE"` and `mergeStateStatus` settled
-       to `"CLEAN"` or `"BEHIND"` also required.
+       to `"CLEAN"` or `"BEHIND"` required.
        `isSafeSoloCodeownerAdminMergeState` still refuses
        `mergeStateStatus: "BLOCKED"`. When the base ruleset does not
        require CODEOWNER review, the `status: "clear"` trigger does not
@@ -341,7 +341,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    posting below (fresh each time, not cached from here — a run's
    status can change during dry-run/apply), check whether this PR's
    `post-merge-cleanup.yml` run is still in flight, waiting (bounded)
-   for it to finish if so — see `docs/idd-comment-minimization.md`'s
+   for it to finish if so (skip if global-only: no such run) — see `docs/idd-comment-minimization.md`'s
    In-flight cleanup-run wait. Either way, continue to the rule below
    unchanged: it reads whatever that run may have posted and decides
    ownership from the marker's own recorded status.
