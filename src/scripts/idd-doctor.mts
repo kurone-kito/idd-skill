@@ -1000,6 +1000,14 @@ function checkCommandResidueAndConsistency(
   for (const key of sharedKeys) {
     const configValue = normalizeCommandValue(policyCommandMap.get(key));
     const overviewValue = normalizeCommandValue(projectCommands.get(key));
+    // A config entry that names its own key holds no command, whatever the
+    // table row says. Report it here, since the comparison below skips it.
+    if (configValue === `commands.${key}`) {
+      report.warnings.push(
+        `command entry "${key}" in .github/idd/config.json refers to itself; it must hold the command text`,
+      );
+      continue;
+    }
     if (
       !isConcreteCommandValue(configValue, key) ||
       !isConcreteCommandValue(overviewValue, key)

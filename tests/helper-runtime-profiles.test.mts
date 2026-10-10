@@ -607,6 +607,40 @@ test('idd-doctor reports a command row that references a different config key (#
   );
 });
 
+test('idd-doctor reports a config entry that refers to its own key (#3959)', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'commands.fix-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+      overviewCommands: {
+        'fix-validate': 'npm run fix',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes(
+        'command entry "fix-validate" in .github/idd/config.json refers to itself',
+      ),
+    ),
+  );
+});
+
 function createDoctorFixtureRepo(
   configFixtureName: string,
   { packageJson = null }: FixtureRepoOptions = {},
