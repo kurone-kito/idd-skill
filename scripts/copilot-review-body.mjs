@@ -218,13 +218,13 @@ const ZERO_WIDTH_CHARS_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/gu;
  * count.
  */
 const CITATION_LINE_PATTERN =
-  /^(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{1,5})(?::\d+)?(?:`|\*\*)$/u;
+  /^(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{1,5}|[\w-]+(?=:\d))(?::\d+)?(?:`|\*\*)$/u;
 /**
  * A file citation anywhere in a body, in the backtick or the legacy bold form
  * (#3942). Used only where no per-item view exists.
  */
 const CITATION_ANYWHERE_PATTERN =
-  /(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{1,5})(?::\d+)?(?:`|\*\*)/u;
+  /(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{1,5}|[\w-]+(?=:\d))(?::\d+)?(?:`|\*\*)/u;
 /** One `<details>` block. A Previously missed item never nests another. */
 const DETAILS_BLOCK_PATTERN = /<details>([\s\S]*?)<\/details>/g;
 /**

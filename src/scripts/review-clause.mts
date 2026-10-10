@@ -39,6 +39,7 @@ import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
   classifyCommentEditState,
   compareIsoTimestamps,
+  DISPOSITION_ACCEPTED_PREFIX_RE,
   hasTrustedReviewAckAfter,
   isCopilotErrorReviewBody,
   isCopilotReviewerLogin,
@@ -442,7 +443,7 @@ export function countCitedItemDispositions(
       return false;
     }
     return (
-      (/^\*\*Accepted\*\*/u.test(body) ||
+      (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
         RECORDED_DEFERRAL_REPLY_PATTERN.test(body)) &&
       REVIEW_REPLY_STAMP_PATTERN.test(body)
     );

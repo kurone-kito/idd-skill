@@ -8601,3 +8601,14 @@ test('Previously missed (#3942): a disposition posted in the same second as the 
     false,
   );
 });
+
+test('Previously missed (#3942): a stamped **Accepted.** reply counts like **Accepted**', () => {
+  assert.equal(
+    convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [
+      citedDispositionComment({
+        body: `**Accepted.** Fixed in the PR.\n${STAMP}`,
+      }),
+    ]),
+    true,
+  );
+});
