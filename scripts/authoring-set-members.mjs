@@ -427,7 +427,7 @@ export function selectSetBoundMarker(input) {
     reason,
     bound: null,
   });
-  const candidates = input.comments
+  const owned = input.comments
     .filter(
       (comment) =>
         trusted.has(comment.authorLogin.trim().toLowerCase()) &&
@@ -436,15 +436,40 @@ export function selectSetBoundMarker(input) {
     .map((comment) => ({
       comment,
       parsed: parseAuthoringOwnerComment(comment.body, input.markerPrefix),
-    }))
-    .filter((entry) => entry.parsed?.set === input.set)
-    .sort((left, right) => {
-      if (left.comment.createdAt !== right.comment.createdAt) {
-        return left.comment.createdAt < right.comment.createdAt ? -1 : 1;
-      }
-      return left.comment.id - right.comment.id;
-    });
+    }));
+  const hostLower = hostRef.toLowerCase();
+  const earlier = (left, right) =>
+    left.createdAt !== right.createdAt
+      ? left.createdAt < right.createdAt
+      : left.id < right.id;
+  const candidates = owned
+    .filter(
+      (entry) =>
+        entry.parsed?.set === input.set &&
+        entry.parsed.target.toLowerCase() === hostLower,
+    )
+    .sort((left, right) => (earlier(left.comment, right.comment) ? -1 : 1));
   const first = candidates[0];
+  // A trusted marker whose set cannot be read, or whose target names another
+  // issue, may be this set's first marker. Its position is unknown, so when it
+  // comes before the bound, or there is no bound, the bound cannot be trusted.
+  const unknownSet = owned
+    .filter(
+      (entry) =>
+        entry.parsed === null ||
+        (entry.parsed.set === input.set &&
+          entry.parsed.target.toLowerCase() !== hostLower),
+    )
+    .sort((left, right) => (earlier(left.comment, right.comment) ? -1 : 1));
+  const firstUnknown = unknownSet[0];
+  if (
+    firstUnknown &&
+    (first === undefined || earlier(firstUnknown.comment, first.comment))
+  ) {
+    return unbound(
+      `unattributable trusted authoring-owner marker (${hostRef}, comment id ${firstUnknown.comment.id}) may be the set's first marker; see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
+    );
+  }
   if (!first) {
     return unbound(
       `no trusted authoring-owner marker for set ${input.set} on ${hostRef}`,
@@ -500,8 +525,11 @@ Output schema:
     {"issueNumber": 2, "commentId": 5577810398, "kind": "requested-set", "mode": "acquire"},
     {"issueNumber": 3, "commentId": 6000000001, "kind": "unattributable", "namesRequestedSet": false}
   ],
-  "skippedElsewhere": 0
+  "skippedElsewhere": 0,
+  "boundedBy": {"issueNumber": 3916, "commentId": 6072113969, "createdAt": "2026-10-09T01:02:22Z", "anchor": "kurone-kito/idd-skill#3916"}
 }
+
+boundedBy appears only with --issue, and names the bound marker.
 `);
 }
 function parseArgs(argv) {

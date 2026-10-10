@@ -1528,3 +1528,57 @@ test('an edited or unparseable trusted marker inside a bounded window still fail
     /unparseable trusted authoring-owner marker/,
   );
 });
+
+test('a hidden malformed trusted marker earlier than the set marker fails the bound closed (#3916)', () => {
+  const malformed = `<!-- ${PREFIX}-authoring-owner: target=${SELF}; anchor=${SELF}; mode=acquire; owner=9e59701c-d1da-4b07-ba66-1ca3f025cfe5; set=${SET}; session=3dad4bd4-7bde-40ed-b6da-0b0cf94cdfa9; body-sha256=; snapshot-sha256=none; supersedes=none -->`;
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(malformed, '2026-10-09T10:00:00Z', 10, {
+        isMinimized: true,
+        minimizedReason: 'outdated',
+      }),
+      provenance(ownerMarker(SELF), '2026-10-09T12:00:00Z', 12),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.bound, null);
+  assert.match(result.reason, /unattributable trusted authoring-owner marker/);
+});
+
+test('a set marker whose target names another issue, earlier than the bound, fails closed (#3916)', () => {
+  const mistargeted = renderAuthoringOwnerMarker({
+    markerPrefix: PREFIX,
+    target: 'kurone-kito/idd-skill#3999',
+    anchor: 'kurone-kito/idd-skill#3999',
+    mode: 'acquire',
+    owner: '9e59701c-d1da-4b07-ba66-1ca3f025cfe5',
+    set: SET,
+    session: '3dad4bd4-7bde-40ed-b6da-0b0cf94cdfa9',
+    bodySha256: DIGEST,
+    snapshotSha256: 'none',
+    supersedes: 'none',
+  });
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(mistargeted, '2026-10-09T10:00:00Z', 10),
+      provenance(ownerMarker(SELF), '2026-10-09T12:00:00Z', 12),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.match(result.reason, /unattributable trusted authoring-owner marker/);
+});
+
+test('a malformed trusted marker later than the bound leaves the bound in place (#3916)', () => {
+  const malformed = `<!-- ${PREFIX}-authoring-owner: target=${SELF}; anchor=${SELF}; mode=heartbeat; owner=9e59701c-d1da-4b07-ba66-1ca3f025cfe5; set=${SET}; session=3dad4bd4-7bde-40ed-b6da-0b0cf94cdfa9; body-sha256=; snapshot-sha256=none; supersedes=none -->`;
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(ownerMarker(SELF), '2026-10-09T10:00:00Z', 10),
+      provenance(malformed, '2026-10-09T12:00:00Z', 12),
+    ],
+  });
+  assert.equal(result.complete, true);
+  assert.equal(result.bound?.commentId, 10);
+});
