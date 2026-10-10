@@ -229,7 +229,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      configured pull-request-only bypass actor → that scoped bypass
      alone may not clear a solo-maintainer self-approval deadlock (see
      `docs/permissions.md`'s "Pull-request-only ruleset bypass"). Check
-     `mergeGate.soloCodeownerAdminFallback` in the effective policy:
+     `mergeGate.soloCodeownerAdminFallback` in `.github/idd/config.json`:
      - `"hold-and-report"` (opt-in) → keep the pre-#1521 behavior: do
        not retry the plain command or add `--admin`; post a hold
        comment with the GitHub error text and stop for a maintainer

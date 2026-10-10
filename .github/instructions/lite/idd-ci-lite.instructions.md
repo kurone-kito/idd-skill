@@ -51,7 +51,7 @@ CI-polling instructions instead of this file.
    `run_attempt` — or `--rerun-count <count>` as a manual fallback).
    Resolve each `node scripts/<h>.mjs` to its profile-selected form
    via `docs/idd-helper-scripts.md`. This helper already resolves
-   `ciWait.*` from the effective policy and emits the final
+   `ciWait.*` from `.github/idd/config.json` and emits the final
    `runningTimeout` / `generationTimeout` / `rerunPolicy` values
    directly — never read that config file yourself.
 2. Fetch duplicate-name-safe, HEAD-pinned check state:
