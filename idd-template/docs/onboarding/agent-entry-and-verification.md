@@ -188,9 +188,8 @@ present. Operators follow the Cursor CLI `AGENTS.md` row in
 context is `AGENTS.md` and `CLAUDE.md` when both exist; nothing from
 `.github/instructions/`; open
 `.github/instructions/idd-overview-core.instructions.md` and the
-routed phase file manually. Do not treat Claude-only adapter bullets
-(for example `--vendor claude`) as Cursor policy — those stay
-Claude-scoped in `CLAUDE.md`. Do not create `CURSOR.md`.
+routed phase file manually. Keep Claude-only adapter bullets out of Cursor
+policy. Do not create `CURSOR.md`.
 
 It discovers the optional `issue-authoring` / `idd-spec-audit`
 companions under `.claude/skills/` via Claude compatibility, the same

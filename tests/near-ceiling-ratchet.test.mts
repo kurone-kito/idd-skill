@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   collectNearCeilingRatchetViolations,
+  parseNearCeilingRaiseApprovals,
   selectStricterNoticeUtilizationPct,
 } from '../src/scripts/consistency-helpers.mts';
 
@@ -187,4 +188,79 @@ test('file order does not affect the rename fallback match', () => {
   ];
   const result = collectNearCeilingRatchetViolations(NOTICE_PCT, current, base);
   assert.equal(result.length, 1);
+});
+
+test('an approved raise within its approved limit is accepted even near the ceiling', () => {
+  const base = [{ id: 'bundle-core', limitBytes: 26000, totalBytes: 25471 }];
+  const current = [{ id: 'bundle-core', limitBytes: 26500, totalBytes: 25700 }];
+  const approvals = new Map([['bundle-core', 26500]]);
+  assert.deepEqual(
+    collectNearCeilingRatchetViolations(NOTICE_PCT, current, base, approvals),
+    [],
+  );
+});
+
+test('an approved raise above its approved limit still fails', () => {
+  const base = [{ id: 'bundle-core', limitBytes: 26000, totalBytes: 25471 }];
+  const current = [{ id: 'bundle-core', limitBytes: 27000, totalBytes: 25700 }];
+  const approvals = new Map([['bundle-core', 26500]]);
+  assert.equal(
+    collectNearCeilingRatchetViolations(NOTICE_PCT, current, base, approvals)
+      .length,
+    1,
+  );
+});
+
+test('a raise to an unapproved bundle still fails near the ceiling', () => {
+  const base = [{ id: 'bundle-core', limitBytes: 26000, totalBytes: 25471 }];
+  const current = [{ id: 'bundle-core', limitBytes: 26500, totalBytes: 25700 }];
+  assert.equal(
+    collectNearCeilingRatchetViolations(NOTICE_PCT, current, base).length,
+    1,
+  );
+});
+
+test('duplicate approvals for one bundle keep the strictest limit', () => {
+  const narrowFirst = parseNearCeilingRaiseApprovals([
+    { bundle: 'bundle-core', limitBytes: 26500, issue: 3840, reason: 'ok' },
+    { bundle: 'bundle-core', limitBytes: 999999, issue: 1, reason: 'wide' },
+  ]);
+  assert.deepEqual([...narrowFirst.entries()], [['bundle-core', 26500]]);
+  const wideFirst = parseNearCeilingRaiseApprovals([
+    { bundle: 'bundle-core', limitBytes: 999999, issue: 1, reason: 'wide' },
+    { bundle: 'bundle-core', limitBytes: 26500, issue: 3840, reason: 'ok' },
+  ]);
+  assert.deepEqual([...wideFirst.entries()], [['bundle-core', 26500]]);
+});
+
+test('malformed approval entries never widen a limit', () => {
+  const approvals = parseNearCeilingRaiseApprovals([
+    { bundle: 'bundle-core', limitBytes: 26500, issue: 3840, reason: 'ok' },
+    { bundle: 'bundle-core', limitBytes: 999999 },
+    { bundle: 'bundle-core', limitBytes: 26500.5, issue: 3840, reason: 'frac' },
+    {
+      bundle: 'bundle-core',
+      limitBytes: 9007199254740992,
+      issue: 3840,
+      reason: 'unsafe',
+    },
+    {
+      bundle: 'bundle-core',
+      limitBytes: 27000,
+      issue: 9007199254740992,
+      reason: 'unsafe issue',
+    },
+    { bundle: 'bundle-core', limitBytes: 27000, issue: 3840, reason: '  ' },
+    { bundle: 'bundle-core', limitBytes: 28000, issue: 0, reason: 'bad' },
+    { bundle: 'bundle-x', limitBytes: 'lots' },
+    { limitBytes: 99999 },
+    { bundle: 'bundle-y', limitBytes: -1 },
+    null,
+    'bundle-z',
+  ]);
+  assert.deepEqual([...approvals.entries()], [['bundle-core', 26500]]);
+  assert.deepEqual(
+    [...parseNearCeilingRaiseApprovals(undefined).entries()],
+    [],
+  );
 });

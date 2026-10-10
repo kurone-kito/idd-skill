@@ -276,6 +276,7 @@ for FILE in \
   ".github/instructions/idd-discover.instructions.md" \
   ".github/instructions/idd-roadmap-audit.instructions.md" \
   ".github/instructions/idd-suitability.instructions.md" \
+  ".github/instructions/idd-orchestrator.instructions.md" \
   ".github/instructions/idd-claim.instructions.md" \
   ".github/instructions/idd-work.instructions.md" \
   ".github/instructions/idd-pr-submit.instructions.md" \
@@ -412,6 +413,7 @@ for FILE in \
   ".github/instructions/idd-discover.instructions.md" \
   ".github/instructions/idd-roadmap-audit.instructions.md" \
   ".github/instructions/idd-suitability.instructions.md" \
+  ".github/instructions/idd-orchestrator.instructions.md" \
   ".github/instructions/idd-claim.instructions.md" \
   ".github/instructions/idd-work.instructions.md" \
   ".github/instructions/idd-pr-submit.instructions.md" \
