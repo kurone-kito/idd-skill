@@ -148,7 +148,7 @@
           "description": "Shell command that re-validates after a review-fix or triage edit, mirroring `fix-validate` without redundant re-fixing already covered elsewhere. Required."
         }
       },
-      "description": "Shell command overrides for the four validation lifecycle steps. Required object; when present and valid, these strings override the matching rows in the Project commands table."
+      "description": "Shell command values for the four lifecycle steps. Required object; the overview's Project commands rows reference these entries, so this object is the single source of the command text."
     },
     "helperRuntime": {
       "type": "object",
