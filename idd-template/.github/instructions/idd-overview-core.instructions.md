@@ -251,11 +251,12 @@ When a phase names a command set, run the corresponding commands.
 (profile-selected `idd-effective-config --key <path>`; without helper output,
 the repository-local `.github/idd/config.json`, with no user-global layers),
 except `commands`,
-`skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`, and
-`upstreamEscalation`, which stay on the repository-local file. Merge-gate reads
-(`mergeGate`, `ciGate`) and trusted-base reads stay on the PR's
-base ref. `commands` overrides the table below when `.github/idd/config.json` exists
-and validates against the canonical schema at
+`skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
+`upstreamEscalation`, and `forcedHandoff`, which stay repository-local.
+Merge-gate reads (`mergeGate`, `ciGate`) and trusted-base reads stay on
+the PR's base ref. `commands` overrides the table below when
+`.github/idd/config.json` exists and validates against the canonical schema
+at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>;
 otherwise the table applies. Absent values keep the gate
 enabled and default approval actors to `owners-and-maintainers-only`.
