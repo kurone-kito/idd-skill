@@ -651,6 +651,19 @@ Ask these checks:
    restating site outside the issue's scope is filed as its own issue,
    not left in a pull request description.
 
+### Loosening a fail-closed check
+
+**Region classifier:** names the parser or function that decides each region
+class the change depends on, and the coordinate system of the text that it
+reads (for example, raw lines or fence-stripped text).
+
+**Must-keep shapes:** lists the rejected shapes that the change must still
+reject, one per line. The list is not exhaustive. A reviewer checks the
+change against it and adds any shape that the change would newly accept.
+
+This subsection cites the observed incident: issue `#3891` and PR `#3934`,
+observed 2026-10-09. See `docs/idd-design-rationale.md#cite-the-observed-incident`.
+
 ## Live-observed claim citation
 
 When a drafted issue's Background section (or its `## Goal` / `## Why
@@ -1057,6 +1070,9 @@ instructions.
 - candidate files, when present, are cues rather than an edit script
 - a `review-needs-decision` body follows the body contract below,
   including its headings, source-comment link, and quoting rules
+- a change that loosens a fail-closed check names its region classifier and
+  its must-keep shapes under `Loosening a fail-closed check`, and the reviewer
+  checks both before the draft is published
 
 ### Resolver
 
