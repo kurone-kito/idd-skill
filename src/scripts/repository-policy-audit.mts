@@ -656,6 +656,7 @@ export const REGRESSION_DEFINITION_PINS: readonly PinnedClauseGroup[] = [
       "A regression is a behavior that the claimed issue's acceptance criteria require to keep working.",
       'a regression is a behavior of the merge base.',
       'A gap in the narrower behavior is a regression only when a stated acceptance criterion enumerates the narrowed behavior.',
+      'Clauses (b) and (c) of the adopt-now test are unaffected by this definition:',
     ],
   },
   {
