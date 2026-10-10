@@ -25,7 +25,7 @@ Collect all signals before routing. Use GitHub server timestamps only.
 | Signal                   | What to collect                                                                                                                                                                 |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claim state              | Active `{claim-id}`, agent-id, branch, latest valid `claimed-by` `created_at`; `none` if unclaimed. Record suspicious marker-shaped comments from untrusted authors separately. |
-| Forced-handoff evidence  | Approver, displaced `{claim-id}`, branch, linked PR, URL (human-gated only); an open PR needs issue-plus-PR approval naming it, or issue-only before its first commit.          |
+| Forced-handoff evidence  | Approver, displaced `{claim-id}`, branch, linked PR, URL (human-gated only); open PR: issue-plus-PR approval naming it, or helper-confirmed issue-only before its first commit. |
 | Open PR and current HEAD | PR number + current HEAD SHA; or `none`.                                                                                                                                        |
 | Activity recency         | Latest `updatedAt` across issue comments, review threads, review bodies, PR comments. Include PR `createdAt`/`updatedAt` when a PR exists.                                      |
 | PR HEAD movement         | Baseline: latest trusted watermark/baseline marker SHA if present, else current PR HEAD. Then confirm whether commits were added after that baseline.                           |
