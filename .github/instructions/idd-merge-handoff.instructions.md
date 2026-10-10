@@ -96,7 +96,7 @@ stop and report.
       routing to F3 is what keeps this no-active-claim continuation
       from contradicting that check (kurone-kito/idd-skill#2977).
    3. If this session has not yet recorded F2 evidence for the
-      `{claim-id}` now active (for example, step 6.2 just established a
+      `{claim-id}` now active (for example, step 6.2 established a
       fresh claim), return to `idd-pre-merge.instructions.md` and run F2
       once to record a fresh snapshot for it, then return here.
    4. Continue directly to `idd-merge.instructions.md`.

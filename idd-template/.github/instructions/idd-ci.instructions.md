@@ -244,7 +244,7 @@ mixed cases hold.
 
 Note: this is a known Rulesets platform behavior, not an `idd-skill`
 dedup bug — GitHub can require every same-named instance non-failing,
-not just the dedup-selected latest.
+not the dedup-selected latest.
 
 **Helper-first**: prints this diagnosis and ordered rerun plan, read-only
 by default; pass `--apply` to also execute it — the preferred recovery
