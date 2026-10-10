@@ -1764,21 +1764,21 @@ test('Node and Bash startup overrides are rejected at every lint scope', () => {
     const options =
       variable === 'SHELLOPTS' ? 'noexec' : '--require=./exit.cjs';
     const assignments = [
-      variable + ': ' + options,
-      '"' + variable + '": ' + options,
-      '{ ' + variable + ': ' + options + ' }',
-      '{ CI: true, ' + variable + ': ' + options + ' }',
+      `${variable}: ${options}`,
+      `"${variable}": ${options}`,
+      `{ ${variable}: ${options} }`,
+      `{ CI: true, ${variable}: ${options} }`,
     ];
     for (const assignment of assignments) {
       const jobEnvironment = assignment.startsWith('{')
-        ? '    env: ' + assignment
-        : '    env:\n      ' + assignment;
+        ? `    env: ${assignment}`
+        : `    env:\n      ${assignment}`;
       const workflowEnvironment = assignment.startsWith('{')
-        ? 'env: ' + assignment
-        : 'env:\n  ' + assignment;
+        ? `env: ${assignment}`
+        : `env:\n  ${assignment}`;
       const stepEnvironment = assignment.startsWith('{')
-        ? '        env: ' + assignment
-        : '        env:\n          ' + assignment;
+        ? `        env: ${assignment}`
+        : `        env:\n          ${assignment}`;
       assert.throws(
         () => assertLintJobEnforcesNodeFloor(jobEnvironment),
         /must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
@@ -1790,7 +1790,7 @@ test('Node and Bash startup overrides are rejected at every lint scope', () => {
 
       const stepBody = syntheticFloorStep(['node --version']).replace(
         '        run: |',
-        stepEnvironment + '\n        run: |',
+        `${stepEnvironment}\n        run: |`,
       );
       assert.throws(
         () => assertNodeVersionLogBeforeFloor(stepBody),
@@ -1798,12 +1798,11 @@ test('Node and Bash startup overrides are rejected at every lint scope', () => {
       );
     }
 
-    const scriptWrite =
-      'echo ' + variable + '=' + options + ' >> "$GITHUB_ENV"';
+    const scriptWrite = `echo ${variable}=${options} >> "$GITHUB_ENV"`;
     assert.throws(
       () =>
         assertLintJobEnforcesNodeFloor(
-          '    steps:\n      - run: |\n          ' + scriptWrite,
+          `    steps:\n      - run: |\n          ${scriptWrite}`,
         ),
       /must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
     );
@@ -1827,14 +1826,14 @@ test('exported Node shell functions are rejected at every lint scope', () => {
 
   for (const assignment of assignments) {
     const jobEnvironment = assignment.startsWith('{')
-      ? '    env: ' + assignment
-      : '    env:\n      ' + assignment;
+      ? `    env: ${assignment}`
+      : `    env:\n      ${assignment}`;
     const workflowEnvironment = assignment.startsWith('{')
-      ? 'env: ' + assignment
-      : 'env:\n  ' + assignment;
+      ? `env: ${assignment}`
+      : `env:\n  ${assignment}`;
     const stepEnvironment = assignment.startsWith('{')
-      ? '        env: ' + assignment
-      : '        env:\n          ' + assignment;
+      ? `        env: ${assignment}`
+      : `        env:\n          ${assignment}`;
     assert.throws(
       () => assertLintJobEnforcesNodeFloor(jobEnvironment),
       rejection,
@@ -1848,7 +1847,7 @@ test('exported Node shell functions are rejected at every lint scope', () => {
         assertNodeVersionLogBeforeFloor(
           syntheticFloorStep(['node --version']).replace(
             '        run: |',
-            stepEnvironment + '\n        run: |',
+            `${stepEnvironment}\n        run: |`,
           ),
         ),
       rejection,
@@ -1859,7 +1858,7 @@ test('exported Node shell functions are rejected at every lint scope', () => {
   assert.throws(
     () =>
       assertLintJobEnforcesNodeFloor(
-        '    steps:\n      - run: |\n          ' + scriptWrite,
+        `    steps:\n      - run: |\n          ${scriptWrite}`,
       ),
     rejection,
   );
@@ -1881,14 +1880,14 @@ test('PATH overrides and Actions environment file writes are rejected', () => {
 
   for (const assignment of assignments) {
     const jobEnvironment = assignment.startsWith('{')
-      ? '    env: ' + assignment
-      : '    env:\n      ' + assignment;
+      ? `    env: ${assignment}`
+      : `    env:\n      ${assignment}`;
     const workflowEnvironment = assignment.startsWith('{')
-      ? 'env: ' + assignment
-      : 'env:\n  ' + assignment;
+      ? `env: ${assignment}`
+      : `env:\n  ${assignment}`;
     const stepEnvironment = assignment.startsWith('{')
-      ? '        env: ' + assignment
-      : '        env:\n          ' + assignment;
+      ? `        env: ${assignment}`
+      : `        env:\n          ${assignment}`;
     assert.throws(
       () => assertLintJobEnforcesNodeFloor(jobEnvironment),
       rejection,
@@ -1902,7 +1901,7 @@ test('PATH overrides and Actions environment file writes are rejected', () => {
         assertNodeVersionLogBeforeFloor(
           syntheticFloorStep(['node --version']).replace(
             '        run: |',
-            stepEnvironment + '\n        run: |',
+            `${stepEnvironment}\n        run: |`,
           ),
         ),
       rejection,
@@ -1913,7 +1912,7 @@ test('PATH overrides and Actions environment file writes are rejected', () => {
   assert.throws(
     () =>
       assertLintJobEnforcesNodeFloor(
-        '    steps:\n      - run: |\n          ' + pathWrite,
+        `    steps:\n      - run: |\n          ${pathWrite}`,
       ),
     rejection,
   );
@@ -1942,7 +1941,7 @@ test('PATH overrides and Actions environment file writes are rejected', () => {
   assert.throws(
     () =>
       assertLintJobEnforcesNodeFloor(
-        '    steps:\n      - run: |\n          ' + indirectWrite,
+        `    steps:\n      - run: |\n          ${indirectWrite}`,
       ),
     rejection,
   );
@@ -2353,7 +2352,7 @@ test('a workflow env anchor keeps its mapping body in the preload scan', () => {
       () =>
         assertLintJobUsesDefaultShell(
           '',
-          'env: &lint-env\n  ' + variable + ': --require=./exit.cjs',
+          `env: &lint-env\n  ${variable}: --require=./exit.cjs`,
         ),
       /workflow environment must not configure or reference NODE_OPTIONS, BASH_ENV, SHELLOPTS, BASH_FUNC_node%%, PATH, GITHUB_PATH, or GITHUB_ENV/,
     );

@@ -81,8 +81,8 @@
   },
   "scripts": {
     "setup:hooks": "husky",
-    "lint": "pnpm run lint:minimum",
-    "lint:minimum": "node scripts/audit-docs.mjs --check && pnpm run lint:contracts && pnpm run lint:boundaries && pnpm run audit:schemas && node scripts/audit-dead-exports.mjs --check && pnpm run typecheck && pnpm run build:check && biome check --error-on-warnings && dprint check \"**/*.md\" && node --test --import ./tests/isolate-state.mts tests/*.test.mts && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
+    "lint": "node src/scripts/check-project.mts lint",
+    "lint:minimum": "pnpm run check",
     "lint:fix": "biome check --write --error-on-warnings && dprint fmt \"**/*.md\" && markdownlint-cli2 --fix \"**/*.md\" && markdownlint-cli2 \"**/*.md\" && cspell lint \"**\" --no-progress",
     "lint:precommit": "biome check --error-on-warnings && dprint check \"**/*.md\" && markdownlint-cli2 \"**/*.md\"",
     "typecheck": "tsc -p tsconfig.json",
@@ -91,11 +91,14 @@
     "lint:contracts": "node scripts/lint-source-contracts.mjs",
     "lint:boundaries": "node scripts/lint-source-boundaries.mjs",
     "audit:schemas": "node scripts/validate-schemas.mjs",
-    "test": "pnpm run test:scripts",
+    "test": "node src/scripts/check-project.mts test",
     "test:scripts": "node --test --import ./tests/isolate-state.mts tests/*.test.mts",
     "fixtures:update": "node scripts/update-fixtures.mjs",
     "docs:sync": "node scripts/sync-docs.mjs --apply",
-    "docs:sync:check": "node scripts/sync-docs.mjs --check"
+    "docs:sync:check": "node scripts/sync-docs.mjs --check",
+    "check": "node src/scripts/check-project.mts",
+    "audit": "node src/scripts/check-project.mts audit",
+    "doctor:github": "node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

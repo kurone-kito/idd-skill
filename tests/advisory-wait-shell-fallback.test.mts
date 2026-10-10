@@ -951,7 +951,7 @@ function runAw1(fixtures: Fixtures): {
   const block = substitutePlaceholders(fencedBlock('## AW1'));
   const result = runScript(
     root,
-    block + '\nprintf "COVERS=%s\\n" "$COPILOT_PENDING_COVERS_HEAD"',
+    `${block}\nprintf "COVERS=%s\\n" "$COPILOT_PENDING_COVERS_HEAD"`,
     {},
   );
   rmSync(root, { recursive: true, force: true });
