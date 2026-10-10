@@ -40,11 +40,11 @@ a new repository.
 > following once after pulling the new template files:
 >
 > 1. Move any local customizations of `fix-validate`,
->    `pre-push-validate` and `post-fix-validate` from your old
->    `.github/instructions/idd-overview.instructions.md` into the
+>    `pre-push-validate`, `post-fix-validate` and `install-deps` from your
+>    old `.github/instructions/idd-overview.instructions.md` into the
 >    `commands.*` object of `.github/idd/config.json`. Keep the other
->    rows in the Project commands table of
->    `.github/instructions/idd-overview-core.instructions.md`.
+>    rows (`issue-scope`, `orphan-first-policy`) in the Project commands
+>    table of `.github/instructions/idd-overview-core.instructions.md`.
 > 2. Delete
 >    `.github/instructions/idd-overview.instructions.md` from your
 >    target repository. No machine consumer reads that path anymore.

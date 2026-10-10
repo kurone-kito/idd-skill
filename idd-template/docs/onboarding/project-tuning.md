@@ -144,6 +144,5 @@ the matching explicit override flag
 (`--fix-validate-commands`, `--pre-push-validate-commands`,
 `--post-fix-validate-commands`, or `--install-deps-command`); an
 explicit flag always wins over a transcript value. `--record-policy`
-does not touch these command rows — their values are written to the
-`commands` object of `.github/idd/config.json`, which the imported
-`Project commands` table names by key.
+does not touch these command rows — their values live in the `commands`
+object of `.github/idd/config.json`.

@@ -640,9 +640,8 @@ full placeholder list.
 ## Machine-readable policy file
 
 `.github/idd/config.json` is the machine-readable record of the same
-policy decisions. It is required. Its `commands` object holds the
-values that the command table in `idd-overview-core.instructions.md` names
-by key. The non-command policy fields are a
+policy decisions and is required. Its `commands` object holds the values
+the command table names by key. The non-command policy fields are a
 machine-readable mirror that should stay aligned with the owning
 instruction files and human-readable policy notes, including
 `claimTiming.*` and `ciWait.*` when the repository records those
