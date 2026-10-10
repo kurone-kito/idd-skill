@@ -17,7 +17,7 @@ No separate `claimed-by` post is required for the delegation itself.
 **Carry the nonce, don't mint one — and still revalidate it.** The
 brief must also carry the orchestrator's current activation nonce
 verbatim; minting a new nonce for the same `{claim-id}` creates the
-exact two-nonce collision step 4 of [Claim verification](idd-claim.instructions.md#claim-verification)
+exact two-nonce collision that step 4 of [Claim verification](idd-claim.instructions.md#claim-verification)
 exists to catch, flagging
 legitimate delegation as a second activation. The worker still
 performs the Claim revalidation gate's nonce check
