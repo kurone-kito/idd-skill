@@ -70,12 +70,13 @@ split-authority profile.
 
 ## Optional machine-readable config
 
-Adopters that want a stable config input for local tooling can add
-`.github/idd/config.json` and mirror their recorded policy decisions
+`.github/idd/config.json` records the adopter's policy decisions
 (`iddVersion`, marker prefix, merge/review/thread policies,
-claim timing values, `trustedMarkerActors`, and JSON-escaped command
-strings). This JSON is optional and does not replace
-`.github/instructions/*.instructions.md` as the execution authority.
+claim timing values, `trustedMarkerActors`, and the JSON-escaped command
+strings under `commands`, including `install-deps`). The overview's command
+table refers to these entries by key, so the file is required for IDD runs.
+It does not replace `.github/instructions/*.instructions.md` as the execution
+authority.
 
 ## Placeholders
 
