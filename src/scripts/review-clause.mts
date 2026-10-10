@@ -34,12 +34,14 @@ import {
   type CopilotReviewBodyShape,
   citationBreakdown,
   classifyCopilotReviewBody,
+  namesFileOrLine,
 } from './copilot-review-body.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
   classifyCommentEditState,
   compareIsoTimestamps,
   DISPOSITION_ACCEPTED_PREFIX_RE,
+  DISPOSITION_REJECTED_PREFIX_RE,
   hasTrustedReviewAckAfter,
   isCopilotErrorReviewBody,
   isCopilotReviewerLogin,
@@ -444,7 +446,11 @@ export function countCitedItemDispositions(
     }
     return (
       (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
-        RECORDED_DEFERRAL_REPLY_PATTERN.test(body)) &&
+        RECORDED_DEFERRAL_REPLY_PATTERN.test(body) ||
+        // #3942 (maintainer decision, 2026-10-11): a Rejected reply counts when
+        // it names a file or line as the evidence, as the PATH A verification
+        // rule allows for a claim the live evidence contradicts.
+        (DISPOSITION_REJECTED_PREFIX_RE.test(body) && namesFileOrLine(body))) &&
       REVIEW_REPLY_STAMP_PATTERN.test(body)
     );
   }).length;

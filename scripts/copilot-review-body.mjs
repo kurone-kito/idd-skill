@@ -243,7 +243,7 @@ export function extractPreviouslyMissedItems(body) {
   }));
 }
 /** True when `body` names a file or line anywhere in its text (#3942). */
-function namesFileOrLine(body) {
+export function namesFileOrLine(body) {
   return CITATION_ANYWHERE_PATTERN.test(
     body.replace(ZERO_WIDTH_CHARS_PATTERN, ''),
   );

@@ -289,7 +289,7 @@ export function extractPreviouslyMissedItems(
 }
 
 /** True when `body` names a file or line anywhere in its text (#3942). */
-function namesFileOrLine(body: string): boolean {
+export function namesFileOrLine(body: string): boolean {
   return CITATION_ANYWHERE_PATTERN.test(
     body.replace(ZERO_WIDTH_CHARS_PATTERN, ''),
   );

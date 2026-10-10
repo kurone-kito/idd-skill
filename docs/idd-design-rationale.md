@@ -1175,8 +1175,9 @@ so a confirmed defect could merge with neither a fix nor a deferral.
 
 The gate now splits that section by citation. A citation-free item keeps the
 review-ack rule. Each cited item needs its own trusted, unedited reply that
-opens with `**Accepted**` or with the recorded-deferral form, and the count
-of such replies must cover the cited items. Replies match by count because a
+opens with `**Accepted**`, with the recorded-deferral form, or with
+`**Rejected**` naming a file or line as its evidence, and the count of such
+replies must cover the cited items. Replies match by count because a
 body item has no thread to pair with, the same as the review-thread route,
 so the reply carries the review-reply stamp that identifies it. A body whose
 items do not match its count fails closed, and a body with no per-item view

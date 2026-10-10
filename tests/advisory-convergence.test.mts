@@ -8612,3 +8612,23 @@ test('Previously missed (#3942): a stamped **Accepted.** reply counts like **Acc
     true,
   );
 });
+
+test('Previously missed (#3942): a stamped Rejected reply with a cited file counts as the disposition', () => {
+  assert.equal(
+    convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [
+      citedDispositionComment({
+        body: `**Rejected** — the claim is contradicted by \`src/scripts/review-clause.mts:448\`.\n${STAMP}`,
+      }),
+    ]),
+    true,
+  );
+});
+
+test('Previously missed (#3942): a stamped Rejected reply without evidence does not count', () => {
+  assert.equal(
+    convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [
+      citedDispositionComment({ body: `**Rejected** — I disagree.\n${STAMP}` }),
+    ]),
+    false,
+  );
+});
