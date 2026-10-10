@@ -249,7 +249,7 @@ which still stop child selection in Discover.
 When a phase names a command set, run the corresponding commands.
 **Adapt this section for other projects.**
 
-The command entries below are read from the `commands` object of
+The three validation entries below are read from the `commands` object of
 `.github/idd/config.json`, which must validate against the canonical
 schema at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>. If
