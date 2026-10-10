@@ -2203,11 +2203,15 @@ function primaryCheckoutNamesRepo(root, owner, repo) {
 }
 /**
  * #3824: whether a git remote URL names `owner/repo`. Accepts the https, scp
- * style, and ssh forms, with or without a trailing `.git`. The match is
- * case-insensitive, as GitHub owner and repository names are.
+ * style, and ssh forms (an optional port and an optional trailing `.git`).
+ * Local paths and file URLs never match. The match is case-insensitive, as
+ * GitHub owner and repository names are.
  */
 export function remoteNamesRepo(url, owner, repo) {
-  const match = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim());
+  const match =
+    /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?[^/:]+(?::\d+)?[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(
+      url.trim(),
+    );
   if (match === null) return false;
   return (
     match[1].toLowerCase() === owner.toLowerCase() &&

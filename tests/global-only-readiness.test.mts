@@ -314,6 +314,14 @@ test('a remote URL names the repository in its https, scp, and ssh forms', () =>
     ),
     true,
   );
+  assert.equal(
+    remoteNamesRepo(
+      'ssh://git@github.com:22/kurone-kito/idd-skill.git',
+      'kurone-kito',
+      'idd-skill',
+    ),
+    true,
+  );
 });
 
 test('a remote URL for another repository or a local path does not match', () => {
@@ -330,4 +338,16 @@ test('a remote URL for another repository or a local path does not match', () =>
     false,
   );
   assert.equal(remoteNamesRepo('', 'kurone-kito', 'idd-skill'), false);
+  assert.equal(
+    remoteNamesRepo('/kurone-kito/idd-skill.git', 'kurone-kito', 'idd-skill'),
+    false,
+  );
+  assert.equal(
+    remoteNamesRepo(
+      'file:///srv/git/kurone-kito/idd-skill.git',
+      'kurone-kito',
+      'idd-skill',
+    ),
+    false,
+  );
 });
