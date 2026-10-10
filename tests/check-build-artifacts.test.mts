@@ -1497,7 +1497,11 @@ test('real tools: the CLI exits 0 when clean and 1 on a corrupted committed veri
   assert.deepEqual(readdirSync(clean.tmpRoot), []);
 });
 
-test('fixture: builds its own repository and does not copy the template history (#3954)', () => {
+test('fixture: builds its own repository and does not copy the template history (#3954)', {
+  // fixture() builds the template with the real tools, so it skips in the
+  // bare-node lane the same way the real-tools tests above do.
+  skip: SKIP,
+}, () => {
   // A copied .git would list the template's `initial` commit. The fixture
   // makes exactly one commit of its own, named for its case number.
   const { root } = fixture();
