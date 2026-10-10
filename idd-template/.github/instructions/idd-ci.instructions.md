@@ -307,7 +307,7 @@ ordering dependency a shared check-definition change creates is
 invisible to disjoint-file-set track planning.
 
 **Code-scanning-alerts lookup**: an unscoped call hides a PR-only
-alert, even one failing this PR's own check. Pass `pr=<n>` explicitly.
+alert, even one failing this PR's own check. Pass `pr=<n>`.
 
 ## Interpretation
 
