@@ -38,7 +38,7 @@ import {
 } from './external-check-waiver.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
-  GLOBAL_ONLY_WORKFLOW_PATH,
+  GLOBAL_ONLY_ABSENT_PATHS,
   resolveGlobalOnlyIgnoredCheckNames,
 } from './global-only-profile.mjs';
 import {
@@ -2124,24 +2124,21 @@ export function resolveGlobalOnlyRunIgnores(input) {
   });
 }
 /**
- * #3824: whether the template advisory workflow is absent on the trusted base
- * ref. The contents API answers 404 both for a missing path and for a masked
- * 403, so a clean `null` on the file alone does not prove absence. The
- * repository root listing must read first: an array there shows the contents
- * are readable, and only then does a `null` on the file mean it is absent.
- * Any other outcome keeps the workflow assumed present.
+ * #3824: whether the workflows a global-only profile depends on are absent on
+ * the trusted base ref. Both the advisory workflow and the cleanup workflow
+ * must be absent: the F4 skip assumes no cleanup run exists to race. The
+ * contents API answers 404 both for a missing path and for a masked 403, so a
+ * clean `null` on a file alone does not prove absence. The repository root
+ * listing must read first: an array there shows the contents are readable, and
+ * only then does a `null` on each path mean it is absent. Any other outcome
+ * keeps the workflows assumed present.
  */
 export function baseWorkflowAbsentAt(port, owner, repo, ref) {
   try {
     const root = port.getRepositoryContentAtRef(owner, repo, '', ref);
     if (!Array.isArray(root)) return false;
-    return (
-      port.getRepositoryContentAtRef(
-        owner,
-        repo,
-        GLOBAL_ONLY_WORKFLOW_PATH,
-        ref,
-      ) === null
+    return GLOBAL_ONLY_ABSENT_PATHS.every(
+      (path) => port.getRepositoryContentAtRef(owner, repo, path, ref) === null,
     );
   } catch {
     return false;
@@ -2203,20 +2200,23 @@ function primaryCheckoutNamesRepo(root, owner, repo) {
   }
 }
 /**
- * #3824: whether a git remote URL names `owner/repo` on `host`. Accepts https
- * and ssh URLs and the scp-style form, with an optional user, port, and
- * trailing `.git`. Any other scheme (file, ftp, git) and local paths never
- * match. The host must be the GitHub server the run uses, so a remote on an
- * unrelated server cannot stand in for the target. Matching is
+ * #3824: whether a git remote URL names `owner/repo` on `host`. Accepts the
+ * https and ssh URL forms (with an optional user and port) and the scp-style
+ * form, which has the `:` after the host. The scp-style form needs that colon:
+ * without it, `github.com/owner/repo` reads as a relative local path, so it
+ * never matches. Other schemes (file, ftp, git) and local paths never match.
+ * The host must be the GitHub server the run uses. Matching is
  * case-insensitive, as host, owner, and repository names are.
  */
 export function remoteNamesRepo(url, owner, repo, host = 'github.com') {
   const match =
-    /^(?:(?:https|ssh):\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(
+    /^(?:(?:https|ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/|(?:[^@/]+@)?([^/:]+):)([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(
       url.trim(),
     );
   if (match === null) return false;
-  const [, remoteHost = '', remoteOwner = '', remoteRepo = ''] = match;
+  const remoteHost = match[1] ?? match[2] ?? '';
+  const remoteOwner = match[3] ?? '';
+  const remoteRepo = match[4] ?? '';
   return (
     remoteHost.toLowerCase() === host.toLowerCase() &&
     remoteOwner.toLowerCase() === owner.toLowerCase() &&

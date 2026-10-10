@@ -358,6 +358,7 @@ test('a remote on another scheme, another server, or a local path does not match
     'ftp://github.com/kurone-kito/idd-skill.git',
     'file://github.com/kurone-kito/idd-skill.git',
     'git://github.com/kurone-kito/idd-skill.git',
+    'github.com/kurone-kito/idd-skill.git',
   ]) {
     assert.equal(remoteNamesRepo(url, 'kurone-kito', 'idd-skill'), false, url);
   }
@@ -370,4 +371,28 @@ test('the remote host must be the GitHub server in use', () => {
     true,
   );
   assert.equal(remoteNamesRepo(ghe, 'kurone-kito', 'idd-skill'), false);
+});
+
+test('a committed cleanup workflow keeps the base read from counting as absent', () => {
+  const content = {
+    ...READABLE_ROOT,
+    [`o/r/.github/workflows/post-merge-cleanup.yml@main`]: {
+      name: 'post-merge-cleanup.yml',
+    },
+  };
+  assert.equal(
+    baseWorkflowAbsentAt(contentPort(content), 'o', 'r', 'main'),
+    false,
+  );
+});
+
+test('the flag keeps the advisory check when a cleanup workflow is committed', () => {
+  const ci = collectCi(['--global-only'], GLOBAL_ONLY, {
+    ...READABLE_ROOT,
+    [`o/r/.github/workflows/post-merge-cleanup.yml@main`]: {
+      name: 'post-merge-cleanup.yml',
+    },
+  });
+  assert.deepEqual(ci.requiredCheckNames, [ADVISORY]);
+  assert.deepEqual(ci.missingRequiredCheckNames, [ADVISORY]);
 });

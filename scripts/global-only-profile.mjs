@@ -8,7 +8,7 @@
 // template advisory-convergence workflow then never reports, so pre-merge
 // readiness must not require its check. The profile is decided only from the
 // installed payload (the activation reasons below) AND from the trusted base
-// ref lacking the workflow file. A pull request can change neither, so it
+// ref lacking both workflow files. A pull request can change neither, so it
 // cannot switch the advisory gate off by deleting a workflow of its own.
 /** The check that a template workflow produces and a global-only run may not require. */
 export const GLOBAL_ONLY_WORKFLOW_CHECK_NAMES = Object.freeze([
@@ -17,6 +17,14 @@ export const GLOBAL_ONLY_WORKFLOW_CHECK_NAMES = Object.freeze([
 /** The template workflow behind those checks, read on the trusted base ref. */
 export const GLOBAL_ONLY_WORKFLOW_PATH =
   '.github/workflows/idd-advisory-convergence.yml';
+/** The cleanup workflow the F4 skip relies on being absent. */
+export const GLOBAL_ONLY_CLEANUP_WORKFLOW_PATH =
+  '.github/workflows/post-merge-cleanup.yml';
+/** Every workflow path a global-only profile requires to be absent. */
+export const GLOBAL_ONLY_ABSENT_PATHS = Object.freeze([
+  GLOBAL_ONLY_WORKFLOW_PATH,
+  GLOBAL_ONLY_CLEANUP_WORKFLOW_PATH,
+]);
 /**
  * Activation reasons that mean the instructions come from the installed
  * payload rather than from this repository's committed instruction files:
