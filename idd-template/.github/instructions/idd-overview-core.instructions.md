@@ -301,7 +301,7 @@ Read this file first, then load the phase file matching your situation.
 <!-- dprint-ignore-start -->
 | Situation | Read this file |
 | --- | --- |
-| Starting fresh, and fan-out holds: helper support installed, a worker-table harness with Eligibility `orchestrator`, `orchestrator.maxWorkers` at least 2, not lite, not one explicit issue, not `GITHUB_ACTIONS` | `idd-orchestrator.instructions.md`, then `idd-discover.instructions.md` |
+| Starting fresh, and fan-out holds: helper support installed, a worker-table harness with Eligibility `orchestrator`, `orchestrator.maxWorkers` at least 2, not lite, not one explicit issue or single-issue request, not `GITHUB_ACTIONS` | `idd-orchestrator.instructions.md`, then `idd-discover.instructions.md` |
 | Starting fresh (no active claim) | `idd-discover.instructions.md`, then `idd-claim.instructions.md` |
 | Starting fresh with one explicit issue target | `idd-discover.instructions.md` A0-T, then `idd-claim.instructions.md` |
 | Unsure mid E/F-phase while still owning claim | [Live-session E/F orientation](../../docs/idd-workflow.md#live-session-ef-orientation) |
