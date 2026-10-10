@@ -2210,8 +2210,9 @@ function isCodeIdentifierProcessMention(
 }
 
 // #3891: `ignore` is a real value of a Node `stdio` option (and of the other
-// std* keys), so `{ stdio: 'ignore' }` in a code range is an option value,
-// not an instruction to ignore a policy. The exemption is narrow on purpose:
+// std* keys), so `{ stdio: 'ignore' }` in a single-line inline code span is an
+// option value, not an instruction to ignore a policy (#3984 narrowed the
+// exemption to that span). The exemption is narrow on purpose:
 // the verb must be exactly lowercase `ignore`, it must be a whole quoted
 // literal, and its key must be one of the four std* keys, with only
 // whitespace, `[`, commas and other quoted literals between the colon and
@@ -2305,14 +2306,12 @@ function findNonCodeMask(source: string): boolean[] {
 }
 
 interface StdioScanCache {
-  // "start:end" keys of the ranges the parser classifies as fenced code.
-  fencedKeys: ReadonlySet<string>;
   scans: Map<number, StdioRangeScan>;
 }
 
 interface StdioRangeScan {
   // Local index where the code body begins, or -1 when no literal in the
-  // range can be exempt (its opening line is an info string with no end).
+  // range can be exempt.
   bodyStart: number;
   // Non-code flags, indexed by local position in the range.
   masked: boolean[];
@@ -2333,33 +2332,16 @@ const NO_STDIO_EXEMPTION: StdioRangeScan = {
 
 // Scans one code range in a single pass, so each candidate literal in it costs
 // a binary search and a short segment check, not a rescan of the range.
-function scanStdioRange(region: string, isFence: boolean): StdioRangeScan {
-  // The parser decides what a range is. A fence's delimiter is its first
-  // backtick or tilde run of three or more markers, whatever indentation or
-  // container prefix precedes it, and its opening line's info string is
-  // skipped. An inline span's delimiter is the backtick run at the start of
-  // the range, on one line. Any other range, such as an indented code block or
-  // several blocks merged, is not exempt.
+function scanStdioRange(region: string): StdioRangeScan {
+  // Only a single-line range that starts with a backtick run is exempt (#3984).
+  // That covers an inline span, and also a one-line fence opener with no
+  // closing run, such as one on the last line of the body. That range runs to
+  // the end of the text, so a directive inside it is wholly code and inert
+  // either way. A fence, an indented block, or several blocks merged is
+  // multi-line and fails closed, so the lexer never classifies a block's
+  // delimiter or info string.
   let openerEnd = 0;
-  if (isFence) {
-    const delimiterAt = region.search(/[`~]/);
-    if (delimiterAt >= 0) {
-      const markerChar = region[delimiterAt];
-      let runEnd = delimiterAt;
-      while (region[runEnd] === markerChar) {
-        runEnd += 1;
-      }
-      if (runEnd - delimiterAt >= 3) {
-        // The info string is metadata, not code, so the whole opening line is
-        // skipped; a literal on it fails closed.
-        const lineEnd = region.indexOf('\n', runEnd);
-        if (lineEnd < 0) {
-          return NO_STDIO_EXEMPTION;
-        }
-        openerEnd = lineEnd + 1;
-      }
-    }
-  } else if (region[0] === '`' && !region.includes('\n')) {
+  if (region[0] === '`' && !region.includes('\n')) {
     while (region[openerEnd] === '`') {
       openerEnd += 1;
     }
@@ -2426,10 +2408,7 @@ function isStdioIgnoreOptionValue(
   }
   let scan = cache.scans.get(codeRange.start);
   if (scan === undefined) {
-    scan = scanStdioRange(
-      text.slice(codeRange.start, codeRange.end),
-      cache.fencedKeys.has(`${codeRange.start}:${codeRange.end}`),
-    );
+    scan = scanStdioRange(text.slice(codeRange.start, codeRange.end));
     cache.scans.set(codeRange.start, scan);
   }
   // Local index of the literal's opening quote within the range.
@@ -2470,7 +2449,6 @@ function findPolicyOverrideMatch(
   text: string,
   maskedText: string,
   getCodeRangeAt: (start: number) => { start: number; end: number } | null,
-  fencedRanges: ReadonlySet<string>,
 ): { index: number; text: string } | null {
   // #2408: POLICY_OVERRIDE_PATTERN's own greedy `[\s\S]{0,N}` backtracks
   // from the far end of the window inward, so its own noun capture (group
@@ -2545,7 +2523,6 @@ function findPolicyOverrideMatch(
   // fallback and retain only matches that are not wholly inside code.
   const pattern = new RegExp(POLICY_OVERRIDE_PATTERN.source, 'gi');
   const stdioScans: StdioScanCache = {
-    fencedKeys: fencedRanges,
     scans: new Map(),
   };
   let match: RegExpExecArray | null;
@@ -3343,12 +3320,6 @@ export function checkTrustSafety(context: Context): CheckOutcome {
   // even when a fenced block precedes the match.
   const bodyOffset = issue.title.length + 1;
   const bodyCodeRanges = findMarkdownCodeRanges(issue.body);
-  // Keys are shifted by the title offset, to match the scan text's coordinates.
-  const bodyFencedRanges = new Set(
-    findFencedCodeRanges(issue.body).map(
-      (range) => `${range.start + bodyOffset}:${range.end + bodyOffset}`,
-    ),
-  );
   const policyMatch = findPolicyOverrideMatch(
     corpus,
     `${issue.title}\n${maskMarkdownCodeRegionsPreservingPositions(issue.body, bodyCodeRanges)}`,
@@ -3368,7 +3339,6 @@ export function checkTrustSafety(context: Context): CheckOutcome {
             end: range.end + bodyOffset,
           };
     },
-    bodyFencedRanges,
   );
   if (policyMatch) {
     return {

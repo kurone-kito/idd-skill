@@ -8527,7 +8527,7 @@ for (const line of STDIO_OPTION_FALSE_POSITIVE_LINES) {
   });
 }
 
-test('trust safety passes a std* option value in a fenced block followed by prose (#3891)', () => {
+test('trust safety rejects a std* option value in a fenced block followed by prose (#3891)', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({
     issue: {
@@ -8536,7 +8536,7 @@ test('trust safety passes a std* option value in a fenced block followed by pros
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 // cspell:ignore mystdio xstdio αstdio
@@ -8594,7 +8594,7 @@ test('trust safety deliberately now passes a std* option value followed by a lis
   }
 });
 
-test('trust safety exempts a std* option value in a long fenced example followed by prose (#3891)', () => {
+test('trust safety rejects a std* option value in a long fenced example followed by prose (#3891)', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({
     issue: {
@@ -8603,7 +8603,7 @@ test('trust safety exempts a std* option value in a long fenced example followed
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety fails closed for a std* option value whose segment is longer than 256 characters (#3891)', () => {
@@ -8642,7 +8642,7 @@ test('trust safety keeps a std* option value inside a template literal in a fenc
   assert.equal(result.pass, false);
 });
 
-test('trust safety passes a std* option value in an indented fenced block followed by prose (#3891)', () => {
+test('trust safety rejects a std* option value in an indented fenced block followed by prose (#3891)', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({
     issue: {
@@ -8651,10 +8651,10 @@ test('trust safety passes a std* option value in an indented fenced block follow
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
-test('trust safety passes a std* option value in a blockquote fence followed by prose (#3891)', () => {
+test('trust safety rejects a std* option value in a blockquote fence followed by prose (#3891)', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({
     issue: {
@@ -8663,7 +8663,7 @@ test('trust safety passes a std* option value in a blockquote fence followed by 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety keeps a std* key in a fence info string as metadata, not an option (#3891)', () => {
@@ -8715,7 +8715,7 @@ test('trust safety keeps a backtick-wrapped std* value in an indented code block
   assert.equal(result.pass, false);
 });
 
-test('trust safety passes a std* option value in a list-indented fence followed by prose (#3891)', () => {
+test('trust safety rejects a std* option value in a list-indented fence followed by prose (#3891)', () => {
   const tick = String.fromCharCode(96);
   const result = checkTrustSafety({
     issue: {
@@ -8724,7 +8724,21 @@ test('trust safety passes a std* option value in a list-indented fence followed 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects a std* value in a multi-line code span (#3984)', () => {
+  // Only a single-line inline span is exempt (#3984); a span that wraps onto a
+  // second line fails closed like a fence does.
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nPlease ${tick}stdio:\n'ignore'${tick} repository policy.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety keeps a std* key after a closing backtick inside a fence as not an option (#3891)', () => {
