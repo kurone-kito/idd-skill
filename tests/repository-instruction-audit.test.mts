@@ -437,6 +437,56 @@ test('repository instruction audit CLI accepts a positive read-only scratch fixt
   }
 });
 
+const referenceOverview = overview
+  .replace(
+    '| **fix-validate** | `{{FIX_VALIDATE_COMMANDS}}` |',
+    '| **fix-validate** | `commands.fix-validate` |',
+  )
+  .replace(
+    '| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |',
+    '| **pre-push-validate** | `commands.pre-push-validate` |',
+  )
+  .replace(
+    '| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |',
+    '| **post-fix-validate** | `commands.post-fix-validate` |',
+  );
+
+test('repository instruction audit accepts command rows that reference config keys', () => {
+  const root = writeFixture({
+    ...baseFiles,
+    'idd-template/.github/instructions/idd-overview-core.instructions.md':
+      referenceOverview,
+  });
+  try {
+    const result = runAudit(root);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('repository instruction audit rejects a command row that mixes a reference with a command', () => {
+  const mixedOverview = referenceOverview.replace(
+    '| **pre-push-validate** | `commands.pre-push-validate` |',
+    '| **pre-push-validate** | `commands.pre-push-validate && npx cspell lint` |',
+  );
+  assert.notEqual(mixedOverview, referenceOverview);
+  const root = writeFixture({
+    ...baseFiles,
+    'idd-template/.github/instructions/idd-overview-core.instructions.md':
+      mixedOverview,
+  });
+  try {
+    const result = runAudit(root);
+    assert.notEqual(result.status, 0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.match(output, /non-node\.overview-fallback/u);
+    assert.match(output, /pre-push-validate/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('audit-docs runs source contracts for the canonical repository identity', () => {
   const root = writeAggregateFixture('canonical');
   try {

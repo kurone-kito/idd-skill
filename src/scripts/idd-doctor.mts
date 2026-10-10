@@ -1085,6 +1085,10 @@ function isConcreteCommandValue(value: string | null): boolean {
   if (value.toLowerCase() === 'true') {
     return false;
   }
+  // A row that references its config key is not a command of its own.
+  if (/^commands\.[a-z][a-z0-9-]*$/u.test(value)) {
+    return false;
+  }
   return !/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/.test(value);
 }
 

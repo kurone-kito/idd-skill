@@ -547,6 +547,59 @@ test('config drift scenarios detect mismatches between config and overview defau
   ]);
 });
 
+test('config drift resolves command rows that reference config keys', () => {
+  const overviewRows = (fixValidate: string, prePushValidate: string) =>
+    [
+      '| **install-deps** | `node scripts/verify-install-deps.mjs` |',
+      `| **fix-validate** | \`${fixValidate}\` |`,
+      `| **pre-push-validate** | \`${prePushValidate}\` |`,
+      '| **post-fix-validate** | `commands.post-fix-validate` |',
+      '| **issue-scope** | `roadmap-first` |',
+      '| **orphan-first-policy** | `none` |',
+    ].join('\n');
+  const config = {
+    commands: {
+      'install-deps': 'node scripts/verify-install-deps.mjs',
+      'fix-validate': 'npx biome check --write',
+      'pre-push-validate': 'pnpm test:scripts',
+      'post-fix-validate': 'npx biome check',
+    },
+    issueScope: 'roadmap-first',
+    orphanFirstPolicy: 'none',
+  };
+  const referenceOverview = overviewRows(
+    'commands.fix-validate',
+    'commands.pre-push-validate',
+  );
+
+  assert.deepEqual(collectPolicyConfigDrift(config, referenceOverview), []);
+
+  const missingTarget = {
+    ...config,
+    commands: { ...config.commands, 'pre-push-validate': '' },
+  };
+  assert.deepEqual(collectPolicyConfigDrift(missingTarget, referenceOverview), [
+    {
+      path: 'commands.pre-push-validate',
+      expected: 'commands.pre-push-validate',
+      actual: '',
+      reason: 'reference target commands.pre-push-validate is missing or empty',
+    },
+  ]);
+
+  const mixedOverview = overviewRows(
+    'commands.fix-validate && npx cspell lint',
+    'commands.pre-push-validate',
+  );
+  assert.deepEqual(collectPolicyConfigDrift(config, mixedOverview), [
+    {
+      path: 'commands.fix-validate',
+      expected: 'commands.fix-validate && npx cspell lint',
+      actual: 'npx biome check --write',
+    },
+  ]);
+});
+
 test('helper runtime inspection accepts absent and supported profiles, rejects unsupported values', () => {
   assert.deepEqual(inspectHelperRuntimeConfig({}), {
     status: 'absent',
