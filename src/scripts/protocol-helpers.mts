@@ -9366,6 +9366,16 @@ export function summarizeRequiredChecks(
   const requiredCheckNames = branchReviewRequirements.requiredCheckNames.filter(
     (name) => !ignoredRequiredNames.has(name),
   );
+  // #3824: a name the ignore list removed must not keep the source-pinned
+  // state set on its behalf. Recompute the pinned view over the kept names.
+  const sourcePinnedNames =
+    branchReviewRequirements.requiredCheckSourcePinnedNames.filter(
+      (name) => !ignoredRequiredNames.has(name),
+    );
+  const requiredCheckSourcePinned =
+    branchReviewRequirements.requiredCheckSourcePinned &&
+    (sourcePinnedNames.length > 0 ||
+      branchReviewRequirements.requiredCheckSourcePinnedUnresolved);
   const requiredCheckNameSet = new Set(requiredCheckNames);
   const validWaivers = waivers?.valid ?? [];
 
@@ -9597,14 +9607,12 @@ export function summarizeRequiredChecks(
     // operator has opted in for that one.
     if (
       status === 'success' &&
-      branchReviewRequirements.requiredCheckSourcePinned &&
+      requiredCheckSourcePinned &&
       (!trustSourcePinnedRequiredChecks ||
         branchReviewRequirements.requiredCheckSourcePinnedUnresolved)
     ) {
       status = 'unknown';
-      sourcePinnedRequiredCheckNames = [
-        ...branchReviewRequirements.requiredCheckSourcePinnedNames,
-      ];
+      sourcePinnedRequiredCheckNames = [...sourcePinnedNames];
       sourcePinnedUnresolved =
         branchReviewRequirements.requiredCheckSourcePinnedUnresolved;
     }
@@ -9678,7 +9686,7 @@ export function summarizeRequiredChecks(
     noRequiredChecksConfigured:
       !protectionReadsUnreadable &&
       requiredCheckNames.length === 0 &&
-      !branchReviewRequirements.requiredCheckSourcePinned,
+      !requiredCheckSourcePinned,
     // #1377: surfaced separately from `noRequiredChecksConfigured` so a hold
     // message can name the unreadable-read cause specifically instead of a
     // generic "CI is not all-passing".

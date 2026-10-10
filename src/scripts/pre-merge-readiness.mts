@@ -6,6 +6,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { execFileSync } from 'node:child_process';
 import {
   ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   resolveSelfReferentialTriggerFiles,
@@ -52,7 +53,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { computeActivation } from './idd-activation.mts';
+import { type ActivationResult, computeActivation } from './idd-activation.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import {
   inspectDevelopmentBranch,
@@ -469,6 +470,8 @@ export function collectPreMergeReadiness(
     repo: string,
     ref: string,
   ) => IddConfig | null = loadTrustedIddConfig,
+  resolveActivation: () => ActivationResult = () =>
+    computeActivation({ cwd: primaryCheckoutRoot() }),
 ): PreMergeReadinessReport {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -1206,17 +1209,14 @@ export function collectPreMergeReadiness(
   // #3824: a global-only run may leave out the template advisory check, but
   // only when the local activation says so AND the trusted base ref has no
   // template workflow. Off unless --global-only is passed.
-  const ignoredRequiredCheckNames = args.globalOnly
-    ? resolveGlobalOnlyIgnoredCheckNames({
-        activation: computeActivation({ cwd: process.cwd() }),
-        baseWorkflowAbsent: baseWorkflowAbsentAt(
-          port,
-          owner,
-          repo,
-          trustedConfigRef,
-        ),
-      })
-    : [];
+  const ignoredRequiredCheckNames = resolveGlobalOnlyRunIgnores({
+    globalOnly: args.globalOnly,
+    activation: resolveActivation,
+    port,
+    owner,
+    repo,
+    trustedRef: trustedConfigRef,
+  });
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedReviews = reviews.map(normalizeReview);
@@ -2245,8 +2245,8 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--nonce <token>] [--now <ISO8601>]
-  node scripts/pre-merge-readiness.mjs --pr <number> --claimless [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--now <ISO8601>]
+  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--global-only] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--nonce <token>] [--now <ISO8601>]
+  node scripts/pre-merge-readiness.mjs --pr <number> --claimless [--global-only] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--now <ISO8601>]
   Deprecated aliases (one release): --expected-claim-id -> --claim-id, --expected-agent-id -> --agent-id
 
   --nonce <token>  this session's own recorded activation-nonce (#1522): when
@@ -2256,6 +2256,12 @@ function printHelp(): void {
                     catching a second, independent activation of the same
                     claim-id as a collision. Omit --nonce, or leave it empty,
                     to skip this comparison entirely (backward compatible).
+  --global-only    #3824: opt-in. Leave the advisory-convergence check out of the
+                    required list only when the primary checkout activation is a
+                    payload-backed profile (minimal import or user-global override)
+                    AND the trusted base ref has no
+                    .github/workflows/idd-advisory-convergence.yml. Otherwise the
+                    check stays required.
   --claimless      skip claim fetch/revalidation (#2017). For a PR whose
                     closingIssuesReferences is empty, or (#3328) one that
                     carries a valid, trusted, unedited <!-- idd-out-of-loop:
@@ -2503,17 +2509,47 @@ export function resolveEligibleCodeownerUserLogins(
 }
 
 /**
- * #3824: whether the template advisory workflow is absent on the trusted
- * base ref. Only a clean `null` (a 404) counts as absent. Any error keeps the
- * workflow assumed present, so the check stays required.
+ * #3824: the check names a run may leave out of its required list. Empty
+ * unless `--global-only` is passed. `activation` is a thunk, so a run without
+ * the flag never reads the activation of the checkout.
  */
-function baseWorkflowAbsentAt(
+export function resolveGlobalOnlyRunIgnores(input: {
+  globalOnly: boolean;
+  activation: () => ActivationResult;
+  port: ProviderPort;
+  owner: string;
+  repo: string;
+  trustedRef: string;
+}): string[] {
+  if (!input.globalOnly) return [];
+  return resolveGlobalOnlyIgnoredCheckNames({
+    activation: input.activation(),
+    baseWorkflowAbsent: baseWorkflowAbsentAt(
+      input.port,
+      input.owner,
+      input.repo,
+      input.trustedRef,
+    ),
+  });
+}
+
+/**
+ * #3824: whether the template advisory workflow is absent on the trusted base
+ * ref. The contents API answers 404 both for a missing path and for a masked
+ * 403, so a clean `null` on the file alone does not prove absence. The
+ * repository root listing must read first: an array there shows the contents
+ * are readable, and only then does a `null` on the file mean it is absent.
+ * Any other outcome keeps the workflow assumed present.
+ */
+export function baseWorkflowAbsentAt(
   port: ProviderPort,
   owner: string,
   repo: string,
   ref: string,
 ): boolean {
   try {
+    const root = port.getRepositoryContentAtRef(owner, repo, '', ref);
+    if (!Array.isArray(root)) return false;
     return (
       port.getRepositoryContentAtRef(
         owner,
@@ -2525,6 +2561,26 @@ function baseWorkflowAbsentAt(
   } catch {
     return false;
   }
+}
+
+/**
+ * #3824: the main worktree of this clone, which is the trusted operator
+ * checkout. Activation is read here and never from a linked worktree that a
+ * pull request may have changed. Falls back to the current directory when git
+ * cannot list the worktrees.
+ */
+export function primaryCheckoutRoot(): string {
+  try {
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const first = out.split('\n').find((line) => line.startsWith('worktree '));
+    if (first) return first.slice('worktree '.length);
+  } catch {
+    // Fall through to the current directory.
+  }
+  return process.cwd();
 }
 
 function fetchCodeownersText(
