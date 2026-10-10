@@ -17,8 +17,9 @@ this file links to them rather than restating them.
 
 Activate fan-out only when every condition holds:
 
-- the harness has an eligible row in the
-  [worker mechanism table](../../docs/idd-workflow.md#worker-delegation);
+- the harness's row in the
+  [worker mechanism table](../../docs/idd-workflow.md#worker-delegation) has
+  Eligibility `orchestrator`;
 - helper support is installed, so the profile-selected `idd-worker-budget`
   command exists (`instructions-only` has none);
 - the effective `orchestrator.maxWorkers` is at least 2 (run the
