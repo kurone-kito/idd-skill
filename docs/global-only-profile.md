@@ -7,10 +7,12 @@ tags: [global-only, profile, readiness]
 
 # Global-only profile
 
-A global-only profile runs IDD with no workflows committed to the
-repository. The instructions come from the installed payload, and the
-template advisory-convergence workflow (`idd-advisory-convergence`) never
-reports. The merge and cleanup instructions point here.
+A global-only profile runs IDD without the two workflows it depends on: the
+template advisory-convergence workflow (`idd-advisory-convergence`), which
+never reports, and the cleanup workflow (`post-merge-cleanup`), which never
+runs. The instructions come from the installed payload. The merge and cleanup
+instructions point here. Other workflows the repository commits do not change
+the profile.
 
 ## Definition
 
