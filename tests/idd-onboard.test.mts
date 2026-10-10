@@ -688,10 +688,7 @@ test('restoreExistingCommandsTable restores install-deps like the validate rows 
   assert.equal(restored.commands['fix-validate'], 'npx biome check --write');
   // install-deps is restored from the snapshot, the same as the validate
   // rows: a customized operator value survives the forced re-import.
-  assert.equal(
-    restored.commands['install-deps'],
-    'npm install (customized)',
-  );
+  assert.equal(restored.commands['install-deps'], 'npm install (customized)');
 });
 
 test('readExistingCommandsTable drops a placeholder install-deps value, so a re-import leaves the token for --substitute (#3959)', () => {
@@ -2955,7 +2952,10 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
   const finalConfig = JSON.parse(
     readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
   ) as { commands: Record<string, string> };
-  assert.equal(finalConfig.commands['install-deps'], 'npm install (customized)');
+  assert.equal(
+    finalConfig.commands['install-deps'],
+    'npm install (customized)',
+  );
   assert.equal(
     finalConfig.commands['fix-validate'],
     'npx biome check --write (customized)',
@@ -2990,7 +2990,10 @@ test('bin/idd-onboard.mjs --import --force leaves a placeholder install-deps as 
   const afterReimport = JSON.parse(
     readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
   ) as { commands: Record<string, string> };
-  assert.equal(afterReimport.commands['install-deps'], '{{INSTALL_DEPS_COMMAND}}');
+  assert.equal(
+    afterReimport.commands['install-deps'],
+    '{{INSTALL_DEPS_COMMAND}}',
+  );
 
   const resolved = runCliBin([
     '--substitute',
