@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json",
   "title": "IDD Policy Config",
-  "description": "Machine-readable policy baseline for adopter-side IDD configuration.",
+  "description": "Machine-readable policy baseline for adopter-side IDD configuration. The file .github/idd/config.json is required: idd-doctor reports a missing file as an error, and the overview command rows read commands.<key> from it.",
   "type": "object",
   "required": [
     "iddVersion",

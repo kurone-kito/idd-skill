@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   backLinkPatternFor,
+  checkCanonicalConfigPresence,
   checkClaimTimingConsistency,
   checkDependencyVersionDrift,
   checkLiveConfigSchema,
@@ -3574,6 +3575,48 @@ const emptyReport = (root: string) => ({
   errors: [] as string[],
   warnings: [] as string[],
   passes: [] as string[],
+});
+
+test('checkCanonicalConfigPresence reports a missing config.json as an error', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-config-missing-'));
+  try {
+    const report = emptyReport(dir);
+    checkCanonicalConfigPresence(dir, report);
+    assert.equal(report.errors.length, 1);
+    assert.match(
+      report.errors[0] ?? '',
+      /\.github\/idd\/config\.json is missing/,
+    );
+    assert.match(report.errors[0] ?? '', /idd-onboard/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkCanonicalConfigPresence does not accept a legacy-only install', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-config-legacy-'));
+  try {
+    writeFileSync(join(dir, 'idd-policy.json'), '{}');
+    const report = emptyReport(dir);
+    checkCanonicalConfigPresence(dir, report);
+    assert.equal(report.errors.length, 1);
+    assert.match(report.errors[0] ?? '', /idd-policy\.json alone/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkCanonicalConfigPresence passes when config.json exists', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-config-present-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(join(dir, '.github/idd/config.json'), '{}');
+    const report = emptyReport(dir);
+    checkCanonicalConfigPresence(dir, report);
+    assert.deepEqual(report.errors, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('checkProjectCommands reads the table from idd-overview-core', () => {

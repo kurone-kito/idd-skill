@@ -184,6 +184,7 @@ export function runDoctor({
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
   checkUserGlobalHelperBins(root, report, pathValue ?? process.env.PATH ?? '');
+  checkCanonicalConfigPresence(root, report);
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
   checkMergePolicyAcknowledgement(root, report);
@@ -1708,6 +1709,24 @@ export function checkLiveConfigSchema(root: string, report: DoctorReport) {
     }
     report.errors.push(finding.message);
   }
+}
+
+/**
+ * Report a missing `.github/idd/config.json` as an error. The overview's
+ * command rows read their `commands.<key>` entries from this file, so the
+ * canonical file is required. A legacy `idd-policy.json` may still be read
+ * by the fallback readers, but it does not satisfy this check.
+ */
+export function checkCanonicalConfigPresence(
+  root: string,
+  report: DoctorReport,
+) {
+  if (exists(join(root, '.github/idd/config.json'))) {
+    return;
+  }
+  report.errors.push(
+    '.github/idd/config.json is missing. It is required, because the overview command rows read commands.<key> from it. Run idd-onboard to create it; idd-policy.json alone does not satisfy this check.',
+  );
 }
 
 /** One reportable finding from the claimTiming config↔prose check. */
