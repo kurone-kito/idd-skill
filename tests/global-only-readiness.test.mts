@@ -351,3 +351,23 @@ test('a remote URL for another repository or a local path does not match', () =>
     false,
   );
 });
+
+test('a remote on another scheme, another server, or a local path does not match', () => {
+  for (const url of [
+    'https://attacker.example/kurone-kito/idd-skill.git',
+    'ftp://github.com/kurone-kito/idd-skill.git',
+    'file://github.com/kurone-kito/idd-skill.git',
+    'git://github.com/kurone-kito/idd-skill.git',
+  ]) {
+    assert.equal(remoteNamesRepo(url, 'kurone-kito', 'idd-skill'), false, url);
+  }
+});
+
+test('the remote host must be the GitHub server in use', () => {
+  const ghe = 'git@ghe.example.com:kurone-kito/idd-skill.git';
+  assert.equal(
+    remoteNamesRepo(ghe, 'kurone-kito', 'idd-skill', 'ghe.example.com'),
+    true,
+  );
+  assert.equal(remoteNamesRepo(ghe, 'kurone-kito', 'idd-skill'), false);
+});

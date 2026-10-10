@@ -2625,31 +2625,37 @@ function primaryCheckoutNamesRepo(
       ['-C', root, 'config', '--get', 'remote.origin.url'],
       { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] },
     );
-    return remoteNamesRepo(url, owner, repo);
+    const host = process.env.GH_HOST?.trim().toLowerCase() || 'github.com';
+    return remoteNamesRepo(url, owner, repo, host);
   } catch {
     return false;
   }
 }
 
 /**
- * #3824: whether a git remote URL names `owner/repo`. Accepts the https, scp
- * style, and ssh forms (an optional port and an optional trailing `.git`).
- * Local paths and file URLs never match. The match is case-insensitive, as
- * GitHub owner and repository names are.
+ * #3824: whether a git remote URL names `owner/repo` on `host`. Accepts https
+ * and ssh URLs and the scp-style form, with an optional user, port, and
+ * trailing `.git`. Any other scheme (file, ftp, git) and local paths never
+ * match. The host must be the GitHub server the run uses, so a remote on an
+ * unrelated server cannot stand in for the target. Matching is
+ * case-insensitive, as host, owner, and repository names are.
  */
 export function remoteNamesRepo(
   url: string,
   owner: string,
   repo: string,
+  host = 'github.com',
 ): boolean {
   const match =
-    /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?[^/:]+(?::\d+)?[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(
+    /^(?:(?:https|ssh):\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(
       url.trim(),
     );
   if (match === null) return false;
+  const [, remoteHost = '', remoteOwner = '', remoteRepo = ''] = match;
   return (
-    match[1].toLowerCase() === owner.toLowerCase() &&
-    match[2].toLowerCase() === repo.toLowerCase()
+    remoteHost.toLowerCase() === host.toLowerCase() &&
+    remoteOwner.toLowerCase() === owner.toLowerCase() &&
+    remoteRepo.toLowerCase() === repo.toLowerCase()
   );
 }
 
