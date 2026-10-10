@@ -417,6 +417,10 @@ writeFileSync(${JSON.stringify(sentinel)}, 'ran\\n');
 `;
 }
 
+// Windows cannot create directory symlinks without a privilege that some
+// accounts lack, so directory targets are junctions there (absolute targets).
+const DIRECTORY_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+
 /** Link each top-level package of this checkout into a real directory. */
 function linkDependencies(root: string): void {
   const source = join(REPO_ROOT, 'node_modules');
@@ -434,14 +438,14 @@ function linkDependencies(root: string): void {
         symlinkSync(
           innerReal,
           join(target, entry, inner),
-          statSync(innerReal).isDirectory() ? 'dir' : 'file',
+          statSync(innerReal).isDirectory() ? DIRECTORY_LINK : 'file',
         );
       }
     } else {
       symlinkSync(
         real,
         join(target, entry),
-        statSync(real).isDirectory() ? 'dir' : 'file',
+        statSync(real).isDirectory() ? DIRECTORY_LINK : 'file',
       );
     }
   }
