@@ -220,6 +220,19 @@ test('a raise to an unapproved bundle still fails near the ceiling', () => {
   );
 });
 
+test('duplicate approvals for one bundle keep the strictest limit', () => {
+  const narrowFirst = parseNearCeilingRaiseApprovals([
+    { bundle: 'bundle-core', limitBytes: 26500, issue: 3840, reason: 'ok' },
+    { bundle: 'bundle-core', limitBytes: 999999, issue: 1, reason: 'wide' },
+  ]);
+  assert.deepEqual([...narrowFirst.entries()], [['bundle-core', 26500]]);
+  const wideFirst = parseNearCeilingRaiseApprovals([
+    { bundle: 'bundle-core', limitBytes: 999999, issue: 1, reason: 'wide' },
+    { bundle: 'bundle-core', limitBytes: 26500, issue: 3840, reason: 'ok' },
+  ]);
+  assert.deepEqual([...wideFirst.entries()], [['bundle-core', 26500]]);
+});
+
 test('malformed approval entries never widen a limit', () => {
   const approvals = parseNearCeilingRaiseApprovals([
     { bundle: 'bundle-core', limitBytes: 26500, issue: 3840, reason: 'ok' },

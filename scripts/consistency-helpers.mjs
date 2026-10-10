@@ -232,7 +232,13 @@ export function parseNearCeilingRaiseApprovals(value) {
       continue;
     if (typeof reason !== 'string' || reason.trim() === '') continue;
     if (!Number.isSafeInteger(limitBytes) || limitBytes <= 0) continue;
-    approvals.set(bundle, limitBytes);
+    // Two valid approvals for one bundle keep the strictest limit, so a later
+    // broader entry cannot widen a narrower approval.
+    const prior = approvals.get(bundle);
+    approvals.set(
+      bundle,
+      prior === undefined ? limitBytes : Math.min(prior, limitBytes),
+    );
   }
   return approvals;
 }
