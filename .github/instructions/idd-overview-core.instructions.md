@@ -254,12 +254,12 @@ which still stop child selection in Discover.
 When a phase names a command set, run the corresponding commands.
 
 **Policy and helper spelling.** Read policy keys from the effective policy
-(`idd-effective-config --key <path>`; `instructions-only` reads
-`.github/idd/config.json`), except `commands`,
+(profile-selected `idd-effective-config --key <path>`; `instructions-only`
+reads `.github/idd/config.json`), except `commands`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`, and
-`upstreamEscalation`, which come from the repository-local file. Merge-gate
-and trusted-base reads stay on the PR's base ref. `commands` overrides the table.
-Absent values keep the gate
+`upstreamEscalation`, which stay on the repository-local file. Merge-gate reads
+(`mergeGate`, `ciWait`, `advisoryWait`) and trusted-base reads stay on the PR's
+base ref. `commands` overrides the table. Absent values keep the gate
 enabled and default approval actors to `owners-and-maintainers-only`.
 `node scripts/<name>.mjs` examples are the `vendored-node` spelling; other
 profiles use the forms in `docs/idd-helper-scripts.md`

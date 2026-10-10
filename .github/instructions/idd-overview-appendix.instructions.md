@@ -187,10 +187,7 @@ to one that mirrors or pre-checks another gate's decision.
 
 ## Template sync
 
-When this repository ships `idd-template/` for adopters, that tree is
-canonical. Edit `idd-template/` first for any `idd-*.instructions.md`,
-`docs/idd-workflow.md`, or `docs/customization.md`, then regenerate the
-live target with `node scripts/sync-docs.mjs --apply` (`structure`/
-`contains` pairs need a hand-mirrored live edit). See
+In this repository, edit `idd-template/` first, then regenerate the live
+target with `node scripts/sync-docs.mjs --apply` in the same commit.
+`structure`/`contains` pairs are hand-mirrored. See
 [`docs/customization.md` → Template sync mapping](../../docs/customization.md#template-sync-mapping).
-Include the live target in the same commit as the template source.

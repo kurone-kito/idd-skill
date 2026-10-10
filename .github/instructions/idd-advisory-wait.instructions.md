@@ -90,7 +90,7 @@ routing state for AW4/AW5 fail-closed stops only — caller-derived, not
 emitted by helper enums.
 
 Resolve the policy from helper output when available; otherwise read
-`.github/idd/config.json` `advisoryWait.*`, falling back to the
+`.github/idd/config.json` (PR base ref) `advisoryWait.*`, falling back to the
 distributed defaults in `docs/policy-constants.md`: `REQUEST_CAP`,
 `PENDING_WINDOW_MINUTES`, `SETTLED_WINDOW_MINUTES`,
 `POLL_INTERVAL_MINUTES`, `CAP_EXHAUSTED_ROUTE`.

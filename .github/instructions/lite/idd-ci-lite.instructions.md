@@ -50,10 +50,10 @@ CI-polling instructions instead of this file.
    `--run-id <run-id>` — preferred, derives the rerun budget from
    `run_attempt` — or `--rerun-count <count>` as a manual fallback).
    Resolve each `node scripts/<h>.mjs` to its profile-selected form
-   via `docs/idd-helper-scripts.md`. This helper already resolves
-   `ciWait.*` from `.github/idd/config.json` and emits the final
+   via `docs/idd-helper-scripts.md`. The helper resolves `ciWait.*` from
+   `.github/idd/config.json` on the PR's base ref and emits the final
    `runningTimeout` / `generationTimeout` / `rerunPolicy` values
-   directly — never read that config file yourself.
+   directly — never read that file.
 2. Fetch duplicate-name-safe, HEAD-pinned check state:
    `node scripts/ci-wait-state.mjs --pr {pr-number}` (or the
    package-manager equivalent).
