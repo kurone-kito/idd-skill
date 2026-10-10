@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import {
+  defaultCheckGroups,
+  selectCheckGroups,
+} from '../src/scripts/check-project.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const config = JSON.parse(
@@ -15,9 +18,6 @@ const pkg = JSON.parse(
 ) as { scripts: Record<string, string> };
 const chain: string = config.commands['pre-push-validate'];
 
-const root = mkdtempSync(join(tmpdir(), 'idd-validation-order-'));
-after(() => rmSync(root, { recursive: true, force: true }));
-
 const EXPECTED_ORDER = [
   'pnpm run check',
   'pnpm run doctor:github',
@@ -25,34 +25,28 @@ const EXPECTED_ORDER = [
   'node scripts/check-stray-commit-closes.mjs',
 ];
 
-// Run the configured chain with `pnpm` and `node` replaced by shell functions
-// that only record their arguments. Nothing real runs, and no GitHub request
-// is made. `FAIL_AT` names the one invocation that returns non-zero.
-function runChain(failAt: string | null): {
-  status: number | null;
-  calls: string[];
-} {
-  const log = join(
-    root,
-    `calls-${(failAt ?? 'none').replace(/[^A-Za-z0-9]+/gu, '_')}.log`,
-  );
-  const script = [
-    'pnpm() { echo "pnpm $*" >> "$LOG"; if [ "pnpm $*" = "$FAIL_AT" ]; then return 1; fi; return 0; }',
-    'node() { echo "node $*" >> "$LOG"; if [ "node $*" = "$FAIL_AT" ]; then return 1; fi; return 0; }',
-    chain,
-  ].join('\n');
-  const result = spawnSync('sh', ['-c', script], {
-    env: { ...process.env, LOG: log, FAIL_AT: failAt ?? '__no_failure__' },
-    encoding: 'utf8',
-  });
-  let calls: string[] = [];
-  try {
-    calls = readFileSync(log, 'utf8').trim().split('\n').filter(Boolean);
-  } catch {
-    calls = [];
+// The chain joins its steps with `&&` only, so stopping at the first failing
+// step is exactly what the shell does. The first test pins that no other
+// operator appears, so this simulation cannot drift from the shell's behavior.
+// It runs nothing real, makes no GitHub request, and spawns no shell, so it
+// behaves the same on every platform.
+function runChain(failAt: string | null): { status: number; calls: string[] } {
+  const calls: string[] = [];
+  for (const step of chain.split(' && ')) {
+    calls.push(step);
+    if (step === failAt) {
+      return { status: 1, calls };
+    }
   }
-  return { status: result.status, calls };
+  return { status: 0, calls };
 }
+
+test('the chain uses only && between its steps', () => {
+  const steps = chain.split(' && ').join(' ');
+  for (const operator of ['&', '|', ';', '`', '$(']) {
+    assert.equal(steps.includes(operator), false, `operator ${operator}`);
+  }
+});
 
 test('the pre-push chain runs check, then doctor, then token-cost, then stray', () => {
   const run = runChain(null);
@@ -79,6 +73,15 @@ test('a failing stray check is the last step and still fails the chain', () => {
   assert.deepEqual(run.calls, EXPECTED_ORDER);
 });
 
+test('the check command runs every group, including the aggregate audit', () => {
+  const selected = selectCheckGroups(defaultCheckGroups(undefined), []);
+  assert.equal(Array.isArray(selected), true);
+  assert.deepEqual(
+    (selected as { id: string }[]).map((group) => group.id),
+    ['lint', 'typecheck', 'build:check', 'test', 'audit'],
+  );
+});
+
 test('doctor appears once in the pre-push chain and in no static script', () => {
   const steps = chain.split(' && ');
   assert.equal(
@@ -94,6 +97,7 @@ test('doctor appears once in the pre-push chain and in no static script', () => 
     'test:scripts',
     'typecheck',
     'build:check',
+    'audit',
     'audit:schemas',
     'docs:sync:check',
   ]) {
