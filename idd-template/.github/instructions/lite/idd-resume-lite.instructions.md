@@ -1,7 +1,7 @@
 # IDD — Resume Phase (Lite)
 
 Lite profile for weak/local models. Same semantics as
-`idd-resume.instructions.md`; load it alone for resume routing.
+`idd-resume.instructions.md`; load it alone to route.
 
 ## Helper runtime contract
 
@@ -11,8 +11,9 @@ Lite profile for weak/local models. Same semantics as
    commands below. If a helper is **missing, fails, returns invalid
    JSON, or disagrees with live GitHub state** → **stop and ask**. Do
    **not** fall through to the written tables.
-2. **When the repository is `instructions-only`** (no helper runtime
-   shipped): skip the helper commands and use the written tables only.
+2. **When the repository is `instructions-only`** (no helper runtime shipped):
+   skip the helper commands and use only the written tables; an issue-only
+   handoff on an open PR stops.
 
 ## Always run helpers first (helper-enabled profiles)
 
@@ -38,8 +39,8 @@ unclaimed); trusted `forced-handoff: human-gated` proof (actor, displaced claim,
 branch, PR, URL; mismatches are Step 0 STOP); open PR+HEAD or `none`; latest
 issue/PR activity; PR-HEAD CI; and local worktree/branch/ status/HEAD. When an
 open PR backs the claim, the proof must have `contextScope: issue-plus-pr` with
-`linkedPr` naming it, or be helper-confirmed issue-only before its first commit
-(no helper: stop). Never invent or post forced-handoff markers.
+`linkedPr` naming it, or be helper-confirmed issue-only before its first commit.
+Never invent or post forced-handoff markers.
 
 Use GitHub **server** timestamps only. Stale age default: **24 h**
 (`claim-stale-age` / `claimTiming.staleAge`).
@@ -104,7 +105,7 @@ Step 2.
 After any helper map, `roadmap-audit/*` is still A1.5-only (no
 worktree; child issues are not locked).
 
-Written table (`instructions-only` profile only): first matching row.
+Written table (`instructions-only` only): first matching row.
 
 | Claim state                                                                                 | Action                                                        |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -164,7 +165,7 @@ On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>`
 Before any mutation after routing: re-validate claim ownership, PR HEAD,
 and CI live state.
 
-Written table (`instructions-only` profile only):
+Written table (`instructions-only` only):
 
 | CI      | Reviews                                    | Action                |
 | ------- | ------------------------------------------ | --------------------- |

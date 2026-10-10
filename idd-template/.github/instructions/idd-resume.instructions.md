@@ -165,13 +165,12 @@ concluding the claim is not inheritable; see
 `docs/idd-helper-scripts.md`'s Resume claim and route evidence section.
 
 If helper runtime is absent, helper output is invalid, or helper evidence
-disagrees with live GitHub state, use the written table below and treat
-it as authoritative.
+disagrees with live GitHub state, use the written table below as authoritative,
+except an issue-only handoff on an open PR, which stops.
 
 Evaluate in order; take the first matching row.
 
-Absent or disagreeing helper evidence requires the porcelain occupancy scan;
-this table is the instructions-only fallback.
+Absent or disagreeing helper evidence requires the porcelain occupancy scan.
 If that scan fails, is malformed, or is unreadable, treat it as unknown and
 stop before re-claim or takeover; never treat failure as no match.
 
