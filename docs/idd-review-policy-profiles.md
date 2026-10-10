@@ -682,6 +682,10 @@ A pull request that narrows behavior or imports a release is treated
 differently. A gap in the narrower behavior is a regression only when a stated
 acceptance criterion enumerates the narrowed behavior.
 
+Clauses (b) and (c) of the adopt-now test are unaffected by this definition:
+an unmet acceptance criterion under (b), or a defect under (c), is adopt-now
+whether or not it is a regression.
+
 ## Selection Checklist
 
 Before considering onboarding complete, record the selected profile in
