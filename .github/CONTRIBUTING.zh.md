@@ -44,7 +44,7 @@ pre-commit 钩子运行快速且提交安全的子集
 `pnpm run check` 依次运行 lint、typecheck、构建产物、测试和审计阶段。
 如只需单个阶段,可单独运行:`pnpm run lint`(Biome、dprint、cspell、
 markdownlint 和源码检查)、`pnpm run typecheck`、`pnpm run test`、
-`pnpm run audit`,或 `pnpm run build:check`(不改写生成产物地校验)。
+`pnpm run audit`,或 `pnpm run build:check`(不改写生成产物的校验)。
 `pnpm run lint:fix` 显式应用格式化和 lint 修复。`pnpm run doctor:github`
 是在线 GitHub 诊断,独立于 `check`,需要访问 GitHub。若只运行了部分命令,
 请在 PR 中写明所运行的子集。commit-msg 钩子通过

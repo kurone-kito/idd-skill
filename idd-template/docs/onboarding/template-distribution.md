@@ -200,10 +200,10 @@ backs) only compares this doc's generated file list against
 bundle in `helper-runtime-manifest.mts`, so it will not catch the
 overlap. `resolveImportFiles`'s `manifest drift: duplicate target path`
 hard-fail does catch it (the same #1698 incident cited above), but only
-under `pnpm run test`'s full test suite (`node --test`), which
-`pre-push-validate` does not run — so a change that only satisfies
-`audit-docs.mjs --check` can still break `idd-onboard.mjs`. This needs a
-maintainer decision, not a mechanical file-list edit.
+under `pnpm run test`'s full test suite (`node --test`), which the
+distributed default `pre-push-validate` does not run — so a change that
+only satisfies `audit-docs.mjs --check` can still break `idd-onboard.mjs`.
+This needs a maintainer decision, not a mechanical file-list edit.
 
 ## `.gitattributes` linguist-vendored convention (`vendored-node`)
 
