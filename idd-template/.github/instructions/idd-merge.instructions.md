@@ -302,6 +302,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
 ## F4 — Cleanup
 
+Global-only: docs/global-only-profile.md.
+
 1. **Non-default development branch**: if `{development-branch}` is not
    the repository's default branch, GitHub did not auto-close any issue
    on merge (see `idd-pr-submit.instructions.md` D3.5) — close each
