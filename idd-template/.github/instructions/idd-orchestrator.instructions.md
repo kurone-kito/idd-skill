@@ -62,7 +62,8 @@ The roster lives in the orchestrating session.
    worktree and branch removed (which deletes its lock) and leaves `--issues`
    before any refill. A later Discover re-run may reconsider it. A failure after
    the marker is posted is contested: follow idd-claim.instructions.md, keep its
-   claim and worktree, and do not retry it.
+   claim and worktree, remove it from `--issues`, and track it as a `stalled`
+   roster entry until recovery ends.
 
 ## 4. Waiting and refill
 
@@ -83,8 +84,8 @@ The roster lives in the orchestrating session.
 
 ## 5. Report and disposal
 
-- The orchestrator's brief asks the worker to end with the fields of
-  `schemas/worker-report.schema.json`.
+- The orchestrator's brief asks the worker to write a JSON report matching
+  `schemas/worker-report.schema.json` to a path the orchestrator names.
 - The orchestrator verifies the outcome against live GitHub state, appends the
   record with the profile-selected `idd-worker-report append --file <path>`,
   then disposes of the worker as the table's row says and marks its roster
