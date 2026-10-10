@@ -170,7 +170,20 @@ test('copilotReviewAckNeeded pins the gate Clause 1 ack term', () => {
 });
 
 test('reviewAckCovers follows the gate ack check for the six issue cases', () => {
-  const reviews = [review({ id: 'r1', body: V2_SUPPRESSED })];
+  // A citation-free suppressed item, so a trusted review-ack alone covers it (#3942).
+  const remarkBody = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Rename the helper</summary>',
+    '',
+    'The name reads poorly next to the neighbouring helper.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  const reviews = [review({ id: 'r1', body: remarkBody })];
   const cases: Array<{
     name: string;
     comments: ReturnType<typeof comment>[];
@@ -510,4 +523,48 @@ test('the ack rule matches the gate verdict for every row (oracle)', () => {
       );
     }
   }
+});
+
+// #3942: a cited suppressed item is not covered by a bare review-ack. Its own
+// stamped disposition covers it, and the snapshot field reports that.
+const CITED_SUPPRESSED_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  '<details>',
+  '<summary>Keep the gate fail-closed</summary>',
+  '',
+  '`src/scripts/review-clause.mts:12`',
+  '',
+  'The clause must stay fail-closed.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+test('reviewAckCovers: a cited suppressed item needs its own disposition (#3942)', () => {
+  const reviewRow = review({ id: 'cited', body: CITED_SUPPRESSED_BODY });
+  const bare = resolveLatestPrimaryBotReviewEvidence({
+    reviews: [reviewRow],
+    prHeadSha: HEAD,
+    primaryBotLogin: 'copilot',
+    comments: [comment({})],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.equal(bare?.reviewAckNeeded, true);
+  assert.equal(bare?.reviewAckCovers, false);
+
+  const withDisposition = resolveLatestPrimaryBotReviewEvidence({
+    reviews: [reviewRow],
+    prHeadSha: HEAD,
+    primaryBotLogin: 'copilot',
+    comments: [
+      comment({}),
+      comment({
+        body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+      }),
+    ],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.equal(withDisposition?.reviewAckCovers, true);
 });

@@ -160,9 +160,7 @@ import {
   advisoryBotIdentityToken,
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
-  classifyCommentEditState,
   classifyPrLoopMembership,
-  compareIsoTimestamps,
   filterTrustedClaimFamilyEvents,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
@@ -203,6 +201,7 @@ import type {
   ReviewPayload,
 } from './review-clause.mts';
 import {
+  countCitedItemDispositions,
   fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
   findLatestCopilotReviewIndex,
@@ -2804,58 +2803,6 @@ function resolveHasValidReviewAck(
     reviewSubmittedAt,
     prHeadSha,
   );
-}
-
-/** #3942: the recorded-deferral reply, `**Rejected** — deferred to follow-up
- * issue #<n> ({clause}): {reason}`, as the triage E6 text defines it. */
-const RECORDED_DEFERRAL_REPLY_PATTERN =
-  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \([^()]*\): \S/u;
-
-/** #3942: the review-reply identity stamp, `<!-- {prefix}-review-reply -->`. */
-const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
-
-/**
- * #3942: counts the trusted, unedited disposition replies that settle a
- * Previously missed item naming a file or line. A reply counts when it opens
- * with `**Accepted**` or the recorded-deferral form, carries the review-reply
- * stamp, and was posted strictly after the latest primary-bot review was
- * submitted. A bare `review-ack` never counts for these items.
- */
-function countCitedItemDispositions(
-  comments: IssueCommentPayload[],
-  trustedMarkerLogins: string[],
-  reviewSubmittedAt: string,
-): number {
-  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
-    return 0;
-  }
-  const trusted = new Set(
-    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
-  );
-  return comments.filter((comment) => {
-    const body = String(comment.body ?? '').trimEnd();
-    const login = String(comment.author?.login ?? comment.user?.login ?? '')
-      .trim()
-      .toLowerCase();
-    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
-    // Strictly after the review, the same ordering hasTrustedReviewAckAfter uses:
-    // a reply in the review's own second is not provably later.
-    if (
-      !trusted.has(login) ||
-      !isValidIsoTimestamp(createdAt) ||
-      compareIsoTimestamps(createdAt, reviewSubmittedAt) <= 0
-    ) {
-      return false;
-    }
-    if (classifyCommentEditState(comment) !== 'unedited') {
-      return false;
-    }
-    return (
-      (/^\*\*Accepted\*\*/u.test(body) ||
-        RECORDED_DEFERRAL_REPLY_PATTERN.test(body)) &&
-      REVIEW_REPLY_STAMP_PATTERN.test(body)
-    );
-  }).length;
 }
 
 /** Whole minutes elapsed from `start` to `end`, clamped to 0 and floored --

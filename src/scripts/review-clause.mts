@@ -32,9 +32,13 @@
 import { DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN } from './advisory-wait-policy.mts';
 import {
   type CopilotReviewBodyShape,
+  citationBreakdown,
   classifyCopilotReviewBody,
 } from './copilot-review-body.mts';
+import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
+  classifyCommentEditState,
+  compareIsoTimestamps,
   hasTrustedReviewAckAfter,
   isCopilotErrorReviewBody,
   isCopilotReviewerLogin,
@@ -393,6 +397,58 @@ export interface LatestPrimaryBotReviewEvidence {
  * `comments` must be normalized (`author.login`, `lastEditedAt`), and `trustedMarkerLogins` the
  * resolved set, not a viewer-augmented one.
  */
+/** #3942: the recorded-deferral reply, `**Rejected** — deferred to follow-up
+ * issue #<n> ({clause}): {reason}`, as the triage E6 text defines it. */
+const RECORDED_DEFERRAL_REPLY_PATTERN =
+  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \([^()]*\): \S/u;
+
+/** #3942: the review-reply identity stamp, `<!-- {prefix}-review-reply -->`. */
+const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
+
+/**
+ * #3942: counts the trusted, unedited disposition replies that settle a
+ * Previously missed item naming a file or line. A reply counts when it opens
+ * with `**Accepted**` or the recorded-deferral form, carries the review-reply
+ * stamp, and was posted strictly after the latest primary-bot review was
+ * submitted. A bare `review-ack` never counts for these items.
+ */
+export function countCitedItemDispositions(
+  comments: Parameters<typeof hasTrustedReviewAckAfter>[0],
+  trustedMarkerLogins: string[],
+  reviewSubmittedAt: string,
+): number {
+  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
+    return 0;
+  }
+  const trusted = new Set(
+    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
+  );
+  return comments.filter((comment) => {
+    const body = String(comment.body ?? '').trimEnd();
+    const login = String(comment.author?.login ?? comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    // Strictly after the review, the same ordering hasTrustedReviewAckAfter uses:
+    // a reply in the review's own second is not provably later.
+    if (
+      !trusted.has(login) ||
+      !isValidIsoTimestamp(createdAt) ||
+      compareIsoTimestamps(createdAt, reviewSubmittedAt) <= 0
+    ) {
+      return false;
+    }
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      return false;
+    }
+    return (
+      (/^\*\*Accepted\*\*/u.test(body) ||
+        RECORDED_DEFERRAL_REPLY_PATTERN.test(body)) &&
+      REVIEW_REPLY_STAMP_PATTERN.test(body)
+    );
+  }).length;
+}
+
 export function resolveLatestPrimaryBotReviewEvidence(input: {
   reviews: ReviewPayload[];
   prHeadSha: string;
@@ -424,13 +480,29 @@ export function resolveLatestPrimaryBotReviewEvidence(input: {
       bodyShape: clause.bodyShape,
       primaryBotLogin,
     });
+  // #3942: a cited suppressed item needs its own disposition, so the ack covers
+  // the review only when every cited item has one.
+  const latestIndex = findLatestCopilotReviewIndex(
+    input.reviews,
+    primaryBotLogin,
+  );
+  const citation = citationBreakdown(
+    latestIndex < 0 ? null : input.reviews[latestIndex]?.body,
+    clause.suppressedCount,
+  );
   const reviewAckCovers = clause.matchesHead
     ? hasTrustedReviewAckAfter(
         input.comments,
         normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
         clause.submittedAt,
         headSha,
-      )
+      ) &&
+      (citation.citedCount === 0 ||
+        countCitedItemDispositions(
+          input.comments,
+          [...input.trustedMarkerLogins],
+          clause.submittedAt,
+        ) >= citation.citedCount)
     : null;
   return {
     primaryBotLogin,

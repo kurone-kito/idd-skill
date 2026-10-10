@@ -813,3 +813,19 @@ test('citationBreakdown: an unreadable body counts every item as cited (#3942)',
     citationFreeCount: 0,
   });
 });
+
+test('citationBreakdown: a file name with several dots counts as a citation (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Fix the README wording</summary>',
+    '',
+    '`README.ja.md:1`',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
+});
