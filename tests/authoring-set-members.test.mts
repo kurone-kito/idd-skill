@@ -1582,3 +1582,19 @@ test('a malformed trusted marker later than the bound leaves the bound in place 
   assert.equal(result.complete, true);
   assert.equal(result.bound?.commentId, 10);
 });
+
+test('an edited trusted marker that now names another set, earlier than the bound, fails the bound closed (#3916)', () => {
+  const retargeted = ownerMarker(SELF, 'another-set');
+  const result = selectSetBoundMarker({
+    ...BOUND_SELECT,
+    comments: [
+      provenance(retargeted, '2026-10-09T10:00:00Z', 10, {
+        lastEditedAt: '2026-10-09T11:00:00Z',
+      }),
+      provenance(ownerMarker(SELF), '2026-10-09T12:00:00Z', 12),
+    ],
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.bound, null);
+  assert.match(result.reason, /unattributable trusted authoring-owner marker/);
+});

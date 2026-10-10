@@ -450,12 +450,14 @@ export function selectSetBoundMarker(input) {
     )
     .sort((left, right) => (earlier(left.comment, right.comment) ? -1 : 1));
   const first = candidates[0];
-  // A trusted marker whose set cannot be read, or whose target names another
-  // issue, may be this set's first marker. Its position is unknown, so when it
-  // comes before the bound, or there is no bound, the bound cannot be trusted.
+  // A trusted marker whose set cannot be read, whose target names another
+  // issue, or that was edited (an edit can change its set), may be this set's
+  // first marker. Its position is unknown, so when it comes before the bound,
+  // or there is no bound, the bound cannot be trusted.
   const unknownSet = owned
     .filter(
       (entry) =>
+        entry.comment.lastEditedAt !== null ||
         entry.parsed === null ||
         (entry.parsed.set === input.set &&
           entry.parsed.target.toLowerCase() !== hostLower),
