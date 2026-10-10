@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  citationBreakdown,
   classifyCopilotReviewBody,
   extractCopilotReviewBodyRemark,
+  extractPreviouslyMissedItems,
 } from '../src/scripts/copilot-review-body.mts';
 
 // #3672: the remark extractor is evidence-only and deliberately not a
@@ -681,4 +683,100 @@ test('scanning stops after the first line the bounds cut (#3672)', () => {
     extractCopilotReviewBodyRemark(`### Needs a closer look\n\n${long}`),
     long,
   );
+});
+
+// #3942: a Previously missed item that names a file or line is cited, so it
+// needs its own disposition. The per-item view is read from two real Copilot
+// bodies (a file-cited item, and four body-only findings with zero-width
+// characters inside each path) plus one synthetic citation-free remark.
+
+const CITED_CORPUS_PATH = join(
+  fileURLToPath(new URL('.', import.meta.url)),
+  'fixtures',
+  'copilot-review-body-cited',
+  'corpus.json',
+);
+
+interface CitedCorpusEntry {
+  id: string;
+  source: string;
+  body: string;
+}
+
+const CITED_CORPUS = JSON.parse(
+  readFileSync(CITED_CORPUS_PATH, 'utf8'),
+) as CitedCorpusEntry[];
+
+function citedCorpusBody(id: string): string {
+  const entry = CITED_CORPUS.find((candidate) => candidate.id === id);
+  assert.ok(entry, `missing fixture ${id}`);
+  return entry.body;
+}
+
+test('citationBreakdown: a PR 3938 body with a file-cited Previously missed item is detected as cited (#3942)', () => {
+  const body = citedCorpusBody('pr-3938-previously-missed-cited');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a PR 3925 body whose four findings name files counts all four as cited (#3942)', () => {
+  const body = citedCorpusBody('pr-3925-previously-missed-cited');
+  assert.deepEqual(citationBreakdown(body, 4), {
+    citedCount: 4,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a body whose only signal is a citation-free remark is not cited (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Rename the helper</summary>',
+    '',
+    'The name reads poorly next to the neighbouring helper.',
+    '',
+    '`requestedReviewer.__typename`',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: false }]);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 0,
+    citationFreeCount: 1,
+  });
+});
+
+test('citationBreakdown: an item list that does not match the count fails closed (#3942)', () => {
+  const body = citedCorpusBody('pr-3925-previously-missed-cited');
+  assert.deepEqual(citationBreakdown(body, 5), {
+    citedCount: 5,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a body with no per-item view and no file citation leaves the review-ack rule in place (#3942)', () => {
+  assert.equal(extractPreviouslyMissedItems('plain text'), null);
+  assert.deepEqual(citationBreakdown('plain text', 2), {
+    citedCount: 0,
+    citationFreeCount: 2,
+  });
+  assert.deepEqual(citationBreakdown('plain text', 0), {
+    citedCount: 0,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a body with no per-item view that names a file fails closed (#3942)', () => {
+  const body =
+    '<summary><strong>Previously missed (2)</strong></summary>\n\n`src/scripts/review-clause.mts:12`\n';
+  assert.deepEqual(citationBreakdown(body, 2), {
+    citedCount: 2,
+    citationFreeCount: 0,
+  });
 });

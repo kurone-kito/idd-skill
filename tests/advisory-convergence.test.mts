@@ -3184,30 +3184,40 @@ const LEGACY_SUPPRESSED_3_WITH_NESTED_PREVIOUSLY_MISSED_BODY = [
   '</details>',
 ].join('\n');
 
-for (const [label, body, expectedSuppressedCount, expectedShape] of [
+for (const [
+  label,
+  body,
+  expectedSuppressedCount,
+  expectedShape,
+  expectedCitedCount,
+] of [
   [
     'PR #3196 review 5288008196 (v2 Previously missed)',
     V2_PREVIOUSLY_MISSED_1_BODY,
     1,
     'overview-v2',
+    1,
   ],
   [
     'PR #3174 review 5269880575 (v2, Resolved+Previously missed both (2))',
     V2_RESOLVED_AND_PREVIOUSLY_MISSED_2_BODY,
     2,
     'overview-v2',
+    2,
   ],
   [
     'PR #3095 review 5233995834 (legacy Review details)',
     LEGACY_SUPPRESSED_1_BODY,
     1,
     'overview-legacy',
+    0,
   ],
   [
     'PR #3108 review 5236485791 (legacy, nested Previously missed not double-counted)',
     LEGACY_SUPPRESSED_3_WITH_NESTED_PREVIOUSLY_MISSED_BODY,
     3,
     'overview-legacy',
+    0,
   ],
 ] as const) {
   test(`review-body shape (#3258): ${label} -> suppressedCount ${expectedSuppressedCount}, no ack does not converge`, () => {
@@ -3223,19 +3233,27 @@ for (const [label, body, expectedSuppressedCount, expectedShape] of [
     assert.equal(verdict.ready, false);
   });
 
-  test(`review-body shape (#3258): ${label} -> converges after a trusted review-ack posted after the review`, () => {
+  test(`review-body shape (#3258): ${label} -> converges after a trusted review-ack, or one stamped disposition per cited item (#3942)`, () => {
     const ackAfterReview = '2026-07-11T10:30:00Z'; // after copilotReview()'s default RECENT submittedAt
+    const ack = {
+      author: { login: TRUSTED },
+      body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
+      createdAt: ackAfterReview,
+      lastEditedAt: null,
+    };
+    const disposition = {
+      author: { login: TRUSTED },
+      body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+      createdAt: ackAfterReview,
+      lastEditedAt: null,
+    };
     const verdict = computeAdvisoryConvergenceVerdict(
       baseInputs({
         reviews: [copilotReview({ itemCount: 0, body })],
-        comments: [
-          {
-            author: { login: TRUSTED },
-            body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
-            createdAt: ackAfterReview,
-            lastEditedAt: null,
-          },
-        ],
+        comments:
+          expectedCitedCount > 0
+            ? Array.from({ length: expectedCitedCount }, () => disposition)
+            : [ack],
       }),
       baseOptions(),
     );
@@ -3245,6 +3263,29 @@ for (const [label, body, expectedSuppressedCount, expectedShape] of [
     assert.equal(verdict.converged, true);
     assert.equal(verdict.ready, true);
   });
+
+  if (expectedCitedCount > 0) {
+    test(`review-body shape (#3258): ${label} -> a review-ack alone does not clear its cited item(s) (#3942)`, () => {
+      const ackAfterReview = '2026-07-11T10:30:00Z';
+      const verdict = computeAdvisoryConvergenceVerdict(
+        baseInputs({
+          reviews: [copilotReview({ itemCount: 0, body })],
+          comments: [
+            {
+              author: { login: TRUSTED },
+              body: `review-ack: ${AGENT_ID} ${HEAD} ${ackAfterReview}`,
+              createdAt: ackAfterReview,
+              lastEditedAt: null,
+            },
+          ],
+        }),
+        baseOptions(),
+      );
+      assertValidVerdict(verdict);
+      assert.equal(verdict.review.satisfied, false);
+      assert.equal(verdict.converged, false);
+    });
+  }
 }
 
 test('review-body shape (#3258): a v2 body with NO "Previously missed" section still yields suppressedCount 0 and bodyShape overview-v2, satisfied', () => {
@@ -8450,3 +8491,111 @@ test(
     );
   },
 );
+
+// --- 9f. Previously missed items that name a file or line (#3942) -----------
+//
+// A cited item needs its own stamped disposition (`**Accepted**` or the
+// recorded-deferral form). A citation-free item keeps the review-ack rule.
+
+const CITED_PREVIOUSLY_MISSED_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  '<details>',
+  '<summary>Keep the gate fail-closed</summary>',
+  '',
+  '`src/scripts/review-clause.mts:12`',
+  '',
+  'The clause must stay fail-closed.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+const CITATION_FREE_PREVIOUSLY_MISSED_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  '<details>',
+  '<summary>Rename the helper</summary>',
+  '',
+  'The name reads poorly next to the neighbouring helper.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+const DISPOSITION_AFTER_REVIEW = '2026-07-11T10:30:00Z';
+const STAMP = '<!-- idd-skill-review-reply -->';
+
+function citedDispositionComment(overrides: {
+  body?: string;
+  login?: string;
+  createdAt?: string;
+  lastEditedAt?: string | null;
+}) {
+  return {
+    author: { login: overrides.login ?? TRUSTED },
+    body: overrides.body ?? `**Accepted**: fixed in the PR.\n${STAMP}`,
+    createdAt: overrides.createdAt ?? DISPOSITION_AFTER_REVIEW,
+    lastEditedAt: overrides.lastEditedAt ?? null,
+  };
+}
+
+function convergedWith(
+  body: string,
+  comments: ReturnType<typeof citedDispositionComment>[],
+): boolean {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body })],
+      comments,
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  return verdict.converged;
+}
+
+test('Previously missed (#3942): a cited item cleared by a stamped deferral reply converges', () => {
+  assert.equal(
+    convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [
+      citedDispositionComment({
+        body:
+          '**Rejected** — deferred to follow-up issue #3950 (review-fix-loop-cutoff): outside this change.\n' +
+          STAMP,
+      }),
+    ]),
+    true,
+  );
+});
+
+test('Previously missed (#3942): a citation-free item still converges on a trusted review-ack alone', () => {
+  assert.equal(
+    convergedWith(CITATION_FREE_PREVIOUSLY_MISSED_BODY, [
+      {
+        author: { login: TRUSTED },
+        body: `review-ack: ${AGENT_ID} ${HEAD} ${DISPOSITION_AFTER_REVIEW}`,
+        createdAt: DISPOSITION_AFTER_REVIEW,
+        lastEditedAt: null,
+      },
+    ]),
+    true,
+  );
+});
+
+test('Previously missed (#3942): a disposition does not count before the review, without the stamp, edited, or from an untrusted author', () => {
+  const beforeReview = citedDispositionComment({
+    createdAt: '2026-07-01T00:00:00Z',
+  });
+  const unstamped = citedDispositionComment({
+    body: '**Accepted**: fixed in the PR.',
+  });
+  const edited = citedDispositionComment({
+    lastEditedAt: '2026-07-12T00:00:00Z',
+  });
+  const untrusted = citedDispositionComment({ login: 'someone-else' });
+  for (const comment of [beforeReview, unstamped, edited, untrusted]) {
+    assert.equal(convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [comment]), false);
+  }
+});

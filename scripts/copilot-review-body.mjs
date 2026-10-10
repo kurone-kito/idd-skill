@@ -207,6 +207,75 @@ export function classifyCopilotReviewBody(body) {
   return { shape: 'unrecognized', suppressedCount: 0 };
 }
 // -----------------------------------------------------------------------
+// Previously missed citations (#3942)
+// -----------------------------------------------------------------------
+/** Zero-width and format characters GitHub renders inside a file path. */
+const ZERO_WIDTH_CHARS_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/gu;
+/**
+ * One whole line that is a single backtick span naming a file, with an
+ * optional `:line` suffix. A path needs a slash or a short extension, so an
+ * identifier such as `requestedReviewer.__typename` does not count.
+ */
+const CITATION_LINE_PATTERN =
+  /^`(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+\.[A-Za-z]{1,5})(?::\d+)?`$/u;
+/** One `<details>` block. A Previously missed item never nests another. */
+const DETAILS_BLOCK_PATTERN = /<details>([\s\S]*?)<\/details>/g;
+/**
+ * The Previously missed items of an `overview-v2` body, in order, each
+ * flagged `cited` when one of its own lines names a file or line (#3942).
+ * `null` when the body is not `overview-v2` or carries no such section.
+ * Read from the raw body: {@link stripMarkdownCodeRegions} would blank the
+ * code span that carries the citation.
+ */
+export function extractPreviouslyMissedItems(body) {
+  if (typeof body !== 'string' || !V2_MARKER_PATTERN.test(body.trimStart())) {
+    return null;
+  }
+  const heading = body.match(V2_PREVIOUSLY_MISSED_PATTERN);
+  if (!heading || heading.index === undefined) {
+    return null;
+  }
+  const section = body.slice(heading.index + heading[0].length);
+  return [...section.matchAll(DETAILS_BLOCK_PATTERN)].map((block) => ({
+    cited: block[1]
+      .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+      .split(/\r?\n/)
+      .some((line) => CITATION_LINE_PATTERN.test(line.trim())),
+  }));
+}
+/** True when a line of `body` is a file citation (#3942). */
+function hasCitationLine(body) {
+  return body
+    .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+    .split(/\r?\n/)
+    .some((line) => CITATION_LINE_PATTERN.test(line.trim()));
+}
+/**
+ * Splits a body's Previously missed count into the items that name a file or
+ * line and the ones that do not (#3942). With a per-item view, the items must
+ * match the count, or every suppressed item counts as cited (fail closed).
+ * Without one, a body that names a file or line anywhere counts every item as
+ * cited, and a body that names none counts every item as citation-free, so
+ * the existing review-ack rule still applies to it.
+ */
+export function citationBreakdown(body, suppressedCount) {
+  if (suppressedCount === 0) {
+    return { citedCount: 0, citationFreeCount: 0 };
+  }
+  const items = extractPreviouslyMissedItems(body);
+  if (items && items.length > 0) {
+    if (items.length !== suppressedCount) {
+      return { citedCount: suppressedCount, citationFreeCount: 0 };
+    }
+    const citedCount = items.filter((item) => item.cited).length;
+    return { citedCount, citationFreeCount: suppressedCount - citedCount };
+  }
+  if (typeof body === 'string' && hasCitationLine(body)) {
+    return { citedCount: suppressedCount, citationFreeCount: 0 };
+  }
+  return { citedCount: 0, citationFreeCount: suppressedCount };
+}
+// -----------------------------------------------------------------------
 // Review-body remark extraction (#3672)
 // -----------------------------------------------------------------------
 /** `### 🔵 Needs a closer look` (any ATX level; the `🔵` marker, with or

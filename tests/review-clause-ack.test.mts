@@ -89,6 +89,7 @@ function comment(overrides: {
 const ACK_ROWS = [
   {
     name: 'v2 body with a Previously missed finding',
+    citationBearing: true,
     body: V2_SUPPRESSED,
     primaryBotLogin: 'copilot',
     matchesHead: true,
@@ -468,11 +469,38 @@ test('the ack rule matches the gate verdict for every row (oracle)', () => {
         false,
         `${row.name}: gate must block without an ack`,
       );
-      assert.equal(
-        withAck,
-        true,
-        `${row.name}: gate must pass with a trusted ack`,
-      );
+      if (row.citationBearing) {
+        // #3942: a cited item needs its own stamped disposition, so a trusted
+        // ack alone never clears it, and one disposition does.
+        assert.equal(
+          withAck,
+          false,
+          `${row.name}: a trusted ack must not clear a cited item`,
+        );
+        const withDisposition = computeAdvisoryConvergenceVerdict(
+          {
+            ...inputs,
+            comments: [
+              comment({
+                body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+                createdAt: ACK_AFTER,
+              }),
+            ],
+          },
+          options,
+        ).converged;
+        assert.equal(
+          withDisposition,
+          true,
+          `${row.name}: a stamped disposition must pass`,
+        );
+      } else {
+        assert.equal(
+          withAck,
+          true,
+          `${row.name}: gate must pass with a trusted ack`,
+        );
+      }
     } else {
       assert.equal(
         withAck,
