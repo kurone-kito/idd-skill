@@ -800,7 +800,13 @@ export function checkProjectCommands(root, report) {
     );
     return null;
   }
-  const noOps = requiredRows.filter((row) => commands.get(row) === 'true');
+  // The table rows may be references to commands.<key>, which are not no-op
+  // values themselves. Read the value from config.json when it is present, and
+  // fall back to the table value only when it is absent.
+  const configCommands = loadPolicyCommands(root);
+  const noOps = requiredRows.filter(
+    (row) => (configCommands?.get(row) ?? commands.get(row)) === 'true',
+  );
   if (noOps.length === requiredRows.length) {
     report.warnings.push(
       'all primary command rows are set to `true` (no-op substitutions)',

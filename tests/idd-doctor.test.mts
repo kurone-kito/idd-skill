@@ -3570,6 +3570,46 @@ function makeOverviewFixture(files: Record<string, string>): string {
   return dir;
 }
 
+test('checkProjectCommands still warns when every config command is true, with reference rows (#3981)', () => {
+  // The distributed rows are references, so the table text alone cannot show
+  // the no-op values; the warning must come from config.json.
+  const dir = makeOverviewFixture({
+    'idd-overview-core.instructions.md': [
+      '| Name | Entries |',
+      '| --- | --- |',
+      '| **fix-validate** | `commands.fix-validate` |',
+      '| **pre-push-validate** | `commands.pre-push-validate` |',
+      '| **post-fix-validate** | `commands.post-fix-validate` |',
+      '| **install-deps** | `commands.install-deps` |',
+      '',
+    ].join('\n'),
+  });
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        commands: {
+          'fix-validate': 'true',
+          'pre-push-validate': 'true',
+          'post-fix-validate': 'true',
+          'install-deps': 'true',
+        },
+      }),
+    );
+    const report = emptyReport(dir);
+    checkProjectCommands(dir, report);
+    assert.deepEqual(report.errors, []);
+    assert.ok(
+      report.warnings.some((warning) =>
+        warning.includes('all primary command rows are set to `true`'),
+      ),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const emptyReport = (root: string) => ({
   root,
   errors: [] as string[],
