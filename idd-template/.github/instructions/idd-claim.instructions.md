@@ -87,13 +87,8 @@ already-claimed | stale-reclaimable` with the winning `{claim-id}`:
 - `stale-reclaimable` → proceed with takeover (the stale path below).
 - `already-claimed` → a live competitor, raced claim, or occupied stale/
   released branch: use lock takeover only if `winning_claim_id` matches
-  this session's verified claim; otherwise apply the routing below:
-  return to Discover using the same selection mode that produced this
-  target (orphan-first: continue the A0-O capable path; roadmap mode:
-  continue the A3-ready path) and select the next eligible issue; for an
-  explicit-target A0-T run, report that the issue is already claimed and
-  stop instead of falling back to Discover, per
-  `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
+  this session's verified claim; otherwise apply the contested-claim
+  routing below.
 
 GitHub comments lack compare-and-swap, so this only narrows claim→write
 TOCTOU window; stale-takeover and same-second tie-break remain. If the helper
@@ -275,13 +270,24 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-First record `{agent-id}`/`{claim-id}` via
-`<profile-selected-claim-lock-command> --record-tokens --worktree
-<path> --agent-id {agent-id} --claim-id {claim-id}` (resolve the same
-way as A5(a) above); then post the claim comment using the exact
-format and posting mechanics already defined in
-[Claim format](idd-overview-core.instructions.md#claim-format) — do not
-re-derive them here.
+Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
+`--agent-id {agent-id} --claim-id {claim-id}`; `--assert` takes
+`--claim-id {claim-id} --nonce {nonce}`. Resolve the commands as A5(a) does.
+
+1. Create the worktree and branch: `git worktree add --no-track <path> -b
+   <branch-name> origin/{development-branch}` (fresh-claim row of
+   `idd-work.instructions.md`). The worktree exists before the claim. Do not
+   use WorkTrunk create here: its pre-start hook installs before the claim POST.
+2. `--record-tokens --worktree <path>`.
+3. Post the claim comment per
+   [Claim format](idd-overview-core.instructions.md#claim-format), then the
+   activation nonce.
+4. `--acquire --worktree <path>`, on the linked worktree only.
+5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
+   --claim-id {claim-id} --nonce {nonce} --worktree <path>`. This verification
+   alone counts.
+6. Continue B1 in that worktree, from Step 3 (install dependencies) of
+   `idd-work.instructions.md`.
 
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
 marker body must be exactly the HTML comment token followed by, at
@@ -373,7 +379,8 @@ target and pick the next eligible issue (orphan-first: continue the
 A0-O capable path; roadmap mode: continue the A3-ready path). Do not
 retry the same issue. For explicit-target A0-T runs, report the
 contested claim and stop unless the operator has explicitly switched to
-normal discovery.
+normal discovery, per `idd-discover.instructions.md`'s A0-T stop-don't-fallback
+rule.
 
 Once verified, record this `{claim-id}` as your current claim token for
 the rest of the workflow.
@@ -443,69 +450,9 @@ closed issue.
 
 ### Orchestrator delegation
 
-An orchestrating session that has posted and verified a claim's
-`{agent-id}` / `{claim-id}` pair may delegate it verbatim to an
-isolated subagent worker in the delegation brief. The worker adopts
-both fields verbatim as its own claim token — mirroring adopt-verbatim
-above — instead of minting a fresh claim or being treated as
-claim-less; see the ownership-proof exception in
-[Claim-state parsing](#claim-state-parsing). No separate `claimed-by`
-post is required for the delegation itself.
-
-**Carry the nonce, don't mint one — and still revalidate it.** The
-brief must also carry the orchestrator's current activation nonce
-verbatim; minting a new nonce for the same `{claim-id}` creates the
-exact two-nonce collision step 4 above exists to catch, flagging
-legitimate delegation as a second activation. The worker still
-performs the Claim revalidation gate's nonce check
-(`idd-overview-core.instructions.md`) using the carried value: before
-each mutation, recompute the nonce winner for the `{claim-id}` and
-confirm it still equals the carried nonce. A different winner (e.g. a
-later forced-handoff collision the orchestrator never saw) means the
-worker is no longer the winning activation — treat that the same as any
-other lost claim.
-
-**State the worker role explicitly when the delegate inherits full
-context.** Some delegation mechanisms give the worker the
-orchestrator's own complete conversation context instead of a clean
-slate limited to the brief. There, the worker can carry over the
-orchestrator's own framing — mistaking itself for the session that
-launched several workers and is waiting on their replies — instead of
-recognizing the brief reassigns it to a single-issue worker role. The
-delegation brief must state explicitly that the delegate is the sole
-worker for the named issue, that no peer workers exist for it to
-coordinate with or wait on, and that it must perform the implementation
-work itself rather than re-delegate or wait for a reply (#2179). Use a
-non-context-inheriting mechanism whenever the tool offers one — this
-is a strong preference, not a suggestion; a context-inheriting
-mechanism (e.g. forking the orchestrator's own conversation) is a
-fallback only when no non-context-inheriting option exists. See
-[docs/idd-workflow.md's Orchestrator fan-out
-variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
-
-**Known limitation.** Neither this wording nor an added negative
-instruction reliably stops a context-inheriting delegate from
-misreading itself as a sub-orchestrator waiting on a nonexistent
-sub-worker (#2802) — an accepted residual risk of the fallback path;
-see
-[docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#context-inheriting-delegation-residual-risk)
-for the field evidence.
-
-**Restate the CI/advisory-wait wake-up discipline.** Carry —
-verbatim or by reference — both mitigations from
-[idd-ci.instructions.md's Wake-up
-discipline](idd-ci.instructions.md#wake-up-discipline): the
-topology-safety condition (#2210; also in
-[docs/idd-workflow.md's Orchestrator fan-out
-variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant))
-and the execution-timeout override for a heavy or long-running local
-command (#2933).
-
-**Restate the scratchpad file-naming requirement.** See
-[docs/idd-workflow.md's Orchestrator fan-out
-variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant):
-each worker must prefix scratchpad filenames with the issue number,
-or use an issue-numbered subdirectory.
+An orchestrating session that delegates a verified claim reads
+`claim-orchestrator.instructions.md`
+before it writes the delegation brief. That file holds the delegation rules.
 
 ### Hide displaced claim chain on takeover
 
@@ -556,9 +503,10 @@ for the full algorithm.
 ### Worktree-local lock file (same-machine collision)
 
 A same-machine fast path complementing the cross-machine claim check
-above. Acquire once the B1 worktree exists (before the first mutation;
-also re-run `--record-tokens` there (with `--nonce`)), then re-run
-alongside every later pre-mutation check:
+above. On a fresh claim, acquire as step 4 of the fresh-claim order, after
+the claim POST; on a takeover, acquire once the B1 worktree exists. Either
+way, acquire before the first mutation, and also re-run `--record-tokens`
+there (with `--nonce`). Then re-run alongside every later pre-mutation check:
 `<profile-selected-claim-lock-command> --acquire --worktree <path>
 --agent-id {agent-id} --claim-id {claim-id}`.
 
