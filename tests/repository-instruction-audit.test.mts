@@ -449,6 +449,10 @@ const referenceOverview = overview
   .replace(
     '| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |',
     '| **post-fix-validate** | `commands.post-fix-validate` |',
+  )
+  .replace(
+    '| **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |',
+    '| **install-deps** | `commands.install-deps` |',
   );
 
 test('repository instruction audit accepts command rows that reference config keys', () => {
@@ -482,6 +486,28 @@ test('repository instruction audit rejects a command row that mixes a reference 
     const output = `${result.stdout}\n${result.stderr}`;
     assert.match(output, /non-node\.overview-fallback/u);
     assert.match(output, /pre-push-validate/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('repository instruction audit rejects an install-deps row that mixes a reference with a command', () => {
+  const mixedOverview = referenceOverview.replace(
+    '| **install-deps** | `commands.install-deps` |',
+    '| **install-deps** | `commands.install-deps && pnpm install` |',
+  );
+  assert.notEqual(mixedOverview, referenceOverview);
+  const root = writeFixture({
+    ...baseFiles,
+    'idd-template/.github/instructions/idd-overview-core.instructions.md':
+      mixedOverview,
+  });
+  try {
+    const result = runAudit(root);
+    assert.notEqual(result.status, 0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.match(output, /non-node\.overview-fallback/u);
+    assert.match(output, /install-deps/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -254,8 +254,9 @@ except `commands`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
 `upstreamEscalation`, and `forcedHandoff`, which stay repository-local.
 Merge-gate reads (`mergeGate`, `ciGate`) and trusted-base reads stay on
-the PR's base ref. The three validation entries below are read from the
-`commands` object of `.github/idd/config.json`, which must validate against
+the PR's base ref. The command entries below (`install-deps` and the three
+validation entries) are read from the `commands` object of
+`.github/idd/config.json`, which must validate against
 the canonical schema at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>. If it is
 missing or invalid, stop and report. Absent values keep the gate
@@ -271,7 +272,7 @@ profiles use the forms in `docs/idd-helper-scripts.md`
 | **fix-validate** | `commands.fix-validate` |
 | **pre-push-validate** | `commands.pre-push-validate` |
 | **post-fix-validate** | `commands.post-fix-validate` |
-| **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |
+| **install-deps** | `commands.install-deps` |
 | **issue-scope** | `roadmap-first` |
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->

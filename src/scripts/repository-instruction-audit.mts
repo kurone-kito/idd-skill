@@ -1680,20 +1680,14 @@ function auditNonNodeFallback(
     templateOverview,
     '`npx <tool>` if Node.js and `npx` are available',
   );
-  // Built from a token, not written out, so the placeholder scan that reads
-  // generated helpers does not see an unresolved token in this file.
-  const installDepsToken = 'INSTALL_DEPS_COMMAND';
-  has(
-    'non-node.overview-fallback',
-    templateOverviewPath,
-    templateOverview,
-    `| **install-deps** | \`{{${installDepsToken}}}\` |`,
-  );
   // Each command row is either its onboarding placeholder or a reference to
   // the matching `commands` key in config.json. A line that mixes the two,
-  // or any other text, matches neither form and fails.
+  // or any other text, matches neither form and fails. The placeholder token
+  // is built from its name, not written out, so the placeholder scan that
+  // reads generated helpers does not see an unresolved token in this file.
   const templateOverviewLines = new Set(templateOverview.split(/\r?\n/u));
   for (const [row, token] of [
+    ['install-deps', 'INSTALL_DEPS_COMMAND'],
     ['fix-validate', 'FIX_VALIDATE_COMMANDS'],
     ['pre-push-validate', 'PRE_PUSH_VALIDATE_COMMANDS'],
     ['post-fix-validate', 'POST_FIX_VALIDATE_COMMANDS'],
