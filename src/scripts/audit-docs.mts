@@ -63,6 +63,7 @@ import {
   resolveDistributedFileSet,
 } from './markdown-link-audit.mts';
 import { collectRepositoryInstructionViolations } from './repository-instruction-audit.mts';
+import { collectRepositoryWorkflowViolations } from './repository-workflow-audit.mts';
 
 interface ReadmePair {
   id: string;
@@ -356,6 +357,12 @@ async function main(): Promise<void> {
       ...collectRepositoryInstructionViolations(root).map(
         ({ ruleId, path, message }) =>
           `repository-instruction-audit/${ruleId}: ${path}: ${message}`,
+      ),
+    );
+    errors.push(
+      ...collectRepositoryWorkflowViolations(root).map(
+        ({ ruleId, path, message }) =>
+          `repository-workflow-audit/${ruleId}: ${path}: ${message}`,
       ),
     );
   }
