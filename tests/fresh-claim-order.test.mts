@@ -28,13 +28,13 @@ test('the claim instructions state the worktree-first steps in sequence', () => 
     'idd-template/.github/instructions/idd-claim.instructions.md',
   );
   const steps = [
-    'Fresh-claim order, worktree first:',
-    '(1) `git worktree add --no-track`',
-    '(2) `--record-tokens',
-    '(3) claim comment per',
-    '(4) `--acquire --worktree <path>`',
-    '(5) after the settle',
-    '`--assert --worktree <path>`, which alone counts',
+    'Fresh-claim order, worktree first.',
+    '1. Create the worktree and branch: `git worktree add --no-track <path> -b',
+    '2. `--record-tokens --worktree <path>`.',
+    '3. Post the claim comment per',
+    '4. `--acquire --worktree <path>`, on the linked worktree only.',
+    '5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert',
+    '6. Continue B1 in that worktree',
   ];
   const positions = steps.map((step) => claim.indexOf(step));
   for (const [index, position] of positions.entries()) {

@@ -131,7 +131,7 @@ defaultBranchRef --jq .defaultBranchRef.name`; validate the result
 ([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
 fail closed if invalid/absent on `origin`, never fall back. Then
 `git fetch origin` (may be missing/stale otherwise). Use **WorkTrunk**
-if available (create verb:
+if available, except on a fresh claim (see the note under the table) (create verb:
 `wt switch --create`; `wt new` was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
@@ -154,10 +154,8 @@ in such an environment, run `wt config approvals add --yes` once from
 the primary worktree to pre-approve the project's hook and alias
 commands (stored in `~/.config/worktrunk/approvals.toml`, scoped to the
 git project so the approval carries over to every sibling worktree).
-This one-time pre-approval step is narrower than adding the global
-`-y`/`--yes` flag to every `wt switch` call, which would also silently
-skip approval for any other command WorkTrunk runs on that invocation —
-prefer the pre-approval step for that reason.
+Prefer this pre-approval to the global `-y`/`--yes` flag, which would
+also skip approval for every other command WorkTrunk runs.
 
 If WorkTrunk is unavailable, choose the correct case:
 
@@ -170,25 +168,27 @@ If WorkTrunk is unavailable, choose the correct case:
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
 <!-- dprint-ignore-end -->
 
-On a fresh claim, a WorkTrunk pre-start hook locks before the claim POST.
+On a fresh claim, do not use WorkTrunk create: its pre-start hook installs
+before the claim POST and before any lock. Create the worktree with the
+fresh-claim row above, then follow the fresh-claim order in
+`idd-claim.instructions.md`.
 
 For manual `git worktree add`, WorkTrunk without an install hook, or a
 compliant pinned harness-native tool (per "Harness-native worktree
 tools" above), acquire the
 [worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-immediately after the worktree exists, **before Step 3** —
+at the timing `idd-claim.instructions.md` gives, **before Step 3** —
 `install-deps` itself writes into the worktree and runs lifecycle
 hooks, so acquiring the lock any later leaves that install unprotected.
 Also re-run `--record-tokens` (with the same `{nonce}` the A5 write
-used — `--record-tokens` overwrites rather than merges, so omitting it
-here drops the nonce from this worktree's own copy) for this
+used; it overwrites rather than merges) for this
 worktree's own copy of the
 [generated-tokens record](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-at the same point — the A5 copy lives in the primary worktree's admin
-directory, not this one, so the later Claim revalidation gate's
-`--read-tokens` check has nothing to find here until this step runs it.
+at the same point — the A5 copy is in the primary worktree's admin
+directory, so this copy is needed for the `--read-tokens` check.
 
-WorkTrunk's pre-start hook runs before the create command returns. If it
+On a takeover, WorkTrunk's pre-start hook runs before the create command
+returns. If it
 installs dependencies, its **first** command must acquire the lock for
 the new worktree with the current `{agent-id}` / `{claim-id}` and
 re-run `--record-tokens` (with the same `{nonce}` the A5 write used),
@@ -209,8 +209,8 @@ namespace and F4 removal behavior as above.
 are installed:
 
 - **WorkTrunk with a pre-start install hook** (e.g.,
-  `[pre-start].install` in `.config/wt.toml`): The hook must acquire the
-  lock before installing, as described above; after the hook succeeds,
+  `[pre-start].install` in `.config/wt.toml`): On a takeover, the hook must
+  acquire the lock before installing, as described above; after the hook succeeds,
   skip this step. `-x <noop>` never changes the caller's directory —
   `cd` into the new sibling (from `git worktree list`) before later
   steps.
