@@ -8,7 +8,7 @@ are in `idd-overview-core.instructions.md`.
 
 The distributed claim, advisory, CI, and critique-loop defaults are
 named in `docs/policy-constants.md`. Read it before changing a timing
-or loop constant, and record local deviations in onboarding or
+or loop constant; record local deviations in onboarding or
 repository docs.
 
 ## Live status digest
