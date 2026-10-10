@@ -91,12 +91,12 @@ The roster lives in the orchestrating session.
 
 ## 5. Report and disposal
 
-- The orchestrator's brief asks the worker to write a JSON report matching
-  `schemas/worker-report.schema.json` to a path the orchestrator names.
-- The orchestrator verifies the outcome against live GitHub state, appends the
-  record with the profile-selected `idd-worker-report append --file <path>`,
-  then disposes of the worker as the table's row says and marks its roster
-  entry `disposed`.
+- The orchestrator's brief asks the worker for a worker-report JSON draft at a
+  per-worker path.
+- The orchestrator verifies the outcome against live GitHub state, completes
+  the draft as the worker final report store describes, appends it with the
+  profile-selected `idd-worker-report append --file <path>`, then disposes of
+  the worker as the table's row says and marks its roster entry `disposed`.
 - If verification or the append fails, the orchestrator keeps the worker
   addressable and follows the dead-or-stalled recovery rule in
   [idd-resume-stall.instructions.md](idd-resume-stall.instructions.md).
