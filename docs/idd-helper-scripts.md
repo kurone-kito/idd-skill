@@ -7655,7 +7655,7 @@ a whole-module `export * from './y.mts'` barrel) is resolved back to its
 origin declaration rather than counted as a use in its own right. A
 `// audit:ignore-dead-export: <reason>` comment — on the declaration's
 own line, or the line immediately above it — suppresses one finding.
-Wired into `lint:minimum`.
+Wired into the `check` script.
 
 ## Friction Inventory
 

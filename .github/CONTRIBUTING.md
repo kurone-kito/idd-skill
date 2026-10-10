@@ -38,8 +38,7 @@ floor in `package.json`).
 corepack enable
 pnpm install
 pnpm run setup:hooks # enables the Git hooks; run once per clone and once per new worktree
-pnpm run lint
-pnpm run test
+pnpm run check # the full validation suite; run it before you open a pull request
 ```
 
 Node.js 25+ no longer bundles corepack; if `corepack enable` fails,
@@ -47,8 +46,18 @@ install it first with `npm install -g corepack`.
 
 The pre-commit hook runs a fast, commit-safe subset
 (`pnpm run lint:precommit`: Biome, dprint, and markdownlint); the full
-`pnpm run lint:minimum` suite runs in CI. The commit message hook
-enforces Conventional Commits through commitlint.
+`pnpm run check` suite runs in CI (`pnpm run lint:minimum` is a
+compatibility alias for it). The commit message hook enforces Conventional
+Commits through commitlint.
+
+`pnpm run check` runs the lint, typecheck, build artifact, test, and audit
+stages. Run a single stage when you need only that one: `pnpm run lint`
+(Biome, dprint, cspell, markdownlint, and the source checks),
+`pnpm run typecheck`, `pnpm run test`, `pnpm run audit`, or
+`pnpm run build:check`, which verifies generated artifacts without rewriting
+them. `pnpm run lint:fix` applies formatter and lint fixes explicitly.
+`pnpm run doctor:github` is the online GitHub diagnosis; it is separate from
+`check` and needs GitHub access. Name any subset you ran in your pull request.
 
 When you edit canonical source files in `idd-template/`, run
 `pnpm run docs:sync` to propagate the changes to all mirrored
