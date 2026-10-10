@@ -1,9 +1,10 @@
 name: Pnpm boundary guard
 # CI topology (#832): pull_request is the only CI trigger for this
 # repository so each check runs exactly once per change; workflow_call
-# remains for downstream callers. This workflow runs the full
-# `pnpm run lint:minimum` suite once with installed dependencies; the
-# bare-node subset intentionally also runs in lint.yml.
+# remains for downstream callers. This workflow runs the full project
+# check suite, `pnpm run check`, once with installed dependencies (the
+# `pnpm run lint:minimum` alias runs the same suite); the bare-node
+# subset intentionally also runs in lint.yml.
 on:
   pull_request:
   workflow_call:
@@ -21,7 +22,7 @@ on:
         required: false
         type: string
       lint-command:
-        default: pnpm run lint:minimum
+        default: pnpm run check
         required: false
         type: string
       boundary-command:
@@ -73,7 +74,7 @@ jobs:
         env:
           HUSKY: 0
         run: ${{ inputs.install-command || 'pnpm install --frozen-lockfile --prefer-offline' }}
-      - name: Run lint minimum
-        run: ${{ inputs.lint-command || 'pnpm run lint:minimum' }}
+      - name: Run project checks
+        run: ${{ inputs.lint-command || 'pnpm run check' }}
       - name: Check distributable pnpm boundary
         run: ${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}

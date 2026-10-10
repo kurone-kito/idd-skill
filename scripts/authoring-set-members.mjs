@@ -46,6 +46,7 @@ const SET_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const FLAG_SPEC = {
   '--set': { type: 'string' },
+  '--issue': { type: 'string', default: '' },
   '--owner': { type: 'string' },
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
@@ -395,9 +396,111 @@ function fetchIndexLagIssues(owner, repo, sinceIso) {
   }
   return { items, pageFull: payload.length >= INDEX_LAG_PAGE_SIZE };
 }
+/**
+ * The owner-marker search query. Without a bound it is the whole-history
+ * query this helper has always built. A bound adds `updated:>=` at the
+ * bound marker's creation time, so the search covers only issues updated
+ * since it (kurone-kito/idd-skill#3916).
+ */
+export function buildOwnerMarkerSearchQuery(input) {
+  const base = `repo:${input.owner}/${input.repo} is:issue "${input.markerPrefix}-authoring-owner:"`;
+  return input.boundCreatedAt === undefined
+    ? base
+    : `${base} updated:>=${input.boundCreatedAt}`;
+}
+/**
+ * The bound for a listing scoped to one target issue (#3916): the
+ * target's earliest trusted owner marker that carries `set`, hidden or
+ * not. An edited bound marker, or a target with no such marker, fails
+ * closed. A bound that names another anchor is complete but not a sole
+ * member, because only a target that anchors its own set can use the
+ * single-target exception.
+ */
+export function selectSetBoundMarker(input) {
+  const hostRef = `${input.repository.owner}/${input.repository.repo}#${input.target}`;
+  const trusted = new Set(
+    input.trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
+  );
+  const unbound = (reason) => ({
+    complete: false,
+    soleMember: false,
+    reason,
+    bound: null,
+  });
+  const owned = input.comments
+    .filter(
+      (comment) =>
+        trusted.has(comment.authorLogin.trim().toLowerCase()) &&
+        looksLikeOwnerMarker(comment.body, input.markerPrefix),
+    )
+    .map((comment) => ({
+      comment,
+      parsed: parseAuthoringOwnerComment(comment.body, input.markerPrefix),
+    }));
+  const hostLower = hostRef.toLowerCase();
+  const earlier = (left, right) =>
+    left.createdAt !== right.createdAt
+      ? left.createdAt < right.createdAt
+      : left.id < right.id;
+  const candidates = owned
+    .filter(
+      (entry) =>
+        entry.parsed?.set === input.set &&
+        entry.parsed.target.toLowerCase() === hostLower,
+    )
+    .sort((left, right) => (earlier(left.comment, right.comment) ? -1 : 1));
+  const first = candidates[0];
+  // A trusted marker whose set cannot be read, whose target names another
+  // issue, or that was edited (an edit can change its set), may be this set's
+  // first marker. Its position is unknown, so when it comes before the bound,
+  // or there is no bound, the bound cannot be trusted.
+  const unknownSet = owned
+    .filter(
+      (entry) =>
+        entry.comment.lastEditedAt !== null ||
+        entry.parsed === null ||
+        (entry.parsed.set === input.set &&
+          entry.parsed.target.toLowerCase() !== hostLower),
+    )
+    .sort((left, right) => (earlier(left.comment, right.comment) ? -1 : 1));
+  const firstUnknown = unknownSet[0];
+  if (
+    firstUnknown &&
+    (first === undefined || earlier(firstUnknown.comment, first.comment))
+  ) {
+    return unbound(
+      `unattributable trusted authoring-owner marker (${hostRef}, comment id ${firstUnknown.comment.id}) may be the set's first marker; see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
+    );
+  }
+  if (!first) {
+    return unbound(
+      `no trusted authoring-owner marker for set ${input.set} on ${hostRef}`,
+    );
+  }
+  if (first.comment.lastEditedAt !== null) {
+    return unbound(
+      `edited bound authoring-owner marker (${hostRef}, comment id ${first.comment.id}); see docs/idd-comment-minimization.md#clearing-a-comment-that-blocks-the-scan`,
+    );
+  }
+  const anchor = first.parsed?.anchor ?? '';
+  const bound = {
+    commentId: first.comment.id,
+    createdAt: first.comment.createdAt,
+    anchor,
+  };
+  if (anchor.toLowerCase() !== hostRef.toLowerCase()) {
+    return {
+      complete: true,
+      soleMember: false,
+      reason: `bound authoring-owner marker names another anchor (${anchor}) for ${hostRef}`,
+      bound,
+    };
+  }
+  return { complete: true, soleMember: true, reason: '', bound };
+}
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/authoring-set-members.mjs --set <id> [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--trusted-marker-logins <login1,login2>]
+  node scripts/authoring-set-members.mjs --set <id> [--issue <n>] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--trusted-marker-logins <login1,login2>]
 
 Lists every issue in the repository whose unedited trusted authoring-owner
 marker carries that exact set. The candidate search is the owner-marker
@@ -406,6 +509,11 @@ fetched and fails closed. Read-only. Exits non-zero when the listing
 does not finish, including a search response with incomplete_results, a
 duplicate search hit, or an index-lag window that does not finish.
 soleMember is true only when exactly one such issue is listed.
+
+--issue <n> bounds the search to issues updated since the target's own
+earliest trusted marker for the set (a hidden marker counts). An edited
+bound marker or a target with none fails closed, and a bound that names
+another anchor reports soleMember false. The output then carries boundedBy.
 
 Output schema:
 {
@@ -419,8 +527,11 @@ Output schema:
     {"issueNumber": 2, "commentId": 5577810398, "kind": "requested-set", "mode": "acquire"},
     {"issueNumber": 3, "commentId": 6000000001, "kind": "unattributable", "namesRequestedSet": false}
   ],
-  "skippedElsewhere": 0
+  "skippedElsewhere": 0,
+  "boundedBy": {"issueNumber": 3916, "commentId": 6072113969, "createdAt": "2026-10-09T01:02:22Z", "anchor": "kurone-kito/idd-skill#3916"}
 }
+
+boundedBy appears only with --issue, and names the bound marker.
 `);
 }
 function parseArgs(argv) {
@@ -436,6 +547,7 @@ function parseArgs(argv) {
   }
   return {
     set: (values.set ?? '').trim(),
+    issue: (values.issue ?? '').trim(),
     owner,
     repo,
     policy: values.policy ?? '',
@@ -505,11 +617,39 @@ function runCli() {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
     config,
   });
+  // With --issue, the bound comes from the target's own marker log, and the
+  // search starts there (#3916). An unusable bound stops the run before any
+  // search request is sent.
+  let bound = null;
+  if (args.issue !== '') {
+    if (!/^[1-9][0-9]*$/.test(args.issue)) {
+      throw markCliUsageError(
+        new Error('--issue must be a positive issue number'),
+      );
+    }
+    const target = Number(args.issue);
+    bound = selectSetBoundMarker({
+      set: args.set,
+      markerPrefix,
+      repository: { owner, repo },
+      target,
+      trustedMarkerLogins,
+      comments: fetchProvenanceCommentsGraphql(owner, repo, target),
+    });
+  }
   // Search for the owner-marker token, not the set id. An edit that
   // changes or removes the set while leaving the token in place stays
   // in the candidate list, and the edit check below fails closed.
-  const query = `repo:${owner}/${repo} is:issue "${markerPrefix}-authoring-owner:"`;
-  const search = collectSearchedIssueNumbers(fetchSearchPages(query));
+  const query = buildOwnerMarkerSearchQuery({
+    owner,
+    repo,
+    markerPrefix,
+    boundCreatedAt: bound?.bound?.createdAt,
+  });
+  const search =
+    bound !== null && !bound.complete
+      ? { complete: false, numbers: [], reason: bound.reason }
+      : collectSearchedIssueNumbers(fetchSearchPages(query));
   const fetchedLag = search.complete
     ? fetchIndexLagIssues(
         owner,
@@ -549,18 +689,30 @@ function runCli() {
     ? search.reason
     : !lag.complete
       ? lag.reason
-      : evaluation.reason;
+      : evaluation.reason !== ''
+        ? evaluation.reason
+        : (bound?.reason ?? '');
   process.stdout.write(
     `${JSON.stringify(
       {
         repository: { owner, repo },
         set: args.set,
         complete: evaluation.complete,
-        soleMember: evaluation.soleMember,
+        soleMember: evaluation.soleMember && (bound?.soleMember ?? true),
         issues: evaluation.issues,
         reason,
         skippedMarkers: evaluation.skippedMarkers,
         skippedElsewhere: evaluation.skippedElsewhere,
+        ...(bound?.bound
+          ? {
+              boundedBy: {
+                issueNumber: Number(args.issue),
+                commentId: bound.bound.commentId,
+                createdAt: bound.bound.createdAt,
+                anchor: bound.bound.anchor,
+              },
+            }
+          : {}),
       },
       null,
       2,

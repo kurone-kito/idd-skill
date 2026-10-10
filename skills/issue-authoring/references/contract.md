@@ -651,6 +651,19 @@ Ask these checks:
    restating site outside the issue's scope is filed as its own issue,
    not left in a pull request description.
 
+### Loosening a fail-closed check
+
+**Region classifier:** names the parser or function that decides each region
+class the change depends on, and the coordinate system of the text that it
+reads (for example, raw lines or fence-stripped text).
+
+**Must-keep shapes:** lists the rejected shapes that the change must still
+reject, one per line. The list is not exhaustive. A reviewer checks the
+change against it and adds any shape that the change would newly accept.
+
+This subsection cites the observed incident: issue `#3891` and PR `#3934`,
+observed 2026-10-09. See `docs/idd-design-rationale.md#cite-the-observed-incident`.
+
 ## Live-observed claim citation
 
 When a drafted issue's Background section (or its `## Goal` / `## Why
@@ -1057,6 +1070,9 @@ instructions.
 - candidate files, when present, are cues rather than an edit script
 - a `review-needs-decision` body follows the body contract below,
   including its headings, source-comment link, and quoting rules
+- a change that loosens a fail-closed check names its region classifier and
+  its must-keep shapes under `Loosening a fail-closed check`, and the reviewer
+  checks both before the draft is published
 
 ### Resolver
 
@@ -2227,9 +2243,11 @@ only approval boundary.
   anchor), and the read-only `authoring-set-members` helper reports
   that this target is the only issue whose trusted `authoring-owner`
   marker carries that exact `set`
-  (`node scripts/authoring-set-members.mjs --set <id>`). A zero exit
-  whose JSON has `soleMember: true`, `issues` equal to that one target,
-  and no `skippedMarkers` entry with `namesRequestedSet: true` is the only
+  (`node scripts/authoring-set-members.mjs --set <id> --issue <target>`,
+  the bounded window that starts at the target's own first trusted marker
+  for the set). A zero exit whose JSON has `soleMember: true`, `issues` equal
+  to that one target, and no `skippedMarkers` entry with
+  `namesRequestedSet: true` is the only
   passing result (an edited entry's flag reflects only the comment's
   current text). A `requested-set` entry on the target itself is that
   target's own hidden marker, which the sweep routinely leaves behind, so
@@ -2331,8 +2349,9 @@ only approval boundary.
   removal in step (4): first, verify that this sole target really is
   the sole member of its authoring set -- it carries no
   `<marker-prefix>-roadmap-id` marker, and
-  `node scripts/authoring-set-members.mjs --set <id>` reports
-  `soleMember: true` with `issues` equal to this one target and no
+  `node scripts/authoring-set-members.mjs --set <id> --issue <target>`, the
+  bounded window that starts at the target's own first trusted marker for the
+  set, reports `soleMember: true` with `issues` equal to this one target and no
   `skippedMarkers` entry with `namesRequestedSet: true` (a `requested-set`
   entry on the target itself does not block); that
   helper is exactly the mechanical proof this fast path's own

@@ -4863,3 +4863,17 @@ test('a bare carriage return in the cleanup workflow is refused by name and leav
     );
   });
 });
+
+test('the reusable pnpm-boundary lint-command defaults to pnpm run check and an explicit caller value still overrides it', () => {
+  const text = realText('.github/workflows/pnpm-boundary.yml');
+  assert.match(text, /lint-command:\n\s+default: pnpm run check\n/);
+  assert.match(
+    text,
+    /run: \$\{\{ inputs\.lint-command \|\| 'pnpm run check' \}\}/,
+  );
+});
+
+test('the Node 22 floor caller inherits the pnpm run check default and sets no lint-command', () => {
+  const text = realText('.github/workflows/pnpm-boundary-node22-floor.yml');
+  assert.doesNotMatch(text, /lint-command/);
+});
