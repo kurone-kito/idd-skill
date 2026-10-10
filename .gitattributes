@@ -29,6 +29,7 @@ scripts/build-ts.mjs linguist-generated=true
 scripts/bundle-root.mjs linguist-generated=true
 scripts/check-build-artifacts.mjs linguist-generated=true
 scripts/check-pnpm-boundary.mjs linguist-generated=true
+scripts/check-project.mjs linguist-generated=true
 scripts/check-stray-commit-closes.mjs linguist-generated=true
 scripts/check-untracked-artifacts.mjs linguist-generated=true
 scripts/ci-wait-policy.mjs linguist-generated=true
