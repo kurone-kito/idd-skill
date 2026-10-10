@@ -7,9 +7,9 @@ are in `idd-overview-core.instructions.md`.
 ## Policy Constants
 
 The distributed claim, advisory, CI, and critique-loop defaults are
-named in `docs/policy-constants.md`. Read it before changing any timing
+named in `docs/policy-constants.md`. Read it before changing a timing
 or loop constant, and record local deviations in onboarding or
-repository docs so later sessions need not scan every phase file.
+repository docs.
 
 ## Live status digest
 
@@ -24,8 +24,9 @@ them, report the URLs, and treat none as authoritative unattended. See
 (use the profile-selected form from `docs/idd-helper-scripts.md`).
 
 Treat each digest create or edit as a GitHub side effect under the claim
-revalidation gate (`idd-overview-core.instructions.md`); set `Authoritative
-by` to the evidence. If the claim was lost, do not update the digest.
+revalidation gate (`idd-overview-core.instructions.md`), with fields
+from the revalidated claim; set `Authoritative by` to the evidence.
+If the claim was lost, do not update the digest.
 
 A PR digest edit is still PR activity: do not edit it between a valid
 E1 review watermark and an intended F3 merge (it would perturb
