@@ -780,3 +780,19 @@ test('citationBreakdown: a body with no per-item view that names a file fails cl
     citationFreeCount: 0,
   });
 });
+
+test('citationBreakdown: a v2 Previously missed heading with no parsed item fails closed (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    'The finding text sits outside any item block.',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), []);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});

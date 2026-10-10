@@ -8599,3 +8599,12 @@ test('Previously missed (#3942): a disposition does not count before the review,
     assert.equal(convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [comment]), false);
   }
 });
+
+test('Previously missed (#3942): a disposition posted in the same second as the review does not count', () => {
+  assert.equal(
+    convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [
+      citedDispositionComment({ createdAt: RECENT }),
+    ]),
+    false,
+  );
+});

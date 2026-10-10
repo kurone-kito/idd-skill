@@ -162,6 +162,7 @@ import {
   buildEffectiveTrustedMarkerLogins,
   classifyCommentEditState,
   classifyPrLoopMembership,
+  compareIsoTimestamps,
   filterTrustedClaimFamilyEvents,
   hasTrustedReviewAckAfter,
   normalizeTrustedMarkerLogins,
@@ -2825,8 +2826,7 @@ function countCitedItemDispositions(
   trustedMarkerLogins: string[],
   reviewSubmittedAt: string,
 ): number {
-  const submittedMs = Date.parse(reviewSubmittedAt);
-  if (!Number.isFinite(submittedMs)) {
+  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
     return 0;
   }
   const trusted = new Set(
@@ -2837,10 +2837,14 @@ function countCitedItemDispositions(
     const login = String(comment.author?.login ?? comment.user?.login ?? '')
       .trim()
       .toLowerCase();
-    const createdMs = Date.parse(
-      String(comment.createdAt ?? comment.created_at ?? ''),
-    );
-    if (!trusted.has(login) || !(createdMs >= submittedMs)) {
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    // Strictly after the review, the same ordering hasTrustedReviewAckAfter uses:
+    // a reply in the review's own second is not provably later.
+    if (
+      !trusted.has(login) ||
+      !isValidIsoTimestamp(createdAt) ||
+      compareIsoTimestamps(createdAt, reviewSubmittedAt) <= 0
+    ) {
       return false;
     }
     if (classifyCommentEditState(comment) !== 'unedited') {

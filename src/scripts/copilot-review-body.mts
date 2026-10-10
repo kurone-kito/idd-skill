@@ -299,11 +299,12 @@ function hasCitationLine(body: string): boolean {
 
 /**
  * Splits a body's Previously missed count into the items that name a file or
- * line and the ones that do not (#3942). With a per-item view, the items must
- * match the count, or every suppressed item counts as cited (fail closed).
- * Without one, a body that names a file or line anywhere counts every item as
- * cited, and a body that names none counts every item as citation-free, so
- * the existing review-ack rule still applies to it.
+ * line and the ones that do not (#3942). An `overview-v2` body with a
+ * Previously missed section always has a per-item view, which may be empty.
+ * Its items must match the count, or every suppressed item counts as cited
+ * (fail closed). A body with no per-item view counts every item as cited when
+ * it names a file or line anywhere, and as citation-free when it names none,
+ * so the existing review-ack rule still applies to it.
  */
 export function citationBreakdown(
   body: string | null | undefined,
@@ -313,7 +314,7 @@ export function citationBreakdown(
     return { citedCount: 0, citationFreeCount: 0 };
   }
   const items = extractPreviouslyMissedItems(body);
-  if (items && items.length > 0) {
+  if (items) {
     if (items.length !== suppressedCount) {
       return { citedCount: suppressedCount, citationFreeCount: 0 };
     }
