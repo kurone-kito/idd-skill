@@ -68,7 +68,7 @@ off before F3; opt in to `fully_autonomous_merge` for an unattended
 merge loop, or choose `separate_merge_agent` as a non-default
 split-authority profile.
 
-## Optional machine-readable config
+## Machine-readable config
 
 `.github/idd/config.json` records the adopter's policy decisions
 (`iddVersion`, marker prefix, merge/review/thread policies,
