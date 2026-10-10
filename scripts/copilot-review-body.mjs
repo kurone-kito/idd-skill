@@ -216,7 +216,7 @@ const ZERO_WIDTH_CHARS_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/gu;
  * (#3942). Used only where no per-item view exists.
  */
 const CITATION_ANYWHERE_PATTERN =
-  /(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{1,5}|[\w-]+(?=:\d))(?::\d+)?(?:`|\*\*)/u;
+  /(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.(?:md|mts|mjs|cjs|cts|ts|tsx|js|jsx|json|ya?ml|sh|toml|txt)|[\w-]+(?=:\d))(?::\d+)?(?:`|\*\*)/u;
 /** A `<details>` or `</details>` tag, for the wrapper-bounded scan below. */
 const DETAILS_TAG_PATTERN = /<(\/?)details>/g;
 /**

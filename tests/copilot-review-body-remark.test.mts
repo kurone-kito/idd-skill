@@ -8,6 +8,7 @@ import {
   classifyCopilotReviewBody,
   extractCopilotReviewBodyRemark,
   extractPreviouslyMissedItems,
+  namesFileOrLine,
 } from '../src/scripts/copilot-review-body.mts';
 
 // #3672: the remark extractor is evidence-only and deliberately not a
@@ -900,4 +901,22 @@ test('citationBreakdown: a file named in a section after the Previously missed w
     '</details>',
   ].join('\n');
   assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: false }]);
+});
+
+test('citationBreakdown: an ordinary dotted identifier is not a file citation (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Read the field</summary>',
+    '',
+    'Use `obj.id` instead of `foo.bar` here.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: false }]);
+  assert.equal(namesFileOrLine('The field is `obj.id`.'), false);
+  assert.equal(namesFileOrLine('See `README.ja.md`.'), true);
 });

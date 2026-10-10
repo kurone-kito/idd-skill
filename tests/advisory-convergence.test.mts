@@ -8632,3 +8632,14 @@ test('Previously missed (#3942): a stamped Rejected reply without evidence does 
     false,
   );
 });
+
+test('Previously missed (#3942): a Rejected reply whose only evidence is a dotted identifier does not count', () => {
+  assert.equal(
+    convergedWith(CITED_PREVIOUSLY_MISSED_BODY, [
+      citedDispositionComment({
+        body: `**Rejected** — the value is \`obj.id\`.\n${STAMP}`,
+      }),
+    ]),
+    false,
+  );
+});
