@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { classifyDiscoverInterruption } from '../src/scripts/discover-progress.mts';
-import { GhPaginatedResponseLimitError } from '../src/scripts/gh-exec.mts';
+import {
+  GhPaginatedResponseLimitError,
+  tagGhCommandError,
+} from '../src/scripts/gh-exec.mts';
+import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
+import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import {
   createGithubProviderAdapter,
   fetchLastEditedAtByNodeId,
@@ -6098,4 +6103,68 @@ test('a traversal failure that is neither a timeout nor a throttle stays unclass
   );
   assert.ok(error instanceof Error);
   assert.equal(classifyDiscoverInterruption(error, EVIDENCE_NOW_MS), null);
+});
+
+// #3945: a comment-read failure that the adapter rebuilds keeps the gh tag, so
+// the helper classifier reads it as a transport failure, not an internal error.
+function commentReadFailure(error: Error): unknown {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghApiJson: () => {
+        throw new Error('REST must not be consulted');
+      },
+      ghText: () => {
+        throw error;
+      },
+    }),
+  );
+  try {
+    port.listWorkItemComments(900, { includeEditState: true });
+  } catch (caught) {
+    return caught;
+  }
+  throw new Error('the comment read must fail');
+}
+
+test('listWorkItemComments: a tagged 503 comment-read failure classifies as transport with its status (#3945)', () => {
+  const error = tagGhCommandError(
+    Object.assign(new Error('gh: HTTP 503'), { stderr: 'gh: HTTP 503' }),
+  );
+  const classified = classifyHelperError(commentReadFailure(error));
+  assert.equal(classified.kind, 'transport');
+  assert.equal(classified.httpStatus, 503);
+});
+
+test('listWorkItemComments: an untagged comment-read failure keeps its current classification (#3945)', () => {
+  const error = Object.assign(new Error('gh: HTTP 503'), {
+    stderr: 'gh: HTTP 503',
+  });
+  const classified = classifyHelperError(commentReadFailure(error));
+  assert.equal(classified.kind, 'internal');
+});
+
+test('listWorkItemComments: a load-control refusal stays not dispatched after the rebuild (#3945)', () => {
+  const refusal = tagGhCommandError(
+    createLoadControlRefusal({ outcome: 'not-dispatched', reason: 'busy' }),
+  );
+  const classified = classifyHelperError(commentReadFailure(refusal));
+  assert.equal(classified.kind, 'transport');
+  assert.equal(classified.notDispatched, true);
+});
+
+test('listWorkItemComments: a composite error that wraps a refused read stays a plain transport failure (#3945)', () => {
+  const composite = tagGhCommandError(
+    Object.assign(new Error('composite write failed'), {
+      stderr: 'gh: HTTP 503',
+      cause: createLoadControlRefusal({
+        outcome: 'not-dispatched',
+        reason: 'busy',
+      }),
+    }),
+  );
+  const classified = classifyHelperError(commentReadFailure(composite));
+  assert.equal(classified.kind, 'transport');
+  assert.notEqual(classified.notDispatched, true);
 });
