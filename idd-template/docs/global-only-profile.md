@@ -44,9 +44,10 @@ forwards it). The flag takes effect only when both conditions hold. Then the
 advisory check is removed from the required list. Without the flag, or when
 either condition fails, nothing changes.
 
-If the primary checkout cannot be listed, activation is unavailable and the
-check stays required. An ignore entry never drops a source-pinned requirement,
-so a required check whose ruleset entry names an app stays required. A
+If the primary checkout cannot be listed, or its origin remote does not name
+the target repository, activation is unavailable and the check stays
+required. An ignore entry never drops a source-pinned requirement, so a
+required check whose ruleset entry names an app stays required. A
 same-named context without such a pin cannot be told apart from the template
 check by ruleset data alone. That case remains a residual risk.
 
