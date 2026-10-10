@@ -840,26 +840,26 @@ same: repeated runs must stay safe and predictable.
 ### Project commands reference
 
 When a phase refers to a named command set, run the corresponding
-commands. **Adapt this table when applying this workflow to a
-different project.**
+commands. **Adapt `.github/idd/config.json`, not this table, when
+applying this workflow to a different project.**
 
 `.github/idd/config.json` is required and must validate against the canonical
 schema at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>.
 Its `commands` object is the runtime source of the command values, and the
-table below is the reference copy. Policy fields such as
+table below points each command row at its config entry. Policy fields such as
 `skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
 the recorded machine-readable policy. Absent values keep the gate
 enabled and default approval actors to `owners-and-maintainers-only`.
 
-| Name                    | Commands                                                                                                                                     |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **fix-validate**        | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"`                                       |
-| **pre-push-validate**   | `npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                        |
-| **post-fix-validate**   | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
-| **install-deps**        | `true`                                                                                                                                       |
-| **issue-scope**         | `roadmap-first`                                                                                                                              |
-| **orphan-first-policy** | `none`                                                                                                                                       |
+| Name                    | Value                                                     |
+| ----------------------- | --------------------------------------------------------- |
+| **fix-validate**        | `commands.fix-validate` in `.github/idd/config.json`      |
+| **pre-push-validate**   | `commands.pre-push-validate` in `.github/idd/config.json` |
+| **post-fix-validate**   | `commands.post-fix-validate` in `.github/idd/config.json` |
+| **install-deps**        | `commands.install-deps` in `.github/idd/config.json`      |
+| **issue-scope**         | `roadmap-first`                                           |
+| **orphan-first-policy** | `none`                                                    |
 
 Non-shell rows such as **issue-scope** and **orphan-first-policy** are
 workflow settings. Read them literally, not as commands.
