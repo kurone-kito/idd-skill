@@ -423,6 +423,83 @@ function buildRerunArguments(args) {
   }
   return argv;
 }
+// #3876: a closing keyword (`close`, `fix`, `resolve` and their forms) makes a
+// closing edge only when its line is a standalone declaration. The line must
+// hold nothing but closing clauses -- an optional list marker, then clauses
+// joined by `,`, `, and` or `and`, then an optional period -- and both
+// neighbouring lines must be neutral. Prose that merely contains `Closes #N`
+// is text, not a declaration. Only the closing edge is gated; dependency,
+// sub-issue and reference keywords keep their own grammars.
+const LIST_MARKER_SOURCE = String.raw`(?:[-*+]|\d+[.)])[ \t]+`;
+const CLOSING_REFERENCE_SOURCE = String.raw`(?:#\d+|[\w.-]+\/[\w.-]+#\d+)(?!\w)`;
+const CLOSING_CLAUSE_SOURCE =
+  String.raw`(?<![\w-])(?:${CLOSING_KEYWORD_ALTERNATION}):?[ \t]+` +
+  `${CLOSING_REFERENCE_SOURCE}(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+)` +
+  `${CLOSING_REFERENCE_SOURCE})*`;
+const CLOSING_CLAUSE_SEPARATOR_SOURCE = String.raw`(?:[ \t]*,(?:[ \t]+and[ \t]+|[ \t]*)|[ \t]+and[ \t]+)`;
+const CLOSING_DECLARATION_LINE_RE = new RegExp(
+  `^[ \\t]*(?:${LIST_MARKER_SOURCE})?${CLOSING_CLAUSE_SOURCE}` +
+    `(?:${CLOSING_CLAUSE_SEPARATOR_SOURCE}${CLOSING_CLAUSE_SOURCE})*\\.?[ \\t]*$`,
+  'iu',
+);
+// A neighbour's relationship declaration: the keywords of
+// KEYWORD_REFERENCE_REGEX (and IDD's `Parent roadmap` header), references that
+// may also be issue or pull request URLs, and an optional parenthetical such as
+// `(non-blocking)`.
+const RELATIONSHIP_REFERENCE_SOURCE = String.raw`(?:#\d+|[\w.-]+\/[\w.-]+#\d+|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+)(?!\w)`;
+const RELATIONSHIP_CLAUSE_SOURCE =
+  String.raw`(?<![\w-])(?:${CLOSING_KEYWORD_ALTERNATION}|refs?|depends on|blocked by|sub-issue|sub issue|parent roadmap):?[ \t]+` +
+  `${RELATIONSHIP_REFERENCE_SOURCE}(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+|[ \t]+)` +
+  `${RELATIONSHIP_REFERENCE_SOURCE})*`;
+const RELATIONSHIP_DECLARATION_LINE_RE = new RegExp(
+  `^[ \\t]*(?:${LIST_MARKER_SOURCE})?${RELATIONSHIP_CLAUSE_SOURCE}` +
+    `(?:${CLOSING_CLAUSE_SEPARATOR_SOURCE}${RELATIONSHIP_CLAUSE_SOURCE})*` +
+    `(?:[ \\t]*\\([^()]*\\))?\\.?[ \\t]*$`,
+  'iu',
+);
+const BLANK_LINE_RE = /^[ \t]*$/u;
+const ATX_HEADING_LINE_RE = /^[ \t]*#{1,6}(?:[ \t]|$)/u;
+const LIST_ITEM_LINE_RE = new RegExp(`^[ \\t]*${LIST_MARKER_SOURCE}\\S`, 'u');
+const THEMATIC_BREAK_LINE_RE = /^[ \t]*(?:(?:\*|-|_)[ \t]*){3,}$/u;
+function isClosingNeighbourNeutral(line, position) {
+  if (line === undefined || BLANK_LINE_RE.test(line)) {
+    return true;
+  }
+  if (ATX_HEADING_LINE_RE.test(line)) {
+    return true;
+  }
+  if (RELATIONSHIP_DECLARATION_LINE_RE.test(line)) {
+    return true;
+  }
+  return (
+    position === 'next' &&
+    LIST_ITEM_LINE_RE.test(line) &&
+    !THEMATIC_BREAK_LINE_RE.test(line)
+  );
+}
+/**
+ * True when the closing clauses on `lines[index]` form a standalone
+ * declaration: the line matches the closing-declaration grammar, a closing
+ * line without its own list marker has a neutral previous neighbour, and the
+ * next neighbour is neutral. See the comment above this group.
+ */
+function isStandaloneClosingLine(lines, index) {
+  const line = lines[index] ?? '';
+  if (!CLOSING_DECLARATION_LINE_RE.test(line)) {
+    return false;
+  }
+  const hasOwnListMarker = new RegExp(
+    `^[ \\t]*${LIST_MARKER_SOURCE}`,
+    'u',
+  ).test(line);
+  if (
+    !hasOwnListMarker &&
+    !isClosingNeighbourNeutral(lines[index - 1], 'previous')
+  ) {
+    return false;
+  }
+  return isClosingNeighbourNeutral(lines[index + 1], 'next');
+}
 if (import.meta.main) {
   // #3343: call main() directly when the envelope is disabled -- see
   // applyHelperCliOutcomeWhenDisabled's own doc comment for why, including
@@ -2426,6 +2503,33 @@ export function extractKeywordReferences(body, options = {}) {
   const dependencyMaskedLines = maskMarkdownForScan(rawBody, {
     htmlComments: 'mask',
   }).split(/\r?\n/u);
+  // #3876: the closing-declaration view keeps inline code and masks HTML
+  // comments. It is built lazily, on the first closing-keyword match in the
+  // body, so most bodies pay nothing for it.
+  let closingDeclarationLines = null;
+  const closingDeclarationMemo = new Map();
+  const isStandaloneClosingMatch = (lineIndex, matchIndex, keyword) => {
+    if (closingDeclarationLines === null) {
+      closingDeclarationLines = maskMarkdownForScan(rawBody, {
+        inlineCode: 'keep',
+        htmlComments: 'mask',
+      }).split(/\r?\n/u);
+    }
+    // A keyword inside an HTML comment is masked here, so it cannot match.
+    if (
+      closingDeclarationLines[lineIndex]
+        ?.slice(matchIndex, matchIndex + keyword.length)
+        .toLowerCase() !== keyword.toLowerCase()
+    ) {
+      return false;
+    }
+    let verdict = closingDeclarationMemo.get(lineIndex);
+    if (verdict === undefined) {
+      verdict = isStandaloneClosingLine(closingDeclarationLines, lineIndex);
+      closingDeclarationMemo.set(lineIndex, verdict);
+    }
+    return verdict;
+  };
   for (let lineIndex = 0; lineIndex < maskedLines.length; lineIndex += 1) {
     const maskedLine = maskedLines[lineIndex];
     const rawLine = rawLines[lineIndex] ?? maskedLine;
@@ -2466,6 +2570,14 @@ export function extractKeywordReferences(body, options = {}) {
       const segmentEnd = keywordMatches[index + 1]?.index ?? maskedLine.length;
       const segment = maskedLine.slice(segmentStart, segmentEnd);
       const baseRelationship = classifyKeywordRelationship(match[1]);
+      // #3876: prose that contains a closing keyword is not a declaration, so
+      // the match is dropped silently, as a negated one is.
+      if (
+        baseRelationship === 'closing-keyword' &&
+        !isStandaloneClosingMatch(lineIndex, matchIndex, match[0])
+      ) {
+        continue;
+      }
       const relationship =
         baseRelationship === 'reference' &&
         NON_BLOCKING_ANNOTATION_PATTERN.test(segment)
