@@ -234,6 +234,8 @@ export type ProviderGovernanceReadOutcome<T> =
 export interface ProviderChangeRequestHeadShaAndAuthor {
   headSha: string;
   authorLogin: string;
+  /** The PR's base branch: the trust boundary for policy reads (#3958). */
+  baseRefName: string;
 }
 
 /** Backs {@link ProviderPort.getChangeRequestConvergenceView}. `closingIssuesReferences` is a raw passthrough (shape not inspected by this port). */
@@ -1017,8 +1019,8 @@ export interface ProviderPort {
   ): string;
 
   /**
-   * change-requests. `pr view --json headRefOid,author` -- the distinct
-   * two-field shape `review-activity-snapshot.mts` uses (throws on any
+   * change-requests. `pr view --json headRefOid,author,baseRefName` -- the
+   * distinct three-field shape `review-activity-snapshot.mts` uses (throws on any
    * failure, no 404-to-null mapping, matching that file's pre-migration
    * no-try/catch call).
    */

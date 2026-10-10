@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { loadIddConfig } from '../src/scripts/idd-config.mts';
 import {
   buildCodeRabbitEmbeddedFindings,
   buildCopilotOverviewLabels,
@@ -18,6 +19,11 @@ import { PR_1897_REVIEW_4863787336 } from './coderabbit-pr-1897-review.mts';
 import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+// The CLI reads the policy file at the PR base ref (#3958); the stub answers
+// that read with the repository's own file, as the working tree used to.
+const POLICY_B64 = Buffer.from(
+  readFileSync(join(REPO_ROOT, '.github/idd/config.json'), 'utf8'),
+).toString('base64');
 const SNAPSHOT_HEAD = 'b'.repeat(40);
 const COURTESY_ACK =
   '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->';
@@ -45,6 +51,7 @@ test('collectReviewActivitySnapshot calls each rich loader once', () => {
     prNumber: 3592,
     owner: 'o',
     repo: 'r',
+    loadTrustedConfig: () => loadIddConfig(),
     trustedMarkerLoginsFlag: '',
     advisoryBotLoginsFlag: '',
     envTrustedMarkerActors: '',
@@ -56,8 +63,13 @@ test('collectReviewActivitySnapshot calls each rich loader once', () => {
       },
       getChangeRequestHeadShaAndAuthor: () => {
         calls.push('head');
-        return { headSha: 'c'.repeat(40), authorLogin: 'someone' };
+        return {
+          headSha: 'c'.repeat(40),
+          authorLogin: 'someone',
+          baseRefName: 'main',
+        };
       },
+      getRepositoryDefaultBranch: () => 'main',
       listChangeRequestChecks: () => {
         calls.push('checks');
         return [];
@@ -81,8 +93,8 @@ test('collectReviewActivitySnapshot calls each rich loader once', () => {
     },
   });
   assert.deepEqual(calls, [
-    'viewer',
     'head',
+    'viewer',
     'checks',
     'reviews',
     'comments',
@@ -263,8 +275,9 @@ const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 if (args[0] === 'api' && args[1] === 'user') out('kurone-kito\\n');
 if (args[0] === 'pr' && args[1] === 'view') {
-  out(${JSON.stringify(JSON.stringify({ headRefOid: SNAPSHOT_HEAD, author: { login: 'pr-author' } }))});
+  out(${JSON.stringify(JSON.stringify({ headRefOid: SNAPSHOT_HEAD, author: { login: 'pr-author' }, baseRefName: 'main' }))});
 }
+if (args[0] === 'api' && String(args[1]).includes('/contents/.github/idd/config.json')) out(${JSON.stringify(POLICY_B64)});
 if (args[0] === 'pr' && args[1] === 'checks') out('[]');
 if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('databaseId')) {
   const raw = ${JSON.stringify(commentNdjson)};
@@ -700,6 +713,7 @@ function latestPort(options: {
     getChangeRequestHeadShaAndAuthor: () => ({
       headSha: LATEST_HEAD,
       authorLogin: 'someone',
+      baseRefName: 'main',
     }),
     listChangeRequestChecks: () => [],
     listReviews: () => [],
@@ -729,12 +743,14 @@ function latestSnapshot(
       () => ({
         headSha: options.headSha,
         authorLogin: 'someone',
+        baseRefName: 'main',
       });
   }
   return collectReviewActivitySnapshot({
     prNumber: 3907,
     owner: 'o',
     repo: 'r',
+    loadTrustedConfig: () => loadIddConfig(),
     trustedMarkerLoginsFlag: options.trustedMarkerLoginsFlag ?? '',
     advisoryBotLoginsFlag: '',
     envTrustedMarkerActors: '',
@@ -1030,6 +1046,7 @@ function snapshotWithReviews(reviews: readonly object[]) {
     prNumber: 3672,
     owner: 'o',
     repo: 'r',
+    loadTrustedConfig: () => loadIddConfig(),
     trustedMarkerLoginsFlag: '',
     advisoryBotLoginsFlag: '',
     envTrustedMarkerActors: '',
@@ -1042,7 +1059,9 @@ function snapshotWithReviews(reviews: readonly object[]) {
       getChangeRequestHeadShaAndAuthor: () => ({
         headSha: 'c'.repeat(40),
         authorLogin: 'someone',
+        baseRefName: 'main',
       }),
+      getRepositoryDefaultBranch: () => 'main',
       listChangeRequestChecks: () => [],
       listReviews: () => [...reviews],
       listWorkItemComments: () => [],
@@ -1321,4 +1340,119 @@ test('copilotOverviewLabels is evidence only: the other fields match the same re
     } = withoutLabels;
     assert.deepEqual(restWithLabels, restWithoutLabels, id);
   }
+});
+
+// --- #3958: policy is read at the PR's base ref, never the working tree ----
+
+function policyPort(options: {
+  baseRefName?: string;
+  defaultBranch?: string | null;
+}) {
+  return {
+    resolveViewerLoginSafe: () => ({
+      viewerLogin: '',
+      viewerLoginUnavailable: true,
+    }),
+    getChangeRequestHeadShaAndAuthor: () => ({
+      headSha: 'c'.repeat(40),
+      authorLogin: 'someone',
+      baseRefName: options.baseRefName ?? 'main',
+    }),
+    getRepositoryDefaultBranch: () =>
+      options.defaultBranch === undefined ? 'trunk' : options.defaultBranch,
+    listChangeRequestChecks: () => [],
+    listReviews: () => [],
+    listWorkItemComments: () => [],
+    listChangeRequestReviewThreadsWithComments: () => [],
+    getReviewThreadCommentUserContentEdits: () => [],
+  } as unknown as Parameters<typeof collectReviewActivitySnapshot>[0]['port'];
+}
+
+function policyInput(
+  port: Parameters<typeof collectReviewActivitySnapshot>[0]['port'],
+  loadTrustedConfig: NonNullable<
+    Parameters<typeof collectReviewActivitySnapshot>[0]['loadTrustedConfig']
+  >,
+  extra: { iddConfig?: unknown } = {},
+) {
+  return {
+    prNumber: 3958,
+    owner: 'o',
+    repo: 'r',
+    trustedMarkerLoginsFlag: '',
+    advisoryBotLoginsFlag: '',
+    envTrustedMarkerActors: '',
+    envAdvisoryBotLogins: '',
+    port,
+    loadTrustedConfig,
+    ...extra,
+  } as Parameters<typeof collectReviewActivitySnapshot>[0];
+}
+
+test('the trusted loader is called with the PR base ref (#3958)', () => {
+  const refs: string[] = [];
+  collectReviewActivitySnapshot(
+    policyInput(policyPort({ baseRefName: 'release/2' }), (_o, _r, ref) => {
+      refs.push(ref);
+      return null;
+    }),
+  );
+  assert.deepEqual(refs, ['release/2']);
+});
+
+test('an empty base ref falls back to the live default branch (#3958)', () => {
+  const refs: string[] = [];
+  collectReviewActivitySnapshot(
+    policyInput(
+      policyPort({ baseRefName: '', defaultBranch: 'trunk' }),
+      (_o, _r, ref) => {
+        refs.push(ref);
+        return null;
+      },
+    ),
+  );
+  assert.deepEqual(refs, ['trunk']);
+});
+
+test('an empty base ref and no default branch throws (#3958)', () => {
+  assert.throws(
+    () =>
+      collectReviewActivitySnapshot(
+        policyInput(
+          policyPort({ baseRefName: '', defaultBranch: null }),
+          () => null,
+        ),
+      ),
+    /cannot resolve a trusted ref for \.github\/idd\/config\.json/,
+  );
+});
+
+test('a loader error propagates and the working tree is not read (#3958)', () => {
+  let calls = 0;
+  assert.throws(
+    () =>
+      collectReviewActivitySnapshot(
+        policyInput(policyPort({ baseRefName: 'main' }), () => {
+          calls += 1;
+          throw new Error('trusted read failed');
+        }),
+      ),
+    /trusted read failed/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('an injected iddConfig bypasses the trusted loader (#3958)', () => {
+  let calls = 0;
+  collectReviewActivitySnapshot(
+    policyInput(
+      policyPort({ baseRefName: 'main' }),
+      () => {
+        calls += 1;
+        return null;
+      },
+      { iddConfig: {} },
+    ),
+  );
+  assert.equal(calls, 0);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -219,9 +219,30 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
         '-R',
         REPO_REF,
         '--json',
-        'headRefOid,author',
+        'headRefOid,author,baseRefName',
       ]),
-      JSON.stringify({ headRefOid: HEAD_SHA, author: { login: 'pr-author' } }),
+      JSON.stringify({
+        headRefOid: HEAD_SHA,
+        author: { login: 'pr-author' },
+        baseRefName: 'main',
+      }),
+    ],
+    [
+      // #3958: the CLI reads the policy file at the PR base ref. Answer with
+      // the repository's own file, as the working tree used to.
+      JSON.stringify([
+        'api',
+        'repos/o/r/contents/.github/idd/config.json',
+        '--method',
+        'GET',
+        '-f',
+        'ref=main',
+        '--jq',
+        '.content',
+      ]),
+      Buffer.from(
+        readFileSync(join(REPO_ROOT, '.github/idd/config.json'), 'utf8'),
+      ).toString('base64'),
     ],
     [
       // #2267: routed through provider-port.mts's listChangeRequestChecks

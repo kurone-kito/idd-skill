@@ -2983,12 +2983,13 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         '-R',
         `${owner}/${repo}`,
         '--json',
-        'headRefOid,author',
+        'headRefOid,author,baseRefName',
       ]);
       const parsed = JSON.parse(raw);
       return {
         headSha: String(parsed.headRefOid ?? ''),
         authorLogin: String(parsed.author?.login ?? ''),
+        baseRefName: String(parsed.baseRefName ?? ''),
       };
     },
     getChangeRequestConvergenceView(number) {

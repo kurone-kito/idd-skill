@@ -27,7 +27,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadIddConfig } from './idd-config.mts';
+import { loadTrustedIddConfig } from './idd-config.mts';
 import {
   buildActivitySnapshotSummary,
   countUncoveredCodeRabbitEmbeddedFindings,
@@ -147,6 +147,7 @@ export type ReviewActivityCollectors = Pick<
   ProviderPort,
   | 'resolveViewerLoginSafe'
   | 'getChangeRequestHeadShaAndAuthor'
+  | 'getRepositoryDefaultBranch'
   | 'listChangeRequestChecks'
   | 'listReviews'
   | 'listWorkItemComments'
@@ -154,6 +155,36 @@ export type ReviewActivityCollectors = Pick<
   | 'getReviewThreadCommentUserContentEdits'
 > &
   Partial<Pick<ProviderPort, 'getChangeRequestReviewsWithHeadCommitDate'>>;
+
+/**
+ * The policy file, read at the PR's base ref (#3958). The working tree is
+ * never read: a PR branch could edit its own trusted actors and advisory bot
+ * logins and then judge its own snapshot by them. An empty base ref falls back
+ * to the live default branch, as pre-merge-readiness does. A file missing at
+ * that ref is `null`, and a loader error propagates without a working-tree
+ * fallback.
+ */
+function readTrustedPolicyConfig(
+  input: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    port: ReviewActivityCollectors;
+    loadTrustedConfig?: typeof loadTrustedIddConfig;
+  },
+  baseRefName: string,
+): ReturnType<typeof loadTrustedIddConfig> {
+  const ref =
+    baseRefName ||
+    input.port.getRepositoryDefaultBranch(input.owner, input.repo);
+  if (!ref) {
+    throw new Error(
+      `cannot resolve a trusted ref for .github/idd/config.json: PR #${input.prNumber} has no baseRefName and the repository's live default branch could not be determined`,
+    );
+  }
+  const load = input.loadTrustedConfig ?? loadTrustedIddConfig;
+  return load(input.owner, input.repo, ref);
+}
 
 /**
  * Collect one PR's review activity and derive the snapshot JSON.
@@ -171,11 +202,18 @@ export function collectReviewActivitySnapshot(input: {
   advisoryBotLoginsFlag: string;
   envTrustedMarkerActors?: string | undefined;
   envAdvisoryBotLogins?: string | undefined;
-  iddConfig?: ReturnType<typeof loadIddConfig>;
+  iddConfig?: ReturnType<typeof loadTrustedIddConfig>;
   includeLatestPrimaryBotReview?: boolean;
   port: ReviewActivityCollectors;
+  loadTrustedConfig?: typeof loadTrustedIddConfig;
 }): Record<string, unknown> {
-  const iddConfig = input.iddConfig ?? loadIddConfig();
+  const {
+    headSha: rawHeadSha,
+    authorLogin: rawAuthorLogin,
+    baseRefName,
+  } = input.port.getChangeRequestHeadShaAndAuthor(input.prNumber);
+  const iddConfig =
+    input.iddConfig ?? readTrustedPolicyConfig(input, baseRefName);
   const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
       flagValue: input.trustedMarkerLoginsFlag,
@@ -193,8 +231,6 @@ export function collectReviewActivitySnapshot(input: {
       trustedMarkerLogins,
       input.port.resolveViewerLoginSafe(),
     );
-  const { headSha: rawHeadSha, authorLogin: rawAuthorLogin } =
-    input.port.getChangeRequestHeadShaAndAuthor(input.prNumber);
   const headSha = rawHeadSha;
   const prAuthorLogin = rawAuthorLogin.trim().toLowerCase();
   const checks = input.port.listChangeRequestChecks(input.prNumber);
@@ -296,7 +332,7 @@ function buildLatestPrimaryBotReview(
     repo: string;
     prNumber: number;
     headSha: string;
-    iddConfig: ReturnType<typeof loadIddConfig>;
+    iddConfig: ReturnType<typeof loadTrustedIddConfig>;
     normalizedComments: Parameters<
       typeof resolveLatestPrimaryBotReviewEvidence
     >[0]['comments'];

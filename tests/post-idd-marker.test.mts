@@ -1350,6 +1350,12 @@ function statusCheckRollupResponse(
  * required-check read (#3465) so the shared pre-merge predicate sees one
  * passing present run and no required-check names.
  */
+// The watermark path reads the policy file at the PR base ref (#3958); the
+// stub answers that read with the repository's own file.
+const REPO_POLICY_B64 = Buffer.from(
+  readFileSync(join(REPO_ROOT, '.github/idd/config.json'), 'utf8'),
+).toString('base64');
+
 function watermarkFromPrGhStub(
   headSha: string,
   options: {
@@ -1388,7 +1394,8 @@ function watermarkFromPrGhStub(
   return `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
-if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${headSha}', author: { login: 'someone' } }));
+if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${headSha}', author: { login: 'someone' }, baseRefName: 'main' }));
+if (args[0] === 'api' && String(args[1]).includes('/contents/.github/idd/config.json')) out(${JSON.stringify(REPO_POLICY_B64)});
 if (args[0] === 'pr' && args[1] === 'checks') {
   out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
 }
