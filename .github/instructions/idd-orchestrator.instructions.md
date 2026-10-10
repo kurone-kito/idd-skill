@@ -62,14 +62,17 @@ The roster lives in the orchestrating session.
 4. For each pick in batch order, run A4.5, create the B1 worktree and record
    its claim-lock tokens, run the A5 claim, then start a worker with the
    existing delegation brief that names that worktree.
-5. A pick that fails A4.5 or A5 has its worktree and branch removed, which also
-   deletes its lock, then leaves `--issues` before any refill. A later Discover
-   re-run may reconsider it.
+5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
+   worktree and branch removed (which deletes its lock) and leaves `--issues`
+   before any refill. A later Discover re-run may reconsider it. A failure after
+   the marker is posted is contested: follow idd-claim.instructions.md, keep its
+   claim and worktree, and do not retry it.
 
 ## 4. Waiting and refill
 
 - On a streaming harness, handle each completion as it arrives. On a wave
-  harness, wait for the whole batch.
+  harness, wait for the whole batch. Set each finished worker's roster entry
+  to `reporting` before verification.
 - After each completion or wave, call `idd-worker-budget` again and refill from
   the cached graph. Follow the Discover re-run cadence, including the
   target-local A3 recheck.
