@@ -1200,15 +1200,75 @@ test('#3259: a thread-less Copilot "Previously missed" finding is surfaced with 
   assert.equal(result.prs[0].unaddressedComments[0].advisoryBot, true);
 });
 
+const CITATION_FREE_V2_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  '<details>',
+  '<summary>Rename the helper</summary>',
+  '',
+  'The name reads poorly next to the neighbouring helper.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+// #3942: a citation-free item is covered by the ack alone, so this case uses one.
 test("#3259: a trusted review-ack naming the review's own commit, posted after it, clears the finding", () => {
   const prs: MergedPrInput[] = [
     {
       number: 31,
+      reviews: [copilotReviewInput({ body: CITATION_FREE_V2_BODY })],
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
+          createdAt: '2026-09-23T08:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+// #3942: a cited finding (V2_PREVIOUSLY_MISSED_1_BODY names a file) needs its own
+// stamped disposition, so a bare ack does not clear it, but a disposition does.
+test('#3942: a bare review-ack does not clear a cited thread-less finding', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 33,
       reviews: [copilotReviewInput()],
       comments: [
         {
           author: { login: 'kurone-kito' },
           body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
+          createdAt: '2026-09-23T08:00:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+});
+
+test('#3942: a stamped disposition after the review clears a cited thread-less finding', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 34,
+      reviews: [copilotReviewInput()],
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `review-ack: some-agent ${COPILOT_REVIEW_COMMIT} 2026-09-23T08:00:00Z`,
+          createdAt: '2026-09-23T08:00:00Z',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'kurone-kito' },
+          body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
           createdAt: '2026-09-23T08:00:00Z',
           lastEditedAt: null,
         },

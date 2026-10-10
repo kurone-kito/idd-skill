@@ -329,6 +329,36 @@ export function countCitedItemDispositions(
     );
   }).length;
 }
+/**
+ * #3942: whether a trusted review-ack covers a review's suppressed findings.
+ * A citation-free item is covered by the ack. A cited item (one that names a
+ * file or line) needs its own disposition, so the ack alone never covers it. A
+ * review with no suppressed item keeps the plain ack result. The merge gate's
+ * snapshot evidence and the post-merge feedback sweep both call this, so they
+ * cannot disagree.
+ */
+export function ackCoversSuppressedFindings(input) {
+  const ackCovers = hasTrustedReviewAckAfter(
+    input.comments,
+    normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
+    input.reviewSubmittedAt,
+    input.commitSha,
+  );
+  if (input.suppressedCount === 0) {
+    return ackCovers;
+  }
+  const citation = citationBreakdown(input.body, input.suppressedCount);
+  const citedDispositionsCover =
+    citation.citedCount === 0 ||
+    countCitedItemDispositions(
+      input.comments,
+      [...input.trustedMarkerLogins],
+      input.reviewSubmittedAt,
+    ) >= citation.citedCount;
+  return (
+    (citation.citationFreeCount === 0 || ackCovers) && citedDispositionsCover
+  );
+}
 export function resolveLatestPrimaryBotReviewEvidence(input) {
   const headSha = input.prHeadSha.toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(headSha)) {
@@ -355,34 +385,20 @@ export function resolveLatestPrimaryBotReviewEvidence(input) {
       primaryBotLogin,
     });
   // #3942: a citation-free suppressed item is covered by a trusted review-ack,
-  // and each cited one needs its own disposition. The gate applies the same
-  // rule, so a cited-only review converges on dispositions alone.
+  // and each cited one needs its own disposition (see ackCoversSuppressedFindings).
   const latestIndex = findLatestCopilotReviewIndex(
     input.reviews,
     primaryBotLogin,
   );
-  const citation = citationBreakdown(
-    latestIndex < 0 ? null : input.reviews[latestIndex]?.body,
-    clause.suppressedCount,
-  );
-  const ackCovers = hasTrustedReviewAckAfter(
-    input.comments,
-    normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
-    clause.submittedAt,
-    headSha,
-  );
-  const citedDispositionsCover =
-    citation.citedCount === 0 ||
-    countCitedItemDispositions(
-      input.comments,
-      [...input.trustedMarkerLogins],
-      clause.submittedAt,
-    ) >= citation.citedCount;
   const reviewAckCovers = clause.matchesHead
-    ? clause.suppressedCount === 0
-      ? ackCovers
-      : (citation.citationFreeCount === 0 || ackCovers) &&
-        citedDispositionsCover
+    ? ackCoversSuppressedFindings({
+        body: latestIndex < 0 ? null : input.reviews[latestIndex]?.body,
+        suppressedCount: clause.suppressedCount,
+        comments: input.comments,
+        trustedMarkerLogins: input.trustedMarkerLogins,
+        reviewSubmittedAt: clause.submittedAt,
+        commitSha: headSha,
+      })
     : null;
   return {
     primaryBotLogin,
