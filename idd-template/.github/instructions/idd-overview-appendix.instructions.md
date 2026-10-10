@@ -182,7 +182,7 @@ to one that mirrors or pre-checks another gate's decision.
 
 ## Template sync
 
-When this repository ships `idd-template/`, edit it first, then regenerate the
-live target with `node scripts/sync-docs.mjs --apply` in the same commit.
-See
+When this repository ships `idd-template/`, edit it first, then regenerate
+the live copy with `node scripts/sync-docs.mjs --apply` in the same commit.
+`structure`/`contains` pairs are hand-mirrored. See
 [`docs/customization.md` → Template sync mapping](../../docs/customization.md#template-sync-mapping).
