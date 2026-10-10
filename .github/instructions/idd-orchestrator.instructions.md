@@ -61,8 +61,8 @@ The roster lives in the orchestrating session. Workers do not read it.
    at Discover entry. Pass it on every refill.
 4. For each pick in batch order, run A4.5, then the A5 claim, then start a
    worker with the existing delegation brief.
-5. A pick that fails A4.5 or A5 leaves the cached survivors, so the next refill
-   cannot select it again. A later Discover re-run may reconsider it.
+5. A pick that fails A4.5 or A5 is removed from `--issues` before any refill.
+   A later Discover re-run may reconsider it.
 
 ## 4. Waiting and refill
 
@@ -71,9 +71,10 @@ The roster lives in the orchestrating session. Workers do not read it.
 - After each completion or wave, call `idd-worker-budget` again and refill from
   the cached graph. Follow the Discover re-run cadence, including the
   target-local A3 recheck.
-- When `slots` is `0` but candidates remain, the budget is not a stop. Wait
-  for the next completion or wave, then call the budget again. If every roster
-  entry is `disposed`, report its `limitingFactor` and stop.
+- When `slots` is `0` but candidates remain: if every roster entry is
+  `disposed`, or the roster is empty, report the budget's `limitingFactor` and
+  stop. Otherwise, wait for the next completion or wave, then call the budget
+  again.
 - When the graph in hand has nothing startable, re-run Discover as that cadence
   requires. Report and stop only when that re-run finds nothing startable and every
   roster entry is `disposed`.
