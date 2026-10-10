@@ -86,7 +86,8 @@ The roster lives in the orchestrating session. Workers do not read it.
   delegation brief does not include.
 - The orchestrator verifies the outcome against live GitHub state, appends the
   record with the profile-selected `idd-worker-report append --file <path>`,
-  and only then disposes of the worker as the worker mechanism table's row says.
+  then disposes of the worker as the table's row says and marks its roster
+  entry `disposed`.
 - If verification or the append fails, the orchestrator keeps the worker
   addressable and follows the dead-or-stalled recovery rule in
   [idd-resume-stall.instructions.md](idd-resume-stall.instructions.md).
