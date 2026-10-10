@@ -17,9 +17,9 @@ Activate fan-out only when every condition holds:
   [worker mechanism table](../../docs/idd-workflow.md#worker-delegation);
 - helper support is installed, so the profile-selected `idd-worker-budget`
   command exists (`instructions-only` has none);
-- the effective `orchestrator.maxWorkers` is at least 2 (run
-  `idd-worker-budget --running 0 --startable 0` and read `maxWorkers` from its
-  output);
+- the effective `orchestrator.maxWorkers` is at least 2 (run the
+  profile-selected `idd-worker-budget` command with `--running 0 --startable
+  0` and read `maxWorkers` from its output);
 - the session is not on the lite profile;
 - the session was not started for one explicit issue (A0-T), and the operator
   did not ask for a single-issue session;
@@ -44,11 +44,12 @@ The roster lives in the orchestrating session. Workers do not read it.
 
 1. Run Discover A0 through A4 Step 1.5 as written. The startable candidates
    are the survivors of A4 Step 1.5.
-2. Call `idd-worker-budget` with `--running <count of entries not
-   disposed>` and `--startable <candidate count>`. Add
-   `--harness-limit <limit>` from the worker mechanism table's row for this
-   harness when that row gives a numeric limit, and omit it otherwise. Its
-   `slots` field is the number of workers to start now.
+2. Call the profile-selected `idd-worker-budget` command with
+   `--running <count of entries not disposed>` and
+   `--startable <candidate count>`. Add `--harness-limit <limit>` from the
+   worker mechanism table's row for this harness when that row gives a
+   numeric limit, and omit it otherwise. Its `slots` field is the number of
+   workers to start now.
 3. Pick that many candidates with `discover-shared-file-overlap`, passing the
    survivors with `--issues`, `--batch <slots>`, one `--in-flight` per roster
    issue, and `--check-overlap`. When `discover.selectionDesync` is
@@ -65,14 +66,18 @@ The roster lives in the orchestrating session. Workers do not read it.
 - After each completion or wave, call `idd-worker-budget` again and refill from
   the cached graph. Follow the Discover re-run cadence, including the
   target-local A3 recheck.
+- When `slots` is `0` but candidates remain, the budget is not a stop. Wait
+  for the next completion or wave, then call the budget again. If no worker
+  is running, report its `limitingFactor` and stop.
 - When the graph in hand has nothing startable, re-run Discover as that cadence
   requires. Report and stop only when that re-run finds nothing startable and every
   roster entry is `disposed`.
 
 ## 5. Report and disposal
 
-- The delegation brief asks the worker to end with the fields of
-  `schemas/worker-report.schema.json`.
+- The orchestrator's brief adds a request that the worker end with the
+  fields of `schemas/worker-report.schema.json`, which the existing
+  delegation brief does not include.
 - The orchestrator verifies the outcome against live GitHub state, appends the
   record with `idd-worker-report append --file <path>`, and only then disposes
   of the worker as the worker mechanism table's row says.
