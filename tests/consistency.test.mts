@@ -601,6 +601,26 @@ test('config drift resolves command rows that reference config keys', () => {
     },
   ]);
 
+  const crossReference = {
+    ...config,
+    commands: {
+      ...config.commands,
+      'fix-validate': 'commands.pre-push-validate',
+    },
+  };
+  assert.deepEqual(
+    collectPolicyConfigDrift(crossReference, referenceOverview),
+    [
+      {
+        path: 'commands.fix-validate',
+        expected: 'commands.fix-validate',
+        actual: 'commands.pre-push-validate',
+        reason:
+          'reference target commands.fix-validate holds another reference (commands.pre-push-validate) instead of a command',
+      },
+    ],
+  );
+
   const mixedOverview = overviewRows(
     'commands.fix-validate && npx cspell lint',
     'commands.pre-push-validate',

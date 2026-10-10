@@ -82,6 +82,15 @@ export function collectPolicyConfigDrift(
           actual,
           reason: `reference target commands.${key} refers to itself instead of holding a command`,
         });
+      } else if (/^commands\.[A-Za-z0-9-]+$/u.test(actual.trim())) {
+        // Another entry's reference is not a command either; running it
+        // would execute the reference text as a shell command.
+        drifts.push({
+          path: `commands.${key}`,
+          expected,
+          actual,
+          reason: `reference target commands.${key} holds another reference (${actual.trim()}) instead of a command`,
+        });
       }
       continue;
     }
