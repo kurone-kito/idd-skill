@@ -233,7 +233,7 @@ export function collectPreMergeReadiness(
   argv,
   createPort = createGithubProviderAdapter,
   loadTrustedConfig = loadTrustedIddConfig,
-  resolveActivation = () => computeActivation({ cwd: primaryCheckoutRoot() }),
+  resolveActivation = resolvePrimaryActivation,
 ) {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -2111,8 +2111,10 @@ export function resolveEligibleCodeownerUserLogins(
  */
 export function resolveGlobalOnlyRunIgnores(input) {
   if (!input.globalOnly) return [];
+  const activation = input.activation();
+  if (activation === null) return [];
   return resolveGlobalOnlyIgnoredCheckNames({
-    activation: input.activation(),
+    activation,
     baseWorkflowAbsent: baseWorkflowAbsentAt(
       input.port,
       input.owner,
@@ -2153,16 +2155,30 @@ export function baseWorkflowAbsentAt(port, owner, repo, ref) {
  */
 export function primaryCheckoutRoot() {
   try {
+    // Strip inherited GIT_* so a GIT_DIR or GIT_WORK_TREE from the caller cannot
+    // point the listing at another repository (as idd-activation does).
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+    );
     const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       encoding: 'utf8',
+      env,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const first = out.split('\n').find((line) => line.startsWith('worktree '));
-    if (first) return first.slice('worktree '.length);
+    return first ? first.slice('worktree '.length) : null;
   } catch {
-    // Fall through to the current directory.
+    // No listing means no trusted checkout. The caller keeps the check required.
+    return null;
   }
-  return process.cwd();
+}
+/**
+ * #3824: activation of the primary checkout, or null when that checkout cannot
+ * be determined. A null activation never enables the global-only profile.
+ */
+export function resolvePrimaryActivation() {
+  const root = primaryCheckoutRoot();
+  return root === null ? null : computeActivation({ cwd: root });
 }
 function fetchCodeownersText(port, owner, repo, ref) {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(

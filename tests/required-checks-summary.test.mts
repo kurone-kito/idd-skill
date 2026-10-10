@@ -808,10 +808,30 @@ test('an ignored required check name drops out of the required list', () => {
   assert.deepEqual(r.missingRequiredCheckNames, []);
 });
 
-// #3824: an ignored source-pinned name must not keep the downgrade on its
-// behalf, while a kept pinned name still downgrades (fail-closed).
-test('an ignored source-pinned name no longer downgrades a passing summary, and a kept pinned name still does', () => {
-  const ignored = summarizeRequiredChecks(
+// #3824: an ignore entry drops only an unpinned requirement. A source-pinned
+// entry names a specific producer, so it stays required and keeps the downgrade
+// (fail closed).
+test('an ignored unpinned name is dropped, and an ignored source-pinned name stays required', () => {
+  const dropped = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [
+            { context: 'lint' },
+            { context: 'idd-advisory-convergence' },
+          ],
+        },
+      },
+    ],
+    {},
+    { ignoredRequiredCheckNames: ['idd-advisory-convergence'] },
+  );
+  assert.equal(dropped.status, 'success');
+  assert.equal(dropped.requiredChecksPassing, true);
+
+  const kept = summarizeRequiredChecks(
     [{ name: 'lint', state: 'SUCCESS' }],
     [
       {
@@ -827,26 +847,10 @@ test('an ignored source-pinned name no longer downgrades a passing summary, and 
     {},
     { ignoredRequiredCheckNames: ['idd-advisory-convergence'] },
   );
-  assert.equal(ignored.status, 'success');
-  assert.equal(ignored.requiredChecksPassing, true);
-  assert.deepEqual(ignored.sourcePinnedRequiredCheckNames, []);
-
-  const kept = summarizeRequiredChecks(
-    [{ name: 'lint', state: 'SUCCESS' }],
-    [
-      {
-        type: 'required_status_checks',
-        parameters: {
-          required_status_checks: [
-            { context: 'lint', app_id: 1 },
-            { context: 'idd-advisory-convergence' },
-          ],
-        },
-      },
-    ],
-    {},
-    { ignoredRequiredCheckNames: ['idd-advisory-convergence'] },
-  );
-  assert.equal(kept.status, 'unknown');
-  assert.deepEqual(kept.sourcePinnedRequiredCheckNames, ['lint']);
+  assert.notEqual(kept.status, 'success');
+  assert.equal(kept.requiredChecksPassing, false);
+  assert.deepEqual(kept.requiredCheckNames, [
+    'idd-advisory-convergence',
+    'lint',
+  ]);
 });
