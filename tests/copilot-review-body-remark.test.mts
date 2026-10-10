@@ -879,3 +879,25 @@ test('citationBreakdown: a details block with no summary is not an item, so the 
     citationFreeCount: 0,
   });
 });
+
+test('citationBreakdown: a file named in a section after the Previously missed wrapper is not an item (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Rename the helper</summary>',
+    '',
+    'The name reads poorly next to the neighbouring helper.',
+    '</details>',
+    '</details>',
+    '',
+    '<details>',
+    '<summary>Resolved</summary>',
+    '',
+    '`src/scripts/review-clause.mts:12` was fixed earlier.',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: false }]);
+});

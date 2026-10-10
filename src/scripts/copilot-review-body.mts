@@ -259,13 +259,16 @@ const ZERO_WIDTH_CHARS_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/gu;
 const CITATION_ANYWHERE_PATTERN =
   /(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{1,5}|[\w-]+(?=:\d))(?::\d+)?(?:`|\*\*)/u;
 
-/** One `<details>` block. A Previously missed item never nests another. */
-const DETAILS_BLOCK_PATTERN = /<details>([\s\S]*?)<\/details>/g;
+/** A `<details>` or `</details>` tag, for the wrapper-bounded scan below. */
+const DETAILS_TAG_PATTERN = /<(\/?)details>/g;
 
 /**
  * The Previously missed items of an `overview-v2` body, in order, each
- * flagged `cited` when its text names a file or line anywhere (#3942).
- * `null` when the body is not `overview-v2` or carries no such section.
+ * flagged `cited` when its text names a file or line anywhere (#3942). The
+ * items are the `<details>` blocks directly inside the Previously missed
+ * wrapper, and only those with their own `<summary>`. The scan stops where the
+ * wrapper closes, so a later section is never read as an item. `null` when the
+ * body is not `overview-v2`, has no such section, or never closes its wrapper.
  * Read from the raw body: {@link stripMarkdownCodeRegions} would blank the
  * code span that carries the citation.
  */
@@ -279,17 +282,40 @@ export function extractPreviouslyMissedItems(
   if (!heading || heading.index === undefined) {
     return null;
   }
-  const section = body.slice(heading.index + heading[0].length);
-  // An item always has its own <summary>. A <details> without one is part of
-  // the section's prose, not an item, so it cannot make the count match (#3942).
-  return [...section.matchAll(DETAILS_BLOCK_PATTERN)]
-    .filter((block) => block[1].includes('<summary>'))
-    .map((block) => ({
-      cited: block[1]
-        .replace(ZERO_WIDTH_CHARS_PATTERN, '')
-        .split(/\r?\n/)
-        .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
-    }));
+  if (body.lastIndexOf('<details>', heading.index) < 0) {
+    return null;
+  }
+  const items: { cited: boolean }[] = [];
+  let depth = 1;
+  let itemStart = -1;
+  const tags = new RegExp(DETAILS_TAG_PATTERN.source, 'g');
+  tags.lastIndex = heading.index + heading[0].length;
+  for (let m = tags.exec(body); m !== null; m = tags.exec(body)) {
+    if (m[1] === '') {
+      depth += 1;
+      if (depth === 2) {
+        itemStart = m.index;
+      }
+      continue;
+    }
+    if (depth === 2 && itemStart >= 0) {
+      const block = body.slice(itemStart, m.index + m[0].length);
+      if (block.includes('<summary>')) {
+        items.push({
+          cited: block
+            .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+            .split(/\r?\n/)
+            .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
+        });
+      }
+      itemStart = -1;
+    }
+    depth -= 1;
+    if (depth === 0) {
+      return items;
+    }
+  }
+  return null;
 }
 
 /** True when `body` names a file or line anywhere in its text (#3942). */
