@@ -20,10 +20,13 @@ A repository is global-only when both of these hold.
    reason is `repository-policy-minimal-import` (a policy document only) or
    `user-global-override-match` (a user-global override). Both reasons mean
    the instructions come from the installed payload.
-2. The trusted base ref has no `.github/workflows/idd-advisory-convergence.yml`.
-   The contents API answers "not found" both for a missing file and for a
-   caller without contents access, so the check first reads the repository
-   root listing. Only a readable root with no such file counts as absent.
+2. The trusted base ref has neither
+   `.github/workflows/idd-advisory-convergence.yml` nor
+   `.github/workflows/post-merge-cleanup.yml`. The cleanup workflow must be
+   absent too, because the F4 skip relies on there being no cleanup run to
+   race. The contents API answers "not found" both for a missing file and for
+   a caller without contents access, so the check first reads the repository
+   root listing. Only a readable root with neither file counts as absent.
 
 If either condition fails, or either read fails, the advisory check stays
 required, exactly as in a repository-local install.
