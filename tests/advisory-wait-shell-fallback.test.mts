@@ -1040,9 +1040,17 @@ test('AW3-S does not treat a User node spelled with the [bot] suffix as the bot 
 });
 
 // #3948: the shell fallback and the runtime reader must agree on the same
-// fixture. The runtime reader runs in-process over the same comment, with an
-// edit state that the shell's join would produce.
-function aw2RestAs(login: string): unknown {
+// fixture. Both sides read the same REST rows and the same GraphQL edit-state
+// object, so the reader never sees a value the shell route does not.
+type Aw2Row = {
+  id: number;
+  user: { login: string };
+  body: string;
+  created_at: string;
+  updated_at: string;
+};
+
+function aw2RestRows(login: string = AGENT_LOGIN): Aw2Row[] {
   return [
     {
       id: AW2_MARKER_ID,
@@ -1054,95 +1062,89 @@ function aw2RestAs(login: string): unknown {
   ];
 }
 
-function runtimeAw2(
-  author: string,
-  edit: null | string | 'missing' | 'absent-field',
-): AdvisoryWaitMarkerSummary {
-  // A join miss is "unresolved" in the shell route, which the reader reads as
-  // an unknown edit state.
-  const lastEditedAt =
-    edit === 'missing' || edit === 'absent-field' ? 'unresolved' : edit;
-  return summarizeAdvisoryWaitMarkers(
-    [
-      {
-        id: AW2_MARKER_ID,
-        user: { login: author },
-        body: `advisory-wait: claim-x ${HEAD_SHA} ${AW2_MARKER_TIME}`,
-        created_at: AW2_MARKER_TIME,
-        updated_at: '2026-10-08T10:05:00Z',
-        lastEditedAt,
-      },
-    ],
-    HEAD_SHA,
-    [AGENT_LOGIN],
+/** The reader's comments, mapped from the same rows and edit object the shell
+ * route reads. A row with no node, or a node without `lastEditedAt`, is
+ * unresolved, exactly as the shell join treats it. */
+function runtimeAw2(rows: Aw2Row[], edit: unknown): AdvisoryWaitMarkerSummary {
+  const nodes = (
+    edit as {
+      data: {
+        repository: {
+          pullRequest: {
+            comments: {
+              nodes: { databaseId: number; lastEditedAt?: string | null }[];
+            };
+          };
+        };
+      };
+    }
+  ).data.repository.pullRequest.comments.nodes;
+  const comments = rows.map((row) => {
+    const node = nodes.find((candidate) => candidate.databaseId === row.id);
+    const lastEditedAt =
+      node === undefined || !('lastEditedAt' in node)
+        ? 'unresolved'
+        : node.lastEditedAt;
+    return { ...row, lastEditedAt };
+  });
+  return summarizeAdvisoryWaitMarkers(comments, HEAD_SHA, [AGENT_LOGIN]);
+}
+
+function assertAw2Parity(
+  run: { values: Record<string, string> },
+  summary: AdvisoryWaitMarkerSummary,
+): void {
+  assert.equal(run.values.EARLIEST, summary.earliestSameHeadAt);
+  assert.equal(
+    run.values.PRESENT,
+    String(summary.sameHeadRequestMarkerPresent),
   );
+  assert.equal(run.values.COUNT, String(summary.requestMarkerCount));
 }
 
 test('differential: an unedited trusted same-HEAD marker reads the same in shell and runtime (#3948)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const run = runAw2({ rest: aw2Rest(), edit: aw2Edit(null) });
+  const rows = aw2RestRows();
+  const run = runAw2({ rest: rows, edit: aw2Edit(null) });
   assert.equal(run.status, 0, run.stderr);
-  const summary = runtimeAw2(AGENT_LOGIN, null);
-  assert.equal(run.values.EARLIEST, summary.earliestSameHeadAt);
-  assert.equal(
-    run.values.PRESENT,
-    String(summary.sameHeadRequestMarkerPresent),
-  );
-  assert.equal(run.values.COUNT, String(summary.requestMarkerCount));
+  assertAw2Parity(run, runtimeAw2(rows, aw2Edit(null)));
 });
 
 test('differential: an edited trusted marker reads the same in shell and runtime (#3948)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const edited = '2026-10-08T10:05:00Z';
-  const run = runAw2({ rest: aw2Rest(), edit: aw2Edit(edited) });
+  const rows = aw2RestRows();
+  const run = runAw2({ rest: rows, edit: aw2Edit('2026-10-08T10:05:00Z') });
   assert.equal(run.status, 0, run.stderr);
-  const summary = runtimeAw2(AGENT_LOGIN, edited);
-  assert.equal(run.values.EARLIEST, summary.earliestSameHeadAt);
-  assert.equal(
-    run.values.PRESENT,
-    String(summary.sameHeadRequestMarkerPresent),
-  );
-  assert.equal(run.values.COUNT, String(summary.requestMarkerCount));
+  assertAw2Parity(run, runtimeAw2(rows, aw2Edit('2026-10-08T10:05:00Z')));
 });
 
 test('differential: a trusted marker with no edit-state join row reads the same in shell and runtime (#3948)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const run = runAw2({ rest: aw2Rest(), edit: aw2Edit('missing') });
+  const rows = aw2RestRows();
+  const run = runAw2({ rest: rows, edit: aw2Edit('missing') });
   assert.equal(run.status, 0, run.stderr);
-  const summary = runtimeAw2(AGENT_LOGIN, 'missing');
-  assert.equal(run.values.EARLIEST, summary.earliestSameHeadAt);
-  assert.equal(
-    run.values.PRESENT,
-    String(summary.sameHeadRequestMarkerPresent),
-  );
-  assert.equal(run.values.COUNT, String(summary.requestMarkerCount));
+  assertAw2Parity(run, runtimeAw2(rows, aw2Edit('missing')));
 });
 
 test('differential: an untrusted author with the same body reads the same in shell and runtime (#3948)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const run = runAw2({ rest: aw2RestAs('someone-else'), edit: aw2Edit(null) });
+  const rows = aw2RestRows('someone-else');
+  const run = runAw2({ rest: rows, edit: aw2Edit(null) });
   assert.equal(run.status, 0, run.stderr);
-  const summary = runtimeAw2('someone-else', null);
-  assert.equal(run.values.EARLIEST, summary.earliestSameHeadAt);
-  assert.equal(
-    run.values.PRESENT,
-    String(summary.sameHeadRequestMarkerPresent),
-  );
-  assert.equal(run.values.COUNT, String(summary.requestMarkerCount));
+  assertAw2Parity(run, runtimeAw2(rows, aw2Edit(null)));
 });
 
-test('differential: an edited request marker still counts toward the request count in both (#3948)', {
+test('differential: an edited request marker reads the same in shell and runtime, and still counts (#3948)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const edited = '2026-10-08T10:05:00Z';
-  const run = runAw2({ rest: aw2Rest(), edit: aw2Edit(edited) });
+  const rows = aw2RestRows();
+  const run = runAw2({ rest: rows, edit: aw2Edit('2026-10-08T10:05:00Z') });
   assert.equal(run.status, 0, run.stderr);
-  const summary = runtimeAw2(AGENT_LOGIN, edited);
-  assert.equal(run.values.COUNT, String(summary.requestMarkerCount));
+  const summary = runtimeAw2(rows, aw2Edit('2026-10-08T10:05:00Z'));
+  assertAw2Parity(run, summary);
   assert.equal(summary.requestMarkerCount, 1);
-  assert.equal(run.values.COUNT, '1');
 });
