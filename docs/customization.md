@@ -809,10 +809,11 @@ repository policy change, not a copy edit.
 
 ## CI and Command Placeholders
 
-The `Project commands` table in
-`.github/instructions/idd-overview-core.instructions.md` is the command
-contract agents follow. During onboarding, replace the template
-placeholders with the target repository's commands:
+The `commands` object of `.github/idd/config.json` holds the command values
+agents follow, and the `Project commands` table in
+`.github/instructions/idd-overview-core.instructions.md` names each key.
+During onboarding, replace the template placeholders in that file and the
+`install-deps` row of the table with the target repository's commands:
 
 - `fix-validate`: auto-fix and verify before each commit.
 - `pre-push-validate`: verify before pushing, without auto-fix, and keep
@@ -920,13 +921,13 @@ distribution](#exception-this-repository-is-the-source-of-a-reusable-idd-distrib
 Where an `idd-template/` source expresses a project-specific value as
 a `{{placeholder}}`, this table gives the live ↔ template mapping:
 
-| Live value (`.github/instructions/`)                                | Template form (`idd-template/`)  |
+| Live value                                                          | Template form (`idd-template/`)  |
 | ------------------------------------------------------------------- | -------------------------------- |
 | `idd-skill` in repo-name contexts                                   | `{{REPO_NAME}}`                  |
 | `idd-skill` in marker-prefix contexts (e.g. `idd-skill-roadmap-id`) | `{{PROJECT_MARKER_PREFIX}}`      |
-| **fix-validate** command string                                     | `{{FIX_VALIDATE_COMMANDS}}`      |
-| **pre-push-validate** command string                                | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
-| **post-fix-validate** command string                                | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **fix-validate** command string (`config.json`)                     | `{{FIX_VALIDATE_COMMANDS}}`      |
+| **pre-push-validate** command string (`config.json`)                | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
+| **post-fix-validate** command string (`config.json`)                | `{{POST_FIX_VALIDATE_COMMANDS}}` |
 | **install-deps** command string                                     | `{{INSTALL_DEPS_COMMAND}}`       |
 
 Match by the named command row in the Project commands table, not by
@@ -939,9 +940,10 @@ above) are incomplete; include both changes in the same atomic commit.
 
 ## Tooling Boundary
 
-IDD workflow files are tooling-agnostic. The only tooling contract is
-the `Project commands` table in
-`.github/instructions/idd-overview-core.instructions.md`.
+IDD workflow files are tooling-agnostic. The tooling contract is the
+`commands` object of `.github/idd/config.json` for the three validation
+commands, and the `Project commands` table in
+`.github/instructions/idd-overview-core.instructions.md` for the rest.
 
 The following policy matrix defines the tooling requirements and
 fallback order for repositories adopting IDD:
