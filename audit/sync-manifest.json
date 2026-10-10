@@ -678,7 +678,7 @@
         },
         {
           "from": "| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |",
-          "to": "| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |"
+          "to": "| **pre-push-validate** | `pnpm run check && pnpm run doctor:github && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |"
         },
         {
           "from": "| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |",
