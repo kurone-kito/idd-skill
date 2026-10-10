@@ -845,3 +845,19 @@ test('citationBreakdown: an extensionless file name with a line suffix counts as
   ].join('\n');
   assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
 });
+
+test('citationBreakdown: a file named inside the text of an item counts as cited (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Tighten the parser</summary>',
+    '',
+    'Change `src/scripts/copilot-review-body.mts:42` to fail closed.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
+});

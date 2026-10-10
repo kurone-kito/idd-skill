@@ -253,15 +253,6 @@ export function classifyCopilotReviewBody(
 const ZERO_WIDTH_CHARS_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/gu;
 
 /**
- * One whole line that is a single file citation, written as a backtick span or
- * in bold, with an optional `:line` suffix. A path needs a slash or a short
- * extension, so an identifier such as `requestedReviewer.__typename` does not
- * count.
- */
-const CITATION_LINE_PATTERN =
-  /^(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{1,5}|[\w-]+(?=:\d))(?::\d+)?(?:`|\*\*)$/u;
-
-/**
  * A file citation anywhere in a body, in the backtick or the legacy bold form
  * (#3942). Used only where no per-item view exists.
  */
@@ -273,7 +264,7 @@ const DETAILS_BLOCK_PATTERN = /<details>([\s\S]*?)<\/details>/g;
 
 /**
  * The Previously missed items of an `overview-v2` body, in order, each
- * flagged `cited` when one of its own lines names a file or line (#3942).
+ * flagged `cited` when its text names a file or line anywhere (#3942).
  * `null` when the body is not `overview-v2` or carries no such section.
  * Read from the raw body: {@link stripMarkdownCodeRegions} would blank the
  * code span that carries the citation.
@@ -293,7 +284,7 @@ export function extractPreviouslyMissedItems(
     cited: block[1]
       .replace(ZERO_WIDTH_CHARS_PATTERN, '')
       .split(/\r?\n/)
-      .some((line) => CITATION_LINE_PATTERN.test(line.trim())),
+      .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
   }));
 }
 
