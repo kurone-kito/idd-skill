@@ -666,7 +666,7 @@ test('readExistingCommandsTable is a generic commands-table reader (not scoped t
   });
 });
 
-test('restoreExistingCommandsTable never restores install-deps, even when the snapshot includes it (#2222 scope)', () => {
+test('restoreExistingCommandsTable restores install-deps like the validate rows (#3959)', () => {
   const root = makeFixtureDir();
   mkdirSync(join(root, '.github', 'idd'), { recursive: true });
   writeFileSync(
@@ -679,17 +679,29 @@ test('restoreExistingCommandsTable never restores install-deps, even when the sn
     }),
   );
   restoreExistingCommandsTable(root, {
-    'install-deps': 'npm install',
+    'install-deps': 'npm install (customized)',
     'fix-validate': 'npx biome check --write',
   });
   const restored = JSON.parse(
     readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
   ) as { commands: Record<string, string> };
   assert.equal(restored.commands['fix-validate'], 'npx biome check --write');
-  // install-deps is out of #2222's scope: the placeholder token is left
-  // exactly as --import wrote it, for the normal --substitute flow to
-  // resolve independently via deriveInstallDepsCommand.
-  assert.equal(restored.commands['install-deps'], '{{INSTALL_DEPS_COMMAND}}');
+  // install-deps is restored from the snapshot, the same as the validate
+  // rows: a customized operator value survives the forced re-import.
+  assert.equal(
+    restored.commands['install-deps'],
+    'npm install (customized)',
+  );
+});
+
+test('readExistingCommandsTable drops a placeholder install-deps value, so a re-import leaves the token for --substitute (#3959)', () => {
+  const root = makeFixtureDir();
+  writeExistingCommandsConfig(root, {
+    'install-deps': '{{INSTALL_DEPS_COMMAND}}',
+  });
+  // The snapshot is null: a row that is still the raw placeholder is not a
+  // customized value, so there is nothing to restore.
+  assert.equal(readExistingCommandsTable(root), null);
 });
 
 // --- #2671: untrusted-labeler guard-workflow generation --------------------
@@ -2888,7 +2900,7 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
     '--post-fix-validate-commands',
     'npx biome check --write (customized)',
     '--install-deps-command',
-    'npm install',
+    'npm install (customized)',
     '--allow-root',
     tmpdir(),
   ]);
@@ -2920,13 +2932,13 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
     config.commands['post-fix-validate'],
     'npx biome check --write (customized)',
   );
-  // ...while install-deps (out of #2222's scope) reverts to the raw
-  // template placeholder token exactly like every other re-imported file,
-  // ready for the next --substitute to re-resolve it normally.
-  assert.equal(config.commands['install-deps'], '{{INSTALL_DEPS_COMMAND}}');
+  // ...and install-deps (#3959) is restored the same way, so the customized
+  // install command survives the forced re-import as well.
+  assert.equal(config.commands['install-deps'], 'npm install (customized)');
 
-  // A follow-up --substitute converges cleanly: install-deps takes its new
-  // override, and the three preserved rows need no override at all.
+  // A follow-up --substitute converges cleanly and keeps every restored row.
+  // Restored rows are operator-owned: an explicit --install-deps-command
+  // only fills a placeholder token, so it does not rewrite a restored value.
   const followUp = runCliBin([
     '--substitute',
     '--target',
@@ -2937,19 +2949,73 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
     'my-app',
     '--trusted-marker-actor',
     'trusted-user-a',
-    '--install-deps-command',
-    'npm ci',
   ]);
   assert.equal(followUp.status, 0);
   assert.deepEqual(followUp.verdict.residue, []);
   const finalConfig = JSON.parse(
     readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
   ) as { commands: Record<string, string> };
-  assert.equal(finalConfig.commands['install-deps'], 'npm ci');
+  assert.equal(finalConfig.commands['install-deps'], 'npm install (customized)');
   assert.equal(
     finalConfig.commands['fix-validate'],
     'npx biome check --write (customized)',
   );
+});
+
+test('bin/idd-onboard.mjs --import --force leaves a placeholder install-deps as a token, and --substitute resolves it (#3959)', () => {
+  // A fresh import never runs --substitute, so config.json still holds the
+  // raw token. A forced re-import must not write that token as a literal
+  // value: the snapshot drops placeholders, so the token survives and the
+  // next --substitute resolves it through the normal flag path.
+  const targetRoot = makeFixtureDir();
+  execFileSync(process.execPath, [
+    BIN_PATH,
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--allow-root',
+    tmpdir(),
+  ]);
+  const { status } = runCliBin([
+    '--import',
+    '--force',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  const afterReimport = JSON.parse(
+    readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  assert.equal(afterReimport.commands['install-deps'], '{{INSTALL_DEPS_COMMAND}}');
+
+  const resolved = runCliBin([
+    '--substitute',
+    '--target',
+    targetRoot,
+    '--repo-name',
+    'my-app',
+    '--marker-prefix',
+    'my-app',
+    '--trusted-marker-actor',
+    'trusted-user-a',
+    '--fix-validate-commands',
+    'npx biome check --write',
+    '--pre-push-validate-commands',
+    'npx biome check',
+    '--post-fix-validate-commands',
+    'npx biome check --write',
+    '--install-deps-command',
+    'npm ci',
+  ]);
+  assert.equal(resolved.status, 0);
+  const finalConfig = JSON.parse(
+    readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  assert.equal(finalConfig.commands['install-deps'], 'npm ci');
 });
 
 test('bin/idd-onboard.mjs --verify --hold .github/idd/config.json is refused too (#3959)', () => {

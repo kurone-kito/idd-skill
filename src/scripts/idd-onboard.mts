@@ -592,19 +592,21 @@ function escapeRegExpLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
-// Scope matches deriveValidateCommands above exactly (#2222's three
-// validate-command rows). install-deps is deliberately excluded: the issue
-// scopes only fix-validate/pre-push-validate/post-fix-validate, and
-// INSTALL_DEPS_COMMAND already has its own independent re-derivation
-// (deriveInstallDepsCommand) that this restore step must not shadow.
+// The three validate-command rows (#2222) and install-deps are restored
+// the same way. install-deps is restored too: a forced re-import must not
+// discard a customized install command. The restore only replaces a row
+// that is still the raw placeholder token, so an operator's value survives,
+// and a fresh placeholder is left for --substitute to resolve through
+// deriveInstallDepsCommand.
 const RESTORABLE_COMMAND_KEYS: ReadonlySet<string> = new Set([
   'fix-validate',
   'pre-push-validate',
   'post-fix-validate',
+  'install-deps',
 ]);
 
 /**
- * Restore a target's pre-import validate-command row values into its
+ * Restore a target's pre-import command row values into its
  * freshly-copied `.github/idd/config.json` (#2222). `--import` always
  * copies `.github/idd/config.json` byte-for-byte from source — including
  * on a re-import over an already-onboarded target, where it clobbers a
@@ -616,7 +618,7 @@ const RESTORABLE_COMMAND_KEYS: ReadonlySet<string> = new Set([
  *
  * Call this **after** `applyImportPlan` has copied the target tree, passing
  * the `commands` snapshot `readExistingCommandsTable` captured from the
- * **pre-import** target. Only restores the three rows in
+ * **pre-import** target. Only restores the rows in
  * `RESTORABLE_COMMAND_KEYS`, and only a row that is still the raw
  * placeholder token right after the copy — a source-provided literal value
  * (no `{{...}}` template site for that key) is left untouched, since there
