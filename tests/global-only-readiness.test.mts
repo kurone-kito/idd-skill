@@ -4,6 +4,7 @@ import type { ActivationResult } from '../src/scripts/idd-activation.mts';
 import {
   baseWorkflowAbsentAt,
   collectPreMergeReadiness,
+  remoteNamesRepo,
   resolveGlobalOnlyRunIgnores,
 } from '../src/scripts/pre-merge-readiness.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
@@ -286,4 +287,47 @@ test('the flag does not clear the CI gate when the base workflow is present', ()
     LINT_PASSING,
   );
   assert.equal(ciGateBlocked(report), true);
+});
+
+test('a remote URL names the repository in its https, scp, and ssh forms', () => {
+  assert.equal(
+    remoteNamesRepo(
+      'https://github.com/kurone-kito/idd-skill.git',
+      'kurone-kito',
+      'idd-skill',
+    ),
+    true,
+  );
+  assert.equal(
+    remoteNamesRepo(
+      'git@github.com:kurone-kito/idd-skill.git\n',
+      'kurone-kito',
+      'idd-skill',
+    ),
+    true,
+  );
+  assert.equal(
+    remoteNamesRepo(
+      'ssh://git@github.com/Kurone-Kito/IDD-Skill',
+      'kurone-kito',
+      'idd-skill',
+    ),
+    true,
+  );
+});
+
+test('a remote URL for another repository or a local path does not match', () => {
+  assert.equal(
+    remoteNamesRepo(
+      'https://github.com/someone/fork.git',
+      'kurone-kito',
+      'idd-skill',
+    ),
+    false,
+  );
+  assert.equal(
+    remoteNamesRepo('/srv/git/idd-skill.git', 'kurone-kito', 'idd-skill'),
+    false,
+  );
+  assert.equal(remoteNamesRepo('', 'kurone-kito', 'idd-skill'), false);
 });

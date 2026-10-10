@@ -470,7 +470,10 @@ export function collectPreMergeReadiness(
     repo: string,
     ref: string,
   ) => IddConfig | null = loadTrustedIddConfig,
-  resolveActivation: () => ActivationResult | null = resolvePrimaryActivation,
+  resolveActivation: (
+    owner: string,
+    repo: string,
+  ) => ActivationResult | null = resolvePrimaryActivation,
 ): PreMergeReadinessReport {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -1210,7 +1213,7 @@ export function collectPreMergeReadiness(
   // template workflow. Off unless --global-only is passed.
   const ignoredRequiredCheckNames = resolveGlobalOnlyRunIgnores({
     globalOnly: args.globalOnly,
-    activation: resolveActivation,
+    activation: () => resolveActivation(owner, repo),
     port,
     owner,
     repo,
@@ -2567,8 +2570,8 @@ export function baseWorkflowAbsentAt(
 /**
  * #3824: the main worktree of this clone, which is the trusted operator
  * checkout. Activation is read here and never from a linked worktree that a
- * pull request may have changed. Falls back to the current directory when git
- * cannot list the worktrees.
+ * pull request may have changed. Returns null when git cannot list the
+ * worktrees, and the caller then keeps the advisory check required.
  */
 export function primaryCheckoutRoot(): string | null {
   try {
@@ -2592,11 +2595,58 @@ export function primaryCheckoutRoot(): string | null {
 
 /**
  * #3824: activation of the primary checkout, or null when that checkout cannot
- * be determined. A null activation never enables the global-only profile.
+ * be shown to belong to the target repository. Its origin remote must name
+ * `owner/repo`. Otherwise a global-only policy in an unrelated checkout could
+ * suppress this repository's advisory requirement.
  */
-export function resolvePrimaryActivation(): ActivationResult | null {
+export function resolvePrimaryActivation(
+  owner: string,
+  repo: string,
+): ActivationResult | null {
   const root = primaryCheckoutRoot();
-  return root === null ? null : computeActivation({ cwd: root });
+  if (root === null || !primaryCheckoutNamesRepo(root, owner, repo)) {
+    return null;
+  }
+  return computeActivation({ cwd: root });
+}
+
+/** #3824: whether the checkout's origin remote names `owner/repo`. */
+function primaryCheckoutNamesRepo(
+  root: string,
+  owner: string,
+  repo: string,
+): boolean {
+  try {
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+    );
+    const url = execFileSync(
+      'git',
+      ['-C', root, 'config', '--get', 'remote.origin.url'],
+      { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    return remoteNamesRepo(url, owner, repo);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * #3824: whether a git remote URL names `owner/repo`. Accepts the https, scp
+ * style, and ssh forms, with or without a trailing `.git`. The match is
+ * case-insensitive, as GitHub owner and repository names are.
+ */
+export function remoteNamesRepo(
+  url: string,
+  owner: string,
+  repo: string,
+): boolean {
+  const match = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim());
+  if (match === null) return false;
+  return (
+    match[1].toLowerCase() === owner.toLowerCase() &&
+    match[2].toLowerCase() === repo.toLowerCase()
+  );
 }
 
 function fetchCodeownersText(
