@@ -421,6 +421,17 @@ writeFileSync(${JSON.stringify(sentinel)}, 'ran\\n');
 // accounts lack, so directory targets are junctions there (absolute targets).
 const DIRECTORY_LINK = process.platform === 'win32' ? 'junction' : 'dir';
 
+// Directories are linked. Regular files are copied, because a file symlink
+// needs the same Windows privilege the junction avoids (for example
+// node_modules/.modules.yaml).
+function linkOrCopy(source: string, destination: string): void {
+  if (statSync(source).isDirectory()) {
+    symlinkSync(source, destination, DIRECTORY_LINK);
+  } else {
+    copyFileSync(source, destination);
+  }
+}
+
 /** Link each top-level package of this checkout into a real directory. */
 function linkDependencies(root: string): void {
   const source = join(REPO_ROOT, 'node_modules');
@@ -434,19 +445,10 @@ function linkDependencies(root: string): void {
     if (entry.startsWith('@')) {
       mkdirSync(join(target, entry));
       for (const inner of readdirSync(real)) {
-        const innerReal = realpathSync(join(real, inner));
-        symlinkSync(
-          innerReal,
-          join(target, entry, inner),
-          statSync(innerReal).isDirectory() ? DIRECTORY_LINK : 'file',
-        );
+        linkOrCopy(realpathSync(join(real, inner)), join(target, entry, inner));
       }
     } else {
-      symlinkSync(
-        real,
-        join(target, entry),
-        statSync(real).isDirectory() ? DIRECTORY_LINK : 'file',
-      );
+      linkOrCopy(real, join(target, entry));
     }
   }
 }
