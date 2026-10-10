@@ -773,3 +773,84 @@ test('protected branch: two same-name/type/workflowName/workflowPath check-run i
   assert.equal(r.requiredChecksPassing, true);
   assert.equal(r.status, 'success');
 });
+
+// #3824: a global-only run may leave out the template advisory check.
+const advisoryRequiredRules = [
+  {
+    type: 'required_status_checks',
+    parameters: {
+      required_status_checks: [
+        { context: 'lint' },
+        { context: 'idd-advisory-convergence' },
+      ],
+    },
+  },
+];
+
+test('without an ignore, a missing advisory required check blocks the gate', () => {
+  const r = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    advisoryRequiredRules,
+    {},
+  );
+  assert.equal(r.requiredChecksPassing, false);
+  assert.deepEqual(r.missingRequiredCheckNames, ['idd-advisory-convergence']);
+});
+
+test('an ignored required check name drops out of the required list', () => {
+  const r = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    advisoryRequiredRules,
+    {},
+    { ignoredRequiredCheckNames: ['idd-advisory-convergence'] },
+  );
+  assert.equal(r.requiredChecksPassing, true);
+  assert.deepEqual(r.missingRequiredCheckNames, []);
+});
+
+// #3824: an ignore entry drops only an unpinned requirement. A source-pinned
+// entry names a specific producer, so it stays required and keeps the downgrade
+// (fail closed).
+test('an ignored unpinned name is dropped, and an ignored source-pinned name stays required', () => {
+  const dropped = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [
+            { context: 'lint' },
+            { context: 'idd-advisory-convergence' },
+          ],
+        },
+      },
+    ],
+    {},
+    { ignoredRequiredCheckNames: ['idd-advisory-convergence'] },
+  );
+  assert.equal(dropped.status, 'success');
+  assert.equal(dropped.requiredChecksPassing, true);
+
+  const kept = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [
+            { context: 'lint' },
+            { context: 'idd-advisory-convergence', app_id: 1 },
+          ],
+        },
+      },
+    ],
+    {},
+    { ignoredRequiredCheckNames: ['idd-advisory-convergence'] },
+  );
+  assert.notEqual(kept.status, 'success');
+  assert.equal(kept.requiredChecksPassing, false);
+  assert.deepEqual(kept.requiredCheckNames, [
+    'idd-advisory-convergence',
+    'lint',
+  ]);
+});

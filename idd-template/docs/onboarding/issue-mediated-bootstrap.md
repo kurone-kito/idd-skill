@@ -35,7 +35,7 @@ is the one exception.
 Choose issue-mediated bootstrap instead when the operator wants that
 exception closed from day zero — for example, a team whose change-control
 policy requires every repository mutation to have a reviewable record, or
-an operator who simply prefers not to grant an agent a direct-commit
+an operator who prefers not to grant an agent a direct-commit
 path even for the first action. Treat this as an explicit operator
 choice made alongside the other Step 1B policy decisions (see
 [Onboarding Reference — Policy Decisions](policy-decisions.md)), not an

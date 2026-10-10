@@ -161,7 +161,7 @@ profile-conditional. This is intentional, not an oversight:
 **What this means for adopters**: this helper is mirrored into
 `idd-template/` (via the `minimize-superseded-markers-helper`
 syncPair), but it is the only `vendored-node` helper a plain Option B
-copy (copying the `idd-template/` tree) actually supplies — Option B
+copy (copying the `idd-template/` tree) supplies — Option B
 does **not** ship the rest of the `vendored-node` bundle, since none of
 the other files `collectVendoredFiles` manages under the source
 repository's own `scripts/` have an `idd-template/` mirror. Getting the
@@ -315,6 +315,7 @@ for FILE in \
   "docs/concepts.md" \
   "docs/customization.md" \
   "docs/policy-constants.md" \
+  "docs/global-only-profile.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/issue-mediated-bootstrap.md" \
@@ -450,6 +451,7 @@ for FILE in \
   "docs/concepts.md" \
   "docs/customization.md" \
   "docs/policy-constants.md" \
+  "docs/global-only-profile.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/issue-mediated-bootstrap.md" \

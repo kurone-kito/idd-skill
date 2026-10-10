@@ -80,6 +80,7 @@
         "idd-template/docs/concepts.md",
         "idd-template/docs/customization.md",
         "idd-template/docs/policy-constants.md",
+        "idd-template/docs/global-only-profile.md",
         "idd-template/docs/reference.md",
         "idd-template/docs/onboarding/*.md",
         "idd-template/profiles/**/*.md"
@@ -137,6 +138,7 @@
         "idd-template/docs/concepts.md",
         "idd-template/docs/customization.md",
         "idd-template/docs/policy-constants.md",
+        "idd-template/docs/global-only-profile.md",
         "idd-template/docs/reference.md",
         "idd-template/docs/onboarding/agent-entry-and-verification.md",
         "idd-template/docs/onboarding/issue-mediated-bootstrap.md",
@@ -538,6 +540,12 @@
       "id": "getting-started-doc",
       "source": "idd-template/docs/getting-started.md",
       "target": "docs/getting-started.md",
+      "mode": "exact"
+    },
+    {
+      "id": "global-only-profile-doc",
+      "source": "idd-template/docs/global-only-profile.md",
+      "target": "docs/global-only-profile.md",
       "mode": "exact"
     },
     {

@@ -9208,6 +9208,7 @@ export function summarizeRequiredChecks(
     protectionReadsUnreadable = false,
     trustSourcePinnedRequiredChecks = false,
     excludeFromWaiverCoverage = null,
+    ignoredRequiredCheckNames = null,
     waiverActiveSinceOverride = null,
     treatAsCoveredByWaiver = null,
     treatAsCoveredByWaiverSince = null,
@@ -9354,13 +9355,23 @@ export function summarizeRequiredChecks(
     // logic. `null`/omitted (the default, and every caller that predates
     // this option) downgrades nothing.
     nonTargetEventCheckNames?: string[] | null;
+    ignoredRequiredCheckNames?: string[] | null;
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
   );
-  const requiredCheckNames = branchReviewRequirements.requiredCheckNames;
+  const ignoredRequiredNames = new Set(ignoredRequiredCheckNames ?? []);
+  // #3824: an ignore entry never drops a source-pinned requirement. A pinned
+  // entry names a specific producer, so the same name from any other producer
+  // stays required (fail closed).
+  const sourcePinnedNameSet = new Set(
+    branchReviewRequirements.requiredCheckSourcePinnedNames,
+  );
+  const requiredCheckNames = branchReviewRequirements.requiredCheckNames.filter(
+    (name) => !ignoredRequiredNames.has(name) || sourcePinnedNameSet.has(name),
+  );
   const requiredCheckNameSet = new Set(requiredCheckNames);
   const validWaivers = waivers?.valid ?? [];
 
@@ -12114,6 +12125,9 @@ export function buildPreMergeReadinessSummary(
     // file, so importing it back here would be a cycle. Omitted/false (the
     // default) never relieves anything, unchanged pre-#2353 behavior.
     advisoryConvergenceOutageRelieved?: boolean;
+    // #3824: check names a global-only run may leave out of the required list
+    // (see global-only-profile.mts). Absent or empty keeps every check required.
+    ignoredRequiredCheckNames?: string[] | null;
     // #2353 (Codex review on PR #2370): the caller-resolved outage
     // declaration's own active-since moment when
     // `advisoryConvergenceOutageRelieved` is true, empty otherwise. A
@@ -12666,6 +12680,7 @@ export function buildPreMergeReadinessSummary(
     protectionReadsUnreadable,
     trustSourcePinnedRequiredChecks:
       options.trustSourcePinnedRequiredChecks === true,
+    ignoredRequiredCheckNames: options.ignoredRequiredCheckNames ?? null,
     excludeFromWaiverCoverage: (name) =>
       name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       !advisoryConvergenceGenuinelyCovered,

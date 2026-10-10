@@ -76,7 +76,7 @@ stop and report.
    1. If the PR's head branch does not follow B1's
       `issue/<number>-<slug>` naming convention
       ([B1 Worktree creation](idd-work.instructions.md#worktree-creation)),
-      **or** the PR body does not also carry a closing keyword for that
+      **or** the PR body does not carry a closing keyword for that
       same `<number>` (D3.5 step 3's regex, applied to the PR body text
       — not GitHub's `closingIssuesReferences` field, which D3.5 already
       documents as empty on a non-default `{development-branch}`
@@ -96,7 +96,7 @@ stop and report.
       routing to F3 is what keeps this no-active-claim continuation
       from contradicting that check (kurone-kito/idd-skill#2977).
    3. If this session has not yet recorded F2 evidence for the
-      `{claim-id}` now active (for example, step 6.2 just established a
+      `{claim-id}` now active (for example, step 6.2 established a
       fresh claim), return to `idd-pre-merge.instructions.md` and run F2
       once to record a fresh snapshot for it, then return here.
    4. Continue directly to `idd-merge.instructions.md`.

@@ -51,7 +51,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    `{max-activity-updatedAt}`, `{f2-total-item-count}` for
    `{total-item-count}`, and `{f2-latest-ci-completed-at}` for
    `{latest-ci-completed-at}` — this final fetch is the live side of
-   each comparison, exactly as F2's own live snapshot was.
+   each comparison, as F2's own live snapshot was.
 
    The structural ack-only carve-out from F2 applies here verbatim:
    newer activity/count growth that helper evidence proves is
@@ -81,7 +81,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    the active claim still uses your current `{claim-id}` — if not, the
    claim was lost, report and stop.
 
-   **Advisory state revalidation (blocking)**: the AW1 check just below
+   **Advisory state revalidation (blocking)**: the AW1 check below
    is an instant state read, not itself a wait. If it escalates to a
    genuine wait, return to the F2 advisory bot wait check (backgrounds
    only if the topology-safety condition holds — confirmed to route
@@ -131,14 +131,15 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    documented in
    [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#merge-execution-f3).
    Pass `--closing-issues <n>,<m>` for a multi-issue close
-   (forwarded to the collector). First run it in dry-run
+   (forwarded to the collector). Global-only: pass `--global-only`
+   (docs/global-only-profile.md). First run it in dry-run
    (no `--apply`) and confirm `ready: true` with
    an empty `blockers[]` — it wraps the read-only `pre-merge-readiness`
    gate and adds no new authority. Then re-run with `--apply`: when
    `ready`, it re-fetches the head SHA and re-validates the claim
    immediately before merging, fails closed (no merge) on head drift or
    lost claim, and runs the merge commit bound to the validated head
-   (never squash/rebase). On a plain-merge failure it also applies step
+   (never squash/rebase). On a plain-merge failure it applies step
    5's solo-CODEOWNER `--admin` fallback decision itself (recorded in
    `adminFallbackUsed`) — the gate checklist and decision table below
    stay canonical: if the helper is unavailable, its output is invalid,
@@ -192,7 +193,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      AW2/AW3 as needed) checks above; re-run both of those before
      merging. If the fix additionally amended or rebased a commit
      (changing HEAD),
-     return to E1 instead of just re-validating in place — F2's own
+     return to E1 instead of re-validating in place — F2's own
      snapshot is invalidated by a new HEAD. Otherwise repeat this field
      once; if it still fails, stop and do not merge.
 
@@ -250,7 +251,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        time passes between the plain merge's failure and the retry, and
        `--admin` bypasses the entire ruleset), with a fresh GitHub merge
        state of `mergeable: "MERGEABLE"` and `mergeStateStatus` settled
-       to `"CLEAN"` or `"BEHIND"` also required.
+       to `"CLEAN"` or `"BEHIND"` required.
        `isSafeSoloCodeownerAdminMergeState` still refuses
        `mergeStateStatus: "BLOCKED"`. When the base ruleset does not
        require CODEOWNER review, the `status: "clear"` trigger does not
@@ -270,7 +271,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        ```
 
        On success, continue the normal post-merge digest update
-       exactly as after a successful plain merge (step 4). If any
+       as after a successful plain merge (step 4). If any
        condition above does not hold, or the `--admin` retry also
        fails, post a hold comment with the GitHub error text(s) and
        stop for a maintainer decision (kurone-kito/idd-skill#1493,
@@ -335,17 +336,17 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    the idd-skill source repository, run the profile-selected helper form
    from `docs/idd-helper-scripts.md` in dry-run mode first; in adopter
    repositories, skip to the GraphQL fallback below unless the helper
-   scripts were explicitly installed.
+   scripts were installed.
 
    ```sh
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
    ```
 
-   **In-flight cleanup-run wait (#2846)**: immediately before actually
+   **In-flight cleanup-run wait (#2846)**: immediately before
    posting below (fresh each time, not cached from here — a run's
    status can change during dry-run/apply), check whether this PR's
    `post-merge-cleanup.yml` run is still in flight, waiting (bounded)
-   for it to finish if so — see `docs/idd-comment-minimization.md`'s
+   for it to finish if so (skip if global-only: no such run) — see `docs/idd-comment-minimization.md`'s
    In-flight cleanup-run wait. Either way, continue to the rule below
    unchanged: it reads whatever that run may have posted and decides
    ownership from the marker's own recorded status.

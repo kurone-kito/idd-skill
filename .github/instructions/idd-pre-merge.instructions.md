@@ -109,6 +109,8 @@ and otherwise fails closed on a non-empty `closingIssuesReferences`. See
 **Multi-issue close**: pass `--closing-issues <n>,<m>` (D3) with the
 full set (else a `closing-set` mismatch).
 
+**Global-only**: pass `--global-only`.
+
 **Polling loop failure mode**: a zero exit with the full readiness
 JSON (`ready: false` + `blockers`) is not-ready-yet — keep polling. A
 non-zero exit with `{ "error": ... }` is a **call failure**: a usage

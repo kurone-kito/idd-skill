@@ -7404,6 +7404,7 @@ export function summarizeRequiredChecks(
     protectionReadsUnreadable = false,
     trustSourcePinnedRequiredChecks = false,
     excludeFromWaiverCoverage = null,
+    ignoredRequiredCheckNames = null,
     waiverActiveSinceOverride = null,
     treatAsCoveredByWaiver = null,
     treatAsCoveredByWaiverSince = null,
@@ -7415,7 +7416,16 @@ export function summarizeRequiredChecks(
     branchRules,
     branchProtection,
   );
-  const requiredCheckNames = branchReviewRequirements.requiredCheckNames;
+  const ignoredRequiredNames = new Set(ignoredRequiredCheckNames ?? []);
+  // #3824: an ignore entry never drops a source-pinned requirement. A pinned
+  // entry names a specific producer, so the same name from any other producer
+  // stays required (fail closed).
+  const sourcePinnedNameSet = new Set(
+    branchReviewRequirements.requiredCheckSourcePinnedNames,
+  );
+  const requiredCheckNames = branchReviewRequirements.requiredCheckNames.filter(
+    (name) => !ignoredRequiredNames.has(name) || sourcePinnedNameSet.has(name),
+  );
   const requiredCheckNameSet = new Set(requiredCheckNames);
   const validWaivers = waivers?.valid ?? [];
   const normalizedChecks = checks.map((check) => {
@@ -10064,6 +10074,7 @@ export function buildPreMergeReadinessSummary(
     protectionReadsUnreadable,
     trustSourcePinnedRequiredChecks:
       options.trustSourcePinnedRequiredChecks === true,
+    ignoredRequiredCheckNames: options.ignoredRequiredCheckNames ?? null,
     excludeFromWaiverCoverage: (name) =>
       name === DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
       !advisoryConvergenceGenuinelyCovered,

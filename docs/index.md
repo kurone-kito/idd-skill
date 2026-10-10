@@ -59,6 +59,7 @@ distinct from the phase rules in `.github/instructions/`:
 | guide | [Permissions and Threat Model](permissions.md) | Defines the credential profiles, merge-policy boundaries, and threat model an operator must choose before granting IDD agents GitHub access. |
 | concept | [Core IDD Concepts](concepts.md) | Introduces the loop-engineering vocabulary and mental model behind the IDD phase instructions before diving into phase-by-phase rules. |
 | reference | [Critique-Loop Telemetry Methodology](critique-telemetry.md) | Documents how this repository harvests and aggregates its own C-phase critique-loop telemetry. |
+| reference | [Global-only profile](global-only-profile.md) | Defines the global-only IDD profile, its trust rule, and its pre-merge and cleanup behavior. |
 | reference | [IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H / F2 detail)](idd-advisory-wait-shell-fallback.md) | Provides the verbatim gh, gh api, jq, and curl commands the advisory-wait and F2 advisory-convergence shell fallbacks use when helper support cannot be trusted. |
 | reference | [IDD Autonomy Contract](idd-autonomy-contract.md) | Classifies every externally visible IDD mutation as reversible or irreversible and names the gate or undo path for each. |
 | reference | [IDD Comment Minimization](idd-comment-minimization.md) | Defines the live status digest contract and the safe procedure for minimizing completed review feedback and stale operational markers after merge. |

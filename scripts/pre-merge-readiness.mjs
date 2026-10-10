@@ -4,6 +4,7 @@
 // The scripts/pre-merge-readiness.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { execFileSync } from 'node:child_process';
 import {
   ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   resolveSelfReferentialTriggerFiles,
@@ -37,12 +38,17 @@ import {
 } from './external-check-waiver.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
+  GLOBAL_ONLY_ABSENT_PATHS,
+  resolveGlobalOnlyIgnoredCheckNames,
+} from './global-only-profile.mjs';
+import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { computeActivation } from './idd-activation.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import {
   inspectDevelopmentBranch,
@@ -204,6 +210,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--nonce': { type: 'string' },
   '--now': { type: 'string' },
   '--claimless': { type: 'boolean', default: false },
+  '--global-only': { type: 'boolean', default: false },
   '--closing-issues': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -226,6 +233,7 @@ export function collectPreMergeReadiness(
   argv,
   createPort = createGithubProviderAdapter,
   loadTrustedConfig = loadTrustedIddConfig,
+  resolveActivation = resolvePrimaryActivation,
 ) {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -936,6 +944,18 @@ export function collectPreMergeReadiness(
     readExternalCheckWaiverAuthorityPolicy(iddConfig);
   const trustSourcePinnedRequiredChecks =
     readTrustSourcePinnedRequiredChecks(iddConfig);
+  // #3824: a global-only run may leave out the template advisory check, but
+  // only when the local activation says so AND the trusted base ref has no
+  // template workflow. Off unless --global-only is passed.
+  const ignoredRequiredCheckNames = resolveGlobalOnlyRunIgnores({
+    globalOnly: args.globalOnly,
+    activation: () => resolveActivation(owner, repo),
+    port,
+    owner,
+    repo,
+    trustedRef: trustedConfigRef,
+    headSha: prHeadSha,
+  });
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedReviews = reviews.map(normalizeReview);
@@ -1357,6 +1377,7 @@ export function collectPreMergeReadiness(
       externalCheckWaiverAuthorityPolicy,
       resolveWaiverAuthority: (login) => port.getCollaboratorPermission(login),
       trustSourcePinnedRequiredChecks,
+      ignoredRequiredCheckNames,
       staleAgeMs,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
@@ -1847,13 +1868,14 @@ export function parseArgs(argv) {
     now: values.now ?? '',
     help,
     claimless: Boolean(values.claimless),
+    globalOnly: Boolean(values['global-only']),
     closingIssueNumbers,
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--nonce <token>] [--now <ISO8601>]
-  node scripts/pre-merge-readiness.mjs --pr <number> --claimless [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--now <ISO8601>]
+  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--global-only] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--nonce <token>] [--now <ISO8601>]
+  node scripts/pre-merge-readiness.mjs --pr <number> --claimless [--global-only] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--now <ISO8601>]
   Deprecated aliases (one release): --expected-claim-id -> --claim-id, --expected-agent-id -> --agent-id
 
   --nonce <token>  this session's own recorded activation-nonce (#1522): when
@@ -1863,6 +1885,12 @@ function printHelp() {
                     catching a second, independent activation of the same
                     claim-id as a collision. Omit --nonce, or leave it empty,
                     to skip this comparison entirely (backward compatible).
+  --global-only    #3824: opt-in. Leave the advisory-convergence check out of the
+                    required list only when the primary checkout activation is a
+                    payload-backed profile (minimal import or user-global override)
+                    AND the trusted base ref has no
+                    .github/workflows/idd-advisory-convergence.yml. Otherwise the
+                    check stays required.
   --claimless      skip claim fetch/revalidation (#2017). For a PR whose
                     closingIssuesReferences is empty, or (#3328) one that
                     carries a valid, trusted, unedited <!-- idd-out-of-loop:
@@ -2076,6 +2104,130 @@ export function resolveEligibleCodeownerUserLogins(
     );
   });
   return { eligible, unreadable };
+}
+/**
+ * #3824: the check names a run may leave out of its required list. Empty
+ * unless `--global-only` is passed. `activation` is a thunk, so a run without
+ * the flag never reads the activation of the checkout.
+ */
+export function resolveGlobalOnlyRunIgnores(input) {
+  if (!input.globalOnly) return [];
+  const activation = input.activation();
+  if (activation === null) return [];
+  // The PR head is read too: a pull request that adds either workflow must not
+  // get the advisory check dropped, since its own merge would introduce it.
+  const absent =
+    baseWorkflowAbsentAt(
+      input.port,
+      input.owner,
+      input.repo,
+      input.trustedRef,
+    ) &&
+    baseWorkflowAbsentAt(input.port, input.owner, input.repo, input.headSha);
+  return resolveGlobalOnlyIgnoredCheckNames({
+    activation,
+    baseWorkflowAbsent: absent,
+  });
+}
+/**
+ * #3824: whether the workflows a global-only profile depends on are absent on
+ * the trusted base ref. Both the advisory workflow and the cleanup workflow
+ * must be absent: the F4 skip assumes no cleanup run exists to race. The
+ * contents API answers 404 both for a missing path and for a masked 403, so a
+ * clean `null` on a file alone does not prove absence. The repository root
+ * listing must read first: an array there shows the contents are readable, and
+ * only then does a `null` on each path mean it is absent. Any other outcome
+ * keeps the workflows assumed present.
+ */
+export function baseWorkflowAbsentAt(port, owner, repo, ref) {
+  try {
+    const root = port.getRepositoryContentAtRef(owner, repo, '', ref);
+    if (!Array.isArray(root)) return false;
+    return GLOBAL_ONLY_ABSENT_PATHS.every(
+      (path) => port.getRepositoryContentAtRef(owner, repo, path, ref) === null,
+    );
+  } catch {
+    return false;
+  }
+}
+/**
+ * #3824: the main worktree of this clone, which is the trusted operator
+ * checkout. Activation is read here and never from a linked worktree that a
+ * pull request may have changed. Returns null when git cannot list the
+ * worktrees, and the caller then keeps the advisory check required.
+ */
+export function primaryCheckoutRoot() {
+  try {
+    // Strip inherited GIT_* so a GIT_DIR or GIT_WORK_TREE from the caller cannot
+    // point the listing at another repository (as idd-activation does).
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+    );
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      encoding: 'utf8',
+      env,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const first = out.split('\n').find((line) => line.startsWith('worktree '));
+    return first ? first.slice('worktree '.length) : null;
+  } catch {
+    // No listing means no trusted checkout. The caller keeps the check required.
+    return null;
+  }
+}
+/**
+ * #3824: activation of the primary checkout, or null when that checkout cannot
+ * be shown to belong to the target repository. Its origin remote must name
+ * `owner/repo`. Otherwise a global-only policy in an unrelated checkout could
+ * suppress this repository's advisory requirement.
+ */
+export function resolvePrimaryActivation(owner, repo) {
+  const root = primaryCheckoutRoot();
+  if (root === null || !primaryCheckoutNamesRepo(root, owner, repo)) {
+    return null;
+  }
+  return computeActivation({ cwd: root });
+}
+/** #3824: whether the checkout's origin remote names `owner/repo`. */
+function primaryCheckoutNamesRepo(root, owner, repo) {
+  try {
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+    );
+    const url = execFileSync(
+      'git',
+      ['-C', root, 'config', '--get', 'remote.origin.url'],
+      { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    const host = process.env.GH_HOST?.trim().toLowerCase() || 'github.com';
+    return remoteNamesRepo(url, owner, repo, host);
+  } catch {
+    return false;
+  }
+}
+/**
+ * #3824: whether a git remote URL names `owner/repo` on `host`. Accepts the
+ * https and ssh URL forms (with an optional user and port) and the scp-style
+ * form, which has the `:` after the host. The scp-style form needs that colon:
+ * without it, `github.com/owner/repo` reads as a relative local path, so it
+ * never matches. Other schemes (file, ftp, git) and local paths never match.
+ * The host must be the GitHub server the run uses. Matching is
+ * case-insensitive, as host, owner, and repository names are.
+ */
+export function remoteNamesRepo(url, owner, repo, host = 'github.com') {
+  const match =
+    /^(?:(?:https|ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/|(?:[^@/]+@)?([^/:]+):)([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(
+      url.trim(),
+    );
+  if (match === null) return false;
+  const remoteHost = match[1] ?? match[2] ?? '';
+  const remoteOwner = match[3] ?? '';
+  const remoteRepo = match[4] ?? '';
+  return (
+    remoteHost.toLowerCase() === host.toLowerCase() &&
+    remoteOwner.toLowerCase() === owner.toLowerCase() &&
+    remoteRepo.toLowerCase() === repo.toLowerCase()
+  );
 }
 function fetchCodeownersText(port, owner, repo, ref) {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(

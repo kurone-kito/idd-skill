@@ -149,6 +149,7 @@ generated separately in `ONBOARDING.md`.
 docs/concepts.md
 docs/customization.md
 docs/getting-started.md
+docs/global-only-profile.md
 docs/idd-advisory-wait-shell-fallback.md
 docs/idd-autonomy-contract.md
 docs/idd-comment-minimization.md

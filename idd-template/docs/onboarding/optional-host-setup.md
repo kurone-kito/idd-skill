@@ -155,7 +155,7 @@ line and does not evaluate quoting, variable expansion, here-docs,
 of the two forms at runtime while lexically evading this check, or vice
 versa (preventive; no observed incident yet). This is a warning-level
 misconfiguration diagnostic, not a security boundary — an operator who
-wants to fool it can simply not enable the guard — so hardening beyond
+wants to fool it can skip enabling the guard — so hardening beyond
 the documented recipe stays out of scope absent an observed incident.
 
 Fully replacing an existing hook manager instead of chaining it removes
@@ -704,7 +704,7 @@ marker's provenance artifact" step pins `actions/upload-artifact` v4+
 does not support; GHES instead needs the `v3.2.2` (or `v3.2.2-node20`)
 release, itself deprecated on github.com. The self-waiver mechanism
 fails closed, so this never lets a forged waiver through — the upload
-step simply fails or produces no artifact — but it does mean the
+step fails or produces no artifact — but it does mean the
 self-referential-bootstrap-auto mechanism can never actually complete
 on a GHES-hosted adopter, degrading every genuine attempt to
 "no auto-waiver" and leaving only the maintainer-authorized waiver
