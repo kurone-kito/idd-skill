@@ -773,3 +773,37 @@ test('protected branch: two same-name/type/workflowName/workflowPath check-run i
   assert.equal(r.requiredChecksPassing, true);
   assert.equal(r.status, 'success');
 });
+
+// #3824: a global-only run may leave out the template advisory check.
+const advisoryRequiredRules = [
+  {
+    type: 'required_status_checks',
+    parameters: {
+      required_status_checks: [
+        { context: 'lint' },
+        { context: 'idd-advisory-convergence' },
+      ],
+    },
+  },
+];
+
+test('without an ignore, a missing advisory required check blocks the gate', () => {
+  const r = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    advisoryRequiredRules,
+    {},
+  );
+  assert.equal(r.requiredChecksPassing, false);
+  assert.deepEqual(r.missingRequiredCheckNames, ['idd-advisory-convergence']);
+});
+
+test('an ignored required check name drops out of the required list', () => {
+  const r = summarizeRequiredChecks(
+    [{ name: 'lint', state: 'SUCCESS' }],
+    advisoryRequiredRules,
+    {},
+    { ignoredRequiredCheckNames: ['idd-advisory-convergence'] },
+  );
+  assert.equal(r.requiredChecksPassing, true);
+  assert.deepEqual(r.missingRequiredCheckNames, []);
+});

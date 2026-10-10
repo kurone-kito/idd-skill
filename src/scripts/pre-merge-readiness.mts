@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/pre-merge-readiness.mts
 //
 // The scripts/pre-merge-readiness.mjs copy is generated from the .mts
@@ -39,6 +40,10 @@ import {
   resolveCollaboratorAuthority,
 } from './external-check-waiver.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import {
+  GLOBAL_ONLY_WORKFLOW_PATH,
+  resolveGlobalOnlyIgnoredCheckNames,
+} from './global-only-profile.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -47,6 +52,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
+import { computeActivation } from './idd-activation.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
 import {
   inspectDevelopmentBranch,
@@ -391,6 +397,7 @@ interface PreMergeReadinessArgs {
   help: boolean;
   /** #2017: skip claim fetch/revalidation on a PR with no closing issues. */
   claimless: boolean;
+  globalOnly: boolean;
   /** #3298: the deliberate multi-issue closing set (`--closing-issues
    * <n>[,<n>...]`), when given. `null` means "not given" -- the caller
    * falls back to `[claimIssueNumber]`, or `[]` under `--claimless`. */
@@ -420,6 +427,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--nonce': { type: 'string' },
   '--now': { type: 'string' },
   '--claimless': { type: 'boolean', default: false },
+  '--global-only': { type: 'boolean', default: false },
   '--closing-issues': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -1195,6 +1203,20 @@ export function collectPreMergeReadiness(
     readExternalCheckWaiverAuthorityPolicy(iddConfig);
   const trustSourcePinnedRequiredChecks =
     readTrustSourcePinnedRequiredChecks(iddConfig);
+  // #3824: a global-only run may leave out the template advisory check, but
+  // only when the local activation says so AND the trusted base ref has no
+  // template workflow. Off unless --global-only is passed.
+  const ignoredRequiredCheckNames = args.globalOnly
+    ? resolveGlobalOnlyIgnoredCheckNames({
+        activation: computeActivation({ cwd: process.cwd() }),
+        baseWorkflowAbsent: baseWorkflowAbsentAt(
+          port,
+          owner,
+          repo,
+          trustedConfigRef,
+        ),
+      })
+    : [];
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedReviews = reviews.map(normalizeReview);
@@ -1631,6 +1653,7 @@ export function collectPreMergeReadiness(
       ): ExternalCheckWaiverAuthorityLookup =>
         port.getCollaboratorPermission(login),
       trustSourcePinnedRequiredChecks,
+      ignoredRequiredCheckNames,
       staleAgeMs,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
@@ -2215,6 +2238,7 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
     now: (values.now as string | undefined) ?? '',
     help,
     claimless: Boolean(values.claimless),
+    globalOnly: Boolean(values['global-only']),
     closingIssueNumbers,
   };
 }
@@ -2476,6 +2500,31 @@ export function resolveEligibleCodeownerUserLogins(
     );
   });
   return { eligible, unreadable };
+}
+
+/**
+ * #3824: whether the template advisory workflow is absent on the trusted
+ * base ref. Only a clean `null` (a 404) counts as absent. Any error keeps the
+ * workflow assumed present, so the check stays required.
+ */
+function baseWorkflowAbsentAt(
+  port: ProviderPort,
+  owner: string,
+  repo: string,
+  ref: string,
+): boolean {
+  try {
+    return (
+      port.getRepositoryContentAtRef(
+        owner,
+        repo,
+        GLOBAL_ONLY_WORKFLOW_PATH,
+        ref,
+      ) === null
+    );
+  } catch {
+    return false;
+  }
 }
 
 function fetchCodeownersText(

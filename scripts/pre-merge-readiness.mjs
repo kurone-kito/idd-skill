@@ -37,12 +37,17 @@ import {
 } from './external-check-waiver.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
+  GLOBAL_ONLY_WORKFLOW_PATH,
+  resolveGlobalOnlyIgnoredCheckNames,
+} from './global-only-profile.mjs';
+import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { computeActivation } from './idd-activation.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import {
   inspectDevelopmentBranch,
@@ -204,6 +209,7 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--nonce': { type: 'string' },
   '--now': { type: 'string' },
   '--claimless': { type: 'boolean', default: false },
+  '--global-only': { type: 'boolean', default: false },
   '--closing-issues': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -936,6 +942,20 @@ export function collectPreMergeReadiness(
     readExternalCheckWaiverAuthorityPolicy(iddConfig);
   const trustSourcePinnedRequiredChecks =
     readTrustSourcePinnedRequiredChecks(iddConfig);
+  // #3824: a global-only run may leave out the template advisory check, but
+  // only when the local activation says so AND the trusted base ref has no
+  // template workflow. Off unless --global-only is passed.
+  const ignoredRequiredCheckNames = args.globalOnly
+    ? resolveGlobalOnlyIgnoredCheckNames({
+        activation: computeActivation({ cwd: process.cwd() }),
+        baseWorkflowAbsent: baseWorkflowAbsentAt(
+          port,
+          owner,
+          repo,
+          trustedConfigRef,
+        ),
+      })
+    : [];
   const staleAgeMs = readClaimStaleAgeMs(iddConfig);
   const now = args.now || new Date().toISOString().replace('.000Z', 'Z');
   const normalizedReviews = reviews.map(normalizeReview);
@@ -1357,6 +1377,7 @@ export function collectPreMergeReadiness(
       externalCheckWaiverAuthorityPolicy,
       resolveWaiverAuthority: (login) => port.getCollaboratorPermission(login),
       trustSourcePinnedRequiredChecks,
+      ignoredRequiredCheckNames,
       staleAgeMs,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
@@ -1847,6 +1868,7 @@ export function parseArgs(argv) {
     now: values.now ?? '',
     help,
     claimless: Boolean(values.claimless),
+    globalOnly: Boolean(values['global-only']),
     closingIssueNumbers,
   };
 }
@@ -2076,6 +2098,25 @@ export function resolveEligibleCodeownerUserLogins(
     );
   });
   return { eligible, unreadable };
+}
+/**
+ * #3824: whether the template advisory workflow is absent on the trusted
+ * base ref. Only a clean `null` (a 404) counts as absent. Any error keeps the
+ * workflow assumed present, so the check stays required.
+ */
+function baseWorkflowAbsentAt(port, owner, repo, ref) {
+  try {
+    return (
+      port.getRepositoryContentAtRef(
+        owner,
+        repo,
+        GLOBAL_ONLY_WORKFLOW_PATH,
+        ref,
+      ) === null
+    );
+  } catch {
+    return false;
+  }
 }
 function fetchCodeownersText(port, owner, repo, ref) {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(
