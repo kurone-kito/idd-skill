@@ -827,11 +827,17 @@ function checkCommandResidueAndConsistency(
   for (const key of sharedKeys) {
     const configValue = normalizeCommandValue(policyCommandMap.get(key));
     const overviewValue = normalizeCommandValue(projectCommands.get(key));
-    // A config entry that names its own key holds no command, whatever the
-    // table row says. Report it here, since the comparison below skips it.
-    if (configValue === `commands.${key}`) {
+    // A config entry that refers to a `commands.<key>` entry holds no command,
+    // whatever the table row says. Report it here, since the comparison below
+    // skips it.
+    if (
+      typeof configValue === 'string' &&
+      /^commands\.[A-Za-z0-9-]+$/u.test(configValue)
+    ) {
       report.warnings.push(
-        `command entry "${key}" in .github/idd/config.json refers to itself; it must hold the command text`,
+        configValue === `commands.${key}`
+          ? `command entry "${key}" in .github/idd/config.json refers to itself; it must hold the command text`
+          : `command entry "${key}" in .github/idd/config.json refers to another entry (${configValue}); it must hold the command text`,
       );
       continue;
     }
