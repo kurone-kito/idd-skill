@@ -102,9 +102,11 @@ process dying while the child command it spawned kept running).
 ## Registering a repository-local helper
 
 A new helper touches more files than its source. First decide whether it
-ships to adopters: item 4 applies only if it does, and items 3 and 4 depend on
-that decision. Then work through the list in order. Each item names the file to
-edit and the audit or test that fails when the item is missed.
+ships to adopters: item 4 applies only if it does. Item 3 depends on how a
+Markdown file invokes the helper and on whether the helper has a runtime
+catalog entry, so check it for every helper that is invoked as a bare
+`node scripts/<stem>.mjs`. Then work through the list in order. Each item names
+the file to edit and the audit or test that fails when the item is missed.
 
 The placeholders below are not all the same name:
 
@@ -173,11 +175,13 @@ runtime-file lists in item 4, which were checked against the source.
      `.github/instructions/` invokes it. Without it, the check fails with
      `instruction-helper-registration`.
 
-   Unless the helper is listed in one of those two tables, any bare
-   `node scripts/<stem>.mjs` in an instruction file also needs the words
-   `profile-selected` in the same paragraph, or earlier in that file. This
-   applies even when the helper has a catalog entry. Without them, the audit
-   fails with `unpointed-source-form`. This check does not scan `docs/`.
+   Either entry also exempts a helper from the pointer rule, whether or not the
+   helper has a catalog entry. For any other helper, a bare
+   `node scripts/<stem>.mjs` in an instruction file needs the words
+   `profile-selected` in the same paragraph, or earlier in that file, whether or
+   not the helper ships to adopters. The rule matches the `./scripts/` and
+   `<idd-skill>/scripts/` forms too. Without the pointer, the audit fails with
+   `unpointed-source-form`. This check does not scan `docs/`.
 4. If the helper ships to adopters, make it a packaged helper.
    - Add an entry to the `HELPER_COMMANDS` array in
      `src/scripts/helper-runtime-manifest.mts`, with `id` (`<id>`), `scriptName`
@@ -243,6 +247,11 @@ runtime-file lists in item 4, which were checked against the source.
    `noticeUtilizationPct`. Below that, sum the byte length of each file in the
    bundle's `bundleBudgets` entry in `audit/sync-manifest.json`, with the
    `idd-generated-from` banner removed, and compare the total with `limitBytes`.
+   - Check the affected always-loaded instruction file against its per-file
+     `alwaysLoadedLimitBytes` in `instructionSizeBudgets` in
+     `audit/sync-manifest.json`, as well as the bundle total. Both checks must
+     pass. A command-table change edits `idd-overview-core.instructions.md`,
+     which is always loaded.
    - From the notice level up to the limit, follow the near-ceiling exception in
      `docs/policy-constants.md`: prefer trimming or splitting the net addition
      over a ratchet bump. The audit enforces this against the base ref. If the
