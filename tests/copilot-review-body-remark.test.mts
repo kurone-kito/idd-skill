@@ -4,8 +4,11 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  citationBreakdown,
   classifyCopilotReviewBody,
   extractCopilotReviewBodyRemark,
+  extractPreviouslyMissedItems,
+  namesFileOrLine,
 } from '../src/scripts/copilot-review-body.mts';
 
 // #3672: the remark extractor is evidence-only and deliberately not a
@@ -681,4 +684,239 @@ test('scanning stops after the first line the bounds cut (#3672)', () => {
     extractCopilotReviewBodyRemark(`### Needs a closer look\n\n${long}`),
     long,
   );
+});
+
+// #3942: a Previously missed item that names a file or line is cited, so it
+// needs its own disposition. The per-item view is read from two real Copilot
+// bodies (a file-cited item, and four body-only findings with zero-width
+// characters inside each path) plus one synthetic citation-free remark.
+
+const CITED_CORPUS_PATH = join(
+  fileURLToPath(new URL('.', import.meta.url)),
+  'fixtures',
+  'copilot-review-body-cited',
+  'corpus.json',
+);
+
+interface CitedCorpusEntry {
+  id: string;
+  source: string;
+  body: string;
+}
+
+const CITED_CORPUS = JSON.parse(
+  readFileSync(CITED_CORPUS_PATH, 'utf8'),
+) as CitedCorpusEntry[];
+
+function citedCorpusBody(id: string): string {
+  const entry = CITED_CORPUS.find((candidate) => candidate.id === id);
+  assert.ok(entry, `missing fixture ${id}`);
+  return entry.body;
+}
+
+test('citationBreakdown: a PR 3938 body with a file-cited Previously missed item is detected as cited (#3942)', () => {
+  const body = citedCorpusBody('pr-3938-previously-missed-cited');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a PR 3925 body whose four findings name files counts all four as cited (#3942)', () => {
+  const body = citedCorpusBody('pr-3925-previously-missed-cited');
+  assert.deepEqual(citationBreakdown(body, 4), {
+    citedCount: 4,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a body whose only signal is a citation-free remark is not cited (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Rename the helper</summary>',
+    '',
+    'The name reads poorly next to the neighbouring helper.',
+    '',
+    '`requestedReviewer.__typename`',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: false }]);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 0,
+    citationFreeCount: 1,
+  });
+});
+
+test('citationBreakdown: an item list that does not match the count fails closed (#3942)', () => {
+  const body = citedCorpusBody('pr-3925-previously-missed-cited');
+  assert.deepEqual(citationBreakdown(body, 5), {
+    citedCount: 5,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a body with no per-item view and no file citation leaves the review-ack rule in place (#3942)', () => {
+  assert.equal(extractPreviouslyMissedItems('plain text'), null);
+  assert.deepEqual(citationBreakdown('plain text', 2), {
+    citedCount: 0,
+    citationFreeCount: 2,
+  });
+  assert.deepEqual(citationBreakdown('plain text', 0), {
+    citedCount: 0,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a body with no per-item view that names a file fails closed (#3942)', () => {
+  const body =
+    '<summary><strong>Previously missed (2)</strong></summary>\n\n`src/scripts/review-clause.mts:12`\n';
+  assert.deepEqual(citationBreakdown(body, 2), {
+    citedCount: 2,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a v2 Previously missed heading with no parsed item fails closed (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    'The finding text sits outside any item block.',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), []);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a legacy body that names a file in the bold form is cited through the fallback (#3942)', () => {
+  const body =
+    'Review details\n\nPreviously missed (1)\n\n**src/scripts/gh-exec.mts:165** needs a fail-closed check.';
+  assert.equal(extractPreviouslyMissedItems(body), null);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: an unreadable body counts every item as cited (#3942)', () => {
+  assert.deepEqual(citationBreakdown(null, 2), {
+    citedCount: 2,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a file name with several dots counts as a citation (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Fix the README wording</summary>',
+    '',
+    '`README.ja.md:1`',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
+});
+
+test('citationBreakdown: an extensionless file name with a line suffix counts as a citation (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Pin the build target</summary>',
+    '',
+    '`Makefile:12`',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
+});
+
+test('citationBreakdown: a file named inside the text of an item counts as cited (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Tighten the parser</summary>',
+    '',
+    'Change `src/scripts/copilot-review-body.mts:42` to fail closed.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
+});
+
+test('citationBreakdown: a details block with no summary is not an item, so the count fails closed (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    'Intro prose with no item summary.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), []);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a file named in a section after the Previously missed wrapper is not an item (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Rename the helper</summary>',
+    '',
+    'The name reads poorly next to the neighbouring helper.',
+    '</details>',
+    '</details>',
+    '',
+    '<details>',
+    '<summary>Resolved</summary>',
+    '',
+    '`src/scripts/review-clause.mts:12` was fixed earlier.',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: false }]);
+});
+
+test('citationBreakdown: an ordinary dotted identifier is not a file citation (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Read the field</summary>',
+    '',
+    'Use `obj.id` instead of `foo.bar` here.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: false }]);
+  assert.equal(namesFileOrLine('The field is `obj.id`.'), false);
+  assert.equal(namesFileOrLine('See `README.ja.md`.'), true);
 });

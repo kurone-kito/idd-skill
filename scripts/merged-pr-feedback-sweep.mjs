@@ -32,7 +32,6 @@ import {
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
-  hasTrustedReviewAckAfter,
   isAdvisoryNonReviewNotice,
   isCopilotReviewerLogin,
   isDispositionComment,
@@ -48,6 +47,7 @@ import {
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 import {
+  ackCoversSuppressedFindings,
   findLatestCopilotReviewIndex,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mjs';
@@ -549,12 +549,14 @@ function collectUnaddressedComments(
       isPrimaryBotFinding &&
       !isChangesRequested &&
       !hasOutsideDiffRange &&
-      hasTrustedReviewAckAfter(
+      ackCoversSuppressedFindings({
+        body: review.body,
+        suppressedCount: bodyClassification?.suppressedCount ?? 0,
         comments,
-        trustedMarkerLoginsForAck,
-        review.submittedAt ?? '',
-        review.commitOid ?? '',
-      )
+        trustedMarkerLogins: trustedMarkerLoginsForAck,
+        reviewSubmittedAt: review.submittedAt ?? '',
+        commitSha: review.commitOid ?? '',
+      })
     ) {
       continue;
     }

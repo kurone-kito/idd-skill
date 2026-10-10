@@ -117,6 +117,7 @@ import {
 import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
+import { citationBreakdown } from './copilot-review-body.mjs';
 import {
   normalizeAuthorityEvidence,
   resolveCollaboratorAuthority,
@@ -172,8 +173,10 @@ import {
   resolveProviderOutageDeclaration,
 } from './provider-outage-declaration.mjs';
 import {
+  countCitedItemDispositions,
   fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
+  findLatestCopilotReviewIndex,
   isVerifiedCopilotAuthor,
   resolveLatestCopilotReviewClause,
 } from './review-clause.mjs';
@@ -1164,10 +1167,32 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       review.itemCount > 0 &&
       latestReviewThreadIds.size >= review.itemCount &&
       latestReviewBlocking.length === 0);
-  // `suppressedClauseSatisfied`: `suppressedCount === 0`, OR a valid
-  // `review-ack` covers it.
+  // #3942: a Previously missed item that names a file or line needs its own
+  // stamped disposition, and a `review-ack` covers only the citation-free
+  // items. `citationBreakdown` splits the count on the latest review, which
+  // is the one `review.suppressedCount` reports; a body it cannot read counts
+  // every item as cited (fail closed).
+  const latestReviewIndex = findLatestCopilotReviewIndex(
+    reviews,
+    primaryBotLogin,
+  );
+  const citation = citationBreakdown(
+    latestReviewIndex < 0 ? null : reviews[latestReviewIndex]?.body,
+    review.suppressedCount,
+  );
+  const citedDispositionsSatisfied =
+    countCitedItemDispositions(
+      comments,
+      trustedMarkerLogins,
+      review.submittedAt,
+    ) >= citation.citedCount;
+  // `suppressedClauseSatisfied`: `suppressedCount === 0`, OR the citation-free
+  // items are covered by a valid `review-ack` and every cited item by its own
+  // disposition.
   const suppressedClauseSatisfied =
-    review.suppressedCount === 0 || hasValidReviewAck;
+    review.suppressedCount === 0 ||
+    ((citation.citationFreeCount === 0 || hasValidReviewAck) &&
+      citedDispositionsSatisfied);
   // #3258 (Groom-hearing maintainer decision): a Copilot review body that
   // matches none of `classifyCopilotReviewBody`'s known shapes
   // (review-clause.mts / copilot-review-body.mts) is treated fail-closed --
@@ -1229,9 +1254,12 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // still unresolved for lack of a valid `review-ack` -- computed once,
   // shared by both branches below.
   const ackSuffix =
-    review.suppressedCount > 0 && !hasValidReviewAck
+    (citation.citationFreeCount > 0 && !hasValidReviewAck
       ? '; post a trusted review-ack marker after this review to cover the suppressed comment(s)'
-      : '';
+      : '') +
+    (citedDispositionsSatisfied
+      ? ''
+      : `; reply to each of the ${citation.citedCount} suppressed item(s) that name a file or line with a stamped disposition (#3942)`);
   // #3258: named once, appended (never substituted) into whichever branch
   // below fires, so an unrecognized-body review that ALSO carries posted
   // items still reports its item count -- see the module-header rationale
@@ -1382,7 +1410,9 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // (`reviewSatisfied && hasValidReviewAck`) so a clean `itemCount: 0`
   // review still reports ONLY `review-item-count-not-positive`.
   const notAlreadySatisfiedViaReviewAckTerm = !(
-    reviewSatisfied && hasValidReviewAck
+    reviewSatisfied &&
+    (hasValidReviewAck ||
+      (citation.citedCount > 0 && citedDispositionsSatisfied))
   );
   const sameHeadRerollTerms = [
     {

@@ -920,7 +920,47 @@ test('an absent review method or a malformed HEAD yields null (#3907)', () => {
   assert.equal(malformed.latestPrimaryBotReview, null);
 });
 
+// #3942: the cited item below needs its own stamped disposition, so the ack and
+// one disposition together set reviewAckCovers.
 test('a trusted, unedited review-ack after the review sets reviewAckCovers (#3907)', () => {
+  const snapshot = latestSnapshot({
+    include: true,
+    trustedMarkerLoginsFlag: 'kurone-kito',
+    comments: [
+      {
+        id: 'ACK1',
+        authorLogin: 'kurone-kito',
+        body: `review-ack: claude-f3ef1280 ${LATEST_HEAD} 2026-10-09T02:00:00Z`,
+        createdAt: '2026-10-09T02:00:00Z',
+        updatedAt: '2026-10-09T02:00:00Z',
+        lastEditedAt: null,
+      },
+      {
+        id: 'DISP1',
+        authorLogin: 'kurone-kito',
+        body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+        createdAt: '2026-10-09T02:00:00Z',
+        updatedAt: '2026-10-09T02:00:00Z',
+        lastEditedAt: null,
+      },
+    ],
+    fetchReviews: () => ({
+      headCommittedAt: '',
+      reviews: [
+        providerReviewNode(
+          'PRR_ack',
+          corpusEntryBody('copilot-v2-previously-missed-3196'),
+        ),
+      ],
+    }),
+  });
+  const evidence = snapshot.latestPrimaryBotReview as {
+    reviewAckCovers: boolean | null;
+  } | null;
+  assert.equal(evidence?.reviewAckCovers, true);
+});
+
+test('a bare review-ack does not set reviewAckCovers for a cited item (#3942)', () => {
   const snapshot = latestSnapshot({
     include: true,
     trustedMarkerLoginsFlag: 'kurone-kito',
@@ -947,7 +987,7 @@ test('a trusted, unedited review-ack after the review sets reviewAckCovers (#390
   const evidence = snapshot.latestPrimaryBotReview as {
     reviewAckCovers: boolean | null;
   } | null;
-  assert.equal(evidence?.reviewAckCovers, true);
+  assert.equal(evidence?.reviewAckCovers, false);
 });
 
 test('a review-ack from the viewer login is not a trusted ack (#3907)', () => {

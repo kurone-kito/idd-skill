@@ -89,6 +89,7 @@ function comment(overrides: {
 const ACK_ROWS = [
   {
     name: 'v2 body with a Previously missed finding',
+    citationBearing: true,
     body: V2_SUPPRESSED,
     primaryBotLogin: 'copilot',
     matchesHead: true,
@@ -96,6 +97,7 @@ const ACK_ROWS = [
   },
   {
     name: 'legacy body with a suppressed comment',
+    citationBearing: true,
     body: LEGACY_SUPPRESSED,
     primaryBotLogin: 'copilot',
     matchesHead: true,
@@ -168,7 +170,20 @@ test('copilotReviewAckNeeded pins the gate Clause 1 ack term', () => {
 });
 
 test('reviewAckCovers follows the gate ack check for the six issue cases', () => {
-  const reviews = [review({ id: 'r1', body: V2_SUPPRESSED })];
+  // A citation-free suppressed item, so a trusted review-ack alone covers it (#3942).
+  const remarkBody = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    '<summary>Rename the helper</summary>',
+    '',
+    'The name reads poorly next to the neighbouring helper.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  const reviews = [review({ id: 'r1', body: remarkBody })];
   const cases: Array<{
     name: string;
     comments: ReturnType<typeof comment>[];
@@ -468,11 +483,38 @@ test('the ack rule matches the gate verdict for every row (oracle)', () => {
         false,
         `${row.name}: gate must block without an ack`,
       );
-      assert.equal(
-        withAck,
-        true,
-        `${row.name}: gate must pass with a trusted ack`,
-      );
+      if (row.citationBearing) {
+        // #3942: a cited item needs its own stamped disposition, so a trusted
+        // ack alone never clears it, and one disposition does.
+        assert.equal(
+          withAck,
+          false,
+          `${row.name}: a trusted ack must not clear a cited item`,
+        );
+        const withDisposition = computeAdvisoryConvergenceVerdict(
+          {
+            ...inputs,
+            comments: [
+              comment({
+                body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+                createdAt: ACK_AFTER,
+              }),
+            ],
+          },
+          options,
+        ).converged;
+        assert.equal(
+          withDisposition,
+          true,
+          `${row.name}: a stamped disposition must pass`,
+        );
+      } else {
+        assert.equal(
+          withAck,
+          true,
+          `${row.name}: gate must pass with a trusted ack`,
+        );
+      }
     } else {
       assert.equal(
         withAck,
@@ -481,4 +523,62 @@ test('the ack rule matches the gate verdict for every row (oracle)', () => {
       );
     }
   }
+});
+
+// #3942: a cited suppressed item is not covered by a bare review-ack. Its own
+// stamped disposition covers it, and the snapshot field reports that.
+const CITED_SUPPRESSED_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '<details>',
+  '<summary><strong>Previously missed (1)</strong></summary>',
+  '',
+  '<details>',
+  '<summary>Keep the gate fail-closed</summary>',
+  '',
+  '`src/scripts/review-clause.mts:12`',
+  '',
+  'The clause must stay fail-closed.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+test('reviewAckCovers: a cited suppressed item needs its own disposition (#3942)', () => {
+  const reviewRow = review({ id: 'cited', body: CITED_SUPPRESSED_BODY });
+  const bare = resolveLatestPrimaryBotReviewEvidence({
+    reviews: [reviewRow],
+    prHeadSha: HEAD,
+    primaryBotLogin: 'copilot',
+    comments: [comment({})],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.equal(bare?.reviewAckNeeded, true);
+  assert.equal(bare?.reviewAckCovers, false);
+
+  const withDisposition = resolveLatestPrimaryBotReviewEvidence({
+    reviews: [reviewRow],
+    prHeadSha: HEAD,
+    primaryBotLogin: 'copilot',
+    comments: [
+      comment({}),
+      comment({
+        body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+      }),
+    ],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.equal(withDisposition?.reviewAckCovers, true);
+
+  // A cited-only review converges on its dispositions, with no bare ack needed.
+  const dispositionOnly = resolveLatestPrimaryBotReviewEvidence({
+    reviews: [reviewRow],
+    prHeadSha: HEAD,
+    primaryBotLogin: 'copilot',
+    comments: [
+      comment({
+        body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+      }),
+    ],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.equal(dispositionOnly?.reviewAckCovers, true);
 });

@@ -5686,7 +5686,10 @@ reflexively as any other CLI option.
   `reviewAckNeeded` is Clause 1's ack rule (`suppressedCount > 0`, or an
   `unrecognized` body with the default Copilot bot), and `reviewAckCovers`
   says whether a trusted, unedited `review-ack:` for this HEAD was created
-  after the review. The invariant is one-directional: `reviewAckCovers:
+  after the review. Cited suppressed items (a file or line named) change the
+  rule: a citation-free item still needs the ack, each cited item needs its own
+  stamped disposition, and a bare ack does not cover a cited item (#3942).
+  The invariant is one-directional: `reviewAckCovers:
   true` implies the gate's ack check passes under the same flag,
   environment and config, but `false` only means the ack is not provably
   present. An ack is outstanding only when `reviewAckNeeded &&
@@ -6600,7 +6603,10 @@ in place of the raw mechanical value:
 matchesHead
   && (itemCount === 0 || (itemCount is known AND >= itemCount thread(s)
       THIS review opened cover it AND all of them are resolved/dispositioned))
-  && (suppressedCount === 0 || hasValidReviewAck)
+  && (suppressedCount === 0
+      || ((citationFreeCount === 0 || hasValidReviewAck)
+          && every citation-bearing suppressed item has its own stamped
+             disposition))
   && (primaryBotLogin is not the Copilot default
       || bodyShape !== 'unrecognized' || hasValidReviewAck)
 ```

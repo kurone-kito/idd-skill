@@ -1165,6 +1165,25 @@ individually threaded) carry neither collapsible-section heading, so
 this parser naturally returns no findings for them — no separate
 format-detection branch needed.
 
+### A body finding that names a file or line needs its own disposition
+
+The review-ack rule was built for a review whose body carries only
+citation-free remarks. Copilot's "Previously missed" section can also list
+a finding that names a file or line and has no inline thread. The observed
+case is PR `#3938`, whose file-cited item a `review-ack` alone could clear,
+so a confirmed defect could merge with neither a fix nor a deferral.
+
+The gate now splits that section by citation. A citation-free item keeps the
+review-ack rule. Each cited item needs its own trusted, unedited reply that
+opens with `**Accepted**`, with the recorded-deferral form, or with
+`**Rejected**` naming a file or line as its evidence, and the count of such
+replies must cover the cited items. Replies match by count because a
+body item has no thread to pair with, the same as the review-thread route,
+so the reply carries the review-reply stamp that identifies it. A body whose
+items do not match its count fails closed, and a body with no per-item view
+counts every item as cited when it names a file or line anywhere. A reply that
+is edited, untrusted, or posted before the review was submitted does not count.
+
 ### E4/E5 round-count defer cutoff
 
 E4/E5 scored each PATH A item Low/Medium/High with no ceiling on how

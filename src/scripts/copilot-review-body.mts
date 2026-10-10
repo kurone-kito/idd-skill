@@ -246,6 +246,117 @@ export function classifyCopilotReviewBody(
 }
 
 // -----------------------------------------------------------------------
+// Previously missed citations (#3942)
+// -----------------------------------------------------------------------
+
+/** Zero-width and format characters GitHub renders inside a file path. */
+const ZERO_WIDTH_CHARS_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/gu;
+
+/**
+ * A file citation anywhere in a body, in the backtick or the legacy bold form
+ * (#3942). Used only where no per-item view exists.
+ */
+const CITATION_ANYWHERE_PATTERN =
+  /(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.(?:md|mts|mjs|cjs|cts|ts|tsx|js|jsx|json|ya?ml|sh|toml|txt)|[\w-]+(?=:\d))(?::\d+)?(?:`|\*\*)/u;
+
+/** A `<details>` or `</details>` tag, for the wrapper-bounded scan below. */
+const DETAILS_TAG_PATTERN = /<(\/?)details>/g;
+
+/**
+ * The Previously missed items of an `overview-v2` body, in order, each
+ * flagged `cited` when its text names a file or line anywhere (#3942). The
+ * items are the `<details>` blocks directly inside the Previously missed
+ * wrapper, and only those with their own `<summary>`. The scan stops where the
+ * wrapper closes, so a later section is never read as an item. `null` when the
+ * body is not `overview-v2`, has no such section, or never closes its wrapper.
+ * Read from the raw body: {@link stripMarkdownCodeRegions} would blank the
+ * code span that carries the citation.
+ */
+export function extractPreviouslyMissedItems(
+  body: string | null | undefined,
+): { cited: boolean }[] | null {
+  if (typeof body !== 'string' || !V2_MARKER_PATTERN.test(body.trimStart())) {
+    return null;
+  }
+  const heading = body.match(V2_PREVIOUSLY_MISSED_PATTERN);
+  if (!heading || heading.index === undefined) {
+    return null;
+  }
+  if (body.lastIndexOf('<details>', heading.index) < 0) {
+    return null;
+  }
+  const items: { cited: boolean }[] = [];
+  let depth = 1;
+  let itemStart = -1;
+  const tags = new RegExp(DETAILS_TAG_PATTERN.source, 'g');
+  tags.lastIndex = heading.index + heading[0].length;
+  for (let m = tags.exec(body); m !== null; m = tags.exec(body)) {
+    if (m[1] === '') {
+      depth += 1;
+      if (depth === 2) {
+        itemStart = m.index;
+      }
+      continue;
+    }
+    if (depth === 2 && itemStart >= 0) {
+      const block = body.slice(itemStart, m.index + m[0].length);
+      if (block.includes('<summary>')) {
+        items.push({
+          cited: block
+            .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+            .split(/\r?\n/)
+            .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
+        });
+      }
+      itemStart = -1;
+    }
+    depth -= 1;
+    if (depth === 0) {
+      return items;
+    }
+  }
+  return null;
+}
+
+/** True when `body` names a file or line anywhere in its text (#3942). */
+export function namesFileOrLine(body: string): boolean {
+  return CITATION_ANYWHERE_PATTERN.test(
+    body.replace(ZERO_WIDTH_CHARS_PATTERN, ''),
+  );
+}
+
+/**
+ * Splits a body's Previously missed count into the items that name a file or
+ * line and the ones that do not (#3942). An `overview-v2` body with a
+ * Previously missed section always has a per-item view, which may be empty.
+ * Its items must match the count, or every suppressed item counts as cited
+ * (fail closed). A body with no per-item view counts every item as cited when
+ * it names a file or line anywhere, and as citation-free when it names none,
+ * so the existing review-ack rule still applies to it.
+ */
+export function citationBreakdown(
+  body: string | null | undefined,
+  suppressedCount: number,
+): { citedCount: number; citationFreeCount: number } {
+  if (suppressedCount === 0) {
+    return { citedCount: 0, citationFreeCount: 0 };
+  }
+  const items = extractPreviouslyMissedItems(body);
+  if (items) {
+    if (items.length !== suppressedCount) {
+      return { citedCount: suppressedCount, citationFreeCount: 0 };
+    }
+    const citedCount = items.filter((item) => item.cited).length;
+    return { citedCount, citationFreeCount: suppressedCount - citedCount };
+  }
+  // An unreadable body cannot prove an item citation-free, so it fails closed.
+  if (typeof body !== 'string' || namesFileOrLine(body)) {
+    return { citedCount: suppressedCount, citationFreeCount: 0 };
+  }
+  return { citedCount: 0, citationFreeCount: suppressedCount };
+}
+
+// -----------------------------------------------------------------------
 // Review-body remark extraction (#3672)
 // -----------------------------------------------------------------------
 
