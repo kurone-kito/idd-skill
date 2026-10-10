@@ -47,7 +47,7 @@ too-new API passing typecheck doesn't reliably fail loudly at that
 type-only layer.
 
 The actual backstop is runtime, not type-level: the Node 22 CI lane
-(`pnpm-boundary-node22-floor.yml`) runs the full `pnpm run lint:minimum`
+(`pnpm-boundary-node22-floor.yml`) runs the full `pnpm run check`
 suite — including the whole test suite and
 `verify-workshop-integrity.mts` — directly on Node 22.23.2. A helper
 that calls an API present in the types-26 surface but missing or
@@ -327,7 +327,7 @@ runner), and `git status --porcelain` without an explicit `--untracked-files`
 override silently respects a local or CI `status.showUntrackedFiles=no` config,
 which would let an untracked emitted artifact pass unnoticed.
 
-`pnpm run lint:minimum` runs `typecheck` and `build:check`, so a forgotten
+`pnpm run check` runs `typecheck` and `build:check`, so a forgotten
 rebuild or a hand-edited generated file fails the installed CI lane. The
 bare-node lane additionally runs `node scripts/audit-docs.mjs --check`,
 whose pairing guard fails when a source is missing its generated artifact,
@@ -335,7 +335,7 @@ a banner-marked artifact is missing its source, or a source's provenance
 banner is missing or malformed in either file — the guard requires the
 banner on every `src/scripts/**/*.mts` / `src/bin/**/*.mts` source, not
 only on an artifact that already happens to carry one. `node --test
-tests/inventory-ordering.test.mts` (part of `lint:minimum`'s test run)
+tests/inventory-ordering.test.mts` (part of `check`'s test run)
 closes the remaining gap: it fails when a `scripts/*.mjs` or `bin/*.mjs`
 on disk has no matching `.mts` source at all, regardless of whether it
 carries the generated-from banner — the check that keeps the

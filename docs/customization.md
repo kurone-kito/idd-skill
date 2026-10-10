@@ -1015,20 +1015,21 @@ Reusable inputs:
 | `runner`           | `ubuntu-slim`                                     | Runner label for the boundary job                        |
 | `node-version`     | `24.x`                                            | Node.js version used by `setup-node`                     |
 | `install-command`  | `pnpm install --frozen-lockfile --prefer-offline` | Dependency install step                                  |
-| `lint-command`     | `pnpm run lint:minimum`                           | Project lint/test command                                |
+| `lint-command`     | `pnpm run check`                                  | Project lint/test command                                |
 | `boundary-command` | `node scripts/check-pnpm-boundary.mjs`            | Check that distributable command rows do not leak `pnpm` |
 
 The `lint-command` and `boundary-command` defaults above are this
 repository's own commands and are source-repository-only:
 `check-pnpm-boundary.mjs` ships in no core file set or helper runtime
 profile, and reads a path relative to `idd-template/` that exists only
-in this source repository; `lint:minimum` is this repository's own
-`package.json` script. A reusable workflow's steps run against the
-caller's checkout, so neither default can run there unmodified —
-running both commands in a scratch imported tree confirms this: the
-boundary command fails with `MODULE_NOT_FOUND`, and even copied in by
-hand, with `ENOENT` (issue #3293). Every downstream caller, Node.js or
-not, must pass its own `lint-command` and `boundary-command`.
+in this source repository; `pnpm run check` is this repository's own
+`package.json` script, and `lint:minimum` is an alias for it. A reusable
+workflow's steps run against the caller's checkout, so neither default can
+run there unmodified — running both commands in a scratch imported
+tree confirms this: the boundary command fails with `MODULE_NOT_FOUND`,
+and even copied in by hand, with `ENOENT` (issue #3293). Every downstream
+caller, Node.js or not, must pass its own `lint-command` and
+`boundary-command`.
 
 Example downstream usage:
 

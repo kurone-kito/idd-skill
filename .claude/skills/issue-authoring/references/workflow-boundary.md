@@ -412,12 +412,13 @@ approval boundary that hands off to IDD execution.
   removal is a non-anchor target's or the anchor's own -- that the
   marked target is the sole member of its authoring set: it carries no
   `<marker-prefix>-roadmap-id` marker (never a roadmap anchor), and
-  `node scripts/authoring-set-members.mjs --set <id>` reports
-  `soleMember: true` with `issues` equal to that one target and no
-  `skippedMarkers` entry with `namesRequestedSet: true` (a `requested-set`
-  entry on the target itself does not block). The helper exits non-zero
-  when enumeration does not finish, including a
-  search response with `incomplete_results` or an index-lag window
+  `node scripts/authoring-set-members.mjs --set <id> --issue <target>`, the
+  bounded window that starts at the target's own first trusted marker for
+  the set, reports `soleMember: true` with `issues` equal to that one target
+  and no `skippedMarkers` entry with `namesRequestedSet: true` (a
+  `requested-set` entry on the target itself does not block). The helper
+  exits non-zero when enumeration does not finish, including a search
+  response with `incomplete_results` or an index-lag window
   that does not finish. The candidate search is the owner-marker
   token, so an edited marker that dropped the set is still fetched
   and fails closed. An unparseable trusted comment that still

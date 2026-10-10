@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { loadIddConfig } from '../src/scripts/idd-config.mts';
 import { collectPreMergeReadiness } from '../src/scripts/pre-merge-readiness.mts';
 import type { FakeProviderFixture } from '../src/scripts/provider-adapter-fake.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
@@ -49,7 +50,7 @@ function fixture(laterText = FINDING): FakeProviderFixture {
   return {
     viewerLogin: 'kurone-kito',
     changeRequestHeadShaAndAuthor: {
-      1: { headSha: HEAD, authorLogin: 'author-user' },
+      1: { headSha: HEAD, authorLogin: 'author-user', baseRefName: 'main' },
     },
     changeRequestReadinessSnapshots: {
       1: {
@@ -115,6 +116,7 @@ function snapshotFlag(fx: FakeProviderFixture): boolean {
     prNumber: 1,
     owner: 'o',
     repo: 'r',
+    loadTrustedConfig: () => loadIddConfig(),
     trustedMarkerLoginsFlag: 'kurone-kito',
     advisoryBotLoginsFlag: BOT,
     envTrustedMarkerActors: '',

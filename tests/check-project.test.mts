@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
+import { devNull, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -337,5 +354,234 @@ test('the package scripts wire check, lint:minimum, and lint to the canonical ru
   assert.equal(
     scripts['test:scripts'],
     'node --test --import ./tests/isolate-state.mts tests/*.test.mts',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #3987: a tampered committed runner copy is reported as drift, and neither
+// entry point runs it. Each run gets a fresh scratch repository with real git
+// and real pnpm. Its node_modules is a real directory of links to the
+// checkout's packages, so pnpm writes inside the scratch tree and never through
+// to this checkout. Skipped when the tools are absent (the bare-node lane).
+// ---------------------------------------------------------------------------
+
+const requireFromHere = createRequire(import.meta.url);
+function toolsInstalledForScratch(): boolean {
+  try {
+    requireFromHere.resolve('typescript/package.json');
+    requireFromHere.resolve('@biomejs/biome/package.json');
+    return true;
+  } catch {
+    return false;
+  }
+}
+const SCRATCH_SKIP = toolsInstalledForScratch()
+  ? false
+  : 'typescript and @biomejs/biome are not installed (bare-node lane)';
+
+const RUN_TIMEOUT_MS = 600_000;
+const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+
+/** The environment for every scratch process: no inherited GIT_* state. */
+function scratchEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) {
+      delete env[key];
+    }
+  }
+  env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
+  env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
+  env.GIT_CONFIG_NOSYSTEM = '1';
+  return env;
+}
+
+function scratchGit(root: string, ...args: string[]): string {
+  return execFileSync(
+    'git',
+    [
+      '-c',
+      'user.name=fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      ...args,
+    ],
+    { cwd: root, encoding: 'utf8', env: scratchEnv() },
+  );
+}
+
+/** The copy the committed path would hold, written to a sentinel when run. */
+function tamperedRunner(sentinel: string): string {
+  return `// Tampered for kurone-kito/idd-skill#3987: writes a sentinel when run.
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(sentinel)}, 'ran\\n');
+`;
+}
+
+// Windows cannot create directory symlinks without a privilege that some
+// accounts lack, so directory targets are junctions there (absolute targets).
+const DIRECTORY_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+
+// Directories are linked. Regular files are copied, because a file symlink
+// needs the same Windows privilege the junction avoids (for example
+// node_modules/.modules.yaml).
+function linkOrCopy(source: string, destination: string): void {
+  if (statSync(source).isDirectory()) {
+    symlinkSync(source, destination, DIRECTORY_LINK);
+  } else {
+    copyFileSync(source, destination);
+  }
+}
+
+/** Link each top-level package of this checkout into a real directory. */
+function linkDependencies(root: string): void {
+  const source = join(REPO_ROOT, 'node_modules');
+  const target = join(root, 'node_modules');
+  mkdirSync(target);
+  for (const entry of readdirSync(source)) {
+    if (entry === '.bin' || entry === '.pnpm') {
+      continue;
+    }
+    const real = realpathSync(join(source, entry));
+    if (entry.startsWith('@')) {
+      mkdirSync(join(target, entry));
+      for (const inner of readdirSync(real)) {
+        linkOrCopy(realpathSync(join(real, inner)), join(target, entry, inner));
+      }
+    } else {
+      linkOrCopy(real, join(target, entry));
+    }
+  }
+}
+
+/**
+ * A digest of the checkout's dependency layout and lockfile: each top-level
+ * entry, its link target, and the entries of each scope. A scratch run that
+ * rewrites a link or the lockfile changes the digest.
+ */
+function checkoutFingerprint(): string {
+  const describe = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const entry of readdirSync(dir).sort()) {
+      const path = join(dir, entry);
+      const stat = lstatSync(path);
+      out[entry] = stat.isSymbolicLink()
+        ? `link:${readlinkSync(path)}`
+        : stat.isDirectory()
+          ? 'dir'
+          : 'file';
+    }
+    return out;
+  };
+  const modules = join(REPO_ROOT, 'node_modules');
+  const scoped: Record<string, Record<string, string>> = {};
+  const top = describe(modules);
+  for (const entry of Object.keys(top)) {
+    if (entry.startsWith('@') && top[entry] === 'dir') {
+      scoped[entry] = describe(join(modules, entry));
+    }
+  }
+  const lock = createHash('sha256')
+    .update(readFileSync(join(REPO_ROOT, 'pnpm-lock.yaml')))
+    .digest('hex');
+  return JSON.stringify({ top, scoped, lock });
+}
+
+/** A scratch repository of this checkout's tracked files, minus tests/. */
+function buildScratchRepository(parent: string, sentinel: string): string {
+  const root = join(parent, 'scratch repo');
+  mkdirSync(root, { recursive: true });
+  const tracked = execFileSync('git', ['ls-files', '-z'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: scratchEnv(),
+  })
+    .split('\0')
+    .filter((path) => path !== '' && !path.startsWith('tests/'));
+  for (const path of tracked) {
+    const target = join(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(REPO_ROOT, path), target);
+  }
+  scratchGit(root, 'init', '-q');
+  scratchGit(root, 'add', '-A');
+  scratchGit(root, 'commit', '-q', '-m', 'fixture');
+  writeFileSync(
+    join(root, 'scripts/check-project.mjs'),
+    tamperedRunner(sentinel),
+  );
+  scratchGit(root, 'add', '-A');
+  scratchGit(root, 'commit', '-q', '-m', 'tamper');
+  linkDependencies(root);
+  return root;
+}
+
+test('a tampered committed runner copy is reported as drift, and neither check nor lint:minimum runs it (#3987)', {
+  skip: SCRATCH_SKIP,
+  timeout: 2 * RUN_TIMEOUT_MS + 300_000,
+}, (t) => {
+  const probe = spawnSync('pnpm', ['--version'], {
+    encoding: 'utf8',
+    env: scratchEnv(),
+  });
+  assert.equal(
+    probe.status,
+    0,
+    `pnpm must be spawnable when the tools are installed: ${probe.error?.message ?? probe.stderr}`,
+  );
+  const parent = mkdtempSync(join(tmpdir(), 'check project scratch '));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const before = checkoutFingerprint();
+
+  // Positive control: running the sentinel-writing copy directly writes the
+  // sentinel, so the absence check below can fail.
+  const control = join(parent, 'control');
+  mkdirSync(control);
+  const controlRunner = join(control, 'runner.mjs');
+  writeFileSync(controlRunner, tamperedRunner(join(control, 'sentinel')));
+  assert.equal(spawnSync(process.execPath, [controlRunner]).status, 0);
+  assert.equal(existsSync(join(control, 'sentinel')), true);
+
+  for (const entry of ['check', 'lint:minimum']) {
+    const run = join(parent, `run ${entry.replace(':', '-')}`);
+    mkdirSync(run);
+    const sentinel = join(run, 'sentinel');
+    const root = buildScratchRepository(run, sentinel);
+    const result = spawnSync('pnpm', ['run', entry], {
+      cwd: root,
+      encoding: 'utf8',
+      env: scratchEnv(),
+      timeout: RUN_TIMEOUT_MS,
+    });
+    assert.equal(result.error, undefined, `pnpm run ${entry} must start`);
+    assert.equal(
+      result.signal,
+      null,
+      `pnpm run ${entry} must finish within its time bound`,
+    );
+    assert.notEqual(result.status, 0, `pnpm run ${entry} must fail on drift`);
+    assert.match(
+      result.stderr,
+      /scripts\/check-project\.mjs: \[drift\]/,
+      `pnpm run ${entry} must report the drift line on stderr`,
+    );
+    assert.equal(
+      existsSync(sentinel),
+      false,
+      `pnpm run ${entry} must not run the committed copy`,
+    );
+    assert.equal(
+      existsSync(join(root, 'tests')),
+      false,
+      'no tests/ file is copied',
+    );
+    assert.equal(scratchGit(root, 'rev-list', '--count', 'HEAD').trim(), '2');
+  }
+  assert.equal(
+    checkoutFingerprint(),
+    before,
+    "the scratch runs leave the checkout's dependency links and lockfile unchanged",
   );
 });

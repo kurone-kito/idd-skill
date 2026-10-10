@@ -618,7 +618,7 @@ Add a "Human-dependency isolation examples" section to
   deferred, out-of-scope).
 - Examples warn against hiding credentials or product decisions in a
   ready issue.
-- `pnpm run lint:minimum` passes.
+- `pnpm run check` passes.
 
 ## Candidate files
 
