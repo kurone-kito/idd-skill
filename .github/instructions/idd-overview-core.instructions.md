@@ -253,10 +253,11 @@ which still stop child selection in Discover.
 
 When a phase names a command set, run the corresponding commands.
 
-If `.github/idd/config.json` exists and validates against the canonical
+The command entries below are read from the `commands` object of
+`.github/idd/config.json`, which must validate against the canonical
 schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
-object overrides the table below. Policy fields such as
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>. If
+it is missing or invalid, stop and report. Policy fields such as
 `skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
 the recorded machine-readable policy. Absent values keep the gate
 enabled and default approval actors to
@@ -265,9 +266,9 @@ enabled and default approval actors to
 <!-- dprint-ignore-start -->
 | Name | Entries |
 | --- | --- |
-| **fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"` |
-| **pre-push-validate** | `npx biome check --error-on-warnings && npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm lint:contracts && pnpm lint:boundaries && pnpm audit:schemas && pnpm test:scripts && pnpm build:check && pnpm typecheck && node scripts/idd-doctor.mjs --cleanup-backlog-window-days 1 && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |
-| **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm typecheck` |
+| **fix-validate** | `commands.fix-validate` |
+| **pre-push-validate** | `commands.pre-push-validate` |
+| **post-fix-validate** | `commands.post-fix-validate` |
 | **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command "pnpm install --frozen-lockfile"` |
 | **issue-scope** | `roadmap-first` |
 | **orphan-first-policy** | `none` |

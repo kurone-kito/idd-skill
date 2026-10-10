@@ -249,10 +249,11 @@ which still stop child selection in Discover.
 When a phase names a command set, run the corresponding commands.
 **Adapt this section for other projects.**
 
-If `.github/idd/config.json` exists and validates against the canonical
+The command entries below are read from the `commands` object of
+`.github/idd/config.json`, which must validate against the canonical
 schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
-object overrides the table below. Policy fields such as
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>. If
+it is missing or invalid, stop and report. Policy fields such as
 `skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
 the recorded machine-readable policy. Absent values keep the gate
 enabled and default approval actors to
@@ -261,9 +262,9 @@ enabled and default approval actors to
 <!-- dprint-ignore-start -->
 | Name | Entries |
 | --- | --- |
-| **fix-validate** | `{{FIX_VALIDATE_COMMANDS}}` |
-| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
-| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **fix-validate** | `commands.fix-validate` |
+| **pre-push-validate** | `commands.pre-push-validate` |
+| **post-fix-validate** | `commands.post-fix-validate` |
 | **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |
 | **issue-scope** | `roadmap-first` |
 | **orphan-first-policy** | `none` |
