@@ -551,12 +551,35 @@ export const PR_HEAD_FRESHNESS_PINS = [
     phrases: [["apply F2's sequence to `$", '{PR_HEAD_SHA_F3}`'].join('')],
   },
 ];
+// The regression definition (issue #3869) is stated once in the profile doc,
+// and the adopt-now clause in the triage instruction points to it.
+export const REGRESSION_DEFINITION_PINS = [
+  {
+    id: 'regression-definition-doc',
+    paths: [REVIEW_POLICY_PROFILES, LIVE_REVIEW_POLICY_PROFILES],
+    phrases: [
+      '## What counts as a regression',
+      "A regression is a behavior that the claimed issue's acceptance criteria require to keep working.",
+      'a regression is a behavior of the merge base.',
+      'A gap in the narrower behavior is a regression only when a stated acceptance criterion enumerates the narrowed behavior.',
+    ],
+  },
+  {
+    id: 'regression-definition-pointer',
+    paths: [REVIEW_TRIAGE, LIVE_REVIEW_TRIAGE],
+    phrases: [
+      "(a) a [regression] this PR's diff introduced;",
+      '[regression]: ../../docs/idd-review-policy-profiles.md#what-counts-as-a-regression',
+    ],
+  },
+];
 const PINNED_CLAUSE_GROUPS = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
   ...WHOLE_CLASS_SWEEP_PINS,
   ...WAVE_GRADIENT_PINS,
   ...PR_HEAD_FRESHNESS_PINS,
+  ...REGRESSION_DEFINITION_PINS,
 ];
 const RULES = [
   {

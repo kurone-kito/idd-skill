@@ -670,6 +670,18 @@ step. The reply keeps `step <k>`, and only when convergence raised the
 step it also carries `converged <short-sha>` (the first 7 hex digits
 of `prHeadSha`).
 
+## What counts as a regression
+
+Clause (a) of the adopt-now test in `idd-review-triage.instructions.md` uses
+this definition. A regression is a behavior that the claimed issue's
+acceptance criteria require to keep working. Where those criteria are silent
+and the pull request does not intend to change the behavior, a regression is a
+behavior of the merge base.
+
+A pull request that narrows behavior or imports a release is treated
+differently. A gap in the narrower behavior is a regression only when a stated
+acceptance criterion enumerates the narrowed behavior.
+
 ## Selection Checklist
 
 Before considering onboarding complete, record the selected profile in

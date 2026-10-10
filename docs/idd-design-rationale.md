@@ -1782,6 +1782,20 @@ there is no extra step. At a count of 7 or more the count step is
 already 2, so convergence adds nothing and the clause carries no
 `converged` token.
 
+Decision record (2026-10-10, issue `#3869`): adopt-now clause (a) relied on
+the word "regression" without defining it. For a narrowing or release-import
+pull request, each completeness gap in the narrower matcher reads as a
+regression, so the clause swallows the deferral. The maintainer decision
+(Groom hearing) defines the term once in `idd-review-policy-profiles.md`
+under "What counts as a regression": a regression is a behavior the claimed
+issue's acceptance criteria require to keep working or, where those are
+silent and the pull request does not intend to change it, a behavior of the
+merge base. For a narrowing or import pull request, a gap in the narrower
+behavior is a regression only when a stated acceptance criterion enumerates
+it. The needs-decision route uses the same definition. The trade-off is that
+an unlisted gap in a narrowing pull request stays deferrable, so the
+acceptance criteria are the lever for making such a gap adopt-now.
+
 ### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
 
 The review loop stops for a person at several points: the
