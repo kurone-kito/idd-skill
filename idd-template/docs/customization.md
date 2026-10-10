@@ -2189,10 +2189,11 @@ default branch into the claim branch and push the merge.
 `--import --force` overwrites `.github/idd/config.json`, including
 `forcedHandoff`. Afterwards only the four `commands` entries are restored from
 the pre-import file: `install-deps` and the three validate-command rows. An entry
-that is still a placeholder is left for `--substitute`. The overlay re-import
-procedure passes one `--hold` per owned path, with
-`.github/idd/config.json` as the default example. Any other forced re-import
-must re-record the opt-in. A private downstream adopter reported this on
+that is still a placeholder is left for `--substitute`. A forced re-import
+cannot hold `.github/idd/config.json`, because `--hold` on that file is refused.
+So any forced re-import must re-record the opt-in. The overlay re-import
+procedure passes one `--hold` per owned path other than that file. A private
+downstream adopter reported this on
 2026-10-04 as not observed; preventive; no observed incident yet.
 
 ### Example configurations
