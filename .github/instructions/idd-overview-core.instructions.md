@@ -256,7 +256,7 @@ When a phase names a command set, run the corresponding commands.
 reads `.github/idd/config.json`), except `commands`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`, and
 `upstreamEscalation`, which stay on the repository-local file. Merge-gate reads
-(`mergeGate`, `ciWait`, `advisoryWait`) and trusted-base reads stay on the PR's
+(`mergeGate`, `ciGate`) and trusted-base reads stay on the PR's
 base ref. `commands` overrides the table below when `.github/idd/config.json` exists
 and validates against the canonical schema at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>;
