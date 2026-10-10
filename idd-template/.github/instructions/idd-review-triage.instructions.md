@@ -25,11 +25,11 @@ For each item in ReviewItems_snapshot, first classify it:
 
 - **PATH A — actionable feedback**: human reviewer threads and regular
   comments, `CHANGES_REQUESTED` review bodies, critique-pass findings
-  that require a code change or maintainer decision, and Copilot
-  inline review-thread comments.
+  that require a code change or maintainer decision, Copilot inline
+  review-thread comments, and review-body items that name a file or line.
 - **PATH B — advisory feedback**: Copilot's and CI advisory bots'
-  review-summary bodies and regular comments included by E1 for
-  traceability, even when they do not require a code change.
+  review-summary remarks that name no file or line, and regular comments
+  included by E1 for traceability, even when they need no code change.
 - If classification is ambiguous, default to PATH A.
 - Record each PATH A actor's permission standing (CODEOWNER, required
   reviewer, Triage/Write/Maintain/Admin, or none) — E5's cap reads it.
@@ -96,7 +96,7 @@ accept" confirming the claim, or an explicit maintainer confirmation
 reply, gets it there. Otherwise cap it at Rejected with the reasoned
 reply E6 requires. CODEOWNER/required-reviewer AMD handling is unchanged.
 
-Accepted PATH B items do **not** enter review-fix. They are fully
+Accepted citation-free PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
 
 **Verify before accept (PATH A and PATH B).** A PATH A or PATH B item
@@ -351,7 +351,7 @@ PATH B — Advisory items (completed review of current HEAD):
 - Reply immediately with a decision marker, even with no code change
   needed:
   - `**Accepted** — {what the advisory comment confirmed}`
-  - `**Rejected** — {why no action is required}`
+  - `**Rejected** — {why no action is required}`, with evidence if no code changes
 - **Review threads**: resolve immediately after posting. **Regular
   comments**: reply only.
 - PATH B never enters review-fix — work is complete once the marker
@@ -364,9 +364,10 @@ an ack (the snapshot's `latestPrimaryBotReview.reviewAckNeeded`: a thread-less
 finding in a recognized review body shape, or, for the default Copilot bot, an
 unrecognized body; see `docs/idd-helper-scripts.md`), Clause 1 needs
 `latestPrimaryBotReview.reviewAckCovers === true` regardless of any Clause 2
-disposition elsewhere in the review. After confirming every review body finding
-is handled (fixed, or judged as needing no action), post `review-ack:` for the
-current HEAD SHA — only a `trustedMarkerActors`-authored marker counts; an
+disposition elsewhere in the review. After confirming every citation-free review
+body finding is handled (fixed, or judged as needing no action), post
+`review-ack:` for the current HEAD SHA (a file- or line-citing item needs its
+own disposition, E6) — only a `trustedMarkerActors`-authored marker counts; an
 untrusted poster's is ignored, not rejected at post time (helper-first:
 `post-idd-marker --type review-ack --from-pr <pr-number> --agent-id <id>
 --timestamp <ISO8601> --apply`):

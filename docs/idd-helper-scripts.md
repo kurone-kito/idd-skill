@@ -6600,7 +6600,10 @@ in place of the raw mechanical value:
 matchesHead
   && (itemCount === 0 || (itemCount is known AND >= itemCount thread(s)
       THIS review opened cover it AND all of them are resolved/dispositioned))
-  && (suppressedCount === 0 || hasValidReviewAck)
+  && (suppressedCount === 0
+      || ((citationFreeCount === 0 || hasValidReviewAck)
+          && every citation-bearing suppressed item has its own stamped
+             disposition))
   && (primaryBotLogin is not the Copilot default
       || bodyShape !== 'unrecognized' || hasValidReviewAck)
 ```
