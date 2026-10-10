@@ -51,11 +51,12 @@ The roster lives in the orchestrating session.
    worker mechanism table's row for this harness when that row gives a
    numeric limit, and omit it otherwise. Its `slots` field is the number of
    workers to start now.
-3. Pick that many candidates with `discover-shared-file-overlap`, passing the
-   survivors with `--issues`, `--batch <slots>`, one `--in-flight` per roster
-   entry not `disposed`, and `--check-overlap`. When
-   `discover.selectionDesync` is `session-offset`, also pass `--desync-token`,
-   using the token generated once at Discover entry. Pass it on every refill.
+3. If `slots` is `0`, go to section 4. Otherwise pick that many candidates with
+   `discover-shared-file-overlap`, passing the survivors with `--issues`,
+   `--batch <slots>`, one `--in-flight` per roster entry not `disposed`, and
+   `--check-overlap`. When `discover.selectionDesync` is `session-offset`, also
+   pass `--desync-token`, using the token generated once at Discover entry.
+   Pass it on every refill.
 4. For each pick in batch order, run A4.5, then the fresh-claim order in
    idd-claim.instructions.md (worktree first). Then start a
    worker with the existing delegation brief, adding the section 5 report
@@ -65,8 +66,8 @@ The roster lives in the orchestrating session.
 5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
    worktree and branch removed (which deletes its lock) and leaves `--issues`
    before any refill. A failure after the marker is posted is contested: follow
-   idd-claim.instructions.md, keep its claim and worktree, remove it from
-   `--issues`, and track it as a `stalled` roster entry until recovery ends.
+   idd-claim.instructions.md, keep its claim and worktree, and remove it from
+   `--issues`. No worker started, so no roster entry is made.
 6. Every dispatched issue also leaves `--issues`, so a refill from the cached
    graph cannot claim it again. Only a later full Discover run reconsiders a
    failed pick.
@@ -91,7 +92,8 @@ The roster lives in the orchestrating session.
 ## 5. Report and disposal
 
 - The orchestrator's brief asks for a JSON draft matching
-  `schemas/worker-report.schema.json` at a per-worker path, as the
+  `schemas/worker-report.schema.json` at a per-worker path outside the worker
+  worktree, as the
   [worker final report store](../../docs/idd-helper-scripts.md#worker-final-report-store)
   describes.
 - The orchestrator verifies the outcome against live GitHub state, completes
