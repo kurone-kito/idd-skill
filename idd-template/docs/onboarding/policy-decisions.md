@@ -228,7 +228,7 @@ Observed 2026-09-14, during the issue-mediated bootstrap of this
 template into `kurone-kito/kurone-kito` (`kurone-kito/kurone-kito#18` ->
 `#29`, merged; tracked upstream via issue `#2973` item 14): an adopter
 completed the whole hearing/import/substitute/record-policy sequence
-with `ephemeral-npx` or `package-manager` selected and simply never set
+with `ephemeral-npx` or `package-manager` selected and never set
 `helperRuntime.packageSpec`, silently leaving helper calls
 on the mutable default archive URL — embedded directly in the
 `ephemeral-npx` invocation string, or resolved through
@@ -300,7 +300,7 @@ labels from issue content instead of applying only labels a human or
 workflow explicitly requests — that labeler can apply any of these
 three configured label names to an ordinary issue on its own judgment,
 regardless of which label names the repository chose. The failure is
-silent: nothing errors, and the issue simply stops being an execution
+silent: nothing errors, and the issue stops being an execution
 candidate (a spurious `labels.roadmapLabelName` match) or gets parked
 behind a hold (a spurious `labels.blockedByHumanLabelName` or
 `labels.needsDecisionLabelName` match — both are Discover's
@@ -353,7 +353,7 @@ issue-mediated alternate:
   values and Step 1B policy decisions already confirmed earlier in the
   hearing. Choose this when the operator wants every repository
   mutation — including the very first one — to have a reviewable
-  record, or simply prefers not to grant an agent a direct-commit path.
+  record, or prefers not to grant an agent a direct-commit path.
 
 If the operator does not state a preference, propose `direct-import`
 and only switch modes on explicit confirmation. See

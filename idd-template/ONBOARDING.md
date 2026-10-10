@@ -98,7 +98,7 @@ previously opted in to `fully_autonomous_merge` (or
 re-import, since the file reverts to the shipped `human_merge` default
 along with it. This rule is preventive; no observed incident yet.
 
-When you then audit whether re-imported roadmap work is actually done, judge
+When you then audit whether re-imported roadmap work is done, judge
 **completion by auditing the implementation against the acceptance criteria**,
 not by a child issue's closed state — a skeleton or scaffold PR can merge and
 close a child while leaving its acceptance criteria unimplemented. See the
@@ -407,7 +407,7 @@ needs a standalone `jq` binary on `PATH` (see
 this fallback's own commands piping into `jq -r`/`jq -s`, and neither
 `gh` nor Git for Windows installs a standalone `jq`.
 
-Native-Windows adopters should also set
+Native-Windows adopters should set
 `git config --global core.longpaths true` (a one-time host-level
 setting, not a repository change): B1's sibling-worktree layout
 (`<repo>.<branch-with-slashes-dashed>` beside the primary worktree)
@@ -449,7 +449,7 @@ return the report in the same format:
 
 ```md
 Assess this repository for IDD readiness. Do not modify any files.
-Produce a readiness report with the following fields.
+Produce a readiness report with these fields.
 ```
 
 This dry-run is for evaluators who want a quick import readiness summary
@@ -848,6 +848,7 @@ docs/getting-started.md
 docs/concepts.md
 docs/customization.md
 docs/policy-constants.md
+docs/global-only-profile.md
 docs/reference.md
 docs/onboarding/agent-entry-and-verification.md
 docs/onboarding/issue-mediated-bootstrap.md

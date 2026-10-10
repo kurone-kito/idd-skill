@@ -315,6 +315,7 @@ for FILE in \
   "docs/concepts.md" \
   "docs/customization.md" \
   "docs/policy-constants.md" \
+  "docs/global-only-profile.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/issue-mediated-bootstrap.md" \
@@ -450,6 +451,7 @@ for FILE in \
   "docs/concepts.md" \
   "docs/customization.md" \
   "docs/policy-constants.md" \
+  "docs/global-only-profile.md" \
   "docs/reference.md" \
   "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/issue-mediated-bootstrap.md" \
