@@ -212,12 +212,19 @@ export function classifyCopilotReviewBody(body) {
 /** Zero-width and format characters GitHub renders inside a file path. */
 const ZERO_WIDTH_CHARS_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/gu;
 /**
- * One whole line that is a single backtick span naming a file, with an
- * optional `:line` suffix. A path needs a slash or a short extension, so an
- * identifier such as `requestedReviewer.__typename` does not count.
+ * One whole line that is a single file citation, written as a backtick span or
+ * in bold, with an optional `:line` suffix. A path needs a slash or a short
+ * extension, so an identifier such as `requestedReviewer.__typename` does not
+ * count.
  */
 const CITATION_LINE_PATTERN =
-  /^`(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+\.[A-Za-z]{1,5})(?::\d+)?`$/u;
+  /^(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+\.[A-Za-z]{1,5})(?::\d+)?(?:`|\*\*)$/u;
+/**
+ * A file citation anywhere in a body, in the backtick or the legacy bold form
+ * (#3942). Used only where no per-item view exists.
+ */
+const CITATION_ANYWHERE_PATTERN =
+  /(?:`|\*\*)(?:(?:[\w.-]+\/)+[\w.-]+|[\w-]+\.[A-Za-z]{1,5})(?::\d+)?(?:`|\*\*)/u;
 /** One `<details>` block. A Previously missed item never nests another. */
 const DETAILS_BLOCK_PATTERN = /<details>([\s\S]*?)<\/details>/g;
 /**
@@ -243,12 +250,11 @@ export function extractPreviouslyMissedItems(body) {
       .some((line) => CITATION_LINE_PATTERN.test(line.trim())),
   }));
 }
-/** True when a line of `body` is a file citation (#3942). */
-function hasCitationLine(body) {
-  return body
-    .replace(ZERO_WIDTH_CHARS_PATTERN, '')
-    .split(/\r?\n/)
-    .some((line) => CITATION_LINE_PATTERN.test(line.trim()));
+/** True when `body` names a file or line anywhere in its text (#3942). */
+function namesFileOrLine(body) {
+  return CITATION_ANYWHERE_PATTERN.test(
+    body.replace(ZERO_WIDTH_CHARS_PATTERN, ''),
+  );
 }
 /**
  * Splits a body's Previously missed count into the items that name a file or
@@ -271,7 +277,8 @@ export function citationBreakdown(body, suppressedCount) {
     const citedCount = items.filter((item) => item.cited).length;
     return { citedCount, citationFreeCount: suppressedCount - citedCount };
   }
-  if (typeof body === 'string' && hasCitationLine(body)) {
+  // An unreadable body cannot prove an item citation-free, so it fails closed.
+  if (typeof body !== 'string' || namesFileOrLine(body)) {
     return { citedCount: suppressedCount, citationFreeCount: 0 };
   }
   return { citedCount: 0, citationFreeCount: suppressedCount };

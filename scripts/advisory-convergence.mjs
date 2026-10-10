@@ -2057,7 +2057,7 @@ const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
  * #3942: counts the trusted, unedited disposition replies that settle a
  * Previously missed item naming a file or line. A reply counts when it opens
  * with `**Accepted**` or the recorded-deferral form, carries the review-reply
- * stamp, and was posted at or after the latest primary-bot review was
+ * stamp, and was posted strictly after the latest primary-bot review was
  * submitted. A bare `review-ack` never counts for these items.
  */
 function countCitedItemDispositions(

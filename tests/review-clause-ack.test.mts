@@ -97,6 +97,7 @@ const ACK_ROWS = [
   },
   {
     name: 'legacy body with a suppressed comment',
+    citationBearing: true,
     body: LEGACY_SUPPRESSED,
     primaryBotLogin: 'copilot',
     matchesHead: true,

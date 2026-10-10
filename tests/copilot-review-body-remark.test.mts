@@ -796,3 +796,20 @@ test('citationBreakdown: a v2 Previously missed heading with no parsed item fail
     citationFreeCount: 0,
   });
 });
+
+test('citationBreakdown: a legacy body that names a file in the bold form is cited through the fallback (#3942)', () => {
+  const body =
+    'Review details\n\nPreviously missed (1)\n\n**src/scripts/gh-exec.mts:165** needs a fail-closed check.';
+  assert.equal(extractPreviouslyMissedItems(body), null);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: an unreadable body counts every item as cited (#3942)', () => {
+  assert.deepEqual(citationBreakdown(null, 2), {
+    citedCount: 2,
+    citationFreeCount: 0,
+  });
+});

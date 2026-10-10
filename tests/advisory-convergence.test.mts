@@ -2757,6 +2757,19 @@ const SUPPRESSED_COMMENTS_BODY = [
   '</details>',
 ].join('\n');
 
+// The same shape with no file or line named: an ack-only case (#2050 / #2056).
+const SUPPRESSED_REMARK_BODY = [
+  '<details>',
+  '<summary>Suppressed comments (1)</summary>',
+  '',
+  '**Style nit** on the test name, with no file or line.',
+  '* This test is described as exercising the documented `cspell lint',
+  '  "**" --no-progress` command path, but it adds an extra `--no-cache`',
+  "  flag that isn't present in the docs or in the repo's own",
+  '  `lint:minimum` script. ...',
+  '</details>',
+].join('\n');
+
 test('reasons: itemCount 0 with a suppressed-comments body section does NOT converge (PR #1875 commit 9711d404 shape)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
@@ -3210,14 +3223,14 @@ for (const [
     LEGACY_SUPPRESSED_1_BODY,
     1,
     'overview-legacy',
-    0,
+    1,
   ],
   [
     'PR #3108 review 5236485791 (legacy, nested Previously missed not double-counted)',
     LEGACY_SUPPRESSED_3_WITH_NESTED_PREVIOUSLY_MISSED_BODY,
     3,
     'overview-legacy',
-    0,
+    3,
   ],
 ] as const) {
   test(`review-body shape (#3258): ${label} -> suppressedCount ${expectedSuppressedCount}, no ack does not converge`, () => {
@@ -3670,9 +3683,7 @@ test('review-ack: itemCount 2 with only ONE review-scoped resolved thread does n
 test('review-ack: nonzero suppressedCount with a valid post-review ack converges', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [reviewAckComment(ACK_AFTER_REVIEW)],
     }),
     baseOptions(),
@@ -3688,9 +3699,7 @@ test('review-ack: nonzero suppressedCount with a valid post-review ack converges
 test('review-ack: an ack predating the latest review does NOT cover a nonzero suppressedCount', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [reviewAckComment(ACK_BEFORE_REVIEW)],
     }),
     baseOptions(),
@@ -3706,9 +3715,7 @@ test('review-ack: an ack predating the latest review does NOT cover a nonzero su
 test('review-ack: an ack from an untrusted login does not count', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [
         reviewAckComment(ACK_AFTER_REVIEW, { login: 'random-contributor' }),
       ],
@@ -3729,10 +3736,10 @@ test('review-ack: a fresh review submitted after a valid ack invalidates it auto
       reviews: [
         copilotReview({
           itemCount: 0,
-          body: SUPPRESSED_COMMENTS_BODY,
+          body: SUPPRESSED_REMARK_BODY,
           submittedAt: OLD,
         }),
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }), // submittedAt: RECENT
+        copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY }), // submittedAt: RECENT
       ],
       // Posted after the FIRST review (OLD) but before the SECOND (RECENT).
       comments: [reviewAckComment('2026-06-15T00:00:00Z')],
@@ -3748,9 +3755,7 @@ test('review-ack: a fresh review submitted after a valid ack invalidates it auto
 test('review-ack: a malformed marker (bad timestamp, or trailing prose) is not counted, matching the canonical OPERATIONAL_MARKERS shape', () => {
   const badTimestamp = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [
         {
           author: { login: TRUSTED },
@@ -3766,9 +3771,7 @@ test('review-ack: a malformed marker (bad timestamp, or trailing prose) is not c
 
   const trailingProse = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [
         {
           author: { login: TRUSTED },
@@ -3789,9 +3792,7 @@ test('review-ack: a malformed marker (bad timestamp, or trailing prose) is not c
   // only the digit-shape match.
   const invalidCalendarDate = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [
         {
           author: { login: TRUSTED },
@@ -3812,9 +3813,7 @@ test('review-ack: validity is governed by the GitHub createdAt, never the embedd
   // consulted for validity.
   const oldEmbeddedStillCounts = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [reviewAckComment(ACK_AFTER_REVIEW, { embeddedAt: OLD })],
     }),
     baseOptions(),
@@ -3827,9 +3826,7 @@ test('review-ack: validity is governed by the GitHub createdAt, never the embedd
   // marker body; only the GitHub-assigned createdAt is authoritative.
   const futureEmbeddedDoesNotCount = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [
         reviewAckComment(ACK_BEFORE_REVIEW, {
           embeddedAt: '2099-01-01T00:00:00Z',
@@ -3848,9 +3845,7 @@ test('review-ack: an ack whose embedded HEAD SHA is not current HEAD does not va
   // submittedAt. Ordering alone would treat this as an ack of B.
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [reviewAckComment(ACK_AFTER_REVIEW, { headSha: OTHER_SHA })],
     }),
     baseOptions(),
@@ -3864,9 +3859,7 @@ test('review-ack: an ack whose embedded HEAD SHA is not current HEAD does not va
 test('review-ack: sameHeadReroll is not eligible/requestable once a valid ack already satisfies the review (#2056)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
-      reviews: [
-        copilotReview({ itemCount: 0, body: SUPPRESSED_COMMENTS_BODY }),
-      ],
+      reviews: [copilotReview({ itemCount: 0, body: SUPPRESSED_REMARK_BODY })],
       comments: [reviewAckComment(ACK_AFTER_REVIEW)],
     }),
     baseOptions(),
