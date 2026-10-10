@@ -67,9 +67,10 @@ The roster lives in the orchestrating session.
   the cached graph. Follow the Discover re-run cadence, including the
   target-local A3 recheck.
 - When `slots` is `0` but candidates remain: process `reporting` entries (§5)
-  and apply stalled recovery to `stalled` ones first. If no entry is `running`,
-  report the budget's `limitingFactor` and stop. Otherwise, wait for the next
-  completion or wave, then call the budget again.
+  and apply stalled recovery to `stalled` ones first. If every entry is
+  `disposed` or the roster is empty, report the budget's `limitingFactor` and
+  stop. Otherwise, wait for a `running` completion, or repeat recovery when none
+  is running.
 - When the graph in hand has nothing startable, re-run Discover as that cadence
   requires. Report and stop only when that re-run finds nothing startable and every
   roster entry is `disposed`.
