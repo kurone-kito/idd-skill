@@ -24,6 +24,7 @@ import {
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
+  formatBundleReportLine,
   GENERATED_SOURCE_BANNER_PATTERN,
   globFiles,
   isBannerScopedInstructionTarget,
@@ -169,6 +170,7 @@ if (import.meta.main) {
 // src/scripts/ and src/bin/ (#3190).
 async function main() {
   const args = new Set(process.argv.slice(2));
+  const report = args.has('--report');
   if (!args.has('--check')) {
     console.error('usage: node scripts/audit-docs.mjs --check');
     process.exit(2);
@@ -267,6 +269,16 @@ async function main() {
   );
   {
     const bundleStats = checkBundleBudgets(manifest.bundleBudgets ?? []);
+    if (report) {
+      // Printed before the error branch below, so the lines appear on
+      // passing and failing runs alike.
+      const maxUtilizationPct = normalizeNonNegativeNumber(
+        manifest.contextCeiling?.maxUtilizationPct,
+      );
+      for (const stat of bundleStats) {
+        console.log(formatBundleReportLine(stat, maxUtilizationPct));
+      }
+    }
     checkContextCeiling(manifest.contextCeiling ?? null, bundleStats);
     checkNearCeilingRatchet(
       manifest.contextCeiling ?? null,
