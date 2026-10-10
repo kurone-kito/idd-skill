@@ -345,7 +345,7 @@ in this file's Claim-state parsing section).
 ## Claim verification
 
 After posting `claimed-by`, wait for the configured settle delay
-(`.github/idd/config.json` `claim.verifySettleDelay`, distributed
+(`claim.verifySettleDelay` from the effective policy, distributed
 default: `PT5S`), then re-read the full issue comment stream and parse
 the active claim in chronological order using the shared claim-state
 rules. Apply all race-safe checks below:
