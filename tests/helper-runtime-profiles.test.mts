@@ -540,6 +540,73 @@ test('idd-doctor warns when config and overview concrete commands differ', (t) =
   );
 });
 
+test('idd-doctor accepts a command row that references its own config key (#3959)', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'npm run fix',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+      overviewCommands: {
+        'fix-validate': 'commands.fix-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.every(
+      (warning) =>
+        !warning.includes('command mismatch between .github/idd/config.json'),
+    ),
+  );
+});
+
+test('idd-doctor reports a command row that references a different config key (#3959)', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'npm run fix',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+      overviewCommands: {
+        'fix-validate': 'commands.pre-push-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes(
+        'command mismatch between .github/idd/config.json and overview table for "fix-validate"',
+      ),
+    ),
+  );
+});
+
 function createDoctorFixtureRepo(
   configFixtureName: string,
   { packageJson = null }: FixtureRepoOptions = {},

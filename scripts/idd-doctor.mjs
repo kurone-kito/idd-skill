@@ -828,8 +828,8 @@ function checkCommandResidueAndConsistency(
     const configValue = normalizeCommandValue(policyCommandMap.get(key));
     const overviewValue = normalizeCommandValue(projectCommands.get(key));
     if (
-      !isConcreteCommandValue(configValue) ||
-      !isConcreteCommandValue(overviewValue)
+      !isConcreteCommandValue(configValue, key) ||
+      !isConcreteCommandValue(overviewValue, key)
     ) {
       continue;
     }
@@ -896,15 +896,16 @@ function normalizeCommandValue(value) {
   }
   return value.trim();
 }
-function isConcreteCommandValue(value) {
+function isConcreteCommandValue(value, key) {
   if (typeof value !== 'string' || value.length === 0) {
     return false;
   }
   if (value.toLowerCase() === 'true') {
     return false;
   }
-  // A row that references its config key is not a command of its own.
-  if (/^commands\.[a-z][a-z0-9-]*$/u.test(value)) {
+  // A row that references its own config key is not a command of its own. A
+  // reference to any other key is still compared, so a wrong key is reported.
+  if (value === `commands.${key}`) {
     return false;
   }
   return !/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/.test(value);
