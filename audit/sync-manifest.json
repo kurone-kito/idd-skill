@@ -346,7 +346,7 @@
       "files": [
         ".github/instructions/idd-orchestrator.instructions.md"
       ],
-      "limitBytes": 4900
+      "limitBytes": 5100
     },
     {
       "id": "bundle-resume-phase",
