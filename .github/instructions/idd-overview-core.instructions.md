@@ -252,8 +252,9 @@ which still stop child selection in Discover.
 When a phase names a command set, run the corresponding commands.
 
 **Policy and helper spelling.** Read policy keys from the effective policy
-(profile-selected `idd-effective-config --key <path>`; `instructions-only`
-reads `.github/idd/config.json`), except `commands`,
+(profile-selected `idd-effective-config --key <path>`; without helper output,
+the repository-local `.github/idd/config.json`, with no user-global layers),
+except `commands`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`, and
 `upstreamEscalation`, which stay on the repository-local file. Merge-gate reads
 (`mergeGate`, `ciGate`) and trusted-base reads stay on the PR's
