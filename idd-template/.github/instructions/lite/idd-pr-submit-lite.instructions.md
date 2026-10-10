@@ -208,7 +208,7 @@ loop instead of returning to this D1 rebase path.
    any background/rationale only in the issue discussion, commits,
    diff, or explicit operator instructions — omit rather than
    speculate. The prose sections follow the resolved `authoringLanguage` value
-   from `.github/idd/config.json` (fixed tag, the claimed issue's own body
+   from the effective policy (fixed tag, the claimed issue's own body
    language for `match-source`, or English if absent — see
    [Authoring Language](../../../docs/customization.md#authoring-language));
    this never changes a machine-parsed marker or exact-regex-matched

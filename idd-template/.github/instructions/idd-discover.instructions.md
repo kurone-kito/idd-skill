@@ -552,7 +552,7 @@ ascending issue-number order:
   name the gap in the run report; an unlisted parked issue may be
   picked. Under `instructions-only` (no park helper), this rule does
   not apply.
-- Scan the **top N** survivors, where `N` is `.github/idd/config.json`
+- Scan the **top N** survivors, where `N` is the effective policy's
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the shared
   claim-state rules in `idd-claim.instructions.md`, including

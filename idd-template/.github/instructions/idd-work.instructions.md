@@ -121,7 +121,7 @@ cleanup before continuing.
 
 **Step 2 — Create**: `<base-branch>` below is `{development-branch}` —
 resolve it first: read `developmentBranch` from
-`.github/idd/config.json`, else `gh repo view --json
+the effective policy, else `gh repo view --json
 defaultBranchRef --jq .defaultBranchRef.name`; validate the result
 ([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
 fail closed if invalid/absent on `origin`, never fall back. Then

@@ -300,7 +300,7 @@ it):
 - **Helper scripts changed** — any path starting with `src/scripts/`,
   `scripts/`, or `bin/`.
 - **Config schema changed** — `audit/sync-manifest.json`,
-  `.github/idd/config.json`, or another repository-designated
+  the repository-local `.github/idd/config.json`, or another repository-designated
   config-schema-bearing file.
 - **Security / credential / merge behavior changed** stays a judgment
   call — leave it to ordinary self-review discretion; it is not
@@ -314,7 +314,7 @@ before the first push) can change the answer.
 
 The PR body's prose sections above (summary, background/rationale,
 follow-up notes) follow the resolved `authoringLanguage` value from
-`.github/idd/config.json`: a fixed language tag when configured, the
+the effective policy: a fixed language tag when configured, the
 claimed issue's own body language when the value is `match-source`
 (this file's unattended-execution case, with no live operator), or
 English when the field is absent. See the

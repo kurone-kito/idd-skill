@@ -85,7 +85,7 @@ hand from raw timestamps. Allowed values: `SATISFIED`,
 caller-derived, never emitted.
 
 The helper already resolves `advisoryWait.*` from
-`.github/idd/config.json`, emitting final values in `requestCap`,
+the effective policy, emitting final values in `requestCap`,
 `pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
 and `capExhaustedRoute` — never read that config yourself. A missing
 field here isn't "config absent" — it's a malformed helper response

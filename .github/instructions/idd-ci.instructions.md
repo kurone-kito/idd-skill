@@ -10,7 +10,7 @@ define their own **on-success** target before invoking this algorithm.
 
 The shared CI wait defaults are listed in
 [IDD policy constants](../../docs/policy-constants.md). Resolve via
-`.github/idd/config.json` `ciWait.runningTimeout`,
+the effective policy's `ciWait.runningTimeout`,
 `ciWait.generationTimeout`, and `ciWait.rerunPolicy` when present and
 valid; otherwise keep the distributed defaults (`PT30M`, `PT10M`,
 `rerun-once`).
