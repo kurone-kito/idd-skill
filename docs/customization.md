@@ -841,10 +841,11 @@ When a phase refers to a named command set, run the corresponding
 commands. **Adapt this table when applying this workflow to a
 different project.**
 
-If `.github/idd/config.json` exists and validates against the canonical
+`.github/idd/config.json` is required and must validate against the canonical
 schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>,
-its `commands` object overrides the table below. Policy fields such as
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>.
+Its `commands` object is the runtime source of the command values, and the
+table below is the reference copy. Policy fields such as
 `skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
 the recorded machine-readable policy. Absent values keep the gate
 enabled and default approval actors to `owners-and-maintainers-only`.
