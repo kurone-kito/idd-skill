@@ -52,7 +52,7 @@
       "step": "1A",
       "kind": "placeholder",
       "prompt": "What auto-fix plus validate command row should IDD run?",
-      "explanation": "Command placeholders may be set to true when a step does not apply. Prefer an existing Project commands table row over a freshly derived heuristic when one is already recorded.",
+      "explanation": "Command placeholders may be set to true when a step does not apply. Prefer an existing command value in the commands object of `.github/idd/config.json` over a freshly derived heuristic when one is already recorded.",
       "derivationHook": "deriveValidateCommands",
       "mapsToPlaceholder": "FIX_VALIDATE_COMMANDS"
     },
@@ -61,7 +61,7 @@
       "step": "1A",
       "kind": "placeholder",
       "prompt": "What non-mutating verify command row should IDD run before push?",
-      "explanation": "This row must not auto-fix. Prefer an existing Project commands table row over a freshly derived heuristic when one is already recorded.",
+      "explanation": "This row must not auto-fix. Prefer an existing command value in the commands object of `.github/idd/config.json` over a freshly derived heuristic when one is already recorded.",
       "derivationHook": "deriveValidateCommands",
       "mapsToPlaceholder": "PRE_PUSH_VALIDATE_COMMANDS"
     },
@@ -70,7 +70,7 @@
       "step": "1A",
       "kind": "placeholder",
       "prompt": "What post-fix validate command row should IDD run after applying fixes?",
-      "explanation": "Prefer an existing Project commands table row over a freshly derived heuristic when one is already recorded.",
+      "explanation": "Prefer an existing command value in the commands object of `.github/idd/config.json` over a freshly derived heuristic when one is already recorded.",
       "derivationHook": "deriveValidateCommands",
       "mapsToPlaceholder": "POST_FIX_VALIDATE_COMMANDS"
     },

@@ -295,7 +295,19 @@ test('idd-doctor still checks overview residue when policy config is missing', (
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const report = runDoctor({ root, requireGithub: false });
 
-  assert.equal(report.errors.length, 0);
+  // config.json is required (idd-doctor reports its absence as an error);
+  // the residue check still runs and must report its warning as before.
+  assert.ok(
+    report.errors.every((error) =>
+      error.includes('.github/idd/config.json is missing'),
+    ),
+    `unexpected errors: ${report.errors.join(' | ')}`,
+  );
+  assert.ok(
+    report.errors.some((error) =>
+      error.includes('.github/idd/config.json is missing'),
+    ),
+  );
   assert.ok(
     report.warnings.some((warning) =>
       warning.includes(
@@ -441,33 +453,53 @@ test('idd-doctor still warns when a documented segment appears under the wrong c
   );
 });
 
-test('idd-doctor documented toolchain segments stay in sync with customization.md', () => {
+test('idd-doctor documented toolchain segments cover the config commands', () => {
+  // The customization table holds references, not command text, so the
+  // guard now reads the source of truth: each config segment that uses a
+  // toolchain token must be a documented segment for its key.
+  const config = JSON.parse(
+    readFileSync(join(REPO_ROOT, '.github/idd/config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  for (const key of Object.keys(DOCUMENTED_TOOLCHAIN_SEGMENTS)) {
+    const documented = DOCUMENTED_TOOLCHAIN_SEGMENTS[key] ?? [];
+    const segments = (config.commands[key] ?? '')
+      .split('&&')
+      .map((segment) => segment.trim());
+    for (const segment of segments) {
+      if (!/\b(?:dprint|markdownlint-cli2|cspell)\b/i.test(segment)) {
+        continue;
+      }
+      assert.ok(
+        documented.includes(segment),
+        `config.json commands.${key} segment "${segment}" is missing from idd-doctor's DOCUMENTED_TOOLCHAIN_SEGMENTS`,
+      );
+    }
+  }
+});
+
+test('customization.md command rows reference config entries, not command text', () => {
   const customizationDoc = readFileSync(
     join(REPO_ROOT, 'idd-template/docs/customization.md'),
     'utf8',
   );
-  const rows: [string, string][] = [
-    ['fix-validate', '**fix-validate**'],
-    ['pre-push-validate', '**pre-push-validate**'],
-    ['post-fix-validate', '**post-fix-validate**'],
+  const keys = [
+    'fix-validate',
+    'pre-push-validate',
+    'post-fix-validate',
+    'install-deps',
   ];
-  for (const [key, label] of rows) {
+  for (const key of keys) {
     const rowMatch = customizationDoc
       .split('\n')
-      .find((line) => line.includes(`| ${label}`));
+      .find((line) => line.includes(`| **${key}**`));
     assert.ok(rowMatch, `expected a customization.md table row for ${key}`);
-    const cellMatch = rowMatch?.match(/\| `([^`]+)`\s*\|\s*$/);
-    assert.ok(cellMatch, `expected a command cell for ${key} in: ${rowMatch}`);
-    const docSegments = (cellMatch as RegExpMatchArray)[1]
-      .split('&&')
-      .map((segment) => segment.trim());
-    const productionSegments = DOCUMENTED_TOOLCHAIN_SEGMENTS[key] ?? [];
-    for (const segment of docSegments) {
-      assert.ok(
-        productionSegments.includes(segment),
-        `customization.md segment "${segment}" for "${key}" is missing from idd-doctor's DOCUMENTED_TOOLCHAIN_SEGMENTS`,
-      );
-    }
+    assert.match(
+      rowMatch ?? '',
+      new RegExp(
+        `\\| \`commands\\.${key}\` in \`\\.github/idd/config\\.json\`\\s*\\|\\s*$`,
+      ),
+      `the ${key} row must reference commands.${key} in config.json: ${rowMatch}`,
+    );
   }
 });
 
@@ -535,6 +567,141 @@ test('idd-doctor warns when config and overview concrete commands differ', (t) =
     report.warnings.some((warning) =>
       warning.includes(
         'command mismatch between .github/idd/config.json and overview table for "fix-validate"',
+      ),
+    ),
+  );
+});
+
+test('idd-doctor accepts a command row that references its own config key (#3959)', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'npm run fix',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+      overviewCommands: {
+        'fix-validate': 'commands.fix-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.every(
+      (warning) =>
+        !warning.includes('command mismatch between .github/idd/config.json'),
+    ),
+  );
+});
+
+test('idd-doctor reports a command row that references a different config key (#3959)', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'npm run fix',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+      overviewCommands: {
+        'fix-validate': 'commands.pre-push-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes(
+        'command mismatch between .github/idd/config.json and overview table for "fix-validate"',
+      ),
+    ),
+  );
+});
+
+test('idd-doctor reports a config entry that refers to its own key (#3959)', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'commands.fix-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+      overviewCommands: {
+        'fix-validate': 'npm run fix',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes(
+        'command entry "fix-validate" in .github/idd/config.json refers to itself',
+      ),
+    ),
+  );
+});
+
+test('idd-doctor reports a config entry that refers to another entry (#3959)', (t) => {
+  const root = createDoctorFixtureRepoFromConfig(
+    {
+      ...REQUIRED_CONFIG_BASE,
+      commands: {
+        'fix-validate': 'commands.pre-push-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+    {
+      markerPrefix: 'example-team',
+      overviewCommands: {
+        'fix-validate': 'commands.fix-validate',
+        'pre-push-validate': 'npm run lint',
+        'post-fix-validate': 'npm run test',
+        'install-deps': 'true',
+      },
+    },
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes(
+        'command entry "fix-validate" in .github/idd/config.json refers to another entry (commands.pre-push-validate)',
       ),
     ),
   );

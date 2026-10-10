@@ -681,22 +681,6 @@
       "mode": "concreted",
       "replacements": [
         {
-          "from": "| **fix-validate** | `{{FIX_VALIDATE_COMMANDS}}` |",
-          "to": "| **fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\"` |"
-        },
-        {
-          "from": "| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |",
-          "to": "| **pre-push-validate** | `pnpm run check && pnpm run doctor:github && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs` |"
-        },
-        {
-          "from": "| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |",
-          "to": "| **post-fix-validate** | `npx biome check --write --error-on-warnings && npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm typecheck` |"
-        },
-        {
-          "from": "| **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |",
-          "to": "| **install-deps** | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command \"pnpm install --frozen-lockfile\"` |"
-        },
-        {
           "from": "use `npx <tool>` if Node.js and `npx` are available",
           "to": "use `npx <tool>` only when `npx` is available"
         },

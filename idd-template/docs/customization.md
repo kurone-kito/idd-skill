@@ -32,7 +32,7 @@ behavior change too.
 | Development-branch topology         | Absent `developmentBranch` resolves the repository's live default branch, so a repository using only its default branch (whatever it is named) needs no configuration                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Set `developmentBranch` in `.github/idd/config.json` to a different long-lived branch (for example `develop`) when feature PRs should target it instead of the repository default; the trusted checkout for workflow/configuration files still stays on the GitHub-reported default branch regardless of this setting. The chosen branch must already exist on `origin` — a missing or malformed value fails closed rather than creating the branch or silently falling back. Supported scope is `issue/<number>-<slug>` feature branches merging into that one configured branch; release branches, hotfix branches, development-to-default promotion, arbitrary feature-branch namespaces, and Git Flow CLI automation are out of scope. Give the development branch equivalent branch-protection rules to what the default branch would otherwise carry, since IDD's own gates check CI/review/freshness but rely on GitHub branch protection for repository-level rules like force-push prevention. See [IDD policy constants](policy-constants.md#configuration-authority-hierarchy), [Onboarding — Development branch](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#development-branch), and [`idd-work.instructions.md`](../.github/instructions/idd-work.instructions.md#b1--create-worktree-with-branch). |
 | Stall recovery safety               | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Forced handoff contract             | Disabled unless the repository explicitly records a human-gated policy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Keep forced handoff separate from trusted marker-author authority. Record the opt-in state, human approval authority, canonical consent text, and marker contract in the repository-local policy block here, then keep the always-loaded overview pointer aligned with those docs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| CI commands                         | Project-specific command rows in the overview file                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview-core.instructions.md` during onboarding.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| CI commands                         | Project-specific command values in the `commands` object of `.github/idd/config.json`; the overview table lists the entry names                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in the `commands` object of `.github/idd/config.json` during onboarding.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Helper runtime                      | `instructions-only` by default, with evidence-based helper support proposals that still require explicit operator confirmation during onboarding                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Use [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions) together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Auto-propose helper support only when repository evidence shows a real package-manager or Node.js helper path, keep operator confirmation explicit, prefer `package-manager` when supported package-manager evidence exists, and otherwise prefer `vendored-node` before `ephemeral-npx`. For `ephemeral-npx`, `helperRuntime.launcher` selects `npx` (the default), `pnpm-dlx`, or `auto`; read the [helper script reference](idd-helper-scripts.md) for the pin minimum before choosing `pnpm-dlx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Issue scope                         | Roadmap-first discovery (roadmap path first, orphan fallback)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Default is `roadmap-first`. Set `issue-scope` to `roadmap` for strict roadmap-only discovery (no orphan fallback), or to `orphan-first` when unblocked orphan issues should be considered before roadmap traversal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Orphan-first approval               | No extra gate beyond orphan readiness checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -809,10 +809,12 @@ repository policy change, not a copy edit.
 
 ## CI and Command Placeholders
 
-The `Project commands` table in
-`.github/instructions/idd-overview-core.instructions.md` is the command
-contract agents follow. During onboarding, replace the template
-placeholders with the target repository's commands:
+The `commands` object of `.github/idd/config.json` holds the command values
+agents follow for all four entries, including `install-deps`. The `Project
+commands` table in `.github/instructions/idd-overview-core.instructions.md`
+lists each entry name and refers to its key. During onboarding, replace the
+template placeholders in `.github/idd/config.json` with the target
+repository's commands:
 
 - `fix-validate`: auto-fix and verify before each commit.
 - `pre-push-validate`: verify before pushing, without auto-fix, and keep
@@ -838,25 +840,26 @@ same: repeated runs must stay safe and predictable.
 ### Project commands reference
 
 When a phase refers to a named command set, run the corresponding
-commands. **Adapt this table when applying this workflow to a
-different project.**
+commands. **Adapt `.github/idd/config.json`, not this table, when
+applying this workflow to a different project.**
 
-If `.github/idd/config.json` exists and validates against the canonical
+`.github/idd/config.json` is required and must validate against the canonical
 schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>,
-its `commands` object overrides the table below. Policy fields such as
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>.
+Its `commands` object is the runtime source of the command values, and the
+table below points each command row at its config entry. Policy fields such as
 `skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
 the recorded machine-readable policy. Absent values keep the gate
 enabled and default approval actors to `owners-and-maintainers-only`.
 
-| Name                    | Commands                                                                                                                                     |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **fix-validate**        | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"`                                       |
-| **pre-push-validate**   | `npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                        |
-| **post-fix-validate**   | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
-| **install-deps**        | `true`                                                                                                                                       |
-| **issue-scope**         | `roadmap-first`                                                                                                                              |
-| **orphan-first-policy** | `none`                                                                                                                                       |
+| Name                    | Value                                                     |
+| ----------------------- | --------------------------------------------------------- |
+| **fix-validate**        | `commands.fix-validate` in `.github/idd/config.json`      |
+| **pre-push-validate**   | `commands.pre-push-validate` in `.github/idd/config.json` |
+| **post-fix-validate**   | `commands.post-fix-validate` in `.github/idd/config.json` |
+| **install-deps**        | `commands.install-deps` in `.github/idd/config.json`      |
+| **issue-scope**         | `roadmap-first`                                           |
+| **orphan-first-policy** | `none`                                                    |
 
 Non-shell rows such as **issue-scope** and **orphan-first-policy** are
 workflow settings. Read them literally, not as commands.
@@ -919,14 +922,14 @@ distribution](#exception-this-repository-is-the-source-of-a-reusable-idd-distrib
 Where an `idd-template/` source expresses a project-specific value as
 a `{{placeholder}}`, this table gives the live ↔ template mapping:
 
-| Live value (`.github/instructions/`)                                | Template form (`idd-template/`)  |
+| Live value                                                          | Template form (`idd-template/`)  |
 | ------------------------------------------------------------------- | -------------------------------- |
 | `idd-skill` in repo-name contexts                                   | `{{REPO_NAME}}`                  |
 | `idd-skill` in marker-prefix contexts (e.g. `idd-skill-roadmap-id`) | `{{PROJECT_MARKER_PREFIX}}`      |
-| **fix-validate** command string                                     | `{{FIX_VALIDATE_COMMANDS}}`      |
-| **pre-push-validate** command string                                | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
-| **post-fix-validate** command string                                | `{{POST_FIX_VALIDATE_COMMANDS}}` |
-| **install-deps** command string                                     | `{{INSTALL_DEPS_COMMAND}}`       |
+| **fix-validate** command string (`config.json`)                     | `{{FIX_VALIDATE_COMMANDS}}`      |
+| **pre-push-validate** command string (`config.json`)                | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
+| **post-fix-validate** command string (`config.json`)                | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **install-deps** command string (`config.json`)                     | `{{INSTALL_DEPS_COMMAND}}`       |
 
 Match by the named command row in the Project commands table, not by
 command prefix, to avoid confusing commands that share the same
@@ -938,9 +941,11 @@ above) are incomplete; include both changes in the same atomic commit.
 
 ## Tooling Boundary
 
-IDD workflow files are tooling-agnostic. The only tooling contract is
-the `Project commands` table in
-`.github/instructions/idd-overview-core.instructions.md`.
+IDD workflow files are tooling-agnostic. The tooling contract is the
+`commands` object of `.github/idd/config.json` for the four command entries
+(`install-deps` and the three validation commands). The `Project commands`
+table in `.github/instructions/idd-overview-core.instructions.md` lists the
+entry names and refers to their keys, and it holds the rest.
 
 The following policy matrix defines the tooling requirements and
 fallback order for repositories adopting IDD:
@@ -956,8 +961,10 @@ fallback order for repositories adopting IDD:
 
 Decision points:
 
-- **In scope for IDD**: validate command rows and `install-deps` in the
-  `Project commands` table. These are the only tooling integration points.
+- **In scope for IDD**: the validate commands and `install-deps`, whose values
+  live in the `commands` object of `.github/idd/config.json`. The `Project
+  commands` table refers to them by key. These are the only tooling integration
+  points.
 - **Out of scope for IDD**: package manager choice, build tooling,
   language runtime. Adopt whatever the target project already uses.
 - **Fallback order for npx-using templates**: (1) use an existing
@@ -2180,10 +2187,13 @@ normal pull request, then, once that pull request has merged, merge the
 default branch into the claim branch and push the merge.
 
 `--import --force` overwrites `.github/idd/config.json`, including
-`forcedHandoff`, and only the `commands` table is restored afterwards. The
-overlay re-import procedure passes one `--hold` per owned path, with
-`.github/idd/config.json` as the default example. Any other forced re-import
-must re-record the opt-in. A private downstream adopter reported this on
+`forcedHandoff`. Afterwards only the four `commands` entries are restored from
+the pre-import file: `install-deps` and the three validate-command rows. An entry
+that is still a placeholder is left for `--substitute`. A forced re-import
+cannot hold `.github/idd/config.json`, because `--hold` on that file is refused.
+So any forced re-import must re-record the opt-in. The overlay re-import
+procedure passes one `--hold` per owned path other than that file. A private
+downstream adopter reported this on
 2026-10-04 as not observed; preventive; no observed incident yet.
 
 ### Example configurations

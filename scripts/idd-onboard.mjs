@@ -514,18 +514,20 @@ function deriveValidateCommandsFromTooling(targetDir) {
 function escapeRegExpLiteral(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
-// Scope matches deriveValidateCommands above exactly (#2222's three
-// validate-command rows). install-deps is deliberately excluded: the issue
-// scopes only fix-validate/pre-push-validate/post-fix-validate, and
-// INSTALL_DEPS_COMMAND already has its own independent re-derivation
-// (deriveInstallDepsCommand) that this restore step must not shadow.
+// The three validate-command rows (#2222) and install-deps are restored
+// the same way. install-deps is restored too: a forced re-import must not
+// discard a customized install command. The restore only replaces a row
+// that is still the raw placeholder token, so an operator's value survives,
+// and a fresh placeholder is left for --substitute to resolve through
+// deriveInstallDepsCommand.
 const RESTORABLE_COMMAND_KEYS = new Set([
   'fix-validate',
   'pre-push-validate',
   'post-fix-validate',
+  'install-deps',
 ]);
 /**
- * Restore a target's pre-import validate-command row values into its
+ * Restore a target's pre-import command row values into its
  * freshly-copied `.github/idd/config.json` (#2222). `--import` always
  * copies `.github/idd/config.json` byte-for-byte from source — including
  * on a re-import over an already-onboarded target, where it clobbers a
@@ -537,7 +539,7 @@ const RESTORABLE_COMMAND_KEYS = new Set([
  *
  * Call this **after** `applyImportPlan` has copied the target tree, passing
  * the `commands` snapshot `readExistingCommandsTable` captured from the
- * **pre-import** target. Only restores the three rows in
+ * **pre-import** target. Only restores the rows in
  * `RESTORABLE_COMMAND_KEYS`, and only a row that is still the raw
  * placeholder token right after the copy — a source-provided literal value
  * (no `{{...}}` template site for that key) is left untouched, since there
@@ -1398,6 +1400,23 @@ function assertSafeManifestFile(file, origin) {
   return file;
 }
 /**
+ * Manifest target path of the adopter's policy config. The overview's
+ * command rows read its `commands` object, so `--hold` must never skip it
+ * (#3959).
+ */
+const CONFIG_TARGET_PATH = '.github/idd/config.json';
+/**
+ * Refuses `--hold` on the config file, on both the import and verify paths
+ * (#3959). A held config would leave the overview's command rows unresolved.
+ */
+function assertConfigNotHeld(hold) {
+  if (hold.includes(CONFIG_TARGET_PATH)) {
+    throw new Error(
+      `refusing --hold ${CONFIG_TARGET_PATH}: the overview's command rows read its commands object, so the file must always be imported (#3959)`,
+    );
+  }
+}
+/**
  * Resolve the full import file set: the core template files, plus — only
  * when `profile` is exactly `vendored-node` — the profile-conditional
  * helper bundle from `helper-runtime-manifest.mts`'s `collectVendoredFiles`
@@ -1506,6 +1525,10 @@ function describeUnresolvedVendoredPath(sourceRoot, error) {
  * problem; `missingSource`'s own blocking finding is the correct signal
  * there instead, and a `--hold` value simply matches nothing beyond the
  * degraded set in that case.
+ *
+ * `--hold` on `.github/idd/config.json` is refused outright (fail closed,
+ * #3959). The overview's command rows read the `commands` object of that
+ * file, so a skipped import would leave those rows with no source.
  */
 export function buildImportPlan(
   sourceRoot,
@@ -1513,6 +1536,7 @@ export function buildImportPlan(
   { profile, force = false, hold = [] } = {},
 ) {
   const resolved = resolveImportFiles(sourceRoot, profile);
+  assertConfigNotHeld(hold);
   const holdSet = new Set(hold);
   if (holdSet.size > 0 && resolved.missingSource.length === 0) {
     const knownTargets = new Set(resolved.files.map((file) => file.targetPath));
@@ -4756,6 +4780,7 @@ export function runVerify(
   hold = [],
   targetBaseRef,
 ) {
+  assertConfigNotHeld(hold);
   const manifestCompleteness = checkManifestCompleteness(
     sourceRoot,
     targetRoot,

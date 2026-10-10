@@ -39,6 +39,36 @@ export function collectPolicyConfigDrift(config, overviewText) {
       continue;
     }
     const actual = c.commands?.[key];
+    if (expected === `commands.${key}`) {
+      // The row names its own config entry, so the check resolves that
+      // reference: the entry must exist and hold a command, not the same
+      // reference back.
+      if (typeof actual !== 'string' || actual.trim() === '') {
+        drifts.push({
+          path: `commands.${key}`,
+          expected,
+          actual: actual ?? null,
+          reason: `reference target commands.${key} is missing or empty`,
+        });
+      } else if (actual.trim() === `commands.${key}`) {
+        drifts.push({
+          path: `commands.${key}`,
+          expected,
+          actual,
+          reason: `reference target commands.${key} refers to itself instead of holding a command`,
+        });
+      } else if (/^commands\.[A-Za-z0-9-]+$/u.test(actual.trim())) {
+        // Another entry's reference is not a command either; running it
+        // would execute the reference text as a shell command.
+        drifts.push({
+          path: `commands.${key}`,
+          expected,
+          actual,
+          reason: `reference target commands.${key} holds another reference (${actual.trim()}) instead of a command`,
+        });
+      }
+      continue;
+    }
     if (actual !== expected) {
       drifts.push({
         path: `commands.${key}`,

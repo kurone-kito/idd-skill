@@ -455,7 +455,7 @@ test('the stray fixture phrase appears in no other file', () => {
   assert.deepEqual(found, ['tests/check-stray-commit-closes.test.mts']);
 });
 
-test('pre-push-validate ends with the helper, and its manifest row matches', () => {
+test('pre-push-validate ends with the helper, and the overview row references it', () => {
   const config = JSON.parse(
     readFileSync(join(REPO_ROOT, '.github', 'idd', 'config.json'), 'utf8'),
   );
@@ -464,18 +464,23 @@ test('pre-push-validate ends with the helper, and its manifest row matches', () 
     command.split(' && ').at(-1),
     'node scripts/check-stray-commit-closes.mjs',
   );
-  const manifest = JSON.parse(
-    readFileSync(join(REPO_ROOT, 'audit', 'sync-manifest.json'), 'utf8'),
+  // The overview row references the config entry; the command text lives only
+  // in config.json, so the row must not repeat it.
+  const overview = readFileSync(
+    join(
+      REPO_ROOT,
+      'idd-template',
+      '.github',
+      'instructions',
+      'idd-overview-core.instructions.md',
+    ),
+    'utf8',
   );
-  const from = '| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |';
-  const replacements = manifest.syncPairs.flatMap(
-    (pair: { replacements?: { from: string; to: string }[] }) =>
-      pair.replacements ?? [],
+  assert.ok(
+    overview.includes(
+      '| **pre-push-validate** | `commands.pre-push-validate` |',
+    ),
   );
-  const row = replacements.find(
-    (replacement: { from: string }) => replacement.from === from,
-  );
-  assert.equal(row.to, `| **pre-push-validate** | \`${command}\` |`);
 });
 
 test('the flag spec lists exactly the documented flags', () => {

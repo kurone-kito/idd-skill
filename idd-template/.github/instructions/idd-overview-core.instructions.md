@@ -254,12 +254,14 @@ except `commands`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
 `upstreamEscalation`, and `forcedHandoff`, which stay repository-local.
 Merge-gate reads (`mergeGate`, `ciGate`) and trusted-base reads stay on
-the PR's base ref. `commands` overrides the table below when
-`.github/idd/config.json` exists and validates against the canonical schema
-at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>;
-otherwise the table applies. Absent values keep the gate
-enabled and default approval actors to `owners-and-maintainers-only`.
+the PR's base ref. The command entries below (`install-deps` and the three
+validation entries) are read from the `commands` object of
+`.github/idd/config.json`, which must validate against
+the canonical schema at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>. If it is
+missing or invalid, stop and report. Absent values keep the gate
+enabled and default approval actors to
+`owners-and-maintainers-only`.
 `node scripts/<name>.mjs` examples are the `vendored-node` spelling; other
 profiles use the forms in `docs/idd-helper-scripts.md`
 (Helper Runtime Profiles and Profile Wiring Surface).
@@ -267,10 +269,10 @@ profiles use the forms in `docs/idd-helper-scripts.md`
 <!-- dprint-ignore-start -->
 | Name | Entries |
 | --- | --- |
-| **fix-validate** | `{{FIX_VALIDATE_COMMANDS}}` |
-| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
-| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |
-| **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |
+| **fix-validate** | `commands.fix-validate` |
+| **pre-push-validate** | `commands.pre-push-validate` |
+| **post-fix-validate** | `commands.post-fix-validate` |
+| **install-deps** | `commands.install-deps` |
 | **issue-scope** | `roadmap-first` |
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->

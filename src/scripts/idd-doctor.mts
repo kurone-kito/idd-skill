@@ -184,6 +184,7 @@ export function runDoctor({
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
   checkUserGlobalHelperBins(root, report, pathValue ?? process.env.PATH ?? '');
+  checkCanonicalConfigPresence(root, report);
   checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
   checkMergePolicyAcknowledgement(root, report);
@@ -969,7 +970,13 @@ export function checkProjectCommands(
     return null;
   }
 
-  const noOps = requiredRows.filter((row) => commands.get(row) === 'true');
+  // The table rows may be references to commands.<key>, which are not no-op
+  // values themselves. Read the value from config.json when it is present, and
+  // fall back to the table value only when it is absent.
+  const configCommands = loadPolicyCommands(root);
+  const noOps = requiredRows.filter(
+    (row) => (configCommands?.get(row) ?? commands.get(row)) === 'true',
+  );
   if (noOps.length === requiredRows.length) {
     report.warnings.push(
       'all primary command rows are set to `true` (no-op substitutions)',
@@ -1000,9 +1007,23 @@ function checkCommandResidueAndConsistency(
   for (const key of sharedKeys) {
     const configValue = normalizeCommandValue(policyCommandMap.get(key));
     const overviewValue = normalizeCommandValue(projectCommands.get(key));
+    // A config entry that refers to a `commands.<key>` entry holds no command,
+    // whatever the table row says. Report it here, since the comparison below
+    // skips it.
     if (
-      !isConcreteCommandValue(configValue) ||
-      !isConcreteCommandValue(overviewValue)
+      typeof configValue === 'string' &&
+      /^commands\.[A-Za-z0-9-]+$/u.test(configValue)
+    ) {
+      report.warnings.push(
+        configValue === `commands.${key}`
+          ? `command entry "${key}" in .github/idd/config.json refers to itself; it must hold the command text`
+          : `command entry "${key}" in .github/idd/config.json refers to another entry (${configValue}); it must hold the command text`,
+      );
+      continue;
+    }
+    if (
+      !isConcreteCommandValue(configValue, key) ||
+      !isConcreteCommandValue(overviewValue, key)
     ) {
       continue;
     }
@@ -1078,11 +1099,16 @@ function normalizeCommandValue(value: unknown): string | null {
   return value.trim();
 }
 
-function isConcreteCommandValue(value: string | null): boolean {
+function isConcreteCommandValue(value: string | null, key: string): boolean {
   if (typeof value !== 'string' || value.length === 0) {
     return false;
   }
   if (value.toLowerCase() === 'true') {
+    return false;
+  }
+  // A row that references its own config key is not a command of its own. A
+  // reference to any other key is still compared, so a wrong key is reported.
+  if (value === `commands.${key}`) {
     return false;
   }
   return !/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/.test(value);
@@ -1689,6 +1715,24 @@ export function checkLiveConfigSchema(root: string, report: DoctorReport) {
     }
     report.errors.push(finding.message);
   }
+}
+
+/**
+ * Report a missing `.github/idd/config.json` as an error. The overview's
+ * command rows read their `commands.<key>` entries from this file, so the
+ * canonical file is required. A legacy `idd-policy.json` may still be read
+ * by the fallback readers, but it does not satisfy this check.
+ */
+export function checkCanonicalConfigPresence(
+  root: string,
+  report: DoctorReport,
+) {
+  if (exists(join(root, '.github/idd/config.json'))) {
+    return;
+  }
+  report.errors.push(
+    '.github/idd/config.json is missing. It is required, because the overview command rows read commands.<key> from it. Run idd-onboard to create it; idd-policy.json alone does not satisfy this check.',
+  );
 }
 
 /** One reportable finding from the claimTiming config↔prose check. */

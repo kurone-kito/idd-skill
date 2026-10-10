@@ -1237,11 +1237,12 @@ future inventory reviews do not need to re-infer their role from code.
   mirror-only commit is not diffable (observed 2026-09-27 during
   [kurone-kito/idd-skill#3576](https://github.com/kurone-kito/idd-skill/pull/3576)
   review).
-  During a re-import, `idd-onboard --import` may restore the target's three
-  validate-command rows in `.github/idd/config.json` after the template copy.
+  During a re-import, `idd-onboard --import` may restore the target's four
+  command rows in `.github/idd/config.json` after the template copy.
   Keep that file in scope with `--path-prefix .github/idd/config.json`, and
-  repeat `--normalize-json-key` for only `commands.fix-validate`,
-  `commands.pre-push-validate`, and `commands.post-fix-validate`. For each key,
+  repeat `--normalize-json-key` for only `commands.install-deps`,
+  `commands.fix-validate`, `commands.pre-push-validate`, and
+  `commands.post-fix-validate`. For each key,
   the verifier first proves that the target still matches its value at
   `--target-base-ref` (the pre-import commit), then normalizes the upstream
   value to that preserved baseline. Other config fields stay checked; never
@@ -1261,6 +1262,7 @@ future inventory reviews do not need to re-infer their role from code.
     --upstream-path <idd-skill>/idd-template \
     --path-prefix .github/instructions --path-prefix .github/workflows \
     --path-prefix .github/idd/config.json \
+    --normalize-json-key .github/idd/config.json:commands.install-deps \
     --normalize-json-key .github/idd/config.json:commands.fix-validate \
     --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
     --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
@@ -1394,8 +1396,8 @@ future inventory reviews do not need to re-infer their role from code.
   `--normalize-json-key <path>:<key.path>` replaces only the upstream JSON key
   with the pre-import target-base value after proving the target still matches
   it and upstream still has its restoration placeholder; repeat it for the
-  three validate-command keys above and add the config path prefix to this
-  command.
+  four command keys above (`install-deps` and the three validate-command keys)
+  and add the config path prefix to this command.
 
   ```sh
   node node_modules/@kurone-kito/idd-skill/scripts/verify-import-mirror.mjs \
@@ -1404,6 +1406,7 @@ future inventory reviews do not need to re-infer their role from code.
     --upstream-path node_modules/@kurone-kito/idd-skill/idd-template \
     --path-prefix .github/instructions --path-prefix .github/workflows \
     --path-prefix .github/idd/config.json \
+    --normalize-json-key .github/idd/config.json:commands.install-deps \
     --normalize-json-key .github/idd/config.json:commands.fix-validate \
     --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
     --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
