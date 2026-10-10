@@ -23,6 +23,17 @@ test('both fresh-claim worktree commands use --no-track', () => {
   }
 });
 
+test('the lite fresh claim adopts the claim-phase worktree through step 7', () => {
+  const lite = readTemplate(
+    'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
+  );
+  assert.match(lite, /skip steps 8-26,\s+run step 27/);
+  assert.match(
+    lite,
+    /continue at step 28\. Never delete or\s+recreate that branch\./,
+  );
+});
+
 test('the claim instructions state the worktree-first steps in sequence', () => {
   const claim = readTemplate(
     'idd-template/.github/instructions/idd-claim.instructions.md',
