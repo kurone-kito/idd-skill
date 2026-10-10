@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -48,7 +49,7 @@ import {
   resolveAssertOutcome,
   resolveResumeLinkedPrState,
 } from '../src/scripts/resume-claim-routing.mts';
-import { stubExecutable } from './test-utils.mts';
+import { fixtureEnv, stubExecutable } from './test-utils.mts';
 
 function trusted(logins: string[]) {
   const set = new Set(logins);
@@ -2874,9 +2875,35 @@ test('#3276 end-to-end: runCli routes both the old and new claim-id to the looku
   }
 });
 
+// The CLI reads its working directory (the worktree listing on the stale path,
+// and the copied .github/idd/config.json when present), so the case runs it
+// from a fixture repository instead of the host checkout (#3975).
+function createStaleGateRepoFixture(
+  parentDir: string,
+  name: string,
+  withHostConfig: boolean,
+) {
+  const repoPath = join(parentDir, name);
+  mkdirSync(repoPath);
+  execFileSync('git', ['init', '--quiet'], {
+    cwd: repoPath,
+    env: fixtureEnv(),
+    stdio: 'ignore',
+  });
+  if (withHostConfig) {
+    mkdirSync(join(repoPath, '.github', 'idd'), { recursive: true });
+    copyFileSync(
+      join(REPO_ROOT, '.github/idd/config.json'),
+      join(repoPath, '.github/idd/config.json'),
+    );
+  }
+  return repoPath;
+}
+
 function runFreshClaimGateLinkedPrLookupFailureCli(
   policyPath: string,
   now: string,
+  cwd: string,
 ) {
   return spawnSync(
     process.execPath,
@@ -2894,7 +2921,7 @@ function runFreshClaimGateLinkedPrLookupFailureCli(
       '--policy',
       policyPath,
     ],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
+    { cwd, encoding: 'utf8', env: fixtureEnv() },
   );
 }
 
@@ -2907,22 +2934,32 @@ function runFreshClaimGateLinkedPrLookupFailureCli(
 test('#3276 end-to-end: --fresh-claim-gate keeps the displaced claim active (already-claimed) until stale, then stale-reclaimable, unaffected by the blocked handoff', () => {
   const fixture = linkedPrLookupFailureCliFixture();
   try {
-    const withinStaleWindow = runFreshClaimGateLinkedPrLookupFailureCli(
-      fixture.policyPath,
-      '2026-05-12T11:00:00Z', // 1h after claim-old's created_at
-    );
-    assert.equal(withinStaleWindow.status, 0, withinStaleWindow.stderr);
-    const withinOutput = JSON.parse(withinStaleWindow.stdout);
-    assert.equal(withinOutput.fresh_claim_gate.verdict, 'already-claimed');
-    assert.equal(withinOutput.fresh_claim_gate.winning_claim_id, 'claim-old');
+    // Both variants: the host config copied into the fixture, and absent.
+    for (const withHostConfig of [true, false]) {
+      const repoPath = createStaleGateRepoFixture(
+        dirname(fixture.policyPath),
+        withHostConfig ? 'repo-with-host-config' : 'repo-without-host-config',
+        withHostConfig,
+      );
+      const withinStaleWindow = runFreshClaimGateLinkedPrLookupFailureCli(
+        fixture.policyPath,
+        '2026-05-12T11:00:00Z', // 1h after claim-old's created_at
+        repoPath,
+      );
+      assert.equal(withinStaleWindow.status, 0, withinStaleWindow.stderr);
+      const withinOutput = JSON.parse(withinStaleWindow.stdout);
+      assert.equal(withinOutput.fresh_claim_gate.verdict, 'already-claimed');
+      assert.equal(withinOutput.fresh_claim_gate.winning_claim_id, 'claim-old');
 
-    const pastStaleWindow = runFreshClaimGateLinkedPrLookupFailureCli(
-      fixture.policyPath,
-      '2026-05-13T11:00:00Z', // 25h after claim-old's created_at
-    );
-    assert.equal(pastStaleWindow.status, 0, pastStaleWindow.stderr);
-    const pastOutput = JSON.parse(pastStaleWindow.stdout);
-    assert.equal(pastOutput.fresh_claim_gate.verdict, 'stale-reclaimable');
+      const pastStaleWindow = runFreshClaimGateLinkedPrLookupFailureCli(
+        fixture.policyPath,
+        '2026-05-13T11:00:00Z', // 25h after claim-old's created_at
+        repoPath,
+      );
+      assert.equal(pastStaleWindow.status, 0, pastStaleWindow.stderr);
+      const pastOutput = JSON.parse(pastStaleWindow.stdout);
+      assert.equal(pastOutput.fresh_claim_gate.verdict, 'stale-reclaimable');
+    }
   } finally {
     fixture.restore();
   }
