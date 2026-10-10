@@ -480,8 +480,9 @@ export function resolveLatestPrimaryBotReviewEvidence(input: {
       bodyShape: clause.bodyShape,
       primaryBotLogin,
     });
-  // #3942: a cited suppressed item needs its own disposition, so the ack covers
-  // the review only when every cited item has one.
+  // #3942: a citation-free suppressed item is covered by a trusted review-ack,
+  // and each cited one needs its own disposition. The gate applies the same
+  // rule, so a cited-only review converges on dispositions alone.
   const latestIndex = findLatestCopilotReviewIndex(
     input.reviews,
     primaryBotLogin,
@@ -490,19 +491,24 @@ export function resolveLatestPrimaryBotReviewEvidence(input: {
     latestIndex < 0 ? null : input.reviews[latestIndex]?.body,
     clause.suppressedCount,
   );
+  const ackCovers = hasTrustedReviewAckAfter(
+    input.comments,
+    normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
+    clause.submittedAt,
+    headSha,
+  );
+  const citedDispositionsCover =
+    citation.citedCount === 0 ||
+    countCitedItemDispositions(
+      input.comments,
+      [...input.trustedMarkerLogins],
+      clause.submittedAt,
+    ) >= citation.citedCount;
   const reviewAckCovers = clause.matchesHead
-    ? hasTrustedReviewAckAfter(
-        input.comments,
-        normalizeTrustedMarkerLogins([...input.trustedMarkerLogins]),
-        clause.submittedAt,
-        headSha,
-      ) &&
-      (citation.citedCount === 0 ||
-        countCitedItemDispositions(
-          input.comments,
-          [...input.trustedMarkerLogins],
-          clause.submittedAt,
-        ) >= citation.citedCount)
+    ? clause.suppressedCount === 0
+      ? ackCovers
+      : (citation.citationFreeCount === 0 || ackCovers) &&
+        citedDispositionsCover
     : null;
   return {
     primaryBotLogin,

@@ -567,4 +567,18 @@ test('reviewAckCovers: a cited suppressed item needs its own disposition (#3942)
     trustedMarkerLogins: [TRUSTED],
   });
   assert.equal(withDisposition?.reviewAckCovers, true);
+
+  // A cited-only review converges on its dispositions, with no bare ack needed.
+  const dispositionOnly = resolveLatestPrimaryBotReviewEvidence({
+    reviews: [reviewRow],
+    prHeadSha: HEAD,
+    primaryBotLogin: 'copilot',
+    comments: [
+      comment({
+        body: '**Accepted**: fixed in the PR.\n<!-- idd-skill-review-reply -->',
+      }),
+    ],
+    trustedMarkerLogins: [TRUSTED],
+  });
+  assert.equal(dispositionOnly?.reviewAckCovers, true);
 });
