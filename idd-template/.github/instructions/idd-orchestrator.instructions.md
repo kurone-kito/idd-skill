@@ -36,6 +36,7 @@ Keep one entry per worker, with these fields:
 - the claim ID;
 - the branch;
 - the harness's worker handle;
+- the report draft path;
 - the worker's state (`running`, `reporting`, `disposed`, or `stalled`).
 
 The roster lives in the orchestrating session.
@@ -86,15 +87,17 @@ The roster lives in the orchestrating session.
 
 ## 5. Report and disposal
 
-- The orchestrator's brief asks the worker for a worker-report JSON draft at a
-  per-worker path.
+- The orchestrator's brief asks for a JSON draft matching
+  `schemas/worker-report.schema.json` at a per-worker path, as the
+  [worker final report store](../../docs/idd-helper-scripts.md#worker-final-report-store)
+  describes.
 - The orchestrator verifies the outcome against live GitHub state, completes
   the draft as the worker final report store describes, appends it with the
   profile-selected `idd-worker-report append --file <path>`, then disposes of
   the worker as the table's row says and marks its roster entry `disposed`.
 - If verification or the append fails, the orchestrator keeps the worker
-  addressable and follows the dead-or-stalled recovery rule in
-  [idd-resume-stall.instructions.md](idd-resume-stall.instructions.md).
+  addressable and follows the worker-specific recovery in the
+  [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
 
 ## 6. Worker span
 
