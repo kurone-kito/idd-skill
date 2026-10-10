@@ -1456,3 +1456,17 @@ test('an injected iddConfig bypasses the trusted loader (#3958)', () => {
   );
   assert.equal(calls, 0);
 });
+
+test('the trusted policy read opts out of the user-global fallback (#3958)', () => {
+  const options: unknown[] = [];
+  collectReviewActivitySnapshot(
+    policyInput(
+      policyPort({ baseRefName: 'main' }),
+      (_o, _r, _ref, _f, _p, opts) => {
+        options.push(opts);
+        return null;
+      },
+    ),
+  );
+  assert.deepEqual(options, [{ userGlobalFallback: false }]);
+});

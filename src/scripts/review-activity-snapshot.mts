@@ -183,7 +183,11 @@ function readTrustedPolicyConfig(
     );
   }
   const load = input.loadTrustedConfig ?? loadTrustedIddConfig;
-  return load(input.owner, input.repo, ref);
+  // A confirmed-absent file stays absent: the user-global policy layers are
+  // outside this trust boundary, so the read opts out of their fallback.
+  return load(input.owner, input.repo, ref, undefined, undefined, {
+    userGlobalFallback: false,
+  });
 }
 
 /**
