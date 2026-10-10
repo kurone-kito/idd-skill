@@ -58,11 +58,11 @@ The roster lives in the orchestrating session.
    pass `--desync-token`, using the token generated once at Discover entry.
    Pass it on every refill.
 4. For each pick in batch order, run A4.5, then the fresh-claim order in
-   idd-claim.instructions.md (worktree first). Then start a
-   worker with the existing delegation brief, adding the section 5 report
-   request with a per-worker report path and naming that pre-created worktree,
-   which the worker reuses without B1 creation. Record the worker as a `running`
-   roster entry.
+   idd-claim.instructions.md through its claim verification only (worktree
+   first; B1 is the worker's). Then start a worker with the existing delegation
+   brief, adding the section 5 report request with a per-worker report path
+   and naming that pre-created worktree, which the worker reuses without B1
+   creation. Record the worker as a `running` roster entry.
 5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
    worktree and branch removed (which deletes its lock) and leaves `--issues`
    before any refill. A failure after the marker is posted is contested: follow
