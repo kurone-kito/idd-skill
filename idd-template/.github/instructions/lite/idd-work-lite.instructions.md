@@ -44,9 +44,8 @@ runs with checks 1-2 only. Checks 3-5 apply from B2 onward, once B1 step
 step 28 or 29 failure that routes to step 31's hold still runs under
 checks 1-2 only. Never relax checks 1-2 anywhere. This defers only this
 guard's own check 3-5 gate, never B1's own explicit lock-acquisition
-steps: step 7's takeover lock/collision check, and steps 19 and 26's
-lock acquisition and immediate token-recording after creation, all stay
-mandatory regardless of this deferral.
+steps: step 7's lock/collision check, and steps 19 and 26's lock and
+record steps on a takeover, all stay mandatory regardless of this deferral.
 
 1. The active claim still uses this session's claim id.
 2. If this session posted an activation nonce for the current claim,
@@ -93,7 +92,11 @@ worktree removal) behind the
    `claim-lock` helper before reuse or removal. A `collision` result is
    fail-closed: do not reuse or remove the path — resolve it via the
    Claim-state rule in `idd-claim.instructions.md`, and only remove the
-   path once the current claim is authorized to take it over.
+   path once the current claim is authorized to take it over. On a fresh
+   claim the claim phase already created this worktree and branch
+   (`idd-claim.instructions.md`, fresh-claim order), so this step adopts
+   it: then skip steps 8-27 and continue at step 28. Never delete or
+   recreate that branch on this path.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
@@ -113,30 +116,26 @@ worktree removal) behind the
     (`<base-branch>` is normally `main`).
 16. On Windows, use `git-wt switch --create -b <base-branch> <branch-name> -x true`,
     or the same `wt switch` form if `git-wt` is unavailable.
-17. If the `[pre-start]` hook's install command has not already been
-    approved, `wt switch --create` hangs non-interactively even with
-    `-x <noop>` (`Cannot prompt for approval in non-interactive
-    environment`). Before the first `wt switch --create` in such an
-    environment, run `wt config approvals add --yes` once from the
-    primary worktree to pre-approve it (issue `#2797`); this is scoped
-    to the git project, so sibling worktrees inherit it, and is
-    narrower than the global `-y`/`--yes` flag, which would also skip
-    approval for any other command WorkTrunk runs on that call.
+17. If the `[pre-start]` hook's install command is not yet approved,
+    `wt switch --create` hangs non-interactively, even with `-x <noop>`.
+    Before the first one, run `wt config approvals add --yes` once from the
+    primary worktree (issue `#2797`). It is scoped to the git project, so
+    sibling worktrees inherit it, and it is narrower than the global
+    `-y`/`--yes` flag.
 18. Do not use `wt new`.
-19. If WorkTrunk uses a pre-start install hook, its first command must
-    acquire the worktree lock, then — as a separate call — run
-    `--record-tokens --worktree <this-worktree-path> --agent-id <id>
-    --claim-id <id> --nonce <nonce>` (same nonce value as the A5 write;
-    omitting `--nonce` drops it, since the helper overwrites rather than
-    merges) for this worktree's own copy, before it installs anything.
+19. On a takeover only, if WorkTrunk uses a pre-start install hook, its
+    first command must acquire the worktree lock, then — as a separate call —
+    run `--record-tokens --worktree <this-worktree-path> --agent-id <id>
+    --claim-id <id> --nonce <nonce>` (same nonce as the A5 write; omitting
+    `--nonce` drops it) before it installs anything. A fresh claim must not
+    use WorkTrunk create, because its hook installs before the claim POST.
     After the hook succeeds, `cd` into the new sibling (`-x <noop>` never
     changes the caller's directory; resolve the path from
     `git worktree list`) before steps 28-30.
 20. If the hook cannot acquire the lock or record tokens, create the
     worktree without the hook.
-21. If WorkTrunk is unavailable, use
-    `git worktree add --no-track <path> -b <branch-name> origin/main`
-    for a fresh claim.
+21. If WorkTrunk is unavailable, a fresh claim skips this step (step 7
+    adopts the worktree). A takeover uses steps 22-24.
 22. If WorkTrunk is unavailable and this is a takeover, use
     `git worktree add <path> <branch-name>` with the local branch.
 23. If WorkTrunk is unavailable and only the remote branch exists, run
@@ -144,15 +143,13 @@ worktree removal) behind the
 24. If WorkTrunk is unavailable and only the remote branch exists, use
     `git worktree add <path> -b <branch-name> origin/<branch-name>`.
 25. If WorkTrunk is unavailable and neither a local nor a remote branch
-    exists (rare), treat it as a fresh claim while preserving the inherited
-    branch name.
-26. For manual `git worktree add` or WorkTrunk without a hook, acquire the
-    worktree lock with the profile-selected `claim-lock` helper, then — as
-    a separate call — run `--record-tokens --worktree <this-worktree-path>
-    --agent-id <id> --claim-id <id> --nonce <nonce>` (same nonce value as
-    the A5 write; omitting `--nonce` drops it, since the helper overwrites
-    rather than merges) for this worktree's own copy, immediately after
-    creation and before any install or other mutation.
+    exists (rare), stop and report. A fresh claim's branch must already exist
+    from the claim phase, and a takeover has no branch to inherit.
+26. On a takeover only, for manual `git worktree add` or WorkTrunk without a
+    hook, acquire the worktree lock with the profile-selected `claim-lock`
+    helper, then — as a separate call — run `--record-tokens` with the same
+    arguments as step 19, immediately after creation and before any install
+    or other mutation.
 27. On the manual/no-hook path, `cd` into the new sibling worktree first,
     then run `install-deps` there — never from the primary worktree,
     whose lifecycle hooks would otherwise mutate the primary checkout.
