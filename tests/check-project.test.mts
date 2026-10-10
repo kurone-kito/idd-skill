@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -453,6 +456,39 @@ function linkDependencies(root: string): void {
   }
 }
 
+/**
+ * A digest of the checkout's dependency layout and lockfile: each top-level
+ * entry, its link target, and the entries of each scope. A scratch run that
+ * rewrites a link or the lockfile changes the digest.
+ */
+function checkoutFingerprint(): string {
+  const describe = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const entry of readdirSync(dir).sort()) {
+      const path = join(dir, entry);
+      const stat = lstatSync(path);
+      out[entry] = stat.isSymbolicLink()
+        ? `link:${readlinkSync(path)}`
+        : stat.isDirectory()
+          ? 'dir'
+          : 'file';
+    }
+    return out;
+  };
+  const modules = join(REPO_ROOT, 'node_modules');
+  const scoped: Record<string, Record<string, string>> = {};
+  const top = describe(modules);
+  for (const entry of Object.keys(top)) {
+    if (entry.startsWith('@') && top[entry] === 'dir') {
+      scoped[entry] = describe(join(modules, entry));
+    }
+  }
+  const lock = createHash('sha256')
+    .update(readFileSync(join(REPO_ROOT, 'pnpm-lock.yaml')))
+    .digest('hex');
+  return JSON.stringify({ top, scoped, lock });
+}
+
 /** A scratch repository of this checkout's tracked files, minus tests/. */
 function buildScratchRepository(parent: string, sentinel: string): string {
   const root = join(parent, 'scratch repo');
@@ -497,6 +533,7 @@ test('a tampered committed runner copy is reported as drift, and neither check n
   );
   const parent = mkdtempSync(join(tmpdir(), 'check project scratch '));
   t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const before = checkoutFingerprint();
 
   // Positive control: running the sentinel-writing copy directly writes the
   // sentinel, so the absence check below can fail.
@@ -542,4 +579,9 @@ test('a tampered committed runner copy is reported as drift, and neither check n
     );
     assert.equal(scratchGit(root, 'rev-list', '--count', 'HEAD').trim(), '2');
   }
+  assert.equal(
+    checkoutFingerprint(),
+    before,
+    "the scratch runs leave the checkout's dependency links and lockfile unchanged",
+  );
 });
