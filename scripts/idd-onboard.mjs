@@ -1404,6 +1404,17 @@ function assertSafeManifestFile(file, origin) {
  */
 const CONFIG_TARGET_PATH = '.github/idd/config.json';
 /**
+ * Refuses `--hold` on the config file, on both the import and verify paths
+ * (#3959). A held config would leave the overview's command rows unresolved.
+ */
+function assertConfigNotHeld(hold) {
+  if (hold.includes(CONFIG_TARGET_PATH)) {
+    throw new Error(
+      `refusing --hold ${CONFIG_TARGET_PATH}: the overview's command rows read its commands object, so the file must always be imported (#3959)`,
+    );
+  }
+}
+/**
  * Resolve the full import file set: the core template files, plus — only
  * when `profile` is exactly `vendored-node` — the profile-conditional
  * helper bundle from `helper-runtime-manifest.mts`'s `collectVendoredFiles`
@@ -1523,12 +1534,8 @@ export function buildImportPlan(
   { profile, force = false, hold = [] } = {},
 ) {
   const resolved = resolveImportFiles(sourceRoot, profile);
+  assertConfigNotHeld(hold);
   const holdSet = new Set(hold);
-  if (holdSet.has(CONFIG_TARGET_PATH)) {
-    throw new Error(
-      `refusing --hold ${CONFIG_TARGET_PATH}: the overview's command rows read its commands object, so the file must always be imported (#3959)`,
-    );
-  }
   if (holdSet.size > 0 && resolved.missingSource.length === 0) {
     const knownTargets = new Set(resolved.files.map((file) => file.targetPath));
     const unknown = [...holdSet].filter((target) => !knownTargets.has(target));
@@ -4771,6 +4778,7 @@ export function runVerify(
   hold = [],
   targetBaseRef,
 ) {
+  assertConfigNotHeld(hold);
   const manifestCompleteness = checkManifestCompleteness(
     sourceRoot,
     targetRoot,

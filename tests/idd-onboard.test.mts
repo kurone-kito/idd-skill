@@ -2952,6 +2952,46 @@ test('bin/idd-onboard.mjs --import --force preserves a customized commands table
   );
 });
 
+test('bin/idd-onboard.mjs --verify --hold .github/idd/config.json is refused too (#3959)', () => {
+  // The fail-closed rule covers the verify path as well. A verify that
+  // accepted the hold would report no blocking finding for a config that the
+  // overview's command rows need.
+  const targetRoot = makeFixtureDir();
+  execFileSync(process.execPath, [
+    BIN_PATH,
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--allow-root',
+    tmpdir(),
+  ]);
+  rmSync(join(targetRoot, '.github', 'idd', 'config.json'));
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      BIN_PATH,
+      '--verify',
+      '--source',
+      REPO_ROOT,
+      '--target',
+      targetRoot,
+      '--hold',
+      '.github/idd/config.json',
+      '--allow-root',
+      tmpdir(),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /refusing --hold \.github\/idd\/config\.json/u,
+  );
+});
+
 test('bin/idd-onboard.mjs --import --hold .github/idd/config.json is refused and leaves an existing customized config untouched (#3959)', () => {
   // `--hold` on the policy config is refused outright (fail closed): the
   // overview's command rows read its commands object, so a skipped import
