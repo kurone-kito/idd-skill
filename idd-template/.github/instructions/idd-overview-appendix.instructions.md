@@ -7,9 +7,9 @@ are in `idd-overview-core.instructions.md`.
 ## Policy Constants
 
 The distributed claim, advisory, CI, and critique-loop defaults are
-named in `docs/policy-constants.md`. Read it before changing any timing
-or loop constant, and record local deviations in onboarding or
-repository docs so later sessions need not scan every phase file.
+named in `docs/policy-constants.md`. Read it before changing a timing
+or loop constant; record local deviations in onboarding or
+repository docs.
 
 ## Live status digest
 
@@ -23,10 +23,10 @@ them, report the URLs, and treat none as authoritative unattended. See
 `node scripts/live-status-digest.mjs`, an optional convenience helper
 (use the profile-selected form from `docs/idd-helper-scripts.md`).
 
-Treat every digest create or edit as a GitHub side effect: re-validate
-the active claim, write fields from it, and set `Authoritative by` to
-the evidence. If the claim was lost, do not repair or update the
-digest.
+Treat each digest create or edit as a GitHub side effect under the claim
+revalidation gate (`idd-overview-core.instructions.md`), with fields
+from the revalidated claim; set `Authoritative by` to the evidence.
+If the claim was lost, do not update the digest.
 
 A PR digest edit is still PR activity: do not edit it between a valid
 E1 review watermark and an intended F3 merge (it would perturb
@@ -158,12 +158,6 @@ other repository — no comment, no issue, no mutation of any kind.
 Whether to report the local issue upstream is a human decision outside
 this workflow.
 
-## Project commands
-
-The Project commands table (named in full in
-`idd-overview-core.instructions.md`) and its override rules live in
-[`docs/customization.md` → Project commands reference](../../docs/customization.md#project-commands-reference).
-
 ## Critique pass
 
 A **critique pass** is an independent review of a plan or diff that
@@ -188,10 +182,7 @@ to one that mirrors or pre-checks another gate's decision.
 
 ## Template sync
 
-When this repository ships `idd-template/` for adopters, that tree is
-canonical. Edit `idd-template/` first for any `idd-*.instructions.md`,
-`docs/idd-workflow.md`, or `docs/customization.md`, then regenerate the
-live target with `node scripts/sync-docs.mjs --apply` (`structure`/
-`contains` pairs need a hand-mirrored live edit). See
+When this repository ships `idd-template/`, edit it first, then regenerate
+the live copy with `node scripts/sync-docs.mjs --apply` in the same commit.
+`structure`/`contains` pairs are hand-mirrored. See
 [`docs/customization.md` → Template sync mapping](../../docs/customization.md#template-sync-mapping).
-Include the live target in the same commit as the template source.

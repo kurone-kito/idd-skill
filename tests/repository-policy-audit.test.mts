@@ -19,6 +19,7 @@ import {
   collectRepositoryPolicyViolationsFromDocuments,
   NEEDS_DECISION_ROUTE_PINS,
   PR_HEAD_FRESHNESS_PINS,
+  REGRESSION_DEFINITION_PINS,
   REVIEW_TRIAGE_DONOR_PINS,
   type RepositoryPolicyDocuments,
   repositoryPolicyRuleIds,
@@ -56,6 +57,7 @@ const PINNED_CLAUSE_GROUPS = [
   ...WHOLE_CLASS_SWEEP_PINS,
   ...WAVE_GRADIENT_PINS,
   ...PR_HEAD_FRESHNESS_PINS,
+  ...REGRESSION_DEFINITION_PINS,
 ];
 
 function readPositiveFixture(): Map<string, string> {
@@ -400,8 +402,7 @@ function moveRemovalProofOutsidePendingBranch(
   const insertAt = pendingBranchEnd + '\nfi'.length;
   return {
     path,
-    contents:
-      renamed.slice(0, insertAt) + '\n' + phrase + renamed.slice(insertAt),
+    contents: `${renamed.slice(0, insertAt)}\n${phrase}${renamed.slice(insertAt)}`,
   };
 }
 

@@ -323,8 +323,9 @@
     },
     {
       "id": "bundle-discovery-phase",
-      "description": "Discovery path phase-specific files: idd-discover + idd-claim (loaded with bundle-core)",
+      "description": "Discovery path phase-specific files: idd-discover + idd-claim + claim-orchestrator (loaded with bundle-core)",
       "files": [
+        ".github/instructions/claim-orchestrator.instructions.md",
         ".github/instructions/idd-claim.instructions.md",
         ".github/instructions/idd-discover.instructions.md"
       ],
@@ -585,6 +586,12 @@
       "id": "idd-claim-lite-instructions",
       "source": "idd-template/.github/instructions/lite/idd-claim-lite.instructions.md",
       "target": ".github/instructions/lite/idd-claim-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-claim-orchestrator-instructions",
+      "source": "idd-template/.github/instructions/claim-orchestrator.instructions.md",
+      "target": ".github/instructions/claim-orchestrator.instructions.md",
       "mode": "exact"
     },
     {

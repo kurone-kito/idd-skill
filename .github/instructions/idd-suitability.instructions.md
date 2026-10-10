@@ -18,7 +18,7 @@ do this NOW?", A4.5 asks "SHOULD we do this at all?"
 
 The numeric `<!-- idd-skill-autopilot-suitability: N -->`
 footer is a **discovery-time** ranking/routing hint consumed in
-`idd-discover.instructions.md` (floor: `.github/idd/config.json`
+`idd-discover.instructions.md` (floor: the effective policy's
 `autopilotSuitability.floor`, default `3`; see also
 `docs/policy-constants.md`). It is **not** one of the seven checks: A4.5
 PASS/FAIL is decided solely by the qualitative checks, never by the

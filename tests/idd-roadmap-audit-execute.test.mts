@@ -2922,3 +2922,46 @@ test('--apply fails closed when the local worktree turns broken in the commentâ†
   assert.deepEqual(mutationCalls.released, []);
   assert.equal(calls, 3);
 });
+
+// ---------------------------------------------------------------------------
+// #3876 -- a closing keyword in prose is not a child edge
+// ---------------------------------------------------------------------------
+
+/** Graph for a roadmap with one closed task-list child and a narrative body. */
+function narrativeClosingGraph(roadmapBody: string) {
+  const issues = new Map<number, unknown>([
+    [ROADMAP, rawRoadmapIssue(ROADMAP, roadmapBody)],
+    [1047, rawExecutionIssue(1047, 'Follow-up work.', 'closed')],
+    [1048, rawExecutionIssue(1048, 'Other work.', 'open')],
+  ]);
+  return enumerateRoadmapGraph(ROADMAP, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+}
+
+test('a narrative closing mention of an open issue is not a child edge: dry-run is ready (#3876)', async () => {
+  const graph = await narrativeClosingGraph(
+    '- [x] #1047\n\nThe roadmap is complete when every child is verified and closes #1048 only after review.',
+  );
+  const { deps } = makeDeps(graph);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.blockers, []);
+  assert.equal(exitCode, 0);
+});
+
+test('the same mention as a standalone closing line is an open-child blocker (#3876)', async () => {
+  const graph = await narrativeClosingGraph('- [x] #1047\n\nCloses #1048');
+  const { deps } = makeDeps(graph);
+  const { verdict } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(verdict.ready, false);
+  assert.ok(verdict.blockers.some((blocker) => blocker.kind === 'open-child'));
+});

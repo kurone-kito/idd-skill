@@ -110,6 +110,7 @@ generated separately in `ONBOARDING.md`.
 .githooks/pre-commit
 .githooks/pre-push
 .github/idd/config.json
+.github/instructions/claim-orchestrator.instructions.md
 .github/instructions/idd-advisory-wait.instructions.md
 .github/instructions/idd-ci.instructions.md
 .github/instructions/idd-claim.instructions.md
