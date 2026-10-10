@@ -280,12 +280,16 @@ export function extractPreviouslyMissedItems(
     return null;
   }
   const section = body.slice(heading.index + heading[0].length);
-  return [...section.matchAll(DETAILS_BLOCK_PATTERN)].map((block) => ({
-    cited: block[1]
-      .replace(ZERO_WIDTH_CHARS_PATTERN, '')
-      .split(/\r?\n/)
-      .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
-  }));
+  // An item always has its own <summary>. A <details> without one is part of
+  // the section's prose, not an item, so it cannot make the count match (#3942).
+  return [...section.matchAll(DETAILS_BLOCK_PATTERN)]
+    .filter((block) => block[1].includes('<summary>'))
+    .map((block) => ({
+      cited: block[1]
+        .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+        .split(/\r?\n/)
+        .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
+    }));
 }
 
 /** True when `body` names a file or line anywhere in its text (#3942). */

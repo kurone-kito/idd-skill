@@ -209,8 +209,8 @@ re-review-requested in a previous E13/E14 pass. **Embedded CodeRabbit
 findings (helper-first, optional):** only `COMMENTED` CodeRabbit reviews use
 `embeddedFindings[].uncoveredCount`; add one PATH B item per uncovered
 finding. Inspect other bots' `COMMENTED` review bodies separately for
-file/line-cited findings without threads; each is a PATH A item
-(E4 to E6). See the [#2197/#2559 rationale](../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
+file/line-cited findings without threads; each is PATH A (E4 to E6).
+See the [#2197/#2559 rationale](../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
 
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the

@@ -26,7 +26,7 @@ For each item in ReviewItems_snapshot, first classify it:
 - **PATH A — actionable feedback**: human reviewer threads and regular
   comments, `CHANGES_REQUESTED` review bodies, critique-pass findings
   that require a code change or maintainer decision, Copilot inline
-  review-thread comments, and review-body items that name a file or line.
+  review-thread comments, and file- or line-citing review-body items.
 - **PATH B — advisory feedback**: Copilot's and CI advisory bots'
   review-summary remarks that name no file or line, and regular comments
   included by E1 for traceability, even when they need no code change.
@@ -96,7 +96,7 @@ accept" confirming the claim, or an explicit maintainer confirmation
 reply, gets it there. Otherwise cap it at Rejected with the reasoned
 reply E6 requires. CODEOWNER/required-reviewer AMD handling is unchanged.
 
-Accepted citation-free PATH B items do **not** enter review-fix. They are fully
+Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
 
 **Verify before accept (PATH A and PATH B).** A PATH A or PATH B item
@@ -234,15 +234,15 @@ reviewer feedback:
   unavailable check when inconclusive) and wait for the maintainer's
   response. For an inconclusive item from a source without standing, the
   [needs-decision route] may apply first; otherwise this hold stands.
-- After posting your reply, **immediately resolve the thread** — except
-  for `**Awaiting maintainer decision**`. When helper runtime is enabled,
-  the profile-selected resolve-review-thread command (`--pr <number>
-  --comment-id <id> --apply`, with `--body`/`--claim-issue`/`--claim-id`
-  or `--claimless`; see `docs/idd-helper-scripts.md`) posts the reply
-  and resolves in one
-  call, replying before resolving so a failed reply never leaves a
-  silently-resolved thread; the manual REST + GraphQL
-  `resolveReviewThread` sequence is the fallback.
+- After posting your reply, **immediately resolve the thread** — except for
+  `**Awaiting maintainer decision**`; a review-body item has no thread and takes
+  a stamped top-level comment. When helper runtime is enabled, the
+  profile-selected resolve-review-thread command (`--pr <number> --comment-id
+  <id> --apply`, with `--body`/`--claim-issue`/`--claim-id` or `--claimless`;
+  see `docs/idd-helper-scripts.md`) posts the reply and resolves in one call,
+  replying before resolving so a failed reply never leaves a silently-resolved
+  thread; the manual REST + GraphQL `resolveReviewThread` sequence is the
+  fallback.
 - **Exception to immediate resolution**: for a review-thread AMD, leave
   it unresolved (do **NOT** resolve) so F2's "Unresolved threads = 0"
   gate blocks merge until the maintainer responds, and post a separate
@@ -364,11 +364,10 @@ an ack (the snapshot's `latestPrimaryBotReview.reviewAckNeeded`: a thread-less
 finding in a recognized review body shape, or, for the default Copilot bot, an
 unrecognized body; see `docs/idd-helper-scripts.md`), Clause 1 needs
 `latestPrimaryBotReview.reviewAckCovers === true` regardless of any Clause 2
-disposition elsewhere in the review. After confirming every citation-free review
-body finding is handled (fixed, or judged as needing no action), post
-`review-ack:` for the current HEAD SHA (a file- or line-citing item needs its
-own disposition, E6) — only a `trustedMarkerActors`-authored marker counts; an
-untrusted poster's is ignored, not rejected at post time (helper-first:
+disposition elsewhere in the review. After confirming every citation-free
+finding is handled (fixed, or judged as needing no action), post `review-ack:`
+for the current HEAD SHA — only a `trustedMarkerActors`-authored marker counts;
+an untrusted poster's is ignored, not rejected at post time (helper-first:
 `post-idd-marker --type review-ack --from-pr <pr-number> --agent-id <id>
 --timestamp <ISO8601> --apply`):
 

@@ -861,3 +861,21 @@ test('citationBreakdown: a file named inside the text of an item counts as cited
   ].join('\n');
   assert.deepEqual(extractPreviouslyMissedItems(body), [{ cited: true }]);
 });
+
+test('citationBreakdown: a details block with no summary is not an item, so the count fails closed (#3942)', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '<details>',
+    '<summary><strong>Previously missed (1)</strong></summary>',
+    '',
+    '<details>',
+    'Intro prose with no item summary.',
+    '</details>',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(extractPreviouslyMissedItems(body), []);
+  assert.deepEqual(citationBreakdown(body, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
