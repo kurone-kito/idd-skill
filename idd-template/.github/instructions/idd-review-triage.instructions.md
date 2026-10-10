@@ -236,10 +236,11 @@ reviewer feedback:
   [needs-decision route] may apply first; otherwise this hold stands.
 - After posting your reply, **immediately resolve the thread** — except for
   `**Awaiting maintainer decision**`; a review-body item has no thread and takes
-  a stamped top-level comment. When helper runtime is enabled, the
-  profile-selected resolve-review-thread command (`--pr <number> --comment-id
-  <id> --apply`, with `--body`/`--claim-issue`/`--claim-id` or `--claimless`;
-  see `docs/idd-helper-scripts.md`) posts the reply and resolves in one call,
+  a stamped top-level comment; a Rejected one names its file or line. When
+  helper runtime is enabled, the profile-selected resolve-review-thread command
+  (`--pr <number> --comment-id <id> --apply`, with
+  `--body`/`--claim-issue`/`--claim-id` or `--claimless`; see
+  `docs/idd-helper-scripts.md`) posts the reply and resolves in one call,
   replying before resolving so a failed reply never leaves a silently-resolved
   thread; the manual REST + GraphQL `resolveReviewThread` sequence is the
   fallback.
