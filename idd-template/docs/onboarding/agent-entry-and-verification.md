@@ -289,9 +289,9 @@ supplied the mirror-only import; the helper reads the current files under
 `--upstream-path`, so a later working tree can produce false mismatches or
 falsely pass matching local edits.
 
-`idd-onboard --import` may restore three validate-command rows of
+`idd-onboard --import` may restore four command rows of
 `.github/idd/config.json`: keep the file in scope and repeat
-`--normalize-json-key` for only those three keys, as in the
+`--normalize-json-key` for only those four keys, as in the
 `verify-import-mirror` bullet of `docs/idd-helper-scripts.md` ("Helper contract
 classes").
 
@@ -310,6 +310,7 @@ node <idd-skill>/scripts/verify-import-mirror.mjs \
   --upstream-path <idd-skill>/idd-template \
   --path-prefix .github/instructions --path-prefix .github/workflows \
   --path-prefix .github/idd/config.json \
+  --normalize-json-key .github/idd/config.json:commands.install-deps \
   --normalize-json-key .github/idd/config.json:commands.fix-validate \
   --normalize-json-key .github/idd/config.json:commands.pre-push-validate \
   --normalize-json-key .github/idd/config.json:commands.post-fix-validate \
