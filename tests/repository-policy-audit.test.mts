@@ -400,8 +400,7 @@ function moveRemovalProofOutsidePendingBranch(
   const insertAt = pendingBranchEnd + '\nfi'.length;
   return {
     path,
-    contents:
-      renamed.slice(0, insertAt) + '\n' + phrase + renamed.slice(insertAt),
+    contents: `${renamed.slice(0, insertAt)}\n${phrase}${renamed.slice(insertAt)}`,
   };
 }
 
