@@ -379,8 +379,9 @@ kurone-kito/idd-skill#1155 (that the allowance is "applied by pre-merge but not
 by resume routing"); the author binding of kurone-kito/idd-skill#1155
 (`requireAuthorMatchesForcedBy`) is unchanged.
 
-The first-commit time keeps coming from git committer dates. That reading has a
-limit: a history rewrite, or a hand-set `GIT_COMMITTER_DATE`, can move the
+The first-commit time keeps coming from git committer dates, falling back to
+the author date when a commit has no committer date. That reading has a limit:
+a history rewrite, or a hand-set `GIT_COMMITTER_DATE`, can move the
 first-commit time, so the merge gate still relies on CI and review, not on the
 committer date alone. No incident has been observed, so the limit is recorded
 rather than fixed. Binding the handoff to commit SHAs, and a GitHub-recorded
