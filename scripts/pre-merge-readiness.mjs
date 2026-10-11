@@ -848,7 +848,7 @@ export function collectPreMergeReadiness(
     prFirstCommitAt = hasIssueOnlyForcedHandoff
       ? resolveClaimPrFirstCommitAt(
           port,
-          args.claimIssueNumber,
+          args.claimIssueNumber === null ? [] : [args.claimIssueNumber],
           `${owner}/${repo}`,
           args.prNumber,
           prCommits,

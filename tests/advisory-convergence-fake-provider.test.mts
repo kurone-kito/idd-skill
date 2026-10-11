@@ -19,6 +19,7 @@ import {
   renderExternalCheckWaiverComment,
 } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // ---------------------------------------------------------------------------
 // Fake-provider collection wiring (#2267 AC4: "unit tests exercise the
@@ -1280,4 +1281,170 @@ test('end-to-end: a genuine comment EDITED in place after posting is rejected ev
     );
     assert.equal(verdict.waiver.autoWaiverValid, false);
   });
+});
+
+// #3998: advisory convergence judges an issue-only forced handoff against the
+// earliest first commit over every open PR that backs the claim, the same as
+// the merge gate. collectFromGitHub exposes that time as options.prFirstCommitAt.
+const CLAIM_ISSUE = 7;
+
+function withForcedHandoffPolicy<T>(run: () => T): T {
+  return withHermeticCwd(() => {
+    mkdirSync(join(process.cwd(), '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(process.cwd(), '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        forcedHandoff: { mode: 'human-gated' },
+        trustedMarkerActors: ['kurone-kito', 'maintainer'],
+      }),
+    );
+    return run();
+  });
+}
+
+function claimIssueComments(scope: 'issue-only' | 'issue-plus-pr') {
+  const payload = {
+    oldAgentId: 'copilot',
+    oldClaimId: 'claim-old',
+    newAgentId: 'copilot',
+    newClaimId: 'claim-new',
+    branch: 'issue/7-task',
+    forcedBy: 'maintainer',
+    reason: 'handoff',
+    timestamp: '2026-05-12T10:01:00Z',
+    contextScope: scope,
+    ...(scope === 'issue-plus-pr' ? { linkedPr: String(PR_NUMBER) } : {}),
+  };
+  return [
+    {
+      id: 1,
+      body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/7-task -->\n\n_copilot: issue claim — IDD automation marker. Do not edit._',
+      createdAt: '2026-05-12T10:00:00Z',
+      updatedAt: '2026-05-12T10:00:00Z',
+      authorLogin: 'kurone-kito',
+      lastEditedAt: null,
+    },
+    {
+      id: 2,
+      body: `<!-- forced-handoff: ${JSON.stringify(payload)} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._`,
+      createdAt: '2026-05-12T10:01:00Z',
+      updatedAt: '2026-05-12T10:01:00Z',
+      authorLogin: 'maintainer',
+      lastEditedAt: null,
+    },
+  ];
+}
+
+function forcedHandoffPrFixture(options: {
+  scope: 'issue-only' | 'issue-plus-pr';
+  claimIssueListed: boolean;
+  linkedLookupFails: boolean;
+}) {
+  return createFakeProviderAdapter({
+    ...baseFixture(),
+    changeRequestConvergenceViews: {
+      [PR_NUMBER]: {
+        ...baseFixture().changeRequestConvergenceViews[PR_NUMBER],
+        closingIssuesReferences: options.claimIssueListed
+          ? [{ number: CLAIM_ISSUE }]
+          : [],
+      },
+    },
+    comments: { [CLAIM_ISSUE]: claimIssueComments(options.scope) },
+    closingPullRequestPages: {
+      [CLAIM_ISSUE]: [
+        {
+          nodes: [{ state: 'OPEN', number: 2, repository: 'o/r' }],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    closingPullRequestPageErrors: options.linkedLookupFails
+      ? { [CLAIM_ISSUE]: 'simulated linked-PR lookup failure' }
+      : undefined,
+    changeRequestCommits: {
+      [PR_NUMBER]: [
+        { commit: { committer: { date: '2026-05-12T10:30:30Z' } } },
+      ],
+      2: [{ commit: { committer: { date: '2026-05-12T09:30:00Z' } } }],
+    },
+  } as never);
+}
+
+// The forcedBy authority read goes through gh, which the isolation guard
+// blocks unless it is stubbed. Only the permission endpoint is answered.
+const PERMISSION_GH_STUB = [
+  "const joined = process.argv.join(' ');",
+  'if (/\\/collaborators\\/[^ ]+\\/permission/.test(joined)) {',
+  "  process.stdout.write(JSON.stringify({ permission: 'admin', role_name: 'admin' }) + '\\n');",
+  '  process.exit(0);',
+  '}',
+  "process.stderr.write('unexpected gh call: ' + joined + '\\n');",
+  'process.exit(1);',
+].join('\n');
+
+function collectPrFirstCommitAt(
+  port: ReturnType<typeof createFakeProviderAdapter>,
+  extraArgs: string[],
+) {
+  const restore = stubExecutable('gh', PERMISSION_GH_STUB);
+  try {
+    return withForcedHandoffPolicy(
+      () =>
+        collectFromGitHub(
+          parseArgs([
+            '--pr',
+            String(PR_NUMBER),
+            '--owner',
+            'o',
+            '--repo',
+            'r',
+            ...extraArgs,
+          ]),
+          () => port,
+        ).options.prFirstCommitAt,
+    );
+  } finally {
+    restore();
+  }
+}
+
+test('#3998: advisory convergence uses the earliest open claim-backing PR time for an auto-discovered claim issue', () => {
+  const port = forcedHandoffPrFixture({
+    scope: 'issue-only',
+    claimIssueListed: true,
+    linkedLookupFails: false,
+  });
+  assert.equal(collectPrFirstCommitAt(port, []), '2026-05-12T09:30:00Z');
+});
+
+test('#3998: advisory convergence uses the earliest open claim-backing PR time for an explicit claim issue', () => {
+  const port = forcedHandoffPrFixture({
+    scope: 'issue-only',
+    claimIssueListed: false,
+    linkedLookupFails: false,
+  });
+  assert.equal(
+    collectPrFirstCommitAt(port, ['--claim-issue', String(CLAIM_ISSUE)]),
+    '2026-05-12T09:30:00Z',
+  );
+});
+
+test('#3998: advisory convergence fails the claim time closed when the linked-PR lookup fails', () => {
+  const port = forcedHandoffPrFixture({
+    scope: 'issue-only',
+    claimIssueListed: true,
+    linkedLookupFails: true,
+  });
+  assert.equal(collectPrFirstCommitAt(port, []), null);
+});
+
+test('#3998: advisory convergence does not read linked PRs for an issue-plus-PR handoff', () => {
+  const port = forcedHandoffPrFixture({
+    scope: 'issue-plus-pr',
+    claimIssueListed: true,
+    linkedLookupFails: true,
+  });
+  assert.equal(collectPrFirstCommitAt(port, []), '2026-05-12T10:30:30Z');
 });

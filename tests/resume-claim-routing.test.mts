@@ -5733,7 +5733,7 @@ test('#3998: the claim time is the earliest first commit over the open PRs that 
     changeRequestCommits: { 77: [commitAt(COMMIT_BEFORE_MARKER)] },
   });
   assert.equal(
-    resolveClaimPrFirstCommitAt(port, 11, REPO, OWN_PR, [
+    resolveClaimPrFirstCommitAt(port, [11], REPO, OWN_PR, [
       commitAt(COMMIT_AFTER_MARKER),
     ]),
     COMMIT_BEFORE_MARKER,
@@ -5758,7 +5758,7 @@ test('#3998: the PR being merged keeps its own time and is not re-read when it i
     changeRequestCommitErrors: { [OWN_PR]: 'must not be re-read' },
   });
   assert.equal(
-    resolveClaimPrFirstCommitAt(port, 11, REPO, OWN_PR, [
+    resolveClaimPrFirstCommitAt(port, [11], REPO, OWN_PR, [
       commitAt(COMMIT_BEFORE_MARKER),
     ]),
     COMMIT_BEFORE_MARKER,
@@ -5768,7 +5768,7 @@ test('#3998: the PR being merged keeps its own time and is not re-read when it i
 test('#3998: without a claim issue only the PR being merged is judged', () => {
   const port = createFakeProviderAdapter({});
   assert.equal(
-    resolveClaimPrFirstCommitAt(port, null, REPO, OWN_PR, [
+    resolveClaimPrFirstCommitAt(port, [], REPO, OWN_PR, [
       commitAt(COMMIT_AFTER_MARKER),
     ]),
     COMMIT_AFTER_MARKER,
@@ -5781,7 +5781,7 @@ test('#3998: a failed commits read on a linked open PR fails the claim time clos
     changeRequestCommitErrors: { 77: 'commits unavailable' },
   });
   assert.equal(
-    resolveClaimPrFirstCommitAt(port, 11, REPO, OWN_PR, [
+    resolveClaimPrFirstCommitAt(port, [11], REPO, OWN_PR, [
       commitAt(COMMIT_AFTER_MARKER),
     ]),
     null,
@@ -5801,14 +5801,14 @@ test('#3998: a failed link lookup or an undated own commit list fails the claim 
     },
   });
   assert.equal(
-    resolveClaimPrFirstCommitAt(failedLookup, 11, REPO, OWN_PR, [
+    resolveClaimPrFirstCommitAt(failedLookup, [11], REPO, OWN_PR, [
       commitAt(COMMIT_AFTER_MARKER),
     ]),
     null,
   );
   const undated = createFakeProviderAdapter({});
   assert.equal(
-    resolveClaimPrFirstCommitAt(undated, null, REPO, OWN_PR, [{ commit: {} }]),
+    resolveClaimPrFirstCommitAt(undated, [], REPO, OWN_PR, [{ commit: {} }]),
     null,
   );
 });

@@ -8777,8 +8777,9 @@ export function foldLinkedPrFirstCommits(port, references) {
   return { earliest, readFailed: false, unknown: false };
 }
 /**
- * The earliest first-commit time over every open PR that backs the claim, plus
- * the PR being evaluated (#3998). The merge gate and advisory convergence judge
+ * The earliest first-commit time over every open PR that backs a claim issue,
+ * plus the PR being evaluated (#3998). `claimIssueNumbers` is every claim issue
+ * the gate may judge (the explicit one, or each closing issue when none is set). The merge gate and advisory convergence judge
  * an `issue-only` forced handoff against the same set Resume does (#3871), not
  * against only the PR they are looking at. `ownCommits` is that PR's commit
  * list, already read by the caller.
@@ -8789,21 +8790,30 @@ export function foldLinkedPrFirstCommits(port, references) {
  */
 export function resolveClaimPrFirstCommitAt(
   port,
-  claimIssueNumber,
+  claimIssueNumbers,
   repository,
   prNumber,
   ownCommits,
 ) {
-  const linked = fetchOpenLinkedPrReferences(
-    port,
-    claimIssueNumber,
-    repository,
-  );
+  const references = new Set();
+  for (const claimIssueNumber of claimIssueNumbers) {
+    const linked = fetchOpenLinkedPrReferences(
+      port,
+      claimIssueNumber,
+      repository,
+    );
+    if (linked.lookupFailed) {
+      return null;
+    }
+    for (const reference of linked.references) {
+      references.add(reference);
+    }
+  }
   const ownFirst = resolvePrFirstCommitAt(ownCommits);
-  if (linked.lookupFailed || ownFirst === null) {
+  if (ownFirst === null) {
     return null;
   }
-  const others = [...linked.references].filter(
+  const others = [...references].filter(
     (reference) => reference !== String(prNumber),
   );
   const folded = foldLinkedPrFirstCommits(port, others);

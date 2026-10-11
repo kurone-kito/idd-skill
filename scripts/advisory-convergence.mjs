@@ -3047,6 +3047,17 @@ export function collectFromGitHub(
         )?.contextScope === 'issue-only',
     ),
   );
+  // Every claim issue this gate may judge: the explicit one, else each closing
+  // issue the claim candidates were loaded from (#3998).
+  const claimIssueNumbers = args.claimIssueNumber
+    ? [args.claimIssueNumber]
+    : [
+        ...new Set(
+          (closingIssuesReferences ?? [])
+            .map((ref) => ref?.number)
+            .filter((number) => Number.isInteger(number)),
+        ),
+      ];
   let prFirstCommitAt = null;
   if (forcedHandoffEnabled) {
     try {
@@ -3056,7 +3067,7 @@ export function collectFromGitHub(
       prFirstCommitAt = hasIssueOnlyForcedHandoff
         ? resolveClaimPrFirstCommitAt(
             port,
-            args.claimIssueNumber,
+            claimIssueNumbers,
             `${owner}/${repo}`,
             Number(args.prNumber),
             prCommits,
