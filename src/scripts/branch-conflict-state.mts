@@ -6,8 +6,6 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { parseCliArgs } from './cli-args.mts';
 import { ghText, resolveGhOwnerRepo } from './gh-exec.mts';
@@ -124,15 +122,27 @@ export function resolveCallSiteRouting(
 }
 
 /**
- * Read `ciGate.trustEmptyProtectionReads` from the repository's committed
- * policy. A missing or unreadable file reads as `false`, so a 404 stays
- * unreadable (fail closed).
+ * Read `ciGate.trustEmptyProtectionReads` from the policy at the PR's base
+ * ref, as pre-merge-readiness does. The PR's own working tree is not used: a
+ * PR could set the opt-in in its own config and turn a masked 404 into a
+ * readable empty policy. A missing or unreadable base-ref file reads as
+ * `false`, so a 404 stays unreadable (fail closed).
  */
-function readTrustEmptyProtectionReads(): boolean {
+function readTrustEmptyProtectionReads(
+  owner: string,
+  repo: string,
+  baseRef: string,
+): boolean {
   try {
-    const config = JSON.parse(
-      readFileSync(join(process.cwd(), '.github/idd/config.json'), 'utf8'),
-    ) as { ciGate?: { trustEmptyProtectionReads?: unknown } };
+    const raw = ghText([
+      'api',
+      '-H',
+      'Accept: application/vnd.github.raw',
+      `repos/${owner}/${repo}/contents/.github/idd/config.json?ref=${encodeURIComponent(baseRef)}`,
+    ]);
+    const config = JSON.parse(raw) as {
+      ciGate?: { trustEmptyProtectionReads?: unknown };
+    };
     return config?.ciGate?.trustEmptyProtectionReads === true;
   } catch {
     return false;
@@ -142,10 +152,10 @@ function readTrustEmptyProtectionReads(): boolean {
 /**
  * Resolve whether the PR's base branch requires an up-to-date head, reusing
  * `summarizeBranchCurrency` with the same 404 rule as pre-merge-readiness: a
- * 404 is unreadable unless `ciGate.trustEmptyProtectionReads` is set. Any
- * other failure (403, 500, transport) resolves to `true`. That is stricter
- * than pre-merge, which rethrows, and it is safe here because this helper is
- * read-only and `true` only routes to the sync path.
+ * 404 is unreadable unless `ciGate.trustEmptyProtectionReads` is set at the
+ * base ref. Any other failure (403, 500, transport) resolves to `true`. That
+ * is stricter than pre-merge, which rethrows, and it is safe here because this
+ * helper is read-only and `true` only routes to the sync path.
  */
 export function resolveRequiresUpToDateHead(
   owner: string,
@@ -155,7 +165,11 @@ export function resolveRequiresUpToDateHead(
     ReturnType<typeof createGithubProviderAdapter>,
     'listBranchRules' | 'getBranchProtection'
   > = createGithubProviderAdapter(owner, repo),
-  trustEmptyReads: boolean = readTrustEmptyProtectionReads(),
+  trustEmptyReads: boolean = readTrustEmptyProtectionReads(
+    owner,
+    repo,
+    baseRef,
+  ),
 ): boolean {
   try {
     const rulesRead = port.listBranchRules(owner, repo, baseRef);

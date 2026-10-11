@@ -1245,6 +1245,7 @@ test('resolveRequiresUpToDateHead: fail closed on unreadable or failed policy re
       'r',
       'main',
       port(ok(okRules), strictProtection),
+      false,
     ),
     true,
   );
