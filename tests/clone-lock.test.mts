@@ -122,20 +122,24 @@ test('acquire: a held lock blocks a separate-process acquirer until the first re
   try {
     const first = acquireCloneLock(primary, 'agent-a', 5_000);
 
-    const waiter = execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--exec',
-      '--agent-id',
-      'agent-b',
-      '--repo',
-      primary,
-      '--timeout-ms',
-      '5000',
-      '--',
+    const waiter = execFileAsync(
       process.execPath,
-      '-e',
-      'process.stdout.write(String(Date.now()))',
-    ]);
+      [
+        CLI_PATH,
+        '--exec',
+        '--agent-id',
+        'agent-b',
+        '--repo',
+        primary,
+        '--timeout-ms',
+        '5000',
+        '--',
+        process.execPath,
+        '-e',
+        'process.stdout.write(String(Date.now()))',
+      ],
+      { env: fixtureEnv() },
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     const releasedAt = Date.now();
@@ -220,7 +224,9 @@ test('acquire: NEVER automatically takes over a lock, even one recording a confi
  * which is not realistic within a test's lifetime).
  */
 function spawnDeadPid(): number {
-  const pid = spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid;
+  const pid = spawnSync(process.execPath, ['-e', 'process.exit(0)'], {
+    env: fixtureEnv(),
+  }).pid;
   assert.ok(typeof pid === 'number' && pid > 0);
   return pid;
 }
@@ -313,7 +319,7 @@ test('CLI: --check reports a malformed lock body as present+malformed, without t
     const stdout = execFileSync(
       process.execPath,
       [CLI_PATH, '--check', '--repo', primary],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', env: fixtureEnv() },
     );
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.present, true);
@@ -329,20 +335,24 @@ test('CLI: --exec exits 3 with a diagnostic message on timeout', async () => {
     const holder = acquireCloneLock(primary, 'agent-a', 60_000);
     try {
       await assert.rejects(
-        execFileAsync(process.execPath, [
-          CLI_PATH,
-          '--exec',
-          '--agent-id',
-          'agent-b',
-          '--repo',
-          primary,
-          '--timeout-ms',
-          '200',
-          '--',
+        execFileAsync(
           process.execPath,
-          '-e',
-          'process.exit(0)',
-        ]),
+          [
+            CLI_PATH,
+            '--exec',
+            '--agent-id',
+            'agent-b',
+            '--repo',
+            primary,
+            '--timeout-ms',
+            '200',
+            '--',
+            process.execPath,
+            '-e',
+            'process.exit(0)',
+          ],
+          { env: fixtureEnv() },
+        ),
         (error: NodeJS.ErrnoException & { stderr?: string }) => {
           assert.equal(error.code, 3);
           assert.match(error.stderr ?? '', /timed out waiting for clone lock:/);
@@ -361,22 +371,9 @@ test('CLI: --exec exits 3 with a diagnostic message on timeout', async () => {
 test('CLI: --exec propagates the wrapped command exit code and requires a `--` command', async () => {
   const primary = setupRepo();
   try {
-    const ok = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--exec',
-      '--agent-id',
-      'agent-a',
-      '--repo',
-      primary,
-      '--',
+    const ok = await execFileAsync(
       process.execPath,
-      '-e',
-      'process.exit(0)',
-    ]);
-    assert.equal(ok.stdout, '');
-
-    await assert.rejects(
-      execFileAsync(process.execPath, [
+      [
         CLI_PATH,
         '--exec',
         '--agent-id',
@@ -386,8 +383,29 @@ test('CLI: --exec propagates the wrapped command exit code and requires a `--` c
         '--',
         process.execPath,
         '-e',
-        'process.exit(9)',
-      ]),
+        'process.exit(0)',
+      ],
+      { env: fixtureEnv() },
+    );
+    assert.equal(ok.stdout, '');
+
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--exec',
+          '--agent-id',
+          'agent-a',
+          '--repo',
+          primary,
+          '--',
+          process.execPath,
+          '-e',
+          'process.exit(9)',
+        ],
+        { env: fixtureEnv() },
+      ),
       (error: NodeJS.ErrnoException) => {
         assert.equal(error.code, 9);
         return true;
@@ -395,14 +413,11 @@ test('CLI: --exec propagates the wrapped command exit code and requires a `--` c
     );
 
     await assert.rejects(
-      execFileAsync(process.execPath, [
-        CLI_PATH,
-        '--exec',
-        '--agent-id',
-        'agent-a',
-        '--repo',
-        primary,
-      ]),
+      execFileAsync(
+        process.execPath,
+        [CLI_PATH, '--exec', '--agent-id', 'agent-a', '--repo', primary],
+        { env: fixtureEnv() },
+      ),
       (error: NodeJS.ErrnoException & { stderr?: string }) => {
         assert.match(error.stderr ?? '', /requires a command after `--`/);
         return true;

@@ -721,16 +721,20 @@ test('CLI: acquire collision exits non-zero after printing the collision outcome
     assert.equal(first.mode, 'acquired');
 
     await assert.rejects(
-      execFileAsync(process.execPath, [
-        CLI_PATH,
-        '--acquire',
-        '--worktree',
-        fixture.worktree,
-        '--agent-id',
-        'agent-b',
-        '--claim-id',
-        'claim-b',
-      ]),
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--acquire',
+          '--worktree',
+          fixture.worktree,
+          '--agent-id',
+          'agent-b',
+          '--claim-id',
+          'claim-b',
+        ],
+        { env: fixtureEnv() },
+      ),
       (error: NodeJS.ErrnoException & { stdout?: string }) => {
         assert.equal(error.code, 2);
         assert.equal(JSON.parse(error.stdout ?? '').mode, 'collision');
@@ -1028,17 +1032,21 @@ test('acquire: N concurrent forced-takeovers never corrupt the lock — every wr
     const CONCURRENT_TAKEOVERS = 5;
     const results = await Promise.all(
       Array.from({ length: CONCURRENT_TAKEOVERS }, (_, index) =>
-        execFileAsync(process.execPath, [
-          CLI_PATH,
-          '--acquire',
-          '--worktree',
-          fixture.worktree,
-          '--agent-id',
-          `agent-${index}`,
-          '--claim-id',
-          `claim-${index}`,
-          '--takeover',
-        ]),
+        execFileAsync(
+          process.execPath,
+          [
+            CLI_PATH,
+            '--acquire',
+            '--worktree',
+            fixture.worktree,
+            '--agent-id',
+            `agent-${index}`,
+            '--claim-id',
+            `claim-${index}`,
+            '--takeover',
+          ],
+          { env: fixtureEnv() },
+        ),
       ),
     );
 
@@ -2442,29 +2450,37 @@ test('CLI: --record-tokens keeps the git diagnostic when the path has a .git ent
 test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', async () => {
   const fixture = setupLinkedWorktree();
   try {
-    const recordResult = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--record-tokens',
-      '--worktree',
-      fixture.worktree,
-      '--agent-id',
-      'agent-a',
-      '--claim-id',
-      'claim-a',
-      '--nonce',
-      'nonce-a',
-    ]);
+    const recordResult = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--record-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'agent-a',
+        '--claim-id',
+        'claim-a',
+        '--nonce',
+        'nonce-a',
+      ],
+      { env: fixtureEnv() },
+    );
     const recordOutcome = JSON.parse(recordResult.stdout);
     assert.equal(typeof recordOutcome.path, 'string');
 
-    const readResult = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--read-tokens',
-      '--worktree',
-      fixture.worktree,
-      '--claim-id',
-      'claim-a',
-    ]);
+    const readResult = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--read-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--claim-id',
+        'claim-a',
+      ],
+      { env: fixtureEnv() },
+    );
     const readOutcome = JSON.parse(readResult.stdout);
     assert.equal(readOutcome.present, true);
     assert.equal(readOutcome.record.agentId, 'agent-a');
@@ -2472,14 +2488,18 @@ test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', 
     assert.equal(readOutcome.record.nonce, 'nonce-a');
 
     // A different claim-id was never recorded.
-    const readOtherResult = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--read-tokens',
-      '--worktree',
-      fixture.worktree,
-      '--claim-id',
-      'claim-b',
-    ]);
+    const readOtherResult = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--read-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--claim-id',
+        'claim-b',
+      ],
+      { env: fixtureEnv() },
+    );
     const readOtherOutcome = JSON.parse(readOtherResult.stdout);
     assert.equal(readOtherOutcome.present, false);
 
@@ -2489,14 +2509,18 @@ test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', 
       'claim-c',
     );
     writeFileSync(malformedPath, 'not json at all {{{');
-    const readMalformedResult = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--read-tokens',
-      '--worktree',
-      fixture.worktree,
-      '--claim-id',
-      'claim-c',
-    ]);
+    const readMalformedResult = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--read-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--claim-id',
+        'claim-c',
+      ],
+      { env: fixtureEnv() },
+    );
     const readMalformedOutcome = JSON.parse(readMalformedResult.stdout);
     assert.equal(readMalformedOutcome.present, true);
     assert.equal(readMalformedOutcome.malformed, true);
@@ -3321,39 +3345,51 @@ test('CLI: --backfill-tokens writes on a matching lock and exits 0, and exits no
     );
     assert.equal(acquired.mode, 'acquired');
 
-    const backfillResult = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--backfill-tokens',
-      '--worktree',
-      fixture.worktree,
-      '--claim-id',
-      'claim-a',
-    ]);
-    const backfillOutcome = JSON.parse(backfillResult.stdout);
-    assert.equal(backfillOutcome.status, 'backfilled');
-    assert.equal(backfillOutcome.agentId, 'agent-a');
-
-    const readResult = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--read-tokens',
-      '--worktree',
-      fixture.worktree,
-      '--claim-id',
-      'claim-a',
-    ]);
-    const readOutcome = JSON.parse(readResult.stdout);
-    assert.equal(readOutcome.present, true);
-    assert.equal(readOutcome.record.agentId, 'agent-a');
-
-    await assert.rejects(
-      execFileAsync(process.execPath, [
+    const backfillResult = await execFileAsync(
+      process.execPath,
+      [
         CLI_PATH,
         '--backfill-tokens',
         '--worktree',
         fixture.worktree,
         '--claim-id',
-        'claim-b',
-      ]),
+        'claim-a',
+      ],
+      { env: fixtureEnv() },
+    );
+    const backfillOutcome = JSON.parse(backfillResult.stdout);
+    assert.equal(backfillOutcome.status, 'backfilled');
+    assert.equal(backfillOutcome.agentId, 'agent-a');
+
+    const readResult = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--read-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--claim-id',
+        'claim-a',
+      ],
+      { env: fixtureEnv() },
+    );
+    const readOutcome = JSON.parse(readResult.stdout);
+    assert.equal(readOutcome.present, true);
+    assert.equal(readOutcome.record.agentId, 'agent-a');
+
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--backfill-tokens',
+          '--worktree',
+          fixture.worktree,
+          '--claim-id',
+          'claim-b',
+        ],
+        { env: fixtureEnv() },
+      ),
       (error: NodeJS.ErrnoException & { stdout?: string }) => {
         assert.equal(error.code, 2);
         assert.equal(JSON.parse(error.stdout ?? '').status, 'lock-mismatch');
@@ -3362,14 +3398,18 @@ test('CLI: --backfill-tokens writes on a matching lock and exits 0, and exits no
     );
 
     // A different claim-id's record was never written by the failed call.
-    const readOtherResult = await execFileAsync(process.execPath, [
-      CLI_PATH,
-      '--read-tokens',
-      '--worktree',
-      fixture.worktree,
-      '--claim-id',
-      'claim-b',
-    ]);
+    const readOtherResult = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--read-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--claim-id',
+        'claim-b',
+      ],
+      { env: fixtureEnv() },
+    );
     assert.equal(JSON.parse(readOtherResult.stdout).present, false);
   } finally {
     teardown(fixture);
