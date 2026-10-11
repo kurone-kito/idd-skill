@@ -532,3 +532,76 @@ test('a heading whose title ends in a hash keeps that hash in its title', (t) =>
   assert.equal(result.status, 1);
   assert.match(result.stderr, /shared section "C#" differs between/);
 });
+
+test('an example fence inside an HTML comment does not hide the headings after it', (t) => {
+  // Inside an HTML block nothing is parsed as a fence, so the "```js" line in
+  // the comment does not open code. If it did, it would stay open to the end of
+  // the file and hide the real "## Shared rule" heading below. Both sides are
+  // identical, so the check must pass.
+  const commentedExample = [
+    '# Fixture rationale',
+    '',
+    '<!--',
+    '```js',
+    '-->',
+    '',
+    '## Shared rule',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, commentedExample, commentedExample);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a fence opened in a list item hides a heading-looking line in it', (t) => {
+  // "  ## Example" sits inside the fence that "- ```sh" opens, so it is code and
+  // not a heading. The real "## After" heading below the list still counts.
+  // Both sides are identical, so the check must pass.
+  const listFence = [
+    '## Shared rule',
+    '',
+    '- ```sh',
+    '  ## Example',
+    '  ```',
+    '',
+    '## After',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, listFence, listFence);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a backtick in a backtick fence info string does not open a fence', (t) => {
+  // "```info`" is not a fence opener, so the "## Shared rule" heading below it
+  // is a real heading. Treating the line as a fence would hide that heading and
+  // report the section missing. Both sides are identical, so the check passes.
+  const badOpener = [
+    '```info`',
+    '## Shared rule',
+    '```',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, badOpener, badOpener);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});

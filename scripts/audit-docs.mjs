@@ -44,6 +44,12 @@ import {
 } from './helper-flag-drift.mjs';
 import { ONBOARDING_PLACEHOLDERS } from './idd-onboard.mjs';
 import {
+  findFencedCodeRanges,
+  findHtmlBlockRanges,
+  findIndentedCodeRanges,
+  mergeMarkdownCodeRanges,
+} from './markdown-code.mjs';
+import {
   collectMarkdownLinkAuditViolations,
   resolveDistributedFileSet,
 } from './markdown-link-audit.mjs';
@@ -788,67 +794,42 @@ function resolveBlockFiles(block) {
   }
   return files;
 }
-// Splits Markdown into sections the way CommonMark renders it. A heading is an
-// ATX line that is not inside a fenced code block, an indented code block, or an
-// HTML comment block. A comment block opens on a line that starts with "<!--"
-// (up to three spaces) and runs through the first line containing "-->". A
-// comment that does not start its line, such as "text <!--", hides nothing.
-// headingSignature tracks only backtick fences, so this scanner covers the rest.
-// The rules were checked against a CommonMark parser (#4009 review). A heading
-// inside a blockquote is not a boundary here, as in headingSignature, so the
-// section runs past it; that only makes the comparison stricter.
+// Splits Markdown into sections the way CommonMark renders it (#4009). A
+// heading is an ATX line outside fenced code, indented code, and HTML blocks
+// (an HTML comment block is one of those). The block ranges come from
+// markdown-code.mts, which applies CommonMark's fence, comment, and HTML-block
+// rules for the other audits. Its fence scan does not know that an HTML block's
+// raw content has no fences, so HTML block content is masked before the fence
+// scan. Inline comments and inline code spans hide nothing, because a heading
+// can interrupt a paragraph. Headings inside blockquotes are not boundaries
+// here, as in headingSignature, so the section runs past them, which only makes
+// the comparison stricter. List items are not modeled as containers: a fence
+// inside a list item that the list then ends stays open here until a closing
+// fence. Checked against a CommonMark parser, that case differs only in
+// generated documents, not in any tracked Markdown file.
 function markdownSections(text) {
-  const lines = normalizeText(text).split('\n');
+  const normalized = normalizeText(text);
+  const lines = normalized.split('\n');
+  const htmlFirstPass = findHtmlBlockRanges(
+    normalized,
+    findFencedCodeRanges(normalized),
+  );
+  const masked = maskRanges(normalized, htmlFirstPass);
+  const fenced = findFencedCodeRanges(masked);
+  const hidden = mergeMarkdownCodeRanges([
+    ...fenced,
+    ...findIndentedCodeRanges(masked, fenced),
+    ...findHtmlBlockRanges(normalized, fenced),
+  ]);
   const headings = [];
-  let fence = null;
-  let inComment = false;
-  let indentedCode = false;
-  let previousBlank = true;
+  let offset = 0;
   for (const [index, line] of lines.entries()) {
-    const blank = line.trim() === '';
-    if (fence !== null) {
-      const closing = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
-      if (
-        closing !== null &&
-        closing[1][0] === fence.char &&
-        closing[1].length >= fence.length
-      ) {
-        fence = null;
-      }
-      previousBlank = blank;
-      continue;
-    }
-    if (inComment) {
-      if (line.includes('-->')) {
-        inComment = false;
-      }
-      previousBlank = blank;
-      continue;
-    }
-    if (indentedCode) {
-      if (blank || /^ {4}/.test(line)) {
-        previousBlank = blank;
-        continue;
-      }
-      indentedCode = false;
-    }
-    const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (opener !== null) {
-      fence = { char: opener[1][0], length: opener[1].length };
-      previousBlank = false;
-      continue;
-    }
-    if (/^ {0,3}<!--/.test(line)) {
-      inComment = line.indexOf('-->', line.indexOf('<!--') + 4) === -1;
-      previousBlank = false;
-      continue;
-    }
-    if (previousBlank && /^ {4}/.test(line) && !blank) {
-      indentedCode = true;
-      previousBlank = false;
-      continue;
-    }
-    const heading = /^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
+    const isHidden = hidden.some(
+      (range) => offset >= range.start && offset < range.end,
+    );
+    const heading = isHidden
+      ? null
+      : /^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (heading !== null) {
       headings.push({
         index,
@@ -856,7 +837,7 @@ function markdownSections(text) {
         title: normalizeHeading(heading[2]),
       });
     }
-    previousBlank = blank;
+    offset += line.length + 1;
   }
   return headings.map((heading, position) => {
     let end = lines.length;
@@ -871,6 +852,19 @@ function markdownSections(text) {
       body: lines.slice(heading.index, end).join('\n'),
     };
   });
+}
+// Blanks the given ranges, keeping every newline, so later scans see the same
+// line structure with the ranges' content removed.
+function maskRanges(text, ranges) {
+  const chars = text.split('');
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (chars[index] !== '\n') {
+        chars[index] = ' ';
+      }
+    }
+  }
+  return chars.join('');
 }
 // Compares each `sharedSections` title exactly between source and target. A
 // title must appear exactly once on each side: a missing or duplicated title
