@@ -48,6 +48,7 @@ import {
   findHtmlBlockRanges,
   findIndentedCodeRanges,
   mergeMarkdownCodeRanges,
+  stripEnclosingListContentIndent,
 } from './markdown-code.mjs';
 import {
   collectMarkdownLinkAuditViolations,
@@ -834,30 +835,51 @@ function markdownOutline(text) {
   // letting drift through.
   const containerHeading =
     /^[ \t]*(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
-  // A heading with leading whitespace sits in a list item or a continued
-  // paragraph, so it is nested and never a section boundary. An unindented
-  // heading is the only boundary candidate.
+  // An indented heading is nested when the helper finds it inside a list item,
+  // and a top-level boundary only with one to three spaces outside one. Four or
+  // more spaces outside a list item is paragraph text, not a heading.
   const indentedHeading = /^[ \t]+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+  const standaloneHeading = /^ {1,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+  // The helper keeps list state from line to line, so it is called for every
+  // visible line in order, not only for indented ones.
+  const listContext = {
+    contentIndent: 0,
+    nextLineStart: 0,
+  };
   let offset = 0;
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(
       (range) => offset >= range.start && offset < range.end,
     );
-    const nested = isHidden
-      ? null
-      : (containerHeading.exec(line) ?? indentedHeading.exec(line));
-    if (nested !== null) {
-      nestedTitles.push(normalizeHeading(nested[2]));
-    }
-    const heading = isHidden
-      ? null
-      : /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
-    if (heading !== null) {
-      headings.push({
-        index,
-        level: heading[1].length,
-        title: normalizeHeading(heading[2]),
-      });
+    // The helper also answers for paragraph lines, so a list item is only known
+    // when it reports a positive content indent as well.
+    const inListItem =
+      !isHidden &&
+      stripEnclosingListContentIndent(normalized, offset, listContext) !==
+        null &&
+      listContext.contentIndent > 0;
+    if (!isHidden) {
+      const container = containerHeading.exec(line);
+      const indented = indentedHeading.exec(line);
+      const standalone = standaloneHeading.exec(line);
+      const plain = /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
+      if (container !== null) {
+        nestedTitles.push(normalizeHeading(container[2]));
+      } else if (indented !== null && inListItem) {
+        nestedTitles.push(normalizeHeading(indented[2]));
+      } else if (standalone !== null) {
+        headings.push({
+          index,
+          level: standalone[1].length,
+          title: normalizeHeading(standalone[2]),
+        });
+      } else if (plain !== null) {
+        headings.push({
+          index,
+          level: plain[1].length,
+          title: normalizeHeading(plain[2]),
+        });
+      }
     }
     offset += line.length + 1;
   }

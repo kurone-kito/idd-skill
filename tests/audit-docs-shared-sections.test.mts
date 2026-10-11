@@ -698,3 +698,25 @@ test('a heading indented under a list item is nested, not a section boundary', (
     ),
   );
 });
+
+test('a standalone heading indented up to three spaces is a top-level section', (t) => {
+  // Outside any list item, "   ## Shared rule" is an ordinary top-level heading
+  // (CommonMark allows up to three spaces). Both sides are identical, so the
+  // listed section is found and the check passes.
+  const standalone = [
+    '# Fixture rationale',
+    '',
+    '   ## Shared rule',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, standalone, standalone);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
