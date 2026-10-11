@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -19,7 +19,12 @@ import { fixtureEnv } from './test-utils.mts';
 // this file covers the surrounding git plumbing those pure-helper tests
 // cannot reach: resolving a real base ref, reading a real base-ref
 // manifest, and the crash-safety of that read (#3028 PR #3042 review,
-// Codex and Copilot).
+// Codex and Copilot). It also covers the
+// `contextCeiling.nearCeilingRaiseApprovals` wiring from
+// `checkNearCeilingRatchet` into `parseNearCeilingRaiseApprovals`, which the
+// pure-helper tests call directly and so cannot notice if that call site
+// regresses (#3972, the round-5 Copilot finding deferred from PR #3971
+// for issue #3840).
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const COMMIT_ENV = {
@@ -93,6 +98,7 @@ function makeFixture(
   const manifestPath = join(dir, 'audit', 'sync-manifest.json');
   writeFileSync(manifestPath, JSON.stringify(manifestAtBase, null, 2), 'utf8');
   for (const [path, content] of Object.entries(baseOnlyFiles)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), content, 'utf8');
   }
   execFileSync('git', ['add', '-A'], { cwd: dir, env: COMMIT_ENV });
@@ -194,4 +200,86 @@ test('near-ceiling-ratchet: raising phaseLimitBytes while a governed file is nea
     /near-ceiling-ratchet: fixture-budget phaseLimitBytes raised from 1000 to 2000/,
   );
   assert.match(result.stderr, new RegExp(nearCeilingFile.replace('.', '\\.')));
+});
+
+const BUNDLE_ID = 'fixture-bundle';
+const BUNDLE_MEMBER = 'docs/fixture-bundle-member.md';
+
+/** The fixture manifest: one `bundleBudgets` bundle with the given limit,
+ * plus an optional `nearCeilingRaiseApprovals` list under `contextCeiling`. */
+function bundleManifest(limitBytes: number, approvals?: unknown[]) {
+  return {
+    contextCeiling: {
+      ...CONTEXT_CEILING,
+      ...(approvals === undefined
+        ? {}
+        : { nearCeilingRaiseApprovals: approvals }),
+    },
+    bundleBudgets: [{ id: BUNDLE_ID, files: [BUNDLE_MEMBER], limitBytes }],
+  };
+}
+
+/** A maintainer approval for raising the fixture bundle to 1200 bytes. */
+const RAISE_TO_1200_APPROVAL = {
+  bundle: BUNDLE_ID,
+  limitBytes: 1200,
+  issue: 3972,
+  reason: 'Fixture approval for the near-ceiling raise wiring test.',
+};
+
+/** The bundle's member file is 960 bytes against a 1000-byte limit at the
+ * base ref (96%, past the 95% notice threshold), and the working-tree
+ * manifest raises the limit to `currentLimitBytes`. */
+function makeBundleRaiseFixture(
+  currentLimitBytes: number,
+  approvals?: unknown[],
+) {
+  return makeFixture(
+    bundleManifest(1000),
+    bundleManifest(currentLimitBytes, approvals),
+    { [BUNDLE_MEMBER]: 'x'.repeat(960) },
+  );
+}
+
+test('near-ceiling-ratchet: a near-ceiling bundle raise within its approved limit passes audit-docs --check', (t) => {
+  const { dir, cleanup } = makeBundleRaiseFixture(1200, [
+    RAISE_TO_1200_APPROVAL,
+  ]);
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(result.stdout, /documentation audit passed/);
+  // Notices print on stdout, so this also proves the ratchet ran against a
+  // resolved base ref instead of being skipped with a "could not ..." notice.
+  assert.doesNotMatch(output, /near-ceiling-ratchet/);
+});
+
+test('near-ceiling-ratchet: a near-ceiling bundle raise above its approved limit fails audit-docs --check', (t) => {
+  const { dir, cleanup } = makeBundleRaiseFixture(1500, [
+    RAISE_TO_1200_APPROVAL,
+  ]);
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: fixture-bundle limitBytes raised from 1000 to 1500/,
+  );
+});
+
+test('near-ceiling-ratchet: the same near-ceiling bundle raise fails audit-docs --check without an approval', (t) => {
+  // Control for the approved-raise test above: without the approval entry the
+  // identical raise is rejected, so that test passes because of the approval.
+  const { dir, cleanup } = makeBundleRaiseFixture(1200);
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: fixture-bundle limitBytes raised from 1000 to 1200/,
+  );
 });
