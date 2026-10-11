@@ -11397,6 +11397,35 @@ function preMergeAsRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * #4011: the setting path a global-only zero-required-check pass names in the
+ * readiness output (`ci.allowedByPolicySetting`).
+ */
+export const NO_REQUIRED_CHECKS_POLICY_SETTING =
+  'ciGate.allowNoRequiredChecksInGlobalOnly';
+
+/**
+ * #4011: whether the `ciGate.allowNoRequiredChecksInGlobalOnly` opt-in may
+ * pass this CI summary. Only the zero-required-check state with no present
+ * check run qualifies (`presentRunConclusion` `none`), and only while the
+ * global-only profile is active for the run. A pending or failing present run
+ * stays held, and so does any unprotected run outside that profile. Every
+ * other input keeps the default fail-closed behavior, including an unreadable
+ * protection read or a source-pinned requirement, since both already clear
+ * `noRequiredChecksConfigured`.
+ */
+export function noRequiredChecksPolicyAllowed(
+  ci: { noRequiredChecksConfigured: boolean; presentRunConclusion: string },
+  input: { optIn: boolean; globalOnlyActive: boolean },
+): boolean {
+  return (
+    input.optIn &&
+    input.globalOnlyActive &&
+    ci.noRequiredChecksConfigured === true &&
+    ci.presentRunConclusion === 'none'
+  );
+}
+
+/**
  * Whether pre-merge readiness treats this CI summary as all-passing.
  * #3465: the `--from-pr` watermark gate calls this function rather than
  * growing a second definition of green. `protectionReadsUnreadable` and
@@ -11414,6 +11443,15 @@ export function isPreMergeCiAllPassing(ci: Record<string, unknown>): boolean {
     return false;
   }
   if (ci.requiredChecksPassing === true || ci.status === 'success') {
+    return true;
+  }
+  // #4011: the global-only zero-required-check opt-in. Re-checks the state it
+  // was computed for, so a stray marker alone cannot pass a held gate.
+  if (
+    ci.allowedByPolicySetting === NO_REQUIRED_CHECKS_POLICY_SETTING &&
+    ci.noRequiredChecksConfigured === true &&
+    String(ci.presentRunConclusion ?? '') === 'none'
+  ) {
     return true;
   }
   return (
@@ -12405,6 +12443,10 @@ export function buildPreMergeReadinessSummary(
     // #3824: check names a global-only run may leave out of the required list
     // (see global-only-profile.mts). Absent or empty keeps every check required.
     ignoredRequiredCheckNames?: string[] | null;
+    // #4011: configured `ciGate.allowNoRequiredChecksInGlobalOnly`. Only
+    // effective together with an active global-only profile (non-empty
+    // `ignoredRequiredCheckNames`) -- see `noRequiredChecksPolicyAllowed`.
+    allowNoRequiredChecksInGlobalOnly?: boolean;
     // #2353 (Codex review on PR #2370): the caller-resolved outage
     // declaration's own active-since moment when
     // `advisoryConvergenceOutageRelieved` is true, empty otherwise. A
@@ -13000,6 +13042,19 @@ export function buildPreMergeReadinessSummary(
         ? [DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR]
         : null,
   });
+  // #4011: the opt-in may pass only the zero-required-check, zero-present-run
+  // state of an active global-only profile. `ignoredRequiredCheckNames` is
+  // non-empty exactly when that profile is active for this run (#3824).
+  if (
+    noRequiredChecksPolicyAllowed(ci, {
+      optIn: options.allowNoRequiredChecksInGlobalOnly === true,
+      globalOnlyActive: (options.ignoredRequiredCheckNames ?? []).length > 0,
+    })
+  ) {
+    Object.assign(ci, {
+      allowedByPolicySetting: NO_REQUIRED_CHECKS_POLICY_SETTING,
+    });
+  }
 
   // kurone-kito/idd-skill#2911: the OPPOSITE direction from the CI blocker
   // below -- CI may currently report `idd-advisory-convergence` PASSING,
