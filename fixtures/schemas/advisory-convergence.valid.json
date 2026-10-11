@@ -19,7 +19,13 @@
     "submittedAt": "2026-07-11T10:00:00Z",
     "suppressedCount": 0,
     "bodyShape": "overview-v2",
-    "satisfied": true
+    "satisfied": true,
+    "suppressedCitation": {
+      "citedCount": 0,
+      "citationFreeCount": 0,
+      "citedDispositionsSatisfied": true,
+      "reviewAckValid": false
+    }
   },
   "threads": {
     "copilotThreadCount": 0,

@@ -624,6 +624,7 @@ export const ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN = {
   DISPOSITION_POSTED_ITEMS: 'disposition-posted-items',
   DISPOSITION_THREADS: 'disposition-threads',
   ACK_SUPPRESSED: 'ack-suppressed',
+  STAMPED_DISPOSITION_SUPPRESSED: 'stamped-disposition-suppressed',
   WAIVER_TERMINAL: 'waiver-terminal',
   HOLD_TERMINAL: 'hold-terminal',
   WAIVER_DEADLINE: 'waiver-deadline',
@@ -712,6 +713,26 @@ interface ClosingIssueRefPayload {
 // `review-clause.mts`; re-exported here so this file's existing public
 // export surface stays unchanged for any consumer importing it from here.
 export type { AdvisoryConvergenceReviewClause } from './review-clause.mts';
+
+/** #4007: how the latest review's suppressed items split between items that
+ * name a file or line (`citedCount`, each needing a stamped disposition
+ * reply, #3942) and citation-free items (`citationFreeCount`, covered only
+ * by a valid `review-ack`). `citedDispositionsSatisfied` and
+ * `reviewAckValid` are the same values the `suppressedCount` clause reads. */
+export interface AdvisorySuppressedCitation {
+  citedCount: number;
+  citationFreeCount: number;
+  citedDispositionsSatisfied: boolean;
+  reviewAckValid: boolean;
+}
+
+/** Verdict-level review clause: the raw latest-review clause plus the
+ * #4007 suppressed-citation breakdown. The raw clause returned by
+ * `resolveLatestCopilotReviewClause` is unchanged. */
+export interface AdvisoryConvergenceReviewReport
+  extends AdvisoryConvergenceReviewClause {
+  suppressedCitation: AdvisorySuppressedCitation;
+}
 
 /** Thread clause evidence (Clause 2 of the `converged` definition). A
  * Copilot-authored thread satisfies this clause when it is resolved
@@ -872,7 +893,7 @@ export interface AdvisoryConvergenceVerdict {
   now: string;
   primaryBotLogin: string;
   applicability: AdvisoryConvergenceApplicability;
-  review: AdvisoryConvergenceReviewClause;
+  review: AdvisoryConvergenceReviewReport;
   threads: AdvisoryConvergenceThreadClause;
   pending: boolean;
   deadline: AdvisoryConvergenceDeadline;
@@ -2591,9 +2612,15 @@ export function computeAdvisoryConvergenceVerdict(
     reasons.length = 0;
   }
 
-  const reviewReport: AdvisoryConvergenceReviewClause = {
+  const reviewReport: AdvisoryConvergenceReviewReport = {
     ...review,
     satisfied: reviewSatisfied,
+    suppressedCitation: {
+      citedCount: citation.citedCount,
+      citationFreeCount: citation.citationFreeCount,
+      citedDispositionsSatisfied,
+      reviewAckValid: hasValidReviewAck,
+    },
   };
   // #2143: same catalog as the stderr track. Computed AFTER `ready` so a
   // ready verdict is always `[]`; `ready` itself never reads this field.
@@ -5022,12 +5049,32 @@ export function collectAssertNextActions(
     bot === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
     verdict.review.bodyShape === 'unrecognized' &&
     !verdict.review.satisfied;
-  if (verdict.review.suppressedCount > 0 || unrecognizedBodyNeedsAck) {
+  // #4007 (#3942): a suppressed item that names a file or line needs its own
+  // stamped disposition reply, and a review-ack does not cover it. The
+  // stamped item comes first so the stderr `::notice::` leads with it.
+  const { citedCount, citationFreeCount, citedDispositionsSatisfied } =
+    verdict.review.suppressedCitation;
+  if (citedCount > 0 && !citedDispositionsSatisfied) {
+    const pointer = `gh pr comment ${pr} --body-file <file>, where <file> opens with **Accepted** (or **Rejected** naming the file or line as evidence) and carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json)`;
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review, opening with **Accepted** (or **Rejected** naming the file or line), and carrying the review-reply stamp. A review-ack does not cover these. Reply with: ${pointer}`;
+    items.push({
+      token: T.STAMPED_DISPOSITION_SUPPRESSED,
+      summary,
+      pointer,
+    });
+  }
+
+  // A review-ack covers only the citation-free items, and only while no valid
+  // ack exists yet. It is the same condition as `suppressedClauseSatisfied`.
+  const citationFreeNeedsAck =
+    citationFreeCount > 0 && !verdict.review.suppressedCitation.reviewAckValid;
+  if (citationFreeNeedsAck || unrecognizedBodyNeedsAck) {
     const pointer = `node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`;
-    const summary =
-      verdict.review.suppressedCount > 0
+    const summary = citationFreeNeedsAck
+      ? citedCount === 0
         ? `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
-        : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
+        : `Latest ${bot} review reports ${citationFreeCount} citation-free suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
+      : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
     items.push({ token: T.ACK_SUPPRESSED, summary, pointer });
   }
 
