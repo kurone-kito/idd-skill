@@ -81,7 +81,9 @@ test('the lite claim keeps the worktree-first order and the stop sentence', () =
     'git worktree add --no-track <path> -b <branch-name> origin/main',
     '`--worktree <path> --agent-id <id> --claim-id <id>`',
     '4. Post via helper',
-    'After the settle delay and `--acquire`, `resume-claim-routing.mjs --issue <N> --assert --claim-id <id> --nonce <nonce> --worktree <path>`',
+    '6. **Fresh claim: lock and assert before verification.**',
+    'it must return `already_owned`/`keep`. That post-acquire result alone counts.',
+    '**Digest**:',
   ];
   const positions = steps.map((step) => lite.indexOf(step));
   for (const [index, position] of positions.entries()) {

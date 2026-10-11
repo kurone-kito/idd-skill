@@ -22,10 +22,9 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
    disagrees with live GitHub state** → **stop and ask**. Do **not**
    fall through to the written tables in that situation.
 2. **When the repository is `instructions-only`** (no helper runtime
-   shipped): skip the helper commands and use the written tables only.
-   That is the sole path where the tables below are the primary
-   control surface. The `--record-tokens`/`--read-tokens` check
-   instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
+   shipped): skip the helper commands and use the written tables only. The
+   `--record-tokens`/`--read-tokens` check instead uses
+   `docs/idd-helper-scripts.md`'s helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
 vendored-node** form. Other profiles use the profile-selected equivalent
@@ -58,9 +57,9 @@ human-gated forced-handoff evidence from a trusted actor.
 
 ## Pre-checks (a)-(e) — all five must pass
 
-Re-fetch the issue immediately before running these checks. All five
-are target-issue local: claims on related roadmap or child issues do
-not block this check. Owner protocol:
+Re-fetch the issue immediately before running these checks. Checks are
+target-issue local: related roadmap or child claims do not block
+them. Owner protocol:
 `docs/idd-autonomy-contract.md#portable-authoring-owner-protocol`.
 
 ### (a) Issue-author approval
@@ -107,8 +106,7 @@ status must be "not started". Either condition failing → **STOP**.
 
 ### (c) Claim state
 
-**Check first, before the fresh-claim gate** (which always ignores
-`--claim-id`, so it cannot tell "yours" from "a competitor's"), when
+**Check first, before the fresh-claim gate** (it ignores `--claim-id`), when
 either holds: this session already recorded a `{claim-id}` for this
 issue (resume/heartbeat continuation); or a trusted, live
 forced-handoff marker names this session `newAgentId` — treat its
@@ -202,8 +200,7 @@ enough once a PR exists, unless it predates the PR's first commit. On success,
 the successor claim is **sticky**: adopt
 `newAgentId` / `newClaimId` **verbatim** as your own for the rest of
 the run (do not mint a fresh pair), and still post your own
-activation-nonce for `newClaimId` (see Claim verification below) — this
-is the one activation path with no separate `claimed-by` post. On any
+activation-nonce for `newClaimId` (see Claim verification below). On any
 failure, the active claim is unchanged; treat it under the rules above.
 
 ### (d) Open PR
@@ -277,9 +274,9 @@ activation, so it still runs step 5.
    branch (pre-check (e)), run `idd-work-lite.instructions.md` B1 steps 1-5
    under the clone-scoped lock, then create the linked worktree first:
    `git worktree add --no-track <path> -b <branch-name> origin/main` (B1
-   step 21; not WorkTrunk create, whose pre-start hook installs before the
-   claim POST). Otherwise, and for forced-handoff adopt-verbatim, `<path>`
-   is the primary worktree and B1 creates the linked one after the claim.
+   step 21; not WorkTrunk create). Otherwise, and for forced-handoff
+   adopt-verbatim, `<path>` is the primary worktree and B1 creates the linked
+   one after the claim.
    Then generate a fresh opaque token — **except** forced-handoff
    adopt-verbatim, which reuses the marker's `newClaimId`. Record it with
    the profile-selected `claim-lock` helper's `--record-tokens` mode
@@ -338,6 +335,14 @@ activation, so it still runs step 5.
 
    On a same-`{claim-id}` collision (2+ trusted nonce markers), the
    winner is the lexicographically earliest `{nonce}`.
+
+6. **Fresh claim: lock and assert before verification.** Run the acquire
+   and `--read-tokens` checks from the lock section below, on the linked
+   worktree only. After the settle delay, run `resume-claim-routing.mjs`
+   with `--assert`, `--issue`, `--claim-id`, `--nonce`, and `--worktree`;
+   it must return `already_owned`/`keep`. That post-acquire result alone
+   counts. Any other result: STOP before the digest. A takeover does this
+   once B1 creates its worktree.
 
 ## Heartbeat posting
 
@@ -419,10 +424,6 @@ Then run `--read-tokens --worktree <path> --claim-id <id>` and
 require `present: true` with no `malformed`; otherwise recover per
 `docs/idd-helper-scripts.md` (gated: each step succeeds,
 `reacquired: true` both ends), else stop.
-
-After the settle delay and `--acquire`, `resume-claim-routing.mjs --issue
-<N> --assert --claim-id <id> --nonce <nonce> --worktree <path>` must
-return `already_owned`/`keep`; this post-acquire result alone counts.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
 `{claim-id}` is always a collision — run `--fresh-claim-gate` directly
