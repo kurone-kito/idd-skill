@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { extractPreviouslyMissedItemTitles } from '../src/scripts/copilot-review-body.mts';
 import { renderOutOfLoopMarker } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import type {
@@ -1195,12 +1196,12 @@ test('findBodyItem matches a Previously missed title exactly after normalization
   const reviews = [{ id: BODY_ITEM_REVIEW_ID, body: BODY_ITEM_REVIEW_BODY }];
   assert.deepEqual(
     findBodyItem(reviews, BODY_ITEM_REVIEW_ID, BODY_ITEM_TITLE, 42),
-    { found: true, title: BODY_ITEM_TITLE },
+    { found: true, title: BODY_ITEM_TITLE, index: 1 },
   );
   // Entities decode and whitespace runs collapse on both sides.
   assert.deepEqual(
     findBodyItem(reviews, BODY_ITEM_REVIEW_ID, 'Keep R&D notes short', 42),
-    { found: true, title: 'Keep R&D notes short' },
+    { found: true, title: 'Keep R&D notes short', index: 2 },
   );
 });
 
@@ -1214,7 +1215,7 @@ test('findBodyItem keeps literal angle-bracket text in the given title (#4012)',
       'Use <T> in the generic signature',
       42,
     ),
-    { found: true, title: 'Use <T> in the generic signature' },
+    { found: true, title: 'Use <T> in the generic signature', index: 3 },
   );
   // The escaped form a caller may copy from the raw body matches too.
   assert.equal(
@@ -1246,7 +1247,48 @@ test('findBodyItem decodes named and numeric character references in the summary
   assert.deepEqual(findBodyItem(reviews, BODY_ITEM_REVIEW_ID, rendered, 42), {
     found: true,
     title: rendered,
+    index: 4,
   });
+});
+
+test('findBodyItem refuses a title two items share unless --item-index picks one (#4012)', () => {
+  // The PR #3925 corpus review lists two different file-cited items with the
+  // same title.
+  const corpus = JSON.parse(
+    readFileSync(
+      join(REPO_ROOT, 'tests/fixtures/copilot-review-body-cited/corpus.json'),
+      'utf8',
+    ),
+  ) as { id: string; body: string }[];
+  const sample = corpus.find(
+    (entry) => entry.id === 'pr-3925-previously-missed-cited',
+  );
+  assert.ok(sample, 'corpus sample pr-3925-previously-missed-cited');
+  const reviews = [{ id: 3925, body: sample.body }];
+  const title = 'Preserve reviewer type in bot removal-proof matching';
+  const titles = extractPreviouslyMissedItemTitles(sample.body) ?? [];
+  const positions = titles.flatMap((t, i) => (t === title ? [i + 1] : []));
+  assert.equal(positions.length, 2, 'the fixture repeats the title');
+
+  const ambiguous = findBodyItem(reviews, 3925, title, 42);
+  assert.equal(ambiguous.found, false);
+  assert.match(
+    (ambiguous as { error: string }).error,
+    /lists 2 Previously missed items titled .*pass --item-index/,
+  );
+
+  for (const index of positions) {
+    assert.deepEqual(findBodyItem(reviews, 3925, title, 42, index), {
+      found: true,
+      title,
+      index,
+    });
+  }
+  const other = titles.findIndex((t) => t !== title) + 1;
+  assert.ok(other > 0);
+  const wrong = findBodyItem(reviews, 3925, title, 42, other);
+  assert.equal(wrong.found, false);
+  assert.match((wrong as { error: string }).error, /is not titled/);
 });
 
 test('findBodyItem refuses a title that the review does not list (#4012)', () => {
@@ -1293,6 +1335,7 @@ test('runBodyItemDisposition dry-run prints the stamped body and posts nothing (
     prNumber: 42,
     reviewId: BODY_ITEM_REVIEW_ID,
     itemTitle: BODY_ITEM_TITLE,
+    itemIndex: 1,
     body: BODY_ITEM_STAMPED,
   });
   assert.equal(claimChecks, 0);
@@ -1458,7 +1501,7 @@ test('--comment-id cannot be combined with the body-item target (compiled CLI, #
   ]);
   assert.match(
     stderr,
-    /--comment-id cannot be combined with --review-id or --item-title/,
+    /--comment-id cannot be combined with --review-id, --item-title, or --item-index/,
   );
 });
 

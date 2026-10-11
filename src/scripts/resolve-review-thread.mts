@@ -108,6 +108,9 @@ export interface ResolveReviewThreadReport {
   reviewId?: number;
   /** The body-item target's title as matched (#4012); omitted for a thread. */
   itemTitle?: string;
+  /** The answered item's 1-based position in the Previously missed section
+   * (#4012); omitted for a thread and when the lookup fails. */
+  itemIndex?: number;
   /**
    * Reply body that will be posted (dry-run) or was posted (apply),
    * including the injected reply-identity stamp. Omitted when `--body`
@@ -234,7 +237,7 @@ export function hasBodyItemDispositionPrefix(body: string): boolean {
 
 /** Where a body item's title was looked for, and what was found. */
 export type BodyItemLookup =
-  | { found: true; title: string }
+  | { found: true; title: string; index: number }
   | { found: false; error: string };
 
 /**
@@ -243,14 +246,23 @@ export type BodyItemLookup =
  * item titled `itemTitle` (#4012). The body's titles lose their HTML markup,
  * and both sides then pass through `normalizePreviouslyMissedItemTitle`; the
  * caller's title keeps any literal angle-bracket text. The match is exact, so
- * a partial or misspelled title is refused. A review that is absent, or whose body has
- * no readable Previously missed section, is refused too (fail closed).
+ * a partial or misspelled title is refused. A review that is absent, or whose
+ * body has no readable Previously missed section, is refused too (fail
+ * closed).
+ *
+ * Two items can share a title (the PR #3925 corpus review lists two items
+ * titled "Preserve reviewer type in bot removal-proof matching"), and the
+ * merge gate counts dispositions rather than pairing them with items, so an
+ * ambiguous title is refused unless `itemIndex` (the item's 1-based position
+ * in the section) names one of them. A given `itemIndex` must point at an item
+ * with that exact title. The found item's position is returned as `index`.
  */
 export function findBodyItem(
   reviews: unknown[],
   reviewId: number,
   itemTitle: string,
   prNumber: number,
+  itemIndex: number | null = null,
 ): BodyItemLookup {
   const review = (Array.isArray(reviews) ? reviews : []).find(
     (row) =>
@@ -274,13 +286,31 @@ export function findBodyItem(
     };
   }
   const wanted = normalizePreviouslyMissedItemTitle(itemTitle);
-  if (!wanted || !titles.includes(wanted)) {
+  const positions = wanted
+    ? titles.flatMap((title, i) => (title === wanted ? [i + 1] : []))
+    : [];
+  if (positions.length === 0) {
     return {
       found: false,
       error: `review ${reviewId} on PR #${prNumber} lists no Previously missed item titled "${wanted}"`,
     };
   }
-  return { found: true, title: wanted };
+  if (itemIndex !== null) {
+    if (!positions.includes(itemIndex)) {
+      return {
+        found: false,
+        error: `Previously missed item ${itemIndex} of review ${reviewId} on PR #${prNumber} is not titled "${wanted}" (that title is item ${positions.join(', ')})`,
+      };
+    }
+    return { found: true, title: wanted, index: itemIndex };
+  }
+  if (positions.length > 1) {
+    return {
+      found: false,
+      error: `review ${reviewId} on PR #${prNumber} lists ${positions.length} Previously missed items titled "${wanted}" (items ${positions.join(', ')}); pass --item-index to choose one`,
+    };
+  }
+  return { found: true, title: wanted, index: positions[0] as number };
 }
 
 /**
@@ -298,6 +328,8 @@ export function runBodyItemDisposition(
     pr: number;
     reviewId: number;
     itemTitle: string;
+    /** 1-based item position; required only when the title is ambiguous. */
+    itemIndex?: number | null;
     stampedBody: string;
     apply: boolean;
     assertClaim: () => void;
@@ -315,6 +347,7 @@ export function runBodyItemDisposition(
     input.reviewId,
     input.itemTitle,
     input.pr,
+    input.itemIndex ?? null,
   );
   if (!lookup.found) {
     report.error = lookup.error;
@@ -324,6 +357,7 @@ export function runBodyItemDisposition(
     return { report, exitCode: input.apply ? 1 : 0 };
   }
   report.itemTitle = lookup.title;
+  report.itemIndex = lookup.index;
   if (!input.apply) {
     return { report, exitCode: 0 };
   }
@@ -342,6 +376,7 @@ interface CliArgs {
   commentId: number | null;
   reviewId: number | null;
   itemTitle: string;
+  itemIndex: number | null;
   body: string;
   owner: string;
   repo: string;
@@ -366,6 +401,7 @@ const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
   '--comment-id': { type: 'string' },
   '--review-id': { type: 'string' },
   '--item-title': { type: 'string', default: '' },
+  '--item-index': { type: 'string' },
   '--body': { type: 'string', default: '' },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
@@ -417,6 +453,9 @@ export function parseArgs(argv: string[]): CliArgs {
       values['review-id'] as string | undefined,
     ),
     itemTitle: values['item-title'] as string,
+    itemIndex: parseLenientIntegerOrNull(
+      values['item-index'] as string | undefined,
+    ),
     body: values.body as string,
     owner: values.owner as string,
     repo: values.repo as string,
@@ -447,6 +486,8 @@ Dry-run by default; --apply mutates.
   --review-id <id>               review REST id whose body lists the item (body-item target;
                                  requires --item-title; cannot combine with --comment-id)
   --item-title <title>           the Previously missed item's title, matched exactly
+  --item-index <n>               the item's 1-based position in the Previously missed
+                                 section; required when two items share the title
   --body <text>                  reply body (required with --apply; with --apply, must start
                                  with **Accepted**, **Rejected**, or
                                  **Rejection confirmed by maintainer** — on a thread, and
@@ -745,22 +786,24 @@ function main(): HelperCliResult {
   const bodyItem = args.reviewId !== null;
   if (
     !args.help &&
-    (bodyItem || args.itemTitle !== '') &&
+    (bodyItem || args.itemTitle !== '' || args.itemIndex !== null) &&
     args.commentId !== null
   ) {
     writeStderrSync(
-      '--comment-id cannot be combined with --review-id or --item-title\n',
+      '--comment-id cannot be combined with --review-id, --item-title, or --item-index\n',
     );
     exitClassified(
       1,
       'usage',
-      '--comment-id cannot be combined with --review-id or --item-title',
+      '--comment-id cannot be combined with --review-id, --item-title, or --item-index',
     );
   }
   const targetValid = bodyItem
     ? Number.isInteger(args.reviewId) &&
       (args.reviewId ?? 0) > 0 &&
-      args.itemTitle.trim() !== ''
+      args.itemTitle.trim() !== '' &&
+      (args.itemIndex === null ||
+        (Number.isInteger(args.itemIndex) && args.itemIndex > 0))
     : Number.isInteger(args.commentId) && (args.commentId ?? 0) > 0;
   if (
     args.help ||
@@ -773,7 +816,7 @@ function main(): HelperCliResult {
       args.help ? 0 : 1,
       'usage',
       bodyItem
-        ? 'missing required --pr <number>, --review-id <id>, or --item-title <title>'
+        ? 'missing or invalid --pr <number>, --review-id <id>, --item-title <title>, or --item-index <n>'
         : 'missing required --pr <number> or --comment-id <id>',
     );
   }
@@ -1167,6 +1210,7 @@ function runBodyItemCli(
       pr,
       reviewId: args.reviewId as number,
       itemTitle: args.itemTitle,
+      itemIndex: args.itemIndex,
       stampedBody,
       apply: args.apply,
       assertClaim: buildClaimAssertion(port, args, context),

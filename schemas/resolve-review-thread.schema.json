@@ -30,6 +30,7 @@
         "prNumber": {},
         "reviewId": {},
         "itemTitle": {},
+        "itemIndex": {},
         "body": {},
         "status": {},
         "replyId": {},
@@ -71,6 +72,11 @@
     "itemTitle": {
       "type": "string",
       "description": "The answered Previously missed item's title, normalized to plain text. Body-item target only."
+    },
+    "itemIndex": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The answered item's 1-based position in the review's Previously missed section. Body-item target only; omitted when the lookup fails."
     },
     "body": {
       "type": "string",
