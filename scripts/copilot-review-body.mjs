@@ -284,8 +284,12 @@ export function extractPreviouslyMissedItems(body) {
           .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
       }));
 }
-/** The named HTML entities a `<summary>` title is decoded from for matching.
- * Numeric character references (`&#39;`, `&#x27;`) are decoded separately. */
+/** The named HTML character references a `<summary>` title is decoded from
+ * for matching: the markup-significant ones, the typographic punctuation a
+ * prose title can carry (dashes, quotes, ellipsis, arrows, comparison signs),
+ * and a few common symbols. A name outside this table is kept as written.
+ * Numeric references (`&#39;`, `&#x27;`) are decoded separately, for every
+ * valid code point. */
 const SUMMARY_TITLE_NAMED_ENTITIES = {
   amp: '&',
   lt: '<',
@@ -293,6 +297,42 @@ const SUMMARY_TITLE_NAMED_ENTITIES = {
   quot: '"',
   apos: "'",
   nbsp: ' ',
+  ndash: '\u2013',
+  mdash: '\u2014',
+  hellip: '\u2026',
+  lsquo: '\u2018',
+  rsquo: '\u2019',
+  sbquo: '\u201A',
+  ldquo: '\u201C',
+  rdquo: '\u201D',
+  bdquo: '\u201E',
+  laquo: '\u00AB',
+  raquo: '\u00BB',
+  lsaquo: '\u2039',
+  rsaquo: '\u203A',
+  bull: '\u2022',
+  middot: '\u00B7',
+  larr: '\u2190',
+  uarr: '\u2191',
+  rarr: '\u2192',
+  darr: '\u2193',
+  harr: '\u2194',
+  rArr: '\u21D2',
+  lArr: '\u21D0',
+  hArr: '\u21D4',
+  le: '\u2264',
+  ge: '\u2265',
+  ne: '\u2260',
+  minus: '\u2212',
+  times: '\u00D7',
+  divide: '\u00F7',
+  plusmn: '\u00B1',
+  deg: '\u00B0',
+  sect: '\u00A7',
+  para: '\u00B6',
+  copy: '\u00A9',
+  reg: '\u00AE',
+  trade: '\u2122',
 };
 /** A named or numeric (decimal or hex) character reference. */
 const CHARACTER_REFERENCE_PATTERN =
@@ -317,7 +357,8 @@ function decodeCharacterReference(reference, decimal, hex, name) {
 /**
  * The plain-text form of a Previously missed item title, for an exact match
  * (#4012): character references are decoded (decimal and hex numeric ones,
- * and the common named ones such as `&amp;`, `&lt;`, and `&apos;`),
+ * and the named ones in {@link SUMMARY_TITLE_NAMED_ENTITIES}, such as
+ * `&amp;`, `&lt;`, `&apos;`, and `&mdash;`),
  * zero-width characters are removed, and whitespace runs collapse to one
  * space. Applied to the caller's title as given, so a title with literal
  * angle-bracket text (`Use <T>`) keeps that text. The body's `<summary>`

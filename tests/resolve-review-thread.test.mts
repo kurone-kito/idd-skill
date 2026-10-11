@@ -1106,7 +1106,7 @@ const BODY_ITEM_REVIEW_BODY = [
   'Another citation-free remark.',
   '</details>',
   '<details>',
-  '<summary><picture><img src="w.png" alt="Low severity"></picture> Don&apos;t drop the caller&#x27;s &#8220;quoted&#8221; text</summary>',
+  '<summary><picture><img src="w.png" alt="Low severity"></picture> Don&apos;t drop the caller&#x27;s &#8220;quoted&#8221; text &mdash; or its &ndash; dashes&hellip;</summary>',
   '',
   'A third citation-free remark.',
   '</details>',
@@ -1241,9 +1241,11 @@ test('findBodyItem keeps literal angle-bracket text in the given title (#4012)',
 
 test('findBodyItem decodes named and numeric character references in the summary (#4012)', () => {
   const reviews = [{ id: BODY_ITEM_REVIEW_ID, body: BODY_ITEM_REVIEW_BODY }];
-  // &apos;, a hex reference, and decimal references all decode, so the
-  // rendered title matches.
-  const rendered = "Don't drop the caller's \u201Cquoted\u201D text";
+  // &apos;, a hex reference, decimal references, and the typographic
+  // &mdash; / &ndash; / &hellip; names all decode, so the rendered title
+  // matches.
+  const rendered =
+    "Don't drop the caller's \u201Cquoted\u201D text \u2014 or its \u2013 dashes\u2026";
   assert.deepEqual(findBodyItem(reviews, BODY_ITEM_REVIEW_ID, rendered, 42), {
     found: true,
     title: rendered,

@@ -2973,10 +2973,12 @@ The adopted helper boundaries are intentionally narrow:
   item that names a file or line (the E6 stamped top-level disposition). The
   helper reads the review (REST `pulls/{n}/reviews`) and refuses a title that
   its `overview-v2` Previously missed section does not list. Titles match
-  exactly once the review's `<summary>` markup is dropped, numeric and common
-  named character references are decoded, and whitespace collapses; the given
-  title keeps any literal angle-bracket text. When two items share the title,
-  it is refused unless `--item-index <n>` (the item's 1-based position in the
+  exactly once the review's `<summary>` markup is dropped, numeric character
+  references and the common named ones (markup characters, typographic dashes,
+  quotes, and ellipsis, arrows, and a few symbols) are decoded, a name outside
+  that set stays as written, and whitespace collapses; the given title keeps
+  any literal angle-bracket text. When two items share the title, it is
+  refused unless `--item-index <n>` (the item's 1-based position in the
   section) picks one, because the merge gate counts dispositions rather than
   pairing them with items. Dry-run prints the stamped body with `reviewId`,
   `itemTitle`, and `itemIndex` and posts nothing; an unknown review or title
