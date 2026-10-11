@@ -157,9 +157,10 @@ export function hasBodyItemDispositionPrefix(body) {
 /**
  * Find the review whose REST id is `reviewId` among `reviews` (the raw
  * `pulls/{n}/reviews` rows) and confirm its Previously missed section lists an
- * item titled `itemTitle` (#4012). Both titles pass through
- * `normalizePreviouslyMissedItemTitle`, and the match is exact, so a partial
- * or misspelled title is refused. A review that is absent, or whose body has
+ * item titled `itemTitle` (#4012). The body's titles lose their HTML markup,
+ * and both sides then pass through `normalizePreviouslyMissedItemTitle`; the
+ * caller's title keeps any literal angle-bracket text. The match is exact, so
+ * a partial or misspelled title is refused. A review that is absent, or whose body has
  * no readable Previously missed section, is refused too (fail closed).
  */
 export function findBodyItem(reviews, reviewId, itemTitle, prNumber) {

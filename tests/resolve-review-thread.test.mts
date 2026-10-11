@@ -1076,14 +1076,14 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
 // --- #4012: body-item target ------------------------------------------------
 
 /** A Copilot `ccr-overview-v2` review body whose Previously missed section
- * lists two items, shaped like PR #4000's review 5480454002. */
+ * lists three items, shaped like PR #4000's review 5480454002. */
 const BODY_ITEM_REVIEW_BODY = [
   '<!-- ccr-overview-v2 -->',
   '',
   '### 🟡 Changes recommended',
   '',
   '<details>',
-  '<summary><strong>Previously missed (2)</strong></summary>',
+  '<summary><strong>Previously missed (3)</strong></summary>',
   '',
   "In code that hasn't changed since last review",
   '',
@@ -1098,6 +1098,11 @@ const BODY_ITEM_REVIEW_BODY = [
   '<summary><picture><img src="y.png" alt="Low severity"></picture> Keep R&amp;D notes  short</summary>',
   '',
   'A citation-free remark.',
+  '</details>',
+  '<details>',
+  '<summary><picture><img src="z.png" alt="Low severity"></picture> Use &lt;T&gt; in the generic signature</summary>',
+  '',
+  'Another citation-free remark.',
   '</details>',
   '</details>',
   '',
@@ -1191,6 +1196,40 @@ test('findBodyItem matches a Previously missed title exactly after normalization
   assert.deepEqual(
     findBodyItem(reviews, BODY_ITEM_REVIEW_ID, 'Keep R&D notes short', 42),
     { found: true, title: 'Keep R&D notes short' },
+  );
+});
+
+test('findBodyItem keeps literal angle-bracket text in the given title (#4012)', () => {
+  const reviews = [{ id: BODY_ITEM_REVIEW_ID, body: BODY_ITEM_REVIEW_BODY }];
+  // The summary escapes the brackets; the rendered title shows them.
+  assert.deepEqual(
+    findBodyItem(
+      reviews,
+      BODY_ITEM_REVIEW_ID,
+      'Use <T> in the generic signature',
+      42,
+    ),
+    { found: true, title: 'Use <T> in the generic signature' },
+  );
+  // The escaped form a caller may copy from the raw body matches too.
+  assert.equal(
+    findBodyItem(
+      reviews,
+      BODY_ITEM_REVIEW_ID,
+      'Use &lt;T&gt; in the generic signature',
+      42,
+    ).found,
+    true,
+  );
+  // Dropping the bracketed text is not the same title.
+  assert.equal(
+    findBodyItem(
+      reviews,
+      BODY_ITEM_REVIEW_ID,
+      'Use in the generic signature',
+      42,
+    ).found,
+    false,
   );
 });
 

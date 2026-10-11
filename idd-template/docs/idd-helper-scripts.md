@@ -2972,11 +2972,13 @@ The adopted helper boundaries are intentionally narrow:
   finding that has no inline thread, such as a Copilot "Previously missed"
   item that names a file or line (the E6 stamped top-level disposition). The
   helper reads the review (REST `pulls/{n}/reviews`) and refuses a title
-  that its `overview-v2` Previously missed section does not list; titles
-  match exactly after tags and the common HTML entities are removed and
-  whitespace collapses. Dry-run prints the stamped body with `reviewId` and
-  `itemTitle` and posts nothing; an unknown review or title is an `error`
-  note (exit `0`), and a failure under `--apply` (exit `1`). `--apply` posts
+  that its `overview-v2` Previously missed section does not list. Titles
+  match exactly once the review's `<summary>` markup is dropped, the common
+  HTML entities are decoded, and whitespace collapses; the given title keeps
+  any literal angle-bracket text. Dry-run prints the stamped body with
+  `reviewId` and `itemTitle` and posts nothing; an unknown review or title is
+  an `error` note (exit `0`), and a failure under `--apply` (exit `1`).
+  `--apply` posts
   exactly one top-level PR comment ending with the reply-identity stamp,
   reports its id as `replyId`, and resolves no thread. Its `--body` must open
   with `**Accepted**` or `**Rejected**`, the recorded-deferral form

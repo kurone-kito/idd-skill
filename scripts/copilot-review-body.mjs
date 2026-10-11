@@ -294,14 +294,14 @@ const SUMMARY_TITLE_ENTITIES = {
 };
 /**
  * The plain-text form of a Previously missed item title, for an exact match
- * (#4012): HTML tags (the severity `<picture>` icon, `<strong>`) are dropped,
- * the common entities are decoded, zero-width characters are removed, and
- * whitespace runs collapse to one space. Applied to both the body's title and
- * the caller's title, so a caller can pass the title as GitHub renders it.
+ * (#4012): the common entities are decoded, zero-width characters are
+ * removed, and whitespace runs collapse to one space. Applied to the caller's
+ * title as given, so a title with literal angle-bracket text (`Use <T>`)
+ * keeps that text. The body's `<summary>` markup is dropped first, by
+ * {@link extractPreviouslyMissedItemTitles}, before the same normalization.
  */
 export function normalizePreviouslyMissedItemTitle(title) {
   return title
-    .replace(/<[^>]*>/g, ' ')
     .replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => {
       return SUMMARY_TITLE_ENTITIES[entity] ?? entity;
     })
@@ -311,9 +311,11 @@ export function normalizePreviouslyMissedItemTitle(title) {
 }
 /**
  * The normalized titles of an `overview-v2` body's Previously missed items, in
- * order (#4012). Each title is the text of the item's own `<summary>`, passed
- * through {@link normalizePreviouslyMissedItemTitle}. `null` under the same
- * conditions as {@link extractPreviouslyMissedItems}.
+ * order (#4012). Each title is the text of the item's own `<summary>` with its
+ * HTML tags (the severity `<picture>` icon, `<strong>`) dropped, before any
+ * entity is decoded, so an escaped `&lt;T&gt;` survives as `<T>`. The result
+ * then passes through {@link normalizePreviouslyMissedItemTitle}. `null`
+ * under the same conditions as {@link extractPreviouslyMissedItems}.
  */
 export function extractPreviouslyMissedItemTitles(body) {
   const blocks = previouslyMissedItemBlocks(body);
@@ -321,7 +323,10 @@ export function extractPreviouslyMissedItemTitles(body) {
     ? null
     : blocks.map((block) =>
         normalizePreviouslyMissedItemTitle(
-          block.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] ?? '',
+          (block.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] ?? '').replace(
+            /<[^>]*>/g,
+            ' ',
+          ),
         ),
       );
 }
