@@ -329,7 +329,7 @@ default run rather than a usage error.
 | `review-activity-snapshot.mjs`       | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review activity           | —                                              | an unexpected exception |
 | `review-comment-origin.mjs`          | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | —                                                  | —                                              | an unexpected exception |
 | `review-disposition-verify.mjs`      | missing or invalid `--items`, or an unknown flag (exit `1`)                                                               | —                                                  | —                                              | an unexpected exception |
-| `resolve-review-thread.mjs`          | missing `--pr` or `--comment-id`, or an unknown flag (exit `1`)                                                           | a `gh` failure resolving the review thread         | `--apply` cannot complete the mutation         | an unexpected exception |
+| `resolve-review-thread.mjs`          | missing `--pr` or a target (`--comment-id`, or `--review-id` with `--item-title`), or an unknown flag (exit `1`)          | a `gh` failure resolving the review thread         | `--apply` cannot complete the mutation         | an unexpected exception |
 | `disposition-non-review-notices.mjs` | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving notices                   | `--apply` posts nothing or loses the claim     | an unexpected exception |
 | `branch-conflict-state.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving the pull request          | —                                              | an unexpected exception |
 | `idd-merge-execute.mjs`              | missing `--pr` or `--claim-id` (exit `1`); an unrecognized flag is ignored and that same missing-`--pr` check still fires | a `gh` failure during collection or merge          | a gate refuses the merge                       | an unexpected exception |
@@ -2967,6 +2967,33 @@ The adopted helper boundaries are intentionally narrow:
 - **Dry-run** reports the resolved `threadId` and current `alreadyResolved`
   state without posting; a comment with no owning thread omits `threadId`
   and includes an `error` note.
+- **Body-item target** (kurone-kito/idd-skill#4012): pass `--review-id <id>`
+  and `--item-title <title>` instead of `--comment-id` to answer a review-body
+  finding that has no inline thread, such as a Copilot "Previously missed"
+  item that names a file or line (the E6 stamped top-level disposition). The
+  helper reads the review (REST `pulls/{n}/reviews`) and refuses a title that
+  its `overview-v2` Previously missed section does not list. Titles match
+  exactly once the review's `<summary>` markup is dropped, numeric character
+  references and the common named ones (markup characters, typographic dashes,
+  quotes, and ellipsis, arrows, and a few symbols) are decoded, a name outside
+  that set stays as written, and whitespace collapses; the given title keeps
+  any literal angle-bracket text. When two items share the title, it is
+  refused unless `--item-index <n>` (the item's 1-based position in the
+  section) picks one, because the merge gate counts dispositions rather than
+  pairing them with items. Dry-run prints the stamped body with `reviewId`,
+  `itemTitle`, and `itemIndex` and posts nothing; an unknown review or title
+  is an `error` note (exit `0`), and a failure under `--apply` (exit `1`).
+  `--apply` posts exactly one top-level PR comment ending with the
+  reply-identity stamp, reports its id as `replyId`, and resolves no thread.
+  Its `--body` must open with `**Accepted**` or `**Rejected**`, the
+  recorded-deferral form included; `**Rejection confirmed by maintainer**` is
+  refused, since it closes a thread AMD. The merge gate credits a plain
+  `**Rejected**` reply only when it names the file or line
+  (kurone-kito/idd-skill#3942), so a Rejected body should include that
+  citation. The claim checks are the thread target's, run once before the
+  post. Observed on PR `#4000` (2026-10-11): three of these dispositions were
+  posted by hand with `gh pr comment`, skipping the claim checks and the
+  first-bytes rule.
 - **Fail-closed**: `--apply` requires `--body` and, unless `--claimless`,
   the `--claim-issue` / `--claim-id` pair; absent `--claimless` it
   re-validates the active claim before **each** of the reply and the
