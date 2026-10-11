@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveFetchOrigin } from './branch-conflict-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
 import { ghText, resolveGhOwnerRepo } from './gh-exec.mjs';
@@ -74,17 +75,37 @@ export const FIXED_COMMANDS = [
  * Run git with an empty hooks directory, so no hook runs in this audit,
  * including the post-checkout hook that `worktree add` fires.
  */
-function git(cwd, hooksDir, args, env) {
+/**
+ * The inherited environment without repository overrides (GIT_DIR,
+ * GIT_WORK_TREE and the rest), so a hook or wrapper that exports them cannot
+ * point this audit at another repository. Credential prompts are disabled so
+ * a stalled fetch fails instead of waiting for input.
+ */
+function sanitizedEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) delete env[key];
+  }
+  env.GIT_TERMINAL_PROMPT = '0';
+  return env;
+}
+/** A fetch that stalls is cut off, so it cannot hold the clone lock forever. */
+const FETCH_TIMEOUT_MS = 180_000;
+function git(cwd, hooksDir, args, env, timeout) {
   const result = spawnSync(
     'git',
     ['-c', `core.hooksPath=${hooksDir}`, ...args],
     {
       cwd,
       encoding: 'utf8',
-      env: env ?? process.env,
+      env: env ?? sanitizedEnv(),
+      timeout,
     },
   );
-  return { status: result.status, stdout: result.stdout ?? '' };
+  return {
+    status: result.status,
+    stdout: result.stdout ?? '',
+  };
 }
 function gitAtLeast(hooksDir, major, minor) {
   const out = git(process.cwd(), hooksDir, ['--version']);
@@ -115,7 +136,13 @@ function defaultReadPr(owner, repo, pr) {
 }
 function defaultRun(argv, cwd) {
   const [command, ...args] = argv;
-  const result = spawnSync(command, args, { cwd, stdio: 'ignore' });
+  // On Windows pnpm is a .cmd shim, which only a shell resolves.
+  const result = spawnSync(command, args, {
+    cwd,
+    stdio: 'ignore',
+    env: sanitizedEnv(),
+    shell: process.platform === 'win32',
+  });
   return {
     exitCode: result.status,
     error: result.error,
@@ -146,6 +173,9 @@ export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
   const hooksDir = mkdtempSync(join(tmpdir(), 'idd-trial-hooks-'));
   const tmp = join(mkdtempSync(join(tmpdir(), 'idd-trial-merge-')), 'worktree');
   const ctx = { worktreeCreated: false };
+  const fetchUrl =
+    deps.fetchUrl ??
+    `https://${resolveFetchOrigin().host}/${owner}/${repoName}.git`;
   let result;
   let worktreeRemoved = true;
   try {
@@ -162,11 +192,12 @@ export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
       runCommand,
       agentId,
       lockTimeoutMs,
+      fetchUrl,
     });
   } finally {
     if (ctx.worktreeCreated) {
-      // Re-acquire the lock for removal. A removal failure falls back to a
-      // directory delete, and the record is reported, not pruned.
+      // Re-acquire the lock for removal. A failed removal is reported, and the
+      // directory is left in place for the operator. Nothing is pruned.
       try {
         const lock = acquireCloneLock(repo, agentId, lockTimeoutMs);
         try {
@@ -176,22 +207,20 @@ export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
             '--force',
             tmp,
           ]);
-          if (removed.status !== 0) {
-            rmSync(tmp, { recursive: true, force: true });
-          }
-          worktreeRemoved = !existsSync(tmp);
+          worktreeRemoved = removed.status === 0 && !existsSync(tmp);
         } finally {
           releaseCloneLock(lock);
         }
       } catch {
-        // The lock was unavailable: leave the scratch record and report it.
         worktreeRemoved = false;
       }
     }
     rmSync(hooksDir, { recursive: true, force: true });
-    rmSync(join(tmp, '..'), { recursive: true, force: true });
+    if (worktreeRemoved)
+      rmSync(join(tmp, '..'), { recursive: true, force: true });
   }
   result.worktreeRemoved = worktreeRemoved;
+  if (!worktreeRemoved) result.reasons.push('worktree-remove-failed');
   return result;
 }
 function emptyResult(reason, fields = {}) {
@@ -229,15 +258,34 @@ function audit(args) {
   }
   let trialCommit = '';
   try {
-    const fetched = git(repo, hooksDir, [
-      'fetch',
-      '--no-tags',
-      'origin',
-      pull.baseRefName,
-      `pull/${pr}/head`,
-    ]);
+    const fetched = git(
+      repo,
+      hooksDir,
+      [
+        'fetch',
+        '--no-tags',
+        args.fetchUrl,
+        pull.baseRefName,
+        `pull/${pr}/head`,
+      ],
+      undefined,
+      FETCH_TIMEOUT_MS,
+    );
     if (fetched.status !== 0) {
       return emptyResult('fetch-failed', { prHeadSha: headSha, baseSha });
+    }
+    // The SHAs must still be the tips read before the lock. A PR that moved
+    // during the wait would otherwise be merged at an older commit.
+    const again = args.readPr(args.owner, args.repoName, pr);
+    if (again.headRefOid !== headSha || again.baseRefOid !== baseSha) {
+      return emptyResult('pr-moved', { prHeadSha: headSha, baseSha });
+    }
+    for (const sha of [headSha, baseSha]) {
+      if (
+        git(repo, hooksDir, ['cat-file', '-e', `${sha}^{commit}`]).status !== 0
+      ) {
+        return emptyResult('fetch-failed', { prHeadSha: headSha, baseSha });
+      }
     }
     const merged = git(repo, hooksDir, [
       'merge-tree',

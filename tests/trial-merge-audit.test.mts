@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
@@ -20,10 +20,11 @@ import {
   runTrialMergeAudit,
   type TrialMergeAuditDeps,
 } from '../src/scripts/trial-merge-audit.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const GIT_ENV = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_GLOBAL: devNull,
   GIT_AUTHOR_NAME: 't',
   GIT_AUTHOR_EMAIL: 't@t',
   GIT_COMMITTER_NAME: 't',
@@ -76,7 +77,12 @@ function makeFixture(
   git(root, ['init', '--bare', '--quiet', remote]);
   mkdirSync(work);
   git(work, ['init', '--quiet', '-b', 'main']);
-  git(work, ['remote', 'add', 'origin', remote]);
+  git(work, ['remote', 'add', 'origin', 'https://github.com/o/r.git']);
+  git(work, [
+    'config',
+    `url.${remote}.insteadOf`,
+    'https://github.com/o/r.git',
+  ]);
   write(
     work,
     'package.json',
@@ -367,4 +373,71 @@ test('CLI: --help prints usage and a missing --pr is a usage error', () => {
   );
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /missing required --pr/);
+});
+
+test('pr-moved: a PR whose tip changed during the lock wait is not-run', () => {
+  const fixture = makeFixture();
+  let calls = 0;
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: () => {
+      calls += 1;
+      return {
+        headRefOid: fixture.headSha,
+        baseRefOid: calls === 1 ? fixture.baseSha : fixture.headSha,
+        baseRefName: 'main',
+      };
+    },
+    runInstall: realInstall,
+    lockTimeoutMs: 2000,
+  });
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['pr-moved']);
+  assert.equal(result.trialCommit, null);
+});
+
+test('CLI: a successful run prints one JSON verdict with the fixed commands', {
+  skip: process.platform === 'win32',
+}, () => {
+  const fixture = makeFixture();
+  const payload = JSON.stringify({
+    headRefOid: fixture.headSha,
+    baseRefOid: fixture.baseSha,
+    baseRefName: 'main',
+  });
+  const restoreGh = stubExecutable(
+    'gh',
+    `process.stdout.write(${JSON.stringify(payload)});`,
+  );
+  const restorePnpm = stubExecutable('pnpm', 'process.exit(0);');
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        join(process.cwd(), 'tests/isolate-state.mts'),
+        join(process.cwd(), 'src/scripts/trial-merge-audit.mts'),
+        '--pr',
+        '1',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+      ],
+      { cwd: fixture.work, encoding: 'utf8', env: process.env },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    const out = JSON.parse(run.stdout) as {
+      verdict: string;
+      prHeadSha: string;
+      baseSha: string;
+      commands: unknown[];
+    };
+    assert.equal(out.verdict, 'passed');
+    assert.equal(out.prHeadSha, fixture.headSha);
+    assert.equal(out.baseSha, fixture.baseSha);
+    assert.equal(out.commands.length, 3);
+  } finally {
+    restorePnpm();
+    restoreGh();
+  }
 });
