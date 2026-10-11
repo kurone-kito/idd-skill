@@ -15,6 +15,7 @@ import {
   normalizeSecondaryBotLoginList,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mts';
+import type { ProviderPort } from './provider-port.mts';
 
 // Re-exported so callers that already import advisory-bot-identity helpers
 // from this façade (merged-pr-feedback-sweep.mts,
@@ -10648,6 +10649,251 @@ export function resolvePrFirstCommitAt(
     }
   }
   return earliestIso;
+}
+
+/** GraphQL PullRequestState: the only states a closing reference can carry (#3871). */
+const PULL_REQUEST_STATES: readonly string[] = ['OPEN', 'CLOSED', 'MERGED'];
+
+/** Fold one raw CONNECTED_EVENT/DISCONNECTED_EVENT timeline node into the
+ * running connected/state maps {@link fetchOpenLinkedPrReferences} reconciles
+ * afterward. The last connect/disconnect event per PR wins (the timeline is
+ * chronological, and pagination preserves that order across pages). */
+function applyConnectedPrEventNode(
+  node: unknown,
+  connected: Map<number, boolean>,
+  states: Map<number, string>,
+): void {
+  const record = node as {
+    __typename?: unknown;
+    subject?: { __typename?: unknown; number?: unknown; state?: unknown };
+  } | null;
+  const subject = record?.subject;
+  if (subject?.__typename !== 'PullRequest') {
+    return;
+  }
+  const number =
+    typeof subject.number === 'number' ? subject.number : Number.NaN;
+  if (!Number.isInteger(number)) {
+    return;
+  }
+  if (record?.__typename === 'ConnectedEvent') {
+    connected.set(number, true);
+    states.set(number, String(subject.state ?? ''));
+  } else if (record?.__typename === 'DisconnectedEvent') {
+    connected.set(number, false);
+  }
+}
+
+/**
+ * Resolve the set of open pull requests that back this issue's claim, as
+ * normalized PR references, plus whether the lookup itself failed. A PR
+ * counts when either provider signal shows it open and linked:
+ *
+ * - the connected timeline: a PR connected to the issue via
+ *   `CONNECTED_EVENT` (reconciled against later `DISCONNECTED_EVENT`s) that
+ *   is currently `OPEN` (a manual Development link, #3276);
+ * - the closing references: an open PR of this repository whose body closes
+ *   the issue with a closing keyword (`Closes #N`), which is how IDD pull
+ *   requests link and which produces no `ConnectedEvent` (#3871). A closing
+ *   reference naming another repository is ignored.
+ *
+ * Both signals are read to the end with the same cursor-progress checks, so a
+ * failure in either one is a lookup failure. A bare cross-reference or mention
+ * never counts, so an unrelated open PR that merely mentions the issue does
+ * not falsely block a legitimate `issue-only` forced handoff.
+ *
+ * #3276: paginates {@link ProviderPort.getConnectedPullRequestEventsPage}
+ * (which throws on a failed or malformed page, matching
+ * `idd-roadmap-audit-execute.mts`'s `hasOpenConnectedPr` precedent) instead
+ * of the unpaginated, fail-open `getConnectedPullRequestEventsSingle`.
+ * A failed read of either signal sets `lookupFailed: true`. The failed signal
+ * contributes nothing: a failed connected read discards its partial map, and a
+ * failed closing read adds no node. The other signal's references are kept
+ * when that read succeeds (#3871), so `references` can be non-empty on a
+ * failure. A successful lookup that legitimately found no open linked PR is
+ * `lookupFailed: false` with an empty set. Callers must not treat a failure
+ * and an empty success the same way -- see
+ * {@link ResumeClaimRoutingOptions.linkedPrLookupFailed}.
+ */
+export function fetchOpenLinkedPrReferences(
+  port: ProviderPort,
+  issueNumber: number | null,
+  repository: string,
+): { references: Set<string>; lookupFailed: boolean } {
+  const references = new Set<string>();
+  if (!Number.isInteger(issueNumber)) {
+    return { references, lookupFailed: false };
+  }
+  const connected = new Map<number, boolean>();
+  const states = new Map<number, string>();
+  const closing = new Set<number>();
+  const issueRepository = repository.trim().toLowerCase();
+  // Each signal is read on its own, so a failed read never hides the other
+  // one (#3871). Any failure fails the lookup, but the references that each
+  // successful read found are kept. A connected map from a failed read is
+  // partial, so it is not used.
+  // Number.isInteger(issueNumber) above already excludes null; TS can't
+  // narrow a plain boolean-returning call the way a type predicate would.
+  let connectedFailed = false;
+  try {
+    readAllPages(
+      (after) =>
+        port.getConnectedPullRequestEventsPage(issueNumber as number, after),
+      (page) => {
+        for (const node of page.events) {
+          applyConnectedPrEventNode(node, connected, states);
+        }
+      },
+    );
+  } catch {
+    connectedFailed = true;
+  }
+  let closingFailed = false;
+  try {
+    // A blank repository cannot tell this repository's closing references from
+    // another's, so the closing read fails rather than matching blank values.
+    if (issueRepository.length === 0) {
+      throw new Error('blank repository for the closing-reference match');
+    }
+    readAllPages(
+      (after) =>
+        port.getWorkItemClosingPullRequestsPage(issueNumber as number, after),
+      (page) => {
+        for (const node of page.nodes) {
+          // An unknown state could be an open PR this lookup would miss, so
+          // it fails the lookup instead of being skipped.
+          if (
+            node.state === undefined ||
+            !PULL_REQUEST_STATES.includes(node.state)
+          ) {
+            throw new Error('closing-reference node without a known state');
+          }
+          if (node.state !== 'OPEN') {
+            continue;
+          }
+          // A missing number or repository must not read as "another
+          // repository" or as no PR at all: fail the lookup (#3871).
+          if (
+            typeof node.number !== 'number' ||
+            !Number.isSafeInteger(node.number) ||
+            node.number <= 0 ||
+            typeof node.repository !== 'string' ||
+            node.repository.trim().length === 0
+          ) {
+            throw new Error(
+              'open closing-reference node without a number or repository',
+            );
+          }
+          if (node.repository.trim().toLowerCase() !== issueRepository) {
+            continue;
+          }
+          closing.add(node.number);
+        }
+      },
+    );
+  } catch {
+    closingFailed = true;
+  }
+  if (!connectedFailed) {
+    for (const [number, isConnected] of connected) {
+      if (isConnected && states.get(number) === 'OPEN') {
+        references.add(normalizeLinkedPrReference(number));
+      }
+    }
+  }
+  if (!closingFailed) {
+    for (const number of closing) {
+      references.add(normalizeLinkedPrReference(number));
+    }
+  }
+  return { references, lookupFailed: connectedFailed || closingFailed };
+}
+
+/**
+ * Walk every page of a cursor-paginated provider read, handing each page to
+ * `consume`. A page that reports more results without a cursor, or a cursor
+ * that repeats (immediately or in a cycle), throws: either would otherwise
+ * read as a smaller, wrong set (#3276, CodeRabbit review, PR #3386). No page
+ * cap is imposed, so a genuinely long timeline is still read in full.
+ */
+function readAllPages<
+  T extends { hasNextPage: boolean; endCursor: string | null },
+>(readPage: (after: string | null) => T, consume: (page: T) => void): void {
+  let after: string | null = null;
+  const seenCursors = new Set<string>();
+  for (;;) {
+    const page = readPage(after);
+    consume(page);
+    if (!page.hasNextPage) {
+      return;
+    }
+    const nextCursor = page.endCursor ?? null;
+    if (!nextCursor) {
+      // hasNextPage with no endCursor: a truncated read could miss a later
+      // event and silently read as a smaller set, which this lookup exists to
+      // rule out.
+      throw new Error('incomplete pagination: hasNextPage with no endCursor');
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error('non-progressing pagination: repeated endCursor');
+    }
+    seenCursors.add(nextCursor);
+    after = nextCursor;
+  }
+}
+
+/**
+ * The earliest first-commit time over every open PR that backs the claim, plus
+ * the PR being evaluated (#3998, from a CodeRabbit finding on the claim-rule
+ * PR). The merge gate judges an `issue-only` forced handoff against this same
+ * set Resume does (#3871), not against the one PR it is merging.
+ *
+ * `ownCommits` is that PR's commit list, already read by the caller. A failed
+ * link lookup, a failed or malformed commits read on any linked PR, or a time
+ * that cannot be parsed returns `null`, which rejects the handoff (fail closed).
+ */
+export function resolveClaimPrFirstCommitAt(
+  port: ProviderPort,
+  claimIssueNumber: number | null,
+  repository: string,
+  prNumber: number,
+  ownCommits: PrCommitPayload[],
+): string | null {
+  const linked = fetchOpenLinkedPrReferences(
+    port,
+    claimIssueNumber,
+    repository,
+  );
+  if (linked.lookupFailed) {
+    return null;
+  }
+  let earliest = resolvePrFirstCommitAt(ownCommits);
+  if (earliest === null) {
+    return null;
+  }
+  for (const reference of linked.references) {
+    if (reference === String(prNumber)) {
+      continue;
+    }
+    let commits: unknown;
+    try {
+      commits = port.listChangeRequestCommits(Number(reference));
+    } catch {
+      return null;
+    }
+    // A non-array response is a failed read, not an unknown time (#3276).
+    if (!Array.isArray(commits)) {
+      return null;
+    }
+    const first = resolvePrFirstCommitAt(commits as PrCommitPayload[]);
+    if (first === null) {
+      return null;
+    }
+    if (Date.parse(first) < Date.parse(earliest)) {
+      earliest = first;
+    }
+  }
+  return earliest;
 }
 
 /**

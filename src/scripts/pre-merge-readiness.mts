@@ -55,6 +55,7 @@ import {
 } from './helper-cli-runner.mts';
 import { type ActivationResult, computeActivation } from './idd-activation.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
+import { parseForcedHandoffComment } from './marker-helpers.mts';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -83,6 +84,7 @@ import {
   readClaimStaleAgeMs,
   resolveActiveClaim,
   resolveAdvisoryBotLogins,
+  resolveClaimPrFirstCommitAt,
   resolveClosingIssueNumbersForClassifier,
   resolveCodeownersForFiles,
   resolvePrFirstCommitAt,
@@ -1087,18 +1089,36 @@ export function collectPreMergeReadiness(
   } catch {
     prCommits = null;
   }
-  // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
-  // a legitimate issue-only handoff that predates the PR is honored even
-  // against a PR-backed claim. Resume routing applies the same time rule since
-  // #3871; the author binding is what still differs between the two (see
+  // The first-commit time backs the Part B forced-handoff rule (#1058): a
+  // legitimate issue-only handoff that predates the PR is honored even against
+  // a PR-backed claim. It is the earliest first commit over every open PR that
+  // backs the claim (#3871, #3998), not just this PR, matching Resume routing;
+  // the author binding is what still differs between the two (see
   // docs/idd-design-rationale.md, "Forced-handoff strictness"). Resolve it
-  // only when forced handoffs are enabled and the commit list actually read,
-  // and fail closed to `null` (reject) otherwise so a transient commits-API
-  // failure never aborts the readiness gate.
-  const prFirstCommitAt: string | null =
-    forcedHandoffEnabled && prCommits
-      ? resolvePrFirstCommitAt(prCommits)
-      : null;
+  // only when forced handoffs are enabled and this PR's commit list actually
+  // read, and fail closed to `null` (reject) otherwise so a transient
+  // commits-API failure never aborts the readiness gate.
+  // Only an issue-only handoff reads this time, so the linked-PR lookup runs
+  // only when one is among the claim comments (as Resume's own read does).
+  const hasIssueOnlyForcedHandoff = claimComments.some(
+    (comment) =>
+      parseForcedHandoffComment(
+        String(comment.body ?? ''),
+        String(comment.created_at ?? ''),
+      )?.contextScope === 'issue-only',
+  );
+  let prFirstCommitAt: string | null = null;
+  if (forcedHandoffEnabled && prCommits) {
+    prFirstCommitAt = hasIssueOnlyForcedHandoff
+      ? resolveClaimPrFirstCommitAt(
+          port,
+          args.claimIssueNumber,
+          `${owner}/${repo}`,
+          args.prNumber,
+          prCommits,
+        )
+      : resolvePrFirstCommitAt(prCommits);
+  }
   // #3298: the *live* repository default branch, matching D3.5's own
   // non-default-branch exemption -- distinct from developmentBranchTarget's
   // *configured* development-branch value above (a configured

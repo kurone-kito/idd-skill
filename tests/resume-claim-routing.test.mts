@@ -35,6 +35,7 @@ import {
   DEFAULT_STALE_AGE_MS,
   normalizeLinkedPrReference,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
+  resolveClaimPrFirstCommitAt,
   summarizeClaimValidation as summarizeClaimValidationImpl,
 } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
@@ -5719,6 +5720,97 @@ test('#3871: a closing-reference node with an unknown state fails the lookup ins
     },
   });
   assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
+});
+
+// #3998: the merge gate's claim time is the earliest first commit over every
+// open PR that backs the claim, not only the PR being merged (CodeRabbit on
+// PR #4004). `OWN_PR` is the PR under evaluation.
+const OWN_PR = 90;
+
+test('#3998: the claim time is the earliest first commit over the open PRs that back the claim', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_BEFORE_MARKER)] },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, 11, REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    COMMIT_BEFORE_MARKER,
+  );
+});
+
+test('#3998: the PR being merged keeps its own time and is not re-read when it is the earliest', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [
+            closingNode(77, 'OPEN', REPO),
+            closingNode(OWN_PR, 'OPEN', REPO),
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+    changeRequestCommitErrors: { [OWN_PR]: 'must not be re-read' },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, 11, REPO, OWN_PR, [
+      commitAt(COMMIT_BEFORE_MARKER),
+    ]),
+    COMMIT_BEFORE_MARKER,
+  );
+});
+
+test('#3998: without a claim issue only the PR being merged is judged', () => {
+  const port = createFakeProviderAdapter({});
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, null, REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    COMMIT_AFTER_MARKER,
+  );
+});
+
+test('#3998: a failed commits read on a linked open PR fails the claim time closed', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommitErrors: { 77: 'commits unavailable' },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, 11, REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    null,
+  );
+});
+
+test('#3998: a failed link lookup or an undated own commit list fails the claim time closed', () => {
+  const failedLookup = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(77, 'UNKNOWN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(failedLookup, 11, REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    null,
+  );
+  const undated = createFakeProviderAdapter({});
+  assert.equal(
+    resolveClaimPrFirstCommitAt(undated, null, REPO, OWN_PR, [{ commit: {} }]),
+    null,
+  );
 });
 
 // #3873: the refusal cause from the explainer reaches the ignored-handoff
