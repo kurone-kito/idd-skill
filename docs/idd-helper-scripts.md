@@ -2981,10 +2981,12 @@ The adopted helper boundaries are intentionally narrow:
   reports its id as `replyId`, and resolves no thread. Its `--body` must open
   with `**Accepted**` or `**Rejected**`, the recorded-deferral form
   included; `**Rejection confirmed by maintainer**` is refused, since it
-  closes a thread AMD. The claim checks are the thread target's, run once
-  before the post. Observed on PR `#4000` (2026-10-11): three of these
-  dispositions were posted by hand with `gh pr comment`, skipping the claim
-  checks and the first-bytes rule.
+  closes a thread AMD. The merge gate credits a plain `**Rejected**` reply
+  only when it names the file or line (kurone-kito/idd-skill#3942), so a
+  Rejected body should include that citation. The claim checks are the
+  thread target's, run once before the post. Observed on PR `#4000`
+  (2026-10-11): three of these dispositions were posted by hand with
+  `gh pr comment`, skipping the claim checks and the first-bytes rule.
 - **Fail-closed**: `--apply` requires `--body` and, unless `--claimless`,
   the `--claim-issue` / `--claim-id` pair; absent `--claimless` it
   re-validates the active claim before **each** of the reply and the
