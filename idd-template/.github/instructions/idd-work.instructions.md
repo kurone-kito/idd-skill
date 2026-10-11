@@ -498,7 +498,7 @@ local runtime's user-global config file apply. A repository may also
 configure `critiqueLoop.telemetryHook` for a separate fire-and-forget
 per-round JSON record that C2/C4 below invoke but that never gates
 control flow; see `docs/idd-workflow.md`'s "Critique pass invocation"
-section for both. A delegated subagent's brief names a parent-created
+section for both. A delegated per-agent critique subagent's brief names a parent-created
 scratch directory and quotes rule 3: "the subagent uses only that
 directory and creates none"; then run the post-round scratch check.
 
