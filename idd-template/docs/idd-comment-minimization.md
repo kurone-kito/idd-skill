@@ -753,11 +753,13 @@ in error, by these rules:
    makes the check compare with the marker before it, which may name
    another set, so a correct marker needs no hiding.
 3. A trusted comment that quotes the owner-marker string in prose and does
-   not parse blocks every owner post on its issue until it is hidden, so
-   keep that string out of prose (statement 5 above). With no trusted
+   not parse blocks every owner post on its issue until it is hidden
+   (preventive; no observed incident yet), so keep that string out of prose
+   (statement 5 above). With no trusted
    logins configured, any commenter's such comment counts, so the exposure
    is widest in a repository that does not configure `trustedMarkerActors`.
-4. A losing acquire can be the newest marker of its target. While it stays
+4. A losing acquire can be the newest marker of its target (preventive; no
+   observed incident yet). While it stays
    visible, the first set's heartbeats and releases are refused, because the
    check compares with the newest marker and not with the opener of the set
    that is running. Whether it was posted in error is the maintainer's
