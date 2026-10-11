@@ -27,12 +27,14 @@ import {
   DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
   formatAssertNextActions,
   hasTrustedClaimMarkerHistory,
+  hasTrustedHeadApproval,
   isSoleCopilotNotReviewedYetReason,
   parseArgs,
   pendingReviewFingerprint,
   pickResolvingClaimEvents,
   readCopilotReviewPollPolicy,
   resolveClaimEvidence,
+  resolveSelfReferentialDecisionRuleFiles,
   resolveSelfReferentialTriggerFiles,
   retryTransientGhFailure,
   reviewPolicyNotApplicableReason,
@@ -40,6 +42,8 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES,
+  SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   verifySelfReferentialBootstrapWaiverRun,
   viewerProbeGhOptions,
@@ -5050,6 +5054,229 @@ test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the runtime config (Codex r
       '.github/idd/config.json',
     ),
   );
+});
+
+// kurone-kito/idd-skill#4015: decision-rule trigger files never receive the
+// self-referential-bootstrap-auto waiver.
+test('#4015: every trigger file is in exactly one of the bootstrap and decision-rule lists', () => {
+  for (const path of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES) {
+    const inBootstrap = (
+      SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES as readonly string[]
+    ).includes(path);
+    const inDecisionRule = (
+      SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES as readonly string[]
+    ).includes(path);
+    assert.ok(
+      inBootstrap !== inDecisionRule,
+      `expected ${path} in exactly one list (bootstrap=${inBootstrap}, decision-rule=${inDecisionRule})`,
+    );
+  }
+  assert.deepEqual(
+    [
+      ...SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES,
+      ...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
+    ].sort(),
+    [...SELF_REFERENTIAL_WAIVER_TRIGGER_FILES].sort(),
+  );
+  assert.deepEqual([...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES].sort(), [
+    'src/scripts/advisory-convergence.mts',
+    'src/scripts/advisory-wait-policy.mts',
+    'src/scripts/protocol-helpers.mts',
+  ]);
+});
+
+test('#4015: only this source repository resolves a decision-rule list', () => {
+  assert.deepEqual(
+    resolveSelfReferentialDecisionRuleFiles(REPO_FULL_NAME),
+    SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
+  );
+  assert.deepEqual(
+    resolveSelfReferentialDecisionRuleFiles('someone-else/adopter-repo'),
+    [],
+  );
+  assert.deepEqual(resolveSelfReferentialDecisionRuleFiles(undefined), []);
+});
+
+function decisionRuleVerdict(
+  changedFilePaths: string[],
+  reviews: AdvisoryConvergenceInputs['reviews'] = [],
+  optionOverrides: Partial<AdvisoryConvergenceOptions> = {},
+) {
+  return computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews,
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths,
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+      decisionRuleApproverLogins: [TRUSTED],
+      ...optionOverrides,
+    }),
+  );
+}
+
+function maintainerReview(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'maintainer-review',
+    author: { login: TRUSTED, __typename: 'User' },
+    submittedAt: RECENT,
+    commitId: HEAD,
+    itemCount: 0,
+    body: '',
+    state: 'APPROVED',
+    ...overrides,
+  };
+}
+
+test('#4015: a bootstrap-only diff still receives the auto-waiver', () => {
+  const verdict = decisionRuleVerdict([
+    'src/scripts/provider-adapter-github.mts',
+  ]);
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.decisionRuleFilesTouched, false);
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('#4015: a decision-rule diff receives no auto-waiver and is not ready without approval', () => {
+  for (const path of SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES) {
+    // A bootstrap file in the same diff does not restore the waiver.
+    const verdict = decisionRuleVerdict([
+      path,
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    ]);
+    assertValidVerdict(verdict);
+    assert.equal(verdict.waiver.decisionRuleFilesTouched, true);
+    assert.equal(verdict.waiver.autoWaiverValid, false);
+    assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+    assert.equal(verdict.ready, false);
+    assert.ok(
+      verdict.reasons.some(
+        (reason) =>
+          reason.includes(path) && reason.includes('trustedMarkerActors'),
+      ),
+      `expected a decision-rule reason naming ${path}`,
+    );
+  }
+});
+
+test('#4015: a decision-rule diff passes with a trusted approval of the current HEAD', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/protocol-helpers.mts'],
+    [maintainerReview()],
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, true);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('#4015: a decision-rule diff still passes through a converged review', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [copilotReview()],
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('#4015: an approval of an older commit does not count', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [maintainerReview({ commitId: OTHER_SHA })],
+  );
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('#4015: an approval from a login outside trustedMarkerActors does not count', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [
+      maintainerReview({
+        author: { login: 'someone-else', __typename: 'User' },
+      }),
+    ],
+  );
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+  assert.equal(verdict.ready, false);
+  // The widened marker-trust set alone never authorizes the approval.
+  const widened = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [maintainerReview()],
+    { decisionRuleApproverLogins: [] },
+  );
+  assert.equal(widened.waiver.decisionRuleApprovalValid, false);
+  assert.equal(widened.ready, false);
+});
+
+test('#4015: a trusted approval does not replace review for a pull request outside the decision-rule list', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [maintainerReview()],
+      claimEvents: [claimComment()],
+      changedFilePaths: ['docs/README.md'],
+    }),
+    baseOptions({
+      repositoryFullName: REPO_FULL_NAME,
+      decisionRuleApproverLogins: [TRUSTED],
+    }),
+  );
+  assert.equal(verdict.waiver.decisionRuleFilesTouched, false);
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('#4015: hasTrustedHeadApproval uses the latest gating review per login', () => {
+  const approved = maintainerReview({ submittedAt: '2026-07-11T10:00:00Z' });
+  const commented = maintainerReview({
+    state: 'COMMENTED',
+    submittedAt: '2026-07-11T10:30:00Z',
+  });
+  const changesRequested = maintainerReview({
+    state: 'CHANGES_REQUESTED',
+    submittedAt: '2026-07-11T11:00:00Z',
+  });
+  assert.equal(hasTrustedHeadApproval([approved], HEAD, ['Kurone-Kito']), true);
+  // A later COMMENTED review does not withdraw the approval.
+  assert.equal(
+    hasTrustedHeadApproval([approved, commented], HEAD, [TRUSTED]),
+    true,
+  );
+  // A later CHANGES_REQUESTED review does.
+  assert.equal(
+    hasTrustedHeadApproval([approved, changesRequested], HEAD, [TRUSTED]),
+    false,
+  );
+  // Dismissing the approval changes that same review's state.
+  assert.equal(
+    hasTrustedHeadApproval([maintainerReview({ state: 'DISMISSED' })], HEAD, [
+      TRUSTED,
+    ]),
+    false,
+  );
+  assert.equal(hasTrustedHeadApproval([approved], HEAD, []), false);
+  assert.equal(hasTrustedHeadApproval([approved], '', [TRUSTED]), false);
 });
 
 test('resolveSelfReferentialTriggerFiles: this source repository always resolves its own fixed list, regardless of profile (Codex + Copilot review, PR #2895)', () => {

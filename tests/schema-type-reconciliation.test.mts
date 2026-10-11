@@ -982,6 +982,8 @@ const advisoryConvergenceFixture = {
     validCount: 0,
     outageRelieved: false,
     autoWaiverValid: false,
+    decisionRuleFilesTouched: false,
+    decisionRuleApprovalValid: false,
   },
   dispositionEvidence: {
     missingRegularCommentCount: 0,
