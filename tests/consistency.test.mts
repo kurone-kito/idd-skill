@@ -939,7 +939,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       verifySettleDelay: 'PT5S',
     },
     critiqueLoop: {
-      cPhaseLowSeveritySkipAfter: 3,
+      cPhaseLowSeveritySkipAfter: 2,
       e10NoProgressHoldAfter: 3,
       e10MaxPasses: 2,
       deferAfterRounds: 12,

@@ -719,7 +719,7 @@
         "cPhaseLowSeveritySkipAfter": {
           "type": "integer",
           "minimum": 1,
-          "description": "Loop-count threshold after which C4 may skip remaining Low-severity Accepted findings, once the objective diff validation floor has also passed. Optional; defaults to `3`."
+          "description": "Loop-count threshold after which C4 may skip remaining Low-severity Accepted findings, once the objective diff validation floor has also passed. Optional; defaults to `2`."
         },
         "e10NoProgressHoldAfter": {
           "type": "integer",

@@ -1580,7 +1580,7 @@ supports these keys:
 
 - `discover.activeClaimPreScanBatchSize` (default `10`)
 - `claim.verifySettleDelay` (default `PT5S`)
-- `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `3`)
+- `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `2`)
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
 - `critiqueLoop.e10MaxPasses` (default `2`; per-issue cap on E10 passes,
   active only while no High or Medium Accepted finding is open)

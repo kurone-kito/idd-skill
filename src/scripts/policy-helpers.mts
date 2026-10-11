@@ -754,7 +754,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   // `.critiqueLoop.delegate` on every caller. The runtime object still has
   // no `delegate` key at all -- see the clone() doc comment's invariant.
   critiqueLoop: Object.freeze({
-    cPhaseLowSeveritySkipAfter: 3,
+    cPhaseLowSeveritySkipAfter: 2,
     e10NoProgressHoldAfter: 3,
     e10MaxPasses: 2,
     deferAfterRounds: 12,

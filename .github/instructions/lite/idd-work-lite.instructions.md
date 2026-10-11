@@ -393,7 +393,7 @@ pass asks, never a separate pass to run on top of the one that ran.
 2. If accepted issues remain and the floor has not passed, continue to C5.
 3. Otherwise, if no accepted issues remain and the floor has passed, open and
    follow `idd-pr-submit-lite.instructions.md` now.
-4. Otherwise, if only low accepted issues remain after more than 3 loops and
+4. Otherwise, if only low accepted issues remain after more than 2 loops and
    the floor has passed, open and follow `idd-pr-submit-lite.instructions.md` now.
 5. Otherwise continue to C5.
 
