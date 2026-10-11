@@ -1007,8 +1007,13 @@ function markdownOutline(text: string): MarkdownOutline {
   // later module-level const is initialized.
   // A list marker needs a following space or tab; a blockquote marker may
   // omit it. So "-## Title" is text, not a heading (CommonMark).
+  // Any indentation is allowed: a list item nested under another item is often
+  // indented four or more spaces. Lines hidden as code or HTML were skipped above.
+  // A list-like line that continues a paragraph with four spaces also matches.
+  // That over-counts, and an over-count fails the check loudly rather than
+  // letting drift through.
   const containerHeading =
-    /^ {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+    /^[ \t]*(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
   let offset = 0;
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(

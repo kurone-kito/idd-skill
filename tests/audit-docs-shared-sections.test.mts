@@ -658,3 +658,23 @@ test('a list marker without a following space is text, not a nested heading', (t
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test('a heading in a list item nested four spaces deep counts as a nested heading', (t) => {
+  // "    - ## Shared rule" sits under "- parent" as a nested list item, so it is a
+  // rendered duplicate of the listed title and must fail, naming the source.
+  const nested = `${BASE}\n- parent\n    - ## Shared rule\n\nNested copy.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, nested, BASE);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
+});
