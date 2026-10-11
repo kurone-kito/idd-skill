@@ -51,6 +51,8 @@ Stop and ask the operator when:
 
 - pre-check (a)-(e) fails for any reason (see below) — no fallback
   candidate exists in lite scope;
+- the fresh-claim gate returns `already-claimed` for a non-owner, or the
+  written rules find a non-stale competitor;
 - forced-handoff evidence exists but mismatches live claim/branch/PR
   state, or `forcedHandoff.mode` is not `human-gated`;
 - claim verification (below) fails any race-safe check.
@@ -346,9 +348,7 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
    that post-acquire result alone counts. Any other result: claim contested;
-   apply Claim verification step 5, then, under the clone-scoped lock, remove
-   the step-2 worktree and branch only while pristine, with no commits or
-   changes (`git worktree remove`, `git branch -D`), then STOP before the digest.
+   apply Claim verification step 5, then STOP before the digest.
 
 ## Heartbeat posting
 
