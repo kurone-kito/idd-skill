@@ -200,7 +200,7 @@ function invalidStageOneAcquireReason(event, target) {
  * scrutinize, not to parse it -- a comment failing this check carries no
  * detectable trace of ever being an owner marker at all.
  */
-function looksLikeOwnerMarker(body, markerPrefix) {
+export function looksLikeOwnerMarker(body, markerPrefix) {
   return body
     .toLowerCase()
     .includes(`${markerPrefix.toLowerCase()}-authoring-owner:`);

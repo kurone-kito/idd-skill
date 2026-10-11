@@ -249,7 +249,7 @@ export function evaluateAuthoringSetMembers(input) {
   }
   return { ...liveResult, skippedMarkers, skippedElsewhere };
 }
-function isOutdatedMinimized(comment) {
+export function isOutdatedMinimized(comment) {
   return (
     comment.isMinimized === true &&
     typeof comment.minimizedReason === 'string' &&

@@ -377,7 +377,9 @@ export function evaluateAuthoringSetMembers(input: {
   return { ...liveResult, skippedMarkers, skippedElsewhere };
 }
 
-function isOutdatedMinimized(comment: SetMemberComment): boolean {
+export function isOutdatedMinimized(
+  comment: Pick<SetMemberComment, 'isMinimized' | 'minimizedReason'>,
+): boolean {
   return (
     comment.isMinimized === true &&
     typeof comment.minimizedReason === 'string' &&
