@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -225,17 +231,26 @@ test('audit-docs --report without --check keeps the usage error and exit status 
   assert.deepEqual(reportLines(result.stdout), []);
 });
 
-test('audit-docs --check --report on the current tree prints the bundle-work-phase line and exits 0', () => {
-  // bundle-work-phase is exempt from the utilization error, so its headroom
-  // can be negative while the run still passes. The line reports the figure
-  // without making it a failure.
+test('audit-docs --check --report on the current tree keeps bundle-work-phase within its ceiling', () => {
+  // bundle-work-phase is no longer exempt from the utilization ceiling (#4032),
+  // so its headroom must stay at or above zero, and the exemption list must not
+  // name it again. Both guard against the exemption returning.
   const result = runAudit(REPO_ROOT, ['--check', '--report']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.ok(
-    reportLines(result.stdout).some((line) =>
-      line.startsWith('report: bundle-work-phase bytes='),
-    ),
-    result.stdout,
+  const line = reportLines(result.stdout).find((entry) =>
+    entry.startsWith('report: bundle-work-phase bytes='),
+  );
+  assert.ok(line, result.stdout);
+  const headroom = /headroom=(-?\d+)/.exec(line);
+  assert.ok(headroom, line);
+  assert.ok(Number(headroom[1]) >= 0, line);
+  const manifest = JSON.parse(
+    readFileSync(join(REPO_ROOT, 'audit/sync-manifest.json'), 'utf8'),
+  );
+  assert.equal(
+    manifest.contextCeiling.exemptBundles.includes('bundle-work-phase'),
+    false,
+    'bundle-work-phase must not be exempt from the ceiling',
   );
 });
 

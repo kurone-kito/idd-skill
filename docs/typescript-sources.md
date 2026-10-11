@@ -240,10 +240,11 @@ runtime-file lists in item 4, which were checked against the source.
    `noticeUtilizationPct` in `contextCeiling` (`audit/sync-manifest.json`). It
    fails a bundle that is not exempt in two cases: its configured `limitBytes`
    is above `maxBundleLimitBytes`, even below the utilization limit, or its
-   utilization is above `maxUtilizationPct`. `bundle-work-phase` is exempt from
-   both ceiling errors. It still gets the notice, and its byte total is still
-   checked against its own `limitBytes`. Measure each bundle the change touches
-   before you edit. A successful audit prints a figure only at or above
+   utilization is above `maxUtilizationPct`. No bundle is exempt from either
+   ceiling error now: `bundle-work-phase` was exempted until its approval note
+   was trimmed (issue `#4032`). Every bundle still gets the notice, and its byte
+   total is checked against its own `limitBytes`. Measure each bundle the change
+   touches before you edit. A successful audit prints a figure only at or above
    `noticeUtilizationPct`. Below that, sum the byte length of each file in the
    bundle's `bundleBudgets` entry in `audit/sync-manifest.json`, with the
    `idd-generated-from` banner removed, and compare the total with `limitBytes`.

@@ -486,7 +486,7 @@
     "maxBundleLimitBytes": 196000,
     "maxUtilizationPct": 98,
     "noticeUtilizationPct": 95,
-    "exemptBundles": ["bundle-work-phase"],
+    "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
       {
         "bundle": "bundle-core",
