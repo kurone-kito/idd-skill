@@ -2334,8 +2334,10 @@ Validation expectations:
 
 A drafted issue that changes a rule which decides a verdict (a gate,
 classifier, threshold, or routing rule) carries a verdict table in its
-`## Acceptance criteria`, with one row per input case. The table has
-three columns:
+acceptance criteria. An orphan or child issue puts the table under
+`## Acceptance criteria`. A roadmap issue puts it under
+`## Success criteria`, the section that the roadmap shape defines. The
+table has one row per decision-relevant input case, with three columns:
 
 - **Input**: the observable inputs of the case, such as a reply's
   author, its timing, its body shape, or a count.
@@ -2343,9 +2345,11 @@ three columns:
 - **Source decision**: the recorded decision or evidence that sets the
   row's verdict.
 
-Every recorded decision that changes such a rule maps to at least one
-row. A decision that names a rule without its edge cases leaves the gap
-the table closes.
+For an unbounded value such as a count, a duration, or a timestamp, a
+row covers an equivalence class or a boundary (below, at, and above a
+threshold), not every value. Every recorded decision that changes such a
+rule maps to at least one row. A decision that names a rule without its
+edge cases leaves the gap the table closes.
 
 Observed incidents:
 

@@ -246,7 +246,9 @@ Its hits become the candidate-file list:
 ## Gate-rule verdict table example
 
 A gate rule change adds one table to the acceptance criteria. This one
-covers the cited-item disposition rule (issue `#3942`):
+shows the shape for the cited-item disposition rule (issue `#3942`) and
+includes the cases that the incidents needed. It is not the rule's full
+case list:
 
 ```markdown
 ## Acceptance criteria
@@ -259,15 +261,18 @@ covers the cited-item disposition rule (issue `#3942`):
 | Same item; stamped recorded deferral, **Rejected** — deferred to follow-up issue `#<n>` (`<clause>`): `<reason>` | Counts, with or without file or line evidence                                         | `countCitedItemDispositions` deferral form (`review-clause.mts`)        |
 | Same item; reply edited after it was posted                                                                      | Does not count                                                                        | `countCitedItemDispositions` edit check (`review-clause.mts`)           |
 | Same item; reply from a login outside the trusted set                                                            | Does not count                                                                        | `countCitedItemDispositions` trusted-login check (`review-clause.mts`)  |
-| Same item; reply without the review-reply stamp                                                                  | Does not count                                                                        | `countCitedItemDispositions` stamp check (`review-clause.mts`)          |
+| Same item; reply without a review-reply stamp                                                                    | Does not count                                                                        | `countCitedItemDispositions` stamp check (`review-clause.mts`)          |
+| Same item; reply with a review-reply stamp under another prefix                                                  | Counts; the stamp check accepts any prefix                                            | `countCitedItemDispositions` stamp check (`review-clause.mts`)          |
 | Same item; disposition posted in the same second as the review                                                   | Does not count                                                                        | `countCitedItemDispositions` strictly-after check (`review-clause.mts`) |
+| Same item; review submission timestamp does not parse                                                            | Counts zero dispositions (fails closed)                                               | `countCitedItemDispositions` timestamp check (`review-clause.mts`)      |
+| Same item; reply creation timestamp does not parse                                                               | Does not count                                                                        | `countCitedItemDispositions` timestamp check (`review-clause.mts`)      |
 | Per-item view empty or count-mismatched                                                                          | Fails closed: every item counts as cited (commit `8666020ea`)                         | `citationBreakdown` (`copilot-review-body.mts`)                         |
 | Suppressed item names no file or line; trusted review-ack after the review                                       | Covered by the ack                                                                    | `ackCoversSuppressedFindings` (`review-clause.mts`)                     |
 | Suppressed count is zero                                                                                         | Suppressed-findings clause satisfied without a reply; item-count clause still applies | `suppressedClauseSatisfied` (`advisory-convergence.mts`)                |
 ```
 
-Each row is one input case. A case with no row is a gap that the review
-loop would find later.
+Each row is one input case. A case that the table omits is a gap to add
+before the issue is published.
 
 ## Example orphan issue
 
