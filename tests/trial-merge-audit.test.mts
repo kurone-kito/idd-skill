@@ -24,7 +24,7 @@ import { stubExecutable } from './test-utils.mts';
 
 const GIT_ENV = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: devNull,
+  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : devNull,
   GIT_AUTHOR_NAME: 't',
   GIT_AUTHOR_EMAIL: 't@t',
   GIT_COMMITTER_NAME: 't',
@@ -269,9 +269,7 @@ test('failed: a command failure on the merged content gives failed', () => {
 });
 
 test('a command whose script is absent on the base tip counts as failed', () => {
-  // Remove the script from both the base tip and the PR head, so the head
-  // and the base agree on tooling (no tooling-changed) and only the absent
-  // script is under test.
+  // The script is removed from the base tip and from the PR head.
   const fixture = makeFixture();
   git(fixture.work, ['checkout', '--quiet', 'feature']);
   git(fixture.work, ['rm', '--quiet', 'scripts/sync-docs.mjs']);
@@ -302,8 +300,11 @@ test('a command whose script is absent on the base tip counts as failed', () => 
   const sync = result.commands.find((command) => command.id === 'sync-docs');
   assert.equal(sync?.passed, false);
   assert.equal(sync?.exitCode, null);
-  assert.deepEqual(result.toolingChanged, []);
-  assert.equal(result.verdict, 'failed');
+  // The PR deletes the script relative to its merge base, so the tooling change
+  // is reported and the verdict is not-run, while the absent command still fails.
+  assert.deepEqual(result.toolingChanged, ['scripts/sync-docs.mjs']);
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['tooling-changed']);
 });
 
 test('clone lock held by another session: not-run, and no worktree is added', () => {

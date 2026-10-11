@@ -83,8 +83,15 @@ export const FIXED_COMMANDS = [
  */
 function sanitizedEnv() {
   const env = { ...process.env };
+  // Credential helpers stay usable; repository routing and config do not.
+  const kept = new Set([
+    'GIT_ASKPASS',
+    'GIT_SSH',
+    'GIT_SSH_COMMAND',
+    'GIT_SSH_VARIANT',
+  ]);
   for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_')) delete env[key];
+    if (key.startsWith('GIT_') && !kept.has(key)) delete env[key];
   }
   env.GIT_TERMINAL_PROMPT = '0';
   return env;
@@ -173,9 +180,10 @@ export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
   const hooksDir = mkdtempSync(join(tmpdir(), 'idd-trial-hooks-'));
   const tmp = join(mkdtempSync(join(tmpdir(), 'idd-trial-merge-')), 'worktree');
   const ctx = { worktreeCreated: false };
+  const origin = resolveFetchOrigin();
   const fetchUrl =
     deps.fetchUrl ??
-    `https://${resolveFetchOrigin().host}/${owner}/${repoName}.git`;
+    `${origin.scheme}://${origin.host}/${owner}/${repoName}.git`;
   let result;
   let worktreeRemoved = true;
   try {
@@ -311,7 +319,7 @@ function audit(args) {
       hooksDir,
       ['commit-tree', tree, '-p', headSha, '-p', baseSha, '-m', 'trial merge'],
       {
-        ...process.env,
+        ...sanitizedEnv(),
         GIT_AUTHOR_NAME: 'trial-merge-audit',
         GIT_AUTHOR_EMAIL: 'trial-merge-audit@localhost',
         GIT_COMMITTER_NAME: 'trial-merge-audit',
@@ -346,10 +354,18 @@ function audit(args) {
   // Overlay base-tip tooling. A tooling path that the PR changed is replaced
   // by the base tip's copy, and a tooling path the base lacks is removed.
   // Every such path is listed as toolingChanged.
+  const mergeBase = git(repo, hooksDir, [
+    'merge-base',
+    baseSha,
+    headSha,
+  ]).stdout.trim();
+  if (mergeBase.length === 0) {
+    return emptyResult('merge-base-failed', { prHeadSha: headSha, baseSha });
+  }
   const toolingChanged = git(repo, hooksDir, [
     'diff',
     '--name-only',
-    baseSha,
+    mergeBase,
     headSha,
   ])
     .stdout.split('\n')
@@ -492,8 +508,12 @@ async function main() {
   const top = spawnSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: process.cwd(),
     encoding: 'utf8',
+    env: sanitizedEnv(),
   });
   const repoRoot = (top.stdout ?? '').trim();
+  if (top.status !== 0 || repoRoot.length === 0) {
+    throw new Error('not inside a git repository');
+  }
   const result = runTrialMergeAudit(repoRoot, rawPr, owner, repo);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return 0;
