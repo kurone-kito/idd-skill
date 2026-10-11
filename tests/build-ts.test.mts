@@ -440,3 +440,22 @@ test('spawnRunner passes argv without a shell and survives output over 1 MiB', (
   });
   assert.equal(failed.status, 3);
 });
+
+// spawnRunner's `env` option: omitted means the child inherits process.env, as
+// production does; given, it is used as the whole environment. Both cases read
+// the value back from the child, so no test writes process.env.
+test('spawnRunner uses process.env when no env is given, and the given env otherwise', () => {
+  const probe = 'process.stdout.write(String(process.env.PATH ?? ""))';
+  const inherited = spawnRunner(process.execPath, ['-e', probe], {
+    cwd: tmpdir(),
+  });
+  assert.equal(inherited.status, 0);
+  assert.equal(inherited.stdout.toString('utf8'), process.env.PATH ?? '');
+  const given = spawnRunner(
+    process.execPath,
+    ['-e', 'process.stdout.write(String(process.env.IDD_PROBE))'],
+    { cwd: tmpdir(), env: { IDD_PROBE: 'given' } },
+  );
+  assert.equal(given.status, 0);
+  assert.equal(given.stdout.toString('utf8'), 'given');
+});
