@@ -1417,6 +1417,12 @@ export interface AuthoringOwnerLatestMarker {
    * when it is the latest (Codex P2 on #3899).
    */
   mistargeted?: boolean;
+  /**
+   * True when the read omitted this candidate's minimization state, or a
+   * minimized candidate lacks its reason. It is not known to be outdated, so the
+   * check refuses when it is the latest (Copilot on #3899).
+   */
+  unreadableMinimization?: boolean;
 }
 
 /**
@@ -1500,9 +1506,15 @@ export function selectLatestAuthoringOwnerMarker(
     ) {
       continue;
     }
+    // A read that omits the minimization state, or a minimized comment without
+    // its reason, is not known to be outdated. It is kept and refuses the check
+    // if it is the latest, rather than being treated as a visible marker.
+    const unreadableMinimization =
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized && typeof comment.minimizedReason !== 'string');
     if (
       !looksLikeOwnerMarker(comment.body, options.markerPrefix) ||
-      isOutdatedMinimized(comment)
+      (!unreadableMinimization && isOutdatedMinimized(comment))
     ) {
       continue;
     }
@@ -1529,7 +1541,7 @@ export function selectLatestAuthoringOwnerMarker(
       time > latestTime ||
       (time === latestTime && comment.id > latest.comment.id)
     ) {
-      latest = { comment, parsed, mistargeted };
+      latest = { comment, parsed, mistargeted, unreadableMinimization };
     }
   }
   return latest;
@@ -1628,6 +1640,9 @@ export function validateAuthoringOwnerPostIdentity(
     }
     if (latest.parsed === null) {
       return `${latestHead}, which does not parse as an authoring-owner marker, so its set and anchor cannot be checked. ${AUTHORING_OWNER_LATEST_MARKER_HINT} ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
+    }
+    if (latest.unreadableMinimization) {
+      return `${latestHead}, whose minimization state cannot be read completely, so it cannot be checked. ${AUTHORING_OWNER_LATEST_MARKER_HINT} ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
     }
     if (latest.mistargeted) {
       return `${latestHead}, which names another target, so it cannot be the latest marker of this one. ${AUTHORING_OWNER_LATEST_MARKER_HINT} ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;

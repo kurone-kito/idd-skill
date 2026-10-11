@@ -7768,6 +7768,8 @@ function latestCandidate(
     createdAt,
     updatedAt: createdAt,
     lastEditedAt: null,
+    isMinimized: false,
+    minimizedReason: null,
     ...extra,
   };
 }
@@ -7906,6 +7908,45 @@ test('selectLatestAuthoringOwnerMarker keeps a parseable marker of another targe
   );
   assert.equal(latest?.comment.id, 103);
   assert.equal(latest?.parsed, null);
+});
+
+test('selectLatestAuthoringOwnerMarker flags a latest candidate whose minimization state is incomplete (#3899)', () => {
+  const omitted = latestCandidate(
+    102,
+    '2026-10-02T00:00:00Z',
+    ownerIdBody(ownerIdFlags('release')),
+    { isMinimized: undefined },
+  );
+  assert.equal(
+    selectLatestAuthoringOwnerMarker([LATEST_ACQUIRE, omitted], LATEST_OPTIONS)
+      ?.unreadableMinimization,
+    true,
+  );
+  const minimizedNoReason = latestCandidate(
+    103,
+    '2026-10-03T00:00:00Z',
+    ownerIdBody(ownerIdFlags('release')),
+    { isMinimized: true, minimizedReason: undefined },
+  );
+  assert.equal(
+    selectLatestAuthoringOwnerMarker(
+      [LATEST_ACQUIRE, minimizedNoReason],
+      LATEST_OPTIONS,
+    )?.unreadableMinimization,
+    true,
+  );
+  // An incomplete candidate that is not the latest does not refuse the check.
+  const newerClean = latestCandidate(
+    104,
+    '2026-10-04T00:00:00Z',
+    ownerIdBody(ownerIdFlags('release')),
+  );
+  const older = selectLatestAuthoringOwnerMarker(
+    [omitted, newerClean],
+    LATEST_OPTIONS,
+  );
+  assert.equal(older?.comment.id, 104);
+  assert.equal(older?.unreadableMinimization, false);
 });
 
 test('selectLatestAuthoringOwnerMarker ignores an untrusted author and a comment without the owner token, unless no logins are trusted (#3899)', () => {
