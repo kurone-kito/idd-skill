@@ -961,15 +961,19 @@ interface MarkdownSection {
   body: string;
 }
 
-// Fenced blocks of either kind hide their `#` lines from heading detection.
-// headingSignature tracks only backtick fences, so this scanner handles tilde
-// fences too; otherwise a `~~~` block could cut a section short.
+// Fenced blocks of either kind and HTML comments hide their `#` lines from
+// heading detection, because Markdown does not render those lines as
+// headings. headingSignature tracks only backtick fences, so this scanner
+// handles tilde fences and comments too; otherwise a `~~~` block or a comment
+// could cut a section short. A fence opener is at most three spaces deep:
+// deeper indentation is indented code, not a fence (#4009 review).
 function markdownSections(text: string): MarkdownSection[] {
   const lines = normalizeText(text).split('\n');
   const headings: { index: number; level: number; title: string }[] = [];
   let fence: { char: string; length: number } | null = null;
+  let inComment = false;
   for (const [index, line] of lines.entries()) {
-    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line);
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (fence !== null) {
       if (
         fenceMatch !== null &&
@@ -981,8 +985,19 @@ function markdownSections(text: string): MarkdownSection[] {
       }
       continue;
     }
+    if (inComment) {
+      if (line.includes('-->')) {
+        inComment = false;
+      }
+      continue;
+    }
     if (fenceMatch !== null) {
       fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
+      continue;
+    }
+    const commentStart = line.lastIndexOf('<!--');
+    if (commentStart !== -1 && !line.includes('-->', commentStart)) {
+      inComment = true;
       continue;
     }
     const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);

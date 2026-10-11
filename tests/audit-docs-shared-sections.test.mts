@@ -327,3 +327,60 @@ test('a structure pair without sharedSections keeps the heading-only behavior', 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test('a four-space-indented tilde line is indented code, not a fence, so a later listed heading still counts', (t) => {
+  // Markdown treats `    ~~~` as indented code. If the scanner opened a fence
+  // on it, the real "## Shared rule" below would be hidden and reported as
+  // missing. Both sides are identical, so the check must pass.
+  const indented = [
+    '# Fixture rationale',
+    '',
+    '    ~~~',
+    '',
+    '## Shared rule',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, indented, indented);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a heading inside an HTML comment does not end a listed section', (t) => {
+  // Markdown does not render a commented-out heading, so the section runs
+  // past the comment. Drift after the comment must still fail, even though the
+  // commented "##" line matches on both sides and the heading signature
+  // agrees.
+  const commented = (after: string) =>
+    [
+      '# Fixture rationale',
+      '',
+      '## Shared rule',
+      '',
+      '<!--',
+      '## Commented-out heading',
+      '-->',
+      '',
+      after,
+      '',
+    ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(
+    dir,
+    commented('Text after the comment, source.'),
+    commented('Text after the comment, target.'),
+  );
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /shared section "Shared rule" differs between/);
+});
