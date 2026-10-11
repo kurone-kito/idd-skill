@@ -3595,6 +3595,37 @@ gate, since that path requires an actual human judgment call that this
 one never makes. Do not widen this exception to any other reason
 token, actor, or check selector.
 
+**Decision-rule files need an approval instead**
+(kurone-kito/idd-skill#4015): the source repository splits its trigger
+list into two lists. The bootstrap list
+(`SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES`) keeps the waiver above. The
+decision-rule list (`SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES`:
+`src/scripts/advisory-convergence.mts`,
+`src/scripts/advisory-wait-policy.mts`, and
+`src/scripts/protocol-helpers.mts`) names the files that decide this
+check's verdicts. A pull request whose diff touches a decision-rule file
+gets no self-referential-bootstrap-auto waiver, even when it also
+touches a bootstrap file. The check then passes only through a
+converged review, or through an approving review of the current HEAD
+whose author is in `trustedMarkerActors`. Only the latest review per
+login that is not `COMMENTED` or `PENDING` counts, so a later
+`CHANGES_REQUESTED` review withdraws the approval and reruns the check.
+Dismissing the approval also withdraws it, but only on the check's next
+run, because a dismissal does not rerun it; to revoke an approval at
+once, submit a `CHANGES_REQUESTED` review. The
+verdict reports this as `waiver.decisionRuleFilesTouched` and
+`waiver.decisionRuleApprovalValid`. The approval is not a substitute for
+review on any other pull request. GitHub does not let a pull request's
+author approve it, so the approving login must differ from the author;
+the maintainer-authorized waiver above stays the off-ramp after the
+deadline. Every other repository's profile-derived set has no
+decision-rule list and keeps the waiver as before. The posting job still
+posts a marker for such a diff; the verdict job rejects it. Observed
+incident: kurone-kito/idd-skill#3999 and kurone-kito/idd-skill#4000
+both merged through the waiver, and kurone-kito/idd-skill#4000 changed
+the cited-item rules that decide whether a finding counts as settled,
+with no independent check.
+
 **A narrow, inherent dead zone remains** (kurone-kito/idd-skill#2657,
 Codex review, PR #2895, round 9): being in the trigger-file allowlist
 does not mean every possible bug in that file can be self-bootstrapped.

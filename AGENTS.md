@@ -131,7 +131,9 @@ layered on top of the distributed IDD defaults:
   bootstrapping a fix to the checker (including the deadline mechanism
   itself) while a PR editing it is still unmerged. It exists only for
   that narrow trigger set, never as a general substitute for review.
-  See
+  A diff that touches one of the check's decision-rule files gets no
+  such waiver; it needs a converged review or an approval of its HEAD
+  from a `trustedMarkerActors` login (issue `#4015`). See
   [docs/idd-helper-scripts.md](docs/idd-helper-scripts.md#automated-self-referential-bootstrap-auto-waiver-kurone-kitoidd-skill2657)
   for the full trust model.
 - **ciGate F2 bootstrap**: This source repository follows the
