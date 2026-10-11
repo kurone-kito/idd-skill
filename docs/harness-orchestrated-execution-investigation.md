@@ -268,19 +268,22 @@ model occasionally misreading a rule it could in principle re-read.
 The implication: a harness can rehearse its own control flow, marker
 rendering, and branch-naming **fully offline** with `branch-name`,
 `emit-marker`, `ci-wait-policy`, and a **plain** `post-idd-marker` dry-run
-(no `--from-pr`) — enough to smoke-test that the runner constructs
+(no `--from-pr`, and not an `authoring-owner` heartbeat, release,
+release-guard, release-complete or resume, which reads the comment log) —
+enough to smoke-test that the runner constructs
 correct marker bodies and branch names before ever touching a
 credential — but there is no fully offline dry run of an actual
 single-issue pass. Every gate that decides whether to proceed (claim state,
 CI state, review state, merge readiness) requires a live, credentialed,
 network-connected loop, and `post-idd-marker --from-pr` steps outside that
 offline boundary the moment it needs a live snapshot to derive watermark
-fields, even before `--apply` is added. This matters for **when this mode
-can run unattended**: the pure subset is safe to exercise in a sandboxed
-or CI-internal smoke test with no GitHub token at all; the live subset
-can only ever run inside an already-integrated loop with real
-repository access, which is also where the weak-tier guardrail already
-puts the model-driven loop today — this mode does not relax that
+fields, even before `--apply` is added, and so does a checked
+`authoring-owner` dry run, which reads the comment log first. This matters
+for **when this mode can run unattended**: the pure subset is safe to
+exercise in a sandboxed or CI-internal smoke test with no GitHub token at
+all; the live subset can only ever run inside an already-integrated loop
+with real repository access, which is also where the weak-tier guardrail
+already puts the model-driven loop today — this mode does not relax that
 requirement, it only changes who is deciding when to call each live
 helper.
 
