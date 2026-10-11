@@ -791,6 +791,11 @@ in this preamble, since the fallback differs per helper.
   evidence comment, closes the completed roadmap, and releases the claim
   (referenced in
   [kurone-kito/idd-skill#1071](https://github.com/kurone-kito/idd-skill/issues/1071))
+  `--criteria-note <text>` (#4034) records the caller's own check of those
+  criteria on the evidence body as a `Success criteria: <text>` line. The text
+  is trimmed, and an empty or whitespace-only value is a usage error that posts
+  nothing. Without the flag the body carries a fixed line saying the helper did
+  not verify the criteria.
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391)).

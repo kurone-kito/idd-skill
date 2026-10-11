@@ -361,7 +361,9 @@ function buildReachableLeafCounter(report) {
  * so every descendant is closed -- some possibly as completed, others (if
  * any, listed separately) as not planned or duplicate (#3326).
  */
-export function buildRoadmapCompletionAuditBody(report) {
+const FIXED_SUCCESS_CRITERIA_LINE =
+  'Success criteria: not verified by this helper; the closing caller is expected to confirm them where feasible.';
+export function buildRoadmapCompletionAuditBody(report, criteriaNote = null) {
   const rootNumber = report.root.number;
   const descendants = report.nodes.filter((node) => node.number !== rootNumber);
   const executionCount = descendants.filter(
@@ -400,6 +402,10 @@ export function buildRoadmapCompletionAuditBody(report) {
     `- Closed without completion (not planned / duplicate / other): ${closedWithoutCompletion || 'none'}.`,
     '- Open / unresolved / inaccessible / nested-roadmap / open-linked-PR descendants: none.',
     `- Diagnostics: ${report.summary.cycleCount} cycles, ${report.summary.unresolvedReferenceCount} unresolved references, ${report.summary.inaccessibleReferenceCount} inaccessible references, ${report.summary.duplicateReferenceCount} duplicate references.`,
+    '',
+    criteriaNote === null
+      ? FIXED_SUCCESS_CRITERIA_LINE
+      : `Success criteria: ${criteriaNote}`,
     '',
     'Closing the roadmap as completed.',
     '',
@@ -1073,7 +1079,9 @@ export async function runRoadmapAuditExecute(argv, deps) {
     needsDecisionLabelName: resolvedDeps.needsDecisionLabelName,
   });
   const ready = blockers.length === 0;
-  const evidenceBody = ready ? buildRoadmapCompletionAuditBody(report) : '';
+  const evidenceBody = ready
+    ? buildRoadmapCompletionAuditBody(report, args.criteriaNote)
+    : '';
   const verdict = {
     protocolVersion: '1',
     decisionAuthority: 'instructions',
@@ -1219,7 +1227,10 @@ export async function runRoadmapAuditExecute(argv, deps) {
   // comment→close gap must not let us close under a claim we no longer own. An
   // already-posted evidence comment before an aborted close is harmless — the
   // successor session simply re-audits — but a wrongful close is destructive.
-  const finalEvidenceBody = buildRoadmapCompletionAuditBody(revalidated);
+  const finalEvidenceBody = buildRoadmapCompletionAuditBody(
+    revalidated,
+    args.criteriaNote,
+  );
   verdict.evidenceBody = finalEvidenceBody;
   resolvedDeps.postEvidenceComment(roadmapNumber, finalEvidenceBody);
   const preCloseClaim = resolvedDeps.revalidateClaim({
@@ -1570,6 +1581,7 @@ const ROADMAP_AUDIT_EXECUTE_FLAG_SPEC = {
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
   '--now': { type: 'string' },
+  '--criteria-note': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
 function parseArgs(argv) {
@@ -1579,6 +1591,20 @@ function parseArgs(argv) {
     values['claim-issue'],
     '--claim-issue',
   );
+  // --criteria-note is optional. When given it must carry text: an empty or
+  // whitespace-only value is a usage error, so no comment is posted (#4034).
+  const rawCriteriaNote = values['criteria-note'];
+  let criteriaNote = null;
+  if (rawCriteriaNote !== undefined) {
+    criteriaNote = rawCriteriaNote.trim();
+    if (criteriaNote === '') {
+      throw markCliUsageError(
+        new Error(
+          'idd-roadmap-audit-execute: --criteria-note must not be empty',
+        ),
+      );
+    }
+  }
   const owner = (values.owner ?? '').trim();
   const repo = (values.repo ?? '').trim();
   // Fail closed on exactly one of --owner / --repo: a single flag would
@@ -1601,6 +1627,7 @@ function parseArgs(argv) {
     repo,
     policy: (values.policy ?? '').trim(),
     now: (values.now ?? '').trim(),
+    criteriaNote,
     help,
   };
 }
@@ -1616,7 +1643,7 @@ function parsePositiveIntegerOrNull(token, flag) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--criteria-note <text>]
   node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> --claim-id <claim-id> [--claim-issue <number>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--apply]
 
   Default (no --apply): dry-run. Evaluates A1.5 roadmap completion via the
@@ -1624,6 +1651,12 @@ function printHelp() {
   evidenceBody } without mutating. Exit 0 when ready, 1 otherwise. evidenceBody
   is the canonical "IDD roadmap completion audit" comment body (empty when the
   roadmap is not ready).
+
+  --criteria-note <text>: optional. The text is trimmed and recorded on the
+  evidence body as a "Success criteria: <text>" line, so the caller's own check
+  of the roadmap's success criteria is visible in the audit record. An empty or
+  whitespace-only value is a usage error (exit 1, no comment). Without the flag
+  the body carries a fixed line saying the helper does not verify the criteria.
 
   --apply: when ready, re-validate the roadmap-audit claim and re-evaluate the
   roadmap graph immediately before mutating, then post the evidence comment,
