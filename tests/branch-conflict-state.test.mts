@@ -11,9 +11,12 @@ import {
   parseArgs,
   parseConflictFiles,
   parseGitFetchOrigin,
+  readTrustEmptyProtectionReads,
+  resolveCallSiteRouting,
   resolveFetchAttemptTimeoutMs,
   resolveFetchOrigin,
   resolveMergeBaseWithRetry,
+  resolveRequiresUpToDateHead,
 } from '../src/scripts/branch-conflict-state.mts';
 
 type ClassifyOptions = NonNullable<
@@ -1137,4 +1140,230 @@ test('parseArgs: a non-positive / non-integer --pr throws a clear message', () =
   assert.throws(() => parseArgs(['--pr', '0']), /invalid --pr value/);
   assert.throws(() => parseArgs(['--pr', '-5']), /invalid --pr value/);
   assert.throws(() => parseArgs(['--pr', '12abc']), /invalid --pr value/);
+});
+
+// #3497: each call site's next step is derived once here, from the branch
+// state, the CLEAN-only `clean` definition, and the policy input.
+test('resolveCallSiteRouting: one row per routing-table state', () => {
+  const proceed = {
+    eBranchSync: 'proceed-to-f1',
+    e11: 'skip-merge',
+    f1: 'proceed-to-f2',
+  };
+  const hold = { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
+  const rows: [string, unknown, boolean, unknown][] = [
+    ['clean', 'CLEAN', true, proceed],
+    ['clean', 'CLEAN', false, proceed],
+    ['clean', 'BLOCKED', false, hold],
+    ['clean', 'UNSTABLE', true, hold],
+    ['clean', null, false, hold],
+    ['behind-no-conflict', 'BEHIND', false, proceed],
+    [
+      'behind-no-conflict',
+      'BEHIND',
+      true,
+      {
+        eBranchSync: 'sync-path',
+        e11: 'skip-merge',
+        f1: 'return-to-e-phase-branch-sync',
+      },
+    ],
+    [
+      'content-conflict',
+      'DIRTY',
+      true,
+      {
+        eBranchSync: 'sync-path',
+        e11: 'merge-development-branch',
+        f1: 'return-to-e-phase-branch-sync',
+      },
+    ],
+    [
+      'computing',
+      'UNKNOWN',
+      false,
+      { eBranchSync: 'retry', e11: 'skip-merge', f1: 'retry' },
+    ],
+    ['dirty', 'DIRTY', true, hold],
+    ['unknown', null, true, hold],
+    ['force-push-exception', 'CLEAN', false, hold],
+  ];
+  for (const [state, status, requires, expected] of rows) {
+    assert.deepEqual(
+      resolveCallSiteRouting(state, status, requires as boolean),
+      expected,
+      `${state} / ${String(status)} / requiresUpToDateHead=${requires}`,
+    );
+  }
+});
+
+test('classifyBranchConflictState: callSiteRouting follows the injected policy input', async () => {
+  const fixture = loadFixture('clean');
+  const base = {
+    owner: 'test-owner',
+    repo: 'test-repo',
+    _testPrData: fixture.prData,
+    _skipGitProbe: true,
+  };
+  const required = await classifyBranchConflictState(fixture.prData.number, {
+    ...base,
+    _testRequiresUpToDateHead: true,
+  });
+  assert.deepEqual(required.callSiteRouting, {
+    eBranchSync: 'proceed-to-f1',
+    e11: 'skip-merge',
+    f1: 'proceed-to-f2',
+  });
+  const blocked = await classifyBranchConflictState(fixture.prData.number, {
+    ...base,
+    _testPrData: { ...fixture.prData, mergeStateStatus: 'BLOCKED' },
+    _testRequiresUpToDateHead: false,
+  });
+  assert.equal(blocked.callSiteRouting.eBranchSync, 'hold');
+  assert.equal(blocked.callSiteRouting.f1, 'hold');
+});
+
+test('resolveRequiresUpToDateHead: fail closed on unreadable or failed policy reads', () => {
+  const okRules = [{ type: 'pull_request' }];
+  const port = (
+    rules: unknown,
+    protection: unknown,
+  ): Parameters<typeof resolveRequiresUpToDateHead>[3] =>
+    ({
+      listBranchRules: () => rules,
+      getBranchProtection: () => protection,
+    }) as unknown as Parameters<typeof resolveRequiresUpToDateHead>[3];
+  const ok = (value: unknown) => ({ outcome: 'ok', value });
+  const notFound = { outcome: 'not-found' };
+  const strictProtection = ok({
+    required_status_checks: { strict: true, contexts: ['ci'] },
+  });
+
+  // Readable policy: the value follows summarizeBranchCurrency.
+  assert.equal(
+    resolveRequiresUpToDateHead(
+      'o',
+      'r',
+      'main',
+      port(ok(okRules), strictProtection),
+      false,
+    ),
+    true,
+  );
+  assert.equal(
+    resolveRequiresUpToDateHead(
+      'o',
+      'r',
+      'main',
+      port(ok(okRules), ok({})),
+      false,
+    ),
+    false,
+  );
+  // A 404 is unreadable unless the trust flag is set.
+  assert.equal(
+    resolveRequiresUpToDateHead(
+      'o',
+      'r',
+      'main',
+      port(notFound, notFound),
+      false,
+    ),
+    true,
+  );
+  assert.equal(
+    resolveRequiresUpToDateHead(
+      'o',
+      'r',
+      'main',
+      port(notFound, notFound),
+      true,
+    ),
+    false,
+  );
+  // Any thrown read (403, 500, transport) resolves to true.
+  const throwing = {
+    listBranchRules: () => {
+      throw new Error('HTTP 403');
+    },
+    getBranchProtection: () => notFound,
+  } as unknown as Parameters<typeof resolveRequiresUpToDateHead>[3];
+  assert.equal(
+    resolveRequiresUpToDateHead('o', 'r', 'main', throwing, true),
+    true,
+  );
+});
+
+// #3497 review: the trust opt-in comes from the base ref, never from the PR
+// working tree, and any read failure keeps it unset (fail closed).
+test('readTrustEmptyProtectionReads: reads the opt-in from the base ref', () => {
+  const refs: string[] = [];
+  const encoded =
+    (json: string) =>
+    (_owner: string, _repo: string, ref: string): string => {
+      refs.push(ref);
+      return Buffer.from(json).toString('base64');
+    };
+  const noProbe = () => {};
+  const noUserGlobal = { userGlobalFallback: false };
+  assert.equal(
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'release/1',
+      encoded('{"ciGate":{"trustEmptyProtectionReads":true}}'),
+      noProbe,
+      noUserGlobal,
+    ),
+    true,
+  );
+  assert.deepEqual(refs, ['release/1']);
+  assert.equal(
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      encoded('{"ciGate":{}}'),
+      noProbe,
+      noUserGlobal,
+    ),
+    false,
+  );
+  assert.equal(
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      encoded('not json'),
+      noProbe,
+      noUserGlobal,
+    ),
+    false,
+  );
+  assert.equal(
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      () => {
+        throw new Error('gh: Forbidden (HTTP 403)');
+      },
+      noProbe,
+      noUserGlobal,
+    ),
+    false,
+  );
+  assert.equal(
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      () => {
+        throw new Error('gh: Not Found (HTTP 404)');
+      },
+      noProbe,
+      noUserGlobal,
+    ),
+    false,
+  );
 });

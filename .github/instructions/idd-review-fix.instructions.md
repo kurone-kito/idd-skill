@@ -164,13 +164,15 @@ follow-up kurone-kito/idd-skill#2865 (see [the rationale example](../../docs/idd
 Same read-only check as
 `idd-review-triage.instructions.md`'s E-phase branch-sync check and
 `idd-pre-merge.instructions.md`'s F1 (`idd-branch-conflict-state --pr
-{pr-number}` or `gh pr view {pr-number} --json
-mergeable,mergeStateStatus`) — reflects the last pushed head, not
-unpushed E9 fixes.
+{pr-number}`, or `gh pr view {pr-number} --json
+mergeable,mergeStateStatus` with the helper contract's table) — reflects
+the last pushed head, not unpushed E9 fixes.
 
-- **`content-conflict`** (`mergeable` `CONFLICTING`): pass the active
-  review gate, merge `{development-branch}` into the feature branch,
-  resolve, complete the merge:
+- **`callSiteRouting.e11` is `merge-development-branch`** (branch state
+  `content-conflict`; without helper runtime, `mergeable` `CONFLICTING`):
+  pass the active review gate, merge
+  `{development-branch}` into the feature branch, resolve, complete the
+  merge:
 
   ```sh
   git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
@@ -180,9 +182,10 @@ unpushed E9 fixes.
   Non-interactive-hostile signing: use the
   [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
   instead.
-- Otherwise (clean, behind-no-conflict, computing, dirty,
-  force-push-exception, unknown): skip the merge, proceed to E12 —
-  the E-phase branch-sync check and F1 handle those downstream.
+- Otherwise (`callSiteRouting.e11` is `skip-merge`; without helper
+  runtime, any `mergeable` other than `CONFLICTING`): skip the merge, proceed
+  to E12 — the E-phase branch-sync check and F1 handle those
+  downstream.
 
 ## E12 — Lint, test, push
 

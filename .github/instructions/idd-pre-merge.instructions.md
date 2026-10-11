@@ -44,28 +44,23 @@ git merge-base {pr-head-sha} FETCH_HEAD
 
 This check is read-only — F1 does not rebase, merge, or push.
 
-- **`clean`** (`mergeable` is `MERGEABLE` and `mergeStateStatus` is
-  `CLEAN`) or **`behind-no-conflict`** when no up-to-date-head policy
-  applies: proceed to F2. `clean` is conflict-freeness only — if
-  `baseAdvancedSinceMergeBase: true`, prefer a fresh CI result over an
-  old green check.
-- **`behind-no-conflict`** when branch protection or recorded policy
-  requires an up-to-date head, or unreadable/ambiguous (fails closed),
-  or **`content-conflict`** (`mergeable` is `CONFLICTING`): return to
-  the E-phase branch-sync check in `idd-review-triage.instructions.md`,
-  first setting `Phase: F1 sync-required`, the branch state in `Open
-  blockers`, and `Next action: E-phase branch-sync` on the digest.
-- **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is
-  `UNKNOWN` / null because GitHub has not settled mergeability yet
-  (common right after E1 posts its watermark/baseline) — transient, not
-  terminal. Do **not** hold; re-poll after a short wait (default: 3
-  attempts, a few seconds apart), then route by the first settled
-  result. Only if still `computing`/`unknown` after the budget, fall
-  through to the terminal hold below.
-- **`dirty`** (`mergeStateStatus` is `DIRTY`), **`unknown`**, or any
-  other state the bullets above do not name (for example
-  `force-push-exception`): hold; post a PR comment documenting the
-  branch state and stop. A maintainer must clear the hold.
+Route on `callSiteRouting.f1` from the helper output. With helper runtime
+disabled, route the state from the `gh pr view` output with the table in
+the [helper contract](../../docs/idd-helper-scripts.md#branch-conflict-and-synchronization-state-evidence).
+
+- **`proceed-to-f2`**: proceed to F2. This route means conflict-freeness
+  only — if `baseAdvancedSinceMergeBase: true`, prefer a fresh CI result
+  over an old green check.
+- **`return-to-e-phase-branch-sync`**: return to the E-phase branch-sync
+  check in `idd-review-triage.instructions.md`, first setting
+  `Phase: F1 sync-required`, the branch state in `Open blockers`, and
+  `Next action: E-phase branch-sync` on the digest.
+- **`retry`**: transient, not terminal. Do **not** hold; re-poll after a
+  short wait, up to the attempt budget in the helper contract, then route
+  by the first settled result. Only a result still `retry` after the
+  budget falls through to `hold`.
+- **`hold`**: post a PR comment documenting the branch state and stop. A
+  maintainer must clear the hold.
 
 ## F2 — Pre-merge condition check
 

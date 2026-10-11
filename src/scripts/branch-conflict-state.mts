@@ -16,6 +16,9 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
+import { loadTrustedIddConfig } from './idd-config.mts';
+import { summarizeBranchCurrency } from './protocol-helpers.mts';
+import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 
 interface PrData {
   headRefOid?: unknown;
@@ -50,6 +53,7 @@ export interface BranchConflictResult {
   branchState: string;
   syncRecommendation: string;
   baseAdvancedSinceMergeBase: boolean;
+  callSiteRouting: CallSiteRouting;
   readOnly: boolean;
   worktreeUnchanged: boolean;
   diagnostics: {
@@ -59,10 +63,147 @@ export interface BranchConflictResult {
   };
 }
 
+/**
+ * Next step each E/F call site takes for the classified branch state, so the
+ * routing table lives here once instead of in three phase files. Values are
+ * named by the phase file's own action, not by the prose around it.
+ */
+export interface CallSiteRouting {
+  /** E-phase branch-sync check in idd-review-triage.instructions.md. */
+  eBranchSync: 'proceed-to-f1' | 'sync-path' | 'retry' | 'hold';
+  /** E11 in idd-review-fix.instructions.md (merge only on content-conflict). */
+  e11: 'skip-merge' | 'merge-development-branch';
+  /** F1 in idd-pre-merge.instructions.md. */
+  f1: 'proceed-to-f2' | 'return-to-e-phase-branch-sync' | 'retry' | 'hold';
+}
+
+/**
+ * Map a classified branch state to each call site's next step.
+ *
+ * `clean` proceeds only with `mergeStateStatus` CLEAN, which is F1's own
+ * definition; the helper's `clean` alone also covers BLOCKED and UNSTABLE,
+ * and those hold, as F1's "any other state" line requires.
+ * `requiresUpToDateHead` is always a boolean: an unreadable policy resolves
+ * to `true` (see resolveRequiresUpToDateHead).
+ */
+export function resolveCallSiteRouting(
+  branchState: string,
+  mergeStateStatus: unknown,
+  requiresUpToDateHead: boolean,
+): CallSiteRouting {
+  if (branchState === 'clean') {
+    return String(mergeStateStatus ?? '').toUpperCase() === 'CLEAN'
+      ? { eBranchSync: 'proceed-to-f1', e11: 'skip-merge', f1: 'proceed-to-f2' }
+      : { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
+  }
+  if (branchState === 'behind-no-conflict') {
+    return requiresUpToDateHead
+      ? {
+          eBranchSync: 'sync-path',
+          e11: 'skip-merge',
+          f1: 'return-to-e-phase-branch-sync',
+        }
+      : {
+          eBranchSync: 'proceed-to-f1',
+          e11: 'skip-merge',
+          f1: 'proceed-to-f2',
+        };
+  }
+  if (branchState === 'content-conflict') {
+    return {
+      eBranchSync: 'sync-path',
+      e11: 'merge-development-branch',
+      f1: 'return-to-e-phase-branch-sync',
+    };
+  }
+  if (branchState === 'computing') {
+    return { eBranchSync: 'retry', e11: 'skip-merge', f1: 'retry' };
+  }
+  return { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
+}
+
+/**
+ * Read `ciGate.trustEmptyProtectionReads` through the same trusted-ref loader
+ * pre-merge-readiness uses (`loadTrustedIddConfig`): the policy at the PR's
+ * base ref, with the user-global layers when the file is absent. The PR's
+ * own working tree is never used, since a PR could set the opt-in itself and
+ * turn a masked 404 into a readable empty policy. Any failure to read the
+ * policy keeps the opt-in unset (fail closed).
+ */
+export function readTrustEmptyProtectionReads(
+  owner: string,
+  repo: string,
+  baseRef: string,
+  fetchEncodedConfig?: (owner: string, repo: string, ref: string) => string,
+  probeLegacyPolicy?: (owner: string, repo: string, ref: string) => void,
+  options: { userGlobalFallback?: boolean } = {},
+): boolean {
+  try {
+    const config = loadTrustedIddConfig(
+      owner,
+      repo,
+      baseRef,
+      fetchEncodedConfig,
+      probeLegacyPolicy,
+      options,
+    );
+    const policy = config as {
+      ciGate?: { trustEmptyProtectionReads?: unknown };
+    } | null;
+    return policy?.ciGate?.trustEmptyProtectionReads === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve whether the PR's base branch requires an up-to-date head, reusing
+ * `summarizeBranchCurrency` with the same 404 rule as pre-merge-readiness: a
+ * 404 is unreadable unless `ciGate.trustEmptyProtectionReads` is set at the
+ * base ref. Any other failure (403, 500, transport) resolves to `true`. That
+ * is stricter than pre-merge, which rethrows, and it is safe here because this
+ * helper is read-only and `true` only routes to the sync path.
+ */
+export function resolveRequiresUpToDateHead(
+  owner: string,
+  repo: string,
+  baseRef: string,
+  port: Pick<
+    ReturnType<typeof createGithubProviderAdapter>,
+    'listBranchRules' | 'getBranchProtection'
+  > = createGithubProviderAdapter(owner, repo),
+  trustEmptyReads: boolean = readTrustEmptyProtectionReads(
+    owner,
+    repo,
+    baseRef,
+  ),
+): boolean {
+  try {
+    const rulesRead = port.listBranchRules(owner, repo, baseRef);
+    const protectionRead = port.getBranchProtection(owner, repo, baseRef);
+    const protectionReadsUnreadable =
+      (rulesRead.outcome === 'not-found' ||
+        protectionRead.outcome === 'not-found') &&
+      !trustEmptyReads;
+    return summarizeBranchCurrency(
+      (rulesRead.outcome === 'ok' ? rulesRead.value : []) as Parameters<
+        typeof summarizeBranchCurrency
+      >[0],
+      (protectionRead.outcome === 'ok'
+        ? protectionRead.value
+        : {}) as Parameters<typeof summarizeBranchCurrency>[1],
+      { protectionReadsUnreadable },
+    ).requiresUpToDateHead;
+  } catch {
+    return true;
+  }
+}
+
 interface ClassifyOptions {
   owner?: string;
   repo?: string;
   _testPrData?: PrData;
+  _testRequiresUpToDateHead?: boolean;
   _skipGitProbe?: boolean;
 }
 
@@ -238,7 +379,8 @@ export async function classifyBranchConflictState(
   prNumber: unknown,
   options: ClassifyOptions = {},
 ): Promise<BranchConflictResult> {
-  const { owner, repo, _testPrData, _skipGitProbe } = options;
+  const { owner, repo, _testPrData, _testRequiresUpToDateHead, _skipGitProbe } =
+    options;
   const notes: string[] = [];
 
   const prData: PrData = _testPrData ?? fetchPrData(owner, repo, prNumber);
@@ -262,6 +404,7 @@ export async function classifyBranchConflictState(
       branchState: 'unknown',
       syncRecommendation: 'hold-unknown',
       baseAdvancedSinceMergeBase: false,
+      callSiteRouting: resolveCallSiteRouting('unknown', null, true),
       readOnly: true,
       worktreeUnchanged: true,
       diagnostics: {
@@ -294,6 +437,22 @@ export async function classifyBranchConflictState(
     skipGitProbe: Boolean(_skipGitProbe),
   });
 
+  // Test cases inject the policy value, or fall back to fail-closed `true`
+  // when they inject PR data; only the live path reads the base branch policy.
+  // Only `behind-no-conflict` routes on this input, so the policy reads run
+  // only for that state.
+  const requiresUpToDateHead =
+    _testRequiresUpToDateHead ??
+    (branchState !== 'behind-no-conflict'
+      ? false
+      : _testPrData
+        ? true
+        : resolveRequiresUpToDateHead(
+            String(owner ?? ''),
+            String(repo ?? ''),
+            prBaseRef,
+          ));
+
   return {
     protocolVersion: '1',
     prNumber: Number(prNumber),
@@ -305,6 +464,11 @@ export async function classifyBranchConflictState(
     branchState,
     syncRecommendation,
     baseAdvancedSinceMergeBase,
+    callSiteRouting: resolveCallSiteRouting(
+      branchState,
+      mergeStateStatus,
+      requiresUpToDateHead,
+    ),
     readOnly: true,
     worktreeUnchanged: true,
     diagnostics: {

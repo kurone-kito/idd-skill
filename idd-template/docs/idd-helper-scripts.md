@@ -6795,6 +6795,11 @@ same as `AW4`/`AW5`.
     "branchState": "clean",
     "syncRecommendation": "none",
     "baseAdvancedSinceMergeBase": false,
+    "callSiteRouting": {
+      "eBranchSync": "proceed-to-f1",
+      "e11": "skip-merge",
+      "f1": "proceed-to-f2"
+    },
     "readOnly": true,
     "worktreeUnchanged": true,
     "diagnostics": {
@@ -6805,6 +6810,72 @@ same as `AW4`/`AW5`.
   }
   ```
 
+- `callSiteRouting` (required object): the next step for each call site.
+  `eBranchSync` is `proceed-to-f1`, `sync-path`, `retry`, or `hold`; `e11`
+  is `skip-merge` or `merge-development-branch`; `f1` is `proceed-to-f2`,
+  `return-to-e-phase-branch-sync`, `retry`, or `hold`. Each call site reads
+  its own key, and the phase files do not restate the routing.
+- Routing table (the single statement of branch-state routing).
+  `requiresUpToDateHead` is not emitted. The helper derives it from the base
+  branch's policy, and a failed or unreadable read counts as `true`, which is
+  fail closed.
+- Without helper runtime, take `mergeable` and `mergeStateStatus` from
+  `gh pr view {pr-number} --json mergeable,mergeStateStatus`, and route with
+  the table below:
+  1. Derive `branchState` from `mergeable` and `mergeStateStatus` with the
+     first matching rule (the helper's order):
+     - `mergeable` `CONFLICTING`: `content-conflict`.
+     - `mergeStateStatus` `DIRTY`: `dirty`.
+     - `mergeable` `MERGEABLE` and `mergeStateStatus` `CLEAN`: `clean`.
+     - `mergeStateStatus` `BEHIND`: `behind-no-conflict`. The helper's
+       extra merge-tree probe, which can report `content-conflict` or
+       `unknown`, does not run without the helper.
+     - `mergeable` `MERGEABLE` with any other `mergeStateStatus`: `clean`,
+       which the table holds unless the status is `CLEAN`.
+     - `mergeable` `UNKNOWN` or null: `computing`.
+     - Anything else: `unknown`.
+  2. Only if `branchState` is `behind-no-conflict`, derive
+     `requiresUpToDateHead`. Other states route without it, so they make no
+     policy reads.
+     1. Read the base branch's rules (`rules/branches/{base-branch-url-encoded}`)
+        and its protection (`branches/{base-branch-url-encoded}/protection`)
+        under `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable
+        unless the `.github/idd/config.json` at the base ref sets
+        `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
+        base ref, never from the PR's own working tree:
+
+        ```sh
+        gh api -H 'Accept: application/vnd.github.raw' \
+          'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch-url-encoded}'
+        ```
+
+        Encode `{base-branch}` as a URL path segment in all three paths (for
+        example `release%2F1`), as the helper adapter does. An unencoded name
+        addresses another route and reads as a 404. A missing file falls back
+        to the user-global policy layers, as `loadTrustedIddConfig` does, and
+        an unreadable file leaves the opt-in unset.
+     2. `requiresUpToDateHead` is `true` when a ruleset's
+        `required_status_checks` rule has `strict_required_status_checks_policy`
+        `true` and at least one required check, or when classic protection has
+        `required_status_checks.strict` `true`. It is also `true` when either
+        read fails or is unreadable. Otherwise it is `false`.
+  3. Route with the table below.
+
+  | `branchState`                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
+  | -------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
+  | `clean` with `mergeStateStatus` `CLEAN`                        | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with any other `mergeStateStatus`                      | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `behind-no-conflict`                                           | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `behind-no-conflict`                                           | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
+  | `content-conflict`                                             | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
+  | `computing`                                                    | either                 | `retry`         | `skip-merge`               | `retry`                         |
+  | `dirty`, `unknown`, `force-push-exception`, or any other state | either                 | `hold`          | `skip-merge`               | `hold`                          |
+
+  `clean` proceeds only with `mergeStateStatus` `CLEAN`, which is the phase
+  files' own definition. The helper's `clean` alone also covers `BLOCKED` and
+  `UNSTABLE`. A `retry` result is re-polled a small fixed number of times
+  (distributed default: three attempts, a few seconds apart), then routed by
+  the first settled result.
 - `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
   `dirty`, `force-push-exception`, `computing`, `unknown` (`computing` is the
   transient still-computing mergeability that callers re-poll; `unknown` stays
@@ -6827,7 +6898,8 @@ same as `AW4`/`AW5`.
   `pull_request`-triggered CI run is pinned to a merge-ref computed at trigger
   time, so a bare rerun after base moves can replay that stale state.
 - Stable fields consumed by D/E/F routing: `branchState`,
-  `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
+  `syncRecommendation`, `callSiteRouting`, `published`, `readOnly`,
+  `worktreeUnchanged`
 - Read-only boundary: the helper never runs `git merge`, `git rebase`, or
   any command that leaves merge state, index changes, or working-tree
   changes. The `readOnly` and `worktreeUnchanged` fields confirm this.
