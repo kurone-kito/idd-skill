@@ -61,6 +61,13 @@ export function isToolingPath(path) {
   if (TOOLING_DIRS.some((dir) => path.startsWith(dir))) return true;
   return TOOLING_ROOT_PATTERNS.some((pattern) => pattern.test(path));
 }
+/** The frozen-lockfile install, with lifecycle scripts disabled. */
+const INSTALL_ARGV = [
+  'pnpm',
+  'install',
+  '--frozen-lockfile',
+  '--ignore-scripts',
+];
 /** The three fixed commands, in order. `script` must exist on the base tip. */
 export const FIXED_COMMANDS = [
   {
@@ -176,13 +183,7 @@ function defaultRun(argv, cwd, extraEnv = {}) {
  */
 export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
   const readPr = deps.readPr ?? defaultReadPr;
-  const runInstall =
-    deps.runInstall ??
-    ((cwd) =>
-      defaultRun(
-        ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'],
-        cwd,
-      ));
+  const runInstall = deps.runInstall ?? ((cwd, argv) => defaultRun(argv, cwd));
   const runCommand = deps.runCommand ?? defaultRun;
   const agentId = deps.agentId ?? `trial-merge-audit-${process.pid}`;
   const lockTimeoutMs = deps.lockTimeoutMs ?? 60_000;
@@ -288,6 +289,8 @@ function audit(args) {
       hooksDir,
       [
         'fetch',
+        // FETCH_HEAD is shared by the clone, and a named ref is never moved.
+        '--no-write-fetch-head',
         '--no-tags',
         args.fetchUrl,
         pull.baseRefName,
@@ -383,6 +386,7 @@ function audit(args) {
   }
   const changed = git(repo, hooksDir, [
     'diff',
+    '--no-renames',
     '--name-only',
     mergeBase,
     headSha,
@@ -430,7 +434,7 @@ function audit(args) {
     eventPath,
     JSON.stringify({ pull_request: { base: { sha: baseSha } } }),
   );
-  const install = args.runInstall(tmp);
+  const install = args.runInstall(tmp, INSTALL_ARGV);
   if (install.error !== undefined || install.exitCode !== 0) {
     return {
       protocolVersion: '1',

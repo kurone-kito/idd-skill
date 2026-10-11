@@ -69,6 +69,14 @@ export function isToolingPath(path: string): boolean {
   return TOOLING_ROOT_PATTERNS.some((pattern) => pattern.test(path));
 }
 
+/** The frozen-lockfile install, with lifecycle scripts disabled. */
+const INSTALL_ARGV = [
+  'pnpm',
+  'install',
+  '--frozen-lockfile',
+  '--ignore-scripts',
+];
+
 export type CommandId = 'audit-docs' | 'sync-docs' | 'typecheck';
 
 /** The three fixed commands, in order. `script` must exist on the base tip. */
@@ -126,7 +134,7 @@ export interface TrialMergeAuditDeps {
     repo: string,
     pr: string,
   ) => { headRefOid: string; baseRefOid: string; baseRefName: string };
-  runInstall?: (cwd: string) => CommandRun;
+  runInstall?: (cwd: string, argv: string[]) => CommandRun;
   runCommand?: (
     argv: string[],
     cwd: string,
@@ -279,12 +287,7 @@ export function runTrialMergeAudit(
 ): TrialMergeAuditResult {
   const readPr = deps.readPr ?? defaultReadPr;
   const runInstall =
-    deps.runInstall ??
-    ((cwd: string) =>
-      defaultRun(
-        ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts'],
-        cwd,
-      ));
+    deps.runInstall ?? ((cwd: string, argv: string[]) => defaultRun(argv, cwd));
   const runCommand = deps.runCommand ?? defaultRun;
   const agentId = deps.agentId ?? `trial-merge-audit-${process.pid}`;
   const lockTimeoutMs = deps.lockTimeoutMs ?? 60_000;
@@ -414,6 +417,8 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
       hooksDir,
       [
         'fetch',
+        // FETCH_HEAD is shared by the clone, and a named ref is never moved.
+        '--no-write-fetch-head',
         '--no-tags',
         args.fetchUrl,
         pull.baseRefName,
@@ -513,6 +518,7 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
   }
   const changed = git(repo, hooksDir, [
     'diff',
+    '--no-renames',
     '--name-only',
     mergeBase,
     headSha,
@@ -561,7 +567,7 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
     eventPath,
     JSON.stringify({ pull_request: { base: { sha: baseSha } } }),
   );
-  const install = args.runInstall(tmp);
+  const install = args.runInstall(tmp, INSTALL_ARGV);
   if (install.error !== undefined || install.exitCode !== 0) {
     return {
       protocolVersion: '1',

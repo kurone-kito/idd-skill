@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -123,8 +124,19 @@ function stubPr(fixture: Fixture): NonNullable<TrialMergeAuditDeps['readPr']> {
 }
 
 /** Install stub that creates a real node_modules directory, never a link. */
-const realInstall: NonNullable<TrialMergeAuditDeps['runInstall']> = (cwd) => {
+const realInstall: NonNullable<TrialMergeAuditDeps['runInstall']> = (
+  cwd,
+  argv,
+) => {
+  assert.deepEqual(argv, [
+    'pnpm',
+    'install',
+    '--frozen-lockfile',
+    '--ignore-scripts',
+  ]);
   mkdirSync(join(cwd, 'node_modules'));
+  assert.equal(lstatSync(join(cwd, 'node_modules')).isDirectory(), true);
+  assert.equal(lstatSync(join(cwd, 'node_modules')).isSymbolicLink(), false);
   return { exitCode: 0 };
 };
 
@@ -409,7 +421,11 @@ test('CLI: a successful run prints one JSON verdict with the fixed commands', {
     'gh',
     `process.stdout.write(${JSON.stringify(payload)});`,
   );
-  const restorePnpm = stubExecutable('pnpm', 'process.exit(0);');
+  // The stub accepts only the two commands the audit runs, with their exact arguments.
+  const restorePnpm = stubExecutable(
+    'pnpm',
+    "const a = process.argv.slice(2).join(' '); process.exit(a === 'install --frozen-lockfile --ignore-scripts' || a === 'run typecheck' ? 0 : 3);",
+  );
   try {
     const run = spawnSync(
       process.execPath,
