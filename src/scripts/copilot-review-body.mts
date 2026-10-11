@@ -333,28 +333,57 @@ export function extractPreviouslyMissedItems(
       }));
 }
 
-/** The few HTML entities a `<summary>` title can carry, decoded for matching. */
-const SUMMARY_TITLE_ENTITIES: Readonly<Record<string, string>> = {
-  '&amp;': '&',
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&#39;': "'",
+/** The named HTML entities a `<summary>` title is decoded from for matching.
+ * Numeric character references (`&#39;`, `&#x27;`) are decoded separately. */
+const SUMMARY_TITLE_NAMED_ENTITIES: Readonly<Record<string, string>> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
 };
+
+/** A named or numeric (decimal or hex) character reference. */
+const CHARACTER_REFERENCE_PATTERN =
+  /&(?:#(\d{1,7})|#[xX]([\da-fA-F]{1,6})|([a-zA-Z]+));/g;
+
+/** Decode one character reference, or keep it as written when it is a name
+ * outside {@link SUMMARY_TITLE_NAMED_ENTITIES} or not a valid code point. */
+function decodeCharacterReference(
+  reference: string,
+  decimal: string | undefined,
+  hex: string | undefined,
+  name: string | undefined,
+): string {
+  if (name !== undefined) {
+    return SUMMARY_TITLE_NAMED_ENTITIES[name] ?? reference;
+  }
+  const codePoint =
+    decimal !== undefined
+      ? Number.parseInt(decimal, 10)
+      : Number.parseInt(hex ?? '', 16);
+  return Number.isInteger(codePoint) &&
+    codePoint > 0 &&
+    codePoint <= 0x10ffff &&
+    (codePoint < 0xd800 || codePoint > 0xdfff)
+    ? String.fromCodePoint(codePoint)
+    : reference;
+}
 
 /**
  * The plain-text form of a Previously missed item title, for an exact match
- * (#4012): the common entities are decoded, zero-width characters are
- * removed, and whitespace runs collapse to one space. Applied to the caller's
- * title as given, so a title with literal angle-bracket text (`Use <T>`)
- * keeps that text. The body's `<summary>` markup is dropped first, by
- * {@link extractPreviouslyMissedItemTitles}, before the same normalization.
+ * (#4012): character references are decoded (decimal and hex numeric ones,
+ * and the common named ones such as `&amp;`, `&lt;`, and `&apos;`),
+ * zero-width characters are removed, and whitespace runs collapse to one
+ * space. Applied to the caller's title as given, so a title with literal
+ * angle-bracket text (`Use <T>`) keeps that text. The body's `<summary>`
+ * markup is dropped first, by {@link extractPreviouslyMissedItemTitles},
+ * before the same normalization.
  */
 export function normalizePreviouslyMissedItemTitle(title: string): string {
   return title
-    .replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => {
-      return SUMMARY_TITLE_ENTITIES[entity] ?? entity;
-    })
+    .replace(CHARACTER_REFERENCE_PATTERN, decodeCharacterReference)
     .replace(ZERO_WIDTH_CHARS_PATTERN, '')
     .replace(/\s+/g, ' ')
     .trim();

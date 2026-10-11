@@ -1076,14 +1076,14 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
 // --- #4012: body-item target ------------------------------------------------
 
 /** A Copilot `ccr-overview-v2` review body whose Previously missed section
- * lists three items, shaped like PR #4000's review 5480454002. */
+ * lists four items, shaped like PR #4000's review 5480454002. */
 const BODY_ITEM_REVIEW_BODY = [
   '<!-- ccr-overview-v2 -->',
   '',
   '### 🟡 Changes recommended',
   '',
   '<details>',
-  '<summary><strong>Previously missed (3)</strong></summary>',
+  '<summary><strong>Previously missed (4)</strong></summary>',
   '',
   "In code that hasn't changed since last review",
   '',
@@ -1103,6 +1103,11 @@ const BODY_ITEM_REVIEW_BODY = [
   '<summary><picture><img src="z.png" alt="Low severity"></picture> Use &lt;T&gt; in the generic signature</summary>',
   '',
   'Another citation-free remark.',
+  '</details>',
+  '<details>',
+  '<summary><picture><img src="w.png" alt="Low severity"></picture> Don&apos;t drop the caller&#x27;s &#8220;quoted&#8221; text</summary>',
+  '',
+  'A third citation-free remark.',
   '</details>',
   '</details>',
   '',
@@ -1231,6 +1236,17 @@ test('findBodyItem keeps literal angle-bracket text in the given title (#4012)',
     ).found,
     false,
   );
+});
+
+test('findBodyItem decodes named and numeric character references in the summary (#4012)', () => {
+  const reviews = [{ id: BODY_ITEM_REVIEW_ID, body: BODY_ITEM_REVIEW_BODY }];
+  // &apos;, a hex reference, and decimal references all decode, so the
+  // rendered title matches.
+  const rendered = "Don't drop the caller's \u201Cquoted\u201D text";
+  assert.deepEqual(findBodyItem(reviews, BODY_ITEM_REVIEW_ID, rendered, 42), {
+    found: true,
+    title: rendered,
+  });
 });
 
 test('findBodyItem refuses a title that the review does not list (#4012)', () => {

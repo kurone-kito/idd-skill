@@ -2971,24 +2971,24 @@ The adopted helper boundaries are intentionally narrow:
   and `--item-title <title>` instead of `--comment-id` to answer a review-body
   finding that has no inline thread, such as a Copilot "Previously missed"
   item that names a file or line (the E6 stamped top-level disposition). The
-  helper reads the review (REST `pulls/{n}/reviews`) and refuses a title
-  that its `overview-v2` Previously missed section does not list. Titles
-  match exactly once the review's `<summary>` markup is dropped, the common
-  HTML entities are decoded, and whitespace collapses; the given title keeps
-  any literal angle-bracket text. Dry-run prints the stamped body with
-  `reviewId` and `itemTitle` and posts nothing; an unknown review or title is
-  an `error` note (exit `0`), and a failure under `--apply` (exit `1`).
-  `--apply` posts
-  exactly one top-level PR comment ending with the reply-identity stamp,
-  reports its id as `replyId`, and resolves no thread. Its `--body` must open
-  with `**Accepted**` or `**Rejected**`, the recorded-deferral form
-  included; `**Rejection confirmed by maintainer**` is refused, since it
-  closes a thread AMD. The merge gate credits a plain `**Rejected**` reply
-  only when it names the file or line (kurone-kito/idd-skill#3942), so a
-  Rejected body should include that citation. The claim checks are the
-  thread target's, run once before the post. Observed on PR `#4000`
-  (2026-10-11): three of these dispositions were posted by hand with
-  `gh pr comment`, skipping the claim checks and the first-bytes rule.
+  helper reads the review (REST `pulls/{n}/reviews`) and refuses a title that
+  its `overview-v2` Previously missed section does not list. Titles match
+  exactly once the review's `<summary>` markup is dropped, numeric and common
+  named character references are decoded, and whitespace collapses; the given
+  title keeps any literal angle-bracket text. Dry-run prints the stamped body
+  with `reviewId` and `itemTitle` and posts nothing; an unknown review or
+  title is an `error` note (exit `0`), and a failure under `--apply` (exit
+  `1`). `--apply` posts exactly one top-level PR comment ending with the
+  reply-identity stamp, reports its id as `replyId`, and resolves no thread.
+  Its `--body` must open with `**Accepted**` or `**Rejected**`, the
+  recorded-deferral form included; `**Rejection confirmed by maintainer**` is
+  refused, since it closes a thread AMD. The merge gate credits a plain
+  `**Rejected**` reply only when it names the file or line
+  (kurone-kito/idd-skill#3942), so a Rejected body should include that
+  citation. The claim checks are the thread target's, run once before the
+  post. Observed on PR `#4000` (2026-10-11): three of these dispositions were
+  posted by hand with `gh pr comment`, skipping the claim checks and the
+  first-bytes rule.
 - **Fail-closed**: `--apply` requires `--body` and, unless `--claimless`,
   the `--claim-issue` / `--claim-id` pair; absent `--claimless` it
   re-validates the active claim before **each** of the reply and the
