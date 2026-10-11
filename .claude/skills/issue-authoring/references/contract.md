@@ -1029,12 +1029,13 @@ authoring skill should catch these issues before publishing:
 
 **Check 3 descriptive-text rule**: a descriptive sentence can match the
 policy-override detector even when it only explains existing behavior, for
-example a sentence that uses the word "override" next to "the gate". The
-whole sentence must sit inside one code span or one fenced block, which the
-body's code-region mask skips. A single word inside a span is not enough.
-The detector stays fail-closed. `audit-authored-issue` runs the same check
-before publication, so a sentence that is not reworded fails there rather than at
-Discover time.
+example a sentence that uses the word "override" next to "the gate". Observed
+2026-10-11 on issue `#3947`: one such sentence failed the trust check and
+stopped Discover. The whole sentence must sit inside one code span or one fenced
+block, which the body's code-region mask skips. A single word inside a span is
+not enough. The detector stays fail-closed. For `orphan` and `child` drafts,
+`audit-authored-issue` runs the same check before publication, so a sentence
+that is not reworded fails there rather than at Discover time.
 
 **Check 7 escape-hatch pattern**: an either/or acceptance-criteria bullet
 where one branch is a substantive change and the other reads as "or
