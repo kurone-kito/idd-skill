@@ -1709,7 +1709,8 @@ subsection describes for the issue-authoring reviewer.
    E10 critique rounds 5 and 6 for `kurone-kito/idd-skill#3872`: one
    subagent wrote a bare file under `/tmp`, another left a `mktemp`
    directory under `/tmp`, and one reported its scratch file deleted
-   while it was still present. Observed again 2026-10-10, in an E10
+   while it was still present (the run notes do not record whether
+   those briefs named a directory). Observed again 2026-10-10, in an E10
    critique round for `kurone-kito/idd-skill#3752` (pull request
    `kurone-kito/idd-skill#3851`): a subagent deleted five entries in a
    shared scratch directory that it had not created. Both are recorded
@@ -1735,8 +1736,9 @@ subsection describes for the issue-authoring reviewer.
 
 **Post-round scratch check.** The parent names a scratch directory in
 the brief whenever it can create one, so a subagent-created directory
-is only a fallback. After each delegated per-agent critique round, and
-after any process cleanup, the parent checks rule 3 itself:
+is only a fallback. Around each delegated per-agent critique round
+(step 1 before the launch, the rest after the round and any process
+cleanup), the parent checks rule 3 itself:
 
 1. Before the launch, it creates the named directory empty, so every
    entry in it after the round belongs to the round. It also lists the
@@ -1749,12 +1751,22 @@ after any process cleanup, the parent checks rule 3 itself:
    flags, in the critique result and in its final message, any reported
    path outside the named directory, any entry in the named directory
    the subagent did not report, and any entry of the containing
-   directory that appeared or vanished during the round.
+   directory that appeared or vanished during the round. It records
+   the listings in the critique result before the named directory is
+   removed. For a pass stopped before it returned, the subagent
+   reported nothing, so the parent lists every entry as residual risk
+   rather than as a violation.
 4. It does not scan all of `/tmp` or any other shared directory beyond
    the containing directory's own entries, and it deletes nothing it
    cannot attribute to the round. Other sessions under the same OS user
    write to these locations too, so a flagged entry there is a lead to
    check, not proof of a violation.
+
+When the subagent created its own directory instead (the fallback),
+there is no pre-launch listing. The parent then checks only the paths
+the subagent reported, lists only a reported directory's own entries,
+never lists `/tmp` itself, and records that the round had no named
+directory as residual risk.
 
 The parent bounds its wait for each delegated per-agent critique pass by
 the resolved `critiqueLoop.subagentWaitCeiling`. Enforce that ceiling
