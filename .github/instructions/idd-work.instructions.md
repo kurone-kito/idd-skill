@@ -144,8 +144,8 @@ WorkTrunk creates, runs the pre-start hook, and exits without
 changing the caller's directory.
 
 **Pre-start hook approval hang** (issue `#2797`): with `-x <noop>`,
-`wt switch --create` hangs non-interactively if the `[pre-start]` hook is
-unapproved. Then run `wt config approvals add --yes` once from the primary
+`wt switch --create` hangs if the `[pre-start]` hook is unapproved. Before the
+first switch, run `wt config approvals add --yes` once from the primary
 worktree. The approval is project-scoped, so sibling worktrees share it.
 Avoid the global `-y`/`--yes` flag; it skips all approvals.
 
