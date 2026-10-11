@@ -20,29 +20,29 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
 ## Helper runtime contract
 
 1. **When helper runtime is enabled** (`package-manager`, vendored-node,
-   `user-global`, or any profile that ships the helpers): run the commands below
+   `user-global`, or any profile that ships the helpers): run the commands
    first. If a helper is **missing, fails, returns invalid JSON, or
    disagrees with live GitHub state** → **stop and ask**. Do **not**
    fall through to the written tables in that situation.
 2. **When the repository is `instructions-only`** (no helper runtime
-   shipped): skip the helper commands and use the written tables only.
-   That is the sole path where the tables below are the primary
-   control surface. The `--record-tokens`/`--read-tokens` check
+   shipped): skip the helper commands and use only the written tables;
+   an issue-only handoff on an open PR stops. That is the sole path where
+   the tables below are the primary control
+   surface. The `--record-tokens`/`--read-tokens` check
    instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
 vendored-node** invocation form. Under `package-manager` /
 `ephemeral-npx` / `user-global` profiles, `scripts/` is not vendored — resolve each
 command's profile-selected equivalent from
-`docs/idd-helper-scripts.md`. A helper missing on the active profile
-is a missing-helper case under rule 1 (stop and ask), not a reason to
-fall through.
+`docs/idd-helper-scripts.md`. A helper missing on the active profile falls
+under rule 1 (stop and ask), never a reason to fall through.
 
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
-command below that needs it (Claim execution step 4 at the latest).
-Appending a unique session token is recommended for auditability
-(e.g., `copilot-8122ca35`), not required. `{agent-id}` alone is never
+command that needs it (Claim execution step 4 at the latest).
+A unique session token (e.g., `copilot-8122ca35`) is recommended for
+auditability, not required. `{agent-id}` alone is never
 ownership proof; `{claim-id}` is the authoritative token.
 
 ## Stop-and-ask
@@ -64,9 +64,9 @@ human-gated forced-handoff evidence from a trusted actor.
 
 ## Pre-checks (a)-(e) — all five must pass
 
-Re-fetch the issue immediately before running these checks. All five
-are target-issue local: claims on related roadmap or child issues do
-not block this check. Owner protocol:
+Re-fetch the issue immediately before these checks. All five are
+target-issue local: claims on related roadmap or child issues never block
+them. Owner protocol:
 `docs/idd-autonomy-contract.md#portable-authoring-owner-protocol`.
 
 ### (a) Issue-author approval
@@ -79,7 +79,7 @@ node scripts/claim-approval-gate.mjs --issue <N>
 
 Read `approved` / `reason` / `gateEnabled` / `checks` from the JSON
 output. `instructions-only` profile: use the written rules below
-directly (no helper exists for that profile).
+directly (no helper for that profile).
 
 - If `.github/idd/config.json` has `skipIssueAuthorApprovalGate: true`
   → skip this check.
@@ -203,13 +203,14 @@ is authorized under `forcedHandoff.authorityPolicy`;
 `branch` all match the active claim; and, when an open PR already backs
 this claim, the marker's evidence has `contextScope` of
 `issue-plus-pr` with `linkedPr` naming that PR — an issue-only handoff is not
-enough once a PR exists, unless it predates the PR's first commit. On success,
+enough once a PR exists, unless helper-confirmed to predate every open PR's
+first commit (the earliest). On success,
 the successor claim is **sticky**: adopt
 `newAgentId` / `newClaimId` **verbatim** as your own for the rest of
 the run (do not mint a fresh pair), and still post your own
-activation-nonce for `newClaimId` (see Claim verification below) — this
-is the one activation path with no separate `claimed-by` post. On any
-failure, the active claim is unchanged; treat it under the rules above.
+activation-nonce for `newClaimId` (see Claim verification) — the one
+activation path with no separate `claimed-by` post. On any failure, the
+active claim is unchanged; apply the rules above.
 
 ### (d) Open PR
 
