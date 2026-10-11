@@ -1740,8 +1740,9 @@ is only a fallback. Around each delegated per-agent critique round
 (step 1 before the launch, the rest after the round and any process
 cleanup), the parent checks rule 3 itself:
 
-1. Before the launch, it creates the named directory empty, so every
-   entry in it after the round belongs to the round. It also lists the
+1. Before the launch, it creates the named directory empty inside a
+   dedicated per-user parent directory, never directly in `/tmp`, so
+   every entry in it after the round belongs to the round. It also lists the
    immediate entries of the directory that contains the named directory
    (for example `ls -A /tmp/claude-1000/critic-scratch/`).
 2. After the round, it lists the named directory recursively by its
