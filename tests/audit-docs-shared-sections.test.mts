@@ -605,3 +605,41 @@ test('a backtick in a backtick fence info string does not open a fence', (t) => 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test('a listed title that is also a source-only blockquote heading fails and names that file', (t) => {
+  // "> ## Shared rule" renders as a second heading with the listed title, but
+  // headingSignature and the top-level scan both skip it. Without this check the
+  // duplicate would pass, since the top-level copy still matches exactly.
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, `${BASE}\n> ## Shared rule\n\nQuoted copy.\n`, BASE);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
+});
+
+test('a listed title that is a target-only list-item heading fails and names that file', (t) => {
+  // "- ## Shared rule" is a list-item heading in the target copy only.
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, BASE, `${BASE}\n- ## Shared rule\n\nListed copy.\n`);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${TARGET}`,
+    ),
+  );
+});

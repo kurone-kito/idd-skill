@@ -807,7 +807,7 @@ function resolveBlockFiles(block) {
 // inside a list item that the list then ends stays open here until a closing
 // fence. Checked against a CommonMark parser, that case differs only in
 // generated documents, not in any tracked Markdown file.
-function markdownSections(text) {
+function markdownOutline(text) {
   const normalized = normalizeText(text);
   const lines = normalized.split('\n');
   const htmlFirstPass = findHtmlBlockRanges(
@@ -822,11 +822,20 @@ function markdownSections(text) {
     ...findHtmlBlockRanges(normalized, fenced),
   ]);
   const headings = [];
+  const nestedTitles = [];
+  // Declared here, not at module level: audit-docs runs main() before any
+  // later module-level const is initialized.
+  const containerHeading =
+    /^ {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
   let offset = 0;
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(
       (range) => offset >= range.start && offset < range.end,
     );
+    const nested = isHidden ? null : containerHeading.exec(line);
+    if (nested !== null) {
+      nestedTitles.push(normalizeHeading(nested[2]));
+    }
     const heading = isHidden
       ? null
       : /^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
@@ -839,7 +848,7 @@ function markdownSections(text) {
     }
     offset += line.length + 1;
   }
-  return headings.map((heading, position) => {
+  const sections = headings.map((heading, position) => {
     let end = lines.length;
     for (const next of headings.slice(position + 1)) {
       if (next.level <= heading.level) {
@@ -852,6 +861,7 @@ function markdownSections(text) {
       body: lines.slice(heading.index, end).join('\n'),
     };
   });
+  return { sections, nestedTitles };
 }
 // Blanks the given ranges, keeping every newline, so later scans see the same
 // line structure with the ranges' content removed.
@@ -883,18 +893,36 @@ function checkSharedSections(pair, source, target) {
     );
     return;
   }
-  const sourceSections = markdownSections(source);
-  const targetSections = markdownSections(target);
+  const sourceOutline = markdownOutline(source);
+  const targetOutline = markdownOutline(target);
   for (const title of titles) {
     const key = normalizeHeading(title);
+    // A listed title nested in a blockquote or list item is not a boundary the
+    // scan can use, so it fails rather than slipping past the count below.
+    const nestedIn = [
+      { file: pair.source, outline: sourceOutline },
+      { file: pair.target, outline: targetOutline },
+    ].filter(({ outline }) => outline.nestedTitles.includes(key));
+    if (nestedIn.length > 0) {
+      for (const side of nestedIn) {
+        errors.push(
+          `${pair.id}: shared section "${title}" appears inside a blockquote or list item in ${side.file}`,
+        );
+      }
+      continue;
+    }
     const sides = [
       {
         file: pair.source,
-        matches: sourceSections.filter((section) => section.title === key),
+        matches: sourceOutline.sections.filter(
+          (section) => section.title === key,
+        ),
       },
       {
         file: pair.target,
-        matches: targetSections.filter((section) => section.title === key),
+        matches: targetOutline.sections.filter(
+          (section) => section.title === key,
+        ),
       },
     ];
     let resolved = true;
