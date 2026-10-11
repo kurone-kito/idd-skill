@@ -15,6 +15,7 @@
     "branchState",
     "syncRecommendation",
     "baseAdvancedSinceMergeBase",
+    "callSiteRouting",
     "readOnly",
     "worktreeUnchanged"
   ],
@@ -79,6 +80,26 @@
     "baseAdvancedSinceMergeBase": {
       "type": "boolean",
       "description": "Whether the base advanced beyond the computed merge base; false can also mean the merge base was unavailable or the probe was skipped, so consult diagnostics.notes."
+    },
+    "callSiteRouting": {
+      "type": "object",
+      "description": "Next step each E/F call site takes for this branch state. Values are fixed by the classification; a call site reads only its own key.",
+      "required": ["eBranchSync", "e11", "f1"],
+      "properties": {
+        "eBranchSync": {
+          "enum": ["proceed-to-f1", "sync-path", "retry", "hold"],
+          "description": "E-phase branch-sync check in idd-review-triage.instructions.md."
+        },
+        "e11": {
+          "enum": ["skip-merge", "merge-development-branch"],
+          "description": "E11 in idd-review-fix.instructions.md."
+        },
+        "f1": {
+          "enum": ["proceed-to-f2", "return-to-e-phase-branch-sync", "retry", "hold"],
+          "description": "F1 in idd-pre-merge.instructions.md."
+        }
+      },
+      "additionalProperties": false
     },
     "readOnly": {
       "type": "boolean",

@@ -429,6 +429,7 @@ export const branchConflictStateKeys = [
   'branchState',
   'syncRecommendation',
   'baseAdvancedSinceMergeBase',
+  'callSiteRouting',
   'readOnly',
   'worktreeUnchanged',
   'diagnostics',
@@ -1076,6 +1077,11 @@ const branchConflictStateFixture = {
   branchState: 'clean',
   syncRecommendation: 'none',
   baseAdvancedSinceMergeBase: false,
+  callSiteRouting: {
+    eBranchSync: 'proceed-to-f1',
+    e11: 'skip-merge',
+    f1: 'proceed-to-f2',
+  },
   readOnly: true,
   worktreeUnchanged: true,
   diagnostics: {
