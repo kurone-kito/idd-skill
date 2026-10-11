@@ -414,7 +414,7 @@ export interface ProviderGraphqlReview {
 
 /** One review node as {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}
  * returns it -- distinct field set from {@link ProviderGraphqlReview} (no
- * `url`/`state`; adds the review's own node `id`, `authorTypename`, and
+ * `url`; adds the review's own node `id`, `authorTypename`, and
  * `commentCount`), matching `review-clause.mts`'s own Clause-1 evidence
  * shape. */
 export interface ProviderReviewClauseNode {
@@ -434,6 +434,12 @@ export interface ProviderReviewClauseNode {
    * predates #3262 -- built without this field -- keeps typechecking;
    * absent reads the same as `false` ("not reply-only"). */
   replyOnly?: boolean;
+  /** kurone-kito/idd-skill#4015: the review's GraphQL `state`
+   * (`APPROVED`, `COMMENTED`, `CHANGES_REQUESTED`, ...). The advisory gate
+   * reads it to find a trusted maintainer's approval of a pull request that
+   * changes the gate's own decision rules. Optional so fixture literals that
+   * predate it keep typechecking; absent reads as "not an approval". */
+  state?: string | null;
 }
 
 /** Backs {@link ProviderPort.getChangeRequestReviewsWithHeadCommitDate}. */
