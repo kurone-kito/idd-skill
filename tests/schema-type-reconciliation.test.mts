@@ -1867,6 +1867,8 @@ const resolveReviewThreadKeys = [
   'commentId',
   'threadId',
   'alreadyResolved',
+  'reviewId',
+  'itemTitle',
   'body',
   'status',
   'replyId',

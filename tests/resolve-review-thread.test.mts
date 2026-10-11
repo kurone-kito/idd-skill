@@ -15,12 +15,15 @@ import {
   activeOwnedClaim,
   applyResolveReviewThread,
   assertNoGraphqlErrors,
+  findBodyItem,
   findThreadForComment,
+  hasBodyItemDispositionPrefix,
   hasKnownDispositionMarkerPrefix,
   isClaimlessEligible,
   parseArgs,
   type ResolveReviewThreadReport,
   type ReviewThreadNode,
+  runBodyItemDisposition,
 } from '../src/scripts/resolve-review-thread.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { buildReviewThreadNode, stubExecutable } from './test-utils.mts';
@@ -1068,4 +1071,398 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
     body: '**Accepted** — fixed in abc\n\n<!-- idd-skill-review-reply -->',
   };
   assert.equal(validate(apply, resultSchema).length, 0, 'apply output');
+});
+
+// --- #4012: body-item target ------------------------------------------------
+
+/** A Copilot `ccr-overview-v2` review body whose Previously missed section
+ * lists two items, shaped like PR #4000's review 5480454002. */
+const BODY_ITEM_REVIEW_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '### 🟡 Changes recommended',
+  '',
+  '<details>',
+  '<summary><strong>Previously missed (2)</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary><picture><img src="x.png" alt="Medium severity"></picture> Accept punctuation variants in cited-item dispositions</summary>',
+  '',
+  '`src/​scripts/​review-clause.mts:447`',
+  '',
+  'The predicate only accepts the bare prefix.',
+  '</details>',
+  '<details>',
+  '<summary><picture><img src="y.png" alt="Low severity"></picture> Keep R&amp;D notes  short</summary>',
+  '',
+  'A citation-free remark.',
+  '</details>',
+  '</details>',
+  '',
+  '🧠 **Review effort:** Lite',
+].join('\n');
+
+const BODY_ITEM_REVIEW_ID = 5480454002;
+const BODY_ITEM_TITLE =
+  'Accept punctuation variants in cited-item dispositions';
+const BODY_ITEM_STAMPED =
+  '**Accepted**: the shared prefix grammar is used, in commit abc.\n\n<!-- idd-skill-review-reply -->';
+
+function bodyItemPort(claimComments: ProviderComment[] = []): ReturnType<
+  typeof createFakeProviderAdapter
+> & {
+  fixture: Parameters<typeof createFakeProviderAdapter>[0];
+} {
+  const fixture: Parameters<typeof createFakeProviderAdapter>[0] = {
+    viewerLogin: 'kurone-kito',
+    reviews: {
+      42: [
+        { id: 111, body: 'unrelated review' },
+        { id: BODY_ITEM_REVIEW_ID, body: BODY_ITEM_REVIEW_BODY },
+      ],
+    },
+    comments: { 5: claimComments },
+    changeRequestHeadRefs: { 42: 'issue/5-feat' },
+  };
+  const port = createFakeProviderAdapter(fixture);
+  return Object.assign(port, { fixture });
+}
+
+const BODY_ITEM_CLAIM: ProviderComment = {
+  id: 1,
+  body: [
+    '<!-- claimed-by: claude-a claim-a supersedes: none 2026-10-11T10:00:00Z branch: issue/5-feat -->',
+    '',
+    '_claude-a: issue claim — IDD automation marker. Do not edit._',
+  ].join('\n'),
+  createdAt: new Date(Date.now() - 60_000).toISOString(),
+  updatedAt: new Date(Date.now() - 60_000).toISOString(),
+  authorLogin: 'kurone-kito',
+  lastEditedAt: null,
+};
+
+/** The CLI's claim check, reduced to the fake port: revalidate the claim on
+ * issue 5 and bind it to PR 42's head branch. */
+function bodyItemAssertClaim(port: ProviderPort, claimId: string): () => void {
+  return () => {
+    const active = activeOwnedClaim(
+      port,
+      5,
+      '',
+      claimId,
+      (login) => login === 'kurone-kito',
+      { forcedHandoffEnabled: false, isAuthorizedForcedHandoff: () => false },
+      24 * 60 * 60 * 1000,
+    );
+    if (!active) {
+      throw new Error(
+        `claim revalidation failed: "${claimId}" is no longer the active claim on issue #5`,
+      );
+    }
+    if (active.branch !== port.getChangeRequestHeadRef(42)) {
+      throw new Error('claim/PR mismatch');
+    }
+  };
+}
+
+test('parseArgs reads the body-item target flags (#4012)', () => {
+  const args = parseArgs([
+    '--pr',
+    '42',
+    '--review-id',
+    String(BODY_ITEM_REVIEW_ID),
+    '--item-title',
+    BODY_ITEM_TITLE,
+  ]);
+  assert.equal(args.reviewId, BODY_ITEM_REVIEW_ID);
+  assert.equal(args.itemTitle, BODY_ITEM_TITLE);
+  assert.equal(args.commentId, null);
+});
+
+test('findBodyItem matches a Previously missed title exactly after normalization (#4012)', () => {
+  const reviews = [{ id: BODY_ITEM_REVIEW_ID, body: BODY_ITEM_REVIEW_BODY }];
+  assert.deepEqual(
+    findBodyItem(reviews, BODY_ITEM_REVIEW_ID, BODY_ITEM_TITLE, 42),
+    { found: true, title: BODY_ITEM_TITLE },
+  );
+  // Entities decode and whitespace runs collapse on both sides.
+  assert.deepEqual(
+    findBodyItem(reviews, BODY_ITEM_REVIEW_ID, 'Keep R&D notes short', 42),
+    { found: true, title: 'Keep R&D notes short' },
+  );
+});
+
+test('findBodyItem refuses a title that the review does not list (#4012)', () => {
+  const reviews = [{ id: BODY_ITEM_REVIEW_ID, body: BODY_ITEM_REVIEW_BODY }];
+  for (const title of ['Accept punctuation variants', 'Something else', '']) {
+    const lookup = findBodyItem(reviews, BODY_ITEM_REVIEW_ID, title, 42);
+    assert.equal(lookup.found, false, title);
+  }
+  // A title from the "open findings" list or plain prose is not an item.
+  const lookup = findBodyItem(reviews, BODY_ITEM_REVIEW_ID, 'Lite', 42);
+  assert.equal(lookup.found, false);
+});
+
+test('findBodyItem refuses an unknown review and a body with no Previously missed section (#4012)', () => {
+  const missing = findBodyItem([], BODY_ITEM_REVIEW_ID, BODY_ITEM_TITLE, 42);
+  assert.deepEqual(missing, {
+    found: false,
+    error: `no review ${BODY_ITEM_REVIEW_ID} found on PR #42`,
+  });
+  const plain = findBodyItem([{ id: 7, body: 'LGTM' }], 7, BODY_ITEM_TITLE, 42);
+  assert.equal(plain.found, false);
+  assert.match(
+    (plain as { error: string }).error,
+    /no readable Previously missed section/,
+  );
+});
+
+test('runBodyItemDisposition dry-run prints the stamped body and posts nothing (#4012)', () => {
+  const port = bodyItemPort([BODY_ITEM_CLAIM]);
+  let claimChecks = 0;
+  const { report, exitCode } = runBodyItemDisposition(port, {
+    pr: 42,
+    reviewId: BODY_ITEM_REVIEW_ID,
+    itemTitle: BODY_ITEM_TITLE,
+    stampedBody: BODY_ITEM_STAMPED,
+    apply: false,
+    assertClaim: () => {
+      claimChecks += 1;
+    },
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(report, {
+    mode: 'dry-run',
+    prNumber: 42,
+    reviewId: BODY_ITEM_REVIEW_ID,
+    itemTitle: BODY_ITEM_TITLE,
+    body: BODY_ITEM_STAMPED,
+  });
+  assert.equal(claimChecks, 0);
+  assert.deepEqual(port.fixture.postedComments, []);
+  assert.equal(port.fixture.resolvedReviewThreadIds, undefined);
+  assert.equal(validate(report, resultSchema).length, 0);
+});
+
+test('runBodyItemDisposition apply posts exactly one stamped top-level comment and resolves no thread (#4012)', () => {
+  const port = bodyItemPort([BODY_ITEM_CLAIM]);
+  const { report, exitCode } = runBodyItemDisposition(port, {
+    pr: 42,
+    reviewId: BODY_ITEM_REVIEW_ID,
+    itemTitle: BODY_ITEM_TITLE,
+    stampedBody: BODY_ITEM_STAMPED,
+    apply: true,
+    assertClaim: bodyItemAssertClaim(port, 'claim-a'),
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(report.status, 'applied');
+  assert.deepEqual(port.fixture.postedComments, [
+    { number: 42, body: BODY_ITEM_STAMPED },
+  ]);
+  assert.match(
+    port.fixture.postedComments?.[0]?.body ?? '',
+    /<!-- idd-skill-review-reply -->$/,
+  );
+  assert.equal(report.replyId, 1);
+  assert.equal(port.fixture.resolvedReviewThreadIds, undefined);
+  assert.equal(validate(report, resultSchema).length, 0);
+});
+
+test('runBodyItemDisposition apply refuses an unknown title before the claim check or any post (#4012)', () => {
+  const port = bodyItemPort([BODY_ITEM_CLAIM]);
+  let claimChecks = 0;
+  const { report, exitCode } = runBodyItemDisposition(port, {
+    pr: 42,
+    reviewId: BODY_ITEM_REVIEW_ID,
+    itemTitle: 'Not an item in this review',
+    stampedBody: BODY_ITEM_STAMPED,
+    apply: true,
+    assertClaim: () => {
+      claimChecks += 1;
+    },
+  });
+  assert.equal(exitCode, 1);
+  assert.equal(report.status, 'failed');
+  assert.match(report.error ?? '', /lists no Previously missed item titled/);
+  assert.equal(claimChecks, 0);
+  assert.deepEqual(port.fixture.postedComments, []);
+  assert.equal(validate(report, resultSchema).length, 0);
+});
+
+test('runBodyItemDisposition apply refuses a missing or stale claim before any post (#4012)', () => {
+  // No claim at all on the issue.
+  const unclaimed = bodyItemPort([]);
+  assert.throws(
+    () =>
+      runBodyItemDisposition(unclaimed, {
+        pr: 42,
+        reviewId: BODY_ITEM_REVIEW_ID,
+        itemTitle: BODY_ITEM_TITLE,
+        stampedBody: BODY_ITEM_STAMPED,
+        apply: true,
+        assertClaim: bodyItemAssertClaim(unclaimed, 'claim-a'),
+      }),
+    /claim revalidation failed/,
+  );
+  assert.deepEqual(unclaimed.fixture.postedComments, []);
+
+  // The issue's active claim belongs to another claim id.
+  const other = bodyItemPort([BODY_ITEM_CLAIM]);
+  assert.throws(
+    () =>
+      runBodyItemDisposition(other, {
+        pr: 42,
+        reviewId: BODY_ITEM_REVIEW_ID,
+        itemTitle: BODY_ITEM_TITLE,
+        stampedBody: BODY_ITEM_STAMPED,
+        apply: true,
+        assertClaim: bodyItemAssertClaim(other, 'claim-stale'),
+      }),
+    /claim revalidation failed/,
+  );
+  assert.deepEqual(other.fixture.postedComments, []);
+});
+
+test('hasBodyItemDispositionPrefix accepts Accepted, Rejected, and the recorded deferral only (#4012)', () => {
+  for (const body of [
+    '**Accepted** — fixed in abc',
+    '**Accepted**: fixed in abc',
+    '**Rejected** — `src/a.mts:3` already guards this',
+    '**Rejected** — deferred to follow-up issue #12 (round-count): out of scope',
+  ]) {
+    assert.equal(hasBodyItemDispositionPrefix(body), true, body);
+  }
+  for (const body of [
+    '**Rejection confirmed by maintainer** — agreed',
+    '**Fixed** — cleaned up',
+    ' **Accepted** — leading space breaks the first-bytes rule',
+  ]) {
+    assert.equal(hasBodyItemDispositionPrefix(body), false, body);
+  }
+});
+
+function runCliExpectingUsageFailure(cliArgs: string[]): string {
+  try {
+    execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'), ...cliArgs],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    return failure.stderr ?? '';
+  }
+  throw new Error('expected the CLI to exit non-zero');
+}
+
+test('body-item --apply refuses a non-conforming --body before any gh call (compiled CLI, #4012)', () => {
+  for (const body of [
+    '**Fixed** — cleaned up the stray import',
+    '**Rejection confirmed by maintainer** — agreed',
+  ]) {
+    const stderr = runCliExpectingUsageFailure([
+      '--pr',
+      '42',
+      '--review-id',
+      String(BODY_ITEM_REVIEW_ID),
+      '--item-title',
+      BODY_ITEM_TITLE,
+      '--claim-issue',
+      '5',
+      '--claim-id',
+      'claim-a',
+      '--apply',
+      '--body',
+      body,
+    ]);
+    assert.match(
+      stderr,
+      /--apply requires --body to start with one of the accepted body-item disposition markers/,
+    );
+  }
+});
+
+test('--comment-id cannot be combined with the body-item target (compiled CLI, #4012)', () => {
+  const stderr = runCliExpectingUsageFailure([
+    '--pr',
+    '42',
+    '--comment-id',
+    '1001',
+    '--review-id',
+    String(BODY_ITEM_REVIEW_ID),
+    '--item-title',
+    BODY_ITEM_TITLE,
+  ]);
+  assert.match(
+    stderr,
+    /--comment-id cannot be combined with --review-id or --item-title/,
+  );
+});
+
+test('body-item dry-run reads the review and prints the stamped body without posting (compiled CLI, #4012)', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const joined = args.join(' ');
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+const fail = (msg) => { fs.writeSync(2, msg); process.exit(1); };
+if (args[0] === 'api' && joined.includes('repos/o/r/pulls/42/reviews') && !args.includes('POST')) {
+  out(JSON.stringify({ id: ${BODY_ITEM_REVIEW_ID}, body: ${JSON.stringify(BODY_ITEM_REVIEW_BODY)} }) + '\\n');
+}
+fail('unexpected gh invocation: ' + joined);
+`,
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'),
+        '--pr',
+        '42',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--review-id',
+        String(BODY_ITEM_REVIEW_ID),
+        '--item-title',
+        BODY_ITEM_TITLE,
+        '--body',
+        '**Accepted** — fixed in abc',
+      ],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    const report = JSON.parse(output) as ResolveReviewThreadReport;
+    assert.equal(report.mode, 'dry-run');
+    assert.equal(report.reviewId, BODY_ITEM_REVIEW_ID);
+    assert.equal(report.itemTitle, BODY_ITEM_TITLE);
+    assert.equal(report.status, undefined);
+    assert.match(report.body ?? '', /<!-- idd-skill-review-reply -->$/);
+    assert.equal(validate(report, resultSchema).length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('the schema refuses an envelope that names both targets or neither (#4012)', () => {
+  const both = {
+    mode: 'dry-run',
+    prNumber: 7,
+    commentId: 1001,
+    alreadyResolved: false,
+    reviewId: 9,
+    itemTitle: 'x',
+  };
+  assert.notEqual(validate(both, resultSchema).length, 0, 'both targets');
+  const neither = { mode: 'dry-run', prNumber: 7 };
+  assert.notEqual(validate(neither, resultSchema).length, 0, 'no target');
 });

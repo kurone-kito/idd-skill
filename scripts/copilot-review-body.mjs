@@ -220,16 +220,16 @@ const CITATION_ANYWHERE_PATTERN =
 /** A `<details>` or `</details>` tag, for the wrapper-bounded scan below. */
 const DETAILS_TAG_PATTERN = /<(\/?)details>/g;
 /**
- * The Previously missed items of an `overview-v2` body, in order, each
- * flagged `cited` when its text names a file or line anywhere (#3942). The
- * items are the `<details>` blocks directly inside the Previously missed
- * wrapper, and only those with their own `<summary>`. The scan stops where the
- * wrapper closes, so a later section is never read as an item. `null` when the
- * body is not `overview-v2`, has no such section, or never closes its wrapper.
- * Read from the raw body: {@link stripMarkdownCodeRegions} would blank the
- * code span that carries the citation.
+ * The raw `<details>` blocks of an `overview-v2` body's Previously missed
+ * section, in order. The items are the `<details>` blocks directly inside the
+ * Previously missed wrapper, and only those with their own `<summary>`. The
+ * scan stops where the wrapper closes, so a later section is never read as an
+ * item. `null` when the body is not `overview-v2`, has no such section, or
+ * never closes its wrapper. Read from the raw body:
+ * {@link stripMarkdownCodeRegions} would blank the code span that carries the
+ * citation.
  */
-export function extractPreviouslyMissedItems(body) {
+function previouslyMissedItemBlocks(body) {
   if (typeof body !== 'string' || !V2_MARKER_PATTERN.test(body.trimStart())) {
     return null;
   }
@@ -240,7 +240,7 @@ export function extractPreviouslyMissedItems(body) {
   if (body.lastIndexOf('<details>', heading.index) < 0) {
     return null;
   }
-  const items = [];
+  const blocks = [];
   let depth = 1;
   let itemStart = -1;
   const tags = new RegExp(DETAILS_TAG_PATTERN.source, 'g');
@@ -256,21 +256,74 @@ export function extractPreviouslyMissedItems(body) {
     if (depth === 2 && itemStart >= 0) {
       const block = body.slice(itemStart, m.index + m[0].length);
       if (block.includes('<summary>')) {
-        items.push({
-          cited: block
-            .replace(ZERO_WIDTH_CHARS_PATTERN, '')
-            .split(/\r?\n/)
-            .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
-        });
+        blocks.push(block);
       }
       itemStart = -1;
     }
     depth -= 1;
     if (depth === 0) {
-      return items;
+      return blocks;
     }
   }
   return null;
+}
+/**
+ * The Previously missed items of an `overview-v2` body, in order, each
+ * flagged `cited` when its text names a file or line anywhere (#3942). See
+ * {@link previouslyMissedItemBlocks} for which blocks count as items and when
+ * the result is `null`.
+ */
+export function extractPreviouslyMissedItems(body) {
+  const blocks = previouslyMissedItemBlocks(body);
+  return blocks === null
+    ? null
+    : blocks.map((block) => ({
+        cited: block
+          .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+          .split(/\r?\n/)
+          .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
+      }));
+}
+/** The few HTML entities a `<summary>` title can carry, decoded for matching. */
+const SUMMARY_TITLE_ENTITIES = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+};
+/**
+ * The plain-text form of a Previously missed item title, for an exact match
+ * (#4012): HTML tags (the severity `<picture>` icon, `<strong>`) are dropped,
+ * the common entities are decoded, zero-width characters are removed, and
+ * whitespace runs collapse to one space. Applied to both the body's title and
+ * the caller's title, so a caller can pass the title as GitHub renders it.
+ */
+export function normalizePreviouslyMissedItemTitle(title) {
+  return title
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => {
+      return SUMMARY_TITLE_ENTITIES[entity] ?? entity;
+    })
+    .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+/**
+ * The normalized titles of an `overview-v2` body's Previously missed items, in
+ * order (#4012). Each title is the text of the item's own `<summary>`, passed
+ * through {@link normalizePreviouslyMissedItemTitle}. `null` under the same
+ * conditions as {@link extractPreviouslyMissedItems}.
+ */
+export function extractPreviouslyMissedItemTitles(body) {
+  const blocks = previouslyMissedItemBlocks(body);
+  return blocks === null
+    ? null
+    : blocks.map((block) =>
+        normalizePreviouslyMissedItemTitle(
+          block.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] ?? '',
+        ),
+      );
 }
 /** True when `body` names a file or line anywhere in its text (#3942). */
 export function namesFileOrLine(body) {
