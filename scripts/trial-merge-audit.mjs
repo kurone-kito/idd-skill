@@ -94,6 +94,7 @@ function sanitizedEnv() {
     if (key.startsWith('GIT_') && !kept.has(key)) delete env[key];
   }
   env.GIT_TERMINAL_PROMPT = '0';
+  env.GCM_INTERACTIVE = 'never';
   return env;
 }
 /** A fetch that stalls is cut off, so it cannot hold the clone lock forever. */
@@ -124,7 +125,7 @@ function gitAtLeast(hooksDir, major, minor) {
 }
 function listFiles(repo, hooksDir, rev) {
   const out = git(repo, hooksDir, ['ls-tree', '-r', '--name-only', rev]);
-  if (out.status !== 0) return [];
+  if (out.status !== 0) return null;
   return out.stdout.split('\n').filter((line) => line.length > 0);
 }
 function defaultReadPr(owner, repo, pr) {
@@ -180,7 +181,10 @@ export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
   const hooksDir = mkdtempSync(join(tmpdir(), 'idd-trial-hooks-'));
   const tmp = join(mkdtempSync(join(tmpdir(), 'idd-trial-merge-')), 'worktree');
   const ctx = { worktreeCreated: false };
-  const origin = resolveFetchOrigin();
+  const origin = resolveFetchOrigin(sanitizedEnv(), {
+    readOriginUrl: () =>
+      git(repo, hooksDir, ['remote', 'get-url', 'origin']).stdout.trim(),
+  });
   const fetchUrl =
     deps.fetchUrl ??
     `${origin.scheme}://${origin.host}/${owner}/${repoName}.git`;
@@ -354,27 +358,32 @@ function audit(args) {
   // Overlay base-tip tooling. A tooling path that the PR changed is replaced
   // by the base tip's copy, and a tooling path the base lacks is removed.
   // Every such path is listed as toolingChanged.
-  const mergeBase = git(repo, hooksDir, [
-    'merge-base',
-    baseSha,
-    headSha,
-  ]).stdout.trim();
-  if (mergeBase.length === 0) {
+  const mergeBaseRead = git(repo, hooksDir, ['merge-base', baseSha, headSha]);
+  const mergeBase = mergeBaseRead.stdout.trim();
+  if (mergeBaseRead.status !== 0 || mergeBase.length === 0) {
     return emptyResult('merge-base-failed', { prHeadSha: headSha, baseSha });
   }
-  const toolingChanged = git(repo, hooksDir, [
+  const changed = git(repo, hooksDir, [
     'diff',
     '--name-only',
     mergeBase,
     headSha,
-  ])
-    .stdout.split('\n')
+  ]);
+  const baseFiles = listFiles(repo, hooksDir, baseSha);
+  const mergedFiles = listFiles(repo, hooksDir, trialCommit);
+  if (changed.status !== 0 || baseFiles === null || mergedFiles === null) {
+    return emptyResult('tooling-read-failed', {
+      prHeadSha: headSha,
+      baseSha,
+      trialCommit,
+    });
+  }
+  const toolingChanged = changed.stdout
+    .split('\n')
     .filter((path) => path.length > 0 && isToolingPath(path))
     .sort();
-  const baseTooling = listFiles(repo, hooksDir, baseSha).filter(isToolingPath);
-  const mergedTooling = listFiles(repo, hooksDir, trialCommit).filter(
-    isToolingPath,
-  );
+  const baseTooling = baseFiles.filter(isToolingPath);
+  const mergedTooling = mergedFiles.filter(isToolingPath);
   const baseSet = new Set(baseTooling);
   for (const path of mergedTooling) {
     if (!baseSet.has(path)) {
