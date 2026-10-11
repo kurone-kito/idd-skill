@@ -284,9 +284,16 @@ Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
    `idd-work.instructions.md`). The worktree exists before the claim. Do not
    use WorkTrunk create here: its pre-start hook installs before the claim POST.
 2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.
-3. Post the claim comment per
-   [Claim format](idd-overview-core.instructions.md#claim-format), then the
-   activation nonce.
+3. Re-run the A5(c) gate with `--fresh-claim-gate --own-worktree <path>`,
+   so this session's new worktree does not read as an occupant of a
+   released claim's branch. The gate ignores that path only while it is
+   clean with no commits beyond the base. Observed 2026-10-11, issues
+   `#3944` and `#3952`: without the flag the gate read `already-claimed`
+   (`released-claim-local-worktree-occupied`). Only on `claimable`, post
+   the claim comment per
+   [Claim format](idd-overview-core.instructions.md#claim-format), then
+   the activation nonce. Any other verdict follows the A5(c) routing
+   above; this worktree holds no claim yet.
 4. `--acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`,
    on the linked worktree only.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
