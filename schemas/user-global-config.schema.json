@@ -450,6 +450,9 @@
         "e10NoProgressHoldAfter": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/e10NoProgressHoldAfter"
         },
+        "e10MaxPasses": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/e10MaxPasses"
+        },
         "deferAfterRounds": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferAfterRounds"
         },

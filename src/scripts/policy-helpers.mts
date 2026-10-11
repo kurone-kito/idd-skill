@@ -26,6 +26,7 @@ export interface CritiqueLoopDelegate {
 interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
+  e10MaxPasses: number;
   deferAfterRounds: number;
   deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
   /**
@@ -521,6 +522,7 @@ interface RawConfig {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: unknown;
     e10NoProgressHoldAfter?: unknown;
+    e10MaxPasses?: unknown;
     deferAfterRounds?: unknown;
     deferByUrgency?: unknown;
     deferRelaxAtRounds?: unknown;
@@ -754,6 +756,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
+    e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
     deferRelaxAtRounds: Object.freeze([]),
@@ -1006,6 +1009,10 @@ export function normalizePolicyConfig(config: unknown) {
     e10NoProgressHoldAfter: parsePositiveInteger(
       c?.critiqueLoop?.e10NoProgressHoldAfter,
       POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
+    ),
+    e10MaxPasses: parsePositiveInteger(
+      c?.critiqueLoop?.e10MaxPasses,
+      POLICY_DEFAULTS.critiqueLoop.e10MaxPasses,
     ),
     deferAfterRounds: parsePositiveInteger(
       c?.critiqueLoop?.deferAfterRounds,

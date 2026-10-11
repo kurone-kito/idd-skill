@@ -771,6 +771,35 @@ test('policy schema rejects a critiqueLoop.delegate mode outside the enum (#2324
   );
 });
 
+test('policy schema accepts critiqueLoop.e10MaxPasses as a positive integer (#3943)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const e10MaxPasses of [1, 2, 5]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, e10MaxPasses };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected e10MaxPasses ${e10MaxPasses} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects a non-positive or non-integer critiqueLoop.e10MaxPasses (#3943)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const e10MaxPasses of [0, -1, 1.5, '2']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, e10MaxPasses };
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `expected e10MaxPasses ${String(e10MaxPasses)} to be rejected`,
+    );
+  }
+});
+
 test('policy schema accepts every critiqueLoop.deferByUrgency value (#3311)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   for (const deferByUrgency of [

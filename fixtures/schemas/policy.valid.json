@@ -72,6 +72,7 @@
   "critiqueLoop": {
     "cPhaseLowSeveritySkipAfter": 3,
     "e10NoProgressHoldAfter": 3,
+    "e10MaxPasses": 2,
     "telemetryHook": {
       "command": "notify-critique-telemetry"
     }

@@ -313,6 +313,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
+    e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
     deferRelaxAtRounds: Object.freeze([]),
@@ -544,6 +545,10 @@ export function normalizePolicyConfig(config) {
     e10NoProgressHoldAfter: parsePositiveInteger(
       c?.critiqueLoop?.e10NoProgressHoldAfter,
       POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
+    ),
+    e10MaxPasses: parsePositiveInteger(
+      c?.critiqueLoop?.e10MaxPasses,
+      POLICY_DEFAULTS.critiqueLoop.e10MaxPasses,
     ),
     deferAfterRounds: parsePositiveInteger(
       c?.critiqueLoop?.deferAfterRounds,

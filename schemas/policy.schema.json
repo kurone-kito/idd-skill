@@ -726,6 +726,11 @@
           "minimum": 1,
           "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
         },
+        "e10MaxPasses": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-issue cap on E10 review-fix critique passes, counted across E9 fix batches. Once this many passes have run and no High or Medium Accepted finding is open, the loop stops and files the remaining Low findings into a follow-up issue instead of fixing them in the loop. An unestablished count does not count as reached. Optional; defaults to `2`."
+        },
         "deferAfterRounds": {
           "type": "integer",
           "minimum": 1,

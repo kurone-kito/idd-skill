@@ -941,6 +941,7 @@ test('policy normalization provides default-safe values and supports aliases', (
     critiqueLoop: {
       cPhaseLowSeveritySkipAfter: 3,
       e10NoProgressHoldAfter: 3,
+      e10MaxPasses: 2,
       deferAfterRounds: 12,
       deferByUrgency: 'off',
       deferRelaxAtRounds: [],
@@ -1163,6 +1164,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       critiqueLoop: {
         cPhaseLowSeveritySkipAfter: 4,
         e10NoProgressHoldAfter: 2,
+        e10MaxPasses: 2,
         deferAfterRounds: 20,
         deferByUrgency: 'low-and-medium',
         deferRelaxAtRounds: [4, 7],
