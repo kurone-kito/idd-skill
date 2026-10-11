@@ -23,10 +23,9 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
    fall through to the written tables in that situation.
 2. **When the repository is `instructions-only`** (no helper runtime
    shipped): skip the helper commands and use only the written tables;
-   an issue-only handoff on an open PR stops. That is the sole path where
-   the tables below are the primary control
-   surface. The `--record-tokens`/`--read-tokens` check
-   instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
+   an issue-only handoff on an open PR stops. The `--record-tokens` /
+   `--read-tokens` check instead uses `docs/idd-helper-scripts.md`'s
+   helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
 vendored-node** form; other profiles resolve each command's profile-selected
@@ -273,8 +272,7 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 2. **Worktree and `{claim-id}`**: on a fresh claim with no inheritable
    branch (pre-check (e)), create the linked worktree first, under the
    clone-scoped lock after `git fetch origin main`: `git worktree add
-   --no-track <path> -b <branch-name> origin/main` (B1 step 21; not WorkTrunk
-   create). B1 guard
+   --no-track <path> -b <branch-name> origin/main` (B1 step 21). B1 guard
    checks 1-2 do not apply yet. Otherwise, and for forced-handoff
    adopt-verbatim, `<path>` is the primary worktree and B1 creates the linked
    one after the claim. Then generate a fresh opaque token (adopt-verbatim
@@ -409,8 +407,8 @@ check means stop, do not mutate further.
 **Digest**: after verification, upsert the issue's `idd-live-status`
 digest (only when exactly one exists, or none) — `Phase: A5 claimed`,
 `Claim`, `Branch`, `Open blockers: none`, `Next action: B1 create
-branch and worktree`. Multiple digests → report their URLs, do not
-edit either.
+branch and worktree` (B1 Step 3 when step 2 created it). Multiple digests
+→ report their URLs, do not edit either.
 
 ## Worktree-local lock (same-machine fast path)
 
@@ -445,5 +443,6 @@ No release step (F4 `git worktree remove` deletes it).
 Then continue to `idd-work-lite.instructions.md` when pre-check (d)
 matched no inherited open PR — except on `instructions-only`, where
 that file declines the profile in its own header; use
-`idd-work.instructions.md` instead. When it did, continue at
+`idd-work.instructions.md` instead, from Step 3 (install dependencies) when
+step 2 created the worktree. When it did, continue at
 `idd-resume-lite.instructions.md` Step 2.
