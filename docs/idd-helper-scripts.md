@@ -6897,7 +6897,8 @@ same as `AW4`/`AW5`.
   `pull_request`-triggered CI run is pinned to a merge-ref computed at trigger
   time, so a bare rerun after base moves can replay that stale state.
 - Stable fields consumed by D/E/F routing: `branchState`,
-  `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
+  `syncRecommendation`, `callSiteRouting`, `published`, `readOnly`,
+  `worktreeUnchanged`
 - Read-only boundary: the helper never runs `git merge`, `git rebase`, or
   any command that leaves merge state, index changes, or working-tree
   changes. The `readOnly` and `worktreeUnchanged` fields confirm this.
