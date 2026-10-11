@@ -39,9 +39,9 @@ a fall-through.
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
 command below that needs it (Claim execution step 4 at the latest).
-Appending a unique session token is recommended for auditability
-(e.g., `copilot-8122ca35`), not required. `{agent-id}` alone is never
-ownership proof; `{claim-id}` is the authoritative token.
+Appending a unique session token is recommended for auditability, not
+required. `{agent-id}` alone is never ownership proof; `{claim-id}` is the
+authoritative token.
 
 ## Stop-and-ask
 
@@ -55,8 +55,7 @@ Stop and ask the operator when:
   state, or `forcedHandoff.mode` is not `human-gated`;
 - claim verification (below) fails any race-safe check.
 
-Never invent a forced-handoff marker. Only consume already-recorded,
-human-gated forced-handoff evidence from a trusted actor.
+Never invent a forced-handoff marker.
 
 ## Pre-checks (a)-(e) — all five must pass
 
@@ -275,12 +274,13 @@ activation, so it still runs step 5.
    recompute from the title (which may have changed since). No
    inheritable match → use the name pre-check (e) computed.
 2. **Worktree and `{claim-id}`**: on a fresh claim with no inheritable
-   branch (pre-check (e)), run `idd-work-lite.instructions.md` B1 steps 1-5
-   under the clone-scoped lock, then create the linked worktree first:
-   `git worktree add --no-track <path> -b <branch-name> origin/main` (B1
-   step 21; not WorkTrunk create, whose pre-start hook installs before the
-   claim POST). Otherwise, and for forced-handoff adopt-verbatim, `<path>`
-   is the primary worktree and B1 creates the linked one after the claim.
+   branch (pre-check (e)), create the linked worktree first, under the
+   clone-scoped lock after `git fetch origin main`: `git worktree add
+   --no-track <path> -b <branch-name> origin/main` (B1 step 21; not WorkTrunk
+   create, whose pre-start hook installs before the claim POST). This runs
+   before any claim exists, so the B1 guard's checks 1-2 do not apply.
+   Otherwise, and for forced-handoff adopt-verbatim, `<path>` is the primary
+   worktree and B1 creates the linked one after the claim.
    Then generate a fresh opaque token — **except** forced-handoff
    adopt-verbatim, which reuses the marker's `newClaimId`. Record it with
    the profile-selected `claim-lock` helper's `--record-tokens` mode
@@ -340,10 +340,10 @@ activation, so it still runs step 5.
    On a same-`{claim-id}` collision (2+ trusted nonce markers), the
    winner is the lexicographically earliest `{nonce}`.
 
-6. **Fresh claim: lock and assert before verification.** On the linked
-   worktree only, run the lock section's acquire and `--read-tokens`. After
-   the settle delay (`claim.verifySettleDelay`), run
-   `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
+6. **Fresh claim with no inheritable branch: lock and assert before
+   verification.** On the linked worktree only, run the lock section's acquire
+   and `--read-tokens`. After the settle delay (`claim.verifySettleDelay`),
+   run `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
    that post-acquire result alone counts. Any other result: claim contested;
    apply Claim verification step 5, then STOP before the digest.

@@ -81,7 +81,7 @@ test('the lite claim keeps the worktree-first order and the stop sentence', () =
     'git worktree add --no-track <path> -b <branch-name> origin/main',
     '`--worktree <path> --agent-id <id> --claim-id <id>`',
     '4. Post via helper',
-    '6. **Fresh claim: lock and assert before verification.**',
+    '6. **Fresh claim with no inheritable branch: lock and assert before verification.**',
     '`resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`, `--nonce`, and `--worktree`',
     'it must return `already_owned`/`keep`, and that post-acquire result alone counts.',
     '## Claim verification',
