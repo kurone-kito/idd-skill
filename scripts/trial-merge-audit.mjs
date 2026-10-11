@@ -11,9 +11,15 @@
 // It never pushes and never moves a ref. The verdict is evidence only; F1's
 // routing does not change.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { resolveFetchOrigin } from './branch-conflict-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
@@ -144,13 +150,13 @@ function defaultReadPr(owner, repo, pr) {
   ]);
   return JSON.parse(raw);
 }
-function defaultRun(argv, cwd) {
+function defaultRun(argv, cwd, extraEnv = {}) {
   const [command, ...args] = argv;
   // On Windows pnpm is a .cmd shim, which only a shell resolves.
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'ignore',
-    env: sanitizedEnv(),
+    env: { ...sanitizedEnv(), ...extraEnv },
     shell: process.platform === 'win32',
   });
   return {
@@ -417,6 +423,13 @@ function audit(args) {
       });
     }
   }
+  // audit-docs reads the base from GITHUB_EVENT_PATH first, so give it the
+  // base SHA this run merged rather than the checkout's stale origin/main.
+  const eventPath = join(dirname(tmp), 'event.json');
+  writeFileSync(
+    eventPath,
+    JSON.stringify({ pull_request: { base: { sha: baseSha } } }),
+  );
   const install = args.runInstall(tmp);
   if (install.error !== undefined || install.exitCode !== 0) {
     return {
@@ -443,7 +456,9 @@ function audit(args) {
         passed: false,
       };
     }
-    const run = args.runCommand(command.argv, tmp);
+    const run = args.runCommand(command.argv, tmp, {
+      GITHUB_EVENT_PATH: eventPath,
+    });
     return {
       id: command.id,
       argv: command.argv,

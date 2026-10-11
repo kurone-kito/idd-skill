@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
@@ -20,11 +20,10 @@ import {
   runTrialMergeAudit,
   type TrialMergeAuditDeps,
 } from '../src/scripts/trial-merge-audit.mts';
-import { stubExecutable } from './test-utils.mts';
+import { fixtureEnv, stubExecutable } from './test-utils.mts';
 
 const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : devNull,
+  ...fixtureEnv(),
   GIT_AUTHOR_NAME: 't',
   GIT_AUTHOR_EMAIL: 't@t',
   GIT_COMMITTER_NAME: 't',
@@ -456,4 +455,26 @@ test('pr-read-failed: a metadata read that throws is a not-run verdict with no c
   assert.equal(result.verdict, 'not-run');
   assert.deepEqual(result.reasons, ['pr-read-failed']);
   assert.equal(result.prHeadSha, null);
+});
+
+test('commands get the merged base SHA through GITHUB_EVENT_PATH', () => {
+  const fixture = makeFixture();
+  const seen: string[] = [];
+  runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: realInstall,
+    runCommand: (_argv, _cwd, env) => {
+      const path = env.GITHUB_EVENT_PATH ?? '';
+      seen.push(readFileSync(path, 'utf8'));
+      return { exitCode: 0 };
+    },
+    lockTimeoutMs: 2000,
+  });
+  assert.ok(seen.length > 0);
+  for (const body of seen) {
+    const event = JSON.parse(body) as {
+      pull_request: { base: { sha: string } };
+    };
+    assert.equal(event.pull_request.base.sha, fixture.baseSha);
+  }
 });

@@ -12,9 +12,15 @@
 // routing does not change.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { resolveFetchOrigin } from './branch-conflict-state.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
@@ -121,7 +127,11 @@ export interface TrialMergeAuditDeps {
     pr: string,
   ) => { headRefOid: string; baseRefOid: string; baseRefName: string };
   runInstall?: (cwd: string) => CommandRun;
-  runCommand?: (argv: string[], cwd: string) => CommandRun;
+  runCommand?: (
+    argv: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+  ) => CommandRun;
   agentId?: string;
   lockTimeoutMs?: number;
   fetchUrl?: string;
@@ -227,13 +237,17 @@ function defaultReadPr(
   };
 }
 
-function defaultRun(argv: string[], cwd: string): CommandRun {
+function defaultRun(
+  argv: string[],
+  cwd: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+): CommandRun {
   const [command, ...args] = argv;
   // On Windows pnpm is a .cmd shim, which only a shell resolves.
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'ignore',
-    env: sanitizedEnv(),
+    env: { ...sanitizedEnv(), ...extraEnv },
     shell: process.platform === 'win32',
   });
   return {
@@ -540,6 +554,13 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
     }
   }
 
+  // audit-docs reads the base from GITHUB_EVENT_PATH first, so give it the
+  // base SHA this run merged rather than the checkout's stale origin/main.
+  const eventPath = join(dirname(tmp), 'event.json');
+  writeFileSync(
+    eventPath,
+    JSON.stringify({ pull_request: { base: { sha: baseSha } } }),
+  );
   const install = args.runInstall(tmp);
   if (install.error !== undefined || install.exitCode !== 0) {
     return {
@@ -567,7 +588,9 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
         passed: false,
       };
     }
-    const run = args.runCommand(command.argv, tmp);
+    const run = args.runCommand(command.argv, tmp, {
+      GITHUB_EVENT_PATH: eventPath,
+    });
     return {
       id: command.id,
       argv: command.argv,
