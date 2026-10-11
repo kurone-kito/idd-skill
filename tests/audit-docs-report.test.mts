@@ -238,3 +238,20 @@ test('audit-docs --check --report on the current tree prints the bundle-work-pha
     result.stdout,
   );
 });
+
+test('audit-docs with an unknown flag prints usage listing --check and --report and exits 2', (t) => {
+  const { dir, cleanup } = makeFixture(
+    manifestWith(1000, true),
+    injectGeneratedFromBanner(bodyOfBytes(980), 'bundle.md'),
+  );
+  t.after(cleanup);
+
+  for (const args of [['--bogus'], ['--check', '--bogus']]) {
+    const result = runAudit(dir, args);
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.match(result.stderr, /usage: node scripts\/audit-docs\.mjs/);
+    assert.match(result.stderr, /--check/);
+    assert.match(result.stderr, /--report/);
+    assert.deepEqual(reportLines(result.stdout), []);
+  }
+});

@@ -281,9 +281,17 @@ if (import.meta.main) {
 async function main(): Promise<void> {
   const args = new Set(process.argv.slice(2));
   const report = args.has('--report');
+  const knownFlags = new Set(['--check', '--report']);
 
-  if (!args.has('--check')) {
-    console.error('usage: node scripts/audit-docs.mjs --check');
+  if (!args.has('--check') || [...args].some((arg) => !knownFlags.has(arg))) {
+    console.error(
+      [
+        'usage: node scripts/audit-docs.mjs --check [--report]',
+        '  --check   run every documentation audit and exit non-zero on errors',
+        '  --report  also print one `report:` line per bundle with its bytes,',
+        '            limit, maxBytes, and headroom (see docs/policy-constants.md)',
+      ].join('\n'),
+    );
     process.exit(2);
   }
 

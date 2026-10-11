@@ -633,6 +633,22 @@ copied template).
   this utilization prints a CI notice, making the near-ceiling band
   visible before a bundle tips over either error check above.
 
+**Measuring headroom**: in the source repository,
+`node scripts/audit-docs.mjs --check --report` prints one `report:` line
+per bundle with its `bytes`, `limit`, `maxBytes`, and `headroom`. `bytes`
+is the UTF-8 byte total of the bundle's files after the audit strips each
+file's generated banner, so `wc -c` over a mirrored file over-counts (on
+PR [#4000](https://github.com/kurone-kito/idd-skill/pull/4000) a `wc -c`
+estimate overshot, per
+[kurone-kito/idd-skill#4014](https://github.com/kurone-kito/idd-skill/issues/4014)).
+`maxBytes` is `floor(limit * 98 / 100)`, the largest total the
+`maxUtilizationPct` check accepts, and the headroom is
+`floor(limit * 98 / 100) - bytes`: the bytes an edit may still add. A
+negative headroom fails the check unless the bundle is exempt. When a
+bundle has no headroom left, see the
+[`bundle-review` split feasibility analysis](https://github.com/kurone-kito/idd-skill/blob/main/docs/bundle-review-split-feasibility.md)
+before trimming or splitting.
+
 **Exemption lifecycle**: `exemptBundles` temporarily excuses listed
 bundle ids from the two error checks above while a content diet is in
 flight across a sequence of sibling issues. The distributed default —
