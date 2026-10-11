@@ -389,6 +389,7 @@ standard file the same way a standard-tier session would.
 | `.github/instructions/idd-merge.instructions.md`             | F3–F5: execute the merge, clean up, and loop back to discover                                                                                                                                   |
 | `.github/instructions/idd-resume.instructions.md`            | Resume Step 0-3: route crash, stalled, stale-takeover, or clean continuation                                                                                                                    |
 | `.github/instructions/idd-resume-stall.instructions.md`      | Resume S1-S5: handle stalled-session recovery with a dedicated safety gate                                                                                                                      |
+| `.github/instructions/idd-orchestrator.instructions.md`      | Orchestrator fan-out phase: activation, roster, dispatch, refill, report and disposal, worker span                                                                                              |
 | `.github/instructions/lite/idd-*-lite.instructions.md`       | Condensed weak-model-tier phase files for phases with a shipped lite bundle; see [Lite instruction profile opt-in](#lite-instruction-profile-opt-in) for the mapping and standard-file fallback |
 | `docs/idd-review-policy-profiles.md`                         | PR review policy profiles and customization surfaces                                                                                                                                            |
 | `docs/idd-comment-minimization.md`                           | Live status digest contract and post-merge comment minimization policy                                                                                                                          |
@@ -1024,10 +1025,15 @@ one desync token reused across the run) is also cheaper to keep in one
 orchestrating session than to reconstruct per invocation of a stateless
 external scheduler.
 
+The operating rules for this variant are in the
+`.github/instructions/idd-orchestrator.instructions.md`, which an agent
+reads only when its activation conditions hold.
+
 Running this variant safely requires:
 
-- **A non-context-inheriting delegation mechanism for the full
-  B-through-F4 worker role, whenever the calling tool offers one — a
+- **A non-context-inheriting delegation mechanism for the full worker role,
+  from B1 through the merge policy's terminal phase, whenever the calling tool
+  offers one — a
   strong preference, not merely a suggestion, per
   [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).**
   A context-inheriting worker (e.g. Claude Code's `fork` subagent) can
@@ -1045,7 +1051,10 @@ Running this variant safely requires:
   does not reliably close its residual role-misread risk — a
   documented known limitation (kurone-kito/idd-skill#2221,
   kurone-kito/idd-skill#2624, kurone-kito/idd-skill#2802).
-- **A small concurrency cap**, sized against CI-minute cost,
+- **A concurrency cap**, set by `orchestrator.maxWorkers` and enforced on each
+  dispatch by `idd-worker-budget` (see the
+  `.github/instructions/idd-orchestrator.instructions.md`), sized
+  against CI-minute cost,
   shared-file contention, and host capacity rather than raised without
   bound. The optional `discover-shared-file-overlap` helper (see
   [IDD helper script evaluation](idd-helper-scripts.md#discover-shared-file-overlap-contract))
@@ -1084,8 +1093,9 @@ Running this variant safely requires:
   kurone-kito/idd-skill#2624). When the orchestrating session already
   has a same-session sibling worker that stalled this way, the brief
   must cite that sibling failure by name. The brief must also state
-  that the worker's B-through-F execution ends at F4-complete: the
-  worker reports its final result back to the orchestrator instead of
+  that the worker's execution ends at the merge policy's terminal phase (F4
+  under `fully_autonomous_merge`, F2.5 otherwise): the worker reports its final
+  result back to the orchestrator instead of
   independently entering F5's Discover step, so Discover/Claim
   ownership stays with the orchestrator alone.
 - **A delegation brief that requires issue-number-namespaced

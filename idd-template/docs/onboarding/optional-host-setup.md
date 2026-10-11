@@ -103,9 +103,8 @@ flags this again, but nothing about the reset itself is a bug — do not
 assume `core.hooksPath` is free to claim outright. Chain each existing
 hook to the corresponding `.githooks/*` script instead, resolving the
 repository root explicitly so the hook still works when git invokes it
-from a subdirectory. When the hook manager doesn't define that hook
-file yet (for example, Husky ships only `pre-commit` until an adopter
-adds `pre-push` themselves), create it with the chain line as its
+from a subdirectory. When the hook manager doesn't define that hook file yet,
+create it with the chain line as its
 entire contents, using `exec` since nothing else needs to run
 afterward. When the file already exists but has no terminal `exec` or
 `exit` of its own, append the same `exec` form as its last line. When

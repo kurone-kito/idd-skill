@@ -64,9 +64,8 @@ hold phase, the blocking condition in `Open blockers`, and the resume
 condition in `Next action`. The digest does not reset the stale clock.
 
 For an externally owned blocker (sibling PR/issue, maintainer-owned
-check, base-branch health), phrase the resume condition as a checkable
-invariant (e.g. a named check passing on main) rather than the sibling
-alone, since the proxy may resolve differently or never; this keeps the
+check, base-branch health), phrase the resume condition as a checkable invariant
+rather than the sibling alone, since the proxy may never resolve; this keeps the
 claim and 12 h heartbeat active.
 
 **Needs-decision claim release.** When no further session-side action

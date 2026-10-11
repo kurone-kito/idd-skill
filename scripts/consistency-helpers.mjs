@@ -246,6 +246,32 @@ function normalizePositiveIntegerBudget(value, defaultValue) {
   }
   return value;
 }
+/** Parse `contextCeiling.nearCeilingRaiseApprovals` into a bundle-id to
+ * approved-limit map. Entries without a string `bundle` or a finite numeric
+ * `limitBytes` are ignored, so a malformed approval never widens a limit. */
+export function parseNearCeilingRaiseApprovals(value) {
+  const approvals = new Map();
+  if (!Array.isArray(value)) return approvals;
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { bundle, limitBytes, issue, reason } = entry;
+    if (typeof bundle !== 'string' || typeof limitBytes !== 'number') continue;
+    // The audit trail is part of the approval: a positive issue number and a
+    // stated reason are both required, or the entry is ignored.
+    if (typeof issue !== 'number' || !Number.isSafeInteger(issue) || issue <= 0)
+      continue;
+    if (typeof reason !== 'string' || reason.trim() === '') continue;
+    if (!Number.isSafeInteger(limitBytes) || limitBytes <= 0) continue;
+    // Two valid approvals for one bundle keep the strictest limit, so a later
+    // broader entry cannot widen a narrower approval.
+    const prior = approvals.get(bundle);
+    approvals.set(
+      bundle,
+      prior === undefined ? limitBytes : Math.min(prior, limitBytes),
+    );
+  }
+  return approvals;
+}
 export function normalizeNonNegativeNumber(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return null;
@@ -430,6 +456,7 @@ export function collectNearCeilingRatchetViolations(
   noticeUtilizationPct,
   currentBundles,
   baseBundles,
+  approvedRaises = new Map(),
 ) {
   const baseById = new Map(baseBundles.map((bundle) => [bundle.id, bundle]));
   // `null` marks an ambiguous signature (shared by 2+ base bundles) so it is
@@ -459,6 +486,12 @@ export function collectNearCeilingRatchetViolations(
       current.limitBytes <= base.limitBytes ||
       base.limitBytes <= 0
     ) {
+      continue;
+    }
+    // A maintainer-approved raise (manifest `nearCeilingRaiseApprovals`) is
+    // accepted up to its approved limit only; any higher limit still fails.
+    const approvedLimit = approvedRaises.get(current.id);
+    if (approvedLimit !== undefined && current.limitBytes <= approvedLimit) {
       continue;
     }
     if (base.totalBytes * 100 >= base.limitBytes * noticeUtilizationPct) {

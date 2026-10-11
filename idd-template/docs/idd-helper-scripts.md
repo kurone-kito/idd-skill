@@ -7318,6 +7318,12 @@ same as `AW4`/`AW5`.
   (`schemas/token-cost-event.schema.json`), matched on `claimId`; elsewhere
   it is informational.
 
+- Fan-out draft: a worker writes its report without `verifiedAt` and
+  `recordedAt`, because it cannot know them. The orchestrator sets
+  `verifiedAt` to when it checked GitHub and `recordedAt` to when it appends,
+  then runs `append`. The helper stores the file as written and stamps neither
+  field.
+
 ### F4 branch-failure routes
 
 Reference detail for `idd-merge.instructions.md` F4 step 4 and step 5
