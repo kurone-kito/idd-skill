@@ -6815,10 +6815,31 @@ same as `AW4`/`AW5`.
   is `skip-merge` or `merge-development-branch`; `f1` is `proceed-to-f2`,
   `return-to-e-phase-branch-sync`, `retry`, or `hold`. Each call site reads
   its own key, and the phase files do not restate the routing.
-- Routing table (the single statement of branch-state routing; without
-  helper runtime, apply it to the `gh pr view` fields). `requiresUpToDateHead`
-  is read from the base branch's rules and protection and is not emitted. A
-  failed or unreadable policy read counts as `true`, which is fail closed.
+- Routing table (the single statement of branch-state routing).
+  `requiresUpToDateHead` is not emitted. The helper derives it from the base
+  branch's policy, and a failed or unreadable read counts as `true`, which is
+  fail closed.
+- Without helper runtime, take `mergeable` and `mergeStateStatus` from
+  `gh pr view {pr-number} --json mergeable,mergeStateStatus`, derive
+  `requiresUpToDateHead` as follows, and route with the table below:
+  1. Read the base branch's rules (`rules/branches/{base-branch}`) and its
+     protection (`branches/{base-branch}/protection`) under
+     `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable unless the
+     `.github/idd/config.json` at the base ref sets
+     `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
+     base ref, never from the PR's own working tree:
+
+     ```sh
+     gh api -H 'Accept: application/vnd.github.raw' \
+       'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch}'
+     ```
+
+     A missing file means the opt-in is not set.
+  2. `requiresUpToDateHead` is `true` when a ruleset's `required_status_checks`
+     rule has `strict_required_status_checks_policy` `true` and at least one
+     required check, or when classic protection has
+     `required_status_checks.strict` `true`. It is also `true` when either read
+     fails or is unreadable. Otherwise it is `false`.
 
   | `branchState`                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
   | -------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
