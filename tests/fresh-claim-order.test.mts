@@ -82,7 +82,9 @@ test('the lite claim keeps the worktree-first order and the stop sentence', () =
     '`--worktree <path> --agent-id <id> --claim-id <id>`',
     '4. Post via helper',
     '6. **Fresh claim: lock and assert before verification.**',
-    'it must return `already_owned`/`keep`. That post-acquire result alone counts.',
+    '`resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`, `--nonce`, and `--worktree`',
+    'it must return `already_owned`/`keep`, and that post-acquire result alone counts.',
+    '## Claim verification',
     '**Digest**:',
   ];
   const positions = steps.map((step) => lite.indexOf(step));
