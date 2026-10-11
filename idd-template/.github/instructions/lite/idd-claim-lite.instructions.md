@@ -116,7 +116,7 @@ node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId
 ```
 
 Pass `--nonce` only when this session already recorded one for that
-`{claim-id}` (true after forced-handoff step 5); omit it otherwise.
+`{claim-id}`; omit it otherwise.
 Pass `--worktree <path>` once the linked worktree exists (step 2 or B1
 creates it).
 
@@ -341,9 +341,9 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
    that post-acquire result alone counts. Any other result: claim contested;
-   apply Claim verification step 5, then, if released, remove the step-2
-   worktree and branch only while pristine, with no commits or changes
-   (`git worktree remove`, `git branch -D`), then STOP before the digest.
+   apply Claim verification step 5, then, under the clone-scoped lock, remove
+   the step-2 worktree and branch only while pristine, with no commits or
+   changes (`git worktree remove`, `git branch -D`), then STOP before the digest.
 
 ## Heartbeat posting
 
