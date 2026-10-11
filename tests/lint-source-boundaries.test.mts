@@ -152,17 +152,31 @@ function buildFixture(
 
 function runCli(
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; script?: string } = {},
-): { status: number | null; stdout: string; stderr: string } {
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    script?: string;
+    timeout?: number;
+  } = {},
+): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error: NodeJS.ErrnoException | undefined;
+  signal: NodeJS.Signals | null;
+} {
   const result = spawnSync(process.execPath, [options.script ?? CLI, ...args], {
     cwd: options.cwd ?? tmpdir(),
     env: options.env ?? fixtureEnv(),
     encoding: 'utf8',
+    timeout: options.timeout ?? 0,
   });
   return {
     status: result.status,
     stdout: result.stdout,
     stderr: result.stderr,
+    error: result.error as NodeJS.ErrnoException | undefined,
+    signal: result.signal,
   };
 }
 
@@ -2577,20 +2591,28 @@ test('a file nested deeply enough to exhaust the scan stack is reported without 
   assert.doesNotMatch(stderr, /file:\/\//);
 });
 
+// A hang or a super-linear scan fails at this bound. Wall-clock assertions are
+// avoided: a host under load can exceed a fixed elapsed-time ceiling without a
+// scanner regression.
+const SCAN_SPAWN_TIMEOUT_MS = 120000;
+
 for (const [label, unit] of [
   ['a<', 'a<'],
   ['a<b ', 'a<b '],
 ] as const) {
-  test(`a same-line ${label} run of 40,000 repetitions finishes quickly and still reports the import`, () => {
+  test(`a same-line ${label} run of 200,000 repetitions finishes within the spawn timeout and still reports the import`, () => {
     const root = buildFixture((files) =>
       files.set(
         'src/main.mts',
-        `${unit.repeat(40000)}\nimport bare from 'yaml';\n`,
+        `${unit.repeat(200000)}\nimport bare from 'yaml';\n`,
       ),
     );
-    const started = Date.now();
-    const lines = nodeImportLines(runCli(['--root', root]).stderr);
-    assert.ok(Date.now() - started < 15000, 'scan took too long');
+    const result = runCli(['--root', root], {
+      timeout: SCAN_SPAWN_TIMEOUT_MS,
+    });
+    assert.notEqual(result.error?.code, 'ETIMEDOUT', 'scan timed out');
+    assert.equal(result.signal, null, `scan was killed by ${result.signal}`);
+    const lines = nodeImportLines(result.stderr);
     assert.equal(lines.length, 1, lines.join('\n'));
     assert.match(lines[0], /yaml$/);
   });
