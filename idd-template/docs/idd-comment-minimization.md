@@ -747,8 +747,8 @@ newest one is never hidden by the sweep. Clear it only when it was posted
 in error, by these rules:
 
 1. A maintainer or an operator outside the IDD loop hides it as
-   `OUTDATED`, using the route statement 3 above names. The session whose
-   post was refused never hides it.
+   `OUTDATED` with the command that statement 3 above gives. The session
+   whose post was refused never hides it.
 2. Do not hide a correct marker. Hiding the newest marker of a live set
    makes the check compare with the marker before it, which may name
    another set, so a correct marker needs no hiding.
