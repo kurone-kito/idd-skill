@@ -825,8 +825,10 @@ function markdownOutline(text) {
   const nestedTitles = [];
   // Declared here, not at module level: audit-docs runs main() before any
   // later module-level const is initialized.
+  // A list marker needs a following space or tab; a blockquote marker may
+  // omit it. So "-## Title" is text, not a heading (CommonMark).
   const containerHeading =
-    /^ {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+    /^ {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
   let offset = 0;
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(

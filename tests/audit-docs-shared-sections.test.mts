@@ -643,3 +643,18 @@ test('a listed title that is a target-only list-item heading fails and names tha
     ),
   );
 });
+
+test('a list marker without a following space is text, not a nested heading', (t) => {
+  // "-## Shared rule" has no space after the list marker, so CommonMark renders
+  // it as a paragraph. It must not count as a nested copy of the listed title.
+  // Both sides carry the same literal line, so the check passes.
+  const literal = `${BASE}\n-## Shared rule\n\nLiteral text.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, literal, literal);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
