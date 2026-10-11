@@ -139,6 +139,7 @@ test('isToolingPath names the overlay set and nothing else', () => {
     'package.json',
     'pnpm-lock.yaml',
     'pnpm-workspace.yaml',
+    'packages/foo/package.json',
     '.npmrc',
     'tsconfig.json',
     'tsconfig.build.json',
@@ -441,4 +442,18 @@ test('CLI: a successful run prints one JSON verdict with the fixed commands', {
     restorePnpm();
     restoreGh();
   }
+});
+
+test('pr-read-failed: a metadata read that throws is a not-run verdict with no crash', () => {
+  const fixture = makeFixture();
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: () => {
+      throw new Error('gh: Not Found (HTTP 404)');
+    },
+    runInstall: realInstall,
+    lockTimeoutMs: 2000,
+  });
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['pr-read-failed']);
+  assert.equal(result.prHeadSha, null);
 });

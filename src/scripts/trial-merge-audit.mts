@@ -57,6 +57,8 @@ const TOOLING_ROOT_PATTERNS = [
 
 export function isToolingPath(path: string): boolean {
   if (TOOLING_FILES.has(path)) return true;
+  // A workspace package manifest is an install input at any depth.
+  if (path.endsWith('/package.json')) return true;
   if (TOOLING_DIRS.some((dir) => path.startsWith(dir))) return true;
   return TOOLING_ROOT_PATTERNS.some((pattern) => pattern.test(path));
 }
@@ -372,7 +374,12 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
     return emptyResult('unsupported-git');
   }
 
-  const pull = args.readPr(args.owner, args.repoName, pr);
+  let pull: ReturnType<AuditArgs['readPr']>;
+  try {
+    pull = args.readPr(args.owner, args.repoName, pr);
+  } catch {
+    return emptyResult('pr-read-failed');
+  }
   const headSha = pull.headRefOid;
   const baseSha = pull.baseRefOid;
 
@@ -406,7 +413,12 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
     }
     // The SHAs must still be the tips read before the lock. A PR that moved
     // during the wait would otherwise be merged at an older commit.
-    const again = args.readPr(args.owner, args.repoName, pr);
+    let again: ReturnType<AuditArgs['readPr']>;
+    try {
+      again = args.readPr(args.owner, args.repoName, pr);
+    } catch {
+      return emptyResult('pr-read-failed', { prHeadSha: headSha, baseSha });
+    }
     if (again.headRefOid !== headSha || again.baseRefOid !== baseSha) {
       return emptyResult('pr-moved', { prHeadSha: headSha, baseSha });
     }
