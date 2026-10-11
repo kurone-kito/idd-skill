@@ -678,3 +678,23 @@ test('a heading in a list item nested four spaces deep counts as a nested headin
     ),
   );
 });
+
+test('a heading indented under a list item is nested, not a section boundary', (t) => {
+  // "  ## Shared rule" sits inside the "- parent" list item, so it is a nested
+  // copy of the listed title and must fail, naming the source file.
+  const indented = `${BASE}\n- parent\n  ## Shared rule\n\nNested copy.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, indented, BASE);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
+});

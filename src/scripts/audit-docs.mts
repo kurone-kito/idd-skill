@@ -1014,18 +1014,24 @@ function markdownOutline(text: string): MarkdownOutline {
   // letting drift through.
   const containerHeading =
     /^[ \t]*(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+  // A heading with leading whitespace sits in a list item or a continued
+  // paragraph, so it is nested and never a section boundary. An unindented
+  // heading is the only boundary candidate.
+  const indentedHeading = /^[ \t]+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
   let offset = 0;
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(
       (range) => offset >= range.start && offset < range.end,
     );
-    const nested = isHidden ? null : containerHeading.exec(line);
+    const nested = isHidden
+      ? null
+      : (containerHeading.exec(line) ?? indentedHeading.exec(line));
     if (nested !== null) {
       nestedTitles.push(normalizeHeading(nested[2]));
     }
     const heading = isHidden
       ? null
-      : /^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
+      : /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (heading !== null) {
       headings.push({
         index,
