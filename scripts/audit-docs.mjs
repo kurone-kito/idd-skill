@@ -788,86 +788,67 @@ function resolveBlockFiles(block) {
   }
   return files;
 }
-// Splits Markdown into the lines that Markdown would render as text, and tracks
-// HTML comments across lines. Only the text outside comments is returned. An
-// inline code span is literal, so a "<!--" inside one does not open a comment
-// (CommonMark, within one line). Comment state carries over between lines.
-function visibleMarkdownLine(line, state) {
-  let visible = '';
-  let position = 0;
-  while (position < line.length) {
-    if (state.inComment) {
-      const close = line.indexOf('-->', position);
-      if (close === -1) {
-        return visible;
-      }
-      state.inComment = false;
-      position = close + 3;
-      continue;
-    }
-    const open = line.indexOf('<!--', position);
-    const tick = line.indexOf('`', position);
-    if (tick !== -1 && (open === -1 || tick < open)) {
-      const run = /^`+/.exec(line.slice(tick))?.[0] ?? '`';
-      const closing = new RegExp(`(?<!\`)${run}(?!\`)`).exec(
-        line.slice(tick + run.length),
-      );
-      const spanEnd =
-        closing === null
-          ? tick + run.length
-          : tick + run.length + closing.index + run.length;
-      visible += line.slice(position, spanEnd);
-      position = spanEnd;
-      continue;
-    }
-    if (open === -1) {
-      visible += line.slice(position);
-      break;
-    }
-    visible += line.slice(position, open);
-    state.inComment = true;
-    position = open + 4;
-  }
-  return visible;
-}
-// Fenced blocks of either kind, HTML comments, and indented code hide their
-// lines from heading detection, because Markdown does not render those lines
-// as headings. headingSignature tracks only backtick fences and no comments,
-// so this scanner covers them; otherwise a commented-out "##" line, a tilde
-// block, or an indented code sample could cut a section short. A fence opener
-// is at most three spaces deep, since deeper indentation is indented code.
-// Closing hashes are stripped only when a space precedes them, so "## C#" keeps
-// its title (CommonMark).
+// Splits Markdown into sections the way CommonMark renders it. A heading is an
+// ATX line that is not inside a fenced code block, an indented code block, or an
+// HTML comment block. A comment block opens on a line that starts with "<!--"
+// (up to three spaces) and runs through the first line containing "-->". A
+// comment that does not start its line, such as "text <!--", hides nothing.
+// headingSignature tracks only backtick fences, so this scanner covers the rest.
+// The rules were checked against a CommonMark parser (#4009 review). A heading
+// inside a blockquote is not a boundary here, as in headingSignature, so the
+// section runs past it; that only makes the comparison stricter.
 function markdownSections(text) {
   const lines = normalizeText(text).split('\n');
   const headings = [];
   let fence = null;
-  const comment = { inComment: false };
+  let inComment = false;
+  let indentedCode = false;
   let previousBlank = true;
   for (const [index, line] of lines.entries()) {
     const blank = line.trim() === '';
-    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (fence !== null) {
+      const closing = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
       if (
-        fenceMatch !== null &&
-        line.trim() === fenceMatch[1] &&
-        fenceMatch[1][0] === fence.char &&
-        fenceMatch[1].length >= fence.length
+        closing !== null &&
+        closing[1][0] === fence.char &&
+        closing[1].length >= fence.length
       ) {
         fence = null;
       }
       previousBlank = blank;
       continue;
     }
-    if (!comment.inComment && fenceMatch !== null) {
-      fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
+    if (inComment) {
+      if (line.includes('-->')) {
+        inComment = false;
+      }
+      previousBlank = blank;
+      continue;
+    }
+    if (indentedCode) {
+      if (blank || /^ {4}/.test(line)) {
+        previousBlank = blank;
+        continue;
+      }
+      indentedCode = false;
+    }
+    const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (opener !== null) {
+      fence = { char: opener[1][0], length: opener[1].length };
       previousBlank = false;
       continue;
     }
-    const indentedCode =
-      !comment.inComment && previousBlank && /^ {4}/.test(line);
-    const visible = indentedCode ? '' : visibleMarkdownLine(line, comment);
-    const heading = /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(visible);
+    if (/^ {0,3}<!--/.test(line)) {
+      inComment = line.indexOf('-->', line.indexOf('<!--') + 4) === -1;
+      previousBlank = false;
+      continue;
+    }
+    if (previousBlank && /^ {4}/.test(line) && !blank) {
+      indentedCode = true;
+      previousBlank = false;
+      continue;
+    }
+    const heading = /^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (heading !== null) {
       headings.push({
         index,

@@ -385,11 +385,12 @@ test('a heading inside an HTML comment does not end a listed section', (t) => {
   assert.match(result.stderr, /shared section "Shared rule" differs between/);
 });
 
-test('a second comment opened on the line where the first one closes is still scanned', (t) => {
-  // The first comment closes and a second one opens on the same line. The
-  // commented-out "##" line belongs to the second comment, so it must not end
-  // the section. Drift after the second comment must still fail.
-  const twoComments = (after: string) =>
+test('a heading after a comment that closes and reopens on one line is a real heading', (t) => {
+  // CommonMark: the "--> <!--" line ends the comment block, so the next line
+  // "## Commented-out heading" is an ordinary heading. The section therefore
+  // ends before it, and text under that heading is outside the listed section.
+  // Only the text above the heading is compared, so drift below it passes.
+  const reopened = (after: string) =>
     [
       '# Fixture rationale',
       '',
@@ -410,13 +411,62 @@ test('a second comment opened on the line where the first one closes is still sc
   t.after(cleanup);
   seed(
     dir,
-    twoComments('Text after the second comment, source.'),
-    twoComments('Text after the second comment, target.'),
+    reopened('Text after the reopened comment, source.'),
+    reopened('Text after the reopened comment, target.'),
   );
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a mid-line comment does not hide a heading on the next line', (t) => {
+  // "text <!--" does not start its line, so it is inline HTML and the next
+  // line is still a heading (confirmed with a CommonMark parser).
+  const midLine = [
+    '# Fixture rationale',
+    '',
+    'Some text <!--',
+    '## Shared rule',
+    '-->',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, midLine, midLine.replace('The shared rule text.', 'Drifted.'));
 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /shared section "Shared rule" differs between/);
+});
+
+test('a "<!--" inside continued indented code is literal', (t) => {
+  // The first line is indented code after a blank line; the next two lines are
+  // still indented, so they stay code and "<!--" in them opens nothing. The
+  // listed heading below must still be found.
+  const continued = [
+    '# Fixture rationale',
+    '',
+    '    code line',
+    '    <!--',
+    '    more code',
+    '',
+    '## Shared rule',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, continued, continued);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test('a literal "<!--" inside a code span does not open a comment', (t) => {
