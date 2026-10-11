@@ -1297,38 +1297,73 @@ test('resolveRequiresUpToDateHead: fail closed on unreadable or failed policy re
 // #3497 review: the trust opt-in comes from the base ref, never from the PR
 // working tree, and any read failure keeps it unset (fail closed).
 test('readTrustEmptyProtectionReads: reads the opt-in from the base ref', () => {
-  const calls: string[][] = [];
-  const respond = (body: string) => (args: string[]) => {
-    calls.push(args);
-    return body;
-  };
+  const refs: string[] = [];
+  const encoded =
+    (json: string) =>
+    (_owner: string, _repo: string, ref: string): string => {
+      refs.push(ref);
+      return Buffer.from(json).toString('base64');
+    };
+  const noProbe = () => {};
+  const noUserGlobal = { userGlobalFallback: false };
   assert.equal(
     readTrustEmptyProtectionReads(
       'o',
       'r',
       'release/1',
-      respond('{"ciGate":{"trustEmptyProtectionReads":true}}'),
+      encoded('{"ciGate":{"trustEmptyProtectionReads":true}}'),
+      noProbe,
+      noUserGlobal,
     ),
     true,
   );
-  const request = calls[0];
-  assert.equal(request[0], 'api');
+  assert.deepEqual(refs, ['release/1']);
   assert.equal(
-    request[request.length - 1],
-    'repos/o/r/contents/.github/idd/config.json?ref=release%2F1',
-  );
-  assert.equal(
-    readTrustEmptyProtectionReads('o', 'r', 'main', respond('{"ciGate":{}}')),
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      encoded('{"ciGate":{}}'),
+      noProbe,
+      noUserGlobal,
+    ),
     false,
   );
   assert.equal(
-    readTrustEmptyProtectionReads('o', 'r', 'main', respond('not json')),
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      encoded('not json'),
+      noProbe,
+      noUserGlobal,
+    ),
     false,
   );
   assert.equal(
-    readTrustEmptyProtectionReads('o', 'r', 'main', () => {
-      throw new Error('HTTP 404');
-    }),
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      () => {
+        throw new Error('gh: Forbidden (HTTP 403)');
+      },
+      noProbe,
+      noUserGlobal,
+    ),
+    false,
+  );
+  assert.equal(
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'main',
+      () => {
+        throw new Error('gh: Not Found (HTTP 404)');
+      },
+      noProbe,
+      noUserGlobal,
+    ),
     false,
   );
 });

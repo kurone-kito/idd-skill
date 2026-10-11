@@ -16,6 +16,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
+import { loadTrustedIddConfig } from './idd-config.mts';
 import { summarizeBranchCurrency } from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 
@@ -122,29 +123,34 @@ export function resolveCallSiteRouting(
 }
 
 /**
- * Read `ciGate.trustEmptyProtectionReads` from the policy at the PR's base
- * ref, as pre-merge-readiness does. The PR's own working tree is not used: a
- * PR could set the opt-in in its own config and turn a masked 404 into a
- * readable empty policy. A missing or unreadable base-ref file reads as
- * `false`, so a 404 stays unreadable (fail closed).
+ * Read `ciGate.trustEmptyProtectionReads` through the same trusted-ref loader
+ * pre-merge-readiness uses (`loadTrustedIddConfig`): the policy at the PR's
+ * base ref, with the user-global layers when the file is absent. The PR's
+ * own working tree is never used, since a PR could set the opt-in itself and
+ * turn a masked 404 into a readable empty policy. Any failure to read the
+ * policy keeps the opt-in unset (fail closed).
  */
 export function readTrustEmptyProtectionReads(
   owner: string,
   repo: string,
   baseRef: string,
-  fetchRaw: (args: string[]) => string = (args) => ghText(args),
+  fetchEncodedConfig?: (owner: string, repo: string, ref: string) => string,
+  probeLegacyPolicy?: (owner: string, repo: string, ref: string) => void,
+  options: { userGlobalFallback?: boolean } = {},
 ): boolean {
   try {
-    const raw = fetchRaw([
-      'api',
-      '-H',
-      'Accept: application/vnd.github.raw',
-      `repos/${owner}/${repo}/contents/.github/idd/config.json?ref=${encodeURIComponent(baseRef)}`,
-    ]);
-    const config = JSON.parse(raw) as {
+    const config = loadTrustedIddConfig(
+      owner,
+      repo,
+      baseRef,
+      fetchEncodedConfig,
+      probeLegacyPolicy,
+      options,
+    );
+    const policy = config as {
       ciGate?: { trustEmptyProtectionReads?: unknown };
-    };
-    return config?.ciGate?.trustEmptyProtectionReads === true;
+    } | null;
+    return policy?.ciGate?.trustEmptyProtectionReads === true;
   } catch {
     return false;
   }
@@ -433,15 +439,19 @@ export async function classifyBranchConflictState(
 
   // Test cases inject the policy value, or fall back to fail-closed `true`
   // when they inject PR data; only the live path reads the base branch policy.
+  // Only `behind-no-conflict` routes on this input, so the policy reads run
+  // only for that state.
   const requiresUpToDateHead =
     _testRequiresUpToDateHead ??
-    (_testPrData
-      ? true
-      : resolveRequiresUpToDateHead(
-          String(owner ?? ''),
-          String(repo ?? ''),
-          prBaseRef,
-        ));
+    (branchState !== 'behind-no-conflict'
+      ? false
+      : _testPrData
+        ? true
+        : resolveRequiresUpToDateHead(
+            String(owner ?? ''),
+            String(repo ?? ''),
+            prBaseRef,
+          ));
 
   return {
     protocolVersion: '1',

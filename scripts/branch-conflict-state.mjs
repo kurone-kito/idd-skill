@@ -13,6 +13,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { loadTrustedIddConfig } from './idd-config.mjs';
 import { summarizeBranchCurrency } from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 /**
@@ -60,27 +61,32 @@ export function resolveCallSiteRouting(
   return { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
 }
 /**
- * Read `ciGate.trustEmptyProtectionReads` from the policy at the PR's base
- * ref, as pre-merge-readiness does. The PR's own working tree is not used: a
- * PR could set the opt-in in its own config and turn a masked 404 into a
- * readable empty policy. A missing or unreadable base-ref file reads as
- * `false`, so a 404 stays unreadable (fail closed).
+ * Read `ciGate.trustEmptyProtectionReads` through the same trusted-ref loader
+ * pre-merge-readiness uses (`loadTrustedIddConfig`): the policy at the PR's
+ * base ref, with the user-global layers when the file is absent. The PR's
+ * own working tree is never used, since a PR could set the opt-in itself and
+ * turn a masked 404 into a readable empty policy. Any failure to read the
+ * policy keeps the opt-in unset (fail closed).
  */
 export function readTrustEmptyProtectionReads(
   owner,
   repo,
   baseRef,
-  fetchRaw = (args) => ghText(args),
+  fetchEncodedConfig,
+  probeLegacyPolicy,
+  options = {},
 ) {
   try {
-    const raw = fetchRaw([
-      'api',
-      '-H',
-      'Accept: application/vnd.github.raw',
-      `repos/${owner}/${repo}/contents/.github/idd/config.json?ref=${encodeURIComponent(baseRef)}`,
-    ]);
-    const config = JSON.parse(raw);
-    return config?.ciGate?.trustEmptyProtectionReads === true;
+    const config = loadTrustedIddConfig(
+      owner,
+      repo,
+      baseRef,
+      fetchEncodedConfig,
+      probeLegacyPolicy,
+      options,
+    );
+    const policy = config;
+    return policy?.ciGate?.trustEmptyProtectionReads === true;
   } catch {
     return false;
   }
@@ -327,15 +333,19 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
   });
   // Test cases inject the policy value, or fall back to fail-closed `true`
   // when they inject PR data; only the live path reads the base branch policy.
+  // Only `behind-no-conflict` routes on this input, so the policy reads run
+  // only for that state.
   const requiresUpToDateHead =
     _testRequiresUpToDateHead ??
-    (_testPrData
-      ? true
-      : resolveRequiresUpToDateHead(
-          String(owner ?? ''),
-          String(repo ?? ''),
-          prBaseRef,
-        ));
+    (branchState !== 'behind-no-conflict'
+      ? false
+      : _testPrData
+        ? true
+        : resolveRequiresUpToDateHead(
+            String(owner ?? ''),
+            String(repo ?? ''),
+            prBaseRef,
+          ));
   return {
     protocolVersion: '1',
     prNumber: Number(prNumber),
