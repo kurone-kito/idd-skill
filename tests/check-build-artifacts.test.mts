@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,7 @@ import {
   type ProcessRunner,
   type RunResult,
   StageError,
+  spawnRunner,
 } from '../src/scripts/build-ts.mts';
 import {
   type ArtifactSnapshot,
@@ -46,6 +47,7 @@ import {
   TEMP_REMOVE_OPTIONS,
   verifyBuildArtifacts,
 } from '../src/scripts/check-build-artifacts.mts';
+import { fixtureEnv } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ENTRY = join(REPO_ROOT, 'src', 'scripts', 'check-build-artifacts.mts');
@@ -821,33 +823,24 @@ const SKIP = toolsInstalled()
   ? false
   : 'typescript and @biomejs/biome are not installed (bare-node lane)';
 
-// `node:os`'s `devNull` is `\\.\nul` on win32, which Git for Windows rejects as
-// a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value; the bare `NUL` is what it
-// accepts (same constant as tests/test-utils.mts, kurone-kito/idd-skill#2570).
-const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
+// Fixture git processes get their environment per call from fixtureEnv(), so the
+// developer's git config and any ambient GIT_DIR stay out of the fixtures.
+// Nothing here writes process.env at module scope.
 
-// Fixture git processes must never read the developer's config or an ambient
-// GIT_DIR from a hook. The verifier spawns `git` with this process's env, so
-// scrub it here; each test file runs in its own process.
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith('GIT_CONFIG')) {
-    delete process.env[key];
-  }
-}
-for (const key of [
-  'GIT_DIR',
-  'GIT_INDEX_FILE',
-  'GIT_WORK_TREE',
-  'GIT_COMMON_DIR',
-  'GIT_OBJECT_DIRECTORY',
-]) {
-  delete process.env[key];
-}
-process.env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
-process.env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
+/**
+ * The runner for every verifier and build call that reaches a real tool or git.
+ * Each child gets the fixture environment; tests that pass their own runner
+ * never reach it.
+ */
+const fixtureRun: ProcessRunner = (command, args, options) =>
+  spawnRunner(command, args, { ...options, env: fixtureEnv() });
 
 function git(root: string, ...args: string[]): string {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  return execFileSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    env: fixtureEnv(),
+  });
 }
 
 function commitAll(root: string, message: string): void {
@@ -935,7 +928,7 @@ function templateRoot(): string {
     writeFileSync(join(root, path), text);
   }
   git(root, 'init', '-q');
-  buildArtifacts(root);
+  buildArtifacts(root, { run: fixtureRun });
   commitAll(root, 'initial');
   template = root;
   return root;
@@ -1030,7 +1023,11 @@ test('real tools: a clean fixture passes, leaves the checkout and index untouche
   );
   touchTracked(fx.root);
   const before = checkoutState(fx.root);
-  const result = verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot });
+  const result = verifyBuildArtifacts({
+    run: fixtureRun,
+    root: fx.root,
+    tmpRoot: fx.tmpRoot,
+  });
   assert.deepEqual(result, { findings: [], warnings: [] });
   assertUntouched(fx, before);
   assert.equal(git(fx.root, 'status', '--porcelain'), '');
@@ -1044,7 +1041,11 @@ test('real tools: build and the verifier agree that a bannerless source is not i
   assert.ok(attributes.includes('scripts/alpha.mjs linguist-generated=true'));
   assert.ok(!attributes.includes('bannerless'));
   assert.deepEqual(
-    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    verifyBuildArtifacts({
+      run: fixtureRun,
+      root: fx.root,
+      tmpRoot: fx.tmpRoot,
+    }).findings,
     [],
   );
 });
@@ -1058,6 +1059,7 @@ test('real tools: committed artifact drift fails with the path and is not repair
   commitAll(fx.root, 'drift');
   const before = checkoutState(fx.root);
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1077,6 +1079,7 @@ test('real tools: a new source with no committed output fails and writes nothing
   commitAll(fx.root, 'new source only');
   const before = checkoutState(fx.root);
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1095,6 +1098,7 @@ test('real tools: a committed artifact with no source fails', {
   writeFileSync(join(fx.root, 'scripts', 'orphan.mjs'), 'export {};\n');
   commitAll(fx.root, 'orphan artifact');
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1115,6 +1119,7 @@ test('real tools: a stale .gitattributes generated block fails', {
   );
   commitAll(fx.root, 'stale block');
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1132,6 +1137,7 @@ test('real tools: a corrupted committed copy of the verifier is reported as drif
   );
   commitAll(fx.root, 'corrupt the committed verifier');
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1148,6 +1154,7 @@ test('real tools: local generated-file dirt is reported and left exactly as it w
   writeFileSync(target, 'export const hand = 1;\n');
   const before = checkoutState(fx.root);
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1165,6 +1172,7 @@ test('real tools: dirt in bin/ and .gitattributes is reported, staged or not, an
   writeFileSync(beta, 'export const hand = 1;\n');
   writeFileSync(attributes, `${readFileSync(attributes, 'utf8')}# local\n`);
   const unstaged = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   }).findings;
@@ -1174,7 +1182,11 @@ test('real tools: dirt in bin/ and .gitattributes is reported, staged or not, an
   ]);
   git(fx.root, 'add', '-A');
   assert.deepEqual(
-    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    verifyBuildArtifacts({
+      run: fixtureRun,
+      root: fx.root,
+      tmpRoot: fx.tmpRoot,
+    }).findings,
     unstaged,
   );
   assert.equal(readFileSync(beta, 'utf8'), 'export const hand = 1;\n');
@@ -1197,6 +1209,7 @@ test('real tools: a source the build emits nothing for is reported as no-output'
   );
   commitAll(fx.root, 'a source the build config excludes');
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1211,21 +1224,27 @@ test('real tools: staging the regenerated files does not change the HEAD-relativ
     join(fx.root, 'src', 'scripts', 'alpha.mts'),
     `${banner('scripts/alpha')}export const alpha: number = 7;\n`,
   );
-  buildArtifacts(fx.root);
+  buildArtifacts(fx.root, { run: fixtureRun });
   const unstaged = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   }).findings;
   assert.deepEqual(kindsByPath(unstaged), ['scripts/alpha.mjs=drift']);
   git(fx.root, 'add', '-A');
   const staged = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   }).findings;
   assert.deepEqual(staged, unstaged);
   git(fx.root, 'reset', '-q');
   assert.deepEqual(
-    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    verifyBuildArtifacts({
+      run: fixtureRun,
+      root: fx.root,
+      tmpRoot: fx.tmpRoot,
+    }).findings,
     unstaged,
   );
 });
@@ -1236,12 +1255,14 @@ test('real tools: an artifact with no source gives the same verdict untracked an
   const fx = fixture();
   writeFileSync(join(fx.root, 'scripts', 'orphan.mjs'), 'export {};\n');
   const untracked = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   }).findings;
   assert.deepEqual(kindsByPath(untracked), ['scripts/orphan.mjs=not-emitted']);
   git(fx.root, 'add', '-A');
   const staged = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   }).findings;
@@ -1259,6 +1280,7 @@ test('real tools: a committed artifact with a newline in its name and no source 
   writeFileSync(join(fx.root, 'scripts', 'odd\nname.mjs'), 'export {};\n');
   commitAll(fx.root, 'newline-named artifact');
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1277,6 +1299,7 @@ test('real tools: an untracked or staged artifact whose name holds a backslash i
   const fx = fixture();
   writeFileSync(join(fx.root, 'scripts', 'back\\slash.mjs'), 'export {};\n');
   const untracked = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   }).findings;
@@ -1285,7 +1308,11 @@ test('real tools: an untracked or staged artifact whose name holds a backslash i
   ]);
   git(fx.root, 'add', '-A');
   assert.deepEqual(
-    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    verifyBuildArtifacts({
+      run: fixtureRun,
+      root: fx.root,
+      tmpRoot: fx.tmpRoot,
+    }).findings,
     untracked,
   );
 });
@@ -1306,11 +1333,16 @@ test('real tools: a changed executable bit is reported where git tracks it and i
   chmodSync(shim, 0o755);
   commitAll(fx.root, 'record the bin shim as executable');
   assert.deepEqual(
-    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    verifyBuildArtifacts({
+      run: fixtureRun,
+      root: fx.root,
+      tmpRoot: fx.tmpRoot,
+    }).findings,
     [],
   );
   chmodSync(shim, 0o644);
   const lost = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   }).findings;
@@ -1320,7 +1352,11 @@ test('real tools: a changed executable bit is reported where git tracks it and i
   chmodSync(shim, 0o611);
   assert.deepEqual(
     kindsByPath(
-      verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+      verifyBuildArtifacts({
+        run: fixtureRun,
+        root: fx.root,
+        tmpRoot: fx.tmpRoot,
+      }).findings,
     ),
     ['bin/beta.mjs=local-edit'],
   );
@@ -1329,14 +1365,22 @@ test('real tools: a changed executable bit is reported where git tracks it and i
   chmodSync(gained, 0o755);
   assert.deepEqual(
     kindsByPath(
-      verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+      verifyBuildArtifacts({
+        run: fixtureRun,
+        root: fx.root,
+        tmpRoot: fx.tmpRoot,
+      }).findings,
     ),
     ['scripts/alpha.mjs=local-edit'],
   );
   git(fx.root, 'config', 'core.fileMode', 'false');
   chmodSync(shim, 0o644);
   assert.deepEqual(
-    verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }).findings,
+    verifyBuildArtifacts({
+      run: fixtureRun,
+      root: fx.root,
+      tmpRoot: fx.tmpRoot,
+    }).findings,
     [],
   );
 });
@@ -1355,6 +1399,7 @@ test('real tools: a regular artifact replaced by a symlink with the same bytes i
   rmSync(target);
   symlinkSync(copy, target);
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: fx.tmpRoot,
   });
@@ -1374,7 +1419,7 @@ test('real tools: the repository biome.json normalizes an explicit file outside 
   const file = join(outside, 'scripts', 'probe.mjs');
   mkdirSync(join(outside, 'scripts'));
   writeFileSync(file, 'const   probe =   "double";\nexport {probe};\n');
-  normalizeWithBiome([file], REPO_ROOT);
+  normalizeWithBiome([file], REPO_ROOT, { run: fixtureRun });
   const normalized = readFileSync(file, 'utf8');
   assert.match(normalized, /const probe = 'double';/);
   assert.notEqual(normalized, 'const   probe =   "double";\nexport {probe};\n');
@@ -1390,7 +1435,12 @@ test('real tools: a TypeScript error is a tsc stage error and leaves the checkou
   );
   const before = checkoutState(fx.root);
   assert.throws(
-    () => verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }),
+    () =>
+      verifyBuildArtifacts({
+        run: fixtureRun,
+        root: fx.root,
+        tmpRoot: fx.tmpRoot,
+      }),
     (error: unknown) =>
       error instanceof StageError &&
       error.stage === 'tsc' &&
@@ -1408,7 +1458,12 @@ test('real tools: a Biome failure is a biome stage error and leaves the checkout
   writeFileSync(join(fx.root, 'biome.json'), '{"unknownKey": 1}');
   const before = checkoutState(fx.root);
   assert.throws(
-    () => verifyBuildArtifacts({ root: fx.root, tmpRoot: fx.tmpRoot }),
+    () =>
+      verifyBuildArtifacts({
+        run: fixtureRun,
+        root: fx.root,
+        tmpRoot: fx.tmpRoot,
+      }),
     (error: unknown) => error instanceof StageError && error.stage === 'biome',
   );
   assertUntouched(fx, before);
@@ -1432,6 +1487,7 @@ test('real tools: a gitignored temp dir inside the checkout still verifies under
   const insideTmp = join(fx.root, 'inside-tmp');
   mkdirSync(insideTmp);
   const { findings } = verifyBuildArtifacts({
+    run: fixtureRun,
     root: fx.root,
     tmpRoot: insideTmp,
   });
@@ -1448,7 +1504,7 @@ test('real tools: the CLI exits 1 with the tsc diagnostics on a TypeScript error
     `${banner('scripts/alpha')}export const alpha: number = 'not a number';\n`,
   );
   const env = {
-    ...process.env,
+    ...fixtureEnv(),
     TEMP: fx.tmpRoot,
     TMP: fx.tmpRoot,
     TMPDIR: fx.tmpRoot,
@@ -1469,7 +1525,7 @@ test('real tools: the CLI exits 0 when clean and 1 on a corrupted committed veri
 }, () => {
   const clean = fixture();
   const env = {
-    ...process.env,
+    ...fixtureEnv(),
     TEMP: clean.tmpRoot,
     TMP: clean.tmpRoot,
     TMPDIR: clean.tmpRoot,
