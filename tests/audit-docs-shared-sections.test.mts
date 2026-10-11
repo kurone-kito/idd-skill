@@ -766,3 +766,45 @@ test('a four-space list-like line that continues a paragraph is not a nested hea
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test('a nested blockquote heading with extra spaces after its markers counts as nested', (t) => {
+  // CommonMark lets the markers take extra spaces, so ">  > ## Shared rule" is a
+  // nested copy of the listed title in the source and must fail.
+  const quoted = `${BASE}\n>  > ## Shared rule\n\nQuoted copy.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, quoted, BASE);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
+});
+
+test('a shared-section drift prints its own remediation, not the mirror-sync advice', (t) => {
+  // sync-docs skips structure pairs, so the remediation must tell the operator to
+  // align the file by hand instead of pointing at sync-docs.
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(
+    dir,
+    BASE,
+    BASE.replace('The shared rule text.', 'The shared rule text, reworded.'),
+  );
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /align the listed shared section in both files by hand/,
+  );
+  assert.doesNotMatch(result.stderr, /sync-docs\.mjs --apply/);
+});

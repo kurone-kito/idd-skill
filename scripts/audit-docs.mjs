@@ -834,7 +834,7 @@ function markdownOutline(text) {
   // That over-counts, and an over-count fails the check loudly rather than
   // letting drift through.
   const containerHeading =
-    /^[ \t]*(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+    /^[ \t]*(?:>[ \t]*|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
   // An indented heading is nested when the helper finds it inside a list item,
   // and a top-level boundary only with one to three spaces outside one. Four or
   // more spaces outside a list item is paragraph text, not a heading.
@@ -1392,7 +1392,13 @@ function buildRemediation(currentErrors) {
   const hasMirrorDrift = containsMirrorDrift(currentErrors);
   const hasManifestListMismatch = containsManifestListMismatch(currentErrors);
   const hasLinkAuditFailure = containsLinkAuditFailure(currentErrors);
-  if (!hasMirrorDrift && !hasManifestListMismatch && !hasLinkAuditFailure) {
+  const hasSharedSectionDrift = containsSharedSectionDrift(currentErrors);
+  if (
+    !hasMirrorDrift &&
+    !hasManifestListMismatch &&
+    !hasLinkAuditFailure &&
+    !hasSharedSectionDrift
+  ) {
     return [];
   }
   const lines = [];
@@ -1413,6 +1419,12 @@ function buildRemediation(currentErrors) {
       );
     }
   }
+  if (hasSharedSectionDrift) {
+    // sync-docs skips structure pairs, so it cannot refresh a shared section.
+    lines.push(
+      'align the listed shared section in both files by hand (sync-docs does not regenerate structure pairs), or remove the title from `sharedSections` in `audit/sync-manifest.json`',
+    );
+  }
   if (hasManifestListMismatch) {
     // A manifest-list mismatch is not mirror drift: `docs:sync` reads
     // `generatedBlocks[].paths` as-is, so it cannot resolve a disagreement
@@ -1427,6 +1439,13 @@ function buildRemediation(currentErrors) {
 function containsMirrorDrift(currentErrors) {
   return currentErrors.some((error) =>
     /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between|target is missing|target has unexpected|is missing a syncPairs entry/.test(
+      error,
+    ),
+  );
+}
+function containsSharedSectionDrift(currentErrors) {
+  return currentErrors.some((error) =>
+    /shared section ".*" (differs between|is missing from|appears \d+ times in|appears inside a blockquote or list item in)/.test(
       error,
     ),
   );
