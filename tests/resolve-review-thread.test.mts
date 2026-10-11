@@ -1454,6 +1454,31 @@ fail('unexpected gh invocation: ' + joined);
 });
 
 test('the schema refuses an envelope that names both targets or neither (#4012)', () => {
+  // A complete target plus one field of the other target is refused too.
+  const threadPlusReviewId = {
+    mode: 'dry-run',
+    prNumber: 7,
+    commentId: 1001,
+    alreadyResolved: false,
+    reviewId: 9,
+  };
+  assert.notEqual(
+    validate(threadPlusReviewId, resultSchema).length,
+    0,
+    'thread target with a stray reviewId',
+  );
+  const bodyItemPlusThreadId = {
+    mode: 'dry-run',
+    prNumber: 7,
+    reviewId: 9,
+    itemTitle: 'x',
+    threadId: 'thread-b',
+  };
+  assert.notEqual(
+    validate(bodyItemPlusThreadId, resultSchema).length,
+    0,
+    'body-item target with a stray threadId',
+  );
   const both = {
     mode: 'dry-run',
     prNumber: 7,

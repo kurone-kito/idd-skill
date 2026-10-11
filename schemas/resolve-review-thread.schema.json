@@ -7,12 +7,35 @@
   "required": ["mode", "prNumber"],
   "oneOf": [
     {
-      "description": "Thread target (--comment-id).",
-      "required": ["commentId", "alreadyResolved"]
+      "description": "Thread target (--comment-id). Lists only its own fields, so no body-item field may appear.",
+      "required": ["commentId", "alreadyResolved"],
+      "properties": {
+        "mode": {},
+        "prNumber": {},
+        "commentId": {},
+        "threadId": {},
+        "alreadyResolved": {},
+        "body": {},
+        "status": {},
+        "replyId": {},
+        "error": {}
+      },
+      "additionalProperties": false
     },
     {
-      "description": "Body-item target (--review-id / --item-title).",
-      "required": ["reviewId", "itemTitle"]
+      "description": "Body-item target (--review-id / --item-title). Lists only its own fields, so no thread field may appear.",
+      "required": ["reviewId", "itemTitle"],
+      "properties": {
+        "mode": {},
+        "prNumber": {},
+        "reviewId": {},
+        "itemTitle": {},
+        "body": {},
+        "status": {},
+        "replyId": {},
+        "error": {}
+      },
+      "additionalProperties": false
     }
   ],
   "additionalProperties": false,
