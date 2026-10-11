@@ -1239,7 +1239,7 @@ export function selectLatestAuthoringOwnerMarker(comments, options) {
     // returned as the latest, and the check refuses on it.
     const time = Date.parse(comment.createdAt);
     if (!Number.isFinite(time)) {
-      return { comment, parsed, unorderable: true };
+      return { comment, parsed, unreadableTime: true };
     }
     const latestTime =
       latest === null
@@ -1325,7 +1325,7 @@ export function validateAuthoringOwnerPostIdentity(
     if (latest === null) {
       return null;
     }
-    if (latest.unorderable) {
+    if (latest.unreadableTime) {
       return `${head}: a trusted owner marker on the target, comment #${latest.comment.id}, has a creation time that cannot be read, so the latest marker cannot be determined. ${AUTHORING_OWNER_LATEST_MARKER_HINT} ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
     }
     const latestHead = `${head}: the latest trusted owner marker on the target is comment #${latest.comment.id}`;

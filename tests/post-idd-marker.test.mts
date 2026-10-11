@@ -7806,7 +7806,7 @@ test('validateAuthoringOwnerPostIdentity refuses when a candidate creation time 
     [LATEST_ACQUIRE, latestCandidate(102, 'not-a-date', body)],
     LATEST_OPTIONS,
   );
-  assert.equal(unreadable?.unorderable, true);
+  assert.equal(unreadable?.unreadableTime, true);
   assert.equal(unreadable?.comment.id, 102);
   const post = parseAuthoringOwnerComment(body, 'idd-skill');
   assert.ok(post);
