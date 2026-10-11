@@ -6823,8 +6823,8 @@ same as `AW4`/`AW5`.
   `gh pr view {pr-number} --json mergeable,mergeStateStatus`, derive
   `branchState` and `requiresUpToDateHead` as follows, and route with the
   table below:
-  1. Read the base branch's rules (`rules/branches/{base-branch}`) and its
-     protection (`branches/{base-branch}/protection`) under
+  1. Read the base branch's rules (`rules/branches/{base-branch-url-encoded}`)
+     and its protection (`branches/{base-branch-url-encoded}/protection`) under
      `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable unless the
      `.github/idd/config.json` at the base ref sets
      `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
@@ -6832,9 +6832,12 @@ same as `AW4`/`AW5`.
 
      ```sh
      gh api -H 'Accept: application/vnd.github.raw' \
-       'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch}'
+       'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch-url-encoded}'
      ```
 
+     Encode `{base-branch}` as a URL path segment in all three paths (for
+     example `release%2F1`), as the helper adapter does. An unencoded name
+     addresses another route and reads as a 404.
      A missing file falls back to the user-global policy layers, as
      `loadTrustedIddConfig` does, and an unreadable file leaves the opt-in
      unset.
