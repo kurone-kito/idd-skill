@@ -12,7 +12,9 @@ forced-handoff. Prefer helpers.
 
 **Scope**: one selected issue; no open-ended Discover. Standard
 "Return to Discover" branches mean **STOP and report; do not claim**.
-Fresh candidate: before claim, if context pressure prevents completing Claim
+
+**Context-pressure stop** (before Claim execution step 2): Fresh
+candidate: before claim, if context pressure prevents completing Claim
 through F4, report for handoff; stop; do not claim. Recovery unchanged.
 Make no claim-stage event/marker, branch/worktree, or issue-state change.
 (#3144; preventive)
@@ -31,12 +33,9 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
    instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
-vendored-node** invocation form. Under `package-manager` /
-`ephemeral-npx` / `user-global` profiles, `scripts/` is not vendored — resolve each
-command's profile-selected equivalent from
-`docs/idd-helper-scripts.md`. A helper missing on the active profile
-is a missing-helper case under rule 1 (stop and ask), not a reason to
-fall through.
+vendored-node** form. Other profiles use the profile-selected equivalent
+from `docs/idd-helper-scripts.md`; a missing helper is a rule 1 stop, never
+a fall-through.
 
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
@@ -127,7 +126,8 @@ node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId
 
 Pass `--nonce` only when this session already recorded one for that
 `{claim-id}` (true after forced-handoff step 5); omit it otherwise.
-Pass `--worktree <path>` once the B1 worktree exists.
+Pass `--worktree <path>` once the linked worktree exists (Claim execution
+step 2 or B1 creates it).
 
 <!-- dprint-ignore-start -->
 | Top-level `state` / `action` | Meaning |
@@ -267,30 +267,30 @@ activation.
 
 ## Claim execution
 
-Skip step 4 (the `claimed-by` post) in two cases, and treat them
-differently for step 5:
-
-- **Pre-check (c) found this session already owns the claim**: this is
-  a continuation, not a fresh activation — keep the recorded
-  `{claim-id}`/branch, post no new `claimed-by` **and no new
-  activation-nonce**. Skip straight to Claim verification (or Heartbeat
-  posting if you are extending the stale clock).
-- **Forced-handoff adopt-verbatim**: the handoff marker itself already
-  performed the transfer, so no separate `claimed-by` post is required
-  or allowed — but this **is** a fresh activation, so still run step 5
-  (activation-nonce) for it.
+Skip Claim execution for a continuation (pre-check (c) found this
+session's claim): keep its `{claim-id}`/branch, post no new `claimed-by`
+or nonce, and go to Claim verification (or Heartbeat). Forced-handoff
+adopt-verbatim posts no `claimed-by` (none is allowed), but it is a fresh
+activation, so it still runs step 5.
 
 1. **Branch name**: takeover, forced-handoff, or a fresh claim whose
    pre-check (e) scan matched an inheritable branch (released claim,
    legacy migration source, or matching PR) → reuse it verbatim, never
    recompute from the title (which may have changed since). No
    inheritable match → use the name pre-check (e) computed.
-2. **`{claim-id}`**: generate a fresh opaque token — **except**
-   forced-handoff adopt-verbatim, which reuses the marker's
-   `newClaimId` instead. Record it with the profile-selected
-   `claim-lock` helper's `--record-tokens` mode (`--worktree <path>
-   --agent-id <id> --claim-id <id>`; resolve the exact command from
-   `docs/idd-helper-scripts.md`) before step 4.
+2. **Worktree and `{claim-id}`**: on a fresh claim with no inheritable
+   branch (pre-check (e)), run `idd-work-lite.instructions.md` B1 steps 1-5
+   under the clone-scoped lock, then create the linked worktree first:
+   `git worktree add --no-track <path> -b <branch-name> origin/main` (B1
+   step 21; not WorkTrunk create, whose pre-start hook installs before the
+   claim POST). Otherwise, and for forced-handoff adopt-verbatim, `<path>`
+   is the primary worktree and B1 creates the linked one after the claim.
+   Then generate a fresh opaque token — **except** forced-handoff
+   adopt-verbatim, which reuses the marker's `newClaimId`. Record it with
+   the profile-selected `claim-lock` helper's `--record-tokens` mode
+   (`--worktree <path> --agent-id <id> --claim-id <id>`; resolve the exact
+   command from `docs/idd-helper-scripts.md`) before the first post (step
+   4, or step 5 for adopt-verbatim).
 3. **`{prior-claim-id}` / `supersedes:`**: `none` for a fresh claim or
    legacy migration; the active claim's `{claim-id}` for a stale
    takeover. Not applicable to forced-handoff (step 4 is skipped
@@ -327,7 +327,7 @@ differently for step 5:
    or forced-handoff adopt-verbatim) also posts an activation-nonce —
    never for a plain heartbeat. Record it with the same
    `--record-tokens` invocation as step 2 plus `--nonce <nonce>`
-   (primary worktree) first:
+   (same `<path>`) first:
 
    ```sh
    node scripts/post-idd-marker.mjs --type activation-nonce \
@@ -346,21 +346,18 @@ differently for step 5:
 
 ## Heartbeat posting
 
-Only when this session already owns the active claim and is extending
-its stale clock (holding past 12 h, or a phase will exceed 12 h):
-repost using the **same command and body as step 4 above**, with
-`{branch}` copied **verbatim** from the original claim (never
-recompute), `{claim-id}` / `{agent-id}` matching exactly, and
-`supersedes:` unchanged — a mismatch is anomalous and does not refresh
-the stale clock. Skip step 5 (activation-nonce).
+Only when this session owns the active claim and is extending its stale
+clock (holding past 12 h, or a phase will exceed 12 h): repost **step 4's
+command and body** with `{branch}` copied **verbatim**, and `{claim-id}`,
+`{agent-id}`, and `supersedes:` unchanged; a mismatch is anomalous and does
+not refresh the clock. Skip step 5.
 
 ## Claim verification
 
 **Already-owned continuation (no new post)**: pre-check (c)'s
-top-branch `already_owned` result verifies ownership. Skip checks 1–4, but run
-step 5's authoring guard; post no new `claimed-by` or nonce. Checks 1–4
-require a fresh `claimed-by` and apply only to fresh claims, takeovers, and
-legacy migrations.
+`already_owned` verifies ownership; skip checks 1–4 and post nothing new,
+but run step 5's authoring guard. Checks 1–4 apply only to fresh claims,
+takeovers, and legacy migrations.
 
 For fresh activation, after posting `claimed-by`, wait the settle delay
 (`claim.verifySettleDelay`, default `PT5S`), re-read all issue comments, then
@@ -403,13 +400,10 @@ effect. To move off it, either keep adopting it verbatim, or post
 pair (exact `{agent-id}`/`{claim-id}` each), then claim fresh.
 
 Once verified, record this `{claim-id}` (and any posted nonce) as your
-claim token for the rest of the run. Every later mutation (commit,
-push, comment, label, reply, resolve, reviewer request, merge) must
-re-verify this claim is still active — recompute the nonce winner too
-when you posted one, and stop if it no longer matches — and, inside
-the implementation worktree, that cwd and `git branch --show-current`
-both match the claimed branch, before proceeding — a mismatch means
-the claim was lost; stop, do not mutate further.
+claim token for the rest of the run. Before each later mutation, apply
+the pre-mutation guard in `idd-work-lite.instructions.md` with its scope
+rules (its checks 3-4 bind the cwd and branch once B2 starts); a failed
+check means stop, do not mutate further.
 
 **Digest**: after verification, upsert the issue's `idd-live-status`
 digest (only when exactly one exists, or none) — `Phase: A5 claimed`,
@@ -419,7 +413,7 @@ edit either.
 
 ## Worktree-local lock (same-machine fast path)
 
-Once the B1 worktree exists, before every mutation:
+Once the linked worktree exists, before every mutation:
 
 ```sh
 node scripts/claim-lock.mjs --acquire --worktree <path> \
@@ -430,6 +424,10 @@ Then run `--read-tokens --worktree <path> --claim-id <id>` and
 require `present: true` with no `malformed`; otherwise recover per
 `docs/idd-helper-scripts.md` (gated: each step succeeds,
 `reacquired: true` both ends), else stop.
+
+After the settle delay and `--acquire`, `resume-claim-routing.mjs --issue
+<N> --assert --claim-id <id> --nonce <nonce> --worktree <path>` must
+return `already_owned`/`keep`; this post-acquire result alone counts.
 
 A matching `{claim-id}` re-acquires as a read-only check. A different
 `{claim-id}` is always a collision — run `--fresh-claim-gate` directly

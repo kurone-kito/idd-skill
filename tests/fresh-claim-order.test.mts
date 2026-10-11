@@ -57,3 +57,39 @@ test('the claim instructions state the worktree-first steps in sequence', () => 
     'the steps must appear in the documented order',
   );
 });
+
+test('the lite claim keeps the worktree-first order and the stop sentence', () => {
+  const normalize = (text: string) => text.replace(/\s+/g, ' ');
+  const full = normalize(
+    readTemplate('idd-template/.github/instructions/idd-claim.instructions.md'),
+  );
+  const lite = normalize(
+    readTemplate(
+      'idd-template/.github/instructions/lite/idd-claim-lite.instructions.md',
+    ),
+  );
+  const stopSentence =
+    'Make no claim-stage event/marker, branch/worktree, or issue-state change.';
+  assert.ok(full.includes(stopSentence), 'full claim stop sentence');
+  assert.ok(lite.includes(stopSentence), 'lite claim stop sentence');
+  assert.ok(
+    lite.includes('Skip Claim execution for a continuation'),
+    'the continuation skips Claim execution',
+  );
+  const steps = [
+    'on a fresh claim with no inheritable branch',
+    'git worktree add --no-track <path> -b <branch-name> origin/main',
+    '`--worktree <path> --agent-id <id> --claim-id <id>`',
+    '4. Post via helper',
+    'After the settle delay and `--acquire`, `resume-claim-routing.mjs --issue <N> --assert --claim-id <id> --nonce <nonce> --worktree <path>`',
+  ];
+  const positions = steps.map((step) => lite.indexOf(step));
+  for (const [index, position] of positions.entries()) {
+    assert.notEqual(position, -1, steps[index]);
+  }
+  assert.deepEqual(
+    [...positions].sort((left, right) => left - right),
+    positions,
+    'the lite steps must appear in the documented order',
+  );
+});
