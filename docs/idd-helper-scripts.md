@@ -6835,7 +6835,9 @@ same as `AW4`/`AW5`.
        'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch}'
      ```
 
-     A missing file means the opt-in is not set.
+     A missing file falls back to the user-global policy layers, as
+     `loadTrustedIddConfig` does, and an unreadable file leaves the opt-in
+     unset.
   2. `requiresUpToDateHead` is `true` when a ruleset's `required_status_checks`
      rule has `strict_required_status_checks_policy` `true` and at least one
      required check, or when classic protection has
