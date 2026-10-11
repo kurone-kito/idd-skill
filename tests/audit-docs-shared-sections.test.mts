@@ -720,3 +720,49 @@ test('a standalone heading indented up to three spaces is a top-level section', 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test('a non-breaking space after the hashes does not make a heading', (t) => {
+  // "##" followed by a non-breaking space is paragraph text in CommonMark, so
+  // the section under "## Shared rule" runs past that line. The drift after it
+  // must still fail.
+  const nbsp = (after: string) =>
+    [
+      '# Fixture rationale',
+      '',
+      '## Shared rule',
+      '',
+      'The shared rule text.',
+      '',
+      '##\u00a0Not a heading',
+      '',
+      after,
+      '',
+    ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(
+    dir,
+    nbsp('After the non-breaking line, source.'),
+    nbsp('After the non-breaking line, target.'),
+  );
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /shared section "Shared rule" differs between/);
+});
+
+test('a four-space list-like line that continues a paragraph is not a nested heading', (t) => {
+  // "    - ## Shared rule" continues the paragraph above it, so CommonMark renders
+  // it as text. It must not count as a nested copy of the listed title.
+  const continuation = `${BASE}\nSome paragraph text\n    - ## Shared rule\n\nMore text.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, continuation, continuation);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});

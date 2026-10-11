@@ -862,8 +862,13 @@ function markdownOutline(text) {
       const container = containerHeading.exec(line);
       const indented = indentedHeading.exec(line);
       const standalone = standaloneHeading.exec(line);
-      const plain = /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
-      if (container !== null) {
+      // CommonMark separates the hashes from the title with a space or tab only,
+      // so a non-breaking space does not make a heading (#4009 review).
+      const plain = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(line);
+      // Four or more spaces outside a list item is paragraph text, so a list-like
+      // line there is not a nested heading.
+      const indentedCode = /^(?: {4}|\t)/.test(line);
+      if (container !== null && (!indentedCode || inListItem)) {
         nestedTitles.push(normalizeHeading(container[2]));
       } else if (indented !== null && inListItem) {
         nestedTitles.push(normalizeHeading(indented[2]));
