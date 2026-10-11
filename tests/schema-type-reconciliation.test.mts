@@ -953,6 +953,12 @@ const advisoryConvergenceFixture = {
     suppressedCount: 0,
     bodyShape: 'overview-v2',
     satisfied: true,
+    suppressedCitation: {
+      citedCount: 0,
+      citationFreeCount: 0,
+      citedDispositionsSatisfied: true,
+      reviewAckValid: false,
+    },
   },
   threads: {
     copilotThreadCount: 0,

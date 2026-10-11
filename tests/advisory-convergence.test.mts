@@ -8219,6 +8219,7 @@ test('nextActions token catalog is pinned and matches the schema enum (#2143)', 
       'request-review',
       'reread-verdict',
       'same-head-reroll',
+      'stamped-disposition-suppressed',
       'waiver-deadline',
       'waiver-terminal',
     ].sort(),
@@ -8642,4 +8643,225 @@ test('Previously missed (#3942): a Rejected reply whose only evidence is a dotte
     ]),
     false,
   );
+});
+
+// --- 9g. Stamped-disposition next action (#4007) -----------------------------
+//
+// A cited suppressed item (#3942) gets its own stamped-disposition next action.
+// The review-ack instruction is named only for citation-free items, and only
+// while no valid review-ack covers them yet.
+
+const MIXED_PREVIOUSLY_MISSED_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '<details>',
+  '<summary><strong>Previously missed (2)</strong></summary>',
+  '',
+  '<details>',
+  '<summary>Keep the gate fail-closed</summary>',
+  '',
+  '`src/scripts/review-clause.mts:12`',
+  '',
+  'The clause must stay fail-closed.',
+  '</details>',
+  '',
+  '<details>',
+  '<summary>Rename the helper</summary>',
+  '',
+  'The name reads poorly next to the neighbouring helper.',
+  '</details>',
+  '</details>',
+].join('\n');
+
+/** Non-ready catalog for a review body, so the next-action branches run. */
+function nextActionsFor(
+  body: string,
+  comments: ReturnType<typeof citedDispositionComment>[] = [],
+) {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 0, body })],
+      comments,
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  const forced = { ...verdict, ready: false };
+  return {
+    verdict,
+    items: collectAssertNextActions(forced),
+    text: formatAssertNextActions(forced),
+  };
+}
+
+function tokensOf(items: { token: string }[]): string[] {
+  return items.map((item) => item.token);
+}
+
+test('stamped disposition (#4007): cited-only items name the stamped reply, not a review-ack', () => {
+  const { verdict, items, text } = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY);
+  assert.deepEqual(verdict.review.suppressedCitation, {
+    citedCount: 1,
+    citationFreeCount: 0,
+    citedDispositionsSatisfied: false,
+    reviewAckValid: false,
+  });
+  assert.ok(tokensOf(items).includes('stamped-disposition-suppressed'));
+  assert.ok(!tokensOf(items).includes('ack-suppressed'));
+  assert.match(text, /Accepted/);
+  assert.doesNotMatch(text, /--type review-ack/);
+});
+
+test('stamped disposition (#4007): mixed items name the stamped reply first, then a citation-free ack', () => {
+  const { verdict, items, text } = nextActionsFor(MIXED_PREVIOUSLY_MISSED_BODY);
+  assert.equal(verdict.review.suppressedCount, 2);
+  assert.deepEqual(verdict.review.suppressedCitation, {
+    citedCount: 1,
+    citationFreeCount: 1,
+    citedDispositionsSatisfied: false,
+    reviewAckValid: false,
+  });
+  const ordered = tokensOf(items);
+  assert.ok(
+    ordered.indexOf('stamped-disposition-suppressed') <
+      ordered.indexOf('ack-suppressed'),
+  );
+  assert.ok(ordered.includes('ack-suppressed'));
+  const ack = items.find((item) => item.token === 'ack-suppressed');
+  assert.match(
+    ack?.summary ?? '',
+    /reports 1 citation-free suppressed comment/,
+  );
+  assert.ok(
+    text.indexOf('name a file or line') < text.indexOf('--type review-ack'),
+  );
+});
+
+test('stamped disposition (#4007): a valid review-ack drops the ack item but keeps the stamped one', () => {
+  const ackComment = {
+    author: { login: TRUSTED },
+    body: `review-ack: ${AGENT_ID} ${HEAD} ${DISPOSITION_AFTER_REVIEW}`,
+    createdAt: DISPOSITION_AFTER_REVIEW,
+    lastEditedAt: null,
+  };
+  const { verdict, items, text } = nextActionsFor(
+    MIXED_PREVIOUSLY_MISSED_BODY,
+    [ackComment],
+  );
+  assert.equal(verdict.review.suppressedCitation.reviewAckValid, true);
+  assert.ok(tokensOf(items).includes('stamped-disposition-suppressed'));
+  assert.ok(!tokensOf(items).includes('ack-suppressed'));
+  assert.doesNotMatch(text, /--type review-ack/);
+});
+
+test('stamped disposition (#4007): citation-free-only keeps the existing review-ack wording', () => {
+  const { verdict, items } = nextActionsFor(
+    CITATION_FREE_PREVIOUSLY_MISSED_BODY,
+  );
+  assert.equal(verdict.review.suppressedCount, 1);
+  assert.equal(verdict.review.suppressedCitation.citationFreeCount, 1);
+  assert.ok(!tokensOf(items).includes('stamped-disposition-suppressed'));
+  const ack = items.find((item) => item.token === 'ack-suppressed');
+  assert.match(
+    ack?.summary ?? '',
+    /^Latest copilot review reports 1 suppressed comment\(s\)\. After reading the review body, post a trusted review-ack if they are handled: /,
+  );
+});
+
+test('stamped disposition (#4007): stamped cited items clear the stamped next action', () => {
+  const { verdict, items } = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY, [
+    citedDispositionComment({}),
+  ]);
+  assert.equal(
+    verdict.review.suppressedCitation.citedDispositionsSatisfied,
+    true,
+  );
+  assert.ok(!tokensOf(items).includes('stamped-disposition-suppressed'));
+  assert.ok(!tokensOf(items).includes('ack-suppressed'));
+});
+
+test('stamped disposition (#4007): a count the body cannot split counts every item as cited', () => {
+  const { verdict, items } = nextActionsFor(
+    CITED_PREVIOUSLY_MISSED_BODY.replace(
+      'Previously missed (1)',
+      'Previously missed (2)',
+    ),
+  );
+  assert.equal(verdict.review.suppressedCount, 2);
+  assert.equal(verdict.review.suppressedCitation.citedCount, 2);
+  assert.equal(verdict.review.suppressedCitation.citationFreeCount, 0);
+  assert.ok(tokensOf(items).includes('stamped-disposition-suppressed'));
+  assert.ok(!tokensOf(items).includes('ack-suppressed'));
+});
+
+test('stamped disposition (#4007): a valid review-ack also drops the citation-free ack item', () => {
+  const ackComment = {
+    author: { login: TRUSTED },
+    body: `review-ack: ${AGENT_ID} ${HEAD} ${DISPOSITION_AFTER_REVIEW}`,
+    createdAt: DISPOSITION_AFTER_REVIEW,
+    lastEditedAt: null,
+  };
+  const { verdict, items, text } = nextActionsFor(
+    CITATION_FREE_PREVIOUSLY_MISSED_BODY,
+    [ackComment],
+  );
+  assert.equal(verdict.review.suppressedCitation.reviewAckValid, true);
+  assert.ok(!tokensOf(items).includes('ack-suppressed'));
+  assert.ok(!tokensOf(items).includes('stamped-disposition-suppressed'));
+  assert.doesNotMatch(text, /review-ack/);
+});
+
+test('stamped disposition (#4007): with cited items stamped, only the citation-free ack item remains', () => {
+  const { verdict, items } = nextActionsFor(MIXED_PREVIOUSLY_MISSED_BODY, [
+    citedDispositionComment({}),
+  ]);
+  assert.equal(
+    verdict.review.suppressedCitation.citedDispositionsSatisfied,
+    true,
+  );
+  assert.ok(!tokensOf(items).includes('stamped-disposition-suppressed'));
+  const ack = items.find((item) => item.token === 'ack-suppressed');
+  assert.match(
+    ack?.summary ?? '',
+    /reports 1 citation-free suppressed comment\(s\)/,
+  );
+});
+
+test('stamped disposition (#4007): a Rejected reply without a file or line leaves the stamped item open', () => {
+  const { verdict, items } = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY, [
+    citedDispositionComment({
+      body: `**Rejected**: false positive.\n${STAMP}`,
+    }),
+  ]);
+  assert.equal(
+    verdict.review.suppressedCitation.citedDispositionsSatisfied,
+    false,
+  );
+  assert.ok(tokensOf(items).includes('stamped-disposition-suppressed'));
+});
+
+test('stamped disposition (#4007): the GitHub notice leads with the stamped item', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: MIXED_PREVIOUSLY_MISSED_BODY }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(verdict.ready, false);
+  let stderr = '';
+  writeAdvisoryConvergenceCliOutput(verdict, {
+    emitGuidance: true,
+    stdout: { write: () => undefined },
+    stderr: {
+      write: (chunk) => {
+        stderr += chunk;
+      },
+    },
+    env: { GITHUB_ACTIONS: 'true' },
+  });
+  const notice = stderr
+    .split('\n')
+    .find((line) => line.startsWith('::notice::'));
+  assert.match(notice ?? '', /name a file or line/);
 });
