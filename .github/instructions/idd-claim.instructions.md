@@ -283,11 +283,12 @@ Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
    <branch-name> origin/{development-branch}` (fresh-claim row of
    `idd-work.instructions.md`). The worktree exists before the claim. Do not
    use WorkTrunk create here: its pre-start hook installs before the claim POST.
-2. `--record-tokens --worktree <path>`.
+2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.
 3. Post the claim comment per
    [Claim format](idd-overview-core.instructions.md#claim-format), then the
    activation nonce.
-4. `--acquire --worktree <path>`, on the linked worktree only.
+4. `--acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`,
+   on the linked worktree only.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
    --claim-id {claim-id} --nonce {nonce} --worktree <path>`. This verification
    alone counts.

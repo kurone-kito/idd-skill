@@ -41,9 +41,9 @@ test('the claim instructions state the worktree-first steps in sequence', () => 
   const steps = [
     'Fresh-claim order, worktree first.',
     '1. Create the worktree and branch: `git worktree add --no-track <path> -b',
-    '2. `--record-tokens --worktree <path>`.',
+    '2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.',
     '3. Post the claim comment per',
-    '4. `--acquire --worktree <path>`, on the linked worktree only.',
+    '4. `--acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`,',
     '5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert',
     '6. Continue B1 in that worktree',
   ];
