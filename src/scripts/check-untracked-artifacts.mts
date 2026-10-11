@@ -45,9 +45,14 @@ const UNTRACKED_SCAN_PATHS = ['scripts', 'bin'];
  * Untracked file paths under `UNTRACKED_SCAN_PATHS`, via the `git ls-files`
  * plumbing command — unaffected by `status.showUntrackedFiles`, unlike
  * `git status`. Respects `.gitignore` (`--exclude-standard`). Throws when git
- * cannot be run or exits non-zero.
+ * cannot be run or exits non-zero. `env` defaults to `process.env` (an
+ * undefined value makes `spawnSync` use it), so production callers are
+ * unchanged; tests pass an isolated environment.
  */
-export function untrackedEmittedArtifacts(root: string): string[] {
+export function untrackedEmittedArtifacts(
+  root: string,
+  env?: NodeJS.ProcessEnv,
+): string[] {
   const result = spawnSync(
     'git',
     [
@@ -58,7 +63,7 @@ export function untrackedEmittedArtifacts(root: string): string[] {
       '--',
       ...UNTRACKED_SCAN_PATHS,
     ],
-    { cwd: root, encoding: 'utf8' },
+    { cwd: root, encoding: 'utf8', env },
   );
   if (result.error) {
     throw new Error(

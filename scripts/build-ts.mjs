@@ -98,6 +98,7 @@ export const spawnRunner = (command, args, options) => {
   const result = spawnSync(command, [...args], {
     cwd: options.cwd,
     input: options.input,
+    env: options.env,
     maxBuffer: MAX_BUFFER_BYTES,
   });
   return {

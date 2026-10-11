@@ -106,11 +106,18 @@ export interface RunResult {
   readonly stdout: Buffer;
 }
 
-/** Runs one child process synchronously; the seam tests replace. */
+/**
+ * Runs one child process synchronously; the seam tests replace. `env`
+ * defaults to `process.env` when omitted.
+ */
 export type ProcessRunner = (
   command: string,
   args: readonly string[],
-  options: { readonly cwd: string; readonly input?: Buffer },
+  options: {
+    readonly cwd: string;
+    readonly input?: Buffer;
+    readonly env?: NodeJS.ProcessEnv;
+  },
 ) => RunResult;
 
 // The committed artifacts alone are ~6 MB and `git cat-file --batch` returns
@@ -124,6 +131,7 @@ export const spawnRunner: ProcessRunner = (command, args, options) => {
   const result = spawnSync(command, [...args], {
     cwd: options.cwd,
     input: options.input,
+    env: options.env,
     maxBuffer: MAX_BUFFER_BYTES,
   });
   return {
