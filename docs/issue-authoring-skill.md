@@ -2330,6 +2330,34 @@ Validation expectations:
   hidden open descendants must be surfaced as validation failures or
   explicit follow-up notes, not silently normalized away
 
+## Gate-rule verdict table
+
+A drafted issue that changes a rule which decides a verdict (a gate,
+classifier, threshold, or routing rule) carries a verdict table in its
+`## Acceptance criteria`, with one row per input case. The table has
+three columns:
+
+- **Input**: the observable inputs of the case, such as a reply's
+  author, its timing, its body shape, or a count.
+- **Expected verdict**: the outcome the rule must return for that input.
+- **Source decision**: the recorded decision or evidence that sets the
+  row's verdict.
+
+Every recorded decision that changes such a rule maps to at least one
+row. A decision that names a rule without its edge cases leaves the gap
+the table closes.
+
+Observed incidents:
+
+- Observed 2026-10-10 to 2026-10-11, issue `#3942` and PR `#4000`: the
+  cited-item disposition rule took 13 Copilot review rounds and 14 commits
+  to settle. The recorded decision did not name whether a **Rejected**
+  reply counts, under what evidence, or how an empty or count-mismatched
+  per-item view is judged.
+- Observed 2026-10-10, issue `#3947`: the published issue holds a recorded
+  decision whose premise its own reproduction contradicts, and the marker
+  the decision names is absent from the source.
+
 ## Draft schemas
 
 The following schemas are normative. The skill may add small

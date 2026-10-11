@@ -243,6 +243,32 @@ Its hits become the candidate-file list:
 - `schemas/example.schema.json` (restating site: the description still
   gives the old anchor)
 
+## Gate-rule verdict table example
+
+A gate rule change adds one table to the acceptance criteria. This one
+covers the cited-item disposition rule (issue `#3942`):
+
+```markdown
+## Acceptance criteria
+
+| Input                                                                                                            | Expected verdict                                                                      | Source decision                                                         |
+| ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Suppressed item names a file or line; stamped **Accepted** by a trusted login, posted after the review           | Counts as a disposition                                                               | `#3942` cited-item rule                                                 |
+| Same item; stamped **Rejected** with no file or line evidence, not in the recorded deferral form                 | Does not count; gate stays open                                                       | PR `#4000` maintainer decision, 2026-10-11                              |
+| Same item; stamped **Rejected** naming the file or line as evidence                                              | Counts (commit `dd807f91b`)                                                           | PR `#4000` maintainer decision, 2026-10-11                              |
+| Same item; stamped recorded deferral, **Rejected** — deferred to follow-up issue `#<n>` (`<clause>`): `<reason>` | Counts, with or without file or line evidence                                         | `countCitedItemDispositions` deferral form (`review-clause.mts`)        |
+| Same item; reply edited after it was posted                                                                      | Does not count                                                                        | `countCitedItemDispositions` edit check (`review-clause.mts`)           |
+| Same item; reply from a login outside the trusted set                                                            | Does not count                                                                        | `countCitedItemDispositions` trusted-login check (`review-clause.mts`)  |
+| Same item; reply without the review-reply stamp                                                                  | Does not count                                                                        | `countCitedItemDispositions` stamp check (`review-clause.mts`)          |
+| Same item; disposition posted in the same second as the review                                                   | Does not count                                                                        | `countCitedItemDispositions` strictly-after check (`review-clause.mts`) |
+| Per-item view empty or count-mismatched                                                                          | Fails closed: every item counts as cited (commit `8666020ea`)                         | `citationBreakdown` (`copilot-review-body.mts`)                         |
+| Suppressed item names no file or line; trusted review-ack after the review                                       | Covered by the ack                                                                    | `ackCoversSuppressedFindings` (`review-clause.mts`)                     |
+| Suppressed count is zero                                                                                         | Suppressed-findings clause satisfied without a reply; item-count clause still applies | `suppressedClauseSatisfied` (`advisory-convergence.mts`)                |
+```
+
+Each row is one input case. A case with no row is a gap that the review
+loop would find later.
+
 ## Example orphan issue
 
 - `## Background` or `## Goal`
