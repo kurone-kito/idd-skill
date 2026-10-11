@@ -164,7 +164,8 @@ mergeable,mergeStateStatus` with the helper contract's table) — reflects
 the last pushed head, not unpushed E9 fixes.
 
 - **`callSiteRouting.e11` is `merge-development-branch`** (branch state
-  `content-conflict`): pass the active review gate, merge
+  `content-conflict`; without helper runtime, `mergeable` `CONFLICTING`):
+  pass the active review gate, merge
   `{development-branch}` into the feature branch, resolve, complete the
   merge:
 
@@ -176,8 +177,9 @@ the last pushed head, not unpushed E9 fixes.
   Non-interactive-hostile signing: use the
   [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
   instead.
-- Otherwise (`callSiteRouting.e11` is `skip-merge`): skip the merge,
-  proceed to E12 — the E-phase branch-sync check and F1 handle those
+- Otherwise (`callSiteRouting.e11` is `skip-merge`; without helper
+  runtime, any `mergeable` other than `CONFLICTING`): skip the merge, proceed
+  to E12 — the E-phase branch-sync check and F1 handle those
   downstream.
 
 ## E12 — Lint, test, push

@@ -6821,7 +6821,8 @@ same as `AW4`/`AW5`.
   fail closed.
 - Without helper runtime, take `mergeable` and `mergeStateStatus` from
   `gh pr view {pr-number} --json mergeable,mergeStateStatus`, derive
-  `requiresUpToDateHead` as follows, and route with the table below:
+  `branchState` and `requiresUpToDateHead` as follows, and route with the
+  table below:
   1. Read the base branch's rules (`rules/branches/{base-branch}`) and its
      protection (`branches/{base-branch}/protection`) under
      `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable unless the
@@ -6840,6 +6841,19 @@ same as `AW4`/`AW5`.
      required check, or when classic protection has
      `required_status_checks.strict` `true`. It is also `true` when either read
      fails or is unreadable. Otherwise it is `false`.
+  3. Derive `branchState` from `mergeable` and `mergeStateStatus` with the
+     first matching rule (the helper's order):
+     - `mergeable` `CONFLICTING`: `content-conflict`.
+     - `mergeStateStatus` `DIRTY`: `dirty`.
+     - `mergeable` `MERGEABLE` and `mergeStateStatus` `CLEAN`: `clean`.
+     - `mergeStateStatus` `BEHIND`: `behind-no-conflict`. The helper's
+       extra merge-tree probe, which can report `content-conflict` or
+       `unknown`, does not run without the helper.
+     - `mergeable` `MERGEABLE` with any other `mergeStateStatus`: `clean`,
+       which the table holds unless the status is `CLEAN`.
+     - `mergeable` `UNKNOWN` or null: `computing`.
+     - Anything else: `unknown`.
+  4. Route with the table below.
 
   | `branchState`                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
   | -------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
