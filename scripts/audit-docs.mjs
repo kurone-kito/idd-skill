@@ -848,7 +848,10 @@ function markdownOutline(text) {
     nextLineStart: 0,
   };
   let offset = 0;
-  let previousLine = '';
+  // Whether a paragraph is open at this line, tracked from what the previous
+  // line was: visible text opens one, and a blank, hidden, or heading line closes
+  // it. Only a bullet list, or an ordered list starting at 1, can interrupt one.
+  let paragraphOpen = false;
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(
       (range) => offset >= range.start && offset < range.end,
@@ -860,6 +863,7 @@ function markdownOutline(text) {
       stripEnclosingListContentIndent(normalized, offset, listContext) !==
         null &&
       listContext.contentIndent > 0;
+    let headingLine = false;
     if (!isHidden) {
       const container = containerHeading.exec(line);
       const indented = indentedHeading.exec(line);
@@ -876,8 +880,7 @@ function markdownOutline(text) {
       const paragraphText =
         ordered !== null &&
         Number(ordered[1]) !== 1 &&
-        previousLine.trim() !== '' &&
-        !/^ {0,3}#{1,6}(?:[ \t]|$)/.test(previousLine) &&
+        paragraphOpen &&
         !inListItem;
       if (
         container !== null &&
@@ -885,23 +888,27 @@ function markdownOutline(text) {
         (!indentedCode || inListItem)
       ) {
         nestedTitles.push(normalizeHeading(container[2]));
+        headingLine = true;
       } else if (indented !== null && inListItem) {
         nestedTitles.push(normalizeHeading(indented[2] ?? ''));
+        headingLine = true;
       } else if (standalone !== null) {
         headings.push({
           index,
           level: standalone[1].length,
           title: normalizeHeading(standalone[2] ?? ''),
         });
+        headingLine = true;
       } else if (plain !== null) {
         headings.push({
           index,
           level: plain[1].length,
           title: normalizeHeading(plain[2] ?? ''),
         });
+        headingLine = true;
       }
     }
-    previousLine = line;
+    paragraphOpen = !isHidden && !headingLine && line.trim() !== '';
     offset += line.length + 1;
   }
   const sections = headings.map((heading, position) => {

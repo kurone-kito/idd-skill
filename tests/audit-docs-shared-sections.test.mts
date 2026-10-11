@@ -867,3 +867,24 @@ test('an ordered marker other than 1 cannot interrupt a paragraph, so it is not 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test('an ordered marker after a closed fence starts a list, so its nested heading counts', (t) => {
+  // A closed fence is not paragraph text, so "2. ## Shared rule" after it can
+  // start a list. That nested copy of the listed title must fail, naming the
+  // source file.
+  const afterFence = `${BASE}\n~~~\ncode\n~~~\n2. ## Shared rule\n\nQuoted copy.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, afterFence, BASE);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
+});
