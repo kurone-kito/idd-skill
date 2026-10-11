@@ -143,19 +143,11 @@ Non-interactive/automation: append `-x <noop>` (e.g. `-x true`) so
 WorkTrunk creates, runs the pre-start hook, and exits without
 changing the caller's directory.
 
-**Pre-start hook approval hang** (confirmed live 2026-09-09, issue
-`#2797`): even with `-x <noop>`, `wt switch --create` still hangs
-non-interactively when the `[pre-start]` hook's own install command has
-not already been approved — WorkTrunk's own `approvals.toml` mechanism
-prompts for command approval on first run and fails outright outside a
-TTY, with `Cannot prompt for approval in non-interactive environment. To
-skip prompts in CI/CD, add --yes`. Before the first `wt switch --create`
-in such an environment, run `wt config approvals add --yes` once from
-the primary worktree to pre-approve the project's hook and alias
-commands (stored in `~/.config/worktrunk/approvals.toml`, scoped to the
-git project so the approval carries over to every sibling worktree).
-Prefer this pre-approval to the global `-y`/`--yes` flag, which would
-also skip approval for every other command WorkTrunk runs.
+**Pre-start hook approval hang** (issue `#2797`): with `-x <noop>`,
+`wt switch --create` hangs non-interactively until the `[pre-start]` hook is
+approved. Run `wt config approvals add --yes` from the primary worktree.
+The approval is project-scoped, so sibling worktrees inherit it. Avoid the
+global `-y`/`--yes` flag, which skips all approvals.
 
 If WorkTrunk is unavailable, choose the correct case:
 
