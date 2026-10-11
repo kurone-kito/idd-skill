@@ -34,18 +34,16 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
    instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
-vendored-node** invocation form. Under `package-manager` /
-`ephemeral-npx` / `user-global` profiles, `scripts/` is not vendored — resolve each
-command's profile-selected equivalent from
-`docs/idd-helper-scripts.md`. A helper missing on the active profile is a
-rule 1 stop, never a fall-through.
+vendored-node** form; other profiles resolve each command's profile-selected
+equivalent from `docs/idd-helper-scripts.md`. A helper missing on the active
+profile is a rule 1 stop, never a fall-through.
 
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
 command that needs it (Claim execution step 4 at the latest).
-A unique session token (e.g., `copilot-8122ca35`) is recommended for
-auditability, not required. `{agent-id}` alone is never
-ownership proof; `{claim-id}` is the authoritative token.
+A unique session token is recommended for auditability, not required.
+`{agent-id}` alone is never ownership proof; `{claim-id}` is the
+authoritative token.
 
 ## Stop-and-ask
 
@@ -342,7 +340,9 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 
 6. **Fresh claim with no inheritable branch: lock and assert before
    verification.** On the linked worktree only, run the lock acquire and
-   `--read-tokens`. After `claim.verifySettleDelay`, run
+   `--read-tokens` (`instructions-only`: the written lock and Claim
+   verification checks replace these helpers and `--assert`). After
+   `claim.verifySettleDelay`, run
    `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
    that post-acquire result alone counts. Any other result: claim contested;
