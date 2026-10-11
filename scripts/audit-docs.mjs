@@ -788,9 +788,117 @@ function resolveBlockFiles(block) {
   }
   return files;
 }
+// Fenced blocks of either kind hide their `#` lines from heading detection.
+// headingSignature tracks only backtick fences, so this scanner handles tilde
+// fences too; otherwise a `~~~` block could cut a section short.
+function markdownSections(text) {
+  const lines = normalizeText(text).split('\n');
+  const headings = [];
+  let fence = null;
+  for (const [index, line] of lines.entries()) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fence !== null) {
+      if (
+        fenceMatch !== null &&
+        line.trim() === fenceMatch[1] &&
+        fenceMatch[1][0] === fence.char &&
+        fenceMatch[1].length >= fence.length
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMatch !== null) {
+      fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading !== null) {
+      headings.push({
+        index,
+        level: heading[1].length,
+        title: normalizeHeading(heading[2]),
+      });
+    }
+  }
+  return headings.map((heading, position) => {
+    let end = lines.length;
+    for (const next of headings.slice(position + 1)) {
+      if (next.level <= heading.level) {
+        end = next.index;
+        break;
+      }
+    }
+    return {
+      title: heading.title,
+      body: lines.slice(heading.index, end).join('\n'),
+    };
+  });
+}
+// Compares each `sharedSections` title exactly between source and target. A
+// title must appear exactly once on each side: a missing or duplicated title
+// fails closed rather than passing silently.
+function checkSharedSections(pair, source, target) {
+  if (!Object.hasOwn(pair, 'sharedSections')) {
+    return;
+  }
+  const titles = pair.sharedSections;
+  if (
+    !Array.isArray(titles) ||
+    titles.some((title) => typeof title !== 'string' || title.trim() === '')
+  ) {
+    errors.push(
+      `${pair.id}: sharedSections must be an array of non-empty section titles`,
+    );
+    return;
+  }
+  const sourceSections = markdownSections(source);
+  const targetSections = markdownSections(target);
+  for (const title of titles) {
+    const key = normalizeHeading(title);
+    const sides = [
+      {
+        file: pair.source,
+        matches: sourceSections.filter((section) => section.title === key),
+      },
+      {
+        file: pair.target,
+        matches: targetSections.filter((section) => section.title === key),
+      },
+    ];
+    let resolved = true;
+    for (const side of sides) {
+      if (side.matches.length === 0) {
+        errors.push(
+          `${pair.id}: shared section "${title}" is missing from ${side.file}`,
+        );
+        resolved = false;
+      } else if (side.matches.length > 1) {
+        errors.push(
+          `${pair.id}: shared section "${title}" appears ${side.matches.length} times in ${side.file}`,
+        );
+        resolved = false;
+      }
+    }
+    if (!resolved) {
+      continue;
+    }
+    if (sides[0].matches[0].body !== sides[1].matches[0].body) {
+      errors.push(
+        `${pair.id}: shared section "${title}" differs between ${pair.source} and ${pair.target}`,
+      );
+    }
+  }
+}
 function checkSyncPairs(pairs) {
   errors.push(...collectDuplicateSyncPairTargets(pairs));
   for (const pair of pairs) {
+    // Checked before the mode branches below, which `continue` early.
+    if (Object.hasOwn(pair, 'sharedSections') && pair.mode !== 'structure') {
+      errors.push(
+        `${pair.id}: sharedSections is only valid on a "structure" pair, not "${pair.mode}"`,
+      );
+    }
     if (pair.mode === 'contains') {
       checkContainsPair(pair);
       continue;
@@ -826,6 +934,7 @@ function checkSyncPairs(pairs) {
           `${pair.id}: heading structure differs between ${pair.source} and ${pair.target}`,
         );
       }
+      checkSharedSections(pair, source, target);
       continue;
     }
     errors.push(`${pair.id}: unsupported sync mode ${pair.mode}`);
