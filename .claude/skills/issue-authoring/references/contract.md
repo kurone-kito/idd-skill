@@ -976,14 +976,15 @@ edge cases leaves the gap the table closes.
 
 Observed incidents:
 
-- Observed 2026-10-10 to 2026-10-11, issue `#3942` and PR `#4000`: the
+- Observed 2026-10-10 to 2026-10-11, issue
+  `kurone-kito/idd-skill#3942` and PR `kurone-kito/idd-skill#4000`: the
   cited-item disposition rule took 13 Copilot review rounds and 14 commits
   to settle. The recorded decision did not name whether a **Rejected**
   reply counts, under what evidence, or how an empty or count-mismatched
   per-item view is judged.
-- Observed 2026-10-10, issue `#3947`: the published issue holds a recorded
-  decision whose premise its own reproduction contradicts, and the marker
-  the decision names is absent from the source.
+- Observed 2026-10-10, issue `kurone-kito/idd-skill#3947`: the published
+  issue holds a recorded decision whose premise its own reproduction
+  contradicts, and the marker the decision names is absent from the source.
 
 ## Drafted issue prose language
 
