@@ -11,6 +11,7 @@ import {
   parseArgs,
   parseConflictFiles,
   parseGitFetchOrigin,
+  readTrustEmptyProtectionReads,
   resolveCallSiteRouting,
   resolveFetchAttemptTimeoutMs,
   resolveFetchOrigin,
@@ -1290,5 +1291,44 @@ test('resolveRequiresUpToDateHead: fail closed on unreadable or failed policy re
   assert.equal(
     resolveRequiresUpToDateHead('o', 'r', 'main', throwing, true),
     true,
+  );
+});
+
+// #3497 review: the trust opt-in comes from the base ref, never from the PR
+// working tree, and any read failure keeps it unset (fail closed).
+test('readTrustEmptyProtectionReads: reads the opt-in from the base ref', () => {
+  const calls: string[][] = [];
+  const respond = (body: string) => (args: string[]) => {
+    calls.push(args);
+    return body;
+  };
+  assert.equal(
+    readTrustEmptyProtectionReads(
+      'o',
+      'r',
+      'release/1',
+      respond('{"ciGate":{"trustEmptyProtectionReads":true}}'),
+    ),
+    true,
+  );
+  const request = calls[0];
+  assert.equal(request[0], 'api');
+  assert.equal(
+    request[request.length - 1],
+    'repos/o/r/contents/.github/idd/config.json?ref=release%2F1',
+  );
+  assert.equal(
+    readTrustEmptyProtectionReads('o', 'r', 'main', respond('{"ciGate":{}}')),
+    false,
+  );
+  assert.equal(
+    readTrustEmptyProtectionReads('o', 'r', 'main', respond('not json')),
+    false,
+  );
+  assert.equal(
+    readTrustEmptyProtectionReads('o', 'r', 'main', () => {
+      throw new Error('HTTP 404');
+    }),
+    false,
   );
 });

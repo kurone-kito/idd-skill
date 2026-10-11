@@ -128,13 +128,14 @@ export function resolveCallSiteRouting(
  * readable empty policy. A missing or unreadable base-ref file reads as
  * `false`, so a 404 stays unreadable (fail closed).
  */
-function readTrustEmptyProtectionReads(
+export function readTrustEmptyProtectionReads(
   owner: string,
   repo: string,
   baseRef: string,
+  fetchRaw: (args: string[]) => string = (args) => ghText(args),
 ): boolean {
   try {
-    const raw = ghText([
+    const raw = fetchRaw([
       'api',
       '-H',
       'Accept: application/vnd.github.raw',
