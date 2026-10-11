@@ -8749,14 +8749,43 @@ function readAllPages(readPage, consume) {
   }
 }
 /**
+ * Fold the first-commit times of the given PRs into their earliest (#3871,
+ * #3998). `readFailed` is set when a commit list cannot be read or is not an
+ * array; `unknown` when a PR's commits carry no parseable date. Callers treat
+ * both as a reason to reject, so neither is ever a silent pass.
+ */
+export function foldLinkedPrFirstCommits(port, references) {
+  let earliest = null;
+  try {
+    for (const reference of references) {
+      const commits = port.listChangeRequestCommits(Number(reference));
+      // A non-array response is a failed read, not an unknown time (#3276).
+      if (!Array.isArray(commits)) {
+        throw new Error('malformed commits response');
+      }
+      const first = resolvePrFirstCommitAt(commits);
+      if (first === null) {
+        return { earliest: null, readFailed: false, unknown: true };
+      }
+      if (earliest === null || Date.parse(first) < Date.parse(earliest)) {
+        earliest = first;
+      }
+    }
+  } catch {
+    return { earliest: null, readFailed: true, unknown: false };
+  }
+  return { earliest, readFailed: false, unknown: false };
+}
+/**
  * The earliest first-commit time over every open PR that backs the claim, plus
- * the PR being evaluated (#3998, from a CodeRabbit finding on the claim-rule
- * PR). The merge gate judges an `issue-only` forced handoff against this same
- * set Resume does (#3871), not against the one PR it is merging.
+ * the PR being evaluated (#3998). The merge gate and advisory convergence judge
+ * an `issue-only` forced handoff against the same set Resume does (#3871), not
+ * against only the PR they are looking at. `ownCommits` is that PR's commit
+ * list, already read by the caller.
  *
- * `ownCommits` is that PR's commit list, already read by the caller. A failed
- * link lookup, a failed or malformed commits read on any linked PR, or a time
- * that cannot be parsed returns `null`, which rejects the handoff (fail closed).
+ * A failed link lookup, a failed or malformed commits read on any linked PR,
+ * or a time that cannot be parsed returns `null`, which rejects the handoff
+ * (fail closed).
  */
 export function resolveClaimPrFirstCommitAt(
   port,
@@ -8770,36 +8799,24 @@ export function resolveClaimPrFirstCommitAt(
     claimIssueNumber,
     repository,
   );
-  if (linked.lookupFailed) {
+  const ownFirst = resolvePrFirstCommitAt(ownCommits);
+  if (linked.lookupFailed || ownFirst === null) {
     return null;
   }
-  let earliest = resolvePrFirstCommitAt(ownCommits);
-  if (earliest === null) {
+  const others = [...linked.references].filter(
+    (reference) => reference !== String(prNumber),
+  );
+  const folded = foldLinkedPrFirstCommits(port, others);
+  if (folded.readFailed || folded.unknown) {
     return null;
   }
-  for (const reference of linked.references) {
-    if (reference === String(prNumber)) {
-      continue;
-    }
-    let commits;
-    try {
-      commits = port.listChangeRequestCommits(Number(reference));
-    } catch {
-      return null;
-    }
-    // A non-array response is a failed read, not an unknown time (#3276).
-    if (!Array.isArray(commits)) {
-      return null;
-    }
-    const first = resolvePrFirstCommitAt(commits);
-    if (first === null) {
-      return null;
-    }
-    if (Date.parse(first) < Date.parse(earliest)) {
-      earliest = first;
-    }
+  if (
+    folded.earliest !== null &&
+    Date.parse(folded.earliest) < Date.parse(ownFirst)
+  ) {
+    return folded.earliest;
   }
-  return earliest;
+  return ownFirst;
 }
 /**
  * Build the `isForcedHandoffEnabled` gate shared by every claim-revalidation

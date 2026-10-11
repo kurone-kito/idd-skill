@@ -138,6 +138,7 @@ import {
   normalizeNowFlag,
   parseClaimComment,
   parseExternalCheckWaiverComment,
+  parseForcedHandoffComment,
 } from './marker-helpers.mjs';
 import {
   normalizePolicyConfig,
@@ -155,6 +156,7 @@ import {
   operationalMarkerPrefix,
   readClaimStaleAgeMs,
   resolveAdvisoryBotLogins,
+  resolveClaimPrFirstCommitAt,
   resolveClosingIssueNumbersForClassifier,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
@@ -3030,16 +3032,36 @@ export function collectFromGitHub(
   const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
   const forcedHandoffPermissionCache = new Map();
   // Part B (#1058): an issue-only handoff that predates the PR is honored
-  // even against a PR-backed claim. Resolved only when forced handoffs are
-  // enabled, and fails closed to `null` (reject) on any lookup/parse error
-  // so a transient commits-API failure never widens what this gate accepts.
+  // even against a PR-backed claim. It is the earliest first commit over every
+  // open PR that backs the claim (#3998), matching the merge gate and Resume.
+  // Resolved only when forced handoffs are enabled, and fails closed to `null`
+  // (reject) on any lookup/parse error so a transient commits-API failure never
+  // widens what this gate accepts. The linked-PR lookup runs only when an
+  // issue-only handoff is among the claim candidates' comments.
+  const hasIssueOnlyForcedHandoff = claimCandidates.some((comments) =>
+    comments.some(
+      (comment) =>
+        parseForcedHandoffComment(
+          String(comment.body ?? ''),
+          String(comment.created_at ?? ''),
+        )?.contextScope === 'issue-only',
+    ),
+  );
   let prFirstCommitAt = null;
   if (forcedHandoffEnabled) {
     try {
       const prCommits = retryTransientGhFailure(() =>
         port.listChangeRequestCommits(Number(args.prNumber)),
       );
-      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+      prFirstCommitAt = hasIssueOnlyForcedHandoff
+        ? resolveClaimPrFirstCommitAt(
+            port,
+            args.claimIssueNumber,
+            `${owner}/${repo}`,
+            Number(args.prNumber),
+            prCommits,
+          )
+        : resolvePrFirstCommitAt(prCommits);
     } catch {
       prFirstCommitAt = null;
     }

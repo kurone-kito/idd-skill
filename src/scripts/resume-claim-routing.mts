@@ -36,7 +36,6 @@ import { normalizePolicyConfig } from './policy-helpers.mts';
 import type {
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
-  PrCommitPayload,
 } from './protocol-helpers.mts';
 import {
   buildForcedHandoffRefusalExplainer,
@@ -44,6 +43,7 @@ import {
   type ForcedHandoffRefusalCause,
   fetchOpenLinkedPrReferences,
   filterTrustedClaimFamilyEvents,
+  foldLinkedPrFirstCommits,
   isStaleByAge,
   normalizeTrustedMarkerLogins,
   orderClaimEvents,
@@ -51,7 +51,6 @@ import {
   parseReleaseComment,
   readClaimStaleAgeMs,
   resolveActiveClaimWithForcedHandoffTrace,
-  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
@@ -1716,29 +1715,11 @@ export function resolveResumeLinkedPrState(
     !lookupFailed &&
     linked.references.size > 0
   ) {
-    let earliest: string | null = null;
-    let unknown = false;
-    try {
-      for (const reference of linked.references) {
-        const commits = port.listChangeRequestCommits(Number(reference));
-        // A non-array response is a failed read, the same lookup failure as a
-        // thrown one (#3276), not an unknown time.
-        if (!Array.isArray(commits)) {
-          throw new Error('malformed commits response');
-        }
-        const first = resolvePrFirstCommitAt(commits as PrCommitPayload[]);
-        if (first === null) {
-          unknown = true;
-          break;
-        }
-        if (earliest === null || Date.parse(first) < Date.parse(earliest)) {
-          earliest = first;
-        }
-      }
-    } catch {
+    const folded = foldLinkedPrFirstCommits(port, linked.references);
+    if (folded.readFailed) {
       lookupFailed = true;
     }
-    prFirstCommitAt = !lookupFailed && !unknown ? earliest : null;
+    prFirstCommitAt = !lookupFailed && !folded.unknown ? folded.earliest : null;
   }
   // The gate and the refusal cause are built from the same inputs and share
   // one explainer underneath, so they cannot disagree (#3873).
