@@ -31,10 +31,9 @@ non-helper alternative of its own for that case.
 ## Stop-and-ask conditions
 
 - The active claim is ambiguous, disputed, or lost.
-- The branch-conflict-state helper reports anything other than
-  `syncRecommendation: "none"` (after the `recheck` retry budget in F1
-  step 1, if applicable), or is unavailable, fails, or disagrees with
-  live state.
+- The branch-conflict-state helper reports `callSiteRouting.f1` other than
+  `"proceed-to-f2"` (after the `retry` budget in F1 step 1, if applicable),
+  or is unavailable, fails, or disagrees with live state.
 - The pre-merge-readiness helper is missing, fails, returns invalid or
   incomplete JSON (missing any of the required top-level fields listed
   in `schemas/pre-merge-readiness.schema.json` — this file directly
@@ -53,20 +52,18 @@ This check never rebases, merges, or pushes.
    scripts/branch-conflict-state.mjs --pr <pr-number>`, or the
    package-manager-profile `idd:branch-conflict-state` command, or the
    profile-selected equivalent (resolve the exact command from
-   `docs/idd-helper-scripts.md` if unsure). Read `syncRecommendation`:
-   - `"none"`: the branch is conflict-free and, if branch protection
+   `docs/idd-helper-scripts.md` if unsure). Read `callSiteRouting.f1`:
+   - `"proceed-to-f2"`: the branch is conflict-free and, if branch protection
      requires an up-to-date head, already current — proceed to F2.
-   - `"recheck"` (mergeability still computing, a transient state):
-     re-run the helper after a short wait, up to 3 attempts; only a
-     result still `"recheck"` after that budget falls through to stop
-     per the condition above.
-   - Any other value the helper currently reports (`"merge-base"` or
-     `"hold-unknown"`), or the helper is unavailable, fails, or
-     disagrees with live state: stop per the
+     `syncRecommendation` is detail only, so `"merge-base"` does not stop.
+   - `"retry"` (mergeability still computing, a transient state): re-run the
+     helper after a short wait, up to 3 attempts; only a result still
+     `"retry"` after that budget falls through to stop per the condition above.
+   - Any other value (`"return-to-e-phase-branch-sync"` or `"hold"`), or the
+     helper is unavailable, fails, or disagrees with live state: stop per the
      condition above — the merge-based resync and any content-conflict
-     resolution are out of this lite file's scope; that path resumes
-     through the E-phase branch-sync check in
-     `idd-review-triage.instructions.md`.
+     resolution are out of this lite file's scope; that path resumes through
+     the E-phase branch-sync check in `idd-review-triage.instructions.md`.
 
 ## F2 — Pre-merge readiness (helper-read only)
 

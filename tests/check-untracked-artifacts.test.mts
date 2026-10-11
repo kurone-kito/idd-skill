@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -10,46 +10,32 @@ import {
   formatUntrackedReport,
   untrackedEmittedArtifacts,
 } from '../src/scripts/check-untracked-artifacts.mts';
+import { fixtureEnv } from './test-utils.mts';
 
 const ENTRY = fileURLToPath(
   new URL('../src/scripts/check-untracked-artifacts.mts', import.meta.url),
 );
 
-// `node:os`'s `devNull` is `\\.\nul` on win32, which Git for Windows rejects as
-// a GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM value; the bare `NUL` is what it
-// accepts (same constant as tests/test-utils.mts, kurone-kito/idd-skill#2570).
-const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
-
-// Fixture git processes must never read the developer's config or an ambient
-// GIT_DIR from a hook. The helper under test spawns `git` with this
-// process's env, so scrub it here; each test file runs in its own process.
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith('GIT_CONFIG')) {
-    delete process.env[key];
-  }
-}
-for (const key of [
-  'GIT_DIR',
-  'GIT_INDEX_FILE',
-  'GIT_WORK_TREE',
-  'GIT_COMMON_DIR',
-  'GIT_OBJECT_DIRECTORY',
-]) {
-  delete process.env[key];
-}
-process.env.GIT_CONFIG_GLOBAL = GIT_NULL_DEVICE;
-process.env.GIT_CONFIG_SYSTEM = GIT_NULL_DEVICE;
-
+// Fixture git processes get their environment per call from fixtureEnv(), which
+// keeps the developer's git config and any ambient GIT_DIR out of the fixtures.
+// Nothing here writes process.env at module scope.
 const SCRATCH = mkdtempSync(join(tmpdir(), 'idd untracked artifacts '));
-// The "not a repository" fixture must stay one even when the temp directory
-// itself lives inside some other git repository (e.g. TMPDIR under a checkout).
-process.env.GIT_CEILING_DIRECTORIES = SCRATCH;
 after(() => {
   rmSync(SCRATCH, { force: true, recursive: true });
 });
 
+/**
+ * The environment for every scan and CLI run in this file. The "not a
+ * repository" fixture must stay one even when the temp directory itself lives
+ * inside some other git repository (e.g. TMPDIR under a checkout), so the scan
+ * environment also sets GIT_CEILING_DIRECTORIES to the scratch directory.
+ */
+function scanEnv(): NodeJS.ProcessEnv {
+  return { ...fixtureEnv(), GIT_CEILING_DIRECTORIES: SCRATCH };
+}
+
 function git(root: string, ...args: string[]): void {
-  execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+  execFileSync('git', args, { cwd: root, env: fixtureEnv(), stdio: 'pipe' });
 }
 
 let counter = 0;
@@ -80,7 +66,7 @@ function repository(): string {
 }
 
 test('a repository with only tracked artifacts has none untracked', () => {
-  assert.deepEqual(untrackedEmittedArtifacts(repository()), []);
+  assert.deepEqual(untrackedEmittedArtifacts(repository(), scanEnv()), []);
 });
 
 test('an untracked file under scripts or bin is reported with its path', () => {
@@ -89,7 +75,7 @@ test('an untracked file under scripts or bin is reported with its path', () => {
   writeFileSync(join(root, 'bin', 'newer.mjs'), 'export {};\n');
   mkdirSync(join(root, 'scripts', 'nested'));
   writeFileSync(join(root, 'scripts', 'nested', 'deep.mjs'), 'export {};\n');
-  assert.deepEqual(untrackedEmittedArtifacts(root).sort(), [
+  assert.deepEqual(untrackedEmittedArtifacts(root, scanEnv()).sort(), [
     'bin/newer.mjs',
     'scripts/nested/deep.mjs',
     'scripts/new.mjs',
@@ -99,27 +85,29 @@ test('an untracked file under scripts or bin is reported with its path', () => {
 test('an untracked file outside scripts and bin is not this check', () => {
   const root = repository();
   writeFileSync(join(root, 'notes.txt'), 'x\n');
-  assert.deepEqual(untrackedEmittedArtifacts(root), []);
+  assert.deepEqual(untrackedEmittedArtifacts(root, scanEnv()), []);
 });
 
 test('status.showUntrackedFiles=no does not hide an untracked artifact', () => {
   const root = repository();
   writeFileSync(join(root, 'scripts', 'new.mjs'), 'export {};\n');
   git(root, 'config', 'status.showUntrackedFiles', 'no');
-  assert.deepEqual(untrackedEmittedArtifacts(root), ['scripts/new.mjs']);
+  assert.deepEqual(untrackedEmittedArtifacts(root, scanEnv()), [
+    'scripts/new.mjs',
+  ]);
 });
 
 test('a gitignored file is not reported', () => {
   const root = repository();
   writeFileSync(join(root, '.gitignore'), 'scripts/ignored.mjs\n');
   writeFileSync(join(root, 'scripts', 'ignored.mjs'), 'export {};\n');
-  assert.deepEqual(untrackedEmittedArtifacts(root), []);
+  assert.deepEqual(untrackedEmittedArtifacts(root, scanEnv()), []);
 });
 
 test('a non-ASCII or space-containing name is reported unquoted', () => {
   const root = repository();
   writeFileSync(join(root, 'scripts', '日本語 name.mjs'), 'export {};\n');
-  assert.deepEqual(untrackedEmittedArtifacts(root), [
+  assert.deepEqual(untrackedEmittedArtifacts(root, scanEnv()), [
     'scripts/日本語 name.mjs',
   ]);
 });
@@ -128,7 +116,7 @@ test('a directory that is not a git repository is an error, not a pass', () => {
   const root = join(SCRATCH, 'not a repository');
   mkdirSync(root);
   assert.throws(
-    () => untrackedEmittedArtifacts(root),
+    () => untrackedEmittedArtifacts(root, scanEnv()),
     /git ls-files exited \d+/,
   );
 });
@@ -145,13 +133,38 @@ test('the CLI exits 0 on a clean tree and 1 naming the untracked file', () => {
   const clean = spawnSync(process.execPath, [ENTRY], {
     cwd: root,
     encoding: 'utf8',
+    env: scanEnv(),
   });
   assert.equal(clean.status, 0, clean.stderr);
   writeFileSync(join(root, 'scripts', 'new.mjs'), 'export {};\n');
   const dirty = spawnSync(process.execPath, [ENTRY], {
     cwd: root,
     encoding: 'utf8',
+    env: scanEnv(),
   });
   assert.equal(dirty.status, 1);
   assert.match(dirty.stderr, /scripts\/new\.mjs/);
+});
+
+// The default path must read process.env. The scan here runs in `root`, a
+// repository with nothing untracked, while process.env points git at `owner`
+// through GIT_DIR and GIT_WORK_TREE. Only the default path can report the
+// untracked file in `owner`. process.env is replaced for this one call and
+// restored in `finally`, and the replacement starts from fixtureEnv(), so the
+// developer's config and any ambient GIT_DIR cannot change the result.
+test('without an env argument the scan runs under process.env, as production does', () => {
+  const root = repository();
+  const owner = repository();
+  writeFileSync(join(owner, 'scripts', 'owned.mjs'), 'export {};\n');
+  const saved = process.env;
+  try {
+    process.env = {
+      ...fixtureEnv(),
+      GIT_DIR: join(owner, '.git'),
+      GIT_WORK_TREE: owner,
+    };
+    assert.deepEqual(untrackedEmittedArtifacts(root), ['scripts/owned.mjs']);
+  } finally {
+    process.env = saved;
+  }
 });

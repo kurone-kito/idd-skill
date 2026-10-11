@@ -22,26 +22,30 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
 ## Helper runtime contract
 
 1. **When helper runtime is enabled** (`package-manager`, vendored-node,
-   `user-global`, or any profile that ships the helpers): run the commands below
+   `user-global`, or any profile that ships the helpers): run the commands
    first. If a helper is **missing, fails, returns invalid JSON, or
    disagrees with live GitHub state** → **stop and ask**. Do **not**
    fall through to the written tables in that situation.
 2. **When the repository is `instructions-only`** (no helper runtime
-   shipped): skip the helper commands and use the written tables only. The
-   `--record-tokens`/`--read-tokens` check instead uses
-   `docs/idd-helper-scripts.md`'s helper-free fallback.
+   shipped): skip the helper commands and use only the written tables;
+   an issue-only handoff on an open PR stops. That is the sole path where
+   the tables below are the primary control
+   surface. The `--record-tokens`/`--read-tokens` check
+   instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
-vendored-node** form. Other profiles use the profile-selected equivalent
-from `docs/idd-helper-scripts.md`; a missing helper is a rule 1 stop, never
-a fall-through.
+vendored-node** invocation form. Under `package-manager` /
+`ephemeral-npx` / `user-global` profiles, `scripts/` is not vendored — resolve each
+command's profile-selected equivalent from
+`docs/idd-helper-scripts.md`. A helper missing on the active profile is a
+rule 1 stop, never a fall-through.
 
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
-command below that needs it (Claim execution step 4 at the latest).
-Appending a unique session token is recommended for auditability, not
-required. `{agent-id}` alone is never ownership proof; `{claim-id}` is the
-authoritative token.
+command that needs it (Claim execution step 4 at the latest).
+A unique session token (e.g., `copilot-8122ca35`) is recommended for
+auditability, not required. `{agent-id}` alone is never
+ownership proof; `{claim-id}` is the authoritative token.
 
 ## Stop-and-ask
 
@@ -57,8 +61,8 @@ Never invent a forced-handoff marker.
 
 ## Pre-checks (a)-(e) — all five must pass
 
-Re-fetch the issue immediately before running these checks. Checks are
-target-issue local: related roadmap or child claims do not block
+Re-fetch the issue immediately before these checks. All five are
+target-issue local: claims on related roadmap or child issues never block
 them. Owner protocol:
 `docs/idd-autonomy-contract.md#portable-authoring-owner-protocol`.
 
@@ -72,7 +76,7 @@ node scripts/claim-approval-gate.mjs --issue <N>
 
 Read `approved` / `reason` / `gateEnabled` / `checks` from the JSON
 output. `instructions-only` profile: use the written rules below
-directly (no helper exists for that profile).
+directly (no helper for that profile).
 
 - If `.github/idd/config.json` has `skipIssueAuthorApprovalGate: true`
   → skip this check.
@@ -120,8 +124,8 @@ node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId
 
 Pass `--nonce` only when this session already recorded one for that
 `{claim-id}` (true after forced-handoff step 5); omit it otherwise.
-Pass `--worktree <path>` once the linked worktree exists (Claim execution
-step 2 or B1 creates it).
+Pass `--worktree <path>` once the linked worktree exists (step 2 or B1
+creates it).
 
 <!-- dprint-ignore-start -->
 | Top-level `state` / `action` | Meaning |
@@ -197,12 +201,13 @@ is authorized under `forcedHandoff.authorityPolicy`;
 `branch` all match the active claim; and, when an open PR already backs
 this claim, the marker's evidence has `contextScope` of
 `issue-plus-pr` with `linkedPr` naming that PR — an issue-only handoff is not
-enough once a PR exists, unless it predates the PR's first commit. On success,
+enough once a PR exists, unless helper-confirmed to predate every open PR's
+first commit (the earliest). On success,
 the successor claim is **sticky**: adopt
 `newAgentId` / `newClaimId` **verbatim** as your own for the rest of
 the run (do not mint a fresh pair), and still post your own
-activation-nonce for `newClaimId` (see Claim verification below). On any
-failure, the active claim is unchanged; treat it under the rules above.
+activation-nonce for `newClaimId` (see Claim verification). On any failure,
+the active claim is unchanged; apply the rules above.
 
 ### (d) Open PR
 
@@ -262,9 +267,8 @@ activation.
 
 Skip Claim execution for a continuation (pre-check (c) found this
 session's claim): keep its `{claim-id}`/branch, post no new `claimed-by`
-or nonce, and go to Claim verification (or Heartbeat). Forced-handoff
-adopt-verbatim posts no `claimed-by` (none is allowed), but it is a fresh
-activation, so it still runs step 5.
+or nonce, and go to Claim verification (or Heartbeat). Adopt-verbatim posts
+no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 
 1. **Branch name**: takeover, forced-handoff, or a fresh claim whose
    pre-check (e) scan matched an inheritable branch (released claim,
@@ -275,16 +279,14 @@ activation, so it still runs step 5.
    branch (pre-check (e)), create the linked worktree first, under the
    clone-scoped lock after `git fetch origin main`: `git worktree add
    --no-track <path> -b <branch-name> origin/main` (B1 step 21; not WorkTrunk
-   create, whose pre-start hook installs before the claim POST). This runs
-   before any claim exists, so the B1 guard's checks 1-2 do not apply.
-   Otherwise, and for forced-handoff adopt-verbatim, `<path>` is the primary
-   worktree and B1 creates the linked one after the claim.
-   Then generate a fresh opaque token — **except** forced-handoff
-   adopt-verbatim, which reuses the marker's `newClaimId`. Record it with
-   the profile-selected `claim-lock` helper's `--record-tokens` mode
-   (`--worktree <path> --agent-id <id> --claim-id <id>`; resolve the exact
-   command from `docs/idd-helper-scripts.md`) before the first post (step
-   4, or step 5 for adopt-verbatim).
+   create). B1 guard
+   checks 1-2 do not apply yet. Otherwise, and for forced-handoff
+   adopt-verbatim, `<path>` is the primary worktree and B1 creates the linked
+   one after the claim. Then generate a fresh opaque token (adopt-verbatim
+   reuses `newClaimId`) and record it with the `claim-lock` helper's
+   `--record-tokens` mode (`--worktree <path> --agent-id <id> --claim-id <id>`;
+   command in `docs/idd-helper-scripts.md`) before the first post (step 4, or
+   step 5 for adopt-verbatim).
 3. **`{prior-claim-id}` / `supersedes:`**: `none` for a fresh claim or
    legacy migration; the active claim's `{claim-id}` for a stale
    takeover. Not applicable to forced-handoff (step 4 is skipped
@@ -339,14 +341,14 @@ activation, so it still runs step 5.
    winner is the lexicographically earliest `{nonce}`.
 
 6. **Fresh claim with no inheritable branch: lock and assert before
-   verification.** On the linked worktree only, run the lock section's acquire
-   and `--read-tokens`. After the settle delay (`claim.verifySettleDelay`),
-   run `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
+   verification.** On the linked worktree only, run the lock acquire and
+   `--read-tokens`. After `claim.verifySettleDelay`, run
+   `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
    that post-acquire result alone counts. Any other result: claim contested;
-   apply Claim verification step 5. If that releases the claim, remove the
-   worktree and branch step 2 created, only if still pristine (`git worktree
-   remove`, `git branch -d`), then STOP before the digest.
+   apply Claim verification step 5, then, if released, remove the step-2
+   worktree and branch only while pristine (`git worktree remove`,
+   `git branch -d`), then STOP before the digest.
 
 ## Heartbeat posting
 

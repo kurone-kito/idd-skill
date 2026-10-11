@@ -145,6 +145,7 @@ import {
   normalizeNowFlag,
   parseClaimComment,
   parseExternalCheckWaiverComment,
+  parseForcedHandoffComment,
 } from './marker-helpers.mts';
 import {
   normalizePolicyConfig,
@@ -167,6 +168,7 @@ import {
   operationalMarkerPrefix,
   readClaimStaleAgeMs,
   resolveAdvisoryBotLogins,
+  resolveClaimPrFirstCommitAt,
   resolveClosingIssueNumbersForClassifier,
   resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
@@ -624,6 +626,7 @@ export const ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN = {
   DISPOSITION_POSTED_ITEMS: 'disposition-posted-items',
   DISPOSITION_THREADS: 'disposition-threads',
   ACK_SUPPRESSED: 'ack-suppressed',
+  STAMPED_DISPOSITION_SUPPRESSED: 'stamped-disposition-suppressed',
   WAIVER_TERMINAL: 'waiver-terminal',
   HOLD_TERMINAL: 'hold-terminal',
   WAIVER_DEADLINE: 'waiver-deadline',
@@ -712,6 +715,26 @@ interface ClosingIssueRefPayload {
 // `review-clause.mts`; re-exported here so this file's existing public
 // export surface stays unchanged for any consumer importing it from here.
 export type { AdvisoryConvergenceReviewClause } from './review-clause.mts';
+
+/** #4007: how the latest review's suppressed items split between items that
+ * name a file or line (`citedCount`, each needing a stamped disposition
+ * reply, #3942) and citation-free items (`citationFreeCount`, covered only
+ * by a valid `review-ack`). `citedDispositionsSatisfied` and
+ * `reviewAckValid` are the same values the `suppressedCount` clause reads. */
+export interface AdvisorySuppressedCitation {
+  citedCount: number;
+  citationFreeCount: number;
+  citedDispositionsSatisfied: boolean;
+  reviewAckValid: boolean;
+}
+
+/** Verdict-level review clause: the raw latest-review clause plus the
+ * #4007 suppressed-citation breakdown. The raw clause returned by
+ * `resolveLatestCopilotReviewClause` is unchanged. */
+export interface AdvisoryConvergenceReviewReport
+  extends AdvisoryConvergenceReviewClause {
+  suppressedCitation: AdvisorySuppressedCitation;
+}
 
 /** Thread clause evidence (Clause 2 of the `converged` definition). A
  * Copilot-authored thread satisfies this clause when it is resolved
@@ -872,7 +895,7 @@ export interface AdvisoryConvergenceVerdict {
   now: string;
   primaryBotLogin: string;
   applicability: AdvisoryConvergenceApplicability;
-  review: AdvisoryConvergenceReviewClause;
+  review: AdvisoryConvergenceReviewReport;
   threads: AdvisoryConvergenceThreadClause;
   pending: boolean;
   deadline: AdvisoryConvergenceDeadline;
@@ -2591,9 +2614,15 @@ export function computeAdvisoryConvergenceVerdict(
     reasons.length = 0;
   }
 
-  const reviewReport: AdvisoryConvergenceReviewClause = {
+  const reviewReport: AdvisoryConvergenceReviewReport = {
     ...review,
     satisfied: reviewSatisfied,
+    suppressedCitation: {
+      citedCount: citation.citedCount,
+      citationFreeCount: citation.citationFreeCount,
+      citedDispositionsSatisfied,
+      reviewAckValid: hasValidReviewAck,
+    },
   };
   // #2143: same catalog as the stderr track. Computed AFTER `ready` so a
   // ready verdict is always `[]`; `ready` itself never reads this field.
@@ -3955,16 +3984,47 @@ export function collectFromGitHub(
   const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   // Part B (#1058): an issue-only handoff that predates the PR is honored
-  // even against a PR-backed claim. Resolved only when forced handoffs are
-  // enabled, and fails closed to `null` (reject) on any lookup/parse error
-  // so a transient commits-API failure never widens what this gate accepts.
+  // even against a PR-backed claim. It is the earliest first commit over every
+  // open PR that backs the claim (#3998), matching the merge gate and Resume.
+  // Resolved only when forced handoffs are enabled, and fails closed to `null`
+  // (reject) on any lookup/parse error so a transient commits-API failure never
+  // widens what this gate accepts. The linked-PR lookup runs only when an
+  // issue-only handoff is among the claim candidates' comments.
+  const hasIssueOnlyForcedHandoff = claimCandidates.some((comments) =>
+    comments.some(
+      (comment) =>
+        parseForcedHandoffComment(
+          String(comment.body ?? ''),
+          String(comment.created_at ?? ''),
+        )?.contextScope === 'issue-only',
+    ),
+  );
+  // Every claim issue this gate may judge: the explicit one, else each closing
+  // issue the claim candidates were loaded from (#3998).
+  const claimIssueNumbers: number[] = args.claimIssueNumber
+    ? [args.claimIssueNumber]
+    : [
+        ...new Set(
+          (closingIssuesReferences ?? [])
+            .map((ref) => ref?.number)
+            .filter((number): number is number => Number.isInteger(number)),
+        ),
+      ];
   let prFirstCommitAt: string | null = null;
   if (forcedHandoffEnabled) {
     try {
       const prCommits = retryTransientGhFailure(() =>
         port.listChangeRequestCommits(Number(args.prNumber)),
       ) as PrCommitPayload[];
-      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+      prFirstCommitAt = hasIssueOnlyForcedHandoff
+        ? resolveClaimPrFirstCommitAt(
+            port,
+            claimIssueNumbers,
+            `${owner}/${repo}`,
+            Number(args.prNumber),
+            prCommits,
+          )
+        : resolvePrFirstCommitAt(prCommits);
     } catch {
       prFirstCommitAt = null;
     }
@@ -5022,12 +5082,32 @@ export function collectAssertNextActions(
     bot === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
     verdict.review.bodyShape === 'unrecognized' &&
     !verdict.review.satisfied;
-  if (verdict.review.suppressedCount > 0 || unrecognizedBodyNeedsAck) {
+  // #4007 (#3942): a suppressed item that names a file or line needs its own
+  // stamped disposition reply, and a review-ack does not cover it. The
+  // stamped item comes first so the stderr `::notice::` leads with it.
+  const { citedCount, citationFreeCount, citedDispositionsSatisfied } =
+    verdict.review.suppressedCitation;
+  if (citedCount > 0 && !citedDispositionsSatisfied) {
+    const pointer = `gh pr comment ${pr} --body-file <file>`;
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. Post it with: ${pointer}`;
+    items.push({
+      token: T.STAMPED_DISPOSITION_SUPPRESSED,
+      summary,
+      pointer,
+    });
+  }
+
+  // A review-ack covers only the citation-free items, and only while no valid
+  // ack exists yet. It is the same condition as `suppressedClauseSatisfied`.
+  const citationFreeNeedsAck =
+    citationFreeCount > 0 && !verdict.review.suppressedCitation.reviewAckValid;
+  if (citationFreeNeedsAck || unrecognizedBodyNeedsAck) {
     const pointer = `node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`;
-    const summary =
-      verdict.review.suppressedCount > 0
+    const summary = citationFreeNeedsAck
+      ? citedCount === 0
         ? `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
-        : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
+        : `Latest ${bot} review reports ${citationFreeCount} citation-free suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
+      : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
     items.push({ token: T.ACK_SUPPRESSED, summary, pointer });
   }
 

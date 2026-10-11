@@ -278,11 +278,12 @@ Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
    <branch-name> origin/{development-branch}` (fresh-claim row of
    `idd-work.instructions.md`). The worktree exists before the claim. Do not
    use WorkTrunk create here: its pre-start hook installs before the claim POST.
-2. `--record-tokens --worktree <path>`.
+2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.
 3. Post the claim comment per
    [Claim format](idd-overview-core.instructions.md#claim-format), then the
    activation nonce.
-4. `--acquire --worktree <path>`, on the linked worktree only.
+4. `--acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`,
+   on the linked worktree only.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
    --claim-id {claim-id} --nonce {nonce} --worktree <path>`. This verification
    alone counts.
@@ -601,9 +602,9 @@ chronologically and apply these rules:
    - `oldAgentId` / `oldClaimId` / `branch` all match the active claim;
    - when an open PR backs the active claim: an `issue-plus-pr`
      marker's `linkedPr` must name that PR; only an `issue-only` marker
-     may instead rely on the first-commit time of the open PR (the earliest
-     one when several back the claim; PR context, not marker evidence),
-     honored when the handoff predates it — the Part B
+     may instead rely on the helper-confirmed first-commit time of every
+     open PR that backs the claim (the earliest one; PR context, not marker
+     evidence), honored only when the handoff predates it — the Part B
      allowance from issue #1058, which the merge write-gate and Resume
      routing both apply (see
      [Forced-handoff strictness](../../docs/idd-design-rationale.md#forced-handoff-strictness-strict-resume-vs-lenient-relay-merge));

@@ -329,7 +329,7 @@ default run rather than a usage error.
 | `review-activity-snapshot.mjs`       | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review activity           | —                                              | an unexpected exception |
 | `review-comment-origin.mjs`          | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | —                                                  | —                                              | an unexpected exception |
 | `review-disposition-verify.mjs`      | missing or invalid `--items`, or an unknown flag (exit `1`)                                                               | —                                                  | —                                              | an unexpected exception |
-| `resolve-review-thread.mjs`          | missing `--pr` or `--comment-id`, or an unknown flag (exit `1`)                                                           | a `gh` failure resolving the review thread         | `--apply` cannot complete the mutation         | an unexpected exception |
+| `resolve-review-thread.mjs`          | missing `--pr` or a target (`--comment-id`, or `--review-id` with `--item-title`), or an unknown flag (exit `1`)          | a `gh` failure resolving the review thread         | `--apply` cannot complete the mutation         | an unexpected exception |
 | `disposition-non-review-notices.mjs` | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving notices                   | `--apply` posts nothing or loses the claim     | an unexpected exception |
 | `branch-conflict-state.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving the pull request          | —                                              | an unexpected exception |
 | `idd-merge-execute.mjs`              | missing `--pr` or `--claim-id` (exit `1`); an unrecognized flag is ignored and that same missing-`--pr` check still fires | a `gh` failure during collection or merge          | a gate refuses the merge                       | an unexpected exception |
@@ -2967,6 +2967,33 @@ The adopted helper boundaries are intentionally narrow:
 - **Dry-run** reports the resolved `threadId` and current `alreadyResolved`
   state without posting; a comment with no owning thread omits `threadId`
   and includes an `error` note.
+- **Body-item target** (kurone-kito/idd-skill#4012): pass `--review-id <id>`
+  and `--item-title <title>` instead of `--comment-id` to answer a review-body
+  finding that has no inline thread, such as a Copilot "Previously missed"
+  item that names a file or line (the E6 stamped top-level disposition). The
+  helper reads the review (REST `pulls/{n}/reviews`) and refuses a title that
+  its `overview-v2` Previously missed section does not list. Titles match
+  exactly once the review's `<summary>` markup is dropped, numeric character
+  references and the common named ones (markup characters, typographic dashes,
+  quotes, and ellipsis, arrows, and a few symbols) are decoded, a name outside
+  that set stays as written, and whitespace collapses; the given title keeps
+  any literal angle-bracket text. When two items share the title, it is
+  refused unless `--item-index <n>` (the item's 1-based position in the
+  section) picks one, because the merge gate counts dispositions rather than
+  pairing them with items. Dry-run prints the stamped body with `reviewId`,
+  `itemTitle`, and `itemIndex` and posts nothing; an unknown review or title
+  is an `error` note (exit `0`), and a failure under `--apply` (exit `1`).
+  `--apply` posts exactly one top-level PR comment ending with the
+  reply-identity stamp, reports its id as `replyId`, and resolves no thread.
+  Its `--body` must open with `**Accepted**` or `**Rejected**`, the
+  recorded-deferral form included; `**Rejection confirmed by maintainer**` is
+  refused, since it closes a thread AMD. The merge gate credits a plain
+  `**Rejected**` reply only when it names the file or line
+  (kurone-kito/idd-skill#3942), so a Rejected body should include that
+  citation. The claim checks are the thread target's, run once before the
+  post. Observed on PR `#4000` (2026-10-11): three of these dispositions were
+  posted by hand with `gh pr comment`, skipping the claim checks and the
+  first-bytes rule.
 - **Fail-closed**: `--apply` requires `--body` and, unless `--claimless`,
   the `--claim-issue` / `--claim-id` pair; absent `--claimless` it
   re-validates the active claim before **each** of the reply and the
@@ -6795,6 +6822,11 @@ same as `AW4`/`AW5`.
     "branchState": "clean",
     "syncRecommendation": "none",
     "baseAdvancedSinceMergeBase": false,
+    "callSiteRouting": {
+      "eBranchSync": "proceed-to-f1",
+      "e11": "skip-merge",
+      "f1": "proceed-to-f2"
+    },
     "readOnly": true,
     "worktreeUnchanged": true,
     "diagnostics": {
@@ -6805,6 +6837,72 @@ same as `AW4`/`AW5`.
   }
   ```
 
+- `callSiteRouting` (required object): the next step for each call site.
+  `eBranchSync` is `proceed-to-f1`, `sync-path`, `retry`, or `hold`; `e11`
+  is `skip-merge` or `merge-development-branch`; `f1` is `proceed-to-f2`,
+  `return-to-e-phase-branch-sync`, `retry`, or `hold`. Each call site reads
+  its own key, and the phase files do not restate the routing.
+- Routing table (the single statement of branch-state routing).
+  `requiresUpToDateHead` is not emitted. The helper derives it from the base
+  branch's policy, and a failed or unreadable read counts as `true`, which is
+  fail closed.
+- Without helper runtime, take `mergeable` and `mergeStateStatus` from
+  `gh pr view {pr-number} --json mergeable,mergeStateStatus`, and route with
+  the table below:
+  1. Derive `branchState` from `mergeable` and `mergeStateStatus` with the
+     first matching rule (the helper's order):
+     - `mergeable` `CONFLICTING`: `content-conflict`.
+     - `mergeStateStatus` `DIRTY`: `dirty`.
+     - `mergeable` `MERGEABLE` and `mergeStateStatus` `CLEAN`: `clean`.
+     - `mergeStateStatus` `BEHIND`: `behind-no-conflict`. The helper's
+       extra merge-tree probe, which can report `content-conflict` or
+       `unknown`, does not run without the helper.
+     - `mergeable` `MERGEABLE` with any other `mergeStateStatus`: `clean`,
+       which the table holds unless the status is `CLEAN`.
+     - `mergeable` `UNKNOWN` or null: `computing`.
+     - Anything else: `unknown`.
+  2. Only if `branchState` is `behind-no-conflict`, derive
+     `requiresUpToDateHead`. Other states route without it, so they make no
+     policy reads.
+     1. Read the base branch's rules (`rules/branches/{base-branch-url-encoded}`)
+        and its protection (`branches/{base-branch-url-encoded}/protection`)
+        under `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable
+        unless the `.github/idd/config.json` at the base ref sets
+        `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
+        base ref, never from the PR's own working tree:
+
+        ```sh
+        gh api -H 'Accept: application/vnd.github.raw' \
+          'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch-url-encoded}'
+        ```
+
+        Encode `{base-branch}` as a URL path segment in all three paths (for
+        example `release%2F1`), as the helper adapter does. An unencoded name
+        addresses another route and reads as a 404. A missing file falls back
+        to the user-global policy layers, as `loadTrustedIddConfig` does, and
+        an unreadable file leaves the opt-in unset.
+     2. `requiresUpToDateHead` is `true` when a ruleset's
+        `required_status_checks` rule has `strict_required_status_checks_policy`
+        `true` and at least one required check, or when classic protection has
+        `required_status_checks.strict` `true`. It is also `true` when either
+        read fails or is unreadable. Otherwise it is `false`.
+  3. Route with the table below.
+
+  | `branchState`                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
+  | -------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
+  | `clean` with `mergeStateStatus` `CLEAN`                        | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with any other `mergeStateStatus`                      | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `behind-no-conflict`                                           | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `behind-no-conflict`                                           | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
+  | `content-conflict`                                             | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
+  | `computing`                                                    | either                 | `retry`         | `skip-merge`               | `retry`                         |
+  | `dirty`, `unknown`, `force-push-exception`, or any other state | either                 | `hold`          | `skip-merge`               | `hold`                          |
+
+  `clean` proceeds only with `mergeStateStatus` `CLEAN`, which is the phase
+  files' own definition. The helper's `clean` alone also covers `BLOCKED` and
+  `UNSTABLE`. A `retry` result is re-polled a small fixed number of times
+  (distributed default: three attempts, a few seconds apart), then routed by
+  the first settled result.
 - `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
   `dirty`, `force-push-exception`, `computing`, `unknown` (`computing` is the
   transient still-computing mergeability that callers re-poll; `unknown` stays
@@ -6827,7 +6925,8 @@ same as `AW4`/`AW5`.
   `pull_request`-triggered CI run is pinned to a merge-ref computed at trigger
   time, so a bare rerun after base moves can replay that stale state.
 - Stable fields consumed by D/E/F routing: `branchState`,
-  `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
+  `syncRecommendation`, `callSiteRouting`, `published`, `readOnly`,
+  `worktreeUnchanged`
 - Read-only boundary: the helper never runs `git merge`, `git rebase`, or
   any command that leaves merge state, index changes, or working-tree
   changes. The `readOnly` and `worktreeUnchanged` fields confirm this.

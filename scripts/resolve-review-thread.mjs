@@ -16,6 +16,11 @@
 // claim against, mirroring `pre-merge-readiness.mjs`'s identical `--claimless`
 // (#2017). Reply first, resolve second — a failed reply never leaves a
 // silently-resolved thread with no disposition.
+//
+// A second, body-item target (#4012) answers a review-body finding that has
+// no inline thread (a Copilot "Previously missed" item): given the review id
+// and the item's title, it posts one stamped top-level PR comment under the
+// same claim checks and dry-run default, and resolves nothing.
 import { writeSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -23,6 +28,10 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import {
+  extractPreviouslyMissedItemTitles,
+  normalizePreviouslyMissedItemTitle,
+} from './copilot-review-body.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   buildHelperErrorEnvelope,
@@ -131,6 +140,134 @@ export function hasKnownDispositionMarkerPrefix(body) {
     isDispositionComment(comment) || isRejectionConfirmedDisposition(comment)
   );
 }
+/** The forms the body-item target accepts, for use in error messages. */
+export const ACCEPTED_BODY_ITEM_DISPOSITION_MARKERS =
+  '**Accepted**, **Rejected**, or the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>';
+/**
+ * True when `body` opens with a disposition the body-item target accepts
+ * (#4012): `**Accepted**` or `**Rejected**`, the prefixes
+ * `isDispositionComment` recognizes. The recorded-deferral form opens with
+ * `**Rejected** —`, so it passes too. The `**Rejection confirmed by
+ * maintainer**` marker does not: it closes an AMD on a review thread, and a
+ * body item has none.
+ */
+export function hasBodyItemDispositionPrefix(body) {
+  return isDispositionComment({ body });
+}
+/**
+ * Find the review whose REST id is `reviewId` among `reviews` (the raw
+ * `pulls/{n}/reviews` rows) and confirm its Previously missed section lists an
+ * item titled `itemTitle` (#4012). The body's titles lose their HTML markup,
+ * and both sides then pass through `normalizePreviouslyMissedItemTitle`; the
+ * caller's title keeps any literal angle-bracket text. The match is exact, so
+ * a partial or misspelled title is refused. A review that is absent, or whose
+ * body has no readable Previously missed section, is refused too (fail
+ * closed).
+ *
+ * Two items can share a title (the PR #3925 corpus review lists two items
+ * titled "Preserve reviewer type in bot removal-proof matching"), and the
+ * merge gate counts dispositions rather than pairing them with items, so an
+ * ambiguous title is refused unless `itemIndex` (the item's 1-based position
+ * in the section) names one of them. A given `itemIndex` must point at an item
+ * with that exact title. The found item's position is returned as `index`.
+ */
+export function findBodyItem(
+  reviews,
+  reviewId,
+  itemTitle,
+  prNumber,
+  itemIndex = null,
+) {
+  const review = (Array.isArray(reviews) ? reviews : []).find(
+    (row) =>
+      row !== null &&
+      typeof row === 'object' &&
+      Number(row.id) === Number(reviewId),
+  );
+  if (!review) {
+    return {
+      found: false,
+      error: `no review ${reviewId} found on PR #${prNumber}`,
+    };
+  }
+  const titles = extractPreviouslyMissedItemTitles(
+    typeof review.body === 'string' ? review.body : null,
+  );
+  if (titles === null) {
+    return {
+      found: false,
+      error: `review ${reviewId} on PR #${prNumber} has no readable Previously missed section`,
+    };
+  }
+  const wanted = normalizePreviouslyMissedItemTitle(itemTitle);
+  const positions = wanted
+    ? titles.flatMap((title, i) => (title === wanted ? [i + 1] : []))
+    : [];
+  if (positions.length === 0) {
+    return {
+      found: false,
+      error: `review ${reviewId} on PR #${prNumber} lists no Previously missed item titled "${wanted}"`,
+    };
+  }
+  if (itemIndex !== null) {
+    if (!positions.includes(itemIndex)) {
+      return {
+        found: false,
+        error: `Previously missed item ${itemIndex} of review ${reviewId} on PR #${prNumber} is not titled "${wanted}" (that title is item ${positions.join(', ')})`,
+      };
+    }
+    return { found: true, title: wanted, index: itemIndex };
+  }
+  if (positions.length > 1) {
+    return {
+      found: false,
+      error: `review ${reviewId} on PR #${prNumber} lists ${positions.length} Previously missed items titled "${wanted}" (items ${positions.join(', ')}); pass --item-index to choose one`,
+    };
+  }
+  return { found: true, title: wanted, index: positions[0] };
+}
+/**
+ * Run the body-item target against a provider port (#4012). Looks the item
+ * up first, so an unknown review or title never reaches a post. Dry-run
+ * returns the stamped body and posts nothing. Apply revalidates the claim
+ * through `assertClaim`, then posts exactly one top-level PR comment, and
+ * never resolves a review thread. `exitCode` follows the thread target: a
+ * lookup failure is informational (0) in dry-run and a failure (1) in apply.
+ * An error thrown by `assertClaim` or the post propagates to the caller.
+ */
+export function runBodyItemDisposition(port, input) {
+  const report = {
+    mode: input.apply ? 'apply' : 'dry-run',
+    prNumber: input.pr,
+    reviewId: input.reviewId,
+    itemTitle: normalizePreviouslyMissedItemTitle(input.itemTitle),
+    ...(input.stampedBody ? { body: input.stampedBody } : {}),
+  };
+  const lookup = findBodyItem(
+    port.listReviews(input.pr),
+    input.reviewId,
+    input.itemTitle,
+    input.pr,
+    input.itemIndex ?? null,
+  );
+  if (!lookup.found) {
+    report.error = lookup.error;
+    if (input.apply) {
+      report.status = 'failed';
+    }
+    return { report, exitCode: input.apply ? 1 : 0 };
+  }
+  report.itemTitle = lookup.title;
+  report.itemIndex = lookup.index;
+  if (!input.apply) {
+    return { report, exitCode: 0 };
+  }
+  input.assertClaim();
+  const posted = port.postWorkItemComment(input.pr, input.stampedBody);
+  report.status = 'applied';
+  report.replyId = posted.id;
+  return { report, exitCode: 0 };
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -141,6 +278,9 @@ export function hasKnownDispositionMarkerPrefix(body) {
 const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
   '--pr': { type: 'string' },
   '--comment-id': { type: 'string' },
+  '--review-id': { type: 'string' },
+  '--item-title': { type: 'string', default: '' },
+  '--item-index': { type: 'string' },
   '--body': { type: 'string', default: '' },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
@@ -183,6 +323,9 @@ export function parseArgs(argv) {
   return {
     pr: parseLenientIntegerOrNull(values.pr),
     commentId: parseLenientIntegerOrNull(values['comment-id']),
+    reviewId: parseLenientIntegerOrNull(values['review-id']),
+    itemTitle: values['item-title'],
+    itemIndex: parseLenientIntegerOrNull(values['item-index']),
     body: values.body,
     owner: values.owner,
     repo: values.repo,
@@ -196,16 +339,28 @@ export function parseArgs(argv) {
   };
 }
 const USAGE = `usage: node scripts/resolve-review-thread.mjs --pr <number> --comment-id <id> [options]
+       node scripts/resolve-review-thread.mjs --pr <number> --review-id <id> --item-title <title> [options]
 
 Post a reply to the review thread that owns <comment-id> and resolve that
-thread in one invocation (E13). Dry-run by default; --apply mutates.
+thread in one invocation (E13). With --review-id / --item-title instead,
+post one stamped top-level PR comment answering a review-body item that has
+no thread (a Copilot "Previously missed" item); no thread is resolved.
+Dry-run by default; --apply mutates.
 
   --pr <number>                  PR number (required)
-  --comment-id <id>              review comment REST id whose thread to resolve (required)
+  --comment-id <id>              review comment REST id whose thread to resolve
+                                 (required unless --review-id is given)
+  --review-id <id>               review REST id whose body lists the item (body-item target;
+                                 requires --item-title; cannot combine with --comment-id)
+  --item-title <title>           the Previously missed item's title, matched exactly
+  --item-index <n>               the item's 1-based position in the Previously missed
+                                 section; required when two items share the title
   --body <text>                  reply body (required with --apply; with --apply, must start
                                  with **Accepted**, **Rejected**, or
-                                 **Rejection confirmed by maintainer** —; the helper
-                                 appends the reply-identity stamp)
+                                 **Rejection confirmed by maintainer** — on a thread, and
+                                 with **Accepted** or **Rejected** (the recorded deferral
+                                 included) on a body item; the helper appends the
+                                 reply-identity stamp)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
   --claim-issue <number>         issue carrying the active claim (required with --apply, unless --claimless)
@@ -219,7 +374,8 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
                                  reason:bootstrap ... --> marker naming this PR and whose
                                  closing issue(s) have no active claim; cannot combine
                                  with --claim-issue / --claim-id
-  --apply                        post the reply and resolve the thread (default: dry-run)
+  --apply                        post the reply and resolve the thread, or post the
+                                 body-item comment (default: dry-run)
   -h, --help                     show this help
 `;
 /**
@@ -461,18 +617,44 @@ if (import.meta.main) {
 }
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  // #4012: --review-id selects the body-item target. `!== null` (not
+  // `Number.isInteger`) so a malformed but supplied value still selects it
+  // and is then refused, rather than falling back to the thread target.
+  const bodyItem = args.reviewId !== null;
+  if (
+    !args.help &&
+    (bodyItem || args.itemTitle !== '' || args.itemIndex !== null) &&
+    args.commentId !== null
+  ) {
+    writeStderrSync(
+      '--comment-id cannot be combined with --review-id, --item-title, or --item-index\n',
+    );
+    exitClassified(
+      1,
+      'usage',
+      '--comment-id cannot be combined with --review-id, --item-title, or --item-index',
+    );
+  }
+  const targetValid = bodyItem
+    ? Number.isInteger(args.reviewId) &&
+      (args.reviewId ?? 0) > 0 &&
+      args.itemTitle.trim() !== '' &&
+      (args.itemIndex === null ||
+        (Number.isInteger(args.itemIndex) && args.itemIndex > 0))
+    : Number.isInteger(args.commentId) && (args.commentId ?? 0) > 0;
   if (
     args.help ||
     !Number.isInteger(args.pr) ||
     (args.pr ?? 0) <= 0 ||
-    !Number.isInteger(args.commentId) ||
-    (args.commentId ?? 0) <= 0
+    !targetValid
   ) {
     process.stdout.write(USAGE);
     exitClassified(
       args.help ? 0 : 1,
       'usage',
-      'missing required --pr <number> or --comment-id <id>',
+      bodyItem
+        ? 'missing or invalid --pr <number>, --review-id <id>, --item-title <title>, or --item-index <n>'
+        : 'missing required --pr <number> or --comment-id <id>',
     );
   }
   // #2616: --claimless (mirroring pre-merge-readiness.mjs's #2017 flag)
@@ -524,7 +706,19 @@ function main() {
   // hasKnownDispositionMarkerPrefix's own doc comment for why this does
   // not separately gate the "Rejection confirmed by maintainer" form on
   // the thread's pre-mutation resolution state.
-  if (args.apply && !hasKnownDispositionMarkerPrefix(args.body)) {
+  // #4012: a body item has no thread, so the AMD-closing
+  // "Rejection confirmed by maintainer" marker is refused there.
+  if (bodyItem && args.apply && !hasBodyItemDispositionPrefix(args.body)) {
+    writeStderrSync(
+      `--apply requires --body to start with one of the accepted body-item disposition markers: ${ACCEPTED_BODY_ITEM_DISPOSITION_MARKERS}\n`,
+    );
+    exitClassified(
+      1,
+      'usage',
+      `--apply requires --body to start with one of the accepted body-item disposition markers: ${ACCEPTED_BODY_ITEM_DISPOSITION_MARKERS}`,
+    );
+  }
+  if (!bodyItem && args.apply && !hasKnownDispositionMarkerPrefix(args.body)) {
     writeStderrSync(
       `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}\n`,
     );
@@ -535,7 +729,6 @@ function main() {
     );
   }
   const pr = args.pr;
-  const commentId = args.commentId;
   // Loaded once (#3270): both `markerPrefixRaw` below and `staleAgeMs`
   // (near the forced-handoff options, once claim-scoped work below is known
   // to be needed) come from this single read.
@@ -584,6 +777,10 @@ function main() {
       );
     }
   }
+  if (bodyItem) {
+    runBodyItemCli(port, args, { pr, owner, repo, iddConfig, stampedBody });
+  }
+  const commentId = args.commentId;
   const match = findThreadForComment(
     toReviewThreadNodes(port.listChangeRequestReviewThreadCommentIds(pr)),
     commentId,
@@ -618,109 +815,21 @@ function main() {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     exitClassified(1, 'gate', report.error);
   }
-  // #2616: this claim-only setup is unneeded (and un-skippable) network/
-  // identity work for --claimless -- a credential that can read/update
-  // PRs but cannot resolve a viewer identity (e.g. some GitHub App
-  // installation-token setups) must not abort here when neither the
-  // viewer nor the claimed branch is ever consulted in this mode (Codex
-  // review on this PR).
-  let prHeadRef = '';
-  let isTrustedAuthor = () => false;
-  let forcedHandoffOptions = {
-    forcedHandoffEnabled: false,
-    isAuthorizedForcedHandoff: () => false,
-  };
-  // #3270: only meaningful (and only read) inside the `assertClaim` closure
-  // below when `!args.claimless` -- the `--claimless` path never calls
-  // `activeOwnedClaim`, so this default is never exercised.
-  let staleAgeMs = 0;
-  if (!args.claimless) {
-    // Bind the mutation to the claimed PR: the active claim's branch must be
-    // the PR's head branch, so a valid claim on the issue cannot be used to
-    // reply to and resolve a thread on some other PR passed as --pr.
-    prHeadRef = port.getChangeRequestHeadRef(pr);
-    // --apply: default the trusted claim authors to this gh login so the
-    // revalidation recognizes the session's own claim markers.
-    const viewerLogin = port.resolveViewerLogin().toLowerCase();
-    const trustedAuthors = new Set(
-      (args.trustedMarkerLogins.length > 0
-        ? args.trustedMarkerLogins
-        : [viewerLogin]
-      ).map((login) => login.toLowerCase()),
-    );
-    isTrustedAuthor = (login) =>
-      trustedAuthors.has(
-        String(login ?? '')
-          .trim()
-          .toLowerCase(),
-      );
-    // Resolve the forced-handoff policy and build the collaborator-permission
-    // cache ONCE per CLI invocation (not on each assertClaim retry): re-reading
-    // .github/idd/config.json and re-hitting the collaborators API would be a
-    // needless I/O hot path. Mirrors force-handoff.mjs and the audit-pr-cleanup
-    // readActiveClaim comment.
-    const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
-    const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-    const forcedHandoffPermissionCache = new Map();
-    staleAgeMs = readClaimStaleAgeMs(iddConfig);
-    forcedHandoffOptions = {
-      forcedHandoffEnabled,
-      isAuthorizedForcedHandoff: (forcedBy) =>
-        isAuthorizedForcedHandoffActor(
-          owner,
-          repo,
-          forcedBy,
-          forcedHandoffAuthorityPolicy,
-          forcedHandoffPermissionCache,
-        ),
-    };
-  }
+  // Eager: the claim-only setup runs here, before the mutations, as it
+  // always has on the thread target.
+  const assertClaim = buildClaimAssertion(
+    port,
+    args,
+    { pr, owner, repo, iddConfig },
+    { eager: true },
+  );
   // Retain the posted reply id across a later failure so a partial apply (reply
   // posted, resolve not confirmed) reports the reply id instead of looking like
   // nothing was posted — that distinguishes "retry the resolve" from "re-post".
   let postedReplyId;
   try {
     const result = applyResolveReviewThread({
-      assertClaim: () => {
-        // #2616: --claimless intentionally skips claim revalidation, but
-        // re-checks eligibility fresh on every call (not just once,
-        // up front) -- a closing issue linked in the window between
-        // this mutation and the last one must still abort, mirroring
-        // the non-claimless path's own per-mutation claim recheck.
-        if (args.claimless) {
-          if (
-            !isClaimlessEligible(port, pr, {
-              owner,
-              repo,
-              trustedMarkerLogins: args.trustedMarkerLogins,
-            })
-          ) {
-            throw new Error(
-              '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead',
-            );
-          }
-          return;
-        }
-        const active = activeOwnedClaim(
-          port,
-          args.claimIssue,
-          args.agentId,
-          args.claimId,
-          isTrustedAuthor,
-          forcedHandoffOptions,
-          staleAgeMs,
-        );
-        if (!active) {
-          throw new Error(
-            `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${args.claimIssue}`,
-          );
-        }
-        if (active.branch !== prHeadRef) {
-          throw new Error(
-            `claim/PR mismatch: active claim branch "${active.branch}" does not match PR #${pr} head branch "${prHeadRef}"`,
-          );
-        }
-      },
+      assertClaim,
       postReply: () => {
         const posted = port.postReviewCommentReply(
           pr,
@@ -743,19 +852,184 @@ function main() {
       report.replyId = postedReplyId;
     }
     const classified = classifyHelperError(error);
-    const message = error.message;
-    // Deliberate ownership denials are a completed gate. A tagged gh
-    // failure keeps transport/not-found.
-    const kind =
-      classified.kind === 'transport' || classified.kind === 'not-found'
-        ? classified.kind
-        : message.startsWith('claim revalidation failed:') ||
-            message.startsWith('claim/PR mismatch:') ||
-            message.startsWith('--claimless requires a PR')
-          ? 'gate'
-          : classified.kind;
-    report.error = message;
+    report.error = error.message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    exitClassified(1, kind, classified.message, classified.httpStatus);
+    exitClassified(
+      1,
+      classifyMutationErrorKind(error),
+      classified.message,
+      classified.httpStatus,
+    );
+  }
+}
+/**
+ * Deliberate ownership denials are a completed gate. A tagged gh failure
+ * keeps transport/not-found.
+ */
+function classifyMutationErrorKind(error) {
+  const classified = classifyHelperError(error);
+  const message = error?.message ?? '';
+  return classified.kind === 'transport' || classified.kind === 'not-found'
+    ? classified.kind
+    : message.startsWith('claim revalidation failed:') ||
+        message.startsWith('claim/PR mismatch:') ||
+        message.startsWith('--claimless requires a PR')
+      ? 'gate'
+      : classified.kind;
+}
+/**
+ * Build the per-mutation claim check shared by both targets. With
+ * `--claimless` it re-checks eligibility on every call. Otherwise it
+ * revalidates the active claim and binds it to the PR's head branch. The
+ * claim-only setup (head ref, viewer login, forced-handoff policy) runs once:
+ * at build time when `eager`, otherwise on the first call, so a body-item
+ * dry-run or a refused lookup never pays for it.
+ */
+function buildClaimAssertion(port, args, context, options = {}) {
+  const { pr, owner, repo, iddConfig } = context;
+  // #2616: this claim-only setup is unneeded (and un-skippable) network/
+  // identity work for --claimless -- a credential that can read/update
+  // PRs but cannot resolve a viewer identity (e.g. some GitHub App
+  // installation-token setups) must not abort here when neither the
+  // viewer nor the claimed branch is ever consulted in this mode (Codex
+  // review on this PR).
+  let setup = null;
+  const claimSetup = () => {
+    if (setup) {
+      return setup;
+    }
+    // Bind the mutation to the claimed PR: the active claim's branch must be
+    // the PR's head branch, so a valid claim on the issue cannot be used to
+    // reply on some other PR passed as --pr.
+    const prHeadRef = port.getChangeRequestHeadRef(pr);
+    // --apply: default the trusted claim authors to this gh login so the
+    // revalidation recognizes the session's own claim markers.
+    const viewerLogin = port.resolveViewerLogin().toLowerCase();
+    const trustedAuthors = new Set(
+      (args.trustedMarkerLogins.length > 0
+        ? args.trustedMarkerLogins
+        : [viewerLogin]
+      ).map((login) => login.toLowerCase()),
+    );
+    const isTrustedAuthor = (login) =>
+      trustedAuthors.has(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      );
+    // Resolve the forced-handoff policy and build the collaborator-permission
+    // cache ONCE per CLI invocation (not on each assertClaim retry): re-reading
+    // .github/idd/config.json and re-hitting the collaborators API would be a
+    // needless I/O hot path. Mirrors force-handoff.mjs and the audit-pr-cleanup
+    // readActiveClaim comment.
+    const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+    const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+    const forcedHandoffPermissionCache = new Map();
+    setup = {
+      prHeadRef,
+      isTrustedAuthor,
+      forcedHandoffOptions: {
+        forcedHandoffEnabled,
+        isAuthorizedForcedHandoff: (forcedBy) =>
+          isAuthorizedForcedHandoffActor(
+            owner,
+            repo,
+            forcedBy,
+            forcedHandoffAuthorityPolicy,
+            forcedHandoffPermissionCache,
+          ),
+      },
+      // #3270: the configured claimTiming.staleAge window.
+      staleAgeMs: readClaimStaleAgeMs(iddConfig),
+    };
+    return setup;
+  };
+  if (options.eager && !args.claimless) {
+    claimSetup();
+  }
+  return () => {
+    // #2616: --claimless intentionally skips claim revalidation, but
+    // re-checks eligibility fresh on every call (not just once,
+    // up front) -- a closing issue linked in the window between
+    // this mutation and the last one must still abort, mirroring
+    // the non-claimless path's own per-mutation claim recheck.
+    if (args.claimless) {
+      if (
+        !isClaimlessEligible(port, pr, {
+          owner,
+          repo,
+          trustedMarkerLogins: args.trustedMarkerLogins,
+        })
+      ) {
+        throw new Error(
+          '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead',
+        );
+      }
+      return;
+    }
+    const { prHeadRef, isTrustedAuthor, forcedHandoffOptions, staleAgeMs } =
+      claimSetup();
+    const active = activeOwnedClaim(
+      port,
+      args.claimIssue,
+      args.agentId,
+      args.claimId,
+      isTrustedAuthor,
+      forcedHandoffOptions,
+      staleAgeMs,
+    );
+    if (!active) {
+      throw new Error(
+        `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${args.claimIssue}`,
+      );
+    }
+    if (active.branch !== prHeadRef) {
+      throw new Error(
+        `claim/PR mismatch: active claim branch "${active.branch}" does not match PR #${pr} head branch "${prHeadRef}"`,
+      );
+    }
+  };
+}
+/**
+ * The body-item CLI path (#4012): look the item up, then print the dry-run
+ * plan or post the stamped top-level comment. Always exits.
+ */
+function runBodyItemCli(port, args, context) {
+  const { pr, stampedBody } = context;
+  const report = {
+    mode: args.apply ? 'apply' : 'dry-run',
+    prNumber: pr,
+    reviewId: args.reviewId,
+    itemTitle: normalizePreviouslyMissedItemTitle(args.itemTitle),
+    ...(stampedBody ? { body: stampedBody } : {}),
+  };
+  try {
+    const result = runBodyItemDisposition(port, {
+      pr,
+      reviewId: args.reviewId,
+      itemTitle: args.itemTitle,
+      itemIndex: args.itemIndex,
+      stampedBody,
+      apply: args.apply,
+      assertClaim: buildClaimAssertion(port, args, context),
+    });
+    process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
+    if (result.exitCode === 0) {
+      process.exit(0);
+    }
+    exitClassified(1, 'gate', result.report.error ?? 'body item not found');
+  } catch (error) {
+    const classified = classifyHelperError(error);
+    if (args.apply) {
+      report.status = 'failed';
+    }
+    report.error = error.message;
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    exitClassified(
+      1,
+      classifyMutationErrorKind(error),
+      classified.message,
+      classified.httpStatus,
+    );
   }
 }

@@ -92,7 +92,7 @@ import {
   findStrayCommitCloses,
 } from '../src/scripts/supersession-detection.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
-import { readJson } from './test-utils.mts';
+import { readJson, stubExecutable } from './test-utils.mts';
 
 const readinessSchema = loadJson('schemas/pre-merge-readiness.schema.json');
 
@@ -17644,4 +17644,189 @@ test('every ignored-handoff cause the merge report produces is in the published 
       );
     }
   }
+});
+
+// #3998: the merge gate judges an issue-only forced handoff against the
+// earliest first commit over every open PR that backs the claim, not only the
+// PR being merged. These cases run collectPreMergeReadiness end to end. The gh
+// stub answers the collaborator-permission read that backs the forcedBy
+// authority check, which the fake provider does not serve.
+const FORCED_HANDOFF_GH_STUB = [
+  "const joined = process.argv.join(' ');",
+  'if (/\\/collaborators\\/[^ ]+\\/permission/.test(joined)) {',
+  "  process.stdout.write(JSON.stringify({ permission: 'admin', role_name: 'admin' }) + '\\n');",
+  '  process.exit(0);',
+  '}',
+  "process.stderr.write('unexpected gh call: ' + joined + '\\n');",
+  'process.exit(1);',
+].join('\n');
+
+function forcedHandoffMergeFakePort(options: {
+  scope: 'issue-only' | 'issue-plus-pr';
+  earlierLinkedPr: boolean;
+  linkedLookupFails: boolean;
+}): ProviderPort {
+  const handoffPayload = {
+    oldAgentId: 'copilot',
+    oldClaimId: 'claim-old',
+    newAgentId: 'copilot',
+    newClaimId: 'claim-new',
+    branch: 'issue/7-task',
+    forcedBy: 'maintainer',
+    reason: 'handoff',
+    timestamp: '2026-05-12T10:01:00Z',
+    contextScope: options.scope,
+    ...(options.scope === 'issue-plus-pr' ? { linkedPr: '1' } : {}),
+  };
+  return createFakeProviderAdapter({
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-05-12T10:30:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {
+      7: [
+        {
+          id: 1,
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/7-task -->\n\n_copilot: issue claim — IDD automation marker. Do not edit._',
+          createdAt: '2026-05-12T10:00:00Z',
+          updatedAt: '2026-05-12T10:00:00Z',
+          authorLogin: 'kurone-kito',
+          lastEditedAt: null,
+        },
+        {
+          id: 2,
+          body: `<!-- forced-handoff: ${JSON.stringify(handoffPayload)} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._`,
+          createdAt: '2026-05-12T10:01:00Z',
+          updatedAt: '2026-05-12T10:01:00Z',
+          authorLogin: 'maintainer',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    closingPullRequestPages: {
+      7: [
+        {
+          nodes: [{ state: 'OPEN', number: 2, repository: 'o/r' }],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    closingPullRequestPageErrors: options.linkedLookupFails
+      ? { 7: 'simulated linked-PR lookup failure' }
+      : undefined,
+    changeRequestCommits: {
+      1: [{ commit: { committer: { date: '2026-05-12T10:30:00Z' } } }],
+      2: [
+        {
+          commit: {
+            committer: {
+              date: options.earlierLinkedPr
+                ? '2026-05-12T09:30:00Z'
+                : '2026-05-12T10:30:30Z',
+            },
+          },
+        },
+      ],
+    },
+  } as never);
+}
+
+function collectForcedHandoffMerge(port: ProviderPort) {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    return collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      () =>
+        ({
+          forcedHandoff: { mode: 'human-gated' },
+          trustedMarkerActors: ['kurone-kito', 'maintainer'],
+        }) as never,
+    ) as unknown as {
+      claim: { activeClaim?: { claimId?: string } };
+      ignoredForcedHandoffs?: { cause: string }[];
+    };
+  } finally {
+    restore();
+  }
+}
+
+test('#3998: merge gate honors an issue-only handoff that predates every open PR backing the claim', () => {
+  const report = collectForcedHandoffMerge(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    }),
+  );
+  assert.equal(report.claim.activeClaim?.claimId, 'claim-new');
+});
+
+test('#3998: merge gate refuses an issue-only handoff that postdates an earlier open PR backing the claim', () => {
+  const report = collectForcedHandoffMerge(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: true,
+      linkedLookupFails: false,
+    }),
+  );
+  assert.equal(report.claim.activeClaim?.claimId, 'claim-old');
+  assert.deepEqual(
+    report.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['issue-only-not-before-first-commit'],
+  );
+});
+
+test('#3998: merge gate fails an issue-only handoff closed when the linked-PR lookup fails', () => {
+  const report = collectForcedHandoffMerge(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: true,
+    }),
+  );
+  assert.equal(report.claim.activeClaim?.claimId, 'claim-old');
+  assert.deepEqual(
+    report.ignoredForcedHandoffs?.map((entry) => entry.cause),
+    ['first-commit-time-unknown'],
+  );
+});
+
+test('#3998: an issue-plus-PR handoff does not depend on the linked-PR lookup', () => {
+  const report = collectForcedHandoffMerge(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-plus-pr',
+      earlierLinkedPr: false,
+      linkedLookupFails: true,
+    }),
+  );
+  assert.equal(report.claim.activeClaim?.claimId, 'claim-new');
 });

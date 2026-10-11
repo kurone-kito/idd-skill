@@ -429,6 +429,7 @@ export const branchConflictStateKeys = [
   'branchState',
   'syncRecommendation',
   'baseAdvancedSinceMergeBase',
+  'callSiteRouting',
   'readOnly',
   'worktreeUnchanged',
   'diagnostics',
@@ -953,6 +954,12 @@ const advisoryConvergenceFixture = {
     suppressedCount: 0,
     bodyShape: 'overview-v2',
     satisfied: true,
+    suppressedCitation: {
+      citedCount: 0,
+      citationFreeCount: 0,
+      citedDispositionsSatisfied: true,
+      reviewAckValid: false,
+    },
   },
   threads: {
     copilotThreadCount: 0,
@@ -1076,6 +1083,11 @@ const branchConflictStateFixture = {
   branchState: 'clean',
   syncRecommendation: 'none',
   baseAdvancedSinceMergeBase: false,
+  callSiteRouting: {
+    eBranchSync: 'proceed-to-f1',
+    e11: 'skip-merge',
+    f1: 'proceed-to-f2',
+  },
   readOnly: true,
   worktreeUnchanged: true,
   diagnostics: {
@@ -1861,6 +1873,9 @@ const resolveReviewThreadKeys = [
   'commentId',
   'threadId',
   'alreadyResolved',
+  'reviewId',
+  'itemTitle',
+  'itemIndex',
   'body',
   'status',
   'replyId',

@@ -85,7 +85,7 @@
     "review": {
       "type": "object",
       "description": "Clause 1 evidence: identity and HEAD-coverage of the primary bot's latest review, by fetch order.",
-      "required": ["found", "reviewId", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "bodyShape", "satisfied"],
+      "required": ["found", "reviewId", "commitId", "matchesHead", "itemCount", "submittedAt", "suppressedCount", "bodyShape", "satisfied", "suppressedCitation"],
       "additionalProperties": false,
       "properties": {
         "found": {
@@ -125,7 +125,33 @@
         },
         "satisfied": {
           "type": "boolean",
-          "description": "kurone-kito/idd-skill#2050 (revised after PR #2054 review): disposition-aware, not purely mechanical -- reflects a caller-side override computed in advisory-convergence.mts, not resolveLatestCopilotReviewClause's own raw evaluation. True when the latest review covers HEAD (matchesHead) AND (itemCount is a KNOWN 0, OR itemCount is known-nonzero AND the number of threads THIS review opened is at least itemCount AND every one of them is resolved/dispositioned) AND (suppressedCount is 0 OR a trusted review-ack marker posted after this review covers it) -- Clause 1's pass condition. An unknown itemCount (null) always fails this condition."
+          "description": "kurone-kito/idd-skill#2050 (revised after PR #2054 review): disposition-aware, not purely mechanical -- reflects a caller-side override computed in advisory-convergence.mts, not resolveLatestCopilotReviewClause's own raw evaluation. True when the latest review covers HEAD (matchesHead) AND (itemCount is a KNOWN 0, OR itemCount is known-nonzero AND the number of threads THIS review opened is at least itemCount AND every one of them is resolved/dispositioned) AND (suppressedCount is 0 OR a trusted review-ack marker posted after this review covers the citation-free items, and every cited item has a stamped disposition reply (#3942)) -- Clause 1's pass condition. An unknown itemCount (null) always fails this condition."
+        },
+        "suppressedCitation": {
+          "type": "object",
+          "description": "kurone-kito/idd-skill#4007 (#3942): how the suppressedCount items split on the latest review. Read the same way as suppressedCount, so the four values below always describe that count. Reported on the verdict only; the raw Clause 1 evaluation is unchanged.",
+          "required": ["citedCount", "citationFreeCount", "citedDispositionsSatisfied", "reviewAckValid"],
+          "additionalProperties": false,
+          "properties": {
+            "citedCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Suppressed items that name a file or line, each of which needs its own stamped disposition reply (#3942). A body the classifier cannot read counts every item as cited (fail closed)."
+            },
+            "citationFreeCount": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Suppressed items that name no file or line. Only a trusted review-ack covers these. citedCount plus citationFreeCount equals suppressedCount."
+            },
+            "citedDispositionsSatisfied": {
+              "type": "boolean",
+              "description": "True when at least citedCount trusted stamped dispositions are posted for the latest review. Always true when citedCount is 0."
+            },
+            "reviewAckValid": {
+              "type": "boolean",
+              "description": "True when a trusted review-ack for the current HEAD posted after this review exists (the same signal Clause 1 reads). Reported as observed, whether or not any suppressed item needs it."
+            }
+          }
         }
       }
     },
@@ -415,6 +441,7 @@
               "disposition-posted-items",
               "disposition-threads",
               "ack-suppressed",
+              "stamped-disposition-suppressed",
               "waiver-terminal",
               "hold-terminal",
               "waiver-deadline",

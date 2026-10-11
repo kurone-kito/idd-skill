@@ -36,6 +36,7 @@ import {
   DEFAULT_STALE_AGE_MS,
   normalizeLinkedPrReference,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
+  resolveClaimPrFirstCommitAt,
   summarizeClaimValidation as summarizeClaimValidationImpl,
 } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
@@ -976,7 +977,7 @@ test('an explicit --worktree path supplies owner evidence regardless of process.
   const branch = 'issue/42-task';
   const originalCwd = process.cwd();
   const gitEnv = {
-    ...process.env,
+    ...fixtureEnv(),
     GIT_AUTHOR_NAME: 'idd-test',
     GIT_AUTHOR_EMAIL: 'idd-test@example.com',
     GIT_COMMITTER_NAME: 'idd-test',
@@ -984,6 +985,7 @@ test('an explicit --worktree path supplies owner evidence regardless of process.
   };
   try {
     execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      env: fixtureEnv(),
       cwd: primary,
       stdio: 'ignore',
     });
@@ -1003,7 +1005,7 @@ test('an explicit --worktree path supplies owner evidence regardless of process.
     execFileSync(
       'git',
       ['worktree', 'add', '--quiet', '-b', branch, worktree, 'main'],
-      { cwd: primary, stdio: 'ignore' },
+      { cwd: primary, stdio: 'ignore', env: fixtureEnv() },
     );
     acquireClaimLock(worktree, 'agent-owner', claimId, false);
     recordGeneratedClaimTokens(worktree, {
@@ -1061,6 +1063,7 @@ test('an explicit --worktree path supplies owner evidence regardless of process.
     process.chdir(originalCwd);
     try {
       execFileSync('git', ['worktree', 'remove', '--force', worktree], {
+        env: fixtureEnv(),
         cwd: primary,
         stdio: 'ignore',
       });
@@ -2546,7 +2549,7 @@ function runResumeClaimRoutingCli(
       {
         cwd: REPO_ROOT,
         encoding: 'utf8',
-        env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
+        env: { ...fixtureEnv(), ENV_DUMP_PATH: fixture.dumpPath },
         // #3434: suppress the duplicate raw-stderr relay execFileSync
         // performs when no `stdio` override is given.
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -2590,7 +2593,7 @@ test('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias',
         {
           cwd: REPO_ROOT,
           encoding: 'utf8',
-          env: { ...process.env, ENV_DUMP_PATH: fixture.dumpPath },
+          env: { ...fixtureEnv(), ENV_DUMP_PATH: fixture.dumpPath },
           // #3434: suppress the duplicate raw-stderr relay execFileSync
           // performs when no `stdio` override is given.
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -2691,7 +2694,7 @@ function runFormatFlagCli(policyPath: string, extraArgs: string[]) {
       policyPath,
       ...extraArgs,
     ],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
+    { cwd: REPO_ROOT, encoding: 'utf8', env: fixtureEnv() },
   );
 }
 
@@ -2853,7 +2856,7 @@ function runLinkedPrLookupFailureCli(policyPath: string, claimId: string) {
       '--policy',
       policyPath,
     ],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
+    { cwd: REPO_ROOT, encoding: 'utf8', env: fixtureEnv() },
   );
 }
 
@@ -3148,7 +3151,7 @@ test('a login trusted only via IDD_TRUSTED_MARKER_ACTORS is honored by --fresh-c
     const result = runTrustedLadderCli(
       fixture.policyPath,
       ['--fresh-claim-gate'],
-      { ...process.env, IDD_TRUSTED_MARKER_ACTORS: 'trusted-via-env' },
+      { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: 'trusted-via-env' },
     );
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout);
@@ -3171,7 +3174,7 @@ test('--trusted-marker-logins replaces the config trustedMarkerActors instead of
     const result = runTrustedLadderCli(
       fixture.policyPath,
       ['--trusted-marker-logins', 'some-other-login'],
-      { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+      { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: '' },
     );
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout);
@@ -3212,7 +3215,7 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
   const agentId = 'agent-worktree-flag-e2e';
   const createdAt = '2026-09-24T00:00:00Z';
   const gitEnv = {
-    ...process.env,
+    ...fixtureEnv(),
     GIT_AUTHOR_NAME: 'idd-test',
     GIT_AUTHOR_EMAIL: 'idd-test@example.com',
     GIT_COMMITTER_NAME: 'idd-test',
@@ -3229,6 +3232,7 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
   try {
     mkdirSync(primary, { recursive: true });
     execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      env: fixtureEnv(),
       cwd: primary,
       stdio: 'ignore',
     });
@@ -3249,6 +3253,7 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
       { cwd: primary, stdio: 'ignore', env: gitEnv },
     );
     execFileSync('git', ['worktree', 'add', '-b', branch, secondary], {
+      env: fixtureEnv(),
       cwd: primary,
       stdio: 'ignore',
     });
@@ -3281,7 +3286,7 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
       {
         cwd: primary,
         encoding: 'utf8',
-        env: { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+        env: { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: '' },
       },
     );
     assert.equal(result.status, 0, result.stderr);
@@ -3895,7 +3900,7 @@ test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree 
   const nonceCreatedAt = '2026-09-24T00:00:05Z';
   const nowIso = '2026-09-24T00:01:00Z';
   const gitEnv = {
-    ...process.env,
+    ...fixtureEnv(),
     GIT_AUTHOR_NAME: 'idd-test',
     GIT_AUTHOR_EMAIL: 'idd-test@example.com',
     GIT_COMMITTER_NAME: 'idd-test',
@@ -3913,6 +3918,7 @@ test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree 
   try {
     mkdirSync(primary, { recursive: true });
     execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      env: fixtureEnv(),
       cwd: primary,
       stdio: 'ignore',
     });
@@ -3933,6 +3939,7 @@ test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree 
       { cwd: primary, stdio: 'ignore', env: gitEnv },
     );
     execFileSync('git', ['worktree', 'add', '-b', branch, secondary], {
+      env: fixtureEnv(),
       cwd: primary,
       stdio: 'ignore',
     });
@@ -3957,7 +3964,7 @@ test("own-claim CLI proof reusing Step 1's own parsed flags (#3480): --worktree 
       '--policy',
       fixture.policyPath,
     ];
-    const spawnEnv = { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' };
+    const spawnEnv = { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: '' };
 
     const withWorktreeArgs = [
       ...baseArgs,
@@ -4027,30 +4034,13 @@ const SUCCESSOR_EVENTS = [
   },
 ];
 
-// A git-config-file-safe null device: the Win32 device-namespace form of
-// `devNull` cannot be opened as GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM by Git for
-// Windows, the bare `NUL` name can (kurone-kito/idd-skill#2570).
-const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
-
 /**
- * The fixture's git processes must never read the ambient git environment
- * (a hook can export GIT_DIR or GIT_INDEX_FILE) or the developer's config, the
- * same invariant tests/clone-lock.test.mts keeps.
+ * The fixture git environment: fixtureEnv() (no developer config, no ambient
+ * GIT_DIR from a hook) plus the commit identity the fixture commits need.
  */
 function hermeticGitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_CONFIG')) delete env[key];
-  }
-  delete env.GIT_DIR;
-  delete env.GIT_INDEX_FILE;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_COMMON_DIR;
-  delete env.GIT_OBJECT_DIRECTORY;
   return {
-    ...env,
-    GIT_CONFIG_GLOBAL: GIT_NULL_DEVICE,
-    GIT_CONFIG_SYSTEM: GIT_NULL_DEVICE,
+    ...fixtureEnv(),
     GIT_AUTHOR_NAME: 'idd-test',
     GIT_AUTHOR_EMAIL: 'idd-test@example.com',
     GIT_COMMITTER_NAME: 'idd-test',
@@ -5756,6 +5746,97 @@ test('#3871: a closing-reference node with an unknown state fails the lookup ins
     },
   });
   assert.equal(fetchOpenLinkedPrReferences(port, 11, REPO).lookupFailed, true);
+});
+
+// #3998: the merge gate's claim time is the earliest first commit over every
+// open PR that backs the claim, not only the PR being merged (CodeRabbit on
+// PR #4004). `OWN_PR` is the PR under evaluation.
+const OWN_PR = 90;
+
+test('#3998: the claim time is the earliest first commit over the open PRs that back the claim', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommits: { 77: [commitAt(COMMIT_BEFORE_MARKER)] },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, [11], REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    COMMIT_BEFORE_MARKER,
+  );
+});
+
+test('#3998: the PR being merged keeps its own time and is not re-read when it is the earliest', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [
+            closingNode(77, 'OPEN', REPO),
+            closingNode(OWN_PR, 'OPEN', REPO),
+          ],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+    changeRequestCommits: { 77: [commitAt(COMMIT_AFTER_MARKER)] },
+    changeRequestCommitErrors: { [OWN_PR]: 'must not be re-read' },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, [11], REPO, OWN_PR, [
+      commitAt(COMMIT_BEFORE_MARKER),
+    ]),
+    COMMIT_BEFORE_MARKER,
+  );
+});
+
+test('#3998: without a claim issue only the PR being merged is judged', () => {
+  const port = createFakeProviderAdapter({});
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, [], REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    COMMIT_AFTER_MARKER,
+  );
+});
+
+test('#3998: a failed commits read on a linked open PR fails the claim time closed', () => {
+  const port = createFakeProviderAdapter({
+    closingPullRequestPages: { 11: [openClosingPr(77)] },
+    changeRequestCommitErrors: { 77: 'commits unavailable' },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(port, [11], REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    null,
+  );
+});
+
+test('#3998: a failed link lookup or an undated own commit list fails the claim time closed', () => {
+  const failedLookup = createFakeProviderAdapter({
+    closingPullRequestPages: {
+      11: [
+        {
+          nodes: [closingNode(77, 'UNKNOWN', REPO)],
+          hasNextPage: false,
+          endCursor: null,
+        },
+      ],
+    },
+  });
+  assert.equal(
+    resolveClaimPrFirstCommitAt(failedLookup, [11], REPO, OWN_PR, [
+      commitAt(COMMIT_AFTER_MARKER),
+    ]),
+    null,
+  );
+  const undated = createFakeProviderAdapter({});
+  assert.equal(
+    resolveClaimPrFirstCommitAt(undated, [], REPO, OWN_PR, [{ commit: {} }]),
+    null,
+  );
 });
 
 // #3873: the refusal cause from the explainer reaches the ignored-handoff
