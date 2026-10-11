@@ -116,11 +116,6 @@ function cleanFiles(): FixtureFiles {
   return files;
 }
 
-/**
- * Writes `files` under a fresh scratch directory and, unless `git` is false,
- * turns it into a git repository with everything staged (the NUL rule reads
- * the tracked file list, which the index provides without a commit).
- */
 // A failing fixture git call used to throw with no stderr or exit status, so a
 // load-dependent failure could not be read from the error. The stderr is
 // captured and the status is named in the message instead.
@@ -149,6 +144,11 @@ function runFixtureGit(args: string[]): void {
   }
 }
 
+/**
+ * Writes `files` under a fresh scratch directory and, unless `git` is false,
+ * turns it into a git repository with everything staged (the NUL rule reads
+ * the tracked file list, which the index provides without a commit).
+ */
 function buildFixture(
   edit: (files: FixtureFiles) => void = () => undefined,
   {
