@@ -5055,8 +5055,8 @@ export function collectAssertNextActions(
   const { citedCount, citationFreeCount, citedDispositionsSatisfied } =
     verdict.review.suppressedCitation;
   if (citedCount > 0 && !citedDispositionsSatisfied) {
-    const pointer = `gh pr comment ${pr} --body-file <file>, where <file> opens with **Accepted** (or **Rejected** naming the file or line as evidence) and carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json)`;
-    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review, opening with **Accepted** (or **Rejected** naming the file or line), and carrying the review-reply stamp. A review-ack does not cover these. Reply with: ${pointer}`;
+    const pointer = `gh pr comment ${pr} --body-file <file>`;
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body opens with **Accepted** (or **Rejected** naming the file or line as evidence) and carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json). A review-ack does not cover these. Post it with: ${pointer}`;
     items.push({
       token: T.STAMPED_DISPOSITION_SUPPRESSED,
       summary,
