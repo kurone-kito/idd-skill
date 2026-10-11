@@ -1089,7 +1089,14 @@ function markdownOutline(text: string): MarkdownOutline {
         headingLine = true;
       }
     }
-    paragraphOpen = !isHidden && !headingLine && line.trim() !== '';
+    // A thematic break, or a setext underline that makes a heading, ends the
+    // paragraph on its own line (#4009 review).
+    const endsBlock =
+      /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*)$/.test(
+        line,
+      );
+    paragraphOpen =
+      !isHidden && !headingLine && !endsBlock && line.trim() !== '';
     offset += line.length + 1;
   }
   const sections = headings.map((heading, position) => {

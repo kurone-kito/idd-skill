@@ -888,3 +888,23 @@ test('an ordered marker after a closed fence starts a list, so its nested headin
     ),
   );
 });
+
+test('an ordered marker after a thematic break starts a list, so its nested heading counts', (t) => {
+  // "***" ends the paragraph above it, so "2. ## Shared rule" on the next line
+  // starts a list item in CommonMark. The source-only copy must fail.
+  const afterBreak = `${BASE.replace('Prose that differs by design.', 'Prose that differs by design.\n***\n2. ## Shared rule')}\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, afterBreak, BASE);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
+});
