@@ -852,3 +852,18 @@ test('five spaces after a list marker make indented code, not a nested heading',
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+test('an ordered marker other than 1 cannot interrupt a paragraph, so it is not a nested heading', (t) => {
+  // "2. ## Shared rule" directly under paragraph text is paragraph text in
+  // CommonMark, because only a list starting at 1 can interrupt a paragraph.
+  // Both sides carry the same line, so the check must pass.
+  const interrupted = `${BASE}\nSome paragraph text\n2. ## Shared rule\n\nMore text.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, interrupted, interrupted);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});

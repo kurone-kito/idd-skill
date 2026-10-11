@@ -1029,6 +1029,7 @@ function markdownOutline(text: string): MarkdownOutline {
     nextLineStart: 0,
   };
   let offset = 0;
+  let previousLine = '';
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(
       (range) => offset >= range.start && offset < range.end,
@@ -1050,7 +1051,20 @@ function markdownOutline(text: string): MarkdownOutline {
       // Four or more spaces outside a list item is paragraph text, so a list-like
       // line there is not a nested heading.
       const indentedCode = /^(?: {4}|\t)/.test(line);
-      if (container !== null && (!indentedCode || inListItem)) {
+      // Only a bullet or an ordered list starting at 1 can interrupt a paragraph,
+      // so "2. ## Title" directly under paragraph text is paragraph text.
+      const ordered = /^[ \t]*(\d{1,9})[.)][ \t]/.exec(line);
+      const paragraphText =
+        ordered !== null &&
+        Number(ordered[1]) !== 1 &&
+        previousLine.trim() !== '' &&
+        !/^ {0,3}#{1,6}(?:[ \t]|$)/.test(previousLine) &&
+        !inListItem;
+      if (
+        container !== null &&
+        !paragraphText &&
+        (!indentedCode || inListItem)
+      ) {
         nestedTitles.push(normalizeHeading(container[2]));
       } else if (indented !== null && inListItem) {
         nestedTitles.push(normalizeHeading(indented[2] ?? ''));
@@ -1068,6 +1082,7 @@ function markdownOutline(text: string): MarkdownOutline {
         });
       }
     }
+    previousLine = line;
     offset += line.length + 1;
   }
   const sections = headings.map((heading, position) => {
