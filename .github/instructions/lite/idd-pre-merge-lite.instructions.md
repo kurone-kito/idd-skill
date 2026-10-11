@@ -32,9 +32,9 @@ non-helper alternative of its own for that case.
 
 - The active claim is ambiguous, disputed, or lost.
 - The branch-conflict-state helper reports anything other than
-  `syncRecommendation: "none"` (after the `recheck` retry budget in F1
-  step 1, if applicable), or is unavailable, fails, or disagrees with
-  live state.
+  `syncRecommendation: "none"` with `callSiteRouting.f1` `"proceed-to-f2"`
+  (after the `recheck` retry budget in F1 step 1, if applicable), or is
+  unavailable, fails, or disagrees with live state.
 - The pre-merge-readiness helper is missing, fails, returns invalid or
   incomplete JSON (missing any of the required top-level fields listed
   in `schemas/pre-merge-readiness.schema.json` — this file directly
@@ -54,8 +54,10 @@ This check never rebases, merges, or pushes.
    package-manager-profile `idd:branch-conflict-state` command, or the
    profile-selected equivalent (resolve the exact command from
    `docs/idd-helper-scripts.md` if unsure). Read `syncRecommendation`:
-   - `"none"`: the branch is conflict-free and, if branch protection
-     requires an up-to-date head, already current — proceed to F2.
+   - `"none"` with `callSiteRouting.f1` `"proceed-to-f2"`: the branch is
+     conflict-free and, if branch protection requires an up-to-date head,
+     already current — proceed to F2. `"none"` with `"hold"` (for example
+     `BLOCKED`) stops.
    - `"recheck"` (mergeability still computing, a transient state):
      re-run the helper after a short wait, up to 3 attempts; only a
      result still `"recheck"` after that budget falls through to stop
