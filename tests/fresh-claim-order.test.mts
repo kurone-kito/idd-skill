@@ -44,6 +44,7 @@ test('the claim instructions state the worktree-first steps in sequence', () => 
     '2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.',
     '3. Post the claim comment per',
     '4. `--acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`,',
+    '   on the linked worktree only.',
     '5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert',
     '6. Continue B1 in that worktree',
   ];
