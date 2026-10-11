@@ -146,8 +146,25 @@ test('the CLI exits 0 on a clean tree and 1 naming the untracked file', () => {
   assert.match(dirty.stderr, /scripts\/new\.mjs/);
 });
 
+// The default path must read process.env. The scan here runs in `root`, a
+// repository with nothing untracked, while process.env points git at `owner`
+// through GIT_DIR and GIT_WORK_TREE. Only the default path can report the
+// untracked file in `owner`. process.env is replaced for this one call and
+// restored in `finally`, and the replacement starts from fixtureEnv(), so the
+// developer's config and any ambient GIT_DIR cannot change the result.
 test('without an env argument the scan runs under process.env, as production does', () => {
   const root = repository();
-  writeFileSync(join(root, 'scripts', 'new.mjs'), 'export {};\n');
-  assert.deepEqual(untrackedEmittedArtifacts(root), ['scripts/new.mjs']);
+  const owner = repository();
+  writeFileSync(join(owner, 'scripts', 'owned.mjs'), 'export {};\n');
+  const saved = process.env;
+  try {
+    process.env = {
+      ...fixtureEnv(),
+      GIT_DIR: join(owner, '.git'),
+      GIT_WORK_TREE: owner,
+    };
+    assert.deepEqual(untrackedEmittedArtifacts(root), ['scripts/owned.mjs']);
+  } finally {
+    process.env = saved;
+  }
 });
