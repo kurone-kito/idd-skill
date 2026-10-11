@@ -669,9 +669,9 @@ markers. Before it sends an `authoring-owner` heartbeat, release,
 release-guard, release-complete or resume, it refuses when the set or
 anchor disagrees with the latest trusted owner marker of the target. A
 marker minimized as `OUTDATED` is skipped by that check as well, while an
-edited or unparseable latest marker refuses the post. A wrong newest
-marker that is not yet hidden therefore blocks every later owner post on
-its issue, as the next subsection describes.
+edited, unparseable or other-target latest marker refuses the post. A
+wrong newest marker that is not yet hidden therefore blocks every later
+owner post on its issue, as the next subsection describes.
 
 ### Clearing a comment that blocks the scan
 
@@ -765,6 +765,9 @@ in error, by these rules:
    that is running. Whether it was posted in error is the maintainer's
    decision under rule 1; a losing acquire is never hidden only to unblock a
    post.
+5. A trusted marker that parses but names another target, and sits on this
+   issue, blocks every owner post on it until it is hidden (preventive; no
+   observed incident yet). The check refuses it rather than skipping it.
 
 ## Dry Run Shape
 

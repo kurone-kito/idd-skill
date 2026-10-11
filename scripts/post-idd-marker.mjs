@@ -1201,8 +1201,10 @@ export function selectAuthoringOwnerOpeningMarkers(comments, options) {
  * filter, as in `selectAuthoringOwnerOpeningMarkers`), carries the owner token,
  * and is not minimized as outdated (`isOutdatedMinimized`, the rule the set
  * listing uses for superseded markers). A candidate that does not parse is kept,
- * because its target cannot be read and the check must then fail closed; a
- * parseable candidate that names another target is dropped. Any mode counts,
+ * because its target cannot be read and the check must then fail closed. A
+ * parseable candidate that names another target is also kept, marked
+ * `mistargeted`, because a trusted owner marker hosted on this target is never
+ * skipped silently: when it is the latest, the check refuses. Any mode counts,
  * and the session is never compared.
  *
  * Two consequences follow from those rules. When every candidate is minimized
@@ -1230,9 +1232,8 @@ export function selectLatestAuthoringOwnerMarker(comments, options) {
       comment.body,
       options.markerPrefix,
     );
-    if (parsed !== null && !sameIssueRef(parsed.target, options.target)) {
-      continue;
-    }
+    const mistargeted =
+      parsed !== null && !sameIssueRef(parsed.target, options.target);
     // Order by the instant, not the string: an offset form such as +09:00 sorts
     // wrongly as a string, and the shared comparator orders only the canonical
     // Z form. A createdAt that is not a readable instant fails closed: it is
@@ -1250,7 +1251,7 @@ export function selectLatestAuthoringOwnerMarker(comments, options) {
       time > latestTime ||
       (time === latestTime && comment.id > latest.comment.id)
     ) {
-      latest = { comment, parsed };
+      latest = { comment, parsed, mistargeted };
     }
   }
   return latest;
@@ -1335,6 +1336,9 @@ export function validateAuthoringOwnerPostIdentity(
     }
     if (latest.parsed === null) {
       return `${latestHead}, which does not parse as an authoring-owner marker, so its set and anchor cannot be checked. ${AUTHORING_OWNER_LATEST_MARKER_HINT} ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
+    }
+    if (latest.mistargeted) {
+      return `${latestHead}, which names another target, so it cannot be the latest marker of this one. ${AUTHORING_OWNER_LATEST_MARKER_HINT} ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
     }
     const latestDifferences = [];
     if (latest.parsed.set !== post.set) {

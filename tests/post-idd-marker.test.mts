@@ -7104,6 +7104,49 @@ test('authoring-owner --apply sends a corrected release once the mangled release
   }
 });
 
+// A trusted owner marker that parses but names another target, hosted on this
+// issue (#3899, Codex P2). It is newer than the opener, so it is the latest.
+const OWNER_ID_MISTARGETED_HEARTBEAT: OwnerIdComment = {
+  id: 103,
+  body: ownerIdBody(
+    ownerIdFlags('heartbeat', {
+      'marker-target': 'o/r#99',
+      anchor: 'o/r#99',
+    }),
+  ),
+};
+
+test('authoring-owner --apply refuses a heartbeat while a trusted marker that names another target is the latest (#3899)', () => {
+  const stub = withOwnerIdStub({
+    comments: [OWNER_ID_ACQUIRE_OPENER, OWNER_ID_MISTARGETED_HEARTBEAT],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /names another target/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner --apply sends a heartbeat once the mistargeted marker is minimized as outdated (#3899)', () => {
+  const stub = withOwnerIdStub({
+    comments: [
+      OWNER_ID_ACQUIRE_OPENER,
+      { ...OWNER_ID_MISTARGETED_HEARTBEAT, minimizedReason: 'outdated' },
+    ],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
+    assert.equal(run.status, 0);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
 test("authoring-owner --apply refuses a heartbeat of the first set once a second set's opener is the latest marker (#3899)", () => {
   const stub = withOwnerIdStub({
     comments: [
@@ -7587,7 +7630,7 @@ test('authoring-owner --apply refuses when the latest trusted marker was edited 
   }
 });
 
-test('authoring-owner --apply ignores an untrusted or other-target marker as the latest marker (#3899)', () => {
+test('authoring-owner --apply ignores an untrusted marker and refuses an other-target marker as the latest (#3899)', () => {
   const untrusted = withOwnerIdStub({
     comments: [
       OWNER_ID_ACQUIRE_OPENER,
@@ -7618,8 +7661,10 @@ test('authoring-owner --apply ignores an untrusted or other-target marker as the
   });
   try {
     const run = runOwnerIdPost(ownerIdFlags('heartbeat'));
-    assert.equal(run.status, 0);
-    assert.equal(readOwnerIdLines(otherTarget.postsFile).length, 1);
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /names another target/);
+    assert.deepEqual(readOwnerIdLines(otherTarget.postsFile), []);
   } finally {
     otherTarget.restore();
   }
@@ -7836,7 +7881,7 @@ test('selectLatestAuthoringOwnerMarker skips a newest candidate minimized as out
   );
 });
 
-test('selectLatestAuthoringOwnerMarker drops a parseable marker of another target, keeps an unparseable one (#3899)', () => {
+test('selectLatestAuthoringOwnerMarker keeps a parseable marker of another target as mistargeted, keeps an unparseable one (#3899)', () => {
   const otherTarget = latestCandidate(
     102,
     '2026-10-02T00:00:00Z',
@@ -7844,13 +7889,12 @@ test('selectLatestAuthoringOwnerMarker drops a parseable marker of another targe
       ownerIdFlags('release', { 'marker-target': 'o/r#43', anchor: 'o/r#43' }),
     ),
   );
-  assert.equal(
-    selectLatestAuthoringOwnerMarker(
-      [LATEST_ACQUIRE, otherTarget],
-      LATEST_OPTIONS,
-    )?.comment.id,
-    101,
+  const mistargeted = selectLatestAuthoringOwnerMarker(
+    [LATEST_ACQUIRE, otherTarget],
+    LATEST_OPTIONS,
   );
+  assert.equal(mistargeted?.comment.id, 102);
+  assert.equal(mistargeted?.mistargeted, true);
   const garbled = latestCandidate(
     103,
     '2026-10-03T00:00:00Z',
