@@ -6907,6 +6907,36 @@ same as `AW4`/`AW5`.
   fields are missing, discard helper output and apply written D4/E-phase
   branch-sync checks directly.
 
+### Trial merge audit
+
+- Preferred command when helper runtime is enabled:
+  `idd-trial-merge-audit --pr <pr-number>`
+- Source repository equivalent:
+  `node scripts/trial-merge-audit.mjs --pr <pr-number>`
+- Output: one JSON object matching `schemas/trial-merge-audit.schema.json`,
+  with `verdict` (`passed`, `failed`, or `not-run`), `prHeadSha`, `baseSha`,
+  `trialCommit`, `commands` (`audit-docs`, `sync-docs`, `typecheck`, each with
+  `argv`, `exitCode`, and `passed`), `toolingChanged`, `install`,
+  `worktreeRemoved`, and `reasons`.
+- The helper builds the merged tree of the PR head and the current base tip
+  with `git merge-tree --write-tree` (git 2.38 or later), creates a trial
+  commit with `git commit-tree`, and runs the three fixed commands in a
+  temporary detached worktree.
+- Tooling comes from the base tip: `scripts/`, `src/`, `bin/`, `schemas/`,
+  `audit/`, `.husky/`, `.githooks/`, `package.json`, the lockfile,
+  `pnpm-workspace.yaml`, `.npmrc`, root `tsconfig*.json` and pnpmfiles, and
+  `.github/idd/config.json`. A pull request that changes any of them gets
+  `not-run` with reason `tooling-changed`, and the commands still run against
+  base-tip tooling as evidence only.
+- Install is a fresh, frozen-lockfile install with lifecycle scripts
+  disabled, run in the temporary worktree. No `node_modules` is linked from
+  the checkout.
+- Ref-safe: the helper never pushes and never updates a ref. The fetch,
+  `worktree add` and `worktree remove` steps run under the clone-scoped
+  lock. It does not run `git worktree prune`, because a plain prune is
+  clone-wide.
+- The verdict is evidence only. It does not change F1 routing.
+
 ### Effective C1 critique delegate
 
 - Preferred command when helper runtime is enabled:
