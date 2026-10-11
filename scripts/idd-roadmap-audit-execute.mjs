@@ -352,6 +352,8 @@ function buildReachableLeafCounter(report) {
     return leaves.size;
   };
 }
+const FIXED_SUCCESS_CRITERIA_LINE =
+  'Success criteria: not verified by this helper; the closing caller is expected to confirm them where feasible.';
 /**
  * Compose the canonical `IDD roadmap completion audit` evidence comment body.
  * Deterministic and network-free: it summarizes the audited graph (node /
@@ -361,8 +363,6 @@ function buildReachableLeafCounter(report) {
  * so every descendant is closed -- some possibly as completed, others (if
  * any, listed separately) as not planned or duplicate (#3326).
  */
-const FIXED_SUCCESS_CRITERIA_LINE =
-  'Success criteria: not verified by this helper; the closing caller is expected to confirm them where feasible.';
 export function buildRoadmapCompletionAuditBody(report, criteriaNote = null) {
   const rootNumber = report.root.number;
   const descendants = report.nodes.filter((node) => node.number !== rootNumber);
@@ -1644,7 +1644,7 @@ function parsePositiveIntegerOrNull(token, flag) {
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--criteria-note <text>]
-  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> --claim-id <claim-id> [--claim-issue <number>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--apply]
+  node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> --claim-id <claim-id> [--claim-issue <number>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--criteria-note <text>] [--apply]
 
   Default (no --apply): dry-run. Evaluates A1.5 roadmap completion via the
   read-only discover-roadmap-graph traversal and prints { ready, blockers,
