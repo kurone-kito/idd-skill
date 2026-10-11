@@ -7764,6 +7764,62 @@ test('selectLatestAuthoringOwnerMarker picks the last candidate by createdAt, th
   assert.equal(selectLatestAuthoringOwnerMarker([], LATEST_OPTIONS), null);
 });
 
+test('selectLatestAuthoringOwnerMarker orders createdAt by instant across UTC offsets (#3899)', () => {
+  // 10:00 at +09:00 is 01:00Z. Both fixtures put the later instant second, and
+  // the string order and the single-form comparator each get one of them wrong.
+  const zFirst = [
+    latestCandidate(
+      100,
+      '2026-10-02T00:00:00Z',
+      ownerIdBody(ownerIdFlags('heartbeat', { set: 'set-b' })),
+    ),
+    latestCandidate(
+      200,
+      '2026-10-02T10:00:00+09:00',
+      ownerIdBody(ownerIdFlags('heartbeat', { set: 'set-a' })),
+    ),
+  ];
+  assert.equal(
+    selectLatestAuthoringOwnerMarker(zFirst, LATEST_OPTIONS)?.comment.id,
+    200,
+  );
+  const offsetFirst = [
+    latestCandidate(
+      100,
+      '2026-10-02T10:00:00+09:00',
+      ownerIdBody(ownerIdFlags('heartbeat', { set: 'set-a' })),
+    ),
+    latestCandidate(
+      200,
+      '2026-10-02T01:30:00+00:00',
+      ownerIdBody(ownerIdFlags('heartbeat', { set: 'set-b' })),
+    ),
+  ];
+  const latest = selectLatestAuthoringOwnerMarker(offsetFirst, LATEST_OPTIONS);
+  assert.equal(latest?.comment.id, 200);
+  assert.equal(latest?.parsed?.set, 'set-b');
+});
+
+test('validateAuthoringOwnerPostIdentity refuses when a candidate creation time cannot be read (#3899)', () => {
+  const body = ownerIdBody(ownerIdFlags('heartbeat'));
+  const unreadable = selectLatestAuthoringOwnerMarker(
+    [LATEST_ACQUIRE, latestCandidate(102, 'not-a-date', body)],
+    LATEST_OPTIONS,
+  );
+  assert.equal(unreadable?.unorderable, true);
+  assert.equal(unreadable?.comment.id, 102);
+  const post = parseAuthoringOwnerComment(body, 'idd-skill');
+  assert.ok(post);
+  const openers = selectAuthoringOwnerOpeningMarkers([LATEST_ACQUIRE], {
+    target: OWNER_ID_TARGET,
+    markerPrefix: 'idd-skill',
+    trustedLogins: new Set(['kurone-kito']),
+    requireUnedited: true,
+  });
+  const refusal = validateAuthoringOwnerPostIdentity(post, openers, unreadable);
+  assert.match(refusal ?? '', /creation time that cannot be read/);
+});
+
 test('selectLatestAuthoringOwnerMarker skips a newest candidate minimized as outdated (#3899)', () => {
   const comments = [
     LATEST_ACQUIRE,

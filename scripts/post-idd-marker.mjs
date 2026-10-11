@@ -1233,11 +1233,22 @@ export function selectLatestAuthoringOwnerMarker(comments, options) {
     if (parsed !== null && !sameIssueRef(parsed.target, options.target)) {
       continue;
     }
+    // Order by the instant, not the string: an offset form such as +09:00 sorts
+    // wrongly as a string, and the shared comparator orders only the canonical
+    // Z form. A createdAt that is not a readable instant fails closed: it is
+    // returned as the latest, and the check refuses on it.
+    const time = Date.parse(comment.createdAt);
+    if (!Number.isFinite(time)) {
+      return { comment, parsed, unorderable: true };
+    }
+    const latestTime =
+      latest === null
+        ? Number.NEGATIVE_INFINITY
+        : Date.parse(latest.comment.createdAt);
     if (
       latest === null ||
-      comment.createdAt > latest.comment.createdAt ||
-      (comment.createdAt === latest.comment.createdAt &&
-        comment.id > latest.comment.id)
+      time > latestTime ||
+      (time === latestTime && comment.id > latest.comment.id)
     ) {
       latest = { comment, parsed };
     }
@@ -1313,6 +1324,9 @@ export function validateAuthoringOwnerPostIdentity(
   if (closest.differences.length === 0) {
     if (latest === null) {
       return null;
+    }
+    if (latest.unorderable) {
+      return `${head}: a trusted owner marker on the target, comment #${latest.comment.id}, has a creation time that cannot be read, so the latest marker cannot be determined. ${AUTHORING_OWNER_LATEST_MARKER_HINT} ${AUTHORING_OWNER_IDENTITY_SETTLE_HINT}`;
     }
     const latestHead = `${head}: the latest trusted owner marker on the target is comment #${latest.comment.id}`;
     const unreadable = inspectLastEditedAt(latest.comment);
