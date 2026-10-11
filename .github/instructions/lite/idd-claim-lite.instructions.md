@@ -347,8 +347,8 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
    that post-acquire result alone counts. Any other result: claim contested;
    apply Claim verification step 5, then, if released, remove the step-2
-   worktree and branch only while pristine (`git worktree remove`,
-   `git branch -d`), then STOP before the digest.
+   worktree and branch only while pristine, with no commits or changes
+   (`git worktree remove`, `git branch -D`), then STOP before the digest.
 
 ## Heartbeat posting
 
