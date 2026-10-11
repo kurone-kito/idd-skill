@@ -834,12 +834,13 @@ function markdownOutline(text) {
   // That over-counts, and an over-count fails the check loudly rather than
   // letting drift through.
   const containerHeading =
-    /^[ \t]*(?:>[ \t]*|(?:[-*+]|\d{1,9}[.)])[ \t]+)+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+    /^[ \t]*(?:>[ \t]{0,4}|(?:[-*+]|\d{1,9}[.)])[ \t]{1,4})+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
   // An indented heading is nested when the helper finds it inside a list item,
   // and a top-level boundary only with one to three spaces outside one. Four or
   // more spaces outside a list item is paragraph text, not a heading.
-  const indentedHeading = /^[ \t]+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
-  const standaloneHeading = /^ {1,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+  const indentedHeading = /^[ \t]+(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+  const standaloneHeading =
+    /^ {1,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
   // The helper keeps list state from line to line, so it is called for every
   // visible line in order, not only for indented ones.
   const listContext = {
@@ -864,25 +865,25 @@ function markdownOutline(text) {
       const standalone = standaloneHeading.exec(line);
       // CommonMark separates the hashes from the title with a space or tab only,
       // so a non-breaking space does not make a heading (#4009 review).
-      const plain = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(line);
+      const plain = /^(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
       // Four or more spaces outside a list item is paragraph text, so a list-like
       // line there is not a nested heading.
       const indentedCode = /^(?: {4}|\t)/.test(line);
       if (container !== null && (!indentedCode || inListItem)) {
         nestedTitles.push(normalizeHeading(container[2]));
       } else if (indented !== null && inListItem) {
-        nestedTitles.push(normalizeHeading(indented[2]));
+        nestedTitles.push(normalizeHeading(indented[2] ?? ''));
       } else if (standalone !== null) {
         headings.push({
           index,
           level: standalone[1].length,
-          title: normalizeHeading(standalone[2]),
+          title: normalizeHeading(standalone[2] ?? ''),
         });
       } else if (plain !== null) {
         headings.push({
           index,
           level: plain[1].length,
-          title: normalizeHeading(plain[2]),
+          title: normalizeHeading(plain[2] ?? ''),
         });
       }
     }

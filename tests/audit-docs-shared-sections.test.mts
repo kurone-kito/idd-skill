@@ -808,3 +808,47 @@ test('a shared-section drift prints its own remediation, not the mirror-sync adv
   );
   assert.doesNotMatch(result.stderr, /sync-docs\.mjs --apply/);
 });
+
+test('a bare "##" heading ends a listed section, so prose after it is outside the section', (t) => {
+  // A bare "##" is a valid empty heading, so the listed section stops before it.
+  // The prose under it is not compared, and drift there must pass.
+  const bare = (after: string) =>
+    [
+      '# Fixture rationale',
+      '',
+      '## Shared rule',
+      '',
+      'The shared rule text.',
+      '',
+      '##',
+      '',
+      after,
+      '',
+    ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(
+    dir,
+    bare('After the bare heading, source.'),
+    bare('After the bare heading, target.'),
+  );
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('five spaces after a list marker make indented code, not a nested heading', (t) => {
+  // CommonMark reads the fifth space as the start of indented code, so "-     ##
+  // Shared rule" is code. It must not count as a nested copy of the listed title.
+  const overPadded = `${BASE}\n-     ## Shared rule\n\nCode, not a heading.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, overPadded, overPadded);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
