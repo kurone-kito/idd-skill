@@ -1227,7 +1227,9 @@ export function selectLatestAuthoringOwnerMarker(comments, options) {
     // if it is the latest, rather than being treated as a visible marker.
     const unreadableMinimization =
       typeof comment.isMinimized !== 'boolean' ||
-      (comment.isMinimized && typeof comment.minimizedReason !== 'string');
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''));
     if (
       !looksLikeOwnerMarker(comment.body, options.markerPrefix) ||
       (!unreadableMinimization && isOutdatedMinimized(comment))

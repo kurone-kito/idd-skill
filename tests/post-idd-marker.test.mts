@@ -7935,6 +7935,20 @@ test('selectLatestAuthoringOwnerMarker flags a latest candidate whose minimizati
     )?.unreadableMinimization,
     true,
   );
+  // An empty reason is no reason either (Copilot on cffcca86c).
+  const minimizedEmptyReason = latestCandidate(
+    106,
+    '2026-10-06T00:00:00Z',
+    ownerIdBody(ownerIdFlags('release')),
+    { isMinimized: true, minimizedReason: '  ' },
+  );
+  assert.equal(
+    selectLatestAuthoringOwnerMarker(
+      [LATEST_ACQUIRE, minimizedEmptyReason],
+      LATEST_OPTIONS,
+    )?.unreadableMinimization,
+    true,
+  );
   // An incomplete candidate that is not the latest does not refuse the check.
   const newerClean = latestCandidate(
     104,
