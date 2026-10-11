@@ -506,39 +506,30 @@ Otherwise read branch state directly:
 gh pr view {pr-number} --json mergeable,mergeStateStatus
 ```
 
-Route based on `branchState` from the helper (or `mergeable` /
-`mergeStateStatus` from `gh pr view`):
+and route with the state-to-route table in the
+[helper contract](../../docs/idd-helper-scripts.md#branch-conflict-and-synchronization-state-evidence),
+using `mergeable` and `mergeStateStatus` from that output as its inputs.
 
-- **`clean`** or **`behind-no-conflict`** when branch protection does not
-  require an up-to-date head: **first** apply the
+Route on `callSiteRouting.eBranchSync` from the helper output:
+
+- **`proceed-to-f1`**: **first** apply the
   **Zero-Accepted-PATH-A advisory re-review gate** below if it applies
   (no-op otherwise). **Then**, if E6 posted a disposition reply or the
   gate above posted a marker this pass, refresh the `review-watermark`
   for the same `{head-SHA}` (recompute `{max-activity-updatedAt}` /
   `{total-item-count}` / `{latest-ci-completed-at}`, following the E1
   Step 2 rules) — otherwise F2's review-currency check treats this as
-  new activity and bounces back to E1 needlessly. Skip the refresh on
-  the sync path (E1 re-snapshots after merging `{development-branch}`)
-  or on a hold. `clean`
-  here means conflict-freeness only — see the `baseAdvancedSinceMergeBase`
-  note under F1 in `idd-pre-merge.instructions.md`. **Then** proceed to
+  new activity and bounces back to E1 needlessly. This route means
+  conflict-freeness only — see the `baseAdvancedSinceMergeBase` note under
+  F1 in `idd-pre-merge.instructions.md`. **Then** proceed to
   `idd-pre-merge.instructions.md` (F1).
-- **`behind-no-conflict`** when branch protection or recorded repository
-  policy requires an up-to-date head, or undetermined (fail closed, per
-  F1): → **sync path** below.
-- **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
-  below.
-- **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is
-  `UNKNOWN` / null because GitHub hasn't finished computing mergeability —
-  a **transient** state. Do **not** hold. Re-poll after a short wait, up
-  to a small fixed attempt budget (distributed default: 3 attempts, a
-  few seconds apart), then route by the first settled result. Only a
-  state that is **still** `computing` / `unknown` after the budget falls
-  through to the hold below.
-- **`dirty`**, **`unknown`**, or an unlisted state (e.g.
-  `force-push-exception`): hold; post a PR comment documenting the
-  state and stop. Do not proceed to F-phase without confirmed
-  branch-state evidence.
+- **`sync-path`**: → **sync path** below.
+- **`retry`**: a **transient** state. Do **not** hold. Re-poll after a
+  short wait, up to the attempt budget in the helper contract, then route
+  by the first settled result. Only a result that is **still** `retry`
+  after the budget falls through to `hold`.
+- **`hold`**: post a PR comment documenting the branch state and stop. Do
+  not proceed to F-phase without confirmed branch-state evidence.
 
 **Sync path** (merge-from-`{development-branch}`):
 
@@ -574,8 +565,8 @@ carve-outs. A stale `idd-advisory-convergence` rollup: see [rerun mechanics](idd
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
-Applies only from the branch-sync check's no-sync-required `clean` /
-`behind-no-conflict` exit, and fires under either of two conditions:
+Applies only from the branch-sync check's `proceed-to-f1` route, and fires
+under either of two conditions:
 (a) the last non-empty `ReviewItems_snapshot` pass at current
 HEAD had zero Accepted PATH A items **and** at least one PATH B item
 got a _completed-review_ disposition (never a notice-only rejection —
@@ -611,7 +602,7 @@ Run E14's **Primary advisory bot** procedure
 (`idd-review-fix.instructions.md` E14) at this now-stable HEAD — steps
 1-4 plus the active polling loop when it applies; skip Human reviewers
 and the secondary-bot step. Substitute "resume the branch-sync check's
-no-sync-required `clean` exit (watermark-refresh, then F1)" for each of
+`proceed-to-f1` route (watermark-refresh, then F1)" for each of
 E14's six "proceed to E15" exits (step 2's `SATISFIED`, step 4's AW3
 `SATISFIED` and `CAP_EXHAUSTED` default, and the polling loop's
 `SATISFIED` exit). Every other exit — every "return to E1" and every
