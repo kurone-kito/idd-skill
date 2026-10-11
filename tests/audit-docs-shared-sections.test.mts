@@ -384,3 +384,101 @@ test('a heading inside an HTML comment does not end a listed section', (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /shared section "Shared rule" differs between/);
 });
+
+test('a second comment opened on the line where the first one closes is still scanned', (t) => {
+  // The first comment closes and a second one opens on the same line. The
+  // commented-out "##" line belongs to the second comment, so it must not end
+  // the section. Drift after the second comment must still fail.
+  const twoComments = (after: string) =>
+    [
+      '# Fixture rationale',
+      '',
+      '## Shared rule',
+      '',
+      '<!--',
+      'first note',
+      '--> <!--',
+      '## Commented-out heading',
+      '-->',
+      '',
+      after,
+      '',
+    ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(
+    dir,
+    twoComments('Text after the second comment, source.'),
+    twoComments('Text after the second comment, target.'),
+  );
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /shared section "Shared rule" differs between/);
+});
+
+test('a literal "<!--" inside a code span does not open a comment', (t) => {
+  // The code span holds the text "<!--", which Markdown renders literally. A
+  // comment opened there would hide the real "## Shared rule" heading below
+  // it. Both sides are identical, so the check must pass.
+  const literal = [
+    '# Fixture rationale',
+    '',
+    'Write `<!--` to open a comment.',
+    '',
+    '## Shared rule',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, literal, literal);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a "<!--" in an indented code block after a blank line is literal', (t) => {
+  // Four leading spaces after a blank line make an indented code block, where
+  // "<!--" is text, not a comment. The real heading below must still count.
+  const indentedCode = [
+    '# Fixture rationale',
+    '',
+    '    <!--',
+    '',
+    '## Shared rule',
+    '',
+    'The shared rule text.',
+    '',
+  ].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, indentedCode, indentedCode);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a heading whose title ends in a hash keeps that hash in its title', (t) => {
+  // "## C#" has no space before the trailing "#", so the "#" is part of the
+  // title, not a closing sequence. The listed "C#" section must be found, and
+  // drift inside it must still fail.
+  const csharp = (body: string) =>
+    ['# Fixture rationale', '', '## C#', '', body, ''].join('\n');
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['C#'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, csharp('Body, source.'), csharp('Body, target.'));
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /shared section "C#" differs between/);
+});

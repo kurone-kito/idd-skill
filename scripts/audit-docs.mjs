@@ -788,18 +788,64 @@ function resolveBlockFiles(block) {
   }
   return files;
 }
-// Fenced blocks of either kind and HTML comments hide their `#` lines from
-// heading detection, because Markdown does not render those lines as
-// headings. headingSignature tracks only backtick fences, so this scanner
-// handles tilde fences and comments too; otherwise a `~~~` block or a comment
-// could cut a section short. A fence opener is at most three spaces deep:
-// deeper indentation is indented code, not a fence (#4009 review).
+// Splits Markdown into the lines that Markdown would render as text, and tracks
+// HTML comments across lines. Only the text outside comments is returned. An
+// inline code span is literal, so a "<!--" inside one does not open a comment
+// (CommonMark, within one line). Comment state carries over between lines.
+function visibleMarkdownLine(line, state) {
+  let visible = '';
+  let position = 0;
+  while (position < line.length) {
+    if (state.inComment) {
+      const close = line.indexOf('-->', position);
+      if (close === -1) {
+        return visible;
+      }
+      state.inComment = false;
+      position = close + 3;
+      continue;
+    }
+    const open = line.indexOf('<!--', position);
+    const tick = line.indexOf('`', position);
+    if (tick !== -1 && (open === -1 || tick < open)) {
+      const run = /^`+/.exec(line.slice(tick))?.[0] ?? '`';
+      const closing = new RegExp(`(?<!\`)${run}(?!\`)`).exec(
+        line.slice(tick + run.length),
+      );
+      const spanEnd =
+        closing === null
+          ? tick + run.length
+          : tick + run.length + closing.index + run.length;
+      visible += line.slice(position, spanEnd);
+      position = spanEnd;
+      continue;
+    }
+    if (open === -1) {
+      visible += line.slice(position);
+      break;
+    }
+    visible += line.slice(position, open);
+    state.inComment = true;
+    position = open + 4;
+  }
+  return visible;
+}
+// Fenced blocks of either kind, HTML comments, and indented code hide their
+// lines from heading detection, because Markdown does not render those lines
+// as headings. headingSignature tracks only backtick fences and no comments,
+// so this scanner covers them; otherwise a commented-out "##" line, a tilde
+// block, or an indented code sample could cut a section short. A fence opener
+// is at most three spaces deep, since deeper indentation is indented code.
+// Closing hashes are stripped only when a space precedes them, so "## C#" keeps
+// its title (CommonMark).
 function markdownSections(text) {
   const lines = normalizeText(text).split('\n');
   const headings = [];
   let fence = null;
-  let inComment = false;
+  const comment = { inComment: false };
+  let previousBlank = true;
   for (const [index, line] of lines.entries()) {
+    const blank = line.trim() === '';
     const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (fence !== null) {
       if (
@@ -810,24 +856,18 @@ function markdownSections(text) {
       ) {
         fence = null;
       }
+      previousBlank = blank;
       continue;
     }
-    if (inComment) {
-      if (line.includes('-->')) {
-        inComment = false;
-      }
-      continue;
-    }
-    if (fenceMatch !== null) {
+    if (!comment.inComment && fenceMatch !== null) {
       fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
+      previousBlank = false;
       continue;
     }
-    const commentStart = line.lastIndexOf('<!--');
-    if (commentStart !== -1 && !line.includes('-->', commentStart)) {
-      inComment = true;
-      continue;
-    }
-    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    const indentedCode =
+      !comment.inComment && previousBlank && /^ {4}/.test(line);
+    const visible = indentedCode ? '' : visibleMarkdownLine(line, comment);
+    const heading = /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(visible);
     if (heading !== null) {
       headings.push({
         index,
@@ -835,6 +875,7 @@ function markdownSections(text) {
         title: normalizeHeading(heading[2]),
       });
     }
+    previousBlank = blank;
   }
   return headings.map((heading, position) => {
     let end = lines.length;
