@@ -94,6 +94,7 @@ export const COVERED_HELPERS = [
   'suitability-close-execute',
   'suitability-triage',
   'sweep-authoring-markers',
+  'trial-merge-audit',
   'verify-import-mirror',
   'verify-install-deps',
   'verify-workshop-integrity',

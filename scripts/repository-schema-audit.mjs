@@ -96,6 +96,11 @@ export const SCHEMA_TYPE_CATALOG = [
     owningModule: 'src/scripts/branch-conflict-state.mts',
   },
   {
+    schemaFile: 'trial-merge-audit.schema.json',
+    exportedType: 'TrialMergeAuditResult',
+    owningModule: 'src/scripts/trial-merge-audit.mts',
+  },
+  {
     schemaFile: 'provider-health.schema.json',
     exportedType: 'ProviderHealthReport',
     owningModule: 'src/scripts/provider-health.mts',
@@ -234,6 +239,11 @@ export const SCHEMA_OUTPUT_COVERAGE = [
     schema: 'branch-conflict-state.schema.json',
     status: 'covered',
     builder: 'classifyBranchConflictState (branch-conflict-state.mts)',
+  },
+  {
+    schema: 'trial-merge-audit.schema.json',
+    status: 'covered',
+    builder: 'runTrialMergeAudit (trial-merge-audit.mts)',
   },
   {
     schema: 'claim-marker.schema.json',

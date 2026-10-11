@@ -3585,6 +3585,41 @@ test('branch-conflict-state invalid fixture fails validation', () => {
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');
 });
 
+test('trial-merge-audit schema uses only allowed keywords', () => {
+  const schema = loadJson('schemas/trial-merge-audit.schema.json');
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test('trial-merge-audit schema publishes metadata fields', () => {
+  const schema = loadJson(
+    'schemas/trial-merge-audit.schema.json',
+  ) as JsonRecord;
+  assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+  assert.equal(
+    schema.$id,
+    'https://kurone-kito.github.io/idd-skill/schemas/trial-merge-audit.schema.json',
+  );
+  assert.equal(schema.title, 'Trial Merge Audit');
+});
+
+test('trial-merge-audit valid fixture passes validation', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/trial-merge-audit.schema.json',
+    'fixtures/schemas/trial-merge-audit.valid.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
+test('trial-merge-audit invalid fixture fails validation', () => {
+  const { ok } = validateFixture(
+    'schemas/trial-merge-audit.schema.json',
+    'fixtures/schemas/trial-merge-audit.invalid.json',
+    false,
+  );
+  assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
 test('discover-roadmap-union schema uses only allowed keywords', () => {
   const schema = loadJson('schemas/discover-roadmap-union.schema.json');
   assert.deepEqual(checkSchemaKeywords(schema), []);

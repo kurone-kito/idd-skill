@@ -84,6 +84,7 @@ const FLAG_CONCEPTS: readonly FlagConcept[] = [
       'pre-merge-readiness.mjs',
       'review-activity-snapshot.mjs',
       'stalled-session-quiet-check.mjs',
+      'trial-merge-audit.mjs',
     ],
   },
   {

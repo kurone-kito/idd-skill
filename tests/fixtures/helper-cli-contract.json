@@ -109,6 +109,18 @@
         }
       }
     },
+    "idd-trial-merge-audit.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-branch-name.mjs": {
       "runs": {
         "unknownFlag": {
