@@ -6820,33 +6820,9 @@ same as `AW4`/`AW5`.
   branch's policy, and a failed or unreadable read counts as `true`, which is
   fail closed.
 - Without helper runtime, take `mergeable` and `mergeStateStatus` from
-  `gh pr view {pr-number} --json mergeable,mergeStateStatus`, derive
-  `branchState` and `requiresUpToDateHead` as follows, and route with the
-  table below:
-  1. Read the base branch's rules (`rules/branches/{base-branch-url-encoded}`)
-     and its protection (`branches/{base-branch-url-encoded}/protection`) under
-     `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable unless the
-     `.github/idd/config.json` at the base ref sets
-     `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
-     base ref, never from the PR's own working tree:
-
-     ```sh
-     gh api -H 'Accept: application/vnd.github.raw' \
-       'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch-url-encoded}'
-     ```
-
-     Encode `{base-branch}` as a URL path segment in all three paths (for
-     example `release%2F1`), as the helper adapter does. An unencoded name
-     addresses another route and reads as a 404.
-     A missing file falls back to the user-global policy layers, as
-     `loadTrustedIddConfig` does, and an unreadable file leaves the opt-in
-     unset.
-  2. `requiresUpToDateHead` is `true` when a ruleset's `required_status_checks`
-     rule has `strict_required_status_checks_policy` `true` and at least one
-     required check, or when classic protection has
-     `required_status_checks.strict` `true`. It is also `true` when either read
-     fails or is unreadable. Otherwise it is `false`.
-  3. Derive `branchState` from `mergeable` and `mergeStateStatus` with the
+  `gh pr view {pr-number} --json mergeable,mergeStateStatus`, and route with
+  the table below:
+  1. Derive `branchState` from `mergeable` and `mergeStateStatus` with the
      first matching rule (the helper's order):
      - `mergeable` `CONFLICTING`: `content-conflict`.
      - `mergeStateStatus` `DIRTY`: `dirty`.
@@ -6858,7 +6834,32 @@ same as `AW4`/`AW5`.
        which the table holds unless the status is `CLEAN`.
      - `mergeable` `UNKNOWN` or null: `computing`.
      - Anything else: `unknown`.
-  4. Route with the table below.
+  2. Only if `branchState` is `behind-no-conflict`, derive
+     `requiresUpToDateHead`. Other states route without it, so they make no
+     policy reads.
+     1. Read the base branch's rules (`rules/branches/{base-branch-url-encoded}`)
+        and its protection (`branches/{base-branch-url-encoded}/protection`)
+        under `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable
+        unless the `.github/idd/config.json` at the base ref sets
+        `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
+        base ref, never from the PR's own working tree:
+
+        ```sh
+        gh api -H 'Accept: application/vnd.github.raw' \
+          'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch-url-encoded}'
+        ```
+
+        Encode `{base-branch}` as a URL path segment in all three paths (for
+        example `release%2F1`), as the helper adapter does. An unencoded name
+        addresses another route and reads as a 404. A missing file falls back
+        to the user-global policy layers, as `loadTrustedIddConfig` does, and
+        an unreadable file leaves the opt-in unset.
+     2. `requiresUpToDateHead` is `true` when a ruleset's
+        `required_status_checks` rule has `strict_required_status_checks_policy`
+        `true` and at least one required check, or when classic protection has
+        `required_status_checks.strict` `true`. It is also `true` when either
+        read fails or is unreadable. Otherwise it is `false`.
+  3. Route with the table below.
 
   | `branchState`                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
   | -------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
