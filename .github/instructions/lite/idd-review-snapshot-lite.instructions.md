@@ -42,8 +42,8 @@ GitHub side effect, confirm all of the following:
 5. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
    --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
-   its `idd:claim-lock` package-manager form (see
-   `docs/idd-helper-scripts.md`). A `collision` result is
+   its `idd:claim-lock` package-manager form, or the profile-selected
+   equivalent (see `docs/idd-helper-scripts.md`). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
    and require `present: true` with no `malformed`; otherwise recover
