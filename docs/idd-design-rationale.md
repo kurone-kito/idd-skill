@@ -655,7 +655,7 @@ a branch whose tip is not merged into a lagging local `main`, so the branch
 survived (`4242489039`). A later review of the cleanup itself (PR `#4058`)
 found three more gaps: an ambiguous route state, such as `disputed` after an
 activation-nonce mismatch, can still name this session's claim, so only a
-clearly unheld state may remove; `git status --porcelain` does not list
+clearly unclaimed state may remove; `git status --porcelain` does not list
 ignored files, which `git worktree remove` can delete; and the procedure
 needed a helper-free path for `instructions-only`. The decided policy
 (maintainer hearing, 2026-10-12), as implemented:

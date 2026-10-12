@@ -267,9 +267,10 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    checks 1-2 do not apply yet. Otherwise, and for forced-handoff
    adopt-verbatim, `<path>` is the primary worktree and B1 creates the linked
    one after the claim. Then generate a fresh opaque token (adopt-verbatim
-   reuses `newClaimId`) and record it with `claim-lock --record-tokens`
-   (`docs/idd-helper-scripts.md`) before the first post (step 4; step 5 for
-   adopt-verbatim).
+   reuses `newClaimId`) and record it with the `claim-lock` helper's
+   `--record-tokens` mode (`--worktree <path> --agent-id <id> --claim-id <id>`;
+   command in `docs/idd-helper-scripts.md`) before the first post (step 4;
+   step 5 for adopt-verbatim).
 3. **`{prior-claim-id}` / `supersedes:`**: `none` for a fresh claim or
    legacy migration; the active claim's `{claim-id}` for a stale
    takeover. Not applicable to forced-handoff (step 4 is skipped
