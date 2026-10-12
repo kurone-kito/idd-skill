@@ -1,11 +1,5 @@
 import assert from 'node:assert/strict';
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -18,6 +12,10 @@ import {
   scanCodexSessions,
 } from '../src/scripts/token-cost-adapter-codex.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const FIXTURE_DIR = 'tests/fixtures/token-cost/codex';
 
@@ -152,7 +150,7 @@ test('parseCodexRolloutLines tolerates a truncated trailing line', () => {
 });
 
 test('scanCodexSessions keeps an idd-skill session and skips a non-idd-skill session', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   const dayDir = join(sandbox, '2026', '08', '26');
@@ -173,7 +171,7 @@ test('scanCodexSessions keeps an idd-skill session and skips a non-idd-skill ses
 });
 
 test('scanCodexSessions skips a malformed session that fails to harvest, keeping the rest', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   const dayDir = join(sandbox, '2026', '08', '26');
@@ -206,7 +204,7 @@ test('scanCodexSessions skips a malformed session that fails to harvest, keeping
 test('scanCodexSessions skips an unreadable file, keeping the rest', {
   skip: process.platform === 'win32',
 }, () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   const dayDir = join(sandbox, '2026', '08', '26');
@@ -235,7 +233,7 @@ test('scanCodexSessions skips an unreadable file, keeping the rest', {
 });
 
 test('scanCodexSessions on an empty directory returns no results', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-codex-test-'),
   );
   assert.deepEqual(scanCodexSessions({ sessionsDir: sandbox }), []);

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {
   chmodSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -33,6 +32,10 @@ import {
   resolveUserGlobalConfigPath,
   selectTrustedConfigRef,
 } from '../src/scripts/idd-config.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const HEAD = '1111111111111111111111111111111111111111';
 
@@ -53,7 +56,7 @@ function syntheticNotFoundError(): Error & { stderr?: string } {
 // forced-handoff-marker.test.mts's `forcedHandoff.mode` tests.
 function withSandboxCwd<T>(run: (sandbox: string) => T): T {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-idd-config-test-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-idd-config-test-'));
   process.chdir(sandbox);
   try {
     return run(sandbox);
@@ -317,7 +320,7 @@ function withUserGlobal<T>(
     xdg: process.env.XDG_CONFIG_HOME,
     ci: process.env.GITHUB_ACTIONS,
   };
-  const configHome = mkdtempSync(join(tmpdir(), 'idd-idd-config-global-'));
+  const configHome = makeTempDir(join(tmpdir(), 'idd-idd-config-global-'));
   if (body !== null) {
     mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
     writeFileSync(join(configHome, 'idd-skill', 'config.json'), body);
@@ -618,7 +621,7 @@ test('resolveUserGlobalConfigPath documents that POSIX slash roots are Unix-only
 });
 
 test('loadUserGlobalPolicyDocument treats a missing file as absent (#2257)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-missing-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-missing-'));
   const result = loadUserGlobalPolicyDocument({
     path: join(sandbox, 'missing.json'),
   });
@@ -627,7 +630,7 @@ test('loadUserGlobalPolicyDocument treats a missing file as absent (#2257)', () 
 });
 
 test('loadUserGlobalPolicyDocument treats malformed JSON as absent (#2257)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-badjson-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-badjson-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(path, '{ not json');
   const result = loadUserGlobalPolicyDocument({ path });
@@ -636,7 +639,7 @@ test('loadUserGlobalPolicyDocument treats malformed JSON as absent (#2257)', () 
 });
 
 test('resolveEffectiveCritiqueLoopDelegateFromEnv ignores global keys other than critiqueLoop.delegate (#2257)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-extra-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-extra-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
     path,
@@ -660,7 +663,7 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv ignores global keys other than
 });
 
 test('resolveEffectiveCritiqueLoopDelegateFromEnv skips the global file when local policy already decides (#2257)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-skipped-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-skipped-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
     path,
@@ -681,7 +684,7 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv skips the global file when loc
 });
 
 test('resolveEffectiveCritiqueLoopDelegateFromEnv does not read HOME when path is injected (#2257)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-injected-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-injected-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
     path,
@@ -708,7 +711,7 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv does not read HOME when path i
 // `resolveEffectiveCritiqueLoopDelegate` in policy-helpers.test.mts).
 
 test('loadUserGlobalPolicyDocument treats a top-level JSON array as absent (#2258)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-array-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-array-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(path, '[]');
   const result = loadUserGlobalPolicyDocument({ path });
@@ -717,7 +720,7 @@ test('loadUserGlobalPolicyDocument treats a top-level JSON array as absent (#225
 });
 
 test('loadUserGlobalPolicyDocument treats a top-level JSON number as absent (#2258)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-number-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-number-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(path, '42');
   const result = loadUserGlobalPolicyDocument({ path });
@@ -728,7 +731,7 @@ test('loadUserGlobalPolicyDocument treats a top-level JSON number as absent (#22
 test('loadUserGlobalPolicyDocument treats an unreadable (permission-denied) file as absent (#2258)', {
   skip: !canTestPermissionDenied,
 }, () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-denied-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-denied-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
     path,
@@ -745,7 +748,7 @@ test('loadUserGlobalPolicyDocument treats an unreadable (permission-denied) file
 });
 
 test('resolveEffectiveCritiqueLoopDelegateFromEnv: commands, mergePolicy, reviewPolicy, and CI-related global keys do not leak into the resolved delegate (#2258)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-leak-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-leak-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
     path,
@@ -770,7 +773,7 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv: commands, mergePolicy, review
 });
 
 test('resolveEffectiveCritiqueLoopDelegateFromEnv honors a repository-local null disable even when a global delegate file exists (#2258)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-disabled-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-disabled-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
     path,
@@ -790,7 +793,7 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv honors a repository-local null
 });
 
 test('resolveEffectiveCritiqueLoopDelegateFromEnv fails closed on a malformed repository-local delegate without inheriting the global object (#2258)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-user-global-malformed-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-user-global-malformed-'));
   const path = join(sandbox, 'config.json');
   writeFileSync(
     path,
@@ -817,7 +820,7 @@ test('resolveEffectiveCritiqueLoopDelegateFromEnv fails closed on a malformed re
 // the simpler `{ command }`-only critiqueLoop.telemetryHook shape.
 
 test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv ignores global keys other than critiqueLoop.telemetryHook (#2679)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-user-global-telemetry-hook-extra-'),
   );
   const path = join(sandbox, 'config.json');
@@ -843,7 +846,7 @@ test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv ignores global keys other
 });
 
 test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv skips the global file when local policy already decides (#2679)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-user-global-telemetry-hook-skipped-'),
   );
   const path = join(sandbox, 'config.json');
@@ -868,7 +871,7 @@ test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv skips the global file whe
 });
 
 test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv does not read HOME when path is injected (#2679)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-user-global-telemetry-hook-injected-'),
   );
   const path = join(sandbox, 'config.json');
@@ -891,7 +894,7 @@ test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv does not read HOME when p
 });
 
 test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv: commands, mergePolicy, reviewPolicy, and CI-related global keys do not leak into the resolved hook (#2679)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-user-global-telemetry-hook-leak-'),
   );
   const path = join(sandbox, 'config.json');
@@ -918,7 +921,7 @@ test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv: commands, mergePolicy, r
 });
 
 test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv honors a repository-local null disable even when a global hook file exists (#2679)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-user-global-telemetry-hook-disabled-'),
   );
   const path = join(sandbox, 'config.json');
@@ -940,7 +943,7 @@ test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv honors a repository-local
 });
 
 test('resolveEffectiveCritiqueLoopTelemetryHookFromEnv fails closed on a malformed repository-local hook without inheriting the global object (#2679)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-user-global-telemetry-hook-malformed-'),
   );
   const path = join(sandbox, 'config.json');
@@ -1831,7 +1834,7 @@ test('malformed local issue-authoring delegates do not inherit global commands',
 });
 
 test('loadRepositoryPolicyDocument applies canonical-first and legacy fallback semantics', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-repository-policy-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-repository-policy-'));
   const legacyPath = writeRepositoryPolicy(
     root,
     'idd-policy.json',

@@ -411,6 +411,27 @@ directory or leaves `PATH` unset (preventive; no observed incident yet).
 The `Windows platform tests` job runs the two `path shim: windows` cases by
 name pattern.
 
+The preload also gives each test file its own temporary directory
+(kurone-kito/idd-skill#4049). Before the state root, it creates an
+`idd-test-tmp-*` directory under the caller's temporary directory and sets
+`TMPDIR`, `TEMP` and `TMP` to it, so `os.tmpdir()` resolves to it on every
+platform. At exit, after the GitHub CLI ledger check and the state-root scan,
+it names every entry left directly in that directory and then removes it. It
+skips its own `idd-test-state-*` and `idd-test-gh-guard-*` roots and Node's
+`node-compile-cache`. A leftover fails the file on every platform except
+`win32`, where it is only printed as a warning: Windows can keep an
+`idd-stub-*` or `idd-fixture-gh-*` directory locked while its executable
+runs (kurone-kito/idd-skill#3680), and no Windows leftover has been measured.
+`tests/temp-leftovers.mts` holds that rule as a pure function. A test removes
+each fixture it creates in an `after` hook or a `finally` block;
+`trackTempDirectories` in `tests/temp-fixtures.mts` does that for a whole
+file. Observed on 2026-10-11: 16 of 216 test files left fixtures in `/tmp`, a
+tmpfs, which then held about 90,000 `idd-*` entries, after
+kurone-kito/idd-skill#2396 had fixed the same pattern in one file. A child
+spawned with an explicit environment that omits all three variables is not
+covered, a run stopped by a signal leaves the directory behind, and on
+`win32` a locked leftover keeps the directory behind too.
+
 Unit tests import the typed `src/scripts/*.mts`
 sources so assertions are checked against the real signatures;
 CLI/integration tests keep spawning the emitted `scripts/*.mjs` /

@@ -10,9 +10,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { classifyTempLeftovers } from './temp-leftovers.mts';
 
 // Pins `tests/isolate-state.mts` (issue #3725): every case spawns a real Node
 // child with the preload, because the guard's whole behavior is what a
@@ -362,8 +363,13 @@ process.stdout.write(process.env.IDD_TEST_STATE_ROOT);
     assert.doesNotMatch(result.stderr, /EACCES|\n\s+at /);
   } finally {
     // The listener could not remove the locked directory, so the parent does.
-    chmodSync(join(root, 'state', 'other', 'locked'), 0o755);
-    rmSync(root, { recursive: true, force: true });
+    // The root sits in the child's per-process temporary directory (#4049),
+    // which the child could not remove either; left in this process's own
+    // temporary directory, it would fail this test file at exit.
+    if (root !== '') {
+      chmodSync(join(root, 'state', 'other', 'locked'), 0o755);
+      rmSync(dirname(root), { recursive: true, force: true });
+    }
   }
 });
 
@@ -389,6 +395,149 @@ require('node:fs').writeFileSync(require('node:path').join(process.env.XDG_STATE
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(reportedPaths(result.stderr), ['state/idd-note']);
 });
+
+test('os.tmpdir(), TMPDIR, TEMP and TMP resolve to one per-process directory that is gone after exit (#4049)', () => {
+  const result = runWithPreload(
+    `
+process.stdout.write(JSON.stringify({
+  tmpdir: require('node:os').tmpdir(),
+  TMPDIR: process.env.TMPDIR,
+  TEMP: process.env.TEMP,
+  TMP: process.env.TMP,
+  root: process.env.IDD_TEST_STATE_ROOT,
+}));
+`,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const printed = JSON.parse(result.stdout) as Record<string, string>;
+  const directory = printed.tmpdir as string;
+  assert.ok(basename(directory).startsWith('idd-test-tmp-'), directory);
+  assert.equal(printed.TMPDIR, directory);
+  assert.equal(printed.TEMP, directory);
+  assert.equal(printed.TMP, directory);
+  // The state root is created directly inside it. The GitHub CLI guard root
+  // is not checked here: under the preload this file's guarded spawn hands
+  // the child this file's own guard root, so the child creates none.
+  assert.equal(dirname(printed.root as string), directory, 'state root');
+  assert.equal(
+    existsSync(directory),
+    false,
+    'the directory is removed on exit',
+  );
+});
+
+/** The report's temporary-directory entry lines, trimmed. */
+function reportedTempEntries(stderr: string): string[] {
+  const lines = stderr.split('\n');
+  const start = lines.findIndex((line) => line.includes('TEMP LEAK:'));
+  if (start === -1) return [];
+  const entries: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.startsWith('  ')) break;
+    entries.push(line.trim());
+  }
+  return entries;
+}
+
+/**
+ * The cases below assert exit code 1, which a leftover only causes off
+ * `win32`; there it is printed as a warning instead (rule 4 of #4049), and
+ * the pure-function case covers that branch on every platform.
+ */
+const POSIX_EXIT_CODE = {
+  skip:
+    process.platform === 'win32'
+      ? 'a temporary-directory leftover only warns on win32'
+      : false,
+};
+
+test(
+  'an empty directory left in the temporary directory fails the process and is named (#4049)',
+  POSIX_EXIT_CODE,
+  () => {
+    const result = runWithPreload(`
+require('node:fs').mkdirSync(require('node:path').join(require('node:os').tmpdir(), 'left-behind'));
+`);
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(reportedTempEntries(result.stderr), ['left-behind']);
+    assert.deepEqual(reportedPaths(result.stderr), [], 'not a state-root leak');
+  },
+);
+
+test(
+  'an idd-stub-* entry left in the temporary directory is reported too (#4049)',
+  POSIX_EXIT_CODE,
+  () => {
+    const result = runWithPreload(`
+require('node:fs').mkdirSync(require('node:path').join(require('node:os').tmpdir(), 'idd-stub-x'));
+`);
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(reportedTempEntries(result.stderr), ['idd-stub-x']);
+  },
+);
+
+test('a node-compile-cache entry in the temporary directory is not reported (#4049)', () => {
+  const result = runWithPreload(`
+const path = require('node:path');
+const cache = path.join(require('node:os').tmpdir(), 'node-compile-cache', 'v1');
+require('node:fs').mkdirSync(cache, { recursive: true });
+require('node:fs').writeFileSync(path.join(cache, 'entry'), 'x');
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /TEMP (LEAK|warning)/);
+});
+
+test('on win32 a temporary-directory leftover only warns; elsewhere it fails (#4049)', () => {
+  const names = [
+    'left-behind',
+    'idd-stub-x',
+    'node-compile-cache',
+    'idd-test-state-a',
+    'idd-test-gh-guard-b',
+  ];
+  assert.deepEqual(classifyTempLeftovers(names, 'win32'), {
+    fail: [],
+    warn: ['idd-stub-x', 'left-behind'],
+  });
+  for (const platform of ['linux', 'darwin']) {
+    assert.deepEqual(classifyTempLeftovers(names, platform), {
+      fail: ['idd-stub-x', 'left-behind'],
+      warn: [],
+    });
+  }
+});
+
+test(
+  'a relative TMPDIR and a chdir cannot hide a temporary-directory leftover (#4049)',
+  POSIX_EXIT_CODE,
+  () => {
+    mkdirSync(join(scratch, 'reltmp-4049'), { recursive: true });
+    const result = runWithPreload(
+      `
+require('node:fs').writeFileSync(require('node:path').join(require('node:os').tmpdir(), 'left-file'), 'x');
+process.chdir('reltmp-4049');
+process.env.TMPDIR = '.';
+process.env.TEMP = '.';
+process.env.TMP = '.';
+`,
+      {
+        env: {
+          ...cleanEnvironment(),
+          TMPDIR: 'reltmp-4049',
+          TEMP: 'reltmp-4049',
+          TMP: 'reltmp-4049',
+        },
+      },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(reportedTempEntries(result.stderr), ['left-file']);
+    assert.deepEqual(
+      readdirSync(join(scratch, 'reltmp-4049')),
+      [],
+      'the per-process directory is removed',
+    );
+  },
+);
 
 test('a symbolic link under an idd-* entry is reported as the link and not followed (#3725)', {
   skip:
