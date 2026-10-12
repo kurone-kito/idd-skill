@@ -70,6 +70,22 @@ LAST_COPILOT_COMMIT=$(
   | jq -rs 'sort_by(.sa) | last | .cid // ""'
 )
 
+# #4070: this path cannot run the gate's cited-item check, so any same-head
+# Copilot review with a "Previously missed" section holds (AW4). The helper
+# decides the precise file-or-line rule; this check only fails closed.
+SAME_HEAD_PREVIOUSLY_MISSED=$(
+  gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" --paginate \
+  | jq -rs --arg sha "${PR_HEAD_SHA}" '
+      [ .[][] | select(.commit_id == $sha
+          and ((.user.login // "") as $l
+               | $l == "copilot-pull-request-reviewer" or $l == "copilot-pull-request-reviewer[bot]")
+          and ((.body // "") | contains("Previously missed"))) ] | length'
+)
+[ "${SAME_HEAD_PREVIOUSLY_MISSED}" = "0" ] || {
+  echo "same-head review has a Previously-missed section; hold (AW4) #4070" >&2
+  exit 2
+}
+
 COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_reviewers" \
   --jq '.users | any((.login // "" | ascii_downcase) as $l | $l == "copilot" or $l == "copilot-pull-request-reviewer" or $l == "copilot-pull-request-reviewer[bot]")')
 # Observed once: requested_reviewers can lag a successful re-request
