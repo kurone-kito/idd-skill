@@ -5195,9 +5195,13 @@ test('#4015: a decision-rule diff receives no auto-waiver and is not ready witho
     assert.ok(
       verdict.reasons.some(
         (reason) =>
-          reason.includes(path) && reason.includes('trustedMarkerActors'),
+          reason.includes(path) &&
+          reason.includes('trustedMarkerActors') &&
+          // #4050: both routes for the maintainer-authorized waiver.
+          reason.includes('deadline') &&
+          reason.includes('terminally unavailable'),
       ),
-      `expected a decision-rule reason naming ${path}`,
+      `expected a decision-rule reason naming ${path} and both waiver routes`,
     );
   }
 });

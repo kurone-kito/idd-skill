@@ -483,7 +483,8 @@ export const SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES = [
  * passes only through a fresh converged review, through an approving
  * review on the current HEAD from a login in the configured
  * `trustedMarkerActors` list (see `computeAdvisoryConvergenceVerdict`), or
- * through the maintainer-authorized waiver after the deadline.
+ * through the maintainer-authorized waiver, which applies after the
+ * deadline or while Copilot is terminally unavailable.
  * Observed incident: PR #3999 (issue #3945) and PR #4000 (issue #3942)
  * both merged through the waiver, and PR #4000 changed the cited-item
  * rules that decide whether a finding counts as settled, with no
@@ -2727,7 +2728,7 @@ export function computeAdvisoryConvergenceVerdict(
     !decisionRuleApprovalValid
   ) {
     reasons.push(
-      `this pull request changes the gate's own decision rules (${touchedDecisionRuleFiles.join(', ')}), so the self-referential-bootstrap-auto waiver does not apply: it needs a converged review, an approving review on the current HEAD from a login in trustedMarkerActors, or a maintainer-authorized waiver after the deadline`,
+      `this pull request changes the gate's own decision rules (${touchedDecisionRuleFiles.join(', ')}), so the self-referential-bootstrap-auto waiver does not apply: it needs a converged review, an approving review on the current HEAD from a login in trustedMarkerActors, or a maintainer-authorized waiver after the deadline or while Copilot is terminally unavailable`,
     );
   }
 
