@@ -52,7 +52,7 @@ implementation). As at C1, if possible, a per-agent subagent's brief
 names a parent-created scratch directory and quotes rule 3 of
 `docs/idd-workflow.md`'s "Critique pass invocation" section: "the
 subagent uses only that directory and creates none"; run that section's
-post-round scratch check after each pass.
+post-round scratch check after each such pass.
 The distributed defaults for the E10 guardrails are
 listed in `docs/policy-constants.md`. Keep an E10 pass count for the
 current E9 fix batch.
