@@ -8969,6 +8969,43 @@ test('stamped disposition (#4007): cited-only items name the stamped reply, not 
   assert.doesNotMatch(text, /--type review-ack/);
 });
 
+test('stamped disposition (#4063): the pointer names the body-item helper and the guidance follows on its own lines', () => {
+  const { items, text } = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY);
+  const item = items.find(
+    (entry) => entry.token === 'stamped-disposition-suppressed',
+  );
+  assert.ok(item);
+  assert.match(item.pointer, /^node scripts\/resolve-review-thread\.mjs /);
+  for (const flag of [
+    '--pr',
+    '--review-id',
+    '--item-title',
+    '--body',
+    '--claim-issue',
+    '--claim-id',
+    '--apply',
+  ]) {
+    assert.ok(item.pointer.includes(flag), flag);
+  }
+  assert.doesNotMatch(item.pointer, /gh pr comment/);
+  assert.doesNotMatch(text, /gh pr comment/);
+  assert.match(text, /opens with \*\*Accepted\*\*/);
+  assert.match(text, /A review-ack does not cover these\./);
+  const lines = text.split('\n');
+  const pointerAt = lines.findIndex((line) => line.includes(item.pointer));
+  assert.ok(pointerAt >= 0);
+  assert.match(lines[pointerAt + 1] ?? '', /--claimless \(#2616\)\.$/);
+  assert.match(
+    lines[pointerAt + 2] ?? '',
+    /--item-index <n> immediately before --apply\.$/,
+  );
+  assert.match(lines[pointerAt + 3] ?? '', /Previously missed section/);
+  assert.match(
+    lines[pointerAt + 3] ?? '',
+    /do not answer it with a direct PR comment\.$/,
+  );
+});
+
 test('stamped disposition (#4007): mixed items name the stamped reply first, then a citation-free ack', () => {
   const { verdict, items, text } = nextActionsFor(MIXED_PREVIOUSLY_MISSED_BODY);
   assert.equal(verdict.review.suppressedCount, 2);
