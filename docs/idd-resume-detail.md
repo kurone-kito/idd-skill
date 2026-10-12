@@ -1128,7 +1128,7 @@ succeeded.
    --agent-id <id> --claim-id <id>`.
 3. Claim POST, with the branch of the existing PR:
    `node scripts/post-idd-marker.mjs --target issue <N> --type claim
-   --agent-id <id> --claim-id <id> --timestamp <ISO8601> --branch <branch>
+   --agent-id <id> --claim-id <id> --timestamp <ISO8601> --branch "$BRANCH"
    --apply`.
 4. Activation-nonce POST. Generate a fresh opaque nonce for this claim id,
    and never reuse one from an earlier attempt, as the lite claim sequence
