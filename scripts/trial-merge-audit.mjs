@@ -495,7 +495,8 @@ function audit(args) {
   const baseSet = new Set(baseTooling);
   const prOnlyTooling = mergedTooling.filter((path) => !baseSet.has(path));
   for (const path of prOnlyTooling) {
-    rmSync(join(tmp, path), { force: true });
+    // Recursive, so a gitlink that checked out as an empty directory is removed.
+    rmSync(join(tmp, path), { recursive: true, force: true });
   }
   // The scratch index still lists these paths, and the commands enumerate it
   // with git ls-files --cached, so they must leave the index as well.

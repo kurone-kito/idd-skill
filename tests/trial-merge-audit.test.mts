@@ -384,6 +384,7 @@ test('PR-only tooling leaves the scratch index, so commands cannot list it', () 
         listed = execFileSync('git', ['ls-files', '--cached'], {
           cwd,
           encoding: 'utf8',
+          env: GIT_ENV,
         }).split('\n');
       }
       return { exitCode: 0 };
