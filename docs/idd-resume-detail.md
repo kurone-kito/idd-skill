@@ -1113,8 +1113,17 @@ succeeded.
    `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
    returns `claimable`.
 2. Before the claim POST, validate the branch name and record the tokens on
-   the primary worktree. A branch name that fails
-   `git check-ref-format "refs/heads/<branch>"` holds here, before any POST:
+   the primary worktree. Assign the recovered branch to `BRANCH` once, as a
+   single-quoted value with any embedded single quote written as `'\''`. Never
+   write the value itself inside double quotes, because `$(...)` would run
+   there. Then validate. A failure holds here, before any POST:
+
+   ```sh
+   BRANCH='<branch>'
+   git check-ref-format "refs/heads/$BRANCH"
+   ```
+
+   Then record the tokens:
    `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
    --agent-id <id> --claim-id <id>`.
 3. Claim POST, with the branch of the existing PR:
