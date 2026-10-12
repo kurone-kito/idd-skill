@@ -234,6 +234,9 @@ function makeSandbox(fixtures: Fixtures): string {
         submitted_at: '2026-10-08T09:00:00Z',
         commit_id: HEAD_SHA,
         id: 900,
+        // #4070: a real review always carries a body. An empty or missing body
+        // holds the shell AW1 check, so the default fixture is a clean v2 review.
+        body: '<!-- ccr-overview-v2 -->\n\nNo findings.',
       },
     ],
   );

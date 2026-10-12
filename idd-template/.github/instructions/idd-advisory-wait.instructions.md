@@ -101,7 +101,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 | Outcome | D4 | E14 | F2 | F3 |
 | --- | --- | --- | --- | --- |
 | `SATISFIED` | `lastCopilotCommit` matches HEAD: rerun `idd-advisory-convergence`; resume D4. Elapsed-window `SATISFIED`: exit CI-wait; proceed to E1 | proceed to E15 | continue to CI check | proceed with merge |
-| `DISPOSITION_NEEDED` (#4070) | exit CI-wait; proceed to E1 | answer the cited items (E6), then rerun AW1 | return to E14 | do not merge |
+| `DISPOSITION_NEEDED` (#4070) | exit CI-wait; proceed to E1 | answer the cited items (E6), or review-ack an unreadable review; rerun AW1 | return to E14 | do not merge |
 | `REQUEST_NEEDED` | `copilotPending` false: E14 guarded registration, then marker after evidence; resume D4. `copilotPending` true: exit CI-wait; proceed to E1 | request Copilot + marker + poll | return to E14 | return to E14 |
 | `RECOVERY_NEEDED` | exit CI-wait; proceed to E1 | post recovery marker + poll | post recovery marker + poll | post recovery marker; return to F2 |
 | `CAP_EXHAUSTED` | exit CI-wait; proceed to E1 | use `CAP_EXHAUSTED_ROUTE` | post cap-exhausted hold and stop | post cap-exhausted hold and stop |
@@ -152,7 +152,7 @@ AW3 inputs:
 
 - `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
   (empty if none); equals `PR_HEAD_SHA` short-circuits to **SATISFIED**
-  unless that review has a Previously-missed section (#4070): hold (AW4).
+  unless it has suppressed items or an empty body (#4070): hold (AW4).
 - `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
   Observed once: `false` can lag a re-request or empty on submit —
   not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**
@@ -198,7 +198,7 @@ Evaluate top-to-bottom; first match wins.
 <!-- dprint-ignore-start -->
 | `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state | Head proof / cap | Elapsed | Outcome |
 | --- | --- | --- | --- | --- | --- |
-| `== PR_HEAD_SHA` | any | any | cited item lacks disposition (#4070) | any | `DISPOSITION_NEEDED` |
+| `== PR_HEAD_SHA` | any | any | suppressed items or empty body (#4070) | any | `HOLD` (AW4) |
 | `== PR_HEAD_SHA` | any | any | any | any | `SATISFIED` |
 | `!= PR_HEAD_SHA` | `"true"` | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true` | — | `RECOVERY_NEEDED` |
 | `!= PR_HEAD_SHA` | `"true"` | no same-head marker | not proven; `REQUEST_MARKER_COUNT` < `REQUEST_CAP` | — | `REQUEST_NEEDED` |

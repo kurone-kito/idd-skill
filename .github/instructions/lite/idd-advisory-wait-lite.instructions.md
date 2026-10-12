@@ -104,7 +104,7 @@ yourself. A missing field is a malformed helper response: stop and ask.
 | `RECOVERY_NEEDED` | post the recovery marker (do not request another review), then poll |
 | `CAP_EXHAUSTED` | `phase-specific` (default): proceed to CI wait. `hold`: stop and ask (`HOLD`'s only route; see above) |
 | `WAIT` | keep polling |
-| `DISPOSITION_NEEDED` (#4070) | answer the cited items (E6), then rerun the helper |
+| `DISPOSITION_NEEDED` (#4070) | answer the cited items (E6), or post a review-ack for an unreadable review, then rerun the helper |
 <!-- dprint-ignore-end -->
 
 `capExhaustedRoute: phase-specific` lets E14 continue past

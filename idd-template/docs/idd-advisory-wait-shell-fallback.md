@@ -70,19 +70,24 @@ LAST_COPILOT_COMMIT=$(
   | jq -rs 'sort_by(.sa) | last | .cid // ""'
 )
 
-# #4070: this path cannot run the gate's cited-item check, so any same-head
-# Copilot review with a "Previously missed" section holds (AW4). The helper
-# decides the precise file-or-line rule; this check only fails closed.
-SAME_HEAD_PREVIOUSLY_MISSED=$(
-  gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" --paginate \
-  | jq -rs --arg sha "${PR_HEAD_SHA}" '
+# #4070: this path cannot run the gate's cited-item check, so it fails closed.
+# A same-head Copilot review whose body is empty, or carries a suppressed-items
+# heading (v2 "Previously missed" or legacy "Suppressed comments"), holds (AW4).
+# The helper decides the precise rule; this check never grants SATISFIED.
+SAME_HEAD_REVIEWS_JSON=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" --paginate) || {
+  echo "reviews read failed; not trusted (#4070)" >&2
+  exit 2
+}
+SAME_HEAD_UNCLEARED=$(
+  printf '%s' "$SAME_HEAD_REVIEWS_JSON" | jq -rs --arg sha "${PR_HEAD_SHA}" '
       [ .[][] | select(.commit_id == $sha
-          and ((.user.login // "") as $l
-               | $l == "copilot-pull-request-reviewer" or $l == "copilot-pull-request-reviewer[bot]")
-          and ((.body // "") | contains("Previously missed"))) ] | length'
+          and ((.user.login // "") | ascii_downcase
+               | . == "copilot" or . == "copilot-pull-request-reviewer" or . == "copilot-pull-request-reviewer[bot]")
+          and (((.body // "") | ascii_downcase) as $b
+               | $b == "" or ($b | contains("previously missed")) or ($b | contains("suppressed comments")))) ] | length'
 )
-[ "${SAME_HEAD_PREVIOUSLY_MISSED}" = "0" ] || {
-  echo "same-head review has a Previously-missed section; hold (AW4) #4070" >&2
+[ "${SAME_HEAD_UNCLEARED}" = "0" ] || {
+  echo "same-head Copilot review is unreadable or has suppressed items; hold (AW4) #4070" >&2
   exit 2
 }
 
