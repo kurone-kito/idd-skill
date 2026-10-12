@@ -1098,14 +1098,12 @@ or log — never as an issue/PR comment on a non-owned claim:
 ## Re-claim an inheritable branch
 
 Use this sequence when a fresh claim must reuse an existing PR branch, an
-inheritable branch whose commits beyond `origin/main` must be kept. The
-fresh-branch order in `idd-claim.instructions.md` creates a new branch from
-`origin/{development-branch}` and does not apply. The full claim file starts
-from `origin/{development-branch}`, and the lite file starts from
-`origin/main`. This sequence attaches the existing branch instead. Observed
-2026-10-12, `kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached
-the existing PR branch as a sibling worktree before the claim, and the lite
-order succeeded.
+inheritable branch whose commits beyond `origin/{development-branch}` must be
+kept. The fresh-branch order in `idd-claim.instructions.md` creates a new
+branch from its base ref and does not apply. This sequence attaches the
+existing branch instead. Observed 2026-10-12, `kurone-kito/idd-skill#3708`
+(PR `#4030`): the claimant attached the existing PR branch as a sibling
+worktree before the claim, and the lite order succeeded.
 
 1. Fresh-claim gate with no worktree:
    `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
@@ -1117,21 +1115,27 @@ order succeeded.
    `node scripts/post-idd-marker.mjs --target issue <N> --type claim
    --agent-id <id> --claim-id <id> --timestamp <ISO8601> --branch <branch>
    --apply`.
-4. Activation-nonce POST. Record the nonce on the primary worktree first:
+4. Activation-nonce POST. Generate a fresh opaque nonce for this claim id,
+   and never reuse one from an earlier attempt, as the lite claim sequence
+   requires. Record it on the primary worktree first:
    `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
    --agent-id <id> --claim-id <id> --nonce <nonce>`, then:
    `node scripts/post-idd-marker.mjs --target issue <N> --type
    activation-nonce --agent-id <id> --claim-id <id> --nonce <nonce>
    --timestamp <ISO8601> --apply`.
-5. Attach the existing branch to a sibling worktree:
+5. Provision the local branch when it exists only as `origin/<branch>`, as
+   §W7 steps 1 and 2 do. Neither command moves the primary HEAD:
+   `git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>`,
+   then `git branch <branch> origin/<branch>`.
+6. Attach the local branch to a sibling worktree:
    `git worktree add <path> <branch>`, without `-b`.
-6. Carry the nonce forward on the linked worktree:
+7. Carry the nonce forward on the linked worktree:
    `node scripts/claim-lock.mjs --record-tokens --worktree <linked>
    --agent-id <id> --claim-id <id> --nonce <nonce>`.
-7. Acquire on the linked worktree:
+8. Acquire on the linked worktree:
    `node scripts/claim-lock.mjs --acquire --worktree <linked> --agent-id <id>
    --claim-id <id>`.
-8. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
+9. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
    `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
    --nonce <nonce> --worktree <linked>`. It returns `already_owned` with
    action `keep`. Do not assert before the delay: the nonce and the claim
