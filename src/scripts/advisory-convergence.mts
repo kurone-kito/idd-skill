@@ -3572,6 +3572,13 @@ export function createCopilotRequestCoverage(
 defaultDeps.copilotReviewRequestCoversHead = createCopilotRequestCoverage();
 
 /**
+ * #3944: the same poll also covers a stale head whose Copilot re-review was
+ * requested after the head commit ({@link isSoleStaleHeadCopilotReviewReason}
+ * plus `deps.copilotReviewRequestCoversHead`, read once per observed head and
+ * only for that verdict shape). A stale head with no such request, or with any
+ * other blocking reason, still fails on the first pass. A review that never
+ * lands still fails at the ceiling.
+ *
  * #2015: wraps {@link runAdvisoryConvergence} with a short, bounded poll
  * for the narrow case {@link isSoleCopilotNotReviewedYetReason} identifies
  * -- absorbing the common race where the `pull_request`/`pull_request_target`

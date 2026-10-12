@@ -6323,8 +6323,8 @@ reflexively as any other CLI option.
   stale-coverage reason and a Copilot `review_requested` event is recorded
   after the head commit (`computeCopilotPendingCoversHead`). A stale head
   with no such request, or with any other blocking reason, still fails at
-  once, as before. The timeline is read once per run and only for this
-  verdict shape. Each poll tick adds the same watch call as the `#2015`
+  once, as before. The timeline is read once per observed head and only for
+  this verdict shape. Each poll tick adds the same watch call as the `#2015`
   poll. The workflow runs with `cancel-in-progress: true`, so a later push
   or trigger can cancel a long poll; the next run then re-evaluates the new
   head. The `idd-advisory-convergence` job has `timeout-minutes: 14`, which
