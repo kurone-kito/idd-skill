@@ -5247,10 +5247,13 @@ still fails closed:
   usage error raised before any `gh` call. For a released claim's branch
   only, the gate drops an occupant that resolves to `<path>` when that
   worktree is on the branch, `git status --porcelain --untracked-files=all`
-  is empty, and `HEAD` has no commits beyond `origin/<developmentBranch>`
-  (`refs/remotes/origin/HEAD` when the policy sets none; a missing or
-  outdated `origin/HEAD`, or an invalid `developmentBranch`, keeps the
-  block). With no occupant left, the verdict is `claimable` and
+  is empty, and either `HEAD` has no commits beyond
+  `origin/<developmentBranch>` (`refs/remotes/origin/HEAD` when the policy
+  sets none; a missing or outdated `origin/HEAD`, or an invalid
+  `developmentBranch`, keeps that base check from passing), or `HEAD` equals
+  `refs/remotes/origin/<branch>` (#4067: a released PR branch's own pushed
+  tip, which needs no base ref). The occupant still has to resolve to
+  `<path>`. With no occupant left, the verdict is `claimable` and
   `warnings[]` names the ignored path. Another occupant or any failed
   check keeps `already-claimed` with reason
   `released-claim-local-worktree-occupied`. An `unreadable` probe and a
