@@ -22,18 +22,23 @@ import {
   runPrePushTrialBudget,
 } from '../src/scripts/pre-push-trial-budget.mts';
 
-// A stub audit-docs in the printed shape of the real one: a budget breach and a
-// tooling-ledger failure each print one `- <rule>: <message>` line. The base
-// tip's copy is what the trial runs, so a breach that only the merged tree
-// carries fails. `ledger-stale.txt` stands in for a helper the base ledger does
-// not list.
+// A stub audit-docs in the printed shape of the real one. Its budget is the
+// size in budget.txt against the limit in audit/sync-manifest.json, read from
+// the working directory, as the real audit reads its policy. Each failure is one
+// `- <rule>: <message>` line. `ledger-stale.txt` stands in for a helper the base
+// ledger does not list, and `required-missing.txt` for a missing required input.
 const AUDIT_STUB = `import { existsSync, readFileSync } from 'node:fs';
+const limit = JSON.parse(readFileSync('audit/sync-manifest.json', 'utf8')).limit;
+const size = Number(readFileSync('budget.txt', 'utf8').trim());
 const failures = [];
-if (readFileSync('budget.txt', 'utf8').trim() !== 'ok') {
-  failures.push('- context-ceiling-200k: budget breached');
+if (size > limit) {
+  failures.push(\`- context-ceiling-200k: \${size} bytes exceeds the \${limit}-byte limit\`);
 }
 if (existsSync('ledger-stale.txt')) {
   failures.push('- repository-inventory-audit/help-flag-coverage: helper missing from COVERED_HELPERS');
+}
+if (existsSync('required-missing.txt')) {
+  failures.push('- repository-inventory-audit-required-file: scripts/x.mjs is missing');
 }
 if (failures.length > 0) {
   console.log('documentation audit failed:');
@@ -41,6 +46,9 @@ if (failures.length > 0) {
   process.exitCode = 1;
 }
 `;
+
+const BREACH_MESSAGE =
+  '- context-ceiling-200k: 20 bytes exceeds the 10-byte limit';
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -67,8 +75,9 @@ function commitFile(
 
 /**
  * A bare origin, a seed that pushes `main`, and a work clone on `feature`.
- * `main` then moves on in the seed and is fetched, so the work clone's HEAD is
- * behind `origin/main`. Returns the paths and the feature tip.
+ * The budget is 5 against a limit of 10, so the base is within budget. `main`
+ * then moves on in the seed and is fetched, so the work clone's HEAD is behind
+ * `origin/main`.
  */
 function behindFixture(): {
   root: string;
@@ -83,8 +92,15 @@ function behindFixture(): {
   execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', origin]);
   execFileSync('git', ['init', '--quiet', '-b', 'main', seed]);
   mkdirSync(join(seed, 'scripts'));
+  mkdirSync(join(seed, 'audit'));
   commitFile(seed, 'scripts/audit-docs.mjs', AUDIT_STUB, 'add audit stub');
-  commitFile(seed, 'budget.txt', 'ok\n', 'budget ok');
+  commitFile(
+    seed,
+    'audit/sync-manifest.json',
+    '{"limit": 10}\n',
+    'add manifest',
+  );
+  commitFile(seed, 'budget.txt', '5\n', 'budget 5');
   git(seed, ['remote', 'add', 'origin', origin]);
   git(seed, ['push', '--quiet', 'origin', 'main']);
   execFileSync('git', ['clone', '--quiet', origin, work]);
@@ -115,7 +131,7 @@ function auditAt(cwd: string): number {
 test('a branch behind main fails when the merged tree breaches the budget (#4010)', (t) => {
   const f = behindFixture();
   t.after(() => rmSync(f.root, { recursive: true, force: true }));
-  advanceMain(f, 'budget.txt', 'over\n');
+  advanceMain(f, 'budget.txt', '20\n');
   // The branch alone is within budget, so the existing branch-only check passes.
   assert.equal(auditAt(f.work), 0);
 
@@ -123,6 +139,7 @@ test('a branch behind main fails when the merged tree breaches the budget (#4010
   assert.equal(result.outcome, 'fail');
   assert.equal(result.behind, true);
   assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.auditFailures, [BREACH_MESSAGE.slice(2)]);
 });
 
 test('a behind branch whose merge stays within budget passes the trial (#4010)', (t) => {
@@ -151,7 +168,7 @@ test('a merge conflict is reported without running the audit (#4010)', (t) => {
 test('a branch that already contains main is a no-op, so the chain is unchanged (#4010)', (t) => {
   const f = behindFixture();
   t.after(() => rmSync(f.root, { recursive: true, force: true }));
-  advanceMain(f, 'budget.txt', 'over\n');
+  advanceMain(f, 'budget.txt', '20\n');
   git(f.work, [
     '-c',
     'user.name=t',
@@ -171,7 +188,7 @@ test('a branch that already contains main is a no-op, so the chain is unchanged 
 test('the check never pushes or moves a branch or remote ref (#4010)', (t) => {
   const f = behindFixture();
   t.after(() => rmSync(f.root, { recursive: true, force: true }));
-  advanceMain(f, 'budget.txt', 'over\n');
+  advanceMain(f, 'budget.txt', '20\n');
   const before = {
     head: git(f.work, ['rev-parse', 'HEAD']),
     base: git(f.work, ['rev-parse', 'origin/main']),
@@ -220,7 +237,7 @@ test('an unresolvable base fails closed (#4010)', (t) => {
   });
   assert.equal(result.outcome, 'unresolved-ref');
   assert.equal(result.exitCode, 1);
-  assert.equal(readFileSync(join(f.work, 'budget.txt'), 'utf8'), 'ok\n');
+  assert.equal(readFileSync(join(f.work, 'budget.txt'), 'utf8'), '5\n');
 });
 
 test('a host post-checkout hook does not run during the scratch operations (#4010)', {
@@ -228,7 +245,7 @@ test('a host post-checkout hook does not run during the scratch operations (#401
 }, (t) => {
   const f = behindFixture();
   t.after(() => rmSync(f.root, { recursive: true, force: true }));
-  advanceMain(f, 'budget.txt', 'over\n');
+  advanceMain(f, 'budget.txt', '20\n');
   const marker = join(f.root, 'hook-ran');
   const hook = join(f.work, '.git', 'hooks', 'post-checkout');
   writeFileSync(hook, `#!/bin/sh\necho ran > "${marker}"\nexit 1\n`, {
@@ -262,14 +279,48 @@ test('a budget failure is counted even when a ledger failure is also present (#4
   const f = behindFixture();
   t.after(() => rmSync(f.root, { recursive: true, force: true }));
   commitFile(f.work, 'ledger-stale.txt', 'helper\n', 'branch adds a helper');
-  advanceMain(f, 'budget.txt', 'over\n');
+  advanceMain(f, 'budget.txt', '20\n');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'fail');
+  assert.deepEqual(result.auditFailures, [BREACH_MESSAGE.slice(2)]);
+  assert.equal(result.ignoredTooling.length, 1);
+  assert.equal(result.exitCode, 1);
+});
+
+test('a required-input failure is not mistaken for a ledger failure (#4010)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  // A missing required input means the audit cannot run, so it counts.
+  commitFile(f.work, 'required-missing.txt', 'x\n', 'branch removes an input');
+  advanceMain(f, 'unrelated.txt', 'main work\n');
 
   const result = runPrePushTrialBudget({ cwd: f.work });
   assert.equal(result.outcome, 'fail');
   assert.deepEqual(result.auditFailures, [
-    'context-ceiling-200k: budget breached',
+    'repository-inventory-audit-required-file: scripts/x.mjs is missing',
   ]);
-  assert.equal(result.ignoredTooling.length, 1);
+  assert.deepEqual(result.ignoredTooling, []);
+  assert.equal(result.exitCode, 1);
+});
+
+test('a branch cannot relax the budget through its own manifest (#4010)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  // The branch raises the limit in its own manifest. Its branch-only audit then
+  // passes, but the trial pins the base tip's policy, so the breach still fails.
+  commitFile(
+    f.work,
+    'audit/sync-manifest.json',
+    '{"limit": 100}\n',
+    'branch raises the limit',
+  );
+  advanceMain(f, 'budget.txt', '20\n');
+  assert.equal(auditAt(f.work), 0);
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'fail');
+  assert.deepEqual(result.auditFailures, [BREACH_MESSAGE.slice(2)]);
   assert.equal(result.exitCode, 1);
 });
 

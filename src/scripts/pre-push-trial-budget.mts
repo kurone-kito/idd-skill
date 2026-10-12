@@ -40,7 +40,8 @@ export const PRE_PUSH_TRIAL_BUDGET_FLAG_SPEC = {
  * `unresolved-ref`: HEAD or the base cannot be resolved, so the check fails
  * closed. `worktree-failed`: a scratch worktree could not be created.
  * `clone-lock-unavailable`: the repository clone lock was not taken in time, so
- * no shared worktree record was changed.
+ * no shared worktree record was changed. `policy-pin-failed`: the base tip's
+ * audit policy could not be pinned onto the trial tree, so the audit did not run.
  */
 export type PrePushTrialBudgetOutcome =
   | 'not-behind'
@@ -49,7 +50,8 @@ export type PrePushTrialBudgetOutcome =
   | 'merge-conflict'
   | 'unresolved-ref'
   | 'worktree-failed'
-  | 'clone-lock-unavailable';
+  | 'clone-lock-unavailable'
+  | 'policy-pin-failed';
 
 export interface PrePushTrialBudgetResult {
   outcome: PrePushTrialBudgetOutcome;
@@ -131,8 +133,11 @@ export function auditFailureLines(output: string): string[] {
     .map((line) => line.slice(2).trim());
 }
 
+// Only the slash-delimited rule IDs of the tooling ledger are ignored. A prefix
+// match would also hide `repository-inventory-audit-required-file`, which means
+// a required audit input is missing, so it counts.
 function isLedgerFailure(line: string): boolean {
-  return line.startsWith(LEDGER_RULE_PREFIX);
+  return line.startsWith(`${LEDGER_RULE_PREFIX}/`);
 }
 
 /**
@@ -244,6 +249,14 @@ export function runPrePushTrialBudget(options: {
     if (merged.status !== 0) {
       gitScratch(trialTree, ['merge', '--abort']);
       return { outcome: 'merge-conflict' };
+    }
+    // The audit reads its policy (budgets and rule lists) from audit/ under the
+    // working directory. Pin that directory to the base tip, so a branch cannot
+    // relax a budget by editing its own manifest. The measured files stay merged.
+    if (
+      gitScratch(trialTree, ['checkout', baseSha, '--', 'audit']).status !== 0
+    ) {
+      return { outcome: 'policy-pin-failed' };
     }
 
     const audit = spawnSync(
