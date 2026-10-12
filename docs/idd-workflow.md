@@ -1266,10 +1266,12 @@ identify its old claims, and step 1 treats them as not its own.
    profile-selected `idd-worker-budget` command with
    `--running <n> --startable <n>`, where `--running` is the count above and
    `--startable` is the number of startable candidates still in the
-   orchestrator's cached graph (0 when none). Add `--harness-limit <limit>`
-   when this harness's row in the worker mechanism table gives a numeric
-   limit, and omit it otherwise. When `--startable` is at least 1 and the
-   budget's `slots` is at least 1, run the profile-selected
+   orchestrator's cached graph, which a restart discards. After a restart, run
+   a fresh Discover pass first, as section 3 of the orchestrator phase file
+   describes, and count its candidates (0 when none). Add
+   `--harness-limit <limit>` when this harness's row in the worker mechanism
+   table gives a numeric limit, and omit it otherwise. When `--startable` is at
+   least 1 and the budget's `slots` is at least 1, run the profile-selected
    `discover-shared-file-overlap` command with
    `--issues <n,...>` (the startable candidates), `--batch <k>` (the `slots`
    value), `--check-overlap`, one `--in-flight <n>` for each counted running
