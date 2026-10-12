@@ -15,7 +15,7 @@ the local CLI. E14's timing defaults live in
 
 Apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-before E9, the E12 push, and each E13/E14/E15 GitHub side effect
+before E9, before filing the E10 follow-up, the E12 push, and each E13/E14/E15 GitHub side effect
 (reply, resolve, reviewer request, hold comment, or digest update).
 
 ## E9 — Fix accepted issues
