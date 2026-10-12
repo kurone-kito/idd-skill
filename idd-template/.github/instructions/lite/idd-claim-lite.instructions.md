@@ -8,9 +8,9 @@ forced-handoff. Prefer helpers.
 **Scope**: one selected issue; no open-ended Discover. Standard
 "Return to Discover" branches mean **STOP and report; do not claim**.
 
-**Context-pressure stop** (before Claim execution step 2): Fresh
-candidate: before claim, if context pressure prevents completing Claim
-through F4, report for handoff; stop; do not claim. Recovery unchanged.
+**Context-pressure stop** (before Claim execution step 2): If context pressure
+prevents completing Claim through F4, report for handoff and do not claim.
+Recovery unchanged.
 Make no claim-stage event/marker, branch/worktree, or issue-state change.
 (#3144; preventive)
 
@@ -57,15 +57,8 @@ local: related roadmap or child-issue claims never block them. Owner protocol:
 
 ### (a) Issue-author approval
 
-Helper-first:
-
-```sh
-node scripts/claim-approval-gate.mjs --issue <N>
-```
-
-Read `approved` / `reason` / `gateEnabled` / `checks` from the JSON
-output. `instructions-only` profile: use the written rules below
-directly (no helper for that profile).
+Helper: `node scripts/claim-approval-gate.mjs --issue <N>` (read `approved`,
+`reason`, `gateEnabled`, `checks`). `instructions-only`: the written rules below.
 
 - If `.github/idd/config.json` has `skipIssueAuthorApprovalGate: true`
   → skip this check.
@@ -79,8 +72,7 @@ directly (no helper for that profile).
   under that policy; the configured ready label
   (`approvalSignals.readyLabelName`, default `idd:ready`) is present —
   **only when repository policy reserves that label to maintainer
-  approval actors** (otherwise anyone could apply it, so presence alone
-  never counts) — fresh per `approvalSignals.labelFreshnessMode` when
+  approval actors** — fresh per `approvalSignals.labelFreshnessMode` when
   set to `event-freshness`, or presence alone under the `presence-only`
   default; or a visible `IDD ready` comment from a maintainer-approval
   actor, newer than the latest issue title/body/plan edit.
@@ -207,14 +199,12 @@ Compute the branch name (`issue/<number>-<slug>`) with the helper:
 node scripts/branch-name.mjs --number <N> --title "<issue-title>"
 ```
 
-Written fallback (`instructions-only` profile only): lowercase the
-title; replace every non `a-z`/`0-9`
-character with `-`; split on `-` and drop empty tokens and the
-stop-words `a`, `an`, `the`, `and`, `or`, `in`, `for`, `to`, `with`,
-`from`; rejoin with `-`; cut to 40 chars (back off to the last `-`
-before 40 if the cut lands mid-token **and** a `-` exists there;
-otherwise keep the hard 40-char cut); strip trailing `-`; empty result
-→ `task`.
+Written fallback (`instructions-only` profile only): lowercase the title;
+replace every non `a-z`/`0-9` character with `-`; split on `-` and drop empty
+tokens and the stop-words `a`, `an`, `the`, `and`, `or`, `in`, `for`, `to`,
+`with`, `from`; rejoin with `-`; cut to 40 chars (back off to the last `-`
+before 40 if mid-token; else hard-cut); strip trailing `-`; empty result →
+`task`.
 
 ```sh
 git worktree list --porcelain -z
@@ -332,20 +322,23 @@ holds the claim (failed `--record-tokens`, claim, or nonce post; step 6 lock
 collision or `--assert` not `already_owned`/`keep`; verification step 5
 `unclaimed-by`), run the script below as one clone-scoped hold
 (`node scripts/clone-lock.mjs --exec --agent-id <agent-id> -- bash <script>`).
-Never `--takeover`. Any nonzero exit keeps both and reports `<path>`.
-Instructions-only: helper-free fallbacks in `docs/idd-helper-scripts.md`.
+Never `--takeover`. The gates run before removal. Any failure before removal
+keeps the worktree, branch, and lock on purpose. If `git branch -D` fails after
+removal, or the harness denies it, report a leftover branch at `<branch>`.
+Instructions-only: lock from `docs/idd-helper-scripts.md`'s helper-free fallback,
+one clone per worker (`docs/idd-workflow.md`), route by the written Claim-state
+rules in (c).
 
 ```sh
 set -eu
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <agent-id> --claim-id <claim-id>
 route=$(node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --worktree <path>)
-printf '%s\n' "$route" | grep -Eq '^  "state": "(unclaimed|stale|non_inheritable)"' || exit 1
-if printf '%s\n' "$route" | grep -q '"claim_id": "<claim-id>"'; then exit 1; fi
-test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all)"
+printf '%s\n' "$route" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s).active_claim;process.exit(!a||a.claim_id!=="<claim-id>"?0:1)})'
+test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
+test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)"
 test "$(git rev-parse <branch>)" = "$(git rev-parse origin/main)"
-git -C <path> checkout --detach
-git branch -D <branch> || { git -C <path> checkout <branch>; exit 1; }
 git worktree remove <path>
+git branch -D <branch>
 ```
 
 ## Heartbeat posting
@@ -405,12 +398,11 @@ the pre-mutation guard in `idd-work-lite.instructions.md` with its scope
 rules; a failed
 check means stop, do not mutate further.
 
-**Digest**: after verification, upsert the issue's `idd-live-status`
-digest (only when exactly one exists, or none) — `Phase: A5 claimed`,
-`Claim`, `Branch`, `Open blockers: none`, and `Next action: B1 install dependencies`
-when step 2 created the worktree, otherwise `Next
-action: B1 create branch and worktree`. Multiple digests → report their URLs,
-do not edit either.
+**Digest**: after verification, upsert the issue's `idd-live-status` digest
+(only when exactly one exists, or none) — `Phase: A5 claimed`, `Claim`,
+`Branch`, `Open blockers: none`, and `Next action: B1 install dependencies` when
+step 2 created the worktree, otherwise `Next action: B1 create branch and
+worktree`. Multiple digests: report their URLs; edit neither.
 
 ## Worktree-local lock (same-machine fast path)
 

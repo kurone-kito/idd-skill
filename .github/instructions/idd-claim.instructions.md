@@ -315,46 +315,43 @@ every fresh `{claim-id}`.
 
 ### Lost-claim cleanup (`lost-claim-cleanup`)
 
-Run this after the step 1 worktree exists, at every exit where this session
-no longer holds the claim: a `--record-tokens` failure (step 2), a failed
-claim or activation-nonce post (step 3), a `--acquire` collision or any other
-non-success exit (step 4), an `--assert` result other than
-`already_owned`/`keep` (step 5), or an `unclaimed-by` posted after an
-authoring hold that followed a successful assert (Claim verification step 5).
-Never use `--takeover`. Save the script below with the placeholders filled in,
-resolve each helper as in A5(a) for the active profile, then run it as one
-hold of the
+Run this after the step 1 worktree exists, at every exit where this session no
+longer holds the claim: a failure in steps 2-5, or an `unclaimed-by` from
+Claim verification step 5. Never use `--takeover`. Fill in the placeholders of
+the script, resolve each helper as in A5(a), and run it as one hold of the
 [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
 `node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash <script>`.
-The re-check (steps 1-3) and the removal (steps 4-5) both run under that hold.
-Any nonzero exit keeps the worktree and branch and reports the path.
+The gates and the removal both run under that hold.
 
 ```sh
 set -eu
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
-printf '%s\n' "$route" | grep -Eq '^  "state": "(unclaimed|stale|non_inheritable)"' || exit 1
-if printf '%s\n' "$route" | grep -q '"claim_id": "{claim-id}"'; then exit 1; fi
-test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all)"
+printf '%s\n' "$route" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s).active_claim;process.exit(!a||a.claim_id!=="{claim-id}"?0:1)})'
+test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
+test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)"
 test "$(git rev-parse <branch>)" = "$(git rev-parse origin/{development-branch})"
-git -C <path> checkout --detach
-git branch -D <branch> || { git -C <path> checkout <branch>; exit 1; }
 git worktree remove <path>
+git branch -D <branch>
 ```
 
-The route gate removes only when the re-read state is `unclaimed`, `stale`, or
-`non_inheritable` and no active claim carries `{claim-id}`. `already_owned`,
-`owner_evidence_required`, `disputed`, any other state, and an unreadable result
-all keep both. Git refuses to delete a branch checked
-out in any worktree, so the worktree is detached before `git branch -D`, and a
-failed delete reattaches the branch. A branch cut from an earlier base, or
-one with commits beyond `origin/{development-branch}`, is kept with its
-worktree. If `git worktree remove` fails after the branch is deleted, report the
-path: the worktree is then detached and pristine, and its branch is already gone.
+Every gate runs before `git worktree remove`, the only removal step, which runs
+without `--force`. The route gate reads `active_claim`, not the route `state`,
+because `state` is written for a claiming session. The status gate covers
+ignored, untracked, and submodule changes. A branch cut from an earlier base is
+kept with its worktree. A failure before the removal keeps the worktree, its
+branch, and its lock on purpose, so a later claim stops at the collision check
+(A5(e)). No script releases that lock.
 
-On `instructions-only`, use the helper-free fallbacks in
-`docs/idd-helper-scripts.md` for the lock and the clone-scoped hold, and read the
-claim state under Claim-state parsing below for the route gate.
+If `git branch -D` fails after the removal, or the harness denies it (the
+distributed Claude baseline denies `Bash(git branch -D*)`), report a leftover
+branch at `<branch>`. The worktree is already gone, and the A5(e) orphan hold
+covers the next claimant.
+
+Instructions-only: take the lock from the helper-free fallback in
+`docs/idd-helper-scripts.md`, read the claim state under Claim-state parsing for
+the route gate, and give each worker its own clone for the clone-scoped steps
+([fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
 
 Observed in PR `#4018` review (comments `4242489039`, `4242624517`,
 `4242624520`, `4242577825`); rationale in

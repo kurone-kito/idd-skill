@@ -652,29 +652,33 @@ worktree add` (review comment `4242624517`); an `unclaimed-by` posted after
 an authoring hold that followed a successful assert (`4242624520`); removal
 outside the clone-scoped lock (`4242577825`); and `git branch -d` refusing
 a branch whose tip is not merged into a lagging local `main`, so the branch
-survived (`4242489039`). A later review of the cleanup itself (PR `#4058`)
-found three more gaps: an ambiguous route state, such as `disputed` after an
-activation-nonce mismatch, can still name this session's claim, so only a
-clearly unclaimed state may remove; `git status --porcelain` does not list
-ignored files, which `git worktree remove` can delete; and the procedure
-needed a helper-free path for `instructions-only`. The decided policy
-(maintainer hearing, 2026-10-12), as implemented:
+survived (`4242489039`). The decided policy (maintainer hearing,
+2026-10-12) covers them. A later review of the procedure (PR `#4058`) led to
+the amendments below.
 
-- Remove only a pristine worktree: no tracked, untracked, or ignored
-  changes, and a branch tip equal to the local `origin/{development-branch}`
-  ref. The procedure reads that ref as it stands and does not fetch.
-  Otherwise keep both.
-- Run the re-check and the removal in one hold of the clone-scoped lock.
-  Acquire the worktree-local claim lock, re-read the claim, and remove only
-  when the route state is `unclaimed`, `stale`, or `non_inheritable` and no
-  active claim carries this session's `{claim-id}`. A collision, a failed
-  acquire, `already_owned`, `disputed`, `owner_evidence_required`, or an
-  unreadable state keeps the worktree. Never `--takeover`.
-- Git refuses `git branch -D` on a branch checked out in any worktree, so the
-  worktree is detached first. If the delete fails, the procedure reattaches
-  the branch and keeps both, so a kept worktree keeps its branch. Plain
-  `git branch -d` is not used, because it refuses against a lagging local
-  `main`.
+- Gates run before removal, under one hold of the clone-scoped lock, after
+  the worktree-local claim lock is acquired. The route gate reads
+  `active_claim`, not the route `state`, because `state` is written for a
+  claiming session and a released claim can show a local-occupied state.
+  Removal needs `active_claim` to be null or another claim id. The HEAD gate
+  requires the worktree to be attached to the cleanup branch. The status gate
+  is `git status --porcelain --ignored --untracked-files=all
+  --ignore-submodules=none`, empty. The tip gate requires the branch to equal
+  local `origin/{development-branch}`, read without a fetch.
+- Removal comes before deletion. Git refuses to delete a branch checked out in
+  any worktree, so `git worktree remove` (no `--force`) runs first, and
+  `git branch -D` follows. The tip gate is the removal gate. If `-D` fails
+  after removal, or a harness denies it (the distributed Claude baseline denies
+  `Bash(git branch -D*)`), the procedure reports a leftover branch. The A5(e)
+  orphan hold covers the next claimant. The deny rule is unchanged.
+- Failures before removal keep the worktree, its branch, and its lock on
+  purpose. A later claim of the issue then stops at the collision check
+  instead of inheriting the path. No helper releases the lock, and a release
+  would need a new helper mode.
+- Plain `git branch -d` is not used, because it refuses against a lagging
+  local `main`.
+- On `instructions-only`, the lock uses the helper-free fallback, and the
+  clone-scoped steps run with one clone per worker.
 
 ## Work and self-review
 
