@@ -120,8 +120,9 @@ layered on top of the distributed IDD defaults:
 - **Advisory-convergence self-referential-bootstrap-auto waiver**: A
   second, narrower `idd-advisory-convergence` bypass alongside the
   maintainer-authorized one above (Refs #2657): when a PR's own diff
-  touches this check's own committed trigger-file allowlist (its
-  source, policy inputs, or workflow files), a dedicated CI job
+  touches this check's committed bootstrap trigger files (its waiver
+  trust path, policy inputs, or workflow files) and none of its
+  decision-rule files, a dedicated CI job
   auto-posts a run-bound waiver as `github-actions[bot]`, verified
   against the GitHub Actions runs API and this PR's own changed files
   before it is trusted. Unlike the maintainer-authorized waiver, this
