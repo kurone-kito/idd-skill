@@ -133,6 +133,12 @@ function sanitizedEnv() {
 /** A fetch that stalls is cut off, so it cannot hold the clone lock forever. */
 const FETCH_TIMEOUT_MS = 180_000;
 /**
+ * The install and the verification commands run outside the clone lock, but
+ * a stalled one must still end, so the audit returns a verdict (review).
+ */
+const INSTALL_TIMEOUT_MS = 900_000;
+const COMMAND_TIMEOUT_MS = 600_000;
+/**
  * A file listing of a large repository exceeds spawnSync's 1 MiB default
  * output buffer, which would make the listing read as empty or fail.
  */
@@ -231,14 +237,16 @@ function pinnedGitEnv(scratchRoot) {
     GIT_CONFIG_NOSYSTEM: '1',
   };
 }
-function defaultRun(argv, cwd, extraEnv = {}) {
+function defaultRun(argv, cwd, extraEnv = {}, timeoutMs = COMMAND_TIMEOUT_MS) {
   const [command, ...args] = argv;
-  // On Windows pnpm is a .cmd shim, which only a shell resolves.
+  // On Windows pnpm is a .cmd shim, which only a shell resolves. A run that
+  // exceeds timeoutMs fails with ETIMEDOUT, so the audit always returns.
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'ignore',
     env: { ...sanitizedEnv(), ...extraEnv },
     shell: process.platform === 'win32',
+    timeout: timeoutMs,
   });
   return {
     exitCode: result.status,
@@ -257,8 +265,13 @@ function defaultRun(argv, cwd, extraEnv = {}) {
  */
 export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
   const readPr = deps.readPr ?? defaultReadPr;
-  const runInstall = deps.runInstall ?? ((cwd, argv) => defaultRun(argv, cwd));
-  const runCommand = deps.runCommand ?? defaultRun;
+  const runInstall =
+    deps.runInstall ??
+    ((cwd, argv) => defaultRun(argv, cwd, {}, INSTALL_TIMEOUT_MS));
+  const runCommand =
+    deps.runCommand ??
+    ((argv, cwd, extraEnv) =>
+      defaultRun(argv, cwd, extraEnv, COMMAND_TIMEOUT_MS));
   const agentId = deps.agentId ?? `trial-merge-audit-${process.pid}`;
   const lockTimeoutMs = deps.lockTimeoutMs ?? 60_000;
   const hooksDir = mkdtempSync(join(tmpdir(), 'idd-trial-hooks-'));
@@ -592,6 +605,7 @@ function audit(args) {
   // recorded with a null exit code and passed false (decision 1, 2026-10-12),
   // and the verdict then names commands-unavailable.
   const absent = [];
+  const timedOut = [];
   const commands = FIXED_COMMANDS.map((command) => {
     if (!scriptPresent(tmp, command.script)) {
       absent.push(command.id);
@@ -606,6 +620,7 @@ function audit(args) {
       GITHUB_EVENT_PATH: eventPath,
       ...pinnedGitEnv(dirname(tmp)),
     });
+    if (run.error?.code === 'ETIMEDOUT') timedOut.push(command.id);
     return {
       id: command.id,
       argv: command.argv,
@@ -618,6 +633,10 @@ function audit(args) {
   if (toolingChanged.length > 0) {
     verdict = 'not-run';
     reasons.push('tooling-changed');
+  } else if (timedOut.length > 0) {
+    // A command cut off by its timeout is incomplete evidence, not a failure.
+    verdict = 'not-run';
+    reasons.push('command-timed-out');
   } else if (absent.length > 0) {
     verdict = 'not-run';
     reasons.push('commands-unavailable');

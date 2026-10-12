@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -409,6 +410,102 @@ test('a non-ASCII tooling path is listed in toolingChanged, not quoted away', ()
   assert.deepEqual(result.toolingChanged, ['packages/café/package.json']);
   assert.equal(result.verdict, 'not-run');
   assert.deepEqual(result.reasons, ['tooling-changed']);
+});
+
+test('command-timed-out: a command cut off by its timeout is not-run, not failed', () => {
+  const fixture = makeFixture();
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: realInstall,
+    runCommand: (argv) =>
+      argv[1] === 'scripts/sync-docs.mjs'
+        ? {
+            exitCode: null,
+            error: Object.assign(new Error('spawnSync node ETIMEDOUT'), {
+              code: 'ETIMEDOUT',
+            }),
+          }
+        : { exitCode: 0 },
+    lockTimeoutMs: 2000,
+  });
+  const sync = result.commands.find((command) => command.id === 'sync-docs');
+  assert.equal(sync?.passed, false);
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['command-timed-out']);
+});
+
+test('worktree-remove-failed: a removal that cannot take the clone lock keeps the scratch worktree', () => {
+  const fixture = makeFixture();
+  let scratch: string | undefined;
+  let held: ReturnType<typeof acquireCloneLock> | undefined;
+  try {
+    const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+      readPr: stubPr(fixture),
+      runInstall: realInstall,
+      runCommand: (_argv, cwd) => {
+        if (scratch === undefined) {
+          scratch = cwd;
+          // Another session holds the clone lock when removal runs, so the
+          // removal must fail and leave the worktree for recovery.
+          held = acquireCloneLock(fixture.work, 'other-session', 2000);
+        }
+        return { exitCode: 0 };
+      },
+      lockTimeoutMs: 200,
+    });
+    assert.equal(result.worktreeRemoved, false);
+    assert.ok(result.reasons.includes('worktree-remove-failed'));
+    assert.equal(existsSync(scratch ?? ''), true);
+    const records = git(fixture.work, ['worktree', 'list', '--porcelain']);
+    assert.ok(records.includes(scratch ?? '<none>'));
+  } finally {
+    if (held !== undefined) releaseCloneLock(held);
+    if (scratch !== undefined) {
+      spawnSync('git', ['worktree', 'remove', '--force', scratch], {
+        cwd: fixture.work,
+      });
+      rmSync(join(scratch, '..'), { recursive: true, force: true });
+    }
+  }
+});
+
+test('shallow clone: a merge base beyond the shallow boundary is deepened, and no ref moves', () => {
+  const fixture = makeFixture();
+  // A depth-1 clone of main: the merge base of the PR is outside its history.
+  const shallow = join(fixture.root, 'shallow');
+  git(fixture.root, [
+    'clone',
+    '--quiet',
+    '--depth=1',
+    '--branch',
+    'main',
+    '--single-branch',
+    `file://${fixture.remote}`,
+    shallow,
+  ]);
+  git(shallow, [
+    'config',
+    `url.${fixture.remote}.insteadOf`,
+    'https://github.com/o/r.git',
+  ]);
+  const refsBefore = git(shallow, [
+    'for-each-ref',
+    '--format=%(refname) %(objectname)',
+  ]);
+  const result = runTrialMergeAudit(shallow, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: realInstall,
+    runCommand: () => ({ exitCode: 0 }),
+    lockTimeoutMs: 2000,
+  });
+  assert.equal(result.verdict, 'passed');
+  assert.deepEqual(result.reasons, []);
+  assert.match(result.trialCommit ?? '', /^[0-9a-f]{40}$/);
+  const refsAfter = git(shallow, [
+    'for-each-ref',
+    '--format=%(refname) %(objectname)',
+  ]);
+  assert.equal(refsAfter, refsBefore);
 });
 
 test('clone lock held by another session: not-run, and no worktree is added', () => {

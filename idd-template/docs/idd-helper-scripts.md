@@ -7014,10 +7014,10 @@ same as `AW4`/`AW5`.
 
 ### Trial merge audit
 
-- Preferred command when helper runtime is enabled:
-  `idd-trial-merge-audit --pr <pr-number>`
-- Source repository equivalent:
-  `node scripts/trial-merge-audit.mjs --pr <pr-number>`
+- Command, by helper-runtime profile: where the profile vends the bin wrapper,
+  `idd-trial-merge-audit --pr <pr-number>`. Under `vendored-node` and in this
+  source repository, `node scripts/trial-merge-audit.mjs --pr <pr-number>`.
+  Use the invocation that the profile's helper-runtime manifest names.
 - Output: one JSON object matching `schemas/trial-merge-audit.schema.json`,
   with `verdict` (`passed`, `failed`, or `not-run`), `prHeadSha`, `baseSha`,
   `trialCommit`, `commands` (`audit-docs`, `sync-docs`, `typecheck`, each with
@@ -7047,6 +7047,9 @@ same as `AW4`/`AW5`.
   is `not-run` with reason `commands-unavailable`, even when another command
   also fails. An adopter repository without these scripts gets that verdict
   rather than `failed`.
+- A run that exceeds its timeout gives `not-run`: reason `command-timed-out`
+  for a verification command (10 minutes each), and `install-failed` for the
+  install (15 minutes). The audit then returns a verdict instead of hanging.
 - Install is a fresh, frozen-lockfile install with lifecycle scripts
   disabled, run in the temporary worktree. No `node_modules` is linked from
   the checkout.

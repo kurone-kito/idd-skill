@@ -199,6 +199,13 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
 const FETCH_TIMEOUT_MS = 180_000;
 
 /**
+ * The install and the verification commands run outside the clone lock, but
+ * a stalled one must still end, so the audit returns a verdict (review).
+ */
+const INSTALL_TIMEOUT_MS = 900_000;
+const COMMAND_TIMEOUT_MS = 600_000;
+
+/**
  * A file listing of a large repository exceeds spawnSync's 1 MiB default
  * output buffer, which would make the listing read as empty or fail.
  */
@@ -331,14 +338,17 @@ function defaultRun(
   argv: string[],
   cwd: string,
   extraEnv: NodeJS.ProcessEnv = {},
+  timeoutMs: number = COMMAND_TIMEOUT_MS,
 ): CommandRun {
   const [command, ...args] = argv;
-  // On Windows pnpm is a .cmd shim, which only a shell resolves.
+  // On Windows pnpm is a .cmd shim, which only a shell resolves. A run that
+  // exceeds timeoutMs fails with ETIMEDOUT, so the audit always returns.
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'ignore',
     env: { ...sanitizedEnv(), ...extraEnv },
     shell: process.platform === 'win32',
+    timeout: timeoutMs,
   });
   return {
     exitCode: result.status,
@@ -369,8 +379,13 @@ export function runTrialMergeAudit(
 ): TrialMergeAuditResult {
   const readPr = deps.readPr ?? defaultReadPr;
   const runInstall =
-    deps.runInstall ?? ((cwd: string, argv: string[]) => defaultRun(argv, cwd));
-  const runCommand = deps.runCommand ?? defaultRun;
+    deps.runInstall ??
+    ((cwd: string, argv: string[]) =>
+      defaultRun(argv, cwd, {}, INSTALL_TIMEOUT_MS));
+  const runCommand =
+    deps.runCommand ??
+    ((argv: string[], cwd: string, extraEnv: NodeJS.ProcessEnv) =>
+      defaultRun(argv, cwd, extraEnv, COMMAND_TIMEOUT_MS));
   const agentId = deps.agentId ?? `trial-merge-audit-${process.pid}`;
   const lockTimeoutMs = deps.lockTimeoutMs ?? 60_000;
 
@@ -735,6 +750,7 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
   // recorded with a null exit code and passed false (decision 1, 2026-10-12),
   // and the verdict then names commands-unavailable.
   const absent: string[] = [];
+  const timedOut: string[] = [];
   const commands: TrialCommandResult[] = FIXED_COMMANDS.map((command) => {
     if (!scriptPresent(tmp, command.script)) {
       absent.push(command.id);
@@ -749,6 +765,7 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
       GITHUB_EVENT_PATH: eventPath,
       ...pinnedGitEnv(dirname(tmp)),
     });
+    if (run.error?.code === 'ETIMEDOUT') timedOut.push(command.id);
     return {
       id: command.id,
       argv: command.argv,
@@ -762,6 +779,10 @@ function audit(args: AuditArgs): TrialMergeAuditResult {
   if (toolingChanged.length > 0) {
     verdict = 'not-run';
     reasons.push('tooling-changed');
+  } else if (timedOut.length > 0) {
+    // A command cut off by its timeout is incomplete evidence, not a failure.
+    verdict = 'not-run';
+    reasons.push('command-timed-out');
   } else if (absent.length > 0) {
     verdict = 'not-run';
     reasons.push('commands-unavailable');

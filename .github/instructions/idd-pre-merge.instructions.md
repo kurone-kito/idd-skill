@@ -49,8 +49,9 @@ disabled, route the state from the `gh pr view` output with the table in
 the [helper contract](../../docs/idd-helper-scripts.md#branch-conflict-and-synchronization-state-evidence).
 
 - **`proceed-to-f2`**: proceed to F2. This route means conflict-freeness
-  only. If `baseAdvancedSinceMergeBase: true`, run
-  `idd-trial-merge-audit --pr {pr-number}` for push-free evidence (advisory;
+  only. If `baseAdvancedSinceMergeBase: true`, run the profile-selected
+  trial-merge audit command for `--pr {pr-number}` (see the trial-merge audit
+  entry in `docs/idd-helper-scripts.md`) for push-free evidence (advisory;
   this routing does not change). With helper runtime disabled, skip it.
 - **`return-to-e-phase-branch-sync`**: return to the E-phase branch-sync
   check in `idd-review-triage.instructions.md`, first setting
