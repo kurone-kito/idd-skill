@@ -8,8 +8,16 @@
  *
  * This module imports only `node:` builtins.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { after } from 'node:test';
+
+/** Whether `path` is strictly below `root` (both resolved). */
+function isStrictlyInside(root: string, path: string): boolean {
+  const rest = relative(root, path);
+  return rest !== '' && !isAbsolute(rest) && rest.split(sep)[0] !== '..';
+}
 
 /**
  * Return an `mkdtempSync` replacement that records every directory it
@@ -18,12 +26,19 @@ import { after } from 'node:test';
  * test in the file, so a child process a test spawned and waited for has
  * already exited.
  *
+ * As `trackedMkdtemp` in `tests/idd-onboard.test.mts` does, the recursive
+ * removal never reaches outside the temporary directory: a `prefix` that
+ * does not resolve strictly below the `os.tmpdir()` captured by this call
+ * throws before anything is created, and so does a created directory that
+ * is not below it. A prefix in a nested fixture directory there is allowed.
+ *
  * On `win32` a removal failure is ignored, because Windows refuses to remove
  * a directory that holds a running executable image (issue #3680); the
  * preload's temporary-directory guard then prints the leftover as a warning.
  * On every other platform the failure fails the hook.
  */
 export function trackTempDirectories(): (prefix: string) => string {
+  const root = resolve(tmpdir());
   const created: string[] = [];
   after(() => {
     const failures: unknown[] = [];
@@ -44,7 +59,21 @@ export function trackTempDirectories(): (prefix: string) => string {
     }
   });
   return (prefix: string): string => {
+    if (!isStrictlyInside(root, resolve(prefix))) {
+      throw new Error(
+        `trackTempDirectories: prefix must resolve below ${root}: ${prefix}`,
+      );
+    }
     const directory = mkdtempSync(prefix);
+    if (!isStrictlyInside(root, resolve(directory))) {
+      // Unreachable given the check above; kept so the after hook can never
+      // remove a directory outside the temporary root. The new directory is
+      // empty, so a non-recursive removal is enough.
+      rmdirSync(directory);
+      throw new Error(
+        `trackTempDirectories: refusing to track ${directory} outside ${root}`,
+      );
+    }
     created.push(directory);
     return directory;
   };
