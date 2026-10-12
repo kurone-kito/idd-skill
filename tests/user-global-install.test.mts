@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -597,7 +598,7 @@ test('install refuses a harness whose recorded wiring is at another path (#3825)
   }
 });
 
-test('uninstall removes the wiring at the recorded path, not at the current env path (#3825)', () => {
+test('uninstall refuses a recorded path that the current environment does not reach (#3825)', () => {
   const box = sandbox();
   try {
     runUserGlobalInstall(box.options(['claude']));
@@ -605,9 +606,8 @@ test('uninstall removes the wiring at the recorded path, not at the current env 
       ...box.options(['claude']),
       env: { ...box.options().env, CLAUDE_CONFIG_DIR: join(box.root, 'alt') },
     };
-    runUserGlobalUninstall(different);
-    assert.equal(existsSync(box.claudeFile), false);
-    assert.equal(existsSync(join(box.root, 'alt', 'CLAUDE.md')), false);
+    assert.throws(() => runUserGlobalUninstall(different), /does not reach/);
+    assert.equal(existsSync(box.claudeFile), true);
   } finally {
     box.cleanup();
   }
@@ -658,8 +658,111 @@ test('a receipt cannot point a harness record at an unrelated file (#3825)', () 
         },
       }),
     );
-    runUserGlobalUninstall(box.options(['claude']));
+    assert.throws(
+      () => runUserGlobalUninstall(box.options(['claude'])),
+      /does not reach/,
+    );
     assert.equal(readFileSync(bystander, 'utf8'), `# notes\n${block}`);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a bundle version that would escape the data root (#3825)', () => {
+  const box = sandbox();
+  const bundle = join(box.root, 'bundle');
+  try {
+    for (const dir of ['idd-template', 'skills', 'audit']) {
+      cpSync(join(REPO_ROOT, dir), join(bundle, dir), { recursive: true });
+    }
+    writeFixture(
+      join(bundle, 'package.json'),
+      JSON.stringify({ name: 'bundle', version: '../../escape' }),
+    );
+    assert.throws(
+      () => runUserGlobalInstall({ ...box.options(), bundleRoot: bundle }),
+      /invalid package version/,
+    );
+    assert.equal(existsSync(join(box.root, 'escape')), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall refuses a same-basename bystander recorded as a harness file (#3825)', () => {
+  const box = sandbox();
+  try {
+    const bystander = join(box.root, 'other', 'CLAUDE.md');
+    const block = `${BEGIN_MARKER}\n@/elsewhere/entry.md\n<!-- idd-skill:user-global end -->\n`;
+    writeFixture(bystander, `# theirs\n${block}`);
+    writeFixture(
+      join(box.root, 'data', 'idd-skill', 'user-global-receipt.json'),
+      JSON.stringify({
+        schema: 1,
+        version: '0.14.0',
+        payloadRoot: box.payloadRoot,
+        payloadVersions: [],
+        skillDirs: [],
+        skillFiles: [],
+        dirsCreated: [],
+        harnesses: {
+          claude: {
+            file: bystander,
+            fileCreated: false,
+            entryAdded: true,
+            keyCreated: false,
+          },
+        },
+      }),
+    );
+    assert.throws(
+      () => runUserGlobalUninstall(box.options(['claude'])),
+      /does not reach/,
+    );
+    assert.equal(readFileSync(bystander, 'utf8'), `# theirs\n${block}`);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a managed block that no receipt records (#3825)', () => {
+  const box = sandbox();
+  try {
+    const block = `${BEGIN_MARKER}\n@/elsewhere/entry.md\n<!-- idd-skill:user-global end -->\n`;
+    writeFixture(box.claudeFile, `# mine\n\n${block}`);
+    assert.throws(
+      () => runUserGlobalInstall(box.options(['claude'])),
+      /no receipt records/,
+    );
+    assert.equal(readFileSync(box.claudeFile, 'utf8'), `# mine\n\n${block}`);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install and uninstall refuse a receipt path that is a symlink (#3825)', () => {
+  const box = sandbox();
+  try {
+    const target = join(box.root, 'elsewhere.json');
+    writeFixture(target, 'keep me\n');
+    const receiptPath = join(
+      box.root,
+      'data',
+      'idd-skill',
+      'user-global-receipt.json',
+    );
+    mkdirSync(join(box.root, 'data', 'idd-skill'), { recursive: true });
+    symlinkSync(target, receiptPath);
+    assert.throws(
+      () => runUserGlobalInstall(box.options()),
+      /receipt .*symlink/,
+    );
+    assert.equal(readFileSync(target, 'utf8'), 'keep me\n');
+    assert.throws(
+      () => runUserGlobalUninstall(box.options()),
+      /receipt .*symlink/,
+    );
+    assert.equal(readFileSync(target, 'utf8'), 'keep me\n');
   } finally {
     box.cleanup();
   }

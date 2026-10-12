@@ -30,15 +30,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { buildHelperRuntimeManifest } from './helper-runtime-manifest.mjs';
 import { resolveInstalledPayloadRoot } from './idd-activation.mjs';
 import { isQualifiedConfigRoot } from './idd-config.mjs';
@@ -140,10 +132,17 @@ function readVersion(bundleRoot) {
   const pkg = JSON.parse(
     readFileSync(join(bundleRoot, 'package.json'), 'utf8'),
   );
-  if (typeof pkg.version !== 'string' || pkg.version.length === 0) {
-    throw new Error('user-global install: package.json has no version');
+  const version = pkg.version;
+  if (
+    typeof version !== 'string' ||
+    !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/.test(version) ||
+    version.includes('..')
+  ) {
+    throw new Error(
+      `user-global install: invalid package version ${JSON.stringify(version)}; expected one path segment of letters, digits, ".", "_", "+", or "-"`,
+    );
   }
-  return pkg.version;
+  return version;
 }
 /** Relative payload path mapped to its absolute source file. */
 function payloadSources(bundleRoot) {
@@ -517,6 +516,11 @@ function isSafeVersionName(name) {
  * entry that could name a path outside what install owns is dropped.
  */
 function readReceipt(path) {
+  if (lstatIfExists(path)?.isSymbolicLink()) {
+    throw new Error(
+      `user-global install: the receipt at ${path} is a symlink; refusing to read or write through it`,
+    );
+  }
   const text = readUtf8IfExists(path);
   if (text === null) return null;
   const parsed = JSON.parse(text);
@@ -551,17 +555,11 @@ function readReceipt(path) {
 function validHarnessRecords(value) {
   const result = {};
   if (value === null || typeof value !== 'object') return result;
-  const entryFile = {
-    claude: 'CLAUDE.md',
-    codex: 'AGENTS.md',
-    opencode: 'opencode.json',
-  };
   for (const name of HARNESS_NAMES) {
     const record = value[name];
     if (record === undefined || record === null || typeof record !== 'object')
       continue;
     if (typeof record.file !== 'string' || !isAbsolute(record.file)) continue;
-    if (basename(record.file) !== entryFile[name]) continue;
     result[name] = {
       file: record.file,
       fileCreated: record.fileCreated === true,
@@ -776,6 +774,36 @@ function planHarnessFile(plan, prior, path, wire, createdDirs) {
     keyCreated: (prior?.keyCreated ?? false) || next.keyCreated,
   };
 }
+/**
+ * Every recorded harness file must be the file the current environment reaches
+ * for that harness. Any other record is refused before a write, so a stale or
+ * tampered receipt cannot direct an edit to another file.
+ */
+function assertRecordsReachable(receipt, locations, mode) {
+  if (receipt === null) return;
+  for (const name of HARNESS_NAMES) {
+    const record = receipt.harnesses[name];
+    if (record === undefined) continue;
+    const expected = harnessFile(locations, name);
+    if (record.file === expected) continue;
+    const next =
+      mode === 'install'
+        ? `uninstall that wiring before installing to ${expected}`
+        : 'run uninstall with the environment that installed it';
+    throw new Error(
+      `user-global install: the receipt records ${record.file} for ${name}, which the current environment does not reach (expected ${expected}); ${next}; refusing to act on it`,
+    );
+  }
+}
+/** A managed block that no receipt records belongs to someone else. */
+function refuseUnownedBlock(path) {
+  const text = readUtf8IfExists(path);
+  if (text !== null && findRegion(text, path) !== null) {
+    throw new Error(
+      `user-global install: ${path} holds a managed block that no receipt records; refusing to claim it`,
+    );
+  }
+}
 function markdownBody(harness, entryPath, entryText) {
   if (harness === 'claude') return [`@${entryPath}`];
   return entryText.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
@@ -810,6 +838,7 @@ export function runUserGlobalInstall(options) {
   const locations = resolveLocations(options);
   const version = readVersion(options.bundleRoot);
   const receipt = readReceipt(locations.receiptPath);
+  assertRecordsReachable(receipt, locations, 'install');
   const plan = { ops: [], changes: [] };
   const createdDirs = [];
   const harnessReceipts = {};
@@ -863,6 +892,7 @@ export function runUserGlobalInstall(options) {
       );
       continue;
     }
+    if (prior === undefined) refuseUnownedBlock(path);
     const body = markdownBody(harness, entryPath, entryText);
     harnessReceipts[harness] = planHarnessFile(
       plan,
@@ -929,6 +959,7 @@ export function runUserGlobalUninstall(options) {
   const locations = resolveLocations(options);
   const version = readVersion(options.bundleRoot);
   const receipt = readReceipt(locations.receiptPath);
+  assertRecordsReachable(receipt, locations, 'uninstall');
   const plan = { ops: [], changes: [] };
   const remaining = {
     ...(receipt?.harnesses ?? {}),
