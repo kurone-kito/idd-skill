@@ -339,6 +339,9 @@ self-critique and record risk.
      step 10, then E15.
    - `SATISFIED` (otherwise) → apply step 10 first, then continue to
      E15.
+   - `DISPOSITION_NEEDED` (#4070): not satisfied. Stop and ask a full session
+     to answer the cited items (E6). For an unreadable same-head review,
+     post a trusted review-ack, then rerun the helper. Do not go to E15.
    - `RECOVERY_NEEDED`: post the recovery marker
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
