@@ -90,11 +90,10 @@ status must be "not started". Either condition failing → **STOP**.
 
 ### (c) Claim state
 
-**Check first, before the fresh-claim gate** (which ignores
-`--claim-id`), when either holds: this session already recorded a
-`{claim-id}` for this issue (resume/heartbeat continuation); or a trusted, live
-forced-handoff marker names this session `newAgentId` — treat its
-`newClaimId` as the `{claim-id}` to check, before Claim execution's
+**Check first, before the fresh-claim gate** (which ignores `--claim-id`), when
+either holds: this session already recorded a `{claim-id}` for this issue
+(resume/heartbeat continuation); or a trusted, live forced-handoff marker names
+this session `newAgentId`: check its `newClaimId` before Claim execution's
 forced-handoff steps:
 
 ```sh
@@ -321,7 +320,8 @@ collision or `--assert` not `already_owned`/`keep`; verification step 5
 `unclaimed-by`), run the script below from the primary checkout as one
 clone-scoped hold (`node scripts/clone-lock.mjs --exec --agent-id <agent-id>
 -- bash <script>`). Never `--takeover`. Quote placeholders as shell words.
-Failures before removal keep both worktree and branch. If `git branch -D`
+Failures before removal keep both worktree and branch, and report `<path>` and
+the failed gate. If `git branch -D`
 fails after removal or is denied, report a leftover branch at `<branch>`.
 Instructions-only: `docs/idd-helper-scripts.md#worktree-local-claim-lock`,
 one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
@@ -330,10 +330,10 @@ one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 set -euo pipefail
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
-printf '%s\n' "$route" | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!=="{claim-id}")?0:1)'
+printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
 tip=$(git rev-parse <branch>)
-base=$(git rev-parse origin/{development-branch})
+base=$(git rev-parse origin/main)
 test "$tip" = "$base"
 tags=$(git -C <path> ls-files -v | cut -c1 | tr -d 'H\n')
 test -z "$tags"
