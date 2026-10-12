@@ -174,6 +174,8 @@ test('isToolingPath names the overlay set and nothing else', () => {
     'packages/x/tsconfig.json',
     'packages/x/.gitignore',
     '.gitignore',
+    '.gitattributes',
+    'packages/x/.gitattributes',
   ]) {
     assert.equal(isToolingPath(path), true, path);
   }

@@ -7028,11 +7028,15 @@ same as `AW4`/`AW5`.
   commit with `git commit-tree`, and runs the three fixed commands in a
   temporary detached worktree.
 - Tooling comes from the base tip: `scripts/`, `src/`, `bin/`, `schemas/`,
-  `audit/`, `.husky/`, `.githooks/`, `package.json`, the lockfile,
-  `pnpm-workspace.yaml`, `.npmrc`, root `tsconfig*.json` and pnpmfiles, and
-  `.github/idd/config.json`. A pull request that changes any of them gets
-  `not-run` with reason `tooling-changed`, and the commands still run against
-  base-tip tooling as evidence only.
+  `audit/`, `.husky/`, `.githooks/`, the lockfile, `pnpm-workspace.yaml`,
+  `.npmrc`, root `tsconfig*.json` and pnpmfiles, and `.github/idd/config.json`.
+  At any depth, the tooling set also covers `package.json` files, `tsconfig*.json`
+  files, `.gitignore` and `.gitattributes` files, and any `node_modules` tree.
+  A pull request that changes any of them gets `not-run` with reason
+  `tooling-changed`, and the commands still run against base-tip tooling as
+  evidence only.
+- The verification commands run with an empty global and excludes config, so
+  a host's Git configuration cannot change which untracked files they check.
 - The merge base is resolved before `merge-tree`, under the clone lock, with
   the bounded deepen steps `MERGE_BASE_FETCH_STEPS` from
   `branch-conflict-state`. If it stays unreachable, for example in a shallow
