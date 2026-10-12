@@ -114,7 +114,7 @@ bullet per residual Low, exactly one `Refs #<originating-issue>` line, and
 the defer-source marker that E6 uses for `review-fix-loop-cutoff`
 (`idd-review-triage.instructions.md`); the follow-up then takes
 issue-authoring's Stage 2 narrow
-auto-release, not the Stage 1 hold. Then continue to E11. The cap never
+auto-release, not the Stage 1 hold. Re-run the claim revalidation gate (`idd-overview-core.instructions.md`) immediately before filing. Then continue to E11. The cap never
 applies while a High or Medium finding is open. If the count cannot be
 established, the cap is not reached.
 
