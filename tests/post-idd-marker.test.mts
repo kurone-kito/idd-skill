@@ -5691,6 +5691,38 @@ test('#4053: the watermark still defers with the setting true when the global-on
   assert.equal(repositoryLocal.reasonCode, 'required-checks');
 });
 
+test('#4053: post-idd-marker parseArgs reads --global-only and defaults it off', () => {
+  const base = ['--type', 'watermark', '--from-pr', '42'];
+  assert.equal(parseArgs([...base, '--global-only']).globalOnly, true);
+  assert.equal(parseArgs(base).globalOnly, false);
+});
+
+test('#4053: the watermark CI read resolves the global-only profile only when --global-only is forwarded', () => {
+  // The profile is resolved (one activation read) only when the flag is
+  // forwarded and the opt-in is on, so the path without the flag makes no read.
+  for (const [globalOnly, expectedReads] of [
+    [true, 1],
+    [false, 0],
+  ] as const) {
+    let activationReads = 0;
+    readWatermarkRequiredCiAgreement({
+      prNumber: 3592,
+      owner: 'o',
+      repo: 'r',
+      globalOnly,
+      createPort: () => zeroCheckWatermarkPort(),
+      loadTrustedConfig: () => ({
+        ciGate: { allowNoRequiredChecksInGlobalOnly: true },
+      }),
+      resolveActivation: () => {
+        activationReads += 1;
+        return ZERO_CHECK_GLOBAL_ONLY_ACTIVE;
+      },
+    });
+    assert.equal(activationReads, expectedReads, `globalOnly=${globalOnly}`);
+  }
+});
+
 test('operation-local watermark uses one rich capture and one CI agreement read', () => {
   let rich = 0;
   let agreement = 0;
