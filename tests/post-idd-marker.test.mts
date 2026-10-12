@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1374,6 +1381,14 @@ function watermarkFromPrGhStub(
     threadsBody?: string;
     /** Raw GraphQL body for the `userContentEdits` `nodes(ids:)` query. */
     editsBody?: string;
+    /** #4053: base64 of the trusted config the policy read returns (default: this repo's file). */
+    policyB64?: string;
+    /**
+     * #4053: answer the root listing with an empty array and the advisory
+     * workflow with a 404, so the global-only profile's base and head
+     * absence checks both pass.
+     */
+    globalOnlyContents?: boolean;
   } = {},
 ): string {
   const reviewsBody = JSON.stringify(options.reviewsBody ?? '[]');
@@ -1400,7 +1415,14 @@ function watermarkFromPrGhStub(
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${headSha}', author: { login: 'someone' }, baseRefName: 'main' }));
-if (args[0] === 'api' && String(args[1]).includes('/contents/.github/idd/config.json')) out(${JSON.stringify(REPO_POLICY_B64)});
+if (args[0] === 'api' && String(args[1]).includes('/contents/.github/idd/config.json')) out(${JSON.stringify(options.policyB64 ?? REPO_POLICY_B64)});
+${
+  options.globalOnlyContents
+    ? `if (args[0] === 'api' && /contents\\/\\?ref=/.test(args[1])) out('[]');
+if (args[0] === 'api' && /contents\\/\\.github\\/workflows\\//.test(args[1])) { fs.writeSync(2, 'gh: Not Found (HTTP 404)'); process.exit(1); }
+if (args[0] === 'pr' && args[1] === 'checks') out('[]');`
+    : ''
+}
 if (args[0] === 'pr' && args[1] === 'checks') {
   out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
 }
@@ -1529,6 +1551,103 @@ function assertWatermarkRefused(
   }
   throw new Error('expected the CLI to exit non-zero');
 }
+
+// #4053: a CLI-level run of `--global-only` through main. The checkout is a
+// temp repo whose origin names o/r and whose policy file marks it as a minimal
+// import, with a payload installed under XDG_DATA_HOME, so the real activation
+// resolves to the global-only profile.
+function globalOnlyCheckout(): {
+  repo: string;
+  xdg: string;
+  cleanup: () => void;
+} {
+  const base = mkdtempSync(join(tmpdir(), 'idd-4053-'));
+  const repo = join(base, 'checkout');
+  const xdg = join(base, 'xdg');
+  const payloadDir = join(
+    xdg,
+    'idd-skill',
+    'current',
+    '.github',
+    'instructions',
+  );
+  mkdirSync(join(repo, '.github', 'idd'), { recursive: true });
+  writeFileSync(join(repo, '.github', 'idd', 'config.json'), '{}\n');
+  mkdirSync(payloadDir, { recursive: true });
+  writeFileSync(
+    join(payloadDir, 'idd-overview-core.instructions.md'),
+    '# payload\n',
+  );
+  execFileSync('git', ['init', '-q', repo], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/o/r.git'],
+    { stdio: 'ignore' },
+  );
+  return {
+    repo,
+    xdg,
+    cleanup: () => rmSync(base, { recursive: true, force: true }),
+  };
+}
+
+function runGlobalOnlyWatermark(
+  checkout: { repo: string; xdg: string },
+  globalOnly: boolean,
+) {
+  return spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'watermark',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+      ...(globalOnly ? ['--global-only'] : []),
+    ],
+    {
+      cwd: checkout.repo,
+      encoding: 'utf8',
+      env: { ...process.env, XDG_DATA_HOME: checkout.xdg },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+}
+
+test('#4053: --global-only reaches the CLI watermark read, so the opt-in publishes only with the flag', () => {
+  const checkout = globalOnlyCheckout();
+  const policy = Buffer.from(
+    JSON.stringify({ ciGate: { allowNoRequiredChecksInGlobalOnly: true } }),
+  ).toString('base64');
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [],
+      policyB64: policy,
+      globalOnlyContents: true,
+    }),
+  );
+  try {
+    const published = runGlobalOnlyWatermark(checkout, true);
+    assert.equal(published.status, 0, published.stderr);
+    assert.equal(JSON.parse(published.stdout).mode, 'dry-run');
+
+    const refused = runGlobalOnlyWatermark(checkout, false);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /refusing to post watermark/);
+  } finally {
+    restore();
+    checkout.cleanup();
+  }
+});
 
 test('#3465: --from-pr watermark refuses a failed required check in dry-run and --apply', () => {
   const stub = watermarkFromPrGhStub(SHA, {
