@@ -4726,6 +4726,7 @@ export function createGithubProviderAdapter(
                   id
                   commit { oid }
                   submittedAt
+                  state
                   author { login __typename }
                   comments(first: 100) {
                     totalCount
@@ -4744,6 +4745,7 @@ export function createGithubProviderAdapter(
         id?: unknown;
         commit?: { oid?: unknown } | null;
         submittedAt?: unknown;
+        state?: unknown;
         author?: { login?: unknown; __typename?: unknown } | null;
         comments?: {
           totalCount?: unknown;
@@ -4838,6 +4840,7 @@ export function createGithubProviderAdapter(
             commentCount: totalCount,
             body: node.body == null ? null : String(node.body),
             replyOnly,
+            state: node.state == null ? null : String(node.state),
           };
         }),
         headCommittedAt,

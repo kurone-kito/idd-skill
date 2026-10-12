@@ -2647,3 +2647,215 @@ test('a throwing userContentEdits fetcher fails open: the candidate stays select
   assert.equal(result.orphans.length, 1);
   assert.equal(result.filtered.triage_verdict_rejected.length, 0);
 });
+
+// #4065: a defer-source follow-up is blocked while its single Refs origin
+// issue is open, the origin rule A3's readiness check already applies.
+const DEFER_MARKER =
+  '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->';
+
+function deferFollowUp(body: string) {
+  return {
+    number: 4059,
+    title: 'follow-up deferred from #4019',
+    state: 'OPEN',
+    labels: [],
+    body,
+    url: 'https://example.com/4059',
+  };
+}
+
+test('#4065: classifyIssue blocks a defer-source follow-up while its Refs origin is open', () => {
+  const verdict = classifyIssue(
+    deferFollowUp(`${DEFER_MARKER}\n\nRefs #4019\n`),
+    {
+      issueStateByNumber: new Map([[4019, 'OPEN']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(verdict.orphan, false);
+  assert.equal(verdict.reason, 'blocked_by_defer_source_origin');
+  assert.equal(verdict.details, 'open:#4019');
+});
+
+test('#4065: classifyIssue reports a missing and an ambiguous Refs line as blocked', () => {
+  const options = {
+    issueStateByNumber: new Map<number, string>(),
+    fetchIssueStateByNumber: () => 'CLOSED',
+  };
+  const missing = classifyIssue(
+    deferFollowUp(`${DEFER_MARKER}\n\nNo origin named.\n`),
+    options,
+  );
+  assert.equal(missing.reason, 'blocked_by_defer_source_origin');
+  assert.equal(missing.details, 'missing_refs_line');
+
+  const ambiguous = classifyIssue(
+    deferFollowUp(`${DEFER_MARKER}\n\nRefs #4019\n\nRefs #4020\n`),
+    options,
+  );
+  assert.equal(ambiguous.reason, 'blocked_by_defer_source_origin');
+  assert.equal(ambiguous.details, 'ambiguous_refs_line');
+});
+
+test('#4065: classifyIssue reports an unresolvable origin with its bare number', () => {
+  const verdict = classifyIssue(
+    deferFollowUp(`${DEFER_MARKER}\n\nRefs #4019\n`),
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(verdict.reason, 'blocked_by_defer_source_origin');
+  assert.equal(verdict.details, 'unresolvable:#4019');
+  assert.equal((verdict as { originNumber?: number }).originNumber, 4019);
+});
+
+test('#4065: a closed origin keeps the defer-source follow-up an orphan', () => {
+  const verdict = classifyIssue(
+    deferFollowUp(`${DEFER_MARKER}\n\nRefs #4019\n`),
+    {
+      issueStateByNumber: new Map([[4019, 'CLOSED']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(verdict.orphan, true);
+  assert.equal(verdict.reason, 'orphan');
+});
+
+test('#4065: a body without a defer-source marker is unchanged by an open Refs origin', () => {
+  const verdict = classifyIssue(deferFollowUp('Refs #4019\n'), {
+    issueStateByNumber: new Map([[4019, 'OPEN']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+  assert.equal(verdict.orphan, true);
+  assert.equal(verdict.reason, 'orphan');
+});
+
+test('#4065: an open Blocked by reference keeps precedence over the defer-source origin', () => {
+  const verdict = classifyIssue(
+    deferFollowUp(`${DEFER_MARKER}\n\nBlocked by #20\n\nRefs #4019\n`),
+    {
+      issueStateByNumber: new Map([
+        [20, 'OPEN'],
+        [4019, 'OPEN'],
+      ]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(verdict.reason, 'blocked_by_open_reference');
+});
+
+test('#4065: filterOrphanIssues lists the blocked and unresolvable origins and zeroes the new key', async () => {
+  const result = await filterOrphanIssues(
+    [
+      deferFollowUp(`${DEFER_MARKER}\n\nRefs #4019\n`),
+      {
+        number: 4060,
+        title: 'plain orphan',
+        state: 'OPEN',
+        labels: [],
+        body: 'No references.',
+        url: 'https://example.com/4060',
+      },
+    ],
+    {
+      issueStateByNumber: new Map([[4019, 'OPEN']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.filtered.blocked_by_defer_source_origin.length, 1);
+  assert.equal(
+    result.filtered.blocked_by_defer_source_origin[0].details,
+    'open:#4019',
+  );
+  assert.equal(result.counts.filtered.blocked_by_defer_source_origin, 1);
+  assert.deepEqual(
+    result.orphans.map((orphan) => orphan.number),
+    [4060],
+  );
+  assert.deepEqual(result.unresolvable, []);
+});
+
+test('#4065: filterOrphanIssues reports an unresolvable defer-source origin as a top-level unresolvable entry', async () => {
+  const result = await filterOrphanIssues(
+    [deferFollowUp(`${DEFER_MARKER}\n\nRefs #4019\n`)],
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.filtered.blocked_by_defer_source_origin.length, 1);
+  assert.deepEqual(result.unresolvable, [
+    { issue: 4059, reference: 4019, reason: 'issue-not-found-or-inaccessible' },
+  ]);
+});
+
+// #4065 review fix: both defer-source values reach the same origin states.
+for (const value of ['review-fix-loop-cutoff', 'review-needs-decision']) {
+  const marker = `<!-- idd-skill-authoring-defer-source: ${value} -->`;
+  test(`#4065: the ${value} marker is blocked on each origin state`, () => {
+    const withOrigin = (body: string) => deferFollowUp(`${marker}\n\n${body}`);
+    const open = classifyIssue(withOrigin('Refs #4019\n'), {
+      issueStateByNumber: new Map([[4019, 'OPEN']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    });
+    assert.equal(open.reason, 'blocked_by_defer_source_origin');
+    assert.equal(open.details, 'open:#4019');
+
+    const missing = classifyIssue(withOrigin('No origin named.\n'), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'CLOSED',
+    });
+    assert.equal(missing.details, 'missing_refs_line');
+
+    const ambiguous = classifyIssue(withOrigin('Refs #4019\n\nRefs #4020\n'), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'CLOSED',
+    });
+    assert.equal(ambiguous.details, 'ambiguous_refs_line');
+
+    const unresolvable = classifyIssue(withOrigin('Refs #4019\n'), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    });
+    assert.equal(unresolvable.details, 'unresolvable:#4019');
+    assert.equal(
+      (unresolvable as { originNumber?: number }).originNumber,
+      4019,
+    );
+
+    const closed = classifyIssue(withOrigin('Refs #4019\n'), {
+      issueStateByNumber: new Map([[4019, 'CLOSED']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    });
+    assert.equal(closed.reason, 'orphan');
+  });
+}
+
+// #4065 review fix (Codex P2): colliding authoring and needs-decision labels
+// keep a review-needs-decision follow-up blocked even with a closed origin.
+test('#4065: a colliding authoring and needs-decision label blocks a review-needs-decision follow-up', () => {
+  const body = `<!-- idd-skill-authoring-defer-source: review-needs-decision -->\n\nRefs #4019\n`;
+  const closedOrigin = {
+    issueStateByNumber: new Map([[4019, 'CLOSED']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  };
+
+  const colliding = classifyIssue(deferFollowUp(body), {
+    ...closedOrigin,
+    authoringLabelName: 'status:needs-decision',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+  assert.equal(colliding.reason, 'blocked_by_defer_source_origin');
+  assert.equal(
+    colliding.details,
+    'needs_decision_label_conflicts_with_authoring_label',
+  );
+
+  const distinct = classifyIssue(deferFollowUp(body), {
+    ...closedOrigin,
+    authoringLabelName: 'status:authoring',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+  assert.equal(distinct.orphan, true);
+});

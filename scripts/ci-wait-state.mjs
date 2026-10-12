@@ -33,6 +33,10 @@ import {
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
+  resolveGlobalOnlyRunIgnores,
+  resolvePrimaryActivation,
+} from './pre-merge-readiness.mjs';
+import {
   CI_FAILURE_CONCLUSION_STATES,
   CI_PENDING_STATES,
   CI_STATUS_CONTEXT_PENDING_STATES,
@@ -41,6 +45,8 @@ import {
   isCompletedCiTimestamp,
   isPreMergeCiAllPassing,
   listBlockingPresentRunNames,
+  NO_REQUIRED_CHECKS_POLICY_SETTING,
+  noRequiredChecksPolicyAllowed,
   resolvePresentRunConclusion,
   selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
@@ -104,6 +110,7 @@ const CI_WAIT_STATE_FLAG_SPEC = {
   '--pr': { type: 'string' },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
+  '--global-only': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
 // Above the CLI entry block: a module-level binding after that block is a
@@ -157,6 +164,7 @@ export function collectCiWaitState(
   argv,
   createPort = createGithubProviderAdapter,
   loadTrustedConfig = loadTrustedIddConfig,
+  resolveActivation = resolvePrimaryActivation,
 ) {
   const args = parseArgs(argv);
   if (args.help) {
@@ -234,21 +242,62 @@ export function collectCiWaitState(
       branchProtectionOutcome,
       trustEmptyProtectionReads,
     );
-  const summary = buildCiWaitStateSummary(
-    {
-      headRefOid: pr.headSha,
-      statusCheckRollup: pr.statusCheckRollup ?? [],
-    },
-    {
-      requiredCheckNames: branchReviewRequirements.requiredCheckNames,
-      requiredCheckSourcePinned:
-        branchReviewRequirements.requiredCheckSourcePinned,
-      requiredCheckSourcePinnedUnresolved:
-        branchReviewRequirements.requiredCheckSourcePinnedUnresolved,
-      trustSourcePinnedRequiredChecks,
-      protectionReadsUnreadable,
-    },
-  );
+  // #4053: the global-only ignore list, resolved by the same helper and the
+  // same trusted base ref and head SHA that pre-merge readiness uses. It is
+  // resolved only when the opt-in is on: with the setting unset or `false`,
+  // this call makes no activation or content reads, so that result is
+  // unchanged. `globalOnlyActive` is therefore only meaningful with `optIn`.
+  const optIn = ciGate.allowNoRequiredChecksInGlobalOnly === true;
+  const globalOnlyIgnoredNames = resolveGlobalOnlyRunIgnores({
+    globalOnly: args.globalOnly && optIn,
+    activation: () => resolveActivation(owner, repo),
+    port,
+    owner,
+    repo,
+    trustedRef: trustedConfigRef,
+    headSha: pr.headSha,
+  });
+  const globalOnlyPolicy = {
+    optIn,
+    globalOnlyActive: globalOnlyIgnoredNames.length > 0,
+  };
+  const buildRollupSummary = (requiredCheckNames) =>
+    buildCiWaitStateSummary(
+      {
+        headRefOid: pr.headSha,
+        statusCheckRollup: pr.statusCheckRollup ?? [],
+      },
+      {
+        requiredCheckNames,
+        requiredCheckSourcePinned:
+          branchReviewRequirements.requiredCheckSourcePinned,
+        requiredCheckSourcePinnedUnresolved:
+          branchReviewRequirements.requiredCheckSourcePinnedUnresolved,
+        trustSourcePinnedRequiredChecks,
+        protectionReadsUnreadable,
+      },
+    );
+  let summary = buildRollupSummary(branchReviewRequirements.requiredCheckNames);
+  // #4053: the ignore list drops the advisory name from the required set only
+  // inside the named region: the opt-in is `true`, the profile is active, and
+  // no present check run exists. Every other input keeps the unfiltered
+  // rollup, so the setting unset or `false` leaves this result unchanged. A
+  // source-pinned name is never dropped, matching `summarizeRequiredChecks`.
+  if (
+    globalOnlyPolicy.optIn &&
+    globalOnlyPolicy.globalOnlyActive &&
+    summary.checks.length === 0
+  ) {
+    const ignored = new Set(globalOnlyIgnoredNames);
+    const sourcePinnedNames = new Set(
+      branchReviewRequirements.requiredCheckSourcePinnedNames,
+    );
+    summary = buildRollupSummary(
+      branchReviewRequirements.requiredCheckNames.filter(
+        (name) => !ignored.has(name) || sourcePinnedNames.has(name),
+      ),
+    );
+  }
   // #3465: the watermark predicate must see the same advisory-convergence
   // downgrades pre-merge readiness applies. The rollup status itself stays
   // the D-phase wait signal; only the returned flags and resolved
@@ -270,7 +319,7 @@ export function collectCiWaitState(
         DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       ),
   );
-  return {
+  const result = {
     ...summary,
     checks: summary.checks.map((check, index) => {
       const path = advisoryIdentity.workflowPathByIndex.get(index);
@@ -278,7 +327,14 @@ export function collectCiWaitState(
     }),
     advisoryConvergenceIdentityUnresolved: advisoryIdentity.identityUnresolved,
     advisoryConvergenceNonTargetEventOnly: advisoryIdentity.nonTargetEventOnly,
+    globalOnlyPolicy,
   };
+  // #4053: name the opt-in on the snapshot only when it actually passes this
+  // summary, mirroring pre-merge readiness's `ci.allowedByPolicySetting`.
+  if (noRequiredChecksAllowanceHolds(result, presentRunConclusionOf(result))) {
+    result.allowedByPolicySetting = NO_REQUIRED_CHECKS_POLICY_SETTING;
+  }
+  return result;
 }
 /**
  * Classify whether a branch-rules or classic branch-protection governance
@@ -705,6 +761,13 @@ export function ciWaitSummaryIsPreMergeCiPassing(summary) {
       advisoryDowngrade &&
       requiredNames.has(DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR)
     );
+  // #4053: the zero-check global-only opt-in. Derived here from the summary's
+  // own inputs, never from `summary.allowedByPolicySetting`, so a stray marker
+  // on a summary cannot pass a held gate.
+  const allowedByPolicy = noRequiredChecksAllowanceHolds(
+    summary,
+    presentRunConclusion,
+  );
   return isPreMergeCiAllPassing({
     protectionReadsUnreadable:
       rollup.protectionReadsUnreadable || rollup.status === 'unreadable',
@@ -715,7 +778,38 @@ export function ciWaitSummaryIsPreMergeCiPassing(summary) {
     status: requiredChecksPassing ? 'success' : 'failed',
     noRequiredChecksConfigured: rollup.status === 'no-required-checks',
     presentRunConclusion,
+    ...(allowedByPolicy
+      ? { allowedByPolicySetting: NO_REQUIRED_CHECKS_POLICY_SETTING }
+      : {}),
   });
+}
+/**
+ * #4053: whether the `ciGate.allowNoRequiredChecksInGlobalOnly` opt-in passes
+ * this summary. Delegates the region test to `noRequiredChecksPolicyAllowed`
+ * (protocol-helpers, reused unchanged): zero required checks, a `none`
+ * present-run conclusion, the setting `true`, and an active global-only
+ * profile. Reads only the structured summary, never its text.
+ */
+function noRequiredChecksAllowanceHolds(summary, presentRunConclusion) {
+  return noRequiredChecksPolicyAllowed(
+    {
+      noRequiredChecksConfigured:
+        summary.requiredChecks.status === 'no-required-checks',
+      presentRunConclusion,
+    },
+    {
+      optIn: summary.globalOnlyPolicy?.optIn === true,
+      globalOnlyActive: summary.globalOnlyPolicy?.globalOnlyActive === true,
+    },
+  );
+}
+/** The present-run conclusion the pass predicate and the marker both read. */
+function presentRunConclusionOf(summary) {
+  const presentRuns = presentRunInputs(summary);
+  return resolvePresentRunConclusion(
+    presentRuns.checks,
+    presentRuns.downgradeNames,
+  );
 }
 /** Project a CI-wait summary onto {@link RequiredCiHeadAgreement}. */
 export function requiredCiHeadAgreementFromSummary(summary) {
@@ -786,14 +880,19 @@ export function parseArgs(argv) {
     owner: values.owner,
     repo: values.repo,
     help,
+    globalOnly: values['global-only'] === true,
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/ci-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--help]
+  node scripts/ci-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--global-only] [--help]
 
 Single-shot, read-only D-phase CI snapshot: per-check status keyed by
 (checkName, workflowName), the live headRefOid, and a top-level
 required-checks rollup. Performs no writes or reruns.
+
+--global-only: resolve the global-only profile (docs/global-only-profile.md)
+and, with ciGate.allowNoRequiredChecksInGlobalOnly true, name the opt-in in
+allowedByPolicySetting when a zero-required-check run has no present check.
 `);
 }

@@ -175,7 +175,8 @@ function joinGitPath(worktreePath, relative) {
   }
   return joinPath(worktreePath, relative);
 }
-function sanitizedGitEnvironment(environment = process.env) {
+/** Drop Git environment overrides so `git -C <path>` reads that path. */
+export function sanitizedGitEnvironment(environment = process.env) {
   const env = { ...environment };
   for (const key of Object.keys(env)) {
     if (key.startsWith('GIT_CONFIG')) {

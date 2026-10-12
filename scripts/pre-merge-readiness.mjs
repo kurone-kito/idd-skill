@@ -964,6 +964,11 @@ export function collectPreMergeReadiness(
     readExternalCheckWaiverAuthorityPolicy(iddConfig);
   const trustSourcePinnedRequiredChecks =
     readTrustSourcePinnedRequiredChecks(iddConfig);
+  // #4011: opt-in that lets a global-only run with zero required checks pass
+  // the CI gate. It only ever applies alongside a non-empty
+  // `ignoredRequiredCheckNames` (the global-only profile is active).
+  const allowNoRequiredChecksInGlobalOnly =
+    readAllowNoRequiredChecksInGlobalOnly(iddConfig);
   // #3824: a global-only run may leave out the template advisory check, but
   // only when the local activation says so AND the trusted base ref has no
   // template workflow. Off unless --global-only is passed.
@@ -1398,6 +1403,7 @@ export function collectPreMergeReadiness(
       resolveWaiverAuthority: (login) => port.getCollaboratorPermission(login),
       trustSourcePinnedRequiredChecks,
       ignoredRequiredCheckNames,
+      allowNoRequiredChecksInGlobalOnly,
       staleAgeMs,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
@@ -2682,6 +2688,15 @@ function readTrustSourcePinnedRequiredChecks(iddConfig) {
   return (
     normalizePolicyConfig(iddConfig).ciGate.trustSourcePinnedRequiredChecks ===
     true
+  );
+}
+// Configured global-only zero-required-check opt-in
+// (`ciGate.allowNoRequiredChecksInGlobalOnly`, #4011). Same trusted-ref
+// pattern as the readers above; absent or unparseable config is `false`.
+function readAllowNoRequiredChecksInGlobalOnly(iddConfig) {
+  return (
+    normalizePolicyConfig(iddConfig).ciGate
+      .allowNoRequiredChecksInGlobalOnly === true
   );
 }
 /**

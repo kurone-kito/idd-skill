@@ -556,6 +556,7 @@ test('getChangeRequestReviewsWithHeadCommitDate: GitHub and fake adapters agree 
                       id: 'PRR_1',
                       commit: { oid: 'abc123' },
                       submittedAt: '2026-01-01T02:00:00Z',
+                      state: 'COMMENTED',
                       author: { login: 'copilot', __typename: 'Bot' },
                       comments: { totalCount: 1 },
                       body: 'LGTM with one comment.',
@@ -589,6 +590,8 @@ test('getChangeRequestReviewsWithHeadCommitDate: GitHub and fake adapters agree 
             // `comments.nodes`, so its derived `replyOnly` fails closed to
             // `false` (a truncated connection) -- match it here for parity.
             replyOnly: false,
+            // kurone-kito/idd-skill#4015: the review state passes through.
+            state: 'COMMENTED',
           },
         ],
         headCommittedAt: '2026-01-01T01:00:00Z',

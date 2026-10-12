@@ -4,7 +4,6 @@ import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -25,7 +24,11 @@ import {
   type CritiqueTelemetryHookPayload,
   invokeCritiqueTelemetryHook,
 } from '../src/scripts/idd-critique-telemetry-hook.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
 import { stubExecutable } from './test-utils.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-telemetry-hook.mjs');
@@ -40,7 +43,7 @@ function runCli(
   env?: NodeJS.ProcessEnv,
   input?: string,
 ): { stdout: string; status: number } {
-  const isolatedHome = mkdtempSync(
+  const isolatedHome = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-home-'),
   );
   const stdout = execFileSync(process.execPath, [CLI_PATH, ...args], {
@@ -92,7 +95,7 @@ test('reports usable:false, reason repository-local-explicit-disable for a null 
 });
 
 test('a malformed repository-local hook fails closed and never inherits a configured global hook', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-malformed-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -118,7 +121,7 @@ test('a malformed repository-local hook fails closed and never inherits a config
 });
 
 test('falls back to a configured user-global hook only when local is entirely absent', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-global-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -142,7 +145,7 @@ test('falls back to a configured user-global hook only when local is entirely ab
 });
 
 test('consults an $HOME-resolved user-global hook outside GITHUB_ACTIONS', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-remote-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -165,7 +168,7 @@ test('consults an $HOME-resolved user-global hook outside GITHUB_ACTIONS', () =>
 });
 
 test('skips the $HOME-resolved user-global hook under GITHUB_ACTIONS=true', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-remote-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -188,7 +191,7 @@ test('skips the $HOME-resolved user-global hook under GITHUB_ACTIONS=true', () =
 });
 
 test('skips the $HOME-resolved user-global hook when noUserGlobal is passed explicitly, outside GITHUB_ACTIONS', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-remote-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -232,7 +235,7 @@ test('CLI --help exits 0 and does not require config resolution', () => {
 });
 
 test('CLI --policy resolves an absent local config to usable:false with an isolated HOME', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-'),
   );
   const policyPath = join(sandbox, 'config.json');
@@ -249,7 +252,7 @@ test('CLI --policy resolves an absent local config to usable:false with an isola
 });
 
 test('CLI --policy resolves a configured local hook to usable:true', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-local-'),
   );
   const policyPath = join(sandbox, 'config.json');
@@ -730,7 +733,7 @@ test('invokeCritiqueTelemetryHook kills a backgrounded descendant on timeout, no
   // wrapper -- a plain single-pid kill would leave it running as an
   // orphan even though `child` itself died. The fix targets the whole
   // process group (negative pid), which must still reach it.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-telemetry-hook-group-kill-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-telemetry-hook-group-kill-'));
   const pidFile = join(sandbox, 'pid');
   // #2685 review (CodeRabbit): record the backgrounded descendant's pid via
   // the shell's own `$!` immediately after backgrounding it, rather than
@@ -791,7 +794,7 @@ test('invokeCritiqueTelemetryHook delivers the payload and resolves ok:true thro
   // through the real `WIN32_RELAY_SCRIPT` (via `node -e`, not mocked) even
   // on this non-Windows test host, the same real-code-path coverage this
   // file's other `platform: 'win32'`-override tests already rely on.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-success-'),
   );
   const receivedPath = join(sandbox, 'received.json');
@@ -826,7 +829,7 @@ process.stdin.on('end', () => {
 });
 
 test('win32 telemetry relay blocks and records an unexpected gh command (#3755)', async () => {
-  const guardRoot = mkdtempSync(
+  const guardRoot = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-relay-guard-'),
   );
   const ledgerPath = join(guardRoot, 'attempts.jsonl');
@@ -878,7 +881,7 @@ test('invokeCritiqueTelemetryHook win32 relay survives an inherited NODE_OPTIONS
   // not defined in ES module scope`) before this test was written. The
   // fix passes an explicit `--input-type=commonjs` flag, which overrides
   // an inherited `--input-type=module`.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-node-options-'),
   );
   const receivedPath = join(sandbox, 'received.json');
@@ -947,7 +950,7 @@ test('invokeCritiqueTelemetryHook win32 relay never executes an inherited NODE_O
   // --input-type, is deliberately still forwarded there) by having the
   // preload check for the relay-command env var that only the relay's
   // own process ever has set.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-preload-'),
   );
   const relayPoisonedSentinel = join(sandbox, 'relay-poisoned.txt');
@@ -1035,7 +1038,7 @@ test('invokeCritiqueTelemetryHook win32 relay strips a non-canonically-cased Nod
   // of what the real OS would produce), so setting a mixed-case key
   // here exercises the exact same code path a genuine Windows
   // non-canonical entry would.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-mixed-case-'),
   );
   const relayPoisonedSentinel = join(sandbox, 'relay-poisoned.txt');
@@ -1144,7 +1147,7 @@ test('invokeCritiqueTelemetryHook win32 relay clears a stale inherited reserved 
   // <scriptPath>` sidesteps NODE_OPTIONS entirely for the target's own
   // startup, leaving this test free to control it purely to exercise the
   // reserved-channel leak.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-stale-channel-'),
   );
   const receivedPath = join(sandbox, 'received.json');
@@ -1220,7 +1223,7 @@ test('invokeCritiqueTelemetryHook win32 relay preserves a quoted --require path 
   // that exact substring, reproducing the review's own repro
   // (`"C:/dir/name --input-type=module.cjs"`) rather than a synthetic
   // stand-in.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-quoted-token-'),
   );
   const targetPreloadSentinel = join(sandbox, 'target-preload-loaded.txt');
@@ -1364,7 +1367,7 @@ test('invokeCritiqueTelemetryHook forwards a compound (a && b) command through t
   // own doc comment), so the full payload reaches the second stub
   // untouched -- proving the relay does not mangle or truncate the
   // command string across the `&&` boundary.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-win32-relay-compound-'),
   );
   const receivedPath = join(sandbox, 'received.json');
@@ -2248,7 +2251,7 @@ test('spawnWatchdog rounds a fractional timeoutMs up to a whole second (#2685 re
 // whether the resolved hook succeeds, fails, or doesn't exist.
 
 test('CLI --invoke exits 0 with no output when no hook is configured', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-none-'),
   );
   const policyPath = join(sandbox, 'config.json');
@@ -2267,7 +2270,7 @@ test('CLI --invoke exits 0 promptly when the resolved hook command fails', () =>
     'process.exit(1);\n',
   );
   try {
-    const sandbox = mkdtempSync(
+    const sandbox = makeTempDir(
       join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-fail-'),
     );
     const policyPath = join(sandbox, 'config.json');
@@ -2309,7 +2312,7 @@ test('CLI --invoke does not wait for a hanging resolved hook up to its default 5
   // the CLI process (and with it, the JS-level timeout timer) is gone, the
   // hung hook must still not run forever -- only the detached watchdog can
   // enforce that deadline at this point, since nothing else survives to.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-hang-'),
   );
   const pidFile = join(sandbox, 'pid');
@@ -2421,7 +2424,7 @@ test('CLI --invoke waits for a large payload to fully reach the hook before exit
     // Fresh sandbox, received-file path and stub name per attempt, so a
     // straggler hook left by an earlier attempt can never satisfy or
     // corrupt this attempt's read.
-    const sandbox = mkdtempSync(
+    const sandbox = makeTempDir(
       join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-large-payload-'),
     );
     const receivedPath = join(sandbox, 'received.json');
@@ -2502,7 +2505,7 @@ test('CLI --invoke waits for a small payload to fully reach the hook before exit
   // the relay path to begin with.
   skip: process.platform !== 'win32',
 }, async () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-small-payload-'),
   );
   const receivedPath = join(sandbox, 'received.json');
@@ -2554,7 +2557,7 @@ test('CLI --invoke delivers a production-sized payload to a real hook byte for b
   // (241 bytes for a realistic one), so this is the test that exercises
   // the real `--invoke` spawn path at the size it actually runs at, on
   // every platform.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-production-'),
   );
   const receivedPath = join(sandbox, 'received.json');
@@ -2609,12 +2612,12 @@ test('CLI --invoke absorbs a resolution failure (malformed --policy file) instea
   // not be: this is a pure observability hook, and the documented contract
   // is "always exits 0, never surfaces an error" regardless of why the
   // hook turned out to be unusable.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-malformed-'),
   );
   const policyPath = join(sandbox, 'config.json');
   writeFileSync(policyPath, '{ not valid json');
-  const isolatedHome = mkdtempSync(
+  const isolatedHome = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-invoke-malformed-home-'),
   );
   const result = spawnSync(
@@ -2643,7 +2646,7 @@ test('CLI --invoke exits 0 when a resolved hook succeeds', () => {
     'process.exit(0);\n',
   );
   try {
-    const sandbox = mkdtempSync(
+    const sandbox = makeTempDir(
       join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-ok-'),
     );
     const policyPath = join(sandbox, 'config.json');
@@ -2672,7 +2675,7 @@ test('CLI --invoke exits 0 without hanging when stdin carries no payload at all'
   // an empty-but-terminated payload -- runCli's execFileSync always closes
   // stdin after writing `input`, so an empty string here still reaches
   // 'end' promptly; this asserts that path resolves cleanly too.
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-telemetry-hook-cli-invoke-empty-'),
   );
   const policyPath = join(sandbox, 'config.json');

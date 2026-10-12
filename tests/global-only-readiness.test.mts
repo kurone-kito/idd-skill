@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ActivationResult } from '../src/scripts/idd-activation.mts';
+import type { IddConfig } from '../src/scripts/idd-config.mts';
 import {
   baseWorkflowAbsentAt,
   collectPreMergeReadiness,
   remoteNamesRepo,
   resolveGlobalOnlyRunIgnores,
 } from '../src/scripts/pre-merge-readiness.mts';
+import {
+  isPreMergeCiAllPassing,
+  NO_REQUIRED_CHECKS_POLICY_SETTING,
+} from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import type { ProviderPort } from '../src/scripts/provider-port.mts';
 
@@ -99,11 +104,12 @@ function collectReport(
   content: Record<string, unknown>,
   requiredContexts: string[] = [ADVISORY],
   rollup: unknown[] = [],
+  config: IddConfig | null = null,
 ) {
   return collectPreMergeReadiness(
     ['--pr', '42', '--claimless', '--owner', 'o', '--repo', 'r', ...extraArgs],
     () => readinessPort(content, requiredContexts, rollup),
-    () => null,
+    () => config,
     () => activation,
   );
 }
@@ -421,4 +427,210 @@ test('a pull request that adds the cleanup workflow keeps the check required', (
     },
   });
   assert.deepEqual(ci.requiredCheckNames, [ADVISORY]);
+});
+
+// #4011: the `ciGate.allowNoRequiredChecksInGlobalOnly` opt-in. A global-only
+// run with zero required checks and no present check run passes the CI gate
+// only when the operator set the opt-in AND the profile is active. Every other
+// combination keeps the fail-closed hold, and readiness names the setting when
+// it is the reason the gate passed.
+const OPT_IN = {
+  ciGate: { allowNoRequiredChecksInGlobalOnly: true },
+} as unknown as IddConfig;
+const OPT_IN_OFF = {
+  ciGate: { allowNoRequiredChecksInGlobalOnly: false },
+} as unknown as IddConfig;
+
+const LINT_FAILING = [
+  {
+    __typename: 'CheckRun',
+    name: 'lint',
+    status: 'COMPLETED',
+    conclusion: 'FAILURE',
+    startedAt: '2026-07-31T22:00:00Z',
+    completedAt: '2026-07-31T22:05:00Z',
+  },
+];
+
+const LINT_PENDING = [
+  {
+    __typename: 'CheckRun',
+    name: 'lint',
+    status: 'IN_PROGRESS',
+    conclusion: null,
+    startedAt: '2026-07-31T22:00:00Z',
+    completedAt: null,
+  },
+];
+
+// An unprotected branch: no required check names at all.
+const NO_REQUIRED: string[] = [];
+
+function ciOf(report: ReturnType<typeof collectReport>) {
+  return report.ci as unknown as {
+    status: string;
+    noRequiredChecksConfigured: boolean;
+    presentRunConclusion: string;
+    allowedByPolicySetting?: string;
+  };
+}
+
+test('the opt-in passes a global-only run with zero required checks and no check run', () => {
+  const report = collectReport(
+    ['--global-only'],
+    GLOBAL_ONLY,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    [],
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(report), false);
+  const ci = ciOf(report);
+  // The rollup stays `unknown`; only the named policy field records the pass.
+  assert.equal(ci.status, 'unknown');
+  assert.equal(ci.noRequiredChecksConfigured, true);
+  assert.equal(ci.presentRunConclusion, 'none');
+  assert.equal(ci.allowedByPolicySetting, NO_REQUIRED_CHECKS_POLICY_SETTING);
+  assert.equal(
+    NO_REQUIRED_CHECKS_POLICY_SETTING,
+    'ciGate.allowNoRequiredChecksInGlobalOnly',
+  );
+});
+
+test('the opt-in defaults off: a global-only run with zero required checks stays held', () => {
+  const report = collectReport(
+    ['--global-only'],
+    GLOBAL_ONLY,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    [],
+  );
+  assert.equal(ciGateBlocked(report), true);
+  assert.equal(ciOf(report).allowedByPolicySetting, undefined);
+});
+
+test('an explicit false keeps the global-only zero-required-check hold', () => {
+  const report = collectReport(
+    ['--global-only'],
+    GLOBAL_ONLY,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    [],
+    OPT_IN_OFF,
+  );
+  assert.equal(ciGateBlocked(report), true);
+});
+
+test('the opt-in keeps the hold when the global-only profile is not active', () => {
+  // No --global-only flag: the profile is never applied to this run.
+  const withoutFlag = collectReport(
+    [],
+    GLOBAL_ONLY,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    [],
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(withoutFlag), true);
+  // A repository-local activation with the flag: the profile does not apply.
+  const repositoryLocal = collectReport(
+    ['--global-only'],
+    REPOSITORY_LOCAL,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    [],
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(repositoryLocal), true);
+  // An unavailable primary checkout: activation is unknown, so no profile.
+  const unavailable = collectReport(
+    ['--global-only'],
+    null,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    [],
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(unavailable), true);
+  // The template workflow is still present on the base ref: no profile.
+  const workflowPresent = collectReport(
+    ['--global-only'],
+    GLOBAL_ONLY,
+    {
+      ...READABLE_ROOT,
+      [`o/r/${WORKFLOW}@main`]: { name: 'idd-advisory-convergence.yml' },
+    },
+    NO_REQUIRED,
+    [],
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(workflowPresent), true);
+});
+
+test('the opt-in never passes a pending or failing present check run', () => {
+  const pending = collectReport(
+    ['--global-only'],
+    GLOBAL_ONLY,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    LINT_PENDING,
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(pending), true);
+  assert.equal(ciOf(pending).allowedByPolicySetting, undefined);
+
+  const failing = collectReport(
+    ['--global-only'],
+    GLOBAL_ONLY,
+    READABLE_ROOT,
+    NO_REQUIRED,
+    LINT_FAILING,
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(failing), true);
+  assert.equal(ciOf(failing).allowedByPolicySetting, undefined);
+});
+
+test('the opt-in does not pass a configured required check that is missing', () => {
+  // A required check (not the advisory one) with no run stays missing.
+  const report = collectReport(
+    ['--global-only'],
+    GLOBAL_ONLY,
+    READABLE_ROOT,
+    ['lint'],
+    [],
+    OPT_IN,
+  );
+  assert.equal(ciGateBlocked(report), true);
+  assert.equal(ciOf(report).allowedByPolicySetting, undefined);
+});
+
+test('a stray policy marker alone never passes a held CI summary', () => {
+  assert.equal(
+    isPreMergeCiAllPassing({
+      status: 'unknown',
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'none',
+      allowedByPolicySetting: NO_REQUIRED_CHECKS_POLICY_SETTING,
+    }),
+    false,
+  );
+  assert.equal(
+    isPreMergeCiAllPassing({
+      status: 'unknown',
+      noRequiredChecksConfigured: true,
+      presentRunConclusion: 'pending',
+      allowedByPolicySetting: NO_REQUIRED_CHECKS_POLICY_SETTING,
+    }),
+    false,
+  );
+  assert.equal(
+    isPreMergeCiAllPassing({
+      status: 'unknown',
+      noRequiredChecksConfigured: true,
+      presentRunConclusion: 'none',
+      allowedByPolicySetting: NO_REQUIRED_CHECKS_POLICY_SETTING,
+    }),
+    true,
+  );
 });

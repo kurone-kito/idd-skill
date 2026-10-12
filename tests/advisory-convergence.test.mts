@@ -22,17 +22,21 @@ import {
   classifyPendingReviewWatch,
   collectAssertNextActions,
   computeAdvisoryConvergenceVerdict,
+  createCopilotRequestCoverage,
   createPendingReviewWatch,
   DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
   DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
   formatAssertNextActions,
   hasTrustedClaimMarkerHistory,
+  hasTrustedHeadApproval,
   isSoleCopilotNotReviewedYetReason,
+  isSoleStaleHeadCopilotReviewReason,
   parseArgs,
   pendingReviewFingerprint,
   pickResolvingClaimEvents,
   readCopilotReviewPollPolicy,
   resolveClaimEvidence,
+  resolveSelfReferentialDecisionRuleFiles,
   resolveSelfReferentialTriggerFiles,
   retryTransientGhFailure,
   reviewPolicyNotApplicableReason,
@@ -40,6 +44,8 @@ import {
   runAdvisoryConvergenceWithPoll,
   SAME_HEAD_REROLL_INELIGIBLE_REASON,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
+  SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES,
+  SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
   SELF_REFERENTIAL_WAIVER_TRIGGER_FILES,
   verifySelfReferentialBootstrapWaiverRun,
   viewerProbeGhOptions,
@@ -5052,6 +5058,258 @@ test('SELF_REFERENTIAL_WAIVER_TRIGGER_FILES includes the runtime config (Codex r
   );
 });
 
+// kurone-kito/idd-skill#4015: decision-rule trigger files never receive the
+// self-referential-bootstrap-auto waiver.
+test('#4015: every trigger file is in exactly one of the bootstrap and decision-rule lists', () => {
+  for (const path of SELF_REFERENTIAL_WAIVER_TRIGGER_FILES) {
+    const inBootstrap = (
+      SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES as readonly string[]
+    ).includes(path);
+    const inDecisionRule = (
+      SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES as readonly string[]
+    ).includes(path);
+    assert.ok(
+      inBootstrap !== inDecisionRule,
+      `expected ${path} in exactly one list (bootstrap=${inBootstrap}, decision-rule=${inDecisionRule})`,
+    );
+  }
+  assert.deepEqual(
+    [
+      ...SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES,
+      ...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
+    ].sort(),
+    [...SELF_REFERENTIAL_WAIVER_TRIGGER_FILES].sort(),
+  );
+  assert.deepEqual([...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES].sort(), [
+    'src/scripts/advisory-convergence.mts',
+    'src/scripts/advisory-wait-policy.mts',
+    'src/scripts/copilot-review-body.mts',
+    'src/scripts/protocol-helpers.mts',
+    'src/scripts/review-clause.mts',
+  ]);
+});
+
+test('#4015: the posting workflow keeps both lists in sync with the constants', () => {
+  const workflow = readFileSync(
+    new URL(
+      '../.github/workflows/idd-advisory-convergence.yml',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const readArray = (name: string): string[] => {
+    const match = new RegExp(`${name}=\\(([^)]*)\\)`).exec(workflow);
+    assert.ok(match, `expected a ${name}=( ... ) array in the workflow`);
+    return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+  };
+  assert.deepEqual(
+    readArray('ALLOWLIST').sort(),
+    [...SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES].sort(),
+  );
+  assert.deepEqual(
+    readArray('DECISION_RULES').sort(),
+    [...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES].sort(),
+  );
+});
+
+test('#4015: only this source repository resolves a decision-rule list', () => {
+  assert.deepEqual(
+    resolveSelfReferentialDecisionRuleFiles(REPO_FULL_NAME),
+    SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
+  );
+  assert.deepEqual(
+    resolveSelfReferentialDecisionRuleFiles('someone-else/adopter-repo'),
+    [],
+  );
+  assert.deepEqual(resolveSelfReferentialDecisionRuleFiles(undefined), []);
+});
+
+function decisionRuleVerdict(
+  changedFilePaths: string[],
+  reviews: AdvisoryConvergenceInputs['reviews'] = [],
+  optionOverrides: Partial<AdvisoryConvergenceOptions> = {},
+) {
+  return computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews,
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
+      ],
+      autoWaiverRunLookups: { [RUN_ID]: acceptedRunLookup() },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths,
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: REPO_FULL_NAME,
+      decisionRuleApproverLogins: [TRUSTED],
+      ...optionOverrides,
+    }),
+  );
+}
+
+function maintainerReview(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'maintainer-review',
+    author: { login: TRUSTED, __typename: 'User' },
+    submittedAt: RECENT,
+    commitId: HEAD,
+    itemCount: 0,
+    body: '',
+    state: 'APPROVED',
+    ...overrides,
+  };
+}
+
+test('#4015: a bootstrap-only diff still receives the auto-waiver', () => {
+  const verdict = decisionRuleVerdict([
+    'src/scripts/provider-adapter-github.mts',
+  ]);
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.decisionRuleFilesTouched, false);
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('#4015: a decision-rule diff receives no auto-waiver and is not ready without approval', () => {
+  for (const path of SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES) {
+    // A bootstrap file in the same diff does not restore the waiver.
+    const verdict = decisionRuleVerdict([
+      path,
+      ADVISORY_CONVERGENCE_WORKFLOW_PATH,
+    ]);
+    assertValidVerdict(verdict);
+    assert.equal(verdict.waiver.decisionRuleFilesTouched, true);
+    assert.equal(verdict.waiver.autoWaiverValid, false);
+    assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+    assert.equal(verdict.ready, false);
+    assert.ok(
+      verdict.reasons.some(
+        (reason) =>
+          reason.includes(path) &&
+          reason.includes('trustedMarkerActors') &&
+          // #4050: both routes for the maintainer-authorized waiver.
+          reason.includes('deadline') &&
+          reason.includes('terminally unavailable'),
+      ),
+      `expected a decision-rule reason naming ${path} and both waiver routes`,
+    );
+  }
+});
+
+test('#4015: a decision-rule diff passes with a trusted approval of the current HEAD', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/protocol-helpers.mts'],
+    [maintainerReview()],
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, true);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('#4015: a decision-rule diff still passes through a converged review', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [copilotReview()],
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.autoWaiverValid, false);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('#4015: an approval of an older commit does not count', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [maintainerReview({ commitId: OTHER_SHA })],
+  );
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('#4015: an approval from a login outside trustedMarkerActors does not count', () => {
+  const verdict = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [
+      maintainerReview({
+        author: { login: 'someone-else', __typename: 'User' },
+      }),
+    ],
+  );
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+  assert.equal(verdict.ready, false);
+  // The widened marker-trust set alone never authorizes the approval.
+  const widened = decisionRuleVerdict(
+    ['src/scripts/advisory-convergence.mts'],
+    [maintainerReview()],
+    { decisionRuleApproverLogins: [] },
+  );
+  assert.equal(widened.waiver.decisionRuleApprovalValid, false);
+  assert.equal(widened.ready, false);
+});
+
+test('#4015: a trusted approval does not replace review for a pull request outside the decision-rule list', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [maintainerReview()],
+      claimEvents: [claimComment()],
+      changedFilePaths: ['docs/README.md'],
+    }),
+    baseOptions({
+      repositoryFullName: REPO_FULL_NAME,
+      decisionRuleApproverLogins: [TRUSTED],
+    }),
+  );
+  assert.equal(verdict.waiver.decisionRuleFilesTouched, false);
+  assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('#4015: hasTrustedHeadApproval uses the latest gating review per login', () => {
+  const approved = maintainerReview({ submittedAt: '2026-07-11T10:00:00Z' });
+  const commented = maintainerReview({
+    state: 'COMMENTED',
+    submittedAt: '2026-07-11T10:30:00Z',
+  });
+  const changesRequested = maintainerReview({
+    state: 'CHANGES_REQUESTED',
+    submittedAt: '2026-07-11T11:00:00Z',
+  });
+  assert.equal(hasTrustedHeadApproval([approved], HEAD, ['Kurone-Kito']), true);
+  // A later COMMENTED review does not withdraw the approval.
+  assert.equal(
+    hasTrustedHeadApproval([approved, commented], HEAD, [TRUSTED]),
+    true,
+  );
+  // A later CHANGES_REQUESTED review does.
+  assert.equal(
+    hasTrustedHeadApproval([approved, changesRequested], HEAD, [TRUSTED]),
+    false,
+  );
+  // Dismissing the approval changes that same review's state.
+  assert.equal(
+    hasTrustedHeadApproval([maintainerReview({ state: 'DISMISSED' })], HEAD, [
+      TRUSTED,
+    ]),
+    false,
+  );
+  assert.equal(hasTrustedHeadApproval([approved], HEAD, []), false);
+  assert.equal(hasTrustedHeadApproval([approved], '', [TRUSTED]), false);
+});
+
 test('resolveSelfReferentialTriggerFiles: this source repository always resolves its own fixed list, regardless of profile (Codex + Copilot review, PR #2895)', () => {
   for (const profile of [undefined, 'vendored-node', 'package-manager']) {
     assert.deepEqual(
@@ -8864,4 +9122,315 @@ test('stamped disposition (#4007): the GitHub notice leads with the stamped item
     .split('\n')
     .find((line) => line.startsWith('::notice::'));
   assert.match(notice ?? '', /name a file or line/);
+});
+
+// --- #3944: a stale head polls only when a Copilot re-review was requested ---
+
+test('isSoleStaleHeadCopilotReviewReason: true for a stale head with no other reason', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, true);
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), true);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+test('isSoleStaleHeadCopilotReviewReason: false when the verdict is ready', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.ready, true);
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), false);
+});
+
+test('isSoleStaleHeadCopilotReviewReason: false when the bot has never reviewed', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [] }),
+    baseOptions(),
+  );
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), false);
+});
+
+test('isSoleStaleHeadCopilotReviewReason: false when an unrelated reason accompanies the stale one', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
+  );
+  assert.ok(verdict.reasons.length > 1);
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), false);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head whose re-review was requested polls until the review lands', () => {
+  const requestedFor: string[] = [];
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+      baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+      baseInputs({ reviews: [copilotReview()] }),
+    ],
+    baseOptions(),
+  );
+  deps.copilotReviewRequestCoversHead = (_argv, prHeadSha) => {
+    requestedFor.push(prHeadSha);
+    return true;
+  };
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(verdict?.ready, true);
+  assert.equal(exitCode, 0);
+  // 1 initial collection + 2 re-checks; the review lands on the third.
+  assert.equal(collectCalls(), 3);
+  assert.equal(calls(), 2);
+  // The timeline is read once for the head, not once per tick.
+  assert.deepEqual(requestedFor, [HEAD]);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head whose re-review never lands fails once the 10-minute ceiling is reached', () => {
+  const { deps } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions(),
+  );
+  deps.copilotReviewRequestCoversHead = () => true;
+  const { sleep, now, sleptMs } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.ok(
+    verdict?.reasons.some((reason) =>
+      reason.includes('does not cover current HEAD'),
+    ),
+  );
+  assert.equal(
+    sleptMs().reduce((total, ms) => total + ms, 0),
+    600_000,
+  );
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head with no re-review request fails at once', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions(),
+  );
+  deps.copilotReviewRequestCoversHead = () => false;
+  const { sleep, now, calls } = fakeClock();
+  const { exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head without the request check configured fails at once', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  const { exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head with an extra blocking reason never consults the request check', () => {
+  const { deps } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
+  );
+  let consulted = false;
+  deps.copilotReviewRequestCoversHead = () => {
+    consulted = true;
+    return true;
+  };
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.ok((verdict?.reasons.length ?? 0) > 1);
+  assert.equal(exitCode, 1);
+  assert.equal(consulted, false);
+  assert.equal(calls(), 0);
+});
+
+test('DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS is the 10-minute ceiling #3944 decided', () => {
+  assert.equal(DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS, 600_000);
+});
+
+// --- #3944: the production request-coverage reader ---
+
+function timelineGhStub(events: unknown[]): string {
+  return [
+    "const joined = process.argv.join(' ');",
+    'if (/\\/issues\\/[0-9]+\\/timeline/.test(joined)) {',
+    `  process.stdout.write(${JSON.stringify(JSON.stringify(events))} + '\\n');`,
+    '  process.exit(0);',
+    '}',
+    "process.stderr.write('unexpected gh call: ' + joined + '\\n');",
+    'process.exit(1);',
+  ].join('\n');
+}
+
+const REQUESTED_COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
+const REPO_ARGV = ['--pr', '1234', '--owner', 'o', '--repo', 'r'];
+
+test('createCopilotRequestCoverage: true when a Copilot review was requested after the head commit', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([
+      { event: 'committed', sha: HEAD },
+      {
+        event: 'review_requested',
+        requested_reviewer: { login: REQUESTED_COPILOT_LOGIN },
+      },
+    ]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      true,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false when the request came before the head commit', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([
+      {
+        event: 'review_requested',
+        requested_reviewer: { login: REQUESTED_COPILOT_LOGIN },
+      },
+      { event: 'committed', sha: HEAD },
+    ]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false when no Copilot review was requested at all', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([{ event: 'committed', sha: HEAD }]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false when the timeline read fails, so the stale-head failure stands', () => {
+  const restore = stubExecutable(
+    'gh',
+    "process.stderr.write('HTTP 500\\n');\nprocess.exit(1);",
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false without a resolvable repository, and makes no gh call', () => {
+  const covers = createCopilotRequestCoverage(() => ({ owner: '', repo: '' }));
+  assert.equal(
+    covers(['--pr', '1234'], HEAD, 'copilot-pull-request-reviewer'),
+    false,
+  );
+});
+
+test('createCopilotRequestCoverage: resolves the repository from the checkout when argv omits it', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([
+      { event: 'committed', sha: HEAD },
+      {
+        event: 'review_requested',
+        requested_reviewer: { login: REQUESTED_COPILOT_LOGIN },
+      },
+    ]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage(() => ({
+      owner: 'o',
+      repo: 'r',
+    }));
+    assert.equal(
+      covers(['--pr', '1234'], HEAD, 'copilot-pull-request-reviewer'),
+      true,
+    );
+  } finally {
+    restore();
+  }
 });

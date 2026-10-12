@@ -987,6 +987,13 @@
             "unknown"
           ]
         },
+        "allowedByPolicySetting": {
+          "type": "string",
+          "description": "#4011: present only when the global-only zero-required-check opt-in is the reason the CI gate passed. Names that setting (`ciGate.allowNoRequiredChecksInGlobalOnly`). Absent in every other case, including a held gate, so `status` stays `unknown` and only this field records the policy pass.",
+          "enum": [
+            "ciGate.allowNoRequiredChecksInGlobalOnly"
+          ]
+        },
         "checks": {
           "type": "array",
           "description": "Every check run reported for the current head, normalized with required/waiver status.",

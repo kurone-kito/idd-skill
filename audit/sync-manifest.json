@@ -647,7 +647,28 @@
       "id": "idd-design-rationale-doc",
       "source": "idd-template/docs/idd-design-rationale.md",
       "target": "docs/idd-design-rationale.md",
-      "mode": "structure"
+      "mode": "structure",
+      "sharedSections": [
+        "A4 Step 2 — Rationale: milestone-scope preference",
+        "A4 — Scored-vs-unscored floor tie-breaker: what still ties afterward",
+        "Activation-nonce: why a separate marker, and what stays deferred",
+        "B–C — Follow-up discovery bypassed issue authoring",
+        "Stage 1 — Shared hold ownership conflict",
+        "Stage 1 — Non-atomic new-issue publication window",
+        "Stage 2 — Set-level release rollback safety",
+        "Review-fix escalation examples",
+        "Whole-class sweep: why the E13 reply names the pattern and the count",
+        "A body finding that names a file or line needs its own disposition",
+        "Reconciling the deferred follow-up with its pull request (kurone-kito/idd-skill#3624)",
+        "E6 bundles one follow-up per pass (kurone-kito/idd-skill#3866)",
+        "Wave-gradient urgency defer (kurone-kito/idd-skill#3796)",
+        "Converged extra step (kurone-kito/idd-skill#3797)",
+        "review-ack worked example",
+        "F4 verifies the PR digest before it releases the claim",
+        "F2 and F3 require the exact pull request head before the local checks (kurone-kito/idd-skill#3802)",
+        "Helper runtime launchers",
+        "Require a profile-selected pointer before helper commands"
+      ]
     },
     {
       "id": "idd-discover-instructions",

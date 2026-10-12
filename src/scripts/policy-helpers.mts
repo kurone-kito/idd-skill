@@ -510,6 +510,7 @@ interface RawConfig {
     };
     trustEmptyProtectionReads?: unknown;
     trustSourcePinnedRequiredChecks?: unknown;
+    allowNoRequiredChecksInGlobalOnly?: unknown;
   };
   discover?: {
     activeClaimPreScanBatchSize?: unknown;
@@ -730,6 +731,11 @@ export const POLICY_DEFAULTS = Object.freeze({
     // check's green state stays untrusted by default rather than silently
     // treated as passing.
     trustSourcePinnedRequiredChecks: false,
+    // Option A (issue #4011): default false keeps the CI gate fail-closed for a
+    // global-only run with zero required checks. Only an explicit operator
+    // opt-in lets that run pass, and only while the global-only profile is
+    // active (see pre-merge-readiness.mts and protocol-helpers.mts).
+    allowNoRequiredChecksInGlobalOnly: false,
   }),
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
@@ -1290,6 +1296,8 @@ export function normalizePolicyConfig(config: unknown) {
       trustEmptyProtectionReads: c?.ciGate?.trustEmptyProtectionReads === true,
       trustSourcePinnedRequiredChecks:
         c?.ciGate?.trustSourcePinnedRequiredChecks === true,
+      allowNoRequiredChecksInGlobalOnly:
+        c?.ciGate?.allowNoRequiredChecksInGlobalOnly === true,
     },
     discover: {
       activeClaimPreScanBatchSize: parsePositiveInteger(

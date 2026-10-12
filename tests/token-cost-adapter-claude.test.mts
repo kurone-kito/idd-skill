@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,6 +15,10 @@ import {
   segmentRecordsByCwd,
 } from '../src/scripts/token-cost-adapter-claude.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const FIXTURE_DIR = 'tests/fixtures/token-cost/claude';
 
@@ -341,7 +345,7 @@ test('parseClaudeProjectLines tolerates a truncated trailing line', () => {
 });
 
 test('scanClaudeSessions harvests every jsonl file in the project directory', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   writeFileSync(
@@ -364,7 +368,7 @@ test('scanClaudeSessions harvests every jsonl file in the project directory', ()
 });
 
 test('scanClaudeSessions skips a malformed session that fails to harvest, keeping the rest', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   // No record has a valid timestamp, so harvest() throws for this file
@@ -385,7 +389,7 @@ test('scanClaudeSessions skips a malformed session that fails to harvest, keepin
 });
 
 test('scanClaudeSessions on an empty directory returns no results', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   mkdirSync(sandbox, { recursive: true });
@@ -486,7 +490,7 @@ test('segmentRecordsByCwd keeps a cwd-less record in whichever segment is curren
 });
 
 test('scanClaudeSessions splits a multi-cwd file into one correctly-scoped sample per worktree segment -- #2404', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   writeFileSync(
@@ -562,7 +566,7 @@ test('scanClaudeSessions splits a multi-cwd file into one correctly-scoped sampl
 });
 
 test("scanClaudeSessions leaves a single-cwd file's vendorSessionId without a suffix, unchanged from before #2404", () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-claude-test-'),
   );
   writeFileSync(

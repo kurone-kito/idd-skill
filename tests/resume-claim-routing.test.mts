@@ -2993,6 +2993,7 @@ function trustedLadderFixture({
   createdAt,
   agentId = 'agent-x',
   activationNonce,
+  releasedAt,
 }: {
   policyTrustedMarkerActors?: string[];
   commentLogin: string;
@@ -3006,6 +3007,8 @@ function trustedLadderFixture({
   // no nonce is posted at all -- the pre-existing AC3 backward-compat
   // path).
   activationNonce?: { nonce: string; createdAt: string };
+  // #4019: an optional trusted `unclaimed-by` marker releasing the claim.
+  releasedAt?: string;
 }) {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-resume-claim-routing-trust-ladder-'),
@@ -3033,8 +3036,18 @@ function trustedLadderFixture({
         user: { login: commentLogin },
       })
     : null;
+  const releaseCommentJson = releasedAt
+    ? JSON.stringify({
+        id: 3,
+        node_id: 'IC_trust_ladder_release',
+        body: `<!-- unclaimed-by: ${agentId} ${claimId} ${releasedAt} -->`,
+        created_at: releasedAt,
+        updated_at: releasedAt,
+        user: { login: commentLogin },
+      })
+    : null;
   const commentPayloadsJs = JSON.stringify(
-    [commentJson, nonceCommentJson].filter(
+    [commentJson, nonceCommentJson, releaseCommentJson].filter(
       (payload): payload is string => payload !== null,
     ),
   );
@@ -6049,4 +6062,394 @@ test('a caller that supplies the explainer but omits authorization reports the g
     ),
     'an omitted authorization check must not be reported as a refusal',
   );
+});
+
+// #4019: the fresh-claim order creates its own worktree before the second
+// gate read, so a released claim's branch read as occupied by that new,
+// empty worktree. --own-worktree names it; the gate ignores exactly that
+// path, and only while it is clean with no commits beyond origin/main.
+
+interface OwnWorktreeSandbox {
+  root: string;
+  primary: string;
+  own: string;
+  branch: string;
+  claimId: string;
+  agentId: string;
+  gitEnv: NodeJS.ProcessEnv;
+  policyPath: string;
+  gate: (extraArgs: string[]) => {
+    status: number | null;
+    stderr: string;
+    output: {
+      state: string;
+      reason: string;
+      warnings: string[];
+      fresh_claim_gate: { verdict: string; winning_claim_id: string | null };
+    };
+  };
+  addOwnWorktree: () => void;
+  restore: () => void;
+}
+
+function ownWorktreeSandbox(): OwnWorktreeSandbox {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), 'idd-resume-own-worktree-')),
+  );
+  const seed = join(root, 'seed');
+  const origin = join(root, 'origin.git');
+  const primary = join(root, 'primary');
+  const own = join(root, 'primary.issue-1-task');
+  const branch = 'issue/1-task';
+  const claimId = 'claim-own-worktree-released';
+  const agentId = 'agent-own-worktree';
+  const gitEnv = {
+    ...fixtureEnv(),
+    GIT_AUTHOR_NAME: 'idd-test',
+    GIT_AUTHOR_EMAIL: 'idd-test@example.com',
+    GIT_COMMITTER_NAME: 'idd-test',
+    GIT_COMMITTER_EMAIL: 'idd-test@example.com',
+  };
+  const fixture = trustedLadderFixture({
+    policyTrustedMarkerActors: ['maintainer'],
+    commentLogin: 'maintainer',
+    claimId,
+    branch,
+    createdAt: '2026-09-24T00:00:00Z',
+    agentId,
+    releasedAt: '2026-09-24T00:00:30Z',
+  });
+  const git = (cwd: string, args: string[]) =>
+    execFileSync('git', args, { cwd, env: gitEnv, stdio: 'ignore' });
+  mkdirSync(seed, { recursive: true });
+  git(seed, ['init', '--quiet', '-b', 'main']);
+  writeFileSync(join(seed, 'README.md'), 'seed\n');
+  git(seed, ['add', 'README.md']);
+  // Disposable sandbox repository, never pushed or shared: no signing.
+  git(seed, ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'root']);
+  git(root, ['clone', '--quiet', '--bare', seed, origin]);
+  git(root, ['clone', '--quiet', origin, primary]);
+  return {
+    root,
+    primary,
+    own,
+    branch,
+    claimId,
+    agentId,
+    gitEnv,
+    policyPath: fixture.policyPath,
+    gate: (extraArgs) => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+          '--issue',
+          '1',
+          '--owner',
+          'o',
+          '--repo',
+          'r',
+          '--now',
+          '2026-09-24T00:01:00Z',
+          '--policy',
+          fixture.policyPath,
+          '--fresh-claim-gate',
+          ...extraArgs,
+        ],
+        {
+          cwd: primary,
+          encoding: 'utf8',
+          env: { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: '' },
+        },
+      );
+      return {
+        status: result.status,
+        stderr: result.stderr,
+        output: result.status === 0 ? JSON.parse(result.stdout) : null,
+      };
+    },
+    addOwnWorktree: () => {
+      git(primary, [
+        'worktree',
+        'add',
+        '--quiet',
+        '--no-track',
+        own,
+        '-b',
+        branch,
+        'origin/main',
+      ]);
+      // Step 2 of the fresh-claim order runs before the second gate read.
+      recordGeneratedClaimTokens(own, {
+        agentId,
+        claimId: 'claim-own-worktree-fresh',
+        nonce: 'nonce-own-worktree-fresh',
+      });
+    },
+    restore: () => {
+      fixture.restore();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function assertOccupiedByOwnWorktree(
+  sandbox: OwnWorktreeSandbox,
+  extraArgs: string[],
+): void {
+  const read = sandbox.gate(extraArgs);
+  assert.equal(read.status, 0, read.stderr);
+  assert.equal(read.output.fresh_claim_gate.verdict, 'already-claimed');
+  assert.equal(read.output.reason, 'released-claim-local-worktree-occupied');
+  assert.equal(read.output.fresh_claim_gate.winning_claim_id, sandbox.claimId);
+}
+
+test('--own-worktree (#4019): the gate reads claimable on the second read of the worktree-first order', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    const first = sandbox.gate([]);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(first.output.fresh_claim_gate.verdict, 'claimable');
+
+    sandbox.addOwnWorktree();
+
+    // The reproduction: without the flag the caller's own worktree blocks.
+    assertOccupiedByOwnWorktree(sandbox, []);
+
+    const second = sandbox.gate(['--own-worktree', sandbox.own]);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(second.output.fresh_claim_gate.verdict, 'claimable');
+    assert.equal(second.output.fresh_claim_gate.winning_claim_id, null);
+    assert.equal(second.output.state, 'unclaimed');
+    assert.ok(
+      second.output.warnings.some((warning) =>
+        warning.includes(`ignored the caller's own clean worktree`),
+      ),
+      JSON.stringify(second.output.warnings),
+    );
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4019): a path other than the occupying worktree still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.primary]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4019): an untracked file in the worktree still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    writeFileSync(join(sandbox.own, 'scratch.txt'), 'left behind\n');
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4019): a tracked change in the worktree still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    writeFileSync(join(sandbox.own, 'README.md'), 'edited\n');
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4019): a commit beyond origin/main still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'work',
+      ],
+      { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4019) without --fresh-claim-gate is a usage error', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '1',
+      '--own-worktree',
+      REPO_ROOT,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: fixtureEnv() },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--own-worktree requires --fresh-claim-gate/);
+});
+
+test('--own-worktree (#4019): another occupant beside the own worktree still blocks, and a stale or unreadable probe is never relaxed', () => {
+  const released = [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-released supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+    },
+    {
+      createdAt: '2026-05-12T10:05:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- unclaimed-by: copilot claim-released 2026-05-12T10:05:00Z -->',
+    },
+  ];
+  const isOwnPristineWorktree = (path: string) => path === '/tmp/own';
+  const twoOccupants = evaluateFreshClaimGate(
+    { now: '2026-05-12T11:00:00Z', events: released },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/own', '/tmp/other'],
+        reason: 'matching local worktree for issue/24-task',
+      }),
+      isOwnPristineWorktree,
+    },
+  );
+  assert.equal(twoOccupants.verdict, 'already-claimed');
+  assert.equal(twoOccupants.reason, 'released-claim-local-worktree-occupied');
+
+  const unreadable = evaluateFreshClaimGate(
+    { now: '2026-05-12T11:00:00Z', events: released },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'unreadable',
+        paths: ['/tmp/own'],
+        reason: 'cannot inspect matching local worktree metadata',
+      }),
+      isOwnPristineWorktree,
+    },
+  );
+  assert.equal(unreadable.verdict, 'already-claimed');
+  assert.equal(unreadable.reason, 'released-claim-local-worktree-unreadable');
+
+  const stale = evaluateFreshClaimGate(
+    {
+      now: '2026-05-14T11:00:00Z',
+      events: [released[0]],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/own'],
+        reason: 'matching local worktree for issue/24-task',
+      }),
+      isOwnPristineWorktree,
+    },
+  );
+  assert.equal(stale.verdict, 'already-claimed');
+  assert.equal(stale.reason, 'stale-claim-local-worktree-occupied');
+});
+
+function setSandboxDevelopmentBranch(
+  sandbox: OwnWorktreeSandbox,
+  developmentBranch: string,
+): void {
+  const policy = JSON.parse(readFileSync(sandbox.policyPath, 'utf8'));
+  writeFileSync(
+    sandbox.policyPath,
+    JSON.stringify({ ...policy, developmentBranch }),
+  );
+}
+
+test('--own-worktree (#4019): a configured developmentBranch sets the base', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    setSandboxDevelopmentBranch(sandbox, 'main');
+    const read = sandbox.gate(['--own-worktree', sandbox.own]);
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(read.output.fresh_claim_gate.verdict, 'claimable');
+
+    // A configured branch with no origin ref fails closed.
+    setSandboxDevelopmentBranch(sandbox, 'develop');
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4019): an invalid developmentBranch keeps the block', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    setSandboxDevelopmentBranch(sandbox, 'refs/heads/main');
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+// #4059: the own-worktree base is read from refs/remotes/origin/HEAD. With
+// that ref gone the check must fail closed, so the occupant keeps blocking.
+// Copilot flagged this path as untested on #4043.
+test('--own-worktree (#4059): a missing origin/HEAD fails closed without a developmentBranch', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    const read = sandbox.gate(['--own-worktree', sandbox.own]);
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(read.output.fresh_claim_gate.verdict, 'claimable');
+    assert.equal(read.output.fresh_claim_gate.winning_claim_id, null);
+
+    // Remove the base ref from the sandbox clone only. fixtureEnv() strips
+    // GIT_DIR, so the real repository's origin/HEAD is never touched.
+    execFileSync('git', ['remote', 'set-head', 'origin', '-d'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    const baseRef = spawnSync(
+      'git',
+      ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/HEAD'],
+      { cwd: sandbox.primary, env: sandbox.gitEnv },
+    );
+    assert.notEqual(baseRef.status, 0, 'origin/HEAD must be removed');
+
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4019) with an empty value is a usage error', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '1',
+      '--fresh-claim-gate',
+      '--own-worktree',
+      '',
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: fixtureEnv() },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--own-worktree requires a non-empty path/);
 });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -17,6 +17,10 @@ import {
   replaceMarkedRegion,
   resolveDefaultBranchGuard,
 } from '../src/scripts/idd-critique-report.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-report.mjs');
@@ -46,7 +50,7 @@ function sample(
 }
 
 function sandboxDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-critique-report-test-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-critique-report-test-'));
   mkdirSync(join(dir, 'docs'), { recursive: true });
   return dir;
 }

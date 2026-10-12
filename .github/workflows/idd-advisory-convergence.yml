@@ -161,10 +161,13 @@ name: IDD advisory-convergence gate
 # `runAdvisoryConvergenceWithPoll` instead of asserting
 # immediately: when (and ONLY when) the verdict's sole blocking reason
 # is literally "{bot} has not reviewed this pull request yet" --
-# `isSoleCopilotNotReviewedYetReason` in the .mts source -- it polls a
-# short, bounded window (a few seconds apart, capped around a minute,
+# `isSoleCopilotNotReviewedYetReason` in the .mts source, or a stale head
+# whose Copilot re-review was requested after the head commit (#3944,
+# `isSoleStaleHeadCopilotReviewReason`) -- it polls a
+# short, bounded window (a few seconds apart, capped at 10 minutes (#3944),
 # wall-clock bounded) before its real assert-driven exit. Every OTHER
-# not-ready reason (a stale-HEAD review, unresolved threads, an
+# not-ready reason (a stale-HEAD review with no re-review request, unresolved
+# threads, an
 # indeterminate claim scope, a deadline/terminal-unavailability reason,
 # etc.) still fails immediately on the first pass with no wait, exactly
 # as before this change. This does not weaken the check's required,
@@ -349,8 +352,10 @@ jobs:
     runs-on: ubuntu-slim
     # No observed run history yet (new workflow). Bounds pathological
     # hangs with the same headroom as idd-doctor.yml's own estimate
-    # until real durations are available to tighten this.
-    timeout-minutes: 10
+    # until real durations are available to tighten this. #3944 raised it to
+    # 14 minutes so the 10-minute Copilot re-review poll and collection fit;
+    # the runner ends a job at 15 minutes, so this stays below that.
+    timeout-minutes: 14
     # kurone-kito/idd-skill#2657 (Codex review, PR #2895): sequenced after
     # the self-waiver job below so an allowlisted PR's own bootstrap
     # marker is guaranteed to exist (posted or definitively not posted)
@@ -610,23 +615,30 @@ jobs:
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_TRIGGER_FILES
-          # in src/scripts/advisory-convergence.mts -- exactly the same
-          # committed paths, never derived from imports (see that
-          # constant's own doc comment for why an import-derived set would
-          # auto-waive most PRs).
+          # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES
+          # (ALLOWLIST) and SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES
+          # (DECISION_RULES) in src/scripts/advisory-convergence.mts --
+          # exactly the same committed paths, never derived from imports
+          # (see that file's doc comments for why an import-derived set
+          # would auto-waive most PRs). kurone-kito/idd-skill#4015: a diff
+          # that touches a decision-rule file gets no auto-waiver, so no
+          # marker is posted for it.
           ALLOWLIST=(
-            "src/scripts/advisory-convergence.mts"
             "src/scripts/advisory-wait-state.mts"
-            "src/scripts/advisory-wait-policy.mts"
             "src/scripts/rerun-advisory-convergence.mts"
             "src/scripts/external-check-waiver.mts"
             "src/scripts/marker-helpers.mts"
-            "src/scripts/protocol-helpers.mts"
             "src/scripts/provider-adapter-github.mts"
             ".github/idd/config.json"
             ".github/workflows/idd-advisory-convergence.yml"
             ".github/workflows/idd-advisory-convergence-comment.yml"
+          )
+          DECISION_RULES=(
+            "src/scripts/advisory-convergence.mts"
+            "src/scripts/advisory-wait-policy.mts"
+            "src/scripts/protocol-helpers.mts"
+            "src/scripts/review-clause.mts"
+            "src/scripts/copilot-review-body.mts"
           )
           # kurone-kito/idd-skill#2657 (Codex review, PR #2895): `gh pr
           # diff --name-only` documents itself as "Display only names of
@@ -643,6 +655,12 @@ jobs:
           for FILE in "${ALLOWLIST[@]}"; do
             if grep -qxF "$FILE" <<<"$CHANGED"; then
               TOUCHED=true
+              break
+            fi
+          done
+          for FILE in "${DECISION_RULES[@]}"; do
+            if grep -qxF "$FILE" <<<"$CHANGED"; then
+              TOUCHED=false
               break
             fi
           done

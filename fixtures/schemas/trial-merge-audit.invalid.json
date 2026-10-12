@@ -1,0 +1,10 @@
+{
+  "protocolVersion": "1",
+  "verdict": "merged",
+  "prHeadSha": "not-a-sha",
+  "commands": [],
+  "toolingChanged": [],
+  "install": null,
+  "worktreeRemoved": true,
+  "reasons": []
+}

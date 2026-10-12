@@ -103,6 +103,10 @@ export interface ReviewPayload {
    * reply-only. Absent/`null`/`undefined` means "not reply-only" (a fake
    * or older fixture that doesn't set this field behaves as before). */
   replyOnly?: boolean | null;
+  /** kurone-kito/idd-skill#4015: the review's GraphQL `state`
+   * (`APPROVED`, `COMMENTED`, ...). Read only by the advisory gate's
+   * decision-rule approval check; absent reads as "not an approval". */
+  state?: string | null;
 }
 
 /** Latest-review clause evidence (Clause 1 of `advisory-convergence.mts`'s
@@ -331,6 +335,7 @@ export function fetchReviewsAndHeadCommit(
     itemCount: node.commentCount,
     body: node.body,
     replyOnly: node.replyOnly,
+    state: node.state ?? null,
   }));
   return { reviews, headCommittedAt };
 }

@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-owner-provenance.mts';
+import type { ActivationResult } from '../src/scripts/idd-activation.mts';
 import { parseAuthoringOwnerComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildMarkerBody,
@@ -20,6 +28,7 @@ import {
   MARKER_TYPES,
   parseArgs,
   parseIssueReference,
+  readWatermarkRequiredCiAgreement,
   runOperationLocalSnapshotWatermark,
   selectAuthoringOwnerOpeningMarkers,
   selectLatestAuthoringOwnerMarker,
@@ -41,6 +50,7 @@ import {
   parseReviewAckComment,
   parseReviewWatermarkComment,
 } from '../src/scripts/protocol-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import {
   checkSchemaKeywords,
   loadJson,
@@ -1371,6 +1381,14 @@ function watermarkFromPrGhStub(
     threadsBody?: string;
     /** Raw GraphQL body for the `userContentEdits` `nodes(ids:)` query. */
     editsBody?: string;
+    /** #4053: base64 of the trusted config the policy read returns (default: this repo's file). */
+    policyB64?: string;
+    /**
+     * #4053: answer the root listing with an empty array and the advisory
+     * workflow with a 404, so the global-only profile's base and head
+     * absence checks both pass.
+     */
+    globalOnlyContents?: boolean;
   } = {},
 ): string {
   const reviewsBody = JSON.stringify(options.reviewsBody ?? '[]');
@@ -1397,7 +1415,14 @@ function watermarkFromPrGhStub(
 const args = process.argv.slice(2);
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 if (args[0] === 'pr' && args[1] === 'view') out(JSON.stringify({ headRefOid: '${headSha}', author: { login: 'someone' }, baseRefName: 'main' }));
-if (args[0] === 'api' && String(args[1]).includes('/contents/.github/idd/config.json')) out(${JSON.stringify(REPO_POLICY_B64)});
+if (args[0] === 'api' && String(args[1]).includes('/contents/.github/idd/config.json')) out(${JSON.stringify(options.policyB64 ?? REPO_POLICY_B64)});
+${
+  options.globalOnlyContents
+    ? `if (args[0] === 'api' && /contents\\/\\?ref=/.test(args[1])) out('[]');
+if (args[0] === 'api' && /contents\\/\\.github\\/workflows\\//.test(args[1])) { fs.writeSync(2, 'gh: Not Found (HTTP 404)'); process.exit(1); }
+if (args[0] === 'pr' && args[1] === 'checks') out('[]');`
+    : ''
+}
 if (args[0] === 'pr' && args[1] === 'checks') {
   out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
 }
@@ -1526,6 +1551,103 @@ function assertWatermarkRefused(
   }
   throw new Error('expected the CLI to exit non-zero');
 }
+
+// #4053: a CLI-level run of `--global-only` through main. The checkout is a
+// temp repo whose origin names o/r and whose policy file marks it as a minimal
+// import, with a payload installed under XDG_DATA_HOME, so the real activation
+// resolves to the global-only profile.
+function globalOnlyCheckout(): {
+  repo: string;
+  xdg: string;
+  cleanup: () => void;
+} {
+  const base = mkdtempSync(join(tmpdir(), 'idd-4053-'));
+  const repo = join(base, 'checkout');
+  const xdg = join(base, 'xdg');
+  const payloadDir = join(
+    xdg,
+    'idd-skill',
+    'current',
+    '.github',
+    'instructions',
+  );
+  mkdirSync(join(repo, '.github', 'idd'), { recursive: true });
+  writeFileSync(join(repo, '.github', 'idd', 'config.json'), '{}\n');
+  mkdirSync(payloadDir, { recursive: true });
+  writeFileSync(
+    join(payloadDir, 'idd-overview-core.instructions.md'),
+    '# payload\n',
+  );
+  execFileSync('git', ['init', '-q', repo], { stdio: 'ignore' });
+  execFileSync(
+    'git',
+    ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/o/r.git'],
+    { stdio: 'ignore' },
+  );
+  return {
+    repo,
+    xdg,
+    cleanup: () => rmSync(base, { recursive: true, force: true }),
+  };
+}
+
+function runGlobalOnlyWatermark(
+  checkout: { repo: string; xdg: string },
+  globalOnly: boolean,
+) {
+  return spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'watermark',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+      ...(globalOnly ? ['--global-only'] : []),
+    ],
+    {
+      cwd: checkout.repo,
+      encoding: 'utf8',
+      env: { ...process.env, XDG_DATA_HOME: checkout.xdg },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+}
+
+test('#4053: --global-only reaches the CLI watermark read, so the opt-in publishes only with the flag', () => {
+  const checkout = globalOnlyCheckout();
+  const policy = Buffer.from(
+    JSON.stringify({ ciGate: { allowNoRequiredChecksInGlobalOnly: true } }),
+  ).toString('base64');
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [],
+      policyB64: policy,
+      globalOnlyContents: true,
+    }),
+  );
+  try {
+    const published = runGlobalOnlyWatermark(checkout, true);
+    assert.equal(published.status, 0, published.stderr);
+    assert.equal(JSON.parse(published.stdout).mode, 'dry-run');
+
+    const refused = runGlobalOnlyWatermark(checkout, false);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /refusing to post watermark/);
+  } finally {
+    restore();
+    checkout.cleanup();
+  }
+});
 
 test('#3465: --from-pr watermark refuses a failed required check in dry-run and --apply', () => {
   const stub = watermarkFromPrGhStub(SHA, {
@@ -2285,6 +2407,27 @@ test('--expected-head-sha is rejected together with --from-pr for a non-watermar
   assert.match(
     stderr,
     /--expected-head-sha is only valid together with --from-pr --type watermark/,
+  );
+});
+
+test('--global-only fails closed outside --from-pr --type watermark', () => {
+  // #4053: the flag only changes the watermark CI read, so elsewhere it would
+  // be silently ignored. Reject it the same way --expected-head-sha is.
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'advisory',
+    '--from-pr',
+    '1200',
+    '--global-only',
+    '--agent-id',
+    'a',
+    '--timestamp',
+    TS,
+  ]);
+  assert.match(
+    stderr,
+    /--global-only is only valid together with --from-pr --type watermark/,
   );
 });
 
@@ -5571,6 +5714,133 @@ function passingAgreement(head = OPERATION_LOCAL_SHA) {
     latestPassingCompletedAt: '2026-06-25T11:00:00Z',
   };
 }
+
+// --- #4053: the `--from-pr --type watermark` CI read honors the zero-check
+// global-only opt-in. The seam is the exact call the CLI's watermark path
+// makes, driven here through a fake port, config loader, and activation.
+
+const ZERO_CHECK_GLOBAL_ONLY_ACTIVE: ActivationResult = {
+  active: true,
+  tier: 'user-global-override',
+  instructionsRoot: '/payload/idd',
+  reason: 'repository-policy-minimal-import',
+};
+
+function zeroCheckWatermarkPort() {
+  return createFakeProviderAdapter({
+    changeRequestBranchAndChecks: {
+      3592: {
+        headSha: OPERATION_LOCAL_SHA,
+        baseRefName: 'main',
+        statusCheckRollup: [],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    repositoryContentAtRef: {
+      'o/r/@main': [],
+      [`o/r/@${OPERATION_LOCAL_SHA}`]: [],
+    },
+  });
+}
+
+function watermarkDecision(input: {
+  setting?: boolean;
+  globalOnly: boolean;
+  activation?: ActivationResult | null;
+}) {
+  const agreement = readWatermarkRequiredCiAgreement({
+    prNumber: 3592,
+    owner: 'o',
+    repo: 'r',
+    globalOnly: input.globalOnly,
+    createPort: () => zeroCheckWatermarkPort(),
+    loadTrustedConfig: () =>
+      input.setting === undefined
+        ? {}
+        : { ciGate: { allowNoRequiredChecksInGlobalOnly: input.setting } },
+    resolveActivation: () =>
+      input.activation === undefined
+        ? ZERO_CHECK_GLOBAL_ONLY_ACTIVE
+        : input.activation,
+  });
+  return runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: OPERATION_LOCAL_SHA,
+    // No present check run: `latestPassingCiCompletedAt` is empty, so the
+    // snapshot's `ci-completed-at` is `none`, matching the agreement.
+    collectRichActivity: () =>
+      operationLocalSnapshot({ latestPassingCiCompletedAt: '' }),
+    readRequiredCiAgreement: () => agreement,
+  });
+}
+
+test('#4053: the watermark publishes the zero-check global-only state when the opt-in is true', () => {
+  const result = watermarkDecision({ setting: true, globalOnly: true });
+  assert.equal(result.decision, 'publish');
+  assert.equal(result.reasonCode, 'publish');
+  assert.equal(result.watermarkFields?.['head-sha'], OPERATION_LOCAL_SHA);
+  assert.equal(result.watermarkFields?.['ci-completed-at'], 'none');
+});
+
+test('#4053: the watermark defers the same state when the setting is unset or false', () => {
+  for (const setting of [undefined, false]) {
+    const result = watermarkDecision({ setting, globalOnly: true });
+    assert.equal(result.decision, 'defer');
+    assert.equal(result.reasonCode, 'required-checks');
+  }
+});
+
+test('#4053: the watermark still defers with the setting true when the global-only profile is not active', () => {
+  const noFlag = watermarkDecision({ setting: true, globalOnly: false });
+  assert.equal(noFlag.decision, 'defer');
+  assert.equal(noFlag.reasonCode, 'required-checks');
+
+  const repositoryLocal = watermarkDecision({
+    setting: true,
+    globalOnly: true,
+    activation: {
+      active: true,
+      tier: 'repository-local',
+      instructionsRoot: '/repo/.github/instructions',
+      reason: 'repository-instruction-files',
+    },
+  });
+  assert.equal(repositoryLocal.decision, 'defer');
+  assert.equal(repositoryLocal.reasonCode, 'required-checks');
+});
+
+test('#4053: post-idd-marker parseArgs reads --global-only and defaults it off', () => {
+  const base = ['--type', 'watermark', '--from-pr', '42'];
+  assert.equal(parseArgs([...base, '--global-only']).globalOnly, true);
+  assert.equal(parseArgs(base).globalOnly, false);
+});
+
+test('#4053: the watermark CI read resolves the global-only profile only when --global-only is forwarded', () => {
+  // The profile is resolved (one activation read) only when the flag is
+  // forwarded and the opt-in is on, so the path without the flag makes no read.
+  for (const [globalOnly, expectedReads] of [
+    [true, 1],
+    [false, 0],
+  ] as const) {
+    let activationReads = 0;
+    readWatermarkRequiredCiAgreement({
+      prNumber: 3592,
+      owner: 'o',
+      repo: 'r',
+      globalOnly,
+      createPort: () => zeroCheckWatermarkPort(),
+      loadTrustedConfig: () => ({
+        ciGate: { allowNoRequiredChecksInGlobalOnly: true },
+      }),
+      resolveActivation: () => {
+        activationReads += 1;
+        return ZERO_CHECK_GLOBAL_ONLY_ACTIVE;
+      },
+    });
+    assert.equal(activationReads, expectedReads, `globalOnly=${globalOnly}`);
+  }
+});
 
 test('operation-local watermark uses one rich capture and one CI agreement read', () => {
   let rich = 0;

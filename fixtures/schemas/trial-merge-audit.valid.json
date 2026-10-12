@@ -1,0 +1,34 @@
+{
+  "protocolVersion": "1",
+  "verdict": "passed",
+  "prHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "trialCommit": "cccccccccccccccccccccccccccccccccccccccc",
+  "commands": [
+    {
+      "id": "audit-docs",
+      "argv": ["node", "scripts/audit-docs.mjs", "--check"],
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "id": "sync-docs",
+      "argv": ["node", "scripts/sync-docs.mjs", "--check"],
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "id": "typecheck",
+      "argv": ["pnpm", "run", "typecheck"],
+      "exitCode": 0,
+      "passed": true
+    }
+  ],
+  "toolingChanged": [],
+  "install": {
+    "exitCode": 0,
+    "passed": true
+  },
+  "worktreeRemoved": true,
+  "reasons": []
+}

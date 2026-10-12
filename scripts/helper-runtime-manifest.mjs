@@ -670,6 +670,16 @@ const HELPER_COMMANDS = [
       'Fetch-driven hide-on-supersede sweep for authoring-owner / authoring-publication-intent markers: fetches one or more issues via GraphQL, classifies and filters superseded candidates, and minimizes them via minimize-superseded-markers.mjs.',
   },
   {
+    id: 'trial-merge-audit',
+    scriptName: 'idd:trial-merge-audit',
+    binName: 'idd-trial-merge-audit',
+    entryPath: 'scripts/trial-merge-audit.mjs',
+    vendoredCommand: 'node scripts/trial-merge-audit.mjs',
+    description:
+      'Run a push-free trial merge of a PR head and the base tip and report verification evidence.',
+    contractPaths: ['schemas/trial-merge-audit.schema.json'],
+  },
+  {
     id: 'worker-budget',
     scriptName: 'idd:worker-budget',
     binName: 'idd-worker-budget',

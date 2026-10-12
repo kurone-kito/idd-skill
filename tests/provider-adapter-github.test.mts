@@ -3655,6 +3655,7 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
                   id: 'PRR_1',
                   commit: { oid: 'deadbeef' },
                   submittedAt: '2026-01-01T00:00:00Z',
+                  state: 'COMMENTED',
                   author: { login: 'copilot', __typename: 'Bot' },
                   comments: { totalCount: 2 },
                   body: 'first page review',
@@ -3720,6 +3721,8 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
         // so the connection reads as truncated (2 comments claimed, 0
         // nodes fetched) -- fails closed to `replyOnly: false`.
         replyOnly: false,
+        // kurone-kito/idd-skill#4015: the review state is passed through.
+        state: 'COMMENTED',
       },
       {
         id: 'PRR_2',
@@ -3730,6 +3733,8 @@ test('getChangeRequestReviewsWithHeadCommitDate paginates reviews and fetches he
         commentCount: 0,
         body: null,
         replyOnly: false,
+        // An absent state maps to null, never a guessed value.
+        state: null,
       },
     ],
     headCommittedAt: '2026-01-01T00:00:00Z',
