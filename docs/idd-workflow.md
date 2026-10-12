@@ -1259,8 +1259,10 @@ identify its old claims, and step 1 treats them as not its own.
    [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
    replace it with a fresh subagent only when step 2 verified its claim. A
    worker that matches no own claim is neither messaged nor replaced. If the
-   harness offers no agent listing, no worker is matched, and every own claim
-   that reached this step goes to step 5. Then recount the roster. Run the
+   harness offers no agent listing, no worker is matched, every own claim that
+   reached this step goes to step 5, and the rest of this step is skipped,
+   because the running workers are unknown. With a listing, recount the roster.
+   Run the
    profile-selected `idd-worker-budget` command with
    `--running <n> --startable <n>`, where `--running` is the count above and
    `--startable` is the number of startable candidates still in the
