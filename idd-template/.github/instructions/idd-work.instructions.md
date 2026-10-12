@@ -498,20 +498,20 @@ local runtime's user-global config file apply. A repository may also
 configure `critiqueLoop.telemetryHook` for a separate fire-and-forget
 per-round JSON record that C2/C4 below invoke but that never gates
 control flow; see `docs/idd-workflow.md`'s "Critique pass invocation"
-section for both. If possible, a per-agent critique subagent's brief
-names a parent-created scratch directory and quotes rule 3: "the
-subagent uses only that directory and creates none"; always run the
-post-round scratch check.
+section for both. If possible, a per-agent subagent's brief names a
+parent-created scratch directory and quotes rule 3: "the subagent uses
+only that directory and creates none"; run the post-round scratch check
+after each such pass.
 
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
 command set C5 runs — has passed against the branch's current HEAD;
 re-run it after every new commit. This floor is independent of D2's own
 **pre-push-validate** gate and never substitutes for it, and it applies
-**uniformly** regardless of self-classifying as "no-subagent" (see
-that section): on a no-subagent runtime, where critique degrades to
-same-response self-critique, the critique verdict is **advisory** and
-this floor is **load-bearing** instead. If the floor has not passed, C2 and C4
+**uniformly** regardless of self-classifying as "no-subagent": on a
+no-subagent runtime, where critique degrades to same-response
+self-critique, the critique verdict is **advisory** and this floor is
+**load-bearing** instead. If the floor has not passed, C2 and C4
 continue to C5 instead of skipping, even when their other skip
 condition is otherwise met.
 
