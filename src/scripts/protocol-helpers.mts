@@ -42,8 +42,10 @@ export { isCopilotErrorReviewBody } from './copilot-review-body.mts';
 export * from './marker-helpers.mts';
 
 import {
+  citationBreakdown,
   classifyCopilotReviewBody,
   isCopilotErrorReviewBody,
+  namesFileOrLine,
 } from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type {
@@ -393,6 +395,10 @@ interface AdvisoryWaitOutcomeInput {
   copilotPending?: boolean;
   copilotPendingCoversHead?: boolean;
   sameHeadMarkerPresent?: boolean;
+  /** #4070: `false` when the same-head review's cited suppressed items lack a
+   * qualifying disposition. Only read on the same-head branch; an absent
+   * value keeps the pre-#4070 result. */
+  citedDispositionsSatisfied?: boolean;
   requestMarkerCount: number;
   elapsedMinutes: number;
   requestCap?: number;
@@ -6622,6 +6628,122 @@ export function findLastCopilotReviewCommit(
   return latest?.commitId ?? '';
 }
 
+/**
+ * `true` when `author` is a verified Copilot (or the configured primary
+ * bot login)-authored review/comment -- reuses `isCopilotReviewerLogin`
+ * (protocol-helpers.mts) for the login match itself (the exact,
+ * lookalike-resistant comparison #1686 hardened), plus (when the payload
+ * carries it) a `__typename === 'Bot'` check so a same-named `User`
+ * account cannot masquerade as the trusted bot even if it somehow matched
+ * the login. A payload that omits `__typename` is treated as "unknown",
+ * never as a rejection, since not every GraphQL query in this codebase
+ * selects that field.
+ */
+export function isVerifiedCopilotAuthor(
+  author: CopilotAuthorLike | null | undefined,
+  primaryBotLogin: string,
+): boolean {
+  const typename = author?.__typename;
+  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
+    return false;
+  }
+  return typename === undefined || typename === null || typename === 'Bot';
+}
+
+/** Structural author shape the Copilot selector reads. Matches
+ * `GhAuthorPayload` in review-clause.mts; declared here so this module does
+ * not import review-clause.mts (which imports this module). */
+export interface CopilotAuthorLike {
+  login?: string | null;
+  __typename?: string | null;
+}
+
+/** Structural review shape the Copilot selector reads. `ReviewPayload` in
+ * review-clause.mts satisfies it. */
+export interface CopilotSelectableReviewLike {
+  author?: CopilotAuthorLike | null;
+  body?: string | null;
+  replyOnly?: boolean | null;
+}
+
+/** Return the absolute-latest eligible primary review's provider-order index.
+ * Keep this selector shared with {@link resolveLatestCopilotReviewClause} so
+ * callers that need to compare an older finding against the selected review
+ * cannot accidentally choose the latest on-head review instead. */
+export function findLatestCopilotReviewIndex(
+  reviews: readonly CopilotSelectableReviewLike[],
+  primaryBotLogin: string,
+): number {
+  let latestIndex = -1;
+  for (let index = 0; index < reviews.length; index += 1) {
+    const review = reviews[index];
+    if (
+      isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
+      !isCopilotErrorReviewBody(review.body) &&
+      review.replyOnly !== true
+    ) {
+      latestIndex = index;
+    }
+  }
+  return latestIndex;
+}
+
+/** #3942: the recorded-deferral reply, `**Rejected** — deferred to follow-up
+ * issue #<n> ({clause}): {reason}`, as the triage E6 text defines it. */
+const RECORDED_DEFERRAL_REPLY_PATTERN =
+  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \([^()]*\): \S/u;
+
+/** #3942: the review-reply identity stamp, `<!-- {prefix}-review-reply -->`. */
+const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
+
+/**
+ * #3942: counts the trusted, unedited disposition replies that settle a
+ * Previously missed item naming a file or line. A reply counts when it opens
+ * with `**Accepted**` or the recorded-deferral form, carries the review-reply
+ * stamp, and was posted strictly after the latest primary-bot review was
+ * submitted. A bare `review-ack` never counts for these items.
+ */
+export function countCitedItemDispositions(
+  comments: Parameters<typeof hasTrustedReviewAckAfter>[0],
+  trustedMarkerLogins: string[],
+  reviewSubmittedAt: string,
+): number {
+  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
+    return 0;
+  }
+  const trusted = new Set(
+    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
+  );
+  return comments.filter((comment) => {
+    const body = String(comment.body ?? '').trimEnd();
+    const login = String(comment.author?.login ?? comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    // Strictly after the review, the same ordering hasTrustedReviewAckAfter uses:
+    // a reply in the review's own second is not provably later.
+    if (
+      !trusted.has(login) ||
+      !isValidIsoTimestamp(createdAt) ||
+      compareIsoTimestamps(createdAt, reviewSubmittedAt) <= 0
+    ) {
+      return false;
+    }
+    if (classifyCommentEditState(comment) !== 'unedited') {
+      return false;
+    }
+    return (
+      (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
+        RECORDED_DEFERRAL_REPLY_PATTERN.test(body) ||
+        // #3942 (maintainer decision, 2026-10-11): a Rejected reply counts when
+        // it names a file or line as the evidence, as the PATH A verification
+        // rule allows for a claim the live evidence contradicts.
+        (DISPOSITION_REJECTED_PREFIX_RE.test(body) && namesFileOrLine(body))) &&
+      REVIEW_REPLY_STAMP_PATTERN.test(body)
+    );
+  }).length;
+}
+
 export function isCopilotPending(
   requestedReviewers: RequestedReviewerLike[],
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
@@ -7081,6 +7203,67 @@ export function summarizeAdvisoryWaitMarkers(
   };
 }
 
+/**
+ * #4070: whether the cited suppressed items of the review the gate selects for
+ * HEAD all carry a qualifying disposition. Mirrors the gate's
+ * `citedDispositionsSatisfied` in advisory-convergence.mts (Clause 1's
+ * suppressed branch) with the same inputs: the gate's selector
+ * ({@link findLatestCopilotReviewIndex}), the suppressed count from
+ * {@link classifyCopilotReviewBody}, the citation split from
+ * {@link citationBreakdown}, and the disposition counter
+ * {@link countCitedItemDispositions}. Returns `true` whenever the gate's pick
+ * is not on HEAD, so an off-head outcome is never changed by this check.
+ *
+ * REST input carries no GraphQL `replyOnly` flag, so the selector cannot drop
+ * a reply-only review here the way the gate does. See the PR body for that
+ * and the other selector divergences.
+ */
+function citedDispositionsSatisfiedForHead({
+  reviews,
+  prHeadSha,
+  primaryBotLogin,
+  comments,
+  trustedMarkerLogins,
+}: {
+  reviews: ReviewLike[];
+  prHeadSha: string;
+  primaryBotLogin: string;
+  comments: CommentLike[];
+  trustedMarkerLogins: string[];
+}): boolean {
+  const selectable = reviews.map((review) => ({
+    author: {
+      login: review.user?.login ?? review.author?.login ?? '',
+      __typename: review.user?.type ?? review.author?.type ?? null,
+    },
+    body: review.body ?? null,
+  }));
+  const index = findLatestCopilotReviewIndex(selectable, primaryBotLogin);
+  if (index < 0) {
+    return true;
+  }
+  const selected = reviews[index];
+  const commitId = String(
+    selected.commit_id ?? selected.commitId ?? '',
+  ).toLowerCase();
+  if (commitId !== prHeadSha) {
+    return true;
+  }
+  const body = selected.body ?? null;
+  const suppressedCount = classifyCopilotReviewBody(body).suppressedCount;
+  if (suppressedCount === 0) {
+    return true;
+  }
+  const citation = citationBreakdown(body, suppressedCount);
+  const submittedAt = String(
+    selected.submitted_at ?? selected.submittedAt ?? '',
+  );
+  return (
+    countCitedItemDispositions(comments, trustedMarkerLogins, submittedAt) >=
+    citation.citedCount
+  );
+}
+
 export function evaluateAdvisoryWaitOutcome(
   input: AdvisoryWaitOutcomeInput,
 ): string {
@@ -7088,7 +7271,11 @@ export function evaluateAdvisoryWaitOutcome(
     normalizeAdvisoryWaitRuntimeOptions(input);
 
   if (input.lastCopilotCommit === input.prHeadSha) {
-    return 'SATISFIED';
+    // #4070: a same-head review whose cited items lack a disposition is not
+    // settled, so route to the disposition step instead of reporting SATISFIED.
+    return input.citedDispositionsSatisfied === false
+      ? 'DISPOSITION_NEEDED'
+      : 'SATISFIED';
   }
 
   if (input.copilotPending) {
@@ -7120,7 +7307,14 @@ export function evaluateAdvisoryWaitOutcome(
 export function evaluateAdvisoryWaitF3Outcome(
   input: AdvisoryWaitOutcomeInput,
 ): string {
-  if (input.lastCopilotCommit === input.prHeadSha || !input.copilotPending) {
+  // #4070: the same-head rule matches evaluateAdvisoryWaitOutcome, so F3 does
+  // not merge over uncovered cited items either.
+  if (input.lastCopilotCommit === input.prHeadSha) {
+    return input.citedDispositionsSatisfied === false
+      ? 'DISPOSITION_NEEDED'
+      : 'SATISFIED';
+  }
+  if (!input.copilotPending) {
     return 'SATISFIED';
   }
   return evaluateAdvisoryWaitOutcome(input);
@@ -7222,6 +7416,13 @@ export function buildAdvisoryWaitSummary(
     copilotPending,
     copilotPendingCoversHead,
     sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+    citedDispositionsSatisfied: citedDispositionsSatisfiedForHead({
+      reviews,
+      prHeadSha,
+      primaryBotLogin,
+      comments,
+      trustedMarkerLogins,
+    }),
     requestMarkerCount: markerSummary.requestMarkerCount,
     elapsedMinutes,
     requestCap,

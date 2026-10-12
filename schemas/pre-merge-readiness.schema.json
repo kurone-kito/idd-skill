@@ -723,7 +723,8 @@
             "WAIT",
             "REQUEST_NEEDED",
             "RECOVERY_NEEDED",
-            "CAP_EXHAUSTED"
+            "CAP_EXHAUSTED",
+            "DISPOSITION_NEEDED"
           ]
         },
         "f3Outcome": {
@@ -734,7 +735,8 @@
             "WAIT",
             "REQUEST_NEEDED",
             "RECOVERY_NEEDED",
-            "CAP_EXHAUSTED"
+            "CAP_EXHAUSTED",
+            "DISPOSITION_NEEDED"
           ]
         },
         "lastCopilotCommit": {

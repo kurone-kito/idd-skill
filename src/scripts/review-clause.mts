@@ -34,17 +34,11 @@ import {
   type CopilotReviewBodyShape,
   citationBreakdown,
   classifyCopilotReviewBody,
-  namesFileOrLine,
 } from './copilot-review-body.mts';
-import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
-  classifyCommentEditState,
-  compareIsoTimestamps,
-  DISPOSITION_ACCEPTED_PREFIX_RE,
-  DISPOSITION_REJECTED_PREFIX_RE,
+  countCitedItemDispositions,
+  findLatestCopilotReviewIndex,
   hasTrustedReviewAckAfter,
-  isCopilotErrorReviewBody,
-  isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
 } from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
@@ -59,6 +53,15 @@ export {
   type CopilotReviewBodyShape,
   classifyCopilotReviewBody,
 } from './copilot-review-body.mts';
+// The Copilot selector and the cited-disposition counter live in
+// protocol-helpers.mts so the advisory-wait evaluators (which that module
+// owns) can call them without an import cycle. Re-exported here so existing
+// importers keep their `review-clause.mts` path (#4070).
+export {
+  countCitedItemDispositions,
+  findLatestCopilotReviewIndex,
+  isVerifiedCopilotAuthor,
+} from './protocol-helpers.mts';
 
 /** Minimal GitHub GraphQL author payload shape consumed here. `__typename`
  * distinguishes a genuine `Bot` account from a same-named `User` masquerade
@@ -169,50 +172,6 @@ export function parseSuppressedCommentCount(
   body: string | null | undefined,
 ): number {
   return classifyCopilotReviewBody(body).suppressedCount;
-}
-
-/**
- * `true` when `author` is a verified Copilot (or the configured primary
- * bot login)-authored review/comment -- reuses `isCopilotReviewerLogin`
- * (protocol-helpers.mts) for the login match itself (the exact,
- * lookalike-resistant comparison #1686 hardened), plus (when the payload
- * carries it) a `__typename === 'Bot'` check so a same-named `User`
- * account cannot masquerade as the trusted bot even if it somehow matched
- * the login. A payload that omits `__typename` is treated as "unknown",
- * never as a rejection, since not every GraphQL query in this codebase
- * selects that field.
- */
-export function isVerifiedCopilotAuthor(
-  author: GhAuthorPayload | null | undefined,
-  primaryBotLogin: string,
-): boolean {
-  const typename = author?.__typename;
-  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
-    return false;
-  }
-  return typename === undefined || typename === null || typename === 'Bot';
-}
-
-/** Return the absolute-latest eligible primary review's provider-order index.
- * Keep this selector shared with {@link resolveLatestCopilotReviewClause} so
- * callers that need to compare an older finding against the selected review
- * cannot accidentally choose the latest on-head review instead. */
-export function findLatestCopilotReviewIndex(
-  reviews: ReviewPayload[],
-  primaryBotLogin: string,
-): number {
-  let latestIndex = -1;
-  for (let index = 0; index < reviews.length; index += 1) {
-    const review = reviews[index];
-    if (
-      isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
-      !isCopilotErrorReviewBody(review.body) &&
-      review.replyOnly !== true
-    ) {
-      latestIndex = index;
-    }
-  }
-  return latestIndex;
 }
 
 /** Evaluate Clause 1 against the single, absolute-latest Copilot review --
@@ -395,62 +354,6 @@ export interface LatestPrimaryBotReviewEvidence {
    * for this HEAD was created after the review. Evidence only: `false` does
    * not prove that no ack exists under another trust set. */
   reviewAckCovers: boolean | null;
-}
-
-/** #3942: the recorded-deferral reply, `**Rejected** — deferred to follow-up
- * issue #<n> ({clause}): {reason}`, as the triage E6 text defines it. */
-const RECORDED_DEFERRAL_REPLY_PATTERN =
-  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \([^()]*\): \S/u;
-
-/** #3942: the review-reply identity stamp, `<!-- {prefix}-review-reply -->`. */
-const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
-
-/**
- * #3942: counts the trusted, unedited disposition replies that settle a
- * Previously missed item naming a file or line. A reply counts when it opens
- * with `**Accepted**` or the recorded-deferral form, carries the review-reply
- * stamp, and was posted strictly after the latest primary-bot review was
- * submitted. A bare `review-ack` never counts for these items.
- */
-export function countCitedItemDispositions(
-  comments: Parameters<typeof hasTrustedReviewAckAfter>[0],
-  trustedMarkerLogins: string[],
-  reviewSubmittedAt: string,
-): number {
-  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
-    return 0;
-  }
-  const trusted = new Set(
-    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
-  );
-  return comments.filter((comment) => {
-    const body = String(comment.body ?? '').trimEnd();
-    const login = String(comment.author?.login ?? comment.user?.login ?? '')
-      .trim()
-      .toLowerCase();
-    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
-    // Strictly after the review, the same ordering hasTrustedReviewAckAfter uses:
-    // a reply in the review's own second is not provably later.
-    if (
-      !trusted.has(login) ||
-      !isValidIsoTimestamp(createdAt) ||
-      compareIsoTimestamps(createdAt, reviewSubmittedAt) <= 0
-    ) {
-      return false;
-    }
-    if (classifyCommentEditState(comment) !== 'unedited') {
-      return false;
-    }
-    return (
-      (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
-        RECORDED_DEFERRAL_REPLY_PATTERN.test(body) ||
-        // #3942 (maintainer decision, 2026-10-11): a Rejected reply counts when
-        // it names a file or line as the evidence, as the PATH A verification
-        // rule allows for a claim the live evidence contradicts.
-        (DISPOSITION_REJECTED_PREFIX_RE.test(body) && namesFileOrLine(body))) &&
-      REVIEW_REPLY_STAMP_PATTERN.test(body)
-    );
-  }).length;
 }
 
 /**

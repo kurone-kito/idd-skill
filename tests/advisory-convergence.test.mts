@@ -61,6 +61,9 @@ import {
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
+  buildAdvisoryWaitSummary,
+  evaluateAdvisoryWaitF3Outcome,
+  evaluateAdvisoryWaitOutcome,
   LIVE_STATUS_DIGEST_MARKER,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
@@ -9433,4 +9436,169 @@ test('createCopilotRequestCoverage: resolves the repository from the checkout wh
   } finally {
     restore();
   }
+});
+
+// --- 9g. Advisory-wait helper agrees with the gate on cited items (#4070) ---
+//
+// The advisory-wait helper's `outcome` and `f3Outcome` must not report
+// SATISFIED for a same-head review whose cited suppressed items the gate
+// rejects. These fixtures feed the helper and the gate the same review and
+// the same comments, so the two cannot drift apart unnoticed.
+
+function restCopilotReview(body: string, commitId: string = HEAD) {
+  return {
+    user: { login: COPILOT_LOGIN, type: 'Bot' },
+    body,
+    commit_id: commitId,
+    submitted_at: RECENT,
+  };
+}
+
+function helperSummary(
+  body: string,
+  comments: ReturnType<typeof citedDispositionComment>[],
+  reviewCommitId: string = HEAD,
+) {
+  return buildAdvisoryWaitSummary(
+    {
+      prHeadSha: HEAD,
+      reviews: [restCopilotReview(body, reviewCommitId)],
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments,
+    },
+    { now: NOW, trustedMarkerLogins: [TRUSTED] },
+  );
+}
+
+function gateVerdictFor(
+  body: string,
+  comments: ReturnType<typeof citedDispositionComment>[],
+  reviewCommitId: string = HEAD,
+) {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body, commitId: reviewCommitId }),
+      ],
+      comments,
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  return verdict;
+}
+
+const PARITY_CASES: {
+  label: string;
+  comments: ReturnType<typeof citedDispositionComment>[];
+}[] = [
+  { label: 'no reply to the cited item', comments: [] },
+  {
+    label: 'Rejected reply that names no file or line (the #4030 shape)',
+    comments: [
+      citedDispositionComment({
+        body: `**Rejected** — out of scope for this change.\n${STAMP}`,
+      }),
+    ],
+  },
+  {
+    label: 'Accepted reply posted before the review',
+    comments: [citedDispositionComment({ createdAt: '2026-07-01T00:00:00Z' })],
+  },
+  {
+    label: 'Accepted reply without the review-reply stamp',
+    comments: [
+      citedDispositionComment({ body: '**Accepted**: fixed in the PR.' }),
+    ],
+  },
+  {
+    label: 'Accepted reply with the review-reply stamp',
+    comments: [citedDispositionComment({})],
+  },
+  {
+    label: 'recorded-deferral reply with the review-reply stamp',
+    comments: [
+      citedDispositionComment({
+        body:
+          '**Rejected** — deferred to follow-up issue #3950 (review-fix-loop-cutoff): outside this change.\n' +
+          STAMP,
+      }),
+    ],
+  },
+  {
+    label: 'Rejected reply that names the file it rejects',
+    comments: [
+      citedDispositionComment({
+        body: `**Rejected** — intentional, see \`src/scripts/review-clause.mts:12\`.\n${STAMP}`,
+      }),
+    ],
+  },
+];
+
+for (const { label, comments } of PARITY_CASES) {
+  test(`cited-item parity (#4070): ${label} -> helper and gate agree`, () => {
+    const verdict = gateVerdictFor(CITED_PREVIOUSLY_MISSED_BODY, comments);
+    const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, comments);
+    const gateCited =
+      verdict.review.suppressedCitation.citedDispositionsSatisfied;
+    assert.equal(summary.outcome === 'DISPOSITION_NEEDED', !gateCited);
+    assert.equal(summary.f3Outcome === 'DISPOSITION_NEEDED', !gateCited);
+    assert.equal(summary.outcome === 'SATISFIED', verdict.converged);
+    assert.equal(summary.f3Outcome === 'SATISFIED', verdict.converged);
+  });
+}
+
+test('cited-item (#4070): a same-head cited item with no reply reports DISPOSITION_NEEDED on outcome and f3Outcome, not SATISFIED', () => {
+  const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, []);
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('cited-item (#4070): a same-head cited item with a qualifying reply still reports SATISFIED on both fields', () => {
+  const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, [
+    citedDispositionComment({}),
+  ]);
+  assert.equal(summary.outcome, 'SATISFIED');
+  assert.equal(summary.f3Outcome, 'SATISFIED');
+});
+
+test('cited-item (#4070): an off-head review with an uncovered cited item never reports DISPOSITION_NEEDED', () => {
+  const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, [], OTHER_SHA);
+  assert.notEqual(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.notEqual(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('cited-item (#4070): the evaluators route a same-head uncovered item to DISPOSITION_NEEDED and leave the flag-less default alone', () => {
+  const sameHead = {
+    lastCopilotCommit: HEAD,
+    prHeadSha: HEAD,
+    copilotPending: false,
+    sameHeadMarkerPresent: false,
+    requestMarkerCount: 0,
+    elapsedMinutes: 0,
+  };
+  assert.equal(
+    evaluateAdvisoryWaitOutcome({
+      ...sameHead,
+      citedDispositionsSatisfied: false,
+    }),
+    'DISPOSITION_NEEDED',
+  );
+  assert.equal(
+    evaluateAdvisoryWaitF3Outcome({
+      ...sameHead,
+      citedDispositionsSatisfied: false,
+    }),
+    'DISPOSITION_NEEDED',
+  );
+  assert.equal(evaluateAdvisoryWaitOutcome(sameHead), 'SATISFIED');
+  assert.equal(evaluateAdvisoryWaitF3Outcome(sameHead), 'SATISFIED');
+  const offHead = {
+    ...sameHead,
+    lastCopilotCommit: OTHER_SHA,
+    citedDispositionsSatisfied: false,
+  };
+  assert.notEqual(evaluateAdvisoryWaitOutcome(offHead), 'DISPOSITION_NEEDED');
+  assert.notEqual(evaluateAdvisoryWaitF3Outcome(offHead), 'DISPOSITION_NEEDED');
 });
