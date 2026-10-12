@@ -287,7 +287,8 @@ Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
 3. Re-run the A5(c) gate with `--fresh-claim-gate --own-worktree <path>`,
    so this session's new worktree does not read as an occupant of a
    released claim's branch. The gate ignores that path only while it is
-   clean with no commits beyond the base. Observed 2026-10-11, issues
+   clean, and either has no commits beyond the base or sits at its live
+   remote tip (#4067). Observed 2026-10-11, issues
    `#3944` and `#3952`: without the flag the gate read `already-claimed`
    (`released-claim-local-worktree-occupied`). Only on `claimable`, post
    the claim comment per
