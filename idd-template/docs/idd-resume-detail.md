@@ -1131,19 +1131,30 @@ succeeded.
    under the
    [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock), as B1
    requires for every fetch and worktree add against a shared clone. The
-   single command keeps another session from interleaving between the fetch,
-   the branch creation, and the attach. Drop the `git branch` line when a
-   local `<branch>` already exists. Neither command moves the primary HEAD:
+   script fetches the remote tip, creates the local branch when none exists,
+   and attaches it with no `-b`, so the existing history is kept. It never
+   moves the primary HEAD.
+
+   The branch and the path are the two trailing arguments, `"$1"` and
+   `"$2"`. Never paste them into the script text, as the resume guidance
+   requires for a recovered branch name. When a local `<branch>` already
+   exists, the script attaches it only if it equals `origin/<branch>`. A
+   local ref that differs exits 1 and is never overwritten:
 
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
-     git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch> &&
-     git branch <branch> origin/<branch> &&
-     git worktree add <path> <branch>
-   '
+     git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" &&
+     if git show-ref --verify --quiet "refs/heads/$1"; then
+       [ "$(git rev-parse "refs/heads/$1")" = \
+         "$(git rev-parse "refs/remotes/origin/$1")" ] ||
+         { echo "local $1 differs from origin/$1: hold" >&2; exit 1; }
+     else
+       git branch "$1" "origin/$1"
+     fi &&
+     git worktree add "$2" "$1"
+   ' sh <branch> <path>
    ```
 
-   The attach has no `-b`, so the existing branch keeps its history.
 6. Carry the nonce forward on the linked worktree:
    `node scripts/claim-lock.mjs --record-tokens --worktree <linked>
    --agent-id <id> --claim-id <id> --nonce <nonce>`.
@@ -1168,5 +1179,6 @@ node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
 
 The release is safe because you provably hold the pair, the same reasoning as
 the release-then-fresh rule in `idd-claim.instructions.md`. Then restart from
-step 1. The claim comes before the attach because #4071's decided sequence
-orders them that way. This paragraph covers the failure that order allows.
+step 1. A local ref that differs from `origin/<branch>` fails the same check
+on every restart, so resolve that ref first. The claim comes before the attach
+because #4071's decided sequence orders them that way.
