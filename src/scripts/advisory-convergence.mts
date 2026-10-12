@@ -5373,7 +5373,10 @@ export function collectAssertNextActions(
     verdict.review.suppressedCitation;
   if (citedCount > 0 && !citedDispositionsSatisfied) {
     const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --apply`;
-    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. A cited item outside a Previously missed section (a legacy Suppressed comments body has none) has no helper path: report it to the operator and do not answer it with a direct PR comment. Post it with: ${pointer}`;
+    // --review-id takes the numeric REST id; the verdict carries the GraphQL
+    // node id, so the summary gives the lookup that maps one to the other.
+    const reviewNodeId = verdict.review.reviewId ?? '<review-node-id>';
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. A cited item outside a Previously missed section (a legacy Suppressed comments body has none) has no helper path: report it to the operator and do not answer it with a direct PR comment. The <review-id> is the numeric REST id of review ${reviewNodeId}; find it with gh api repos/<owner>/<repo>/pulls/${pr}/reviews --paginate --jq '.[] | select(.node_id == "${reviewNodeId}") | .id'. Post it with: ${pointer}`;
     items.push({
       token: T.STAMPED_DISPOSITION_SUPPRESSED,
       summary,
@@ -5451,12 +5454,15 @@ export function collectAssertNextActions(
 }
 
 /**
- * Text-only lines printed under the stamped-disposition next action (#4063).
- * They stay out of the structured `summary`, which is one line by contract.
+ * Lines printed under the stamped-disposition next action (#4063). The flag
+ * lines refine the pointer and exist only here. The last line repeats the
+ * summary's no-helper-path rule for text readers. The structured `summary`
+ * stays one line by contract, so the rule must also live in it.
  */
 const STAMPED_DISPOSITION_GUIDANCE: readonly string[] = [
   'For a PR with no linked issue, replace --claim-issue <claim-issue> --claim-id <claim-id> with --claimless (#2616).',
   'For a cited title that repeats within one review, add --item-index <n> immediately before --apply.',
+  'A cited item outside a Previously missed section has no helper path: report it to the operator and do not answer it with a direct PR comment.',
 ];
 
 /**
