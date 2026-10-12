@@ -679,8 +679,13 @@ the amendments below.
   local `main`.
 - Placeholders are filled as single-quoted shell words, because a valid branch
   name can contain shell metacharacters such as `$` and `;`.
-- On `instructions-only`, the lock uses the helper-free fallback, and the
-  clone-scoped steps run with one clone per worker.
+- On `instructions-only`, the worktree-local claim lock uses its helper-free
+  fallback. The clone-scoped steps are serialized by giving each worker its own
+  clone, because the clone-scoped lock has no helper-free fallback.
+- `git status --porcelain` cannot see assume-unchanged or skip-worktree entries,
+  so the gate also requires every `git ls-files -v` tag to be `H`. A legacy active
+  claim with a null id keeps the worktree, because it cannot be ruled out as
+  another session's claim.
 
 ## Work and self-review
 

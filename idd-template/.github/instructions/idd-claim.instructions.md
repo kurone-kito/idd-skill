@@ -324,37 +324,34 @@ The gates and removal run under that hold, from the primary checkout (or with
 `--repo`), never from the worktree being removed.
 
 ```sh
-set -eu
+set -euo pipefail
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
-printf '%s\n' "$route" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s).active_claim;process.exit(!a||a.claim_id!=="{claim-id}"?0:1)})'
+printf '%s\n' "$route" | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!=="{claim-id}")?0:1)'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
-dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
-test -z "$dirty"
 tip=$(git rev-parse <branch>)
 base=$(git rev-parse origin/{development-branch})
 test "$tip" = "$base"
+tags=$(git -C <path> ls-files -v | cut -c1 | tr -d 'H\n')
+test -z "$tags"
+dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+test -z "$dirty"
 git worktree remove <path>
 git branch -D <branch>
 ```
 
 Every gate runs before `git worktree remove`, the only removal step (no
-`--force`). The route gate reads `active_claim`, not the route `state`, because
-`state` is written for a claiming session. The status gate covers ignored,
-untracked, and submodule changes. A branch cut from an earlier base is kept with
-its worktree. A failure before the removal keeps the worktree, its branch, and
-its lock on purpose, so a later claim stops at the collision check (A5(e)). No
-script releases that lock.
+`--force`). A failure before removal keeps the worktree, branch, and lock on
+purpose, so a later claim stops at the collision check (A5(e)).
 
-If `git branch -D` fails after the removal, or the harness denies it (the
+If `git branch -D` fails after removal, or the harness denies it (the
 distributed Claude baseline denies `Bash(git branch -D*)`), report a leftover
-branch at `<branch>`. The worktree is already gone, and the A5(e) orphan hold
-covers the next claimant.
+branch at `<branch>`; the A5(e) orphan hold covers the next claimant.
 
-Instructions-only: take the lock from `docs/idd-helper-scripts.md`'s helper-free
-fallback, read the claim state under Claim-state parsing, and give each worker
-its own clone
-([fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
+Instructions-only: take the worktree-local lock from its
+[helper-free fallback](../../docs/idd-helper-scripts.md#worktree-local-claim-lock),
+read the claim state under Claim-state parsing, and give each worker its own
+clone ([fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
 
 Observed in PR `#4018` review; rationale in
 [docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).

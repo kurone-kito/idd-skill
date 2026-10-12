@@ -325,24 +325,25 @@ holds the claim (failed `--record-tokens`, claim, or nonce post; step 6 lock
 collision or `--assert` not `already_owned`/`keep`; verification step 5
 `unclaimed-by`), run the script below from the primary checkout as one
 clone-scoped hold (`node scripts/clone-lock.mjs --exec --agent-id <agent-id>
--- bash <script>`). Never `--takeover`. Quote each placeholder as a single
-shell word. Failures before removal keep the worktree, branch, and lock on
-purpose. If `git branch -D` fails after removal or is denied, report a
-leftover branch at `<branch>`. Instructions-only: helper-free lock fallback
-(`docs/idd-helper-scripts.md`); one clone per worker (`docs/idd-workflow.md`);
-route by pre-check (c)'s written rules.
+-- bash <script>`). Never `--takeover`. Quote placeholders as shell words.
+Failures before removal keep both worktree and branch. If `git branch -D`
+fails after removal or is denied, report a leftover branch at `<branch>`.
+Instructions-only: `docs/idd-helper-scripts.md#worktree-local-claim-lock`,
+one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 
 ```sh
-set -eu
-node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <agent-id> --claim-id <claim-id>
-route=$(node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --worktree <path>)
-printf '%s\n' "$route" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s).active_claim;process.exit(!a||a.claim_id!=="<claim-id>"?0:1)})'
+set -euo pipefail
+node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
+route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
+printf '%s\n' "$route" | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!=="{claim-id}")?0:1)'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
-dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
-test -z "$dirty"
 tip=$(git rev-parse <branch>)
 base=$(git rev-parse origin/{development-branch})
 test "$tip" = "$base"
+tags=$(git -C <path> ls-files -v | cut -c1 | tr -d 'H\n')
+test -z "$tags"
+dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+test -z "$dirty"
 git worktree remove <path>
 git branch -D <branch>
 ```
