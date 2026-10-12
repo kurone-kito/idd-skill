@@ -670,6 +670,27 @@ export const REGRESSION_DEFINITION_PINS: readonly PinnedClauseGroup[] = [
   },
 ];
 
+// The E10 per-issue pass cap (#3943) is the one explicit exception to "always
+// run E10 before E11". These pins keep the cap paragraph, its fail-closed
+// condition, and the Low-only progress rule from being dropped. Each phrase is
+// a verbatim substring that occurs once per file, matched on whitespace-
+// collapsed text.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const E10_PASS_CAP_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'e10-pass-cap-review-fix',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    phrases: [
+      'E10 per-issue pass cap (the one exception to the paragraph above).',
+      "Once `critiqueLoop.e10MaxPasses` passes have run (distributed default `2`), no High or Medium Accepted finding is open, and **fix-validate** has passed on the branch's current HEAD, stop the loop without fixing the remaining Low Accepted findings.",
+      'File one follow-up issue (do not append) with one AC bullet per residual Low, exactly one `Refs #<originating-issue>` line, and the `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->` marker;',
+      'The cap never applies while a High or Medium finding is open.',
+      'If the count cannot be established, the cap is not reached.',
+      'A pass whose Accepted findings are all Low does not count as progress through the narrowing prong alone.',
+    ],
+  },
+];
+
 const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
@@ -677,6 +698,7 @@ const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...WAVE_GRADIENT_PINS,
   ...PR_HEAD_FRESHNESS_PINS,
   ...REGRESSION_DEFINITION_PINS,
+  ...E10_PASS_CAP_PINS,
 ];
 
 const RULES: readonly RuleDefinition[] = [

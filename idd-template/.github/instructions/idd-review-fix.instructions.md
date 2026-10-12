@@ -74,7 +74,9 @@ Convergence guardrails:
 
 - "Meaningful progress" means a pass removes at least one Accepted
   finding, narrows a remaining finding's root cause/scope, or yields a
-  materially new fix direction. Reworded duplicates do not count.
+  materially new fix direction. Reworded duplicates do not count. A pass
+  whose Accepted findings are all Low does not count as progress through
+  the narrowing prong alone.
 - If the same Accepted findings recur for
   `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes (default
   `3`) without progress, stop the auto-loop: post a hold comment
@@ -90,6 +92,20 @@ Convergence guardrails:
 skipping this pass — always run it before E11. Pushed and skipped
 one? Disclose on the PR, name the round(s), run E10 on the
 accumulated diff to a clean pass, then return to E1.
+
+**E10 per-issue pass cap (the one exception to the paragraph above).**
+Count every E10 pass on the issue across E9 batches; this count is
+separate from the per-batch count above. Once
+`critiqueLoop.e10MaxPasses` passes have run (distributed default `2`), no
+High or Medium Accepted finding is open, and **fix-validate** has passed on
+the branch's current HEAD, stop the loop without fixing the remaining Low
+Accepted findings. File one follow-up issue (do not append) with one AC
+bullet per residual Low, exactly one `Refs #<originating-issue>` line, and
+the `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
+marker; the follow-up then takes issue-authoring's Stage 2 narrow
+auto-release, not the Stage 1 hold. Then continue to E11. The cap never
+applies while a High or Medium finding is open. If the count cannot be
+established, the cap is not reached. Observed on issue `#3878` (PR `#3919`).
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round

@@ -143,7 +143,8 @@ self-critique and record risk.
 5. Count "meaningful progress" as removing at least one Accepted
    finding, narrowing a remaining finding's root cause or scope, or
    producing a materially new fix direction. A reworded duplicate
-   finding does not count.
+   finding does not count. A pass whose Accepted findings are all Low does
+   not count as progress through the narrowing prong alone.
 6. If the same Accepted findings recur for
    `critiqueLoop.e10NoProgressHoldAfter` (default 3) consecutive E10
    passes without meaningful progress, stop the loop, post a hold
@@ -158,7 +159,10 @@ self-critique and record risk.
    Disclose it, name the round(s), run E10 against the accumulated
    diff to a clean pass, then return to E1 before F1 — see
    `idd-review-fix.instructions.md`'s E10 repair path for the full
-   procedure.
+   procedure. Exception: once `critiqueLoop.e10MaxPasses` (default 2) E10
+   passes have run on the issue with no High or Medium finding open, the
+   per-issue cap in `idd-review-fix.instructions.md` applies: file the
+   remaining Low findings as a follow-up and go to E11.
 9. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
    another patch. If that fix keeps drawing new findings, prefer
