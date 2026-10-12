@@ -8991,18 +8991,24 @@ test('stamped disposition (#4063): the pointer names the body-item helper and th
   assert.doesNotMatch(text, /gh pr comment/);
   assert.match(text, /opens with \*\*Accepted\*\*/);
   assert.match(text, /A review-ack does not cover these\./);
+  // The structured summary stays one line and ends with the pointer.
+  assert.doesNotMatch(item.summary, /\n/);
+  assert.doesNotMatch(item.summary, /--claimless/);
+  assert.ok(item.summary.endsWith(item.pointer));
+  // The text formatter prints the pointer at the end of its bullet line,
+  // with the flag guidance on the lines directly below it.
   const lines = text.split('\n');
   const pointerAt = lines.findIndex((line) => line.includes(item.pointer));
   assert.ok(pointerAt >= 0);
-  assert.match(lines[pointerAt + 1] ?? '', /--claimless \(#2616\)\.$/);
+  assert.ok(lines[pointerAt].endsWith(item.pointer));
+  assert.match(lines[pointerAt + 1] ?? '', /^ {2}For a PR with no linked issue, .* --claimless \(#2616\)\.$/);
   assert.match(
     lines[pointerAt + 2] ?? '',
-    /--item-index <n> immediately before --apply\.$/,
+    /^ {2}For a cited title that repeats within one review, .* --item-index <n> immediately before --apply\.$/,
   );
-  assert.match(lines[pointerAt + 3] ?? '', /Previously missed section/);
   assert.match(
     lines[pointerAt + 3] ?? '',
-    /do not answer it with a direct PR comment\.$/,
+    /^ {2}A cited item outside the Previously missed section has no helper path: .* do not answer it with a direct PR comment\.$/,
   );
 });
 

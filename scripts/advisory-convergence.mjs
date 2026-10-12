@@ -4248,12 +4248,7 @@ export function collectAssertNextActions(verdict) {
     verdict.review.suppressedCitation;
   if (citedCount > 0 && !citedDispositionsSatisfied) {
     const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --apply`;
-    // The guidance lines follow the pointer on their own lines, so a copied
-    // pointer ends at its line break. The ::notice:: line keeps the pointer.
-    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. Post it with: ${pointer}
-For a PR with no linked issue, replace --claim-issue <claim-issue> --claim-id <claim-id> with --claimless (#2616).
-For a cited title that repeats within one review, add --item-index <n> immediately before --apply.
-A cited item outside the Previously missed section has no helper path: report it to the operator and do not answer it with a direct PR comment.`;
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. Post it with: ${pointer}`;
     items.push({
       token: T.STAMPED_DISPOSITION_SUPPRESSED,
       summary,
@@ -4325,6 +4320,15 @@ A cited item outside the Previously missed section has no helper path: report it
   return items;
 }
 /**
+ * Text-only lines printed under the stamped-disposition next action (#4063).
+ * They stay out of the structured `summary`, which is one line by contract.
+ */
+const STAMPED_DISPOSITION_GUIDANCE = [
+  'For a PR with no linked issue, replace --claim-issue <claim-issue> --claim-id <claim-id> with --claimless (#2616).',
+  'For a cited title that repeats within one review, add --item-index <n> immediately before --apply.',
+  'A cited item outside the Previously missed section has no helper path: report it to the operator and do not answer it with a direct PR comment.',
+];
+/**
  * Compact next-action guidance for a non-ready `--assert` verdict (#2142).
  * Formats {@link collectAssertNextActions}; does not read
  * `verdict.nextActions`, so a spread-mutated verdict stays consistent
@@ -4341,6 +4345,16 @@ export function formatAssertNextActions(verdict) {
     if (item.pointer.includes('\n')) {
       for (const extra of item.pointer.split('\n')) {
         lines.push(`  ${extra}`);
+      }
+    }
+    // #4063: the flag guidance is text-only, so the structured summary stays
+    // one line. It follows the pointer's line, which ends with the pointer.
+    if (
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED
+    ) {
+      for (const guidance of STAMPED_DISPOSITION_GUIDANCE) {
+        lines.push(`  ${guidance}`);
       }
     }
   }
