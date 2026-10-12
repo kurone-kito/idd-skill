@@ -1237,15 +1237,17 @@ identify its old claims, and step 1 treats them as not its own.
    the same claim-id. Then run the profile-selected `resume-claim-routing`
    command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
    `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
-   Continue to step 3 only when the command exits 0, which means the state is
+   A claim that a worker released with its `unclaimed-by` marker, as F4 does
+   as its last mutation before returning the final report, routes to
+   `unclaimed` with action `re_claim`, or to `local_worktree_occupied` with
+   action `stop` while its worktree still exists. It does not return
+   `already_owned`. Skip step 3 for it and go to step 4, which verifies its
+   terminal state from live GitHub state. For any other claim, continue to
+   step 3 only when the command exits 0, which means the state is
    `already_owned` with action `keep`. When it does not exit 0, read the
    `state` field. `stale` goes to the takeover path in
    `idd-resume.instructions.md`. Any other state is reported to the operator
    with its name, and no further action is taken on that issue.
-   A claim that a worker released with its `unclaimed-by` marker, as F4 does
-   as its last mutation before returning the final report, does not return
-   `already_owned`. Skip step 3 for it and go to step 4, which verifies its
-   terminal state from live GitHub state.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry to an own claim by the issue number in the
    worker's brief. If the harness offers no agent listing, no worker is
@@ -1264,7 +1266,8 @@ identify its old claims, and step 1 treats them as not its own.
    `discover-shared-file-overlap` command with `--issues <n,...>` (the
    startable candidates), `--batch <k>` (the `slots` value), `--check-overlap`,
    one `--in-flight <n>` for each re-attached worker's issue, and
-   `--desync-token` when `discover.selectionDesync` is `session-offset`.
+   `--desync-token <session-suffixed agent-id>` when
+   `discover.selectionDesync` is `session-offset`.
    Otherwise skip it: the helper rejects an empty candidate list and a zero
    batch.
 4. **Recover reports.** Look for a finished worker's report draft in the
@@ -1287,8 +1290,9 @@ identify its old claims, and step 1 treats them as not its own.
    release, and `failed` otherwise. `verifiedAt` and `recordedAt` are ISO 8601
    UTC timestamps. Record the recovery in `frictions`, where each entry needs a
    `phase` and a `summary`.
-5. **Report the remainder.** An own claim with no matching worker after step 3
-   is reported to the operator. Its worktree is not removed.
+5. **Report the remainder.** An own claim with no matching worker after step 3,
+   other than a released claim from step 2, is reported to the operator. Its
+   worktree is not removed.
 
 ### Discover re-run cadence
 
