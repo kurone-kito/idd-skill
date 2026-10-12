@@ -778,6 +778,14 @@ in this preamble, since the fallback differs per helper.
   (referenced in
   [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243);
   see its `--help` for the fetch-scope and staleness details)
+  Default-on (not opt-in): excludes a defer-source follow-up, a body with an
+  `<!-- {prefix}-authoring-defer-source: ... -->` marker, while its single
+  `Refs` origin issue is open, bucketed under
+  `filtered.blocked_by_defer_source_origin` with `details` `open:#N`,
+  `missing_refs_line`, `ambiguous_refs_line`, or `unresolvable:#N` (the last
+  also lists the origin in the top-level `unresolvable` array), or
+  `needs_decision_label_conflicts_with_authoring_label` when the configured
+  authoring and needs-decision labels collide (issue #4065)
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
