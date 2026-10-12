@@ -1264,8 +1264,10 @@ identify its old claims, and step 1 treats them as not its own.
    profile-selected `idd-worker-budget` command with
    `--running <n> --startable <n>`, where `--running` is the count above and
    `--startable` is the number of startable candidates still in the
-   orchestrator's cached graph (0 when none). When `--startable` is at least 1
-   and the budget's `slots` is at least 1, run the profile-selected
+   orchestrator's cached graph (0 when none). Add `--harness-limit <limit>`
+   when this harness's row in the worker mechanism table gives a numeric
+   limit, and omit it otherwise. When `--startable` is at least 1 and the
+   budget's `slots` is at least 1, run the profile-selected
    `discover-shared-file-overlap` command with
    `--issues <n,...>` (the startable candidates), `--batch <k>` (the `slots`
    value), `--check-overlap`, one `--in-flight <n>` for each counted running
@@ -1273,16 +1275,19 @@ identify its old claims, and step 1 treats them as not its own.
    `discover.selectionDesync` is `session-offset`. Otherwise skip it: the helper
    rejects an empty candidate list and a zero batch.
 4. **Recover reports.** Run this step for each matched finished worker, under
-   that worker's own listed handle, and for a released claim with no matched
-   worker, under the claim-id as its handle. A matched running worker gets no
-   record. A released claim whose only matched worker is still running gets no
-   record and is reported in step 5. Look for the worker's report draft in the
-   scratchpad of the same session, under the issue-number prefix that the
-   fan-out variant already requires. If a draft is found, verify its outcome,
-   `pullRequest`, and `terminalPhase` against live GitHub state, set
-   `verifiedAt` to that check and `recordedAt` to the time of the append, then
-   append it. If no draft is found, verify the terminal outcome from live GitHub
-   state, build the record as the
+   that worker's own listed handle. For a released claim with no matched
+   worker, first check the `reports.jsonl` store, which the worker final report
+   store section of `docs/idd-helper-scripts.md` locates, for a line whose
+   `claimId` is this claim-id. If one exists, the claim is already recorded, so
+   append nothing. Otherwise run this step under the claim-id as its handle. A
+   matched running worker gets no record. A released claim whose only matched
+   worker is still running gets no record and is reported in step 5. Look for
+   the worker's report draft in the scratchpad of the same session, under the
+   issue-number prefix that the fan-out variant already requires. If a draft is
+   found, verify its outcome, `pullRequest`, and `terminalPhase` against live
+   GitHub state, set `verifiedAt` to that check and `recordedAt` to the time of
+   the append, then append it. If no draft is found, verify the terminal outcome
+   from live GitHub state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, and append it the same way. In both cases, validate the record
    against `schemas/worker-report.schema.json` first, then append it with the
