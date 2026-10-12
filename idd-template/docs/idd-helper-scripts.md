@@ -5259,10 +5259,11 @@ still fails closed:
   `origin/<developmentBranch>` (`refs/remotes/origin/HEAD` when the policy
   sets none; a missing or outdated `origin/HEAD`, or an invalid
   `developmentBranch`, keeps that base check from passing), or (#4067: a
-  released PR branch's own pushed tip) `refs/remotes/origin/<branch>` exists
-  and `HEAD` equals the branch's live remote tip, read with `git ls-remote
-  origin refs/heads/<branch>`. The base check runs first and makes no network
-  call. A missing tracking ref, a failed read, or a timed-out read keeps the
+  released PR branch's own pushed tip) `HEAD`, `refs/remotes/origin/<branch>`,
+  and the branch's live remote tip (`git ls-remote origin refs/heads/<branch>`)
+  are all equal, and the worktree is still clean after that read. The base
+  check runs first and makes no network call. A missing or stale tracking ref,
+  a failed read, a timed-out read, or a change made during the read keeps the
   worktree blocked. The occupant still has to resolve to `<path>`. With no
   occupant left, the verdict is `claimable` and `warnings[]` names the ignored
   path. Another occupant or any failed check keeps `already-claimed` with
