@@ -296,7 +296,8 @@ job is a documented no-op rather than a failure). See
 for the marker shape, the seven acceptance conditions, and why this one
 waiver kind is evaluated independent of the deadline/terminal-unavailable
 gate. This does not replace the manual flow for any other reason token,
-actor, or check.
+actor, or check. In `kurone-kito/idd-skill`, a PR touching a
+decision-rule file gets none (kurone-kito/idd-skill#4015).
 
 **Stale workflow definition after a rerun.** `gh run rerun` reuses the
 original event's commit and workflow definition (`pull_request`: that
