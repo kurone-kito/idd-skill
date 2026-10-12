@@ -1242,6 +1242,10 @@ identify its old claims, and step 1 treats them as not its own.
    `state` field. `stale` goes to the takeover path in
    `idd-resume.instructions.md`. Any other state is reported to the operator
    with its name, and no further action is taken on that issue.
+   A claim that a worker released with its `unclaimed-by` marker, as F4 does
+   as its last mutation before returning the final report, does not return
+   `already_owned`. Skip step 3 for it and go to step 4, which verifies its
+   terminal state from live GitHub state.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry to an own claim by the issue number in the
    worker's brief. If the harness offers no agent listing, no worker is
