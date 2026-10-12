@@ -143,8 +143,8 @@ self-critique and record risk.
    successful empty list, or a failed delegate that still emitted a
    readable list, is a genuine result.
 3. If the critique pass reports zero issues, continue to E11.
-4. If it reports additional issues, fix them, commit atomically, run
-   **fix-validate** on the new HEAD, and run E10 again.
+4. If it reports additional issues, fix them, run `fix-validate`, commit
+   atomically, and run E10 again.
 5. Count "meaningful progress" as removing at least one Accepted
    finding, narrowing a remaining finding's root cause or scope, or
    producing a materially new fix direction. A reworded duplicate
@@ -174,8 +174,10 @@ self-critique and record risk.
    1 hold. Re-run this file's Pre-mutation guard immediately before filing. Each
    residual Low finding takes the defer disposition in
    `idd-review-triage.instructions.md` (a `**Rejected**` reply that names the
-   follow-up issue), not an `Accepted — fixed` reply. Then go to E11. An
-   unestablished count does not reach the cap.
+   follow-up issue, with `e10MaxPasses` as its clause), not an `Accepted —
+   fixed` reply. This is an explicit exception to that Defer rule's exclusion of
+   an Accepted item mid-fix. Then go to E11. An unestablished count does not
+   reach the cap.
 9. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
    another patch. If that fix keeps drawing new findings, prefer

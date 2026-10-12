@@ -15,9 +15,9 @@ the local CLI. E14's timing defaults live in
 
 Apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-before E9, before filing the E10 follow-up, the E12 push, and each
-E13/E14/E15 GitHub side effect (reply, resolve, reviewer request, hold
-comment, or digest update).
+before E9, before filing the E10 follow-up and posting its defer replies,
+the E12 push, and each E13/E14/E15 GitHub side effect (reply, resolve,
+reviewer request, hold comment, or digest update).
 
 ## E9 — Fix accepted issues
 
@@ -78,9 +78,9 @@ readable findings list as a **hold**, not a clean "zero issues,
 proceed to E11" round: apply the shared Hold / suspend rules
 (`idd-overview-appendix.instructions.md`) instead of advancing.
 
-If the critique pass finds additional issues, fix them, commit
-atomically, run **fix-validate** on the new HEAD, and run E10 again while the
-findings are converging.
+If the critique pass finds additional issues, fix them, run
+**fix-validate**, commit atomically, and run E10 again while the findings are
+converging.
 
 Convergence guardrails:
 
@@ -119,9 +119,11 @@ Stage 1 hold. Re-run the claim revalidation gate
 (`idd-overview-core.instructions.md`) immediately before filing. Each residual
 Low finding then takes the defer disposition in
 `idd-review-triage.instructions.md` (a `**Rejected**` reply that names the
-follow-up issue), not an `Accepted — fixed` reply, and is resolved as deferred.
-Then continue to E11. The cap never applies while a High or Medium Accepted
-finding is open. If the count cannot be established, the cap is not reached.
+follow-up issue, with `e10MaxPasses` as its clause), not an `Accepted — fixed`
+reply, and is resolved as deferred. This is an explicit exception to that Defer
+rule's exclusion of an Accepted item mid-fix. Then continue to E11. The cap
+never applies while a High or Medium Accepted finding is open. If the count
+cannot be established, the cap is not reached.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
