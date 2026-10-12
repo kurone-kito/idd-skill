@@ -30,7 +30,15 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { buildHelperRuntimeManifest } from './helper-runtime-manifest.mjs';
 import { resolveInstalledPayloadRoot } from './idd-activation.mjs';
 import { isQualifiedConfigRoot } from './idd-config.mjs';
@@ -536,8 +544,32 @@ function readReceipt(path) {
         typeof entry.sha256 === 'string',
     ),
     dirsCreated: strings(parsed.dirsCreated).filter((dir) => isAbsolute(dir)),
-    harnesses: parsed.harnesses ?? {},
+    harnesses: validHarnessRecords(parsed.harnesses),
   };
+}
+/** Keep only harness records whose file is the entry file that harness reads. */
+function validHarnessRecords(value) {
+  const result = {};
+  if (value === null || typeof value !== 'object') return result;
+  const entryFile = {
+    claude: 'CLAUDE.md',
+    codex: 'AGENTS.md',
+    opencode: 'opencode.json',
+  };
+  for (const name of HARNESS_NAMES) {
+    const record = value[name];
+    if (record === undefined || record === null || typeof record !== 'object')
+      continue;
+    if (typeof record.file !== 'string' || !isAbsolute(record.file)) continue;
+    if (basename(record.file) !== entryFile[name]) continue;
+    result[name] = {
+      file: record.file,
+      fileCreated: record.fileCreated === true,
+      entryAdded: record.entryAdded === true,
+      keyCreated: record.keyCreated === true,
+    };
+  }
+  return result;
 }
 function receiptBytes(receipt) {
   return Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
@@ -552,9 +584,9 @@ function receiptBytes(receipt) {
  * everything below it.
  */
 function assertNoLinkBelow(root, target) {
-  const relative = target.slice(root.length + 1).split('/');
+  const segments = relative(root, target).split(sep);
   let current = root;
-  for (const segment of relative) {
+  for (const segment of segments) {
     current = join(current, segment);
     const stat = lstatIfExists(current);
     if (stat === null) return;
@@ -601,8 +633,13 @@ function planPayload(plan, locations, bundleRoot, version, createdDirs) {
   ensureDirs(plan, [locations.dataRoot], createdDirs);
   const staging = join(
     locations.dataRoot,
-    `.staging-${version}-${process.pid}`,
+    `.staging-${version}-${process.pid}-${Date.now()}`,
   );
+  if (lstatIfExists(staging) !== null) {
+    throw new Error(
+      `user-global install: ${staging} already exists; refusing to stage over it`,
+    );
+  }
   for (const [rel, bytes] of expected) {
     plan.ops.push({
       kind: 'write',
@@ -896,9 +933,6 @@ export function runUserGlobalUninstall(options) {
   const remaining = {
     ...(receipt?.harnesses ?? {}),
   };
-  const allHarnesses = HARNESS_NAMES.every((name) =>
-    options.harnesses.includes(name),
-  );
   for (const harness of options.harnesses) {
     const prior = receipt?.harnesses[harness];
     delete remaining[harness];
@@ -943,11 +977,11 @@ export function runUserGlobalUninstall(options) {
   }
   // Payload and skills are shared by every harness, so they go only when all
   // three are named and a receipt says what install owns.
-  if (allHarnesses && receipt !== null) {
+  if (receipt !== null && Object.keys(remaining).length === 0) {
     removeOwned(plan, locations, receipt);
   }
   if (receipt !== null) {
-    if (allHarnesses && Object.keys(remaining).length === 0) {
+    if (Object.keys(remaining).length === 0) {
       plan.ops.push({ kind: 'unlink', path: locations.receiptPath });
       pushChange(plan, locations.receiptPath, 'delete');
       for (const dir of [...receipt.dirsCreated].sort().reverse()) {
@@ -997,7 +1031,7 @@ function removeOwned(plan, locations, receipt) {
     const marker = lstatIfExists(join(dir, SKILL_MARKER_NAME));
     if (marker === null || marker.isSymbolicLink()) continue;
     for (const file of receipt.skillFiles) {
-      if (!file.path.startsWith(`${dir}/`)) continue;
+      if (!file.path.startsWith(`${dir}${sep}`)) continue;
       if (!isUnchangedFile(file.path, file.sha256)) continue;
       removed.add(file.path);
       plan.ops.push({ kind: 'unlink', path: file.path });
@@ -1016,7 +1050,7 @@ function removeOwned(plan, locations, receipt) {
     // Directories install created below this skill directory go first, deepest
     // first, so the skill directory itself can be removed last.
     const below = receipt.dirsCreated
-      .filter((sub) => sub.startsWith(`${dir}/`))
+      .filter((sub) => sub.startsWith(`${dir}${sep}`))
       .sort((a, b) => b.length - a.length);
     for (const sub of below) plan.ops.push({ kind: 'rmdir', path: sub });
     plan.ops.push({ kind: 'rmdir', path: dir });

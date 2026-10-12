@@ -612,3 +612,55 @@ test('uninstall removes the wiring at the recorded path, not at the current env 
     box.cleanup();
   }
 });
+
+test('uninstalling the last recorded harness removes the shared payload and skills (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options(['claude']));
+    runUserGlobalUninstall(box.options(['claude']));
+    assert.equal(existsSync(box.claudeFile), false);
+    assert.equal(existsSync(box.payloadRoot), false);
+    assert.equal(existsSync(join(box.home, '.claude', 'skills')), false);
+    assert.equal(
+      existsSync(
+        join(box.root, 'data', 'idd-skill', 'user-global-receipt.json'),
+      ),
+      false,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('a receipt cannot point a harness record at an unrelated file (#3825)', () => {
+  const box = sandbox();
+  try {
+    const bystander = join(box.root, 'notes.md');
+    const block = `${BEGIN_MARKER}\n@/elsewhere/entry.md\n<!-- idd-skill:user-global end -->\n`;
+    writeFixture(bystander, `# notes\n${block}`);
+    writeFixture(
+      join(box.root, 'data', 'idd-skill', 'user-global-receipt.json'),
+      JSON.stringify({
+        schema: 1,
+        version: '0.14.0',
+        payloadRoot: box.payloadRoot,
+        payloadVersions: [],
+        skillDirs: [],
+        skillFiles: [],
+        dirsCreated: [],
+        harnesses: {
+          claude: {
+            file: bystander,
+            fileCreated: false,
+            entryAdded: true,
+            keyCreated: false,
+          },
+        },
+      }),
+    );
+    runUserGlobalUninstall(box.options(['claude']));
+    assert.equal(readFileSync(bystander, 'utf8'), `# notes\n${block}`);
+  } finally {
+    box.cleanup();
+  }
+});
