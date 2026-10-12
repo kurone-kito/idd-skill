@@ -27,10 +27,9 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
    `--read-tokens` check instead uses `docs/idd-helper-scripts.md`'s
    helper-free fallback.
 
-Every `node scripts/<name>.mjs` command below is the **source-repo /
-vendored-node** form; other profiles resolve each command's profile-selected
-equivalent from `docs/idd-helper-scripts.md`. A helper missing on the active
-profile is a rule 1 stop, never a fall-through.
+Commands below are the **source-repo / vendored-node** form; other profiles
+use the profile-selected equivalent in `docs/idd-helper-scripts.md`. A helper
+missing on the active profile is a rule 1 stop, never a fall-through.
 
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
@@ -329,20 +328,44 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    that post-acquire result alone counts. Any other result: claim contested;
    apply Claim verification step 5, then STOP before the digest.
 
+## Lost-claim cleanup (`lost-claim-cleanup`)
+
+After step 2's `git worktree add`, at any exit where this session no longer
+holds the claim (failed `--record-tokens` or claim post; step 6 lock
+collision or `--assert` not `already_owned`/`keep`; verification step 5
+`unclaimed-by`), run the block below in one clone-scoped lock hold
+(`clone-lock.mjs --exec --agent-id <agent-id> -- bash -c '…'`). Never
+`--takeover`. Any keep → report `<path>`.
+
+```sh
+node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <agent-id> --claim-id <claim-id>
+# continue only on exit 0; else keep both
+node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --worktree <path>
+# keep on read failure, owner_evidence_required, or already_owned (instructions-only: written Claim-state rules)
+git -C <path> status --porcelain
+# must print nothing (no fetch); tip must equal origin/main, else keep both:
+git rev-parse <branch>
+git rev-parse origin/main
+git -C <path> checkout --detach
+git branch -D <branch>
+# on failure: git -C <path> checkout <branch>; keep both
+git worktree remove <path>
+# no --force
+```
+
 ## Heartbeat posting
 
 Only when this session owns the active claim and is extending its stale
 clock (holding past 12 h, or a phase will exceed 12 h): repost **step 4's
 command and body** with `{branch}` copied **verbatim**, and `{claim-id}`,
-`{agent-id}`, and `supersedes:` unchanged; a mismatch is anomalous and does
-not refresh the clock. Skip step 5.
+`{agent-id}`, and `supersedes:` unchanged; a mismatch does not refresh the
+clock. Skip step 5.
 
 ## Claim verification
 
-**Already-owned continuation (no new post)**: pre-check (c)'s
-`already_owned` verifies ownership; skip checks 1–4 and post nothing new,
-but run step 5's authoring guard. Checks 1–4 apply only to fresh claims,
-takeovers, and legacy migrations.
+**Already-owned continuation**: `already_owned` from pre-check (c) skips
+checks 1–4 and posts nothing, but runs step 5's authoring guard. Checks 1–4
+apply only to fresh claims, takeovers, and legacy migrations.
 
 For fresh activation, after posting `claimed-by`, wait the settle delay
 (`claim.verifySettleDelay`, default `PT5S`), re-read all issue comments, then

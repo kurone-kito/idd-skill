@@ -644,6 +644,30 @@ The lite claim file keeps only the rules; their rationale lives here.
   `--claim-id`, so it cannot tell "yours" from "a competitor's"; pre-check
   (c) runs first for that reason.
 
+### Lost-claim cleanup after a lost fresh claim (issue `#4042`)
+
+PR `#4018` review raised four edge cases for the pre-claim worktree that a
+lost fresh claim leaves behind: a `--record-tokens` failure after `git
+worktree add` (review comment `4242624517`); an `unclaimed-by` posted after
+an authoring hold that followed a successful assert (`4242624520`); removal
+outside the clone-scoped lock (`4242577825`); and `git branch -d` refusing
+a branch whose tip is not merged into a lagging local `main`, so the branch
+survived (`4242489039`). The decided policy (maintainer hearing,
+2026-10-12):
+
+- Remove only a pristine worktree: no tracked or untracked changes, and a
+  branch tip equal to the local `origin/main` ref. The procedure reads
+  that ref as it stands and does not fetch. Otherwise keep both.
+- Run the re-check and the removal in one hold of the clone-scoped lock.
+  Acquire the worktree-local claim lock, re-read the claim, and remove only
+  when no active claim is held by this session. A collision, a failed
+  acquire, or an unreadable claim state keeps the worktree. Never
+  `--takeover`.
+- Git refuses `git branch -D` on a branch checked out in any worktree, so
+  the worktree is detached first. If the delete fails, the procedure
+  reattaches the branch and keeps both, so a kept worktree keeps its
+  branch.
+
 ## Work and self-review
 
 ### B1 Step 3 — install-deps silent under-install detection
