@@ -22,9 +22,10 @@ function isStrictlyInside(root: string, path: string): boolean {
 /**
  * Return an `mkdtempSync` replacement that records every directory it
  * creates, and register a file-level `after` hook that removes them all.
- * Call it once at the top level of a test file. The hook runs after every
- * test in the file, so a child process a test spawned and waited for has
- * already exited.
+ * Call it once at the top level of a test file. The hook runs once, after
+ * all tests in the file have finished, not between tests, so a fixture
+ * stays until the file ends and a child process a test spawned and waited
+ * for has already exited.
  *
  * As `trackedMkdtemp` in `tests/idd-onboard.test.mts` does, the recursive
  * removal never reaches outside the temporary directory. A `prefix` must
