@@ -271,6 +271,7 @@ interface PolicyConfigFile {
     };
     trustEmptyProtectionReads?: boolean;
     trustSourcePinnedRequiredChecks?: boolean;
+    allowNoRequiredChecksInGlobalOnly?: boolean;
   };
   discover?: {
     activeClaimPreScanBatchSize?: number;
@@ -1498,6 +1499,7 @@ const policyConfigFixture = {
     },
     trustEmptyProtectionReads: true,
     trustSourcePinnedRequiredChecks: true,
+    allowNoRequiredChecksInGlobalOnly: true,
   },
   discover: {
     activeClaimPreScanBatchSize: 10,

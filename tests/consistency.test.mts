@@ -928,6 +928,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
       trustEmptyProtectionReads: false,
       trustSourcePinnedRequiredChecks: false,
+      allowNoRequiredChecksInGlobalOnly: false,
     },
     discover: {
       activeClaimPreScanBatchSize: 10,
@@ -1058,6 +1059,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         },
         trustEmptyProtectionReads: true,
         trustSourcePinnedRequiredChecks: true,
+        allowNoRequiredChecksInGlobalOnly: false,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -1148,6 +1150,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         },
         trustEmptyProtectionReads: true,
         trustSourcePinnedRequiredChecks: true,
+        allowNoRequiredChecksInGlobalOnly: false,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -1309,6 +1312,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
       trustEmptyProtectionReads: false,
       trustSourcePinnedRequiredChecks: false,
+      allowNoRequiredChecksInGlobalOnly: false,
     },
   );
 
@@ -1355,6 +1359,21 @@ test('policy normalization provides default-safe values and supports aliases', (
     normalizePolicyConfig({
       ciGate: { trustSourcePinnedRequiredChecks: true },
     }).ciGate.trustSourcePinnedRequiredChecks,
+    true,
+  );
+
+  // #4011: the global-only zero-required-check opt-in uses the same
+  // fail-closed coercion: only a literal boolean `true` enables it.
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { allowNoRequiredChecksInGlobalOnly: 'true' },
+    }).ciGate.allowNoRequiredChecksInGlobalOnly,
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { allowNoRequiredChecksInGlobalOnly: true },
+    }).ciGate.allowNoRequiredChecksInGlobalOnly,
     true,
   );
 });
