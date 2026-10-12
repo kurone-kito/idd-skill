@@ -275,22 +275,24 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
-`--agent-id {agent-id} --claim-id {claim-id}`; `--assert` takes
-`--claim-id {claim-id} --nonce {nonce}`. Resolve the commands as A5(a) does.
+Fresh-claim order, worktree first. Fresh branches only; for an
+inheritable branch, follow
+[Re-claim an inheritable branch](../../docs/idd-resume-detail.md#re-claim-an-inheritable-branch).
+`--record-tokens` and `--acquire` take `--agent-id {agent-id}
+--claim-id {claim-id}`; `--assert` takes `--claim-id {claim-id}
+--nonce {nonce}`. Resolve commands as A5(a) does.
 
 1. Create the worktree and branch: `git worktree add --no-track <path> -b
    <branch-name> origin/{development-branch}` (fresh-claim row of
    `idd-work.instructions.md`). The worktree exists before the claim. Do not
-   use WorkTrunk create here: its pre-start hook installs before the claim POST.
+   use WorkTrunk create here: its pre-start hook installs before the POST.
 2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.
 3. Re-run the A5(c) gate with `--fresh-claim-gate --own-worktree <path>`,
-   so this session's new worktree does not read as an occupant of a
-   released claim's branch. The gate ignores that path only while it is
-   clean with no commits beyond the base. Observed 2026-10-11, issues
-   `#3944` and `#3952`: without the flag the gate read `already-claimed`
-   (`released-claim-local-worktree-occupied`). Only on `claimable`, post
-   the claim comment per
+   so this session's new worktree does not read as occupying a released
+   claim's branch. The gate ignores that path only while it is
+   clean with no commits beyond the base. Without the flag, gate reads
+   `already-claimed` (observed 2026-10-11, `#3944`, `#3952`).
+   Only on `claimable`, post the claim comment per
    [Claim format](idd-overview-core.instructions.md#claim-format), then
    the activation nonce. Any other verdict follows the A5(c) routing
    above; this worktree holds no claim yet.
@@ -303,19 +305,16 @@ Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
    `idd-work.instructions.md`.
 
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
-marker body must be exactly the HTML comment token followed by, at
-most, the single italic note from Claim format above — never more. Any
-deviation
-— trailing content, a missing note, or a note that fails the required
-grammar — fails the parser's whole-body anchor, so the comment is not
-recognized as a live claim event. Such a deviation is still
-**detectable** as a malformed marker
-(`detectMalformedOperationalMarker` in `marker-helpers.mts`) rather
-than reading as unremarkable "other" content, but detection is
-diagnostic only: never salvage a malformed post as valid — always
-re-post a clean marker with nothing appended. A marker merely quoted
-or embedded mid-prose (not the literal first bytes of the body) is
-never treated as live or flagged; anti-spoofing is unaffected.
+body must be exactly the HTML comment token plus, at most, the single
+italic note from Claim format above. Any deviation (trailing content,
+a missing note, or a note that fails the grammar) fails the parser's
+whole-body anchor, so the comment is not a live claim event. A deviation
+is still **detectable** as a malformed marker
+(`detectMalformedOperationalMarker` in `marker-helpers.mts`), not
+unremarkable "other" content, but detection is diagnostic only: never
+salvage a malformed post; re-post a clean marker with nothing appended.
+A marker quoted or embedded mid-prose (not the literal first bytes of the
+body) is never live or flagged; anti-spoofing is unaffected.
 
 **Also post an [activation-nonce marker](#activation-nonce-format)** for
 every fresh `{claim-id}`.
@@ -411,21 +410,18 @@ rules. Apply all race-safe checks below:
    second.
 2. If that set has two or more contenders, the winner is the
    lexicographically earliest `{claim-id}` (case-sensitive ASCII compare)
-   among them. This race-safe tie-break extends the shared parsing rules
-   for this verification step, and a two-way same-second collision (your
-   marker plus one competitor) is resolved here rather than slipping past
-   as a single-element set.
+   among them. This tie-break extends the shared parsing rules here, so a
+   two-way collision (your marker plus one competitor) is resolved too.
 3. Verify that the active claim now uses **your** `{claim-id}` after the
-   same-second tie-break is applied. A trusted competing `claimed-by` with a
-   different `{claim-id}` in a strictly later `created_at` second never
-   disputes this check (#3268): Claim-state parsing rules 4 and 6 could
-   never have activated it while your claim is already active, so it stays
-   diagnostic only — see [Claim-state parsing](#claim-state-parsing).
+   same-second tie-break. A trusted competing `claimed-by` in a strictly later
+   `created_at` second never disputes this check (#3268): Claim-state parsing
+   rules 4 and 6 cannot activate it while your claim is active, so it stays
+   diagnostic only; see [Claim-state parsing](#claim-state-parsing).
 4. If you posted an [activation-nonce marker](#activation-nonce-format) for
    this `{claim-id}`, recompute its winner and verify it equals yours. This
-   catches a second session that adopted the identical `{claim-id}` via
-   forced-handoff, where steps 1–3 see nothing to disagree about (both
-   `{claim-id}`s genuinely match). No marker posted: treat as passed.
+   catches a second session that adopted the same `{claim-id}` via forced
+   handoff, where steps 1–3 see no disagreement. No marker posted: treat as
+   passed.
 
 5. Re-fetch labels and the paginated owner-marker log. If an authoring
    hold is active on this issue, it contests this claim: when step 4
@@ -488,14 +484,13 @@ supersedes: none` with a self-chosen pair).
 
 ### Same-agent live-claim branch correction
 
-A different case from the sticky-successor escape above:
-**this session's own** live, non-stale claim recorded the wrong
-`branch`. Neither existing mechanism fixes it: **supersede**
-([Claim-state parsing](#claim-state-parsing) rule 4) only activates
-when the current claim is already stale, so a live claim's supersede
-post is silently invalid; **heartbeat** (rule 3.5) treats a
-different-`{branch}` re-post as anomalous and never updates the
-branch.
+Unlike the sticky-successor escape above, **this session's own** live,
+non-stale claim recorded the wrong
+`branch`. Neither mechanism fixes it: **supersede**
+([Claim-state parsing](#claim-state-parsing) rule 4) activates only when
+the current claim is already stale, so a live claim's supersede post is
+silently invalid; **heartbeat** (rule 3.5) treats a different-`{branch}`
+re-post as anomalous and never updates the branch.
 
 Use **release-then-fresh** instead: post `unclaimed-by` for your own
 pair (safe — you provably hold it, [Claim verification](#claim-verification)),
@@ -504,10 +499,9 @@ the corrected `branch`, then a fresh
 [activation-nonce](#activation-nonce-format), verified the same way.
 Propagate the new `{claim-id}` into every later call (disposition
 replies, watermarks, F2/F3, cleanup) — the old one is dead once
-released. On an open issue, re-verify no competing claim landed in the
-release-to-fresh gap before posting. If one exists, stop and wait;
-do not post the fresh claim or continue. This is not a risk on a
-closed issue.
+released. On an open issue, re-verify that no competing claim landed in
+the release-to-fresh gap; if one did, stop and wait without posting the
+fresh claim. This is not a risk on a closed issue.
 
 ### Orchestrator delegation
 
@@ -575,9 +569,9 @@ there (with `--nonce`). Then re-run alongside every later pre-mutation check:
 `4`, mode `primary-worktree-refused`). That admin directory is never
 removed by `git worktree remove`, so a lock created there has no
 cleanup path (observed 2026-09-25, kurone-kito/idd-skill#3486). Call
-`--acquire` only on the linked B1 worktree. An already-present lock on
-the primary worktree keeps the existing reacquire, collision, and
-`--takeover` contract; the refusal only blocks creating a new one.
+`--acquire` only on the linked B1 worktree. An existing lock on the
+primary worktree keeps its reacquire, collision, and `--takeover` contract;
+the refusal only blocks creating one.
 `--check`, `--record-tokens`, `--read-tokens`, and
 `--backfill-tokens` still accept the primary worktree.
 
@@ -588,14 +582,14 @@ is authorized only when the verdict is `already-claimed`, its
 `winning_claim_id` matches this session's verified `{claim-id}`, and the
 output's top-level `reason` is not a `released-claim-*` reason — the
 lock merely drifted.
-Every other result — a `released-claim-*` reason, `already-claimed` for
-another id, or `claimable`/`stale-reclaimable` (unexpected from inside
-the worktree since #3141, but handled the same) — means the claim was
-lost: stop, report, and post no new claim from this check; re-entry is
-only through a fresh Resume or Discover pass. If the helper is
-unavailable or malformed, fall back to this file's Claim-state parsing
-rules below for the same verdict. No release step — `git worktree
-remove` at F4 deletes the lock with the worktree, so a crashed
+Every other result (a `released-claim-*` reason, `already-claimed` for
+another id, or `claimable`/`stale-reclaimable`, which handle the same from
+inside the worktree since #3141) means the claim was lost: stop, report,
+and post no new claim from this check; re-entry is only through a fresh
+Resume or Discover pass. If the helper is unavailable or malformed, use
+this file's Claim-state parsing rules below for the same verdict.
+No release step — `git worktree remove` at F4 deletes the lock with the
+worktree, so a crashed
 session's leftover lock resolves the same way. See
 `docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for the
 package-manager / ephemeral-npx / user-global forms and mechanical detail.

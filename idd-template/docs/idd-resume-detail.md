@@ -1094,3 +1094,37 @@ or log — never as an issue/PR comment on a non-owned claim:
   claim-id appears. Either observation only means re-enter Resume
   Step 0 (step 5); a fresh heartbeat lands on the active non-stale
   claim stop there, never on a takeover.
+
+## Re-claim an inheritable branch
+
+Use this sequence when a fresh claim must reuse an existing PR branch, an
+inheritable branch whose commits beyond `origin/main` must be kept. The
+fresh-branch order in `idd-claim.instructions.md` creates a new branch from
+`origin/{development-branch}` and does not apply. The full claim file starts
+from `origin/{development-branch}`, and the lite file starts from
+`origin/main`. This sequence attaches the existing branch instead. Observed
+2026-10-12, `kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached
+the existing PR branch as a sibling worktree before the claim, and the lite
+order succeeded.
+
+1. Fresh-claim gate with no worktree:
+   `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
+   returns `claimable`.
+2. Before the claim POST:
+   `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
+   --agent-id <id> --claim-id <id>`, on the primary worktree.
+3. Claim POST: `node scripts/post-idd-marker.mjs --type claim ... --apply`.
+4. Before the activation-nonce POST: the same `--record-tokens` call on the
+   primary path with `--nonce <nonce>`, then
+   `node scripts/post-idd-marker.mjs --type activation-nonce ... --apply`.
+5. Attach the existing branch to a sibling worktree:
+   `git worktree add <path> <branch>`, without `-b`.
+6. Carry the nonce forward on the linked worktree:
+   `--record-tokens --worktree <linked> ... --nonce <nonce>`.
+7. Acquire on the linked worktree:
+   `node scripts/claim-lock.mjs --acquire --worktree <linked> --agent-id <id>
+   --claim-id <id>`.
+8. Assert:
+   `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
+   --nonce <nonce> --worktree <linked>` returns `already_owned` with action
+   `keep`.
