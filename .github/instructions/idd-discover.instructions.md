@@ -182,7 +182,7 @@ A1 ↔ A0-O or A4 ↔ A0-O loop).
 Search all open issues in the repository. Collect every issue that does
 NOT contain an `idd-skill-roadmap-id` marker (not itself
 a roadmap) or an `idd-skill-blocked-by` marker, AND
-otherwise passes A3's own readiness bullets (the same five criteria A3
+otherwise passes A3's own readiness bullets (the same six criteria A3
 lists; do not re-derive them here).
 
 Apply the configured policy before passing A0-O candidates to A3.5:
@@ -398,6 +398,10 @@ From A2, keep only issues that satisfy **all** of the following:
   blocked if that issue is open, if no issue matches (fail-safe — a
   migration integrity problem such as a typo, deleted issue, or
   incomplete migration), or if any matching issue is open.
+- Defer-source origin: a body with a
+  `<!-- idd-skill-authoring-defer-source: ... -->` marker
+  is blocked while its single `Refs #NNN` origin issue is open; a missing,
+  ambiguous, or unresolvable origin also blocks (issue #4065).
 - No external human coordination or prose-only
   runtime/production-observation precondition ("confirmed in
   production", "observed live", "runtime-observation"; issue #2467)
@@ -704,13 +708,3 @@ discover phase:
 an active roadmap** — those belong in the roadmap's task list as
 `- [ ] #NNN` entries. `blocked-by` is only for a separate, prior
 roadmap that must close first (see A3's diagnostic above for the deadlock this prevents).
-
-## Scope invariant (summary)
-
-Do not widen issue-selection scope beyond A2's query allowlist (A0-T,
-A0-O, A1, A1.5, A3, A4.5) or a same-run operator opt-in per A3 step 5
-(never inferred from standing instructions). An explicit target
-authorizes only that issue, except when A0-T step 2 classifies it as a
-roadmap node: then it authorizes normal selection scoped to that
-roadmap's own descendants only, never an unrelated orphan issue (A0-O
-stays excluded, per A0-T step 2).
