@@ -2831,3 +2831,31 @@ for (const value of ['review-fix-loop-cutoff', 'review-needs-decision']) {
     assert.equal(closed.reason, 'orphan');
   });
 }
+
+// #4065 review fix (Codex P2): colliding authoring and needs-decision labels
+// keep a review-needs-decision follow-up blocked even with a closed origin.
+test('#4065: a colliding authoring and needs-decision label blocks a review-needs-decision follow-up', () => {
+  const body = `<!-- idd-skill-authoring-defer-source: review-needs-decision -->\n\nRefs #4019\n`;
+  const closedOrigin = {
+    issueStateByNumber: new Map([[4019, 'CLOSED']]),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  };
+
+  const colliding = classifyIssue(deferFollowUp(body), {
+    ...closedOrigin,
+    authoringLabelName: 'status:needs-decision',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+  assert.equal(colliding.reason, 'blocked_by_defer_source_origin');
+  assert.equal(
+    colliding.details,
+    'needs_decision_label_conflicts_with_authoring_label',
+  );
+
+  const distinct = classifyIssue(deferFollowUp(body), {
+    ...closedOrigin,
+    authoringLabelName: 'status:authoring',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+  assert.equal(distinct.orphan, true);
+});

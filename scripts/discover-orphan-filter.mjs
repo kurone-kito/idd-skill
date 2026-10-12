@@ -447,6 +447,11 @@ export function classifyIssue(issue, options) {
   const needsDecisionLabelName = normalizeNeedsDecisionLabelName(
     options.needsDecisionLabelName,
   );
+  // #4065 review fix (Codex P2): the same comparison the readiness check uses
+  // for needs_decision_label_conflicts_with_authoring_label.
+  const labelsCollide =
+    authoringLabelName.trim().toLowerCase() ===
+    needsDecisionLabelName.trim().toLowerCase();
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
   // #3281: these two marker tests previously ran against the raw body,
@@ -535,7 +540,7 @@ export function classifyIssue(issue, options) {
     crossRepoUnresolvable.length === 0
   ) {
     return (
-      classifyDeferSourceOrigin(body, markerPrefix, options) ?? {
+      classifyDeferSourceOrigin(body, markerPrefix, options, labelsCollide) ?? {
         orphan: true,
         reason: 'orphan',
         ...demotionWarning,
@@ -620,7 +625,7 @@ export function classifyIssue(issue, options) {
   // #2936): an exempt epic reference has not resolved/closed, it is
   // merely non-blocking.
   return (
-    classifyDeferSourceOrigin(body, markerPrefix, options) ?? {
+    classifyDeferSourceOrigin(body, markerPrefix, options, labelsCollide) ?? {
       orphan: true,
       reason: 'references_non_blocking',
       ...demotionWarning,
@@ -636,10 +641,24 @@ export function classifyIssue(issue, options) {
  * keeps its own verdict. Called only where no earlier reference check
  * blocked the issue, so `blocked_by_open_reference`,
  * `open_dependency_reference`, and `unresolvable_reference` keep precedence.
+ *
+ * A `review-needs-decision` follow-up also stays blocked when the configured
+ * authoring and needs-decision labels collide, whatever its origin state,
+ * matching the readiness check's `needs_decision_label_conflicts_with_authoring_label`.
  */
-function classifyDeferSourceOrigin(body, markerPrefix, options) {
+function classifyDeferSourceOrigin(body, markerPrefix, options, labelsCollide) {
   if (!hasDeferSourceMarker(body, markerPrefix)) {
     return null;
+  }
+  if (
+    labelsCollide &&
+    hasDeferSourceMarker(body, markerPrefix, 'review-needs-decision')
+  ) {
+    return {
+      orphan: false,
+      reason: 'blocked_by_defer_source_origin',
+      details: 'needs_decision_label_conflicts_with_authoring_label',
+    };
   }
   const { numbers, ambiguous } = extractDeferSourceRefsIssueNumbers(body);
   if (ambiguous) {
@@ -1424,7 +1443,9 @@ review-needs-decision) while its single Refs origin issue is open, the same
 origin rule A3's readiness check applies. A closed origin does not block.
 "details" is "open:#N", "missing_refs_line", "ambiguous_refs_line", or
 "unresolvable:#N"; the last also adds the origin to the top-level
-"unresolvable" array as a bare number.
+"unresolvable" array as a bare number. A review-needs-decision follow-up
+whose configured authoring and needs-decision labels collide reports
+"needs_decision_label_conflicts_with_authoring_label" whatever its origin.
 
 A "runtime_observation_precondition" hit demotes to a warned orphan
 (#2767) instead -- kept in "orphans" with "reason": "orphan" and a
