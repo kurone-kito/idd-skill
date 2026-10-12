@@ -316,9 +316,13 @@ every fresh `{claim-id}`.
 ### Lost-claim cleanup (`lost-claim-cleanup`)
 
 Run this after the step 1 worktree exists, at every exit where this session no
-longer holds the claim: a failure in steps 2-5, or an `unclaimed-by` from
-Claim verification step 5. Never use `--takeover`. Fill in the placeholders of
-the script, resolve each helper as in A5(a), and run it as one hold of the
+longer holds the claim: a `--record-tokens` failure (step 2), a failed claim or
+activation-nonce post (step 3), a `--acquire` collision or other non-success
+exit (step 4), an `--assert` result other than `already_owned`/`keep` (step
+5), or an `unclaimed-by` posted after an authoring hold that followed a
+successful assert (Claim verification step 5). Never use `--takeover`. Fill in
+the placeholders of the script, each as a single-quoted shell word (write a `'`
+as `'\''`), resolve each helper as in A5(a), and run it as one hold of the
 [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
 `node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash <script>`.
 The gates and the removal both run under that hold.
@@ -335,13 +339,13 @@ git worktree remove <path>
 git branch -D <branch>
 ```
 
-Every gate runs before `git worktree remove`, the only removal step, which runs
-without `--force`. The route gate reads `active_claim`, not the route `state`,
-because `state` is written for a claiming session. The status gate covers
-ignored, untracked, and submodule changes. A branch cut from an earlier base is
-kept with its worktree. A failure before the removal keeps the worktree, its
-branch, and its lock on purpose, so a later claim stops at the collision check
-(A5(e)). No script releases that lock.
+Every gate runs before `git worktree remove`, the only removal step (no
+`--force`). The route gate reads `active_claim`, not the route `state`, because
+`state` is written for a claiming session. The status gate covers ignored,
+untracked, and submodule changes. A branch cut from an earlier base is kept with
+its worktree. A failure before the removal keeps the worktree, its branch, and
+its lock on purpose, so a later claim stops at the collision check (A5(e)). No
+script releases that lock.
 
 If `git branch -D` fails after the removal, or the harness denies it (the
 distributed Claude baseline denies `Bash(git branch -D*)`), report a leftover
@@ -355,7 +359,7 @@ the route gate, and give each worker its own clone for the clone-scoped steps
 
 Observed in PR `#4018` review (comments `4242489039`, `4242624517`,
 `4242624520`, `4242577825`); rationale in
-[docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#lost-claim-cleanup-after-a-lost-fresh-claim-issue-4042).
+[docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
 
 ## Activation-nonce format
 

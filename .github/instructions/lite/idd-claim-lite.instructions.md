@@ -13,8 +13,8 @@ forced-handoff. Prefer helpers.
 **Scope**: one selected issue; no open-ended Discover. Standard
 "Return to Discover" branches mean **STOP and report; do not claim**.
 
-**Context-pressure stop** (before Claim execution step 2): If context pressure
-prevents completing Claim through F4, report for handoff and do not claim.
+**Context-pressure stop** (before Claim execution step 2): Fresh candidate: if context
+pressure prevents completing Claim through F4, report for handoff and do not claim.
 Recovery unchanged.
 Make no claim-stage event/marker, branch/worktree, or issue-state change.
 (#3144; preventive)
@@ -173,7 +173,7 @@ takeover, migrate with a fresh `{claim-id}` and `supersedes: none`.
 active claim to `newAgentId` / `newClaimId` only when **all** hold: the
 comment author is a trusted marker actor; the author (case-insensitive)
 equals the marker's `forcedBy` field (unconditionally; rationale in
-`docs/idd-design-rationale.md#lite-claim-rationale-moved-out-of-the-lite-file`);
+`docs/idd-design-rationale.md#lite-claim-rationale`);
 that author is authorized under `forcedHandoff.authorityPolicy`;
 `forcedHandoff.mode` is `human-gated`; `oldAgentId` / `oldClaimId` /
 `branch` all match the active claim; and, when an open PR already backs
@@ -208,8 +208,8 @@ Written fallback (`instructions-only` profile only): lowercase the title;
 replace every non `a-z`/`0-9` character with `-`; split on `-` and drop empty
 tokens and the stop-words `a`, `an`, `the`, `and`, `or`, `in`, `for`, `to`,
 `with`, `from`; rejoin with `-`; cut to 40 chars (back off to the last `-`
-before 40 if mid-token; else hard-cut); strip trailing `-`; empty result →
-`task`.
+before 40 when the cut lands mid-token and a `-` exists there; otherwise
+hard-cut at 40); strip trailing `-`; empty result → `task`.
 
 ```sh
 git worktree list --porcelain -z
@@ -312,8 +312,8 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 
 6. **Fresh claim with no inheritable branch: lock and assert before
    verification.** On the linked worktree only, run the lock acquire and
-   `--read-tokens` (`instructions-only`: the written lock and Claim
-   verification checks replace these helpers and `--assert`). After
+   `--read-tokens` (`instructions-only`: written checks replace these
+   helpers). After
    `claim.verifySettleDelay`, run
    `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
@@ -327,12 +327,12 @@ holds the claim (failed `--record-tokens`, claim, or nonce post; step 6 lock
 collision or `--assert` not `already_owned`/`keep`; verification step 5
 `unclaimed-by`), run the script below as one clone-scoped hold
 (`node scripts/clone-lock.mjs --exec --agent-id <agent-id> -- bash <script>`).
-Never `--takeover`. The gates run before removal. Any failure before removal
+Never `--takeover`. Fill each placeholder as a single-quoted shell word. The gates
+run before removal. Any failure before removal
 keeps the worktree, branch, and lock on purpose. If `git branch -D` fails after
 removal, or the harness denies it, report a leftover branch at `<branch>`.
-Instructions-only: lock from `docs/idd-helper-scripts.md`'s helper-free fallback,
-one clone per worker (`docs/idd-workflow.md`), route by the written Claim-state
-rules in (c).
+Instructions-only: helper-free lock fallback (`docs/idd-helper-scripts.md`); one
+clone per worker (`docs/idd-workflow.md`); route by pre-check (c)'s written rules.
 
 ```sh
 set -eu

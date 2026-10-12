@@ -614,7 +614,7 @@ limitation next to the delegation-brief wording, rather than
 continuing to iterate on brief wording that field evidence shows does
 not reliably close the gap.
 
-### Lite claim rationale (moved out of the lite file)
+### Lite claim rationale
 
 The lite claim file keeps only the rules; their rationale lives here.
 
@@ -644,7 +644,7 @@ The lite claim file keeps only the rules; their rationale lives here.
   `--claim-id`, so it cannot tell "yours" from "a competitor's"; pre-check
   (c) runs first for that reason.
 
-### Lost-claim cleanup after a lost fresh claim (issue `#4042`)
+### Lost-claim cleanup (issue `#4042`)
 
 PR `#4018` review raised four edge cases for the pre-claim worktree that a
 lost fresh claim leaves behind: a `--record-tokens` failure after `git
@@ -677,6 +677,8 @@ the amendments below.
   would need a new helper mode.
 - Plain `git branch -d` is not used, because it refuses against a lagging
   local `main`.
+- Placeholders are filled as single-quoted shell words, because a valid branch
+  name can contain shell metacharacters such as `$` and `;`.
 - On `instructions-only`, the lock uses the helper-free fallback, and the
   clone-scoped steps run with one clone per worker.
 
