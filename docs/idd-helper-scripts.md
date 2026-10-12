@@ -5251,11 +5251,12 @@ still fails closed:
   `origin/<developmentBranch>` (`refs/remotes/origin/HEAD` when the policy
   sets none; a missing or outdated `origin/HEAD`, or an invalid
   `developmentBranch`, keeps that base check from passing), or `HEAD` equals
-  `refs/remotes/origin/<branch>` (#4067: a released PR branch's own pushed
-  tip, which needs no base ref). The occupant still has to resolve to
-  `<path>`. With no occupant left, the verdict is `claimable` and
-  `warnings[]` names the ignored path. Another occupant or any failed
-  check keeps `already-claimed` with reason
+  the branch's live remote tip, read with `git ls-remote origin
+  refs/heads/<branch>` (#4067: a released PR branch's own pushed tip, which
+  needs no base ref; a failed or empty read keeps the base check only). The
+  occupant still has to resolve to `<path>`. With no occupant left, the
+  verdict is `claimable` and `warnings[]` names the ignored path. Another
+  occupant or any failed check keeps `already-claimed` with reason
   `released-claim-local-worktree-occupied`. An `unreadable` probe and a
   stale claim's probe are never relaxed and keep their existing
   `released-claim-*` or `stale-claim-*` reason. Observed 2026-10-11,
