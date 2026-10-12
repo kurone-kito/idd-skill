@@ -138,8 +138,8 @@ self-critique and record risk.
    successful empty list, or a failed delegate that still emitted a
    readable list, is a genuine result.
 3. If the critique pass reports zero issues, continue to E11.
-4. If it reports additional issues, fix them, commit atomically, and
-   run E10 again.
+4. If it reports additional issues, fix them, commit atomically, run
+   **fix-validate** on the new HEAD, and run E10 again.
 5. Count "meaningful progress" as removing at least one Accepted
    finding, narrowing a remaining finding's root cause or scope, or
    producing a materially new fix direction. A reworded duplicate

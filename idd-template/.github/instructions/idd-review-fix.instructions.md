@@ -74,7 +74,8 @@ proceed to E11" round: apply the shared Hold / suspend rules
 (`idd-overview-appendix.instructions.md`) instead of advancing.
 
 If the critique pass finds additional issues, fix them, commit
-atomically, and run E10 again while the findings are converging.
+atomically, run **fix-validate** on the new HEAD, and run E10 again while the
+findings are converging.
 
 Convergence guardrails:
 
