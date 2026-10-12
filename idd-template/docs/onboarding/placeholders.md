@@ -126,7 +126,7 @@ placeholders:
 
 | Placeholder                      | Meaning                                                   | Example                            | Policy field                 |
 | -------------------------------- | --------------------------------------------------------- | ---------------------------------- | ---------------------------- |
-| `{{REPO_NAME}}`                  | Repository short name used in worktree examples           | `my-app`                           | (repo name)                  |
+| `{{REPO_NAME}}`                  | Repository short name used in worktree examples           | `my-app`                           | `origin` slug, else root     |
 | `{{PROJECT_MARKER_PREFIX}}`      | Hidden issue-body marker prefix                           | `my-app`                           | `markerPrefix`               |
 | `{{TRUSTED_MARKER_ACTOR}}`       | Single JSON-escaped login allowed to post trusted markers | `trusted-user-a`                   | `trustedMarkerActors[0]`     |
 | `{{FIX_VALIDATE_COMMANDS}}`      | Auto-fix plus validate command row                        | `npm run lint:fix && npm run lint` | `commands.fix-validate`      |

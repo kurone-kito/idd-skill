@@ -107,11 +107,13 @@ Repository-local actor policy and any forced-handoff settings live in
 
 When these instructions are read from the installed payload rather than
 from the repository's own copy, a placeholder written as `{{placeholder}}`
-means the value of its mapped effective-policy field. The mapping is the
-"Policy field" column of the table in "Final placeholder meanings" in
-`idd-template/docs/onboarding/placeholders.md`. If a mapped field resolves to
-nothing in every policy tier, stop and report the missing field instead of
-guessing.
+means the value of its mapped effective-policy field: the "Policy field"
+column of the "Final placeholder meanings" table in
+`docs/onboarding/placeholders.md` (`idd-template/docs/onboarding/placeholders.md`
+in the source checkout). The `REPO_NAME` placeholder is the repository part of the
+`origin` slug, or the main worktree root's basename when there is no
+`github.com` origin. If a mapped field resolves to nothing in every policy
+tier, stop and report the missing field instead of guessing.
 
 ## Claim-state parsing
 
