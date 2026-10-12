@@ -8994,6 +8994,10 @@ test('runRecordPolicyCli uses the injected readRemoteBranchExists reader instead
         overrides: {},
         help: false,
         allowRoots: [tmpdir()],
+        installUserGlobal: false,
+        uninstall: false,
+        harness: undefined,
+        targetExplicit: false,
       },
       {
         readRemoteBranchExists: (targetDir, branch) => {
@@ -11221,5 +11225,78 @@ test('bin/idd-onboard.mjs --help warns that a broad --allow-root removes confine
       section,
       /broad value \(e\.g\. a home directory\) substantially widens it instead/,
     );
+  }
+});
+
+// #3825: the user-global install mode. Each spawn gets a fresh env with a
+// sandbox HOME and XDG roots, so no run can reach the operator's real home.
+function userGlobalSandboxEnv(root: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? '',
+    HOME: join(root, 'home'),
+    XDG_DATA_HOME: join(root, 'data'),
+    XDG_CONFIG_HOME: join(root, 'config'),
+  };
+}
+
+test('--install-user-global refuses foreign flags and unknown harnesses (#3825)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-onboard-user-global-'));
+  try {
+    const cases: Array<[string[], RegExp]> = [
+      [
+        ['--install-user-global', '--import', '--source', 'x'],
+        /does not accept flag\(s\)/,
+      ],
+      [
+        ['--install-user-global', '--target', 'x'],
+        /does not accept flag\(s\).*--target/,
+      ],
+      [
+        ['--install-user-global', '--harness', 'bogus'],
+        /unknown harness "bogus"/,
+      ],
+      [['--uninstall'], /require --install-user-global/],
+      [
+        ['--import', '--harness', 'claude', '--source', 'x', '--target', 'y'],
+        /require --install-user-global/,
+      ],
+    ];
+    for (const [args, pattern] of cases) {
+      const result = spawnSync(process.execPath, [BIN_PATH, ...args], {
+        encoding: 'utf8',
+        env: userGlobalSandboxEnv(root),
+      });
+      assert.equal(
+        result.status,
+        2,
+        `args ${args.join(' ')}: ${result.stderr}`,
+      );
+      assert.match(result.stderr, pattern, args.join(' '));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('--install-user-global --dry-run writes nothing in a sandbox HOME (#3825)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-onboard-user-global-'));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [BIN_PATH, '--install-user-global', '--dry-run'],
+      { encoding: 'utf8', env: userGlobalSandboxEnv(root) },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const verdict = JSON.parse(result.stdout) as {
+      dryRun: boolean;
+      mode: string;
+      changed: number;
+    };
+    assert.equal(verdict.dryRun, true);
+    assert.equal(verdict.mode, 'install');
+    assert.ok(verdict.changed > 0);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

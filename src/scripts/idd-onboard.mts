@@ -69,7 +69,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { resolveBundleRoot } from './bundle-root.mts';
@@ -107,6 +107,13 @@ import {
 } from './policy-helpers.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
+import {
+  HARNESS_NAMES,
+  type HarnessName,
+  runUserGlobalInstall,
+  runUserGlobalUninstall,
+  type UserGlobalResult,
+} from './user-global-install.mts';
 import {
   loadJson,
   validate,
@@ -6976,6 +6983,14 @@ interface ParsedArgs {
   help: boolean;
   /** #2216: additional confinement roots for --source / --target. */
   allowRoots: string[];
+  /** #3825: `--install-user-global` selects the user-global install mode. */
+  installUserGlobal: boolean;
+  /** #3825: `--uninstall`, valid only with `--install-user-global`. */
+  uninstall: boolean;
+  /** #3825: raw `--harness` value; absent means every harness. */
+  harness: string | undefined;
+  /** Whether `--target` was passed; its default `.` must not reach install mode. */
+  targetExplicit: boolean;
 }
 
 // Excluded from the #1446 cli-args.mts wrapper: the placeholder-override
@@ -7011,6 +7026,10 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     overrides: {},
     help: false,
     allowRoots: [],
+    installUserGlobal: false,
+    uninstall: false,
+    harness: undefined,
+    targetExplicit: false,
   };
   const flagToName = new Map(
     ONBOARDING_PLACEHOLDERS.map((entry) => [entry.flag, entry.name]),
@@ -7085,6 +7104,20 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     }
     if (token === '--target') {
       parsed.target = requireValue();
+      parsed.targetExplicit = true;
+      index += 1;
+      continue;
+    }
+    if (token === '--install-user-global') {
+      parsed.installUserGlobal = true;
+      continue;
+    }
+    if (token === '--uninstall') {
+      parsed.uninstall = true;
+      continue;
+    }
+    if (token === '--harness') {
+      parsed.harness = requireValue();
       index += 1;
       continue;
     }
@@ -7245,6 +7278,19 @@ async function runCli(): Promise<HelperCliResult> {
   if (args.help) {
     printHelp();
     return 0;
+  }
+  // #3825: --harness and --uninstall mean something only in the user-global
+  // install mode, so every other mode refuses them rather than ignoring them.
+  if (
+    !args.installUserGlobal &&
+    (args.uninstall || args.harness !== undefined)
+  ) {
+    throw markCliUsageError(
+      new Error('--harness and --uninstall require --install-user-global'),
+    );
+  }
+  if (args.installUserGlobal) {
+    return runUserGlobalCli(args);
   }
   const modeCount = [
     args.substitute,
@@ -7478,6 +7524,61 @@ async function runCli(): Promise<HelperCliResult> {
   return plan.residue.length > 0 ? 1 : 0;
 }
 
+/** #3825: parse --harness. Absent means every harness; unknown names fail. */
+function parseHarnessList(raw: string | undefined): HarnessName[] {
+  if (raw === undefined) return [...HARNESS_NAMES];
+  const requested = raw.split(',').map((name) => name.trim());
+  for (const name of requested) {
+    if (!(HARNESS_NAMES as readonly string[]).includes(name)) {
+      throw markCliUsageError(
+        new Error(
+          `--harness: unknown harness "${name}" (expected ${HARNESS_NAMES.join(', ')})`,
+        ),
+      );
+    }
+  }
+  return HARNESS_NAMES.filter((name) => requested.includes(name));
+}
+
+/**
+ * #3825: `--install-user-global`, and its `--uninstall` form. The mode takes
+ * no --target or repository input; every other mode's flag is refused here.
+ */
+function runUserGlobalCli(args: ParsedArgs): HelperCliResult {
+  const foreign = [
+    ...importOnlyFlagsPresent(args),
+    ...substituteOnlyFlagsPresent(args),
+    ...hearOnlyFlagsPresent(args),
+    ...verifyOnlyFlagsPresent(args),
+    ...recordPolicyOnlyFlagsPresent(args),
+    ...(args.targetExplicit ? ['--target'] : []),
+    ...(args.allowRoots.length > 0 ? ['--allow-root'] : []),
+    ...(args.substitute ? ['--substitute'] : []),
+    ...(args.importMode ? ['--import'] : []),
+    ...(args.verify ? ['--verify'] : []),
+    ...(args.hear ? ['--hear'] : []),
+    ...(args.recordPolicy ? ['--record-policy'] : []),
+  ];
+  if (foreign.length > 0) {
+    throw markCliUsageError(
+      new Error(
+        `--install-user-global does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+      ),
+    );
+  }
+  const result: UserGlobalResult = (
+    args.uninstall ? runUserGlobalUninstall : runUserGlobalInstall
+  )({
+    bundleRoot: resolveBundleRoot(import.meta.dirname),
+    env: process.env,
+    homedir: homedir(),
+    harnesses: parseHarnessList(args.harness),
+    dryRun: args.dryRun,
+  });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return 0;
+}
+
 function runImportCli(args: ParsedArgs): HelperCliResult {
   if (!args.source) {
     throw markCliUsageError(
@@ -7598,6 +7699,8 @@ function printHelp(): void {
   process.stdout.write(`usage: node scripts/idd-onboard.mjs --substitute [options]
        node scripts/idd-onboard.mjs --substitute --from-transcript <file> [options]
        node scripts/idd-onboard.mjs --import --source <dir> --target <dir> [options]
+       node scripts/idd-onboard.mjs --install-user-global [--harness claude,codex,opencode] [--dry-run]
+       node scripts/idd-onboard.mjs --install-user-global --uninstall [--harness ...] [--dry-run]
        node scripts/idd-onboard.mjs --verify --source <dir> --target <dir> [options]
        node scripts/idd-onboard.mjs --hear --propose --target <dir>
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
