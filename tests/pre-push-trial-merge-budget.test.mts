@@ -18,10 +18,24 @@ import {
   runPrePushTrialBudget,
 } from '../src/scripts/pre-push-trial-budget.mts';
 
-// A stub audit-docs that passes while budget.txt says `ok`. The base tip's copy
-// is what the trial runs, so a breach that only the merged tree carries fails.
-const AUDIT_STUB = `import { readFileSync } from 'node:fs';
-process.exit(readFileSync('budget.txt', 'utf8').trim() === 'ok' ? 0 : 1);
+// A stub audit-docs in the printed shape of the real one: a budget breach and a
+// tooling-ledger failure each print one `- <rule>: <message>` line. The base
+// tip's copy is what the trial runs, so a breach that only the merged tree
+// carries fails. `ledger-stale.txt` stands in for a helper the base ledger does
+// not list.
+const AUDIT_STUB = `import { existsSync, readFileSync } from 'node:fs';
+const failures = [];
+if (readFileSync('budget.txt', 'utf8').trim() !== 'ok') {
+  failures.push('- context-ceiling-200k: budget breached');
+}
+if (existsSync('ledger-stale.txt')) {
+  failures.push('- repository-inventory-audit/help-flag-coverage: helper missing from COVERED_HELPERS');
+}
+if (failures.length > 0) {
+  console.log('documentation audit failed:');
+  for (const line of failures) console.log(line);
+  process.exitCode = 1;
+}
 `;
 
 function git(cwd: string, args: string[]): string {
@@ -221,4 +235,80 @@ test('a host post-checkout hook does not run during the scratch operations (#401
 
   assert.equal(existsSync(marker), false, 'the host hook did not run');
   assert.equal(result.outcome, 'fail');
+});
+
+test('a tooling-ledger failure alone is reported and not counted (#4010)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  // The branch adds a helper that the base ledger does not list. Its ledger
+  // failure is reported, but the budget itself is within limits.
+  commitFile(f.work, 'ledger-stale.txt', 'helper\n', 'branch adds a helper');
+  advanceMain(f, 'unrelated.txt', 'main work\n');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'pass');
+  assert.deepEqual(result.auditFailures, []);
+  assert.deepEqual(result.ignoredTooling, [
+    'repository-inventory-audit/help-flag-coverage: helper missing from COVERED_HELPERS',
+  ]);
+  assert.equal(result.exitCode, 0);
+});
+
+test('a budget failure is counted even when a ledger failure is also present (#4010)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, 'ledger-stale.txt', 'helper\n', 'branch adds a helper');
+  advanceMain(f, 'budget.txt', 'over\n');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'fail');
+  assert.deepEqual(result.auditFailures, [
+    'context-ceiling-200k: budget breached',
+  ]);
+  assert.equal(result.ignoredTooling.length, 1);
+  assert.equal(result.exitCode, 1);
+});
+
+test('a GIT_DIR inherited from a hook does not redirect the scratch operations (#4010)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'unrelated.txt', 'main work\n');
+  const saved = process.env.GIT_DIR;
+  process.env.GIT_DIR = join(f.root, 'not-a-repository');
+  t.after(() => {
+    if (saved === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = saved;
+  });
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'pass');
+  assert.equal(result.exitCode, 0);
+});
+
+test('a worktree that cannot be unregistered fails the check closed (#4010)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'unrelated.txt', 'main work\n');
+  const removals: string[] = [];
+  const refusingRemove: GitRunner = (cwd, args) => {
+    if (args.includes('remove')) {
+      removals.push(args[args.length - 1] ?? '');
+      return { status: 1, stdout: '' };
+    }
+    return defaultGitRunner(cwd, args);
+  };
+
+  const result = runPrePushTrialBudget({ cwd: f.work, runGit: refusingRemove });
+  // Clean up what the refused removal left behind, so the fixture is removed.
+  t.after(() => {
+    for (const path of removals) {
+      defaultGitRunner(f.work, ['worktree', 'remove', '--force', path]);
+      rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+
+  assert.equal(result.outcome, 'pass');
+  assert.equal(result.cleanupFailed, true);
+  assert.equal(result.exitCode, 1);
+  assert.ok(removals.length > 0, 'the check tried to remove its worktrees');
 });
