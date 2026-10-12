@@ -1232,35 +1232,31 @@ identify its old claims, and step 1 treats them as not its own.
    determine that id, every claim is not own. Claims that are not own are not
    dispatched again, and they are reported to the operator.
 2. **Verify each own claim.** Take `--issue` from the worktree's branch,
-   `issue/<number>-<slug>`, because the token record holds no issue number.
-   Confirm that number against the trusted `claimed-by` marker that carries
-   the same claim-id. Then run the profile-selected `resume-claim-routing`
-   command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
-   `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
-   A claim that a worker released with its `unclaimed-by` marker, as F4 does
-   as its last mutation before returning the final report, has the result
-   `unclaimed` with `evidence.released_claim` present, or the result
-   `local_worktree_occupied` with the reason
-   `released-claim-local-worktree-occupied` while its worktree still exists.
-   A released claim does not return `already_owned`. Skip step 3 for it and go
-   to step 4, which verifies its terminal state from live GitHub state. For any
-   other claim, continue to step 3 only when the command exits 0, which means
-   the state is `already_owned` with action `keep`. When it does not exit 0,
-   read the `state` field. `stale` goes to the takeover path in
-   `idd-resume.instructions.md`. Any other state, including an unreadable
-   worktree, is reported to the operator with its name, and no further action
-   is taken on that issue.
+   `issue/<number>-<slug>`, and confirm it against the trusted `claimed-by`
+   marker that carries the same claim-id, because the token record holds no
+   issue number. Run the profile-selected `resume-claim-routing` command (see
+   `docs/idd-helper-scripts.md`) with `--assert`, `--issue`, `--claim-id`,
+   `--nonce` (when the file holds one), and `--worktree <path>`. Continue to
+   step 3 only when the command exits 0, which means the state is
+   `already_owned` with action `keep`. A claim that a worker released with its
+   `unclaimed-by` marker, as F4 does as its last mutation before returning the
+   final report, is the one exception: when `evidence.released_claim.claim_id`
+   equals this claim-id and the state is `unclaimed`, or the reason is
+   `released-claim-local-worktree-occupied`, skip step 3 and go to step 4 for
+   it. `stale` goes to the takeover path in `idd-resume.instructions.md`. Any
+   other result, including an unreadable worktree, is reported to the operator
+   with its state, and no further action is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry to an own claim by the issue number in the
-   worker's brief. If the harness offers no agent listing, no worker is
-   matched, and every own claim that reached step 3 goes to step 5. A released claim
-   from step 2 still goes to step 4. For a matched worker that the
-   runtime can still message, apply the existing worker-death rules by
-   reference, under the bullet titled
+   worker's brief. Match finished workers as well as running ones, and count
+   only running workers in `--running`. If the harness offers no agent
+   listing, no worker is matched, and every own claim that reached this step
+   goes to step 5. For a matched worker that the runtime can still message,
+   apply the existing worker-death rules by reference, under the bullet titled
    "Resume-specific recovery when a worker dies mid-turn" in the
    [fan-out variant](#orchestrator-fan-out-variant). A matched worker that
-   cannot be messaged is replaced by a fresh subagent only when step 2
-   verified its claim. Then recount the roster. Run the profile-selected
+   cannot be messaged is replaced by a fresh subagent only when step 2 verified
+   its claim. Then recount the roster. Run the profile-selected
    `idd-worker-budget` command with `--running <n> --startable <n>`, where
    `--running` is the number of re-attached running workers and `--startable`
    is the number of startable candidates still in the orchestrator's cached
@@ -1270,33 +1266,33 @@ identify its old claims, and step 1 treats them as not its own.
    startable candidates), `--batch <k>` (the `slots` value), `--check-overlap`,
    one `--in-flight <n>` for each re-attached worker's issue, and
    `--desync-token <session-suffixed agent-id>` when
-   `discover.selectionDesync` is `session-offset`.
-   Otherwise skip it: the helper rejects an empty candidate list and a zero
-   batch.
-4. **Recover reports.** Look for a finished worker's report draft in the
+   `discover.selectionDesync` is `session-offset`. Otherwise skip it: the
+   helper rejects an empty candidate list and a zero batch.
+4. **Recover reports.** Run this step for a released claim from step 2 and for
+   a matched worker that has finished. A worker that is still running gets no
+   record; step 3 governs it. Look for the worker's report draft in the
    scratchpad of the same session, under the issue-number prefix that the
    fan-out variant already requires. If a draft is found, validate it against
-   `schemas/worker-report.schema.json` and append it. If no draft is found,
-   build a record, but only for a released claim from step 2 or for a matched
-   worker that has finished or been disposed. A worker that is still running
-   gets no record; step 3 governs it. Verify the terminal outcome from live
-   GitHub state (a merged or closed pull request, or a released claim), then
-   append the record with the profile-selected `idd-worker-report append --file
-   <path>` command. The record must validate against
+   `schemas/worker-report.schema.json` and append it with the profile-selected
+   `idd-worker-report append --file <path>` command. If no draft is found,
+   verify the terminal outcome from live GitHub state, build the record from
+   the fields below, and append it the same way. The record validates against
    `schemas/worker-report.schema.json`: `schemaVersion` is `1`; `issue` is
-   `owner/repo#<number>`, with owner and repo from the `repository` field of the
-   routing output and the number that step 2 verified; `claimId` comes from
-   step 1; `pullRequest` is the claim's pull request as live GitHub state
-   shows it, in the same form, or null; `harness` is the schema slug for the
-   harness row of the worker mechanism table, for example `claude-code`;
-   `workerHandle` is the agent-listing handle, or the claim-id when no listing
-   is available. `terminalPhase` is the last phase that live state proves,
-   which is F4 for a merged claim that was released. `outcome` is `merged` for
-   a merged pull request, `abandoned` for a closed unmerged one, `held` for a
-   claim still held, `handed-off` when a handoff summary was posted before the
-   release, and `failed` otherwise. `verifiedAt` and `recordedAt` are ISO 8601
-   UTC timestamps. Record the recovery in `frictions`, where each entry needs a
-   `phase` and a `summary`.
+   `owner/repo#<number>`, with `owner` and `repo` from the `repository.owner`
+   and `repository.repo` fields of the routing output and the number verified
+   in step 2; `claimId` is the claim-id; `pullRequest` is the claim's pull
+   request from live GitHub state, in the same form, or null; `harness` is the
+   schema slug for this session's row of the worker mechanism table, or
+   `other` when that row has no slug; `workerHandle` is the agent-listing
+   handle for a matched worker, and the claim-id for a released claim;
+   `terminalPhase` is the last phase that live state proves, which is F4 for a
+   merged claim that was released; `outcome` is `merged` for a merged pull
+   request, `abandoned` for a closed unmerged one, `held` for a claim still
+   held, `handed-off` when a handoff summary was posted before the release, and
+   `failed` otherwise; `verifiedAt` and `recordedAt` are ISO 8601 UTC
+   timestamps. Record the recovery in `deviations`, where each entry needs a
+   `phase` and a `summary`, because `frictions` lists instruction text that
+   caused friction.
 5. **Report the remainder.** An own claim with no matching worker after step 3,
    other than a released claim from step 2, is reported to the operator. Its
    worktree is not removed.
