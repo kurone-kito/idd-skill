@@ -170,7 +170,8 @@ function checkCurrentSessionOwner(claim, options) {
  *   reports as that worktree's own top level;
  * - its HEAD is `refs/heads/<branchName>`;
  * - `git status --porcelain --untracked-files=all` is empty;
- * - `origin/<base>` resolves, and `HEAD` has no commit beyond it.
+ * - either `HEAD` equals `refs/remotes/origin/<branchName>` (#4067), or
+ *   `origin/<base>` resolves and `HEAD` has no commit beyond it.
  */
 export function isPristineOwnWorktree(check) {
   const execute = check.execute ?? execFileSync;
@@ -216,6 +217,24 @@ export function isPristineOwnWorktree(check) {
   }
   if (git(['status', '--porcelain', '--untracked-files=all']) !== '') {
     return false;
+  }
+  // #4067: a released PR branch always carries pushed commits beyond the base,
+  // so a worktree at the branch's own pushed tip is accepted too. Nothing in it
+  // is unpublished. A missing ref falls through to the base check below.
+  const pushedTip = git([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    `refs/remotes/origin/${check.branchName}^{commit}`,
+  ])?.trim();
+  const headCommit = git([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    'HEAD^{commit}',
+  ])?.trim();
+  if (pushedTip && headCommit && pushedTip === headCommit) {
+    return true;
   }
   let baseRef;
   if (check.developmentBranch) {
@@ -1360,10 +1379,12 @@ function printHelp() {
                       pre-created worktree. When a released claim's branch is
                       occupied by exactly this path, and the worktree is on
                       that branch, clean (no tracked or untracked changes),
-                      and has no commits beyond origin/<developmentBranch>
-                      (origin/HEAD when the policy sets none), the gate
-                      ignores it. Any other occupant, or a failed check
-                      (including a missing or outdated origin/HEAD, or an
+                      and either has no commits beyond
+                      origin/<developmentBranch> (origin/HEAD when the policy
+                      sets none), or sits at its own pushed tip
+                      refs/remotes/origin/<branch> (#4067), the gate ignores
+                      it. Any other occupant, or a failed check (including a
+                      missing or outdated origin/HEAD on the base path, or an
                       invalid developmentBranch), still blocks. An empty
                       value is a usage error.
   --assert            exit 0 only when the verdict is state already_owned with

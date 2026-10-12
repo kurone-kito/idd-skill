@@ -6067,7 +6067,8 @@ test('a caller that supplies the explainer but omits authorization reports the g
 // #4019: the fresh-claim order creates its own worktree before the second
 // gate read, so a released claim's branch read as occupied by that new,
 // empty worktree. --own-worktree names it; the gate ignores exactly that
-// path, and only while it is clean with no commits beyond origin/main.
+// path, and only while it is clean and either has no commits beyond
+// origin/main or sits at its own pushed tip (#4067).
 
 interface OwnWorktreeSandbox {
   root: string;
@@ -6282,6 +6283,93 @@ test('--own-worktree (#4019): a commit beyond origin/main still blocks', () => {
       { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
     );
     assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+// #4067: a released PR branch always carries pushed commits beyond the base,
+// so the own worktree is also dropped when it is clean and its HEAD equals the
+// branch's own pushed tip. Nothing in it is unpublished.
+function pushOwnBranch(sandbox: OwnWorktreeSandbox): void {
+  execFileSync('git', ['push', '--quiet', 'origin', sandbox.branch], {
+    cwd: sandbox.own,
+    env: sandbox.gitEnv,
+    stdio: 'ignore',
+  });
+}
+
+function commitInOwnWorktree(sandbox: OwnWorktreeSandbox): void {
+  execFileSync(
+    'git',
+    [
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--quiet',
+      '--allow-empty',
+      '-m',
+      'work',
+    ],
+    { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+  );
+}
+
+test('--own-worktree (#4067): a clean worktree at the pushed branch tip reads claimable', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+
+    const read = sandbox.gate(['--own-worktree', sandbox.own]);
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(read.output.fresh_claim_gate.verdict, 'claimable');
+    assert.equal(read.output.fresh_claim_gate.winning_claim_id, null);
+    assert.ok(
+      read.output.warnings.some((warning) =>
+        warning.includes(`ignored the caller's own clean worktree`),
+      ),
+      JSON.stringify(read.output.warnings),
+    );
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a commit beyond the pushed branch tip still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    commitInOwnWorktree(sandbox);
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a tracked change at the pushed branch tip still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    writeFileSync(join(sandbox.own, 'README.md'), 'edited\n');
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a path other than the occupant still blocks at the pushed branch tip', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.primary]);
   } finally {
     sandbox.restore();
   }

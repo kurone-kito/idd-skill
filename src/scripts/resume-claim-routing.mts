@@ -186,7 +186,8 @@ interface ResumeClaimRoutingOptions {
   ) => ForcedHandoffRefusalCause | null;
   /**
    * #4019: true only for the caller's own pre-created worktree (named by
-   * `--own-worktree`) when it is clean and has no commits beyond the base.
+   * `--own-worktree`) when it is clean and either has no commits beyond the
+   * base or sits at its branch's own pushed tip (#4067).
    * Consulted only for an `occupied` probe of a released claim's branch:
    * a path it accepts is dropped from the occupants, and a probe left with
    * no occupant counts as `absent`. An `unreadable` probe and a stale
@@ -396,7 +397,8 @@ export interface PristineOwnWorktreeCheck {
  *   reports as that worktree's own top level;
  * - its HEAD is `refs/heads/<branchName>`;
  * - `git status --porcelain --untracked-files=all` is empty;
- * - `origin/<base>` resolves, and `HEAD` has no commit beyond it.
+ * - either `HEAD` equals `refs/remotes/origin/<branchName>` (#4067), or
+ *   `origin/<base>` resolves and `HEAD` has no commit beyond it.
  */
 export function isPristineOwnWorktree(
   check: PristineOwnWorktreeCheck,
@@ -444,6 +446,24 @@ export function isPristineOwnWorktree(
   }
   if (git(['status', '--porcelain', '--untracked-files=all']) !== '') {
     return false;
+  }
+  // #4067: a released PR branch always carries pushed commits beyond the base,
+  // so a worktree at the branch's own pushed tip is accepted too. Nothing in it
+  // is unpublished. A missing ref falls through to the base check below.
+  const pushedTip = git([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    `refs/remotes/origin/${check.branchName}^{commit}`,
+  ])?.trim();
+  const headCommit = git([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    'HEAD^{commit}',
+  ])?.trim();
+  if (pushedTip && headCommit && pushedTip === headCommit) {
+    return true;
   }
   let baseRef: string;
   if (check.developmentBranch) {
@@ -1707,10 +1727,12 @@ function printHelp(): void {
                       pre-created worktree. When a released claim's branch is
                       occupied by exactly this path, and the worktree is on
                       that branch, clean (no tracked or untracked changes),
-                      and has no commits beyond origin/<developmentBranch>
-                      (origin/HEAD when the policy sets none), the gate
-                      ignores it. Any other occupant, or a failed check
-                      (including a missing or outdated origin/HEAD, or an
+                      and either has no commits beyond
+                      origin/<developmentBranch> (origin/HEAD when the policy
+                      sets none), or sits at its own pushed tip
+                      refs/remotes/origin/<branch> (#4067), the gate ignores
+                      it. Any other occupant, or a failed check (including a
+                      missing or outdated origin/HEAD on the base path, or an
                       invalid developmentBranch), still blocks. An empty
                       value is a usage error.
   --assert            exit 0 only when the verdict is state already_owned with
