@@ -5572,58 +5572,67 @@ export function summarizeAdvisoryWaitMarkers(
   };
 }
 /**
- * #4070: whether the cited suppressed items of the review the gate selects for
- * HEAD all carry a qualifying disposition. Mirrors the gate's
- * `citedDispositionsSatisfied` in advisory-convergence.mts (Clause 1's
- * suppressed branch) with the same inputs: the gate's selector
- * ({@link findLatestCopilotReviewIndex}), the suppressed count from
- * {@link classifyCopilotReviewBody}, the citation split from
- * {@link citationBreakdown}, and the disposition counter
- * {@link countCitedItemDispositions}. Returns `true` whenever the gate's pick
- * is not on HEAD, so an off-head outcome is never changed by this check.
+ * #4070 (option B, fail closed): whether every same-head primary-bot review is
+ * settled. The union covers all of them, not only the one a single selector
+ * picks. Returns `false` when any same-head review has a cited suppressed item
+ * (one that names a file or line) without a qualifying disposition, or when a
+ * same-head review body the default Copilot shapes cannot read sits next to the
+ * rest. An empty body is no content and is skipped, the way the gate skips a
+ * reply-only review. Off-head reviews never count here.
  *
- * REST input carries no GraphQL `replyOnly` flag, so the selector cannot drop
- * a reply-only review here the way the gate does. See the PR body for that
- * and the other selector divergences.
+ * This is deliberately stricter than the gate in one direction: a later clean
+ * same-head review does not clear an earlier uncovered item, which the gate
+ * (latest review only) would accept. REST input has no GraphQL `replyOnly`
+ * flag, so the union is the fail-closed substitute for that signal.
  */
-function citedDispositionsSatisfiedForHead({
+function sameHeadReviewsSettled({
   reviews,
   prHeadSha,
   primaryBotLogin,
   comments,
   trustedMarkerLogins,
 }) {
-  const selectable = reviews.map((review) => ({
-    author: {
+  const isDefaultCopilotBot =
+    primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  for (const review of reviews) {
+    const author = {
       login: review.user?.login ?? review.author?.login ?? '',
       __typename: review.user?.type ?? review.author?.type ?? null,
-    },
-    body: review.body ?? null,
-  }));
-  const index = findLatestCopilotReviewIndex(selectable, primaryBotLogin);
-  if (index < 0) {
-    return true;
+    };
+    const body = review.body ?? null;
+    const commitId = String(
+      review.commit_id ?? review.commitId ?? '',
+    ).toLowerCase();
+    if (
+      commitId !== prHeadSha ||
+      !isVerifiedCopilotAuthor(author, primaryBotLogin) ||
+      isCopilotErrorReviewBody(body)
+    ) {
+      continue;
+    }
+    const { shape, suppressedCount } = classifyCopilotReviewBody(body);
+    if (shape !== 'overview-v2' && shape !== 'overview-legacy') {
+      // A configured non-Copilot bot has no known shapes, so it is not judged
+      // here. For the default bot, an empty body is no content, and any other
+      // unreadable body disagrees with the recognized review (fail closed).
+      if (isDefaultCopilotBot && String(body ?? '').trim() !== '') {
+        return false;
+      }
+      continue;
+    }
+    if (suppressedCount === 0) {
+      continue;
+    }
+    const citation = citationBreakdown(body, suppressedCount);
+    const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
+    if (
+      countCitedItemDispositions(comments, trustedMarkerLogins, submittedAt) <
+      citation.citedCount
+    ) {
+      return false;
+    }
   }
-  const selected = reviews[index];
-  const commitId = String(
-    selected.commit_id ?? selected.commitId ?? '',
-  ).toLowerCase();
-  if (commitId !== prHeadSha) {
-    return true;
-  }
-  const body = selected.body ?? null;
-  const suppressedCount = classifyCopilotReviewBody(body).suppressedCount;
-  if (suppressedCount === 0) {
-    return true;
-  }
-  const citation = citationBreakdown(body, suppressedCount);
-  const submittedAt = String(
-    selected.submitted_at ?? selected.submittedAt ?? '',
-  );
-  return (
-    countCitedItemDispositions(comments, trustedMarkerLogins, submittedAt) >=
-    citation.citedCount
-  );
+  return true;
 }
 export function evaluateAdvisoryWaitOutcome(input) {
   const { requestCap, pendingWindowMinutes, settledWindowMinutes } =
@@ -5737,7 +5746,7 @@ export function buildAdvisoryWaitSummary(
     copilotPending,
     copilotPendingCoversHead,
     sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
-    citedDispositionsSatisfied: citedDispositionsSatisfiedForHead({
+    citedDispositionsSatisfied: sameHeadReviewsSettled({
       reviews,
       prHeadSha,
       primaryBotLogin,
