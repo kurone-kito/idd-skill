@@ -61,6 +61,9 @@ import {
 } from '../src/scripts/marker-helpers.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import {
+  buildAdvisoryWaitSummary,
+  evaluateAdvisoryWaitF3Outcome,
+  evaluateAdvisoryWaitOutcome,
   LIVE_STATUS_DIGEST_MARKER,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
@@ -9433,4 +9436,413 @@ test('createCopilotRequestCoverage: resolves the repository from the checkout wh
   } finally {
     restore();
   }
+});
+
+// --- 9g. Advisory-wait helper agrees with the gate on cited items (#4070) ---
+//
+// The advisory-wait helper's `outcome` and `f3Outcome` must not report
+// SATISFIED for a same-head review whose cited suppressed items the gate
+// rejects. These fixtures feed the helper and the gate the same review and
+// the same comments, so the two cannot drift apart unnoticed.
+
+function restCopilotReview(body: string, commitId: string = HEAD) {
+  return {
+    user: { login: COPILOT_LOGIN, type: 'Bot' },
+    body,
+    commit_id: commitId,
+    submitted_at: RECENT,
+  };
+}
+
+function helperSummary(
+  body: string,
+  comments: ReturnType<typeof citedDispositionComment>[],
+  reviewCommitId: string = HEAD,
+) {
+  return buildAdvisoryWaitSummary(
+    {
+      prHeadSha: HEAD,
+      reviews: [restCopilotReview(body, reviewCommitId)],
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments,
+    },
+    { now: NOW, trustedMarkerLogins: [TRUSTED] },
+  );
+}
+
+function gateVerdictFor(
+  body: string,
+  comments: ReturnType<typeof citedDispositionComment>[],
+  reviewCommitId: string = HEAD,
+) {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body, commitId: reviewCommitId }),
+      ],
+      comments,
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  return verdict;
+}
+
+const PARITY_CASES: {
+  label: string;
+  comments: ReturnType<typeof citedDispositionComment>[];
+}[] = [
+  { label: 'no reply to the cited item', comments: [] },
+  {
+    label: 'Rejected reply that names no file or line (the #4030 shape)',
+    comments: [
+      citedDispositionComment({
+        body: `**Rejected** — out of scope for this change.\n${STAMP}`,
+      }),
+    ],
+  },
+  {
+    label: 'Accepted reply posted before the review',
+    comments: [citedDispositionComment({ createdAt: '2026-07-01T00:00:00Z' })],
+  },
+  {
+    label: 'Accepted reply without the review-reply stamp',
+    comments: [
+      citedDispositionComment({ body: '**Accepted**: fixed in the PR.' }),
+    ],
+  },
+  {
+    label: 'Accepted reply with the review-reply stamp',
+    comments: [citedDispositionComment({})],
+  },
+  {
+    label: 'recorded-deferral reply with the review-reply stamp',
+    comments: [
+      citedDispositionComment({
+        body:
+          '**Rejected** — deferred to follow-up issue #3950 (review-fix-loop-cutoff): outside this change.\n' +
+          STAMP,
+      }),
+    ],
+  },
+  {
+    label: 'Rejected reply that names the file it rejects',
+    comments: [
+      citedDispositionComment({
+        body: `**Rejected** — intentional, see \`src/scripts/review-clause.mts:12\`.\n${STAMP}`,
+      }),
+    ],
+  },
+];
+
+for (const { label, comments } of PARITY_CASES) {
+  test(`cited-item parity (#4070): ${label} -> helper and gate agree`, () => {
+    const verdict = gateVerdictFor(CITED_PREVIOUSLY_MISSED_BODY, comments);
+    const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, comments);
+    const gateCited =
+      verdict.review.suppressedCitation.citedDispositionsSatisfied;
+    assert.equal(summary.outcome === 'DISPOSITION_NEEDED', !gateCited);
+    assert.equal(summary.f3Outcome === 'DISPOSITION_NEEDED', !gateCited);
+    assert.equal(summary.outcome === 'SATISFIED', verdict.converged);
+    assert.equal(summary.f3Outcome === 'SATISFIED', verdict.converged);
+  });
+}
+
+test('cited-item (#4070): a same-head cited item with no reply reports DISPOSITION_NEEDED on outcome and f3Outcome, not SATISFIED', () => {
+  const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, []);
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('cited-item (#4070): a same-head cited item with a qualifying reply still reports SATISFIED on both fields', () => {
+  const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, [
+    citedDispositionComment({}),
+  ]);
+  assert.equal(summary.outcome, 'SATISFIED');
+  assert.equal(summary.f3Outcome, 'SATISFIED');
+});
+
+test('cited-item (#4070): an off-head review with an uncovered cited item never reports DISPOSITION_NEEDED', () => {
+  const summary = helperSummary(CITED_PREVIOUSLY_MISSED_BODY, [], OTHER_SHA);
+  assert.notEqual(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.notEqual(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('cited-item (#4070): the evaluators route a same-head uncovered item to DISPOSITION_NEEDED and leave the flag-less default alone', () => {
+  const sameHead = {
+    lastCopilotCommit: HEAD,
+    prHeadSha: HEAD,
+    copilotPending: false,
+    sameHeadMarkerPresent: false,
+    requestMarkerCount: 0,
+    elapsedMinutes: 0,
+  };
+  assert.equal(
+    evaluateAdvisoryWaitOutcome({
+      ...sameHead,
+      citedDispositionsSatisfied: false,
+    }),
+    'DISPOSITION_NEEDED',
+  );
+  assert.equal(
+    evaluateAdvisoryWaitF3Outcome({
+      ...sameHead,
+      citedDispositionsSatisfied: false,
+    }),
+    'DISPOSITION_NEEDED',
+  );
+  assert.equal(evaluateAdvisoryWaitOutcome(sameHead), 'SATISFIED');
+  assert.equal(evaluateAdvisoryWaitF3Outcome(sameHead), 'SATISFIED');
+  const offHead = {
+    ...sameHead,
+    lastCopilotCommit: OTHER_SHA,
+    citedDispositionsSatisfied: false,
+  };
+  assert.notEqual(evaluateAdvisoryWaitOutcome(offHead), 'DISPOSITION_NEEDED');
+  assert.notEqual(evaluateAdvisoryWaitF3Outcome(offHead), 'DISPOSITION_NEEDED');
+});
+
+// --- 9h. Same-head union, fail closed (#4070, option B) ----------------------
+//
+// Every same-head review counts, not only the one a single selector picks. An
+// uncovered cited item in any of them blocks SATISFIED, and so does a same-head
+// review body the helper cannot read next to a recognized one.
+
+const LATER_SAME_HEAD_REVIEW = '2026-07-11T11:00:00Z';
+
+function helperSummaryFor(
+  reviews: ReturnType<typeof restCopilotReview>[],
+  comments: ReturnType<typeof citedDispositionComment>[] = [],
+) {
+  return buildAdvisoryWaitSummary(
+    {
+      prHeadSha: HEAD,
+      reviews,
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments,
+    },
+    { now: NOW, trustedMarkerLogins: [TRUSTED] },
+  );
+}
+
+test('union (#4070): a later reply-only same-head review does not clear an earlier uncovered cited item (Codex P1 on #4082)', () => {
+  const summary = helperSummaryFor([
+    restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+    { ...restCopilotReview('', HEAD), submitted_at: LATER_SAME_HEAD_REVIEW },
+  ]);
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
+  // The gate excludes the reply-only review and still fails the cited item.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          itemCount: 0,
+          body: CITED_PREVIOUSLY_MISSED_BODY,
+          commitId: HEAD,
+        }),
+        copilotReview({
+          itemCount: 0,
+          body: '',
+          commitId: HEAD,
+          submittedAt: LATER_SAME_HEAD_REVIEW,
+          replyOnly: true,
+        }),
+      ],
+      comments: [],
+    }),
+    baseOptions(),
+  );
+  assert.equal(
+    verdict.review.suppressedCitation.citedDispositionsSatisfied,
+    false,
+  );
+});
+
+test('union (#4070): a later clean same-head review does not clear an earlier uncovered cited item', () => {
+  const summary = helperSummaryFor([
+    restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+    {
+      ...restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+      submitted_at: LATER_SAME_HEAD_REVIEW,
+    },
+  ]);
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+});
+
+test('union (#4070): an earlier cited item answered by a stamped reply, then a later clean same-head review, still reports SATISFIED', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [citedDispositionComment({})],
+  );
+  assert.equal(summary.outcome, 'SATISFIED');
+  assert.equal(summary.f3Outcome, 'SATISFIED');
+});
+
+test('union (#4070): a same-head review whose body the helper cannot read disagrees with a recognized one, so it is not SATISFIED', () => {
+  const summary = helperSummaryFor([
+    restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+    {
+      ...restCopilotReview('Copilot could not review this pull request.', HEAD),
+      submitted_at: LATER_SAME_HEAD_REVIEW,
+    },
+  ]);
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('union (#4070, fail closed): an empty-body same-head review blocks as unreadable, and a trusted review-ack for the head clears it', () => {
+  const blocked = helperSummaryFor([
+    restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+    {
+      ...restCopilotReview('', HEAD),
+      submitted_at: LATER_SAME_HEAD_REVIEW,
+    },
+  ]);
+  assert.equal(blocked.outcome, 'DISPOSITION_NEEDED');
+  const cleared = helperSummaryFor(
+    [
+      restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+      {
+        ...restCopilotReview('', HEAD),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [
+      {
+        author: { login: TRUSTED },
+        body: `review-ack: ${AGENT_ID} ${HEAD} 2026-07-11T11:30:00Z`,
+        createdAt: '2026-07-11T11:30:00Z',
+        lastEditedAt: null,
+      },
+    ],
+  );
+  assert.equal(cleared.outcome, 'SATISFIED');
+});
+
+test('union (#4070): a reply posted before a later cited review cannot answer it, so two replies after the first review do not settle both (Codex P1 on #4082)', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: '2026-07-11T11:00:00Z',
+      },
+    ],
+    [
+      citedDispositionComment({ createdAt: '2026-07-11T10:30:00Z' }),
+      citedDispositionComment({ createdAt: '2026-07-11T10:40:00Z' }),
+    ],
+  );
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+});
+
+test('union (#4070): one reply for the first review and one posted after the later review settle both', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: '2026-07-11T11:00:00Z',
+      },
+    ],
+    [
+      citedDispositionComment({ createdAt: '2026-07-11T10:30:00Z' }),
+      citedDispositionComment({ createdAt: '2026-07-11T11:30:00Z' }),
+    ],
+  );
+  assert.equal(summary.outcome, 'SATISFIED');
+});
+
+// --- 9i. Same-head union: one reply answers one item (#4070, round 3) -------
+
+test('union (#4070): two same-head reviews with one cited item each, answered by one reply posted after both, do not settle (Codex P1 on #4082)', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [citedDispositionComment({ createdAt: '2026-07-11T11:30:00Z' })],
+  );
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('union (#4070): two cited items across two same-head reviews, answered by two replies posted after the later review, settle', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [
+      citedDispositionComment({ createdAt: '2026-07-11T11:30:00Z' }),
+      citedDispositionComment({ createdAt: '2026-07-11T11:31:00Z' }),
+    ],
+  );
+  assert.equal(summary.outcome, 'SATISFIED');
+});
+
+test('union (#4070): an unreadable same-head review that a trusted review-ack for the head follows is settled, as the gate clears it', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+      {
+        ...restCopilotReview(
+          'Copilot could not review this pull request.',
+          HEAD,
+        ),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [
+      {
+        author: { login: TRUSTED },
+        body: `review-ack: ${AGENT_ID} ${HEAD} 2026-07-11T11:30:00Z`,
+        createdAt: '2026-07-11T11:30:00Z',
+        lastEditedAt: null,
+      },
+    ],
+  );
+  assert.equal(summary.outcome, 'SATISFIED');
+});
+
+// --- 9j. An unreadable same-head review alone routes to the disposition step
+// (#4070, rp1kz): no recognized review is left to select, so before this change
+// the evaluator fell through to REQUEST_NEEDED.
+
+test('unreadable only (#4070, rp1kz): one same-head review with an unreadable body reports DISPOSITION_NEEDED, not REQUEST_NEEDED', () => {
+  const summary = helperSummaryFor([
+    restCopilotReview('Copilot could not review this pull request.', HEAD),
+  ]);
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('unreadable only (#4070, rp1kz): a trusted review-ack for the head after it clears the route', () => {
+  const summary = helperSummaryFor(
+    [restCopilotReview('Copilot could not review this pull request.', HEAD)],
+    [
+      {
+        author: { login: TRUSTED },
+        body: `review-ack: ${AGENT_ID} ${HEAD} 2026-07-11T11:30:00Z`,
+        createdAt: '2026-07-11T11:30:00Z',
+        lastEditedAt: null,
+      },
+    ],
+  );
+  assert.notEqual(summary.outcome, 'DISPOSITION_NEEDED');
 });
