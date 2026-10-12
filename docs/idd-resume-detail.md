@@ -1182,33 +1182,34 @@ succeeded.
    early assert can report a false failure while the markers are still
    propagating.
 
-A failure after the POSTs in steps 3 and 4 leaves a live claim. The next
-action depends on how far the sequence got.
+A failure after the POSTs may leave a live claim, so never answer it by
+repeating a POST blind. Re-read the issue comments first, paginated, and apply
+the claim verification rules in `idd-claim.instructions.md`.
 
-- Step 5 fails: no linked worktree was attached. Do not wait for the claim to
-  go stale. Release your own pair first:
+- Step 3 or 4 exited nonzero. A `claimed-by` (step 3) or activation-nonce
+  (step 4) marker with your `{claim-id}` means the POST landed, even when the
+  command failed after GitHub accepted it. Continue from the next step. With
+  no such marker, nothing was posted: restart from step 1.
+- Steps 5 to 8 failed. Before any release or retry, confirm that the active
+  claim is your `{claim-id}` and that the activation nonce is yours. If that
+  proof does not hold, stop and report without posting a release.
+- Step 5 failed, and the proof holds. No linked worktree was attached, so
+  release your own pair, then restart from step 1:
 
   ```sh
   node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
     --agent-id <id> --claim-id <id> --timestamp <ISO8601> --apply
   ```
 
-  The release is safe because you provably hold the pair, the same reasoning
-  as the release-then-fresh rule in `idd-claim.instructions.md`. Then restart
-  from step 1. A local branch that the script already created is attached
-  again on the restart, because the script attaches a local branch that equals
+  A local branch that the script already created is attached again on the
+  restart, because the script attaches a local branch that equals
   `origin/<branch>`. A local ref that differs fails the same check on every
   restart, so resolve that ref first.
-- Step 6 fails with an infrastructure error: the linked worktree exists and
-  the claim is yours. Revalidate the claim, then repeat step 6. Do not
-  restart from step 1, because the existing worktree blocks the no-worktree
-  gate.
-- Step 7 or 8 returns a verdict other than success: the claim is contested or
-  lost. Do not repeat the step. Revalidate the claim and the lock, then stop
-  and report to the operator. Post no new claim from this sequence; the
-  claim-verification rules in `idd-claim.instructions.md` govern what follows.
-  Retry only an infrastructure error, and only after the claim is confirmed as
-  yours.
+- Step 6 failed with an infrastructure error, and the proof holds. The linked
+  worktree exists, so do not release or restart from step 1, because the
+  worktree blocks the no-worktree gate. Repeat step 6.
+- Step 7 or 8 returned a contested verdict. Stop and report, as steps 7 and 8
+  require.
 
-The claim comes before the attach because #4071's decided sequence orders
-them that way.
+The claim comes before the attach because #4071's decided sequence orders them
+that way.
