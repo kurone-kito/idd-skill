@@ -268,9 +268,11 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
-`--agent-id {agent-id} --claim-id {claim-id}`; `--assert` takes
-`--claim-id {claim-id} --nonce {nonce}`. Resolve the commands as A5(a) does.
+Fresh-claim order, worktree first. Fresh branches only; for an inheritable
+branch, follow [Re-claim an inheritable branch](../../docs/idd-resume-detail.md#re-claim-an-inheritable-branch).
+`--record-tokens` and `--acquire` take `--agent-id {agent-id}
+--claim-id {claim-id}`; `--assert` takes `--claim-id {claim-id}
+--nonce {nonce}`. Resolve the commands as A5(a) does.
 
 1. Create the worktree and branch: `git worktree add --no-track <path> -b
    <branch-name> origin/{development-branch}` (fresh-claim row of

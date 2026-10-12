@@ -4416,8 +4416,9 @@ still fails closed:
   generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
   marker (the B1 worktree does not exist yet, so `<path>` is then the
   _primary_ worktree); on the worktree-first fresh path (no inheritable
-  branch), `idd-claim` step 2 creates the linked worktree before the claim,
-  so `<path>` is that linked worktree and the B1 write below does not apply;
+  branch), the fresh-branch worktree-creation step creates the linked
+  worktree before the claim, so `<path>` is that linked worktree and the B1
+  write below does not apply;
   again with `--nonce` right before posting the activation-nonce marker; a
   third time at B1 once the sibling worktree exists, again with `--nonce`
   carried over from the A5 write --
