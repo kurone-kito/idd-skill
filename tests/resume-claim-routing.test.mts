@@ -6405,6 +6405,38 @@ test('--own-worktree (#4019): an invalid developmentBranch keeps the block', () 
   }
 });
 
+// #4059: the own-worktree base is read from refs/remotes/origin/HEAD. With
+// that ref gone the check must fail closed, so the occupant keeps blocking.
+// Copilot flagged this path as untested on #4043.
+test('--own-worktree (#4059): a missing origin/HEAD fails closed without a developmentBranch', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    const read = sandbox.gate(['--own-worktree', sandbox.own]);
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(read.output.fresh_claim_gate.verdict, 'claimable');
+    assert.equal(read.output.fresh_claim_gate.winning_claim_id, null);
+
+    // Remove the base ref from the sandbox clone only. fixtureEnv() strips
+    // GIT_DIR, so the real repository's origin/HEAD is never touched.
+    execFileSync('git', ['remote', 'set-head', 'origin', '-d'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    const baseRef = spawnSync(
+      'git',
+      ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/HEAD'],
+      { cwd: sandbox.primary, env: sandbox.gitEnv },
+    );
+    assert.notEqual(baseRef.status, 0, 'origin/HEAD must be removed');
+
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
 test('--own-worktree (#4019) with an empty value is a usage error', () => {
   const result = spawnSync(
     process.execPath,
