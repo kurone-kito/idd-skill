@@ -5373,7 +5373,7 @@ export function collectAssertNextActions(
     verdict.review.suppressedCitation;
   if (citedCount > 0 && !citedDispositionsSatisfied) {
     const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --apply`;
-    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. Post it with: ${pointer}`;
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. A cited item outside a Previously missed section (a legacy Suppressed comments body has none) has no helper path: report it to the operator and do not answer it with a direct PR comment. Post it with: ${pointer}`;
     items.push({
       token: T.STAMPED_DISPOSITION_SUPPRESSED,
       summary,
@@ -5457,7 +5457,6 @@ export function collectAssertNextActions(
 const STAMPED_DISPOSITION_GUIDANCE: readonly string[] = [
   'For a PR with no linked issue, replace --claim-issue <claim-issue> --claim-id <claim-id> with --claimless (#2616).',
   'For a cited title that repeats within one review, add --item-index <n> immediately before --apply.',
-  'A cited item outside the Previously missed section has no helper path: report it to the operator and do not answer it with a direct PR comment.',
 ];
 
 /**
