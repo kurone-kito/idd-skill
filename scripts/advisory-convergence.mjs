@@ -78,14 +78,17 @@
 // this file now runs through `runAdvisoryConvergenceWithPoll` instead of
 // `runAdvisoryConvergence` directly: when (and ONLY when) the verdict's
 // sole blocking reason is that the primary bot has not reviewed the PR AT
-// ALL yet (`isSoleCopilotNotReviewedYetReason` -- excludes a stale-HEAD
-// review, unresolved threads, an indeterminate claim scope, or any other
-// reason, all of which still fail immediately with no wait, exactly as
-// before), it polls a short, bounded window (every
+// ALL yet (`isSoleCopilotNotReviewedYetReason`), or is a stale head whose
+// Copilot re-review was requested after the head commit (#3944,
+// `isSoleStaleHeadCopilotReviewReason` plus the timeline check), it polls a
+// bounded window (every
 // `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, up to
-// `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS` total, wall-clock bounded --
-// see `runAdvisoryConvergenceWithPoll`'s own doc comment) before its real
-// assert-driven exit. This changes nothing about `--assert`'s exit-code
+// `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS` total, 10 minutes since #3944,
+// wall-clock bounded -- see `runAdvisoryConvergenceWithPoll`'s own doc
+// comment) before its real assert-driven exit. Any other reason, including a
+// stale head with no re-review request, an unresolved thread, an
+// indeterminate claim scope, or an extra blocking reason, still fails
+// immediately with no wait, exactly as before. This changes nothing about `--assert`'s exit-code
 // contract, roadmap #1342's deterministic-convergence policy, or this
 // check's required/fail-closed/non-bypassable nature: if the review still
 // has not landed by the end of the window, or lands with outstanding
@@ -150,6 +153,7 @@ import {
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   classifyPrLoopMembership,
+  computeCopilotPendingCoversHead,
   filterTrustedClaimFamilyEvents,
   hasTrustedReviewAckAfter,
   indexLatestGatingReviewsByAuthor,
@@ -2304,8 +2308,10 @@ export function runAdvisoryConvergence(argv, deps = defaultDeps) {
  * check would fail is '{bot} has not reviewed this pull request yet' --
  * not on any other failure reason"), not an accidental scope gap: a later
  * push invalidating an earlier review is a different race with a different
- * reason string, and is intentionally left to fail immediately with no
- * wait, same as every other not-ready reason.
+ * reason string. #3944 reverses that for one case only: a stale head whose
+ * re-review was requested after the head commit now polls, through
+ * {@link isSoleStaleHeadCopilotReviewReason}. Any other stale-head shape still
+ * fails at once, as does a push whose re-review was never requested.
  *
  * `reasons.length === 1` is defense-in-depth, not redundant with the
  * `pending`/`review.found` pair: an unusually short configured deadline
@@ -2322,13 +2328,32 @@ export function isSoleCopilotNotReviewedYetReason(verdict) {
       `${verdict.primaryBotLogin} has not reviewed this pull request yet`
   );
 }
+/**
+ * #3944: `true` only for a stale-head verdict whose sole reason is that the
+ * primary bot's latest review targets an older commit than the current HEAD.
+ * On its own this does not justify a poll: {@link runAdvisoryConvergenceWithPoll}
+ * also needs a Copilot `review_requested` event recorded after the head commit,
+ * so a head nobody asked Copilot to review still fails at once.
+ */
+export function isSoleStaleHeadCopilotReviewReason(verdict) {
+  return (
+    verdict.pending &&
+    verdict.review.found &&
+    !verdict.review.matchesHead &&
+    verdict.reasons.length === 1 &&
+    verdict.reasons[0] ===
+      `latest ${verdict.primaryBotLogin} review (commit ${verdict.review.commitId || '<unknown>'}) does not cover current HEAD ${verdict.prHeadSha}`
+  );
+}
 /** Poll interval for {@link runAdvisoryConvergenceWithPoll}'s bounded wait
  * (#2015), within the issue's suggested 5-10s cadence. */
 export const DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS = 7_500;
 /** Total bounded wait budget, across all poll attempts, for
- * {@link runAdvisoryConvergenceWithPoll} (#2015) -- the issue's suggested
- * ~60s ceiling. */
-export const DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS = 60_000;
+ * {@link runAdvisoryConvergenceWithPoll}. #2015 set ~60 s, which is too short
+ * for a re-review of a new head: #3944 measured 3 to 7 minutes from the
+ * request to Copilot's review, so the ceiling is 10 minutes. The job's
+ * `timeout-minutes` is raised to match, and stays under the runner's limit. */
+export const DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS = 600_000;
 const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
 /**
  * Resolve the configured Copilot-review bounded-poll interval/ceiling
@@ -2551,6 +2576,49 @@ export function createPendingReviewWatch(
 export const watchPendingReviewFromGitHub = createPendingReviewWatch();
 defaultDeps.watchPendingReview = watchPendingReviewFromGitHub;
 /**
+ * #3944: production answer to "has a Copilot re-review of this head been
+ * requested after the head commit?", read from the PR timeline with the same
+ * check the advisory-wait path uses. Fails closed: an unresolvable repository,
+ * a failed read, or a missing head yields `false`, which keeps the immediate
+ * stale-head failure.
+ */
+export function createCopilotRequestCoverage(
+  resolveRepository = resolveCurrentGithubRepository,
+) {
+  let resolved = null;
+  return (argv, prHeadSha, primaryBotLogin) => {
+    try {
+      const args = parseArgs(argv);
+      if (!args.prNumber || !prHeadSha) return false;
+      let currentRepo = resolved;
+      if (!(args.owner && args.repo) && currentRepo === null) {
+        currentRepo = resolveRepository();
+        if (currentRepo.owner && currentRepo.repo) resolved = currentRepo;
+      }
+      const owner = args.owner || currentRepo?.owner || '';
+      const repo = args.repo || currentRepo?.repo || '';
+      if (!owner || !repo) return false;
+      const port = createGithubProviderAdapter(owner, repo);
+      const timeline = port.getWorkItemTimeline(Number(args.prNumber));
+      return computeCopilotPendingCoversHead(
+        timeline,
+        prHeadSha,
+        primaryBotLogin,
+      );
+    } catch {
+      return false;
+    }
+  };
+}
+defaultDeps.copilotReviewRequestCoversHead = createCopilotRequestCoverage();
+/**
+ * #3944: the same poll also covers a stale head whose Copilot re-review was
+ * requested after the head commit ({@link isSoleStaleHeadCopilotReviewReason}
+ * plus `deps.copilotReviewRequestCoversHead`, read once per observed head and
+ * only for that verdict shape). A stale head with no such request, or with any
+ * other blocking reason, still fails on the first pass. A review that never
+ * lands still fails at the ceiling.
+ *
  * #2015: wraps {@link runAdvisoryConvergence} with a short, bounded poll
  * for the narrow case {@link isSoleCopilotNotReviewedYetReason} identifies
  * -- absorbing the common race where the `pull_request`/`pull_request_target`
@@ -2648,11 +2716,26 @@ export function runAdvisoryConvergenceWithPoll(
     },
   };
   let result = runAdvisoryConvergence(argv, collectingDeps);
-  if (
-    result.exitCode !== 0 &&
-    result.verdict &&
-    isSoleCopilotNotReviewedYetReason(result.verdict)
-  ) {
+  // #3944: the timeline is read once per head, and only for a stale-head
+  // verdict. Any other not-ready shape never reaches the read.
+  let requestCover = null;
+  const pollable = (verdict) => {
+    if (isSoleCopilotNotReviewedYetReason(verdict)) return true;
+    if (!isSoleStaleHeadCopilotReviewReason(verdict)) return false;
+    if (requestCover === null || requestCover.head !== verdict.prHeadSha) {
+      requestCover = {
+        head: verdict.prHeadSha,
+        covers:
+          deps.copilotReviewRequestCoversHead?.(
+            argv,
+            verdict.prHeadSha,
+            verdict.primaryBotLogin,
+          ) ?? false,
+      };
+    }
+    return requestCover.covers;
+  };
+  if (result.exitCode !== 0 && result.verdict && pollable(result.verdict)) {
     const pollIntervalMs = positiveMsOrDefault(
       pollOptions.pollIntervalMs,
       DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
@@ -2667,9 +2750,7 @@ export function runAdvisoryConvergenceWithPoll(
     let fingerprint = null;
     let watchBaselineOk = false;
     const solePending = () =>
-      result.exitCode !== 0 &&
-      !!result.verdict &&
-      isSoleCopilotNotReviewedYetReason(result.verdict);
+      result.exitCode !== 0 && !!result.verdict && pollable(result.verdict);
     // Re-anchor after every still-pending verdict. A watch that names a
     // different HEAD, or reviews the verdict missed, must not become the
     // unchanged baseline. Once the deadline has passed, do not start the

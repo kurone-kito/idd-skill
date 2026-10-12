@@ -6340,6 +6340,18 @@ reflexively as any other CLI option.
   `convergenceScope` value for this. Do not register
   `idd-advisory-convergence` as a required check unless the policy
   actually wants an advisory-bot gate.
+- **Bounded re-review poll for a new head (`#3944`)**: a stale head,
+  where the primary bot's latest review targets an older commit, polls
+  under the same ceiling, but only when the verdict's sole reason is that
+  stale-coverage reason and a Copilot `review_requested` event is recorded
+  after the head commit (`computeCopilotPendingCoversHead`). A stale head
+  with no such request, or with any other blocking reason, still fails at
+  once, as before. The timeline is read once per observed head and only for
+  this verdict shape. Each poll tick adds the same watch call as the `#2015`
+  poll. The workflow runs with `cancel-in-progress: true`, so a later push
+  or trigger can cancel a long poll; the next run then re-evaluates the new
+  head. The `idd-advisory-convergence` job has `timeout-minutes: 14`, which
+  stays under the runner's 15-minute limit.
 - **Bounded "not reviewed yet" poll (`#2015`)**: the CLI entry point runs
   through `runAdvisoryConvergenceWithPoll`, not `runAdvisoryConvergence`
   directly. When (and only when) the verdict's sole blocking reason is
@@ -6347,7 +6359,8 @@ reflexively as any other CLI option.
   bot has never reviewed the PR at all yet, not merely an off-HEAD review —
   it polls a short, bounded window (every
   `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, default 7.5s, up to
-  `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS`, default 60s) before its real
+  `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS`, default 10 minutes (`#3944`;
+  it was 60 s) before its real
   `--assert`-driven exit, absorbing the common race where the hosting
   workflow's `pull_request`/`pull_request_target` `synchronize` trigger
   fires before the primary bot's own review has landed. (Through
