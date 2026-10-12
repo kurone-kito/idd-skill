@@ -14,7 +14,7 @@
 // branch cannot relax its own budget. The check never pushes and never moves a
 // branch or a remote ref. A branch that is not behind is a no-op.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
@@ -31,14 +31,15 @@ const GIT_IDENTITY = [
   '-c',
   'user.email=idd-trial-budget@invalid',
 ];
-function git(cwd, args) {
+/** The default runner, a plain `git -C <cwd>` spawn with no extra config. */
+export const defaultGitRunner = (cwd, args) => {
   const result = spawnSync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
   });
   return { status: result.status ?? 1, stdout: result.stdout ?? '' };
-}
-function resolveCommit(cwd, ref) {
-  const result = git(cwd, [
+};
+function resolveCommit(runGit, cwd, ref) {
+  const result = runGit(cwd, [
     'rev-parse',
     '--verify',
     '--quiet',
@@ -47,23 +48,15 @@ function resolveCommit(cwd, ref) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 /**
- * Unregister a scratch worktree. It removes only the worktree that this check
- * created, never a branch or ref, and leaves the scratch directory to the
- * caller so that a second worktree is not deleted under the first.
- */
-function removeWorktree(repo, path) {
-  git(repo, ['worktree', 'remove', '--force', path]);
-  git(repo, ['worktree', 'prune']);
-}
-/**
  * Run the trial-merge budget check for the repository at `cwd`. `base` names
  * the base tip the branch is compared with (default `origin/main`).
  */
 export function runPrePushTrialBudget(options) {
   const repo = options.cwd;
   const base = options.base ?? DEFAULT_BASE;
-  const headSha = resolveCommit(repo, 'HEAD');
-  const baseSha = resolveCommit(repo, base);
+  const runGit = options.runGit ?? defaultGitRunner;
+  const headSha = resolveCommit(runGit, repo, 'HEAD');
+  const baseSha = resolveCommit(runGit, repo, base);
   const fail = (outcome, behind) => ({
     outcome,
     behind,
@@ -75,30 +68,38 @@ export function runPrePushTrialBudget(options) {
     return fail('unresolved-ref', false);
   }
   if (
-    git(repo, ['merge-base', '--is-ancestor', baseSha, headSha]).status === 0
+    runGit(repo, ['merge-base', '--is-ancestor', baseSha, headSha]).status === 0
   ) {
     return fail('not-behind', false);
   }
   const scratch = mkdtempSync(join(tmpdir(), 'idd-pre-push-trial-'));
   const trialTree = join(scratch, 'trial');
   const baseTooling = join(scratch, 'base');
+  // An empty hooks directory, so no post-checkout or merge hook of the host
+  // runs during the scratch operations (as the trial-merge helper does).
+  const hooksOff = join(scratch, 'hooks');
+  mkdirSync(hooksOff);
+  const noHooks = [`-c`, `core.hooksPath=${hooksOff}`];
+  const gitScratch = (cwd, args) => runGit(cwd, [...noHooks, ...args]);
+  // Each worktree is recorded before its status is checked, so a worktree that
+  // a failed add still created is removed by the cleanup below.
   const created = [];
   try {
-    if (
-      git(repo, ['worktree', 'add', '--detach', trialTree, headSha]).status !==
-      0
-    ) {
-      return fail('worktree-failed', true);
-    }
     created.push(trialTree);
     if (
-      git(repo, ['worktree', 'add', '--detach', baseTooling, baseSha])
+      gitScratch(repo, ['worktree', 'add', '--detach', trialTree, headSha])
         .status !== 0
     ) {
       return fail('worktree-failed', true);
     }
     created.push(baseTooling);
-    const merged = git(trialTree, [
+    if (
+      gitScratch(repo, ['worktree', 'add', '--detach', baseTooling, baseSha])
+        .status !== 0
+    ) {
+      return fail('worktree-failed', true);
+    }
+    const merged = gitScratch(trialTree, [
       ...GIT_IDENTITY,
       'merge',
       '--no-edit',
@@ -106,7 +107,7 @@ export function runPrePushTrialBudget(options) {
       baseSha,
     ]);
     if (merged.status !== 0) {
-      git(trialTree, ['merge', '--abort']);
+      gitScratch(trialTree, ['merge', '--abort']);
       return fail('merge-conflict', true);
     }
     const audit = spawnSync(
@@ -117,7 +118,9 @@ export function runPrePushTrialBudget(options) {
     return fail(audit.status === 0 ? 'pass' : 'fail', true);
   } finally {
     for (const path of created.reverse()) {
-      removeWorktree(repo, path);
+      // Only the worktree this check created is unregistered. No branch or
+      // ref is touched, and `prune` is not run because it is repository-wide.
+      gitScratch(repo, ['worktree', 'remove', '--force', path]);
     }
     rmSync(scratch, { recursive: true, force: true });
   }

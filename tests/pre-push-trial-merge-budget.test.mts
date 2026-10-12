@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -11,7 +12,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { runPrePushTrialBudget } from '../src/scripts/pre-push-trial-budget.mts';
+import {
+  defaultGitRunner,
+  type GitRunner,
+  runPrePushTrialBudget,
+} from '../src/scripts/pre-push-trial-budget.mts';
 
 // A stub audit-docs that passes while budget.txt says `ok`. The base tip's copy
 // is what the trial runs, so a breach that only the merged tree carries fails.
@@ -159,8 +164,22 @@ test('the check never pushes or moves a branch or remote ref (#4010)', (t) => {
     worktrees: git(f.work, ['worktree', 'list', '--porcelain']),
   };
 
-  runPrePushTrialBudget({ cwd: f.work });
+  // Record every git invocation, so the absence of a push is observed rather
+  // than inferred from unchanged refs (an attempted push can also leave refs as
+  // they were).
+  const calls: string[][] = [];
+  const recording: GitRunner = (cwd, args) => {
+    calls.push([...args]);
+    return defaultGitRunner(cwd, args);
+  };
+  runPrePushTrialBudget({ cwd: f.work, runGit: recording });
 
+  assert.ok(calls.length > 0, 'the check ran git');
+  assert.equal(
+    calls.some((args) => args.includes('push')),
+    false,
+    'no git invocation pushes',
+  );
   assert.equal(git(f.work, ['rev-parse', 'HEAD']), before.head);
   assert.equal(git(f.work, ['rev-parse', 'origin/main']), before.base);
   assert.equal(
@@ -184,4 +203,22 @@ test('an unresolvable base fails closed (#4010)', (t) => {
   assert.equal(result.outcome, 'unresolved-ref');
   assert.equal(result.exitCode, 1);
   assert.equal(readFileSync(join(f.work, 'budget.txt'), 'utf8'), 'ok\n');
+});
+
+test('a host post-checkout hook does not run during the scratch operations (#4010)', {
+  skip: process.platform === 'win32',
+}, (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'budget.txt', 'over\n');
+  const marker = join(f.root, 'hook-ran');
+  const hook = join(f.work, '.git', 'hooks', 'post-checkout');
+  writeFileSync(hook, `#!/bin/sh\necho ran > "${marker}"\nexit 1\n`, {
+    mode: 0o755,
+  });
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+
+  assert.equal(existsSync(marker), false, 'the host hook did not run');
+  assert.equal(result.outcome, 'fail');
 });
