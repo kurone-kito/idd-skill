@@ -4247,8 +4247,11 @@ export function collectAssertNextActions(verdict) {
   const { citedCount, citationFreeCount, citedDispositionsSatisfied } =
     verdict.review.suppressedCitation;
   if (citedCount > 0 && !citedDispositionsSatisfied) {
-    const pointer = `gh pr comment ${pr} --body-file <file>`;
-    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. Post it with: ${pointer}`;
+    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --apply`;
+    // --review-id takes the numeric REST id; the verdict carries the GraphQL
+    // node id, so the summary gives the lookup that maps one to the other.
+    const reviewNodeId = verdict.review.reviewId ?? '<review-node-id>';
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. A cited item outside a Previously missed section (a legacy Suppressed comments body has none) has no helper path: report it to the operator and do not answer it with a direct PR comment. The <review-id> is the numeric REST id of review ${reviewNodeId}; find it with gh api repos/<owner>/<repo>/pulls/${pr}/reviews --paginate --jq '.[] | select(.node_id == "${reviewNodeId}") | .id'. Post it with: ${pointer}`;
     items.push({
       token: T.STAMPED_DISPOSITION_SUPPRESSED,
       summary,
@@ -4320,6 +4323,17 @@ export function collectAssertNextActions(verdict) {
   return items;
 }
 /**
+ * Lines printed under the stamped-disposition next action (#4063). The flag
+ * lines refine the pointer and exist only here. The last line repeats the
+ * summary's no-helper-path rule for text readers. The structured `summary`
+ * stays one line by contract, so the rule must also live in it.
+ */
+const STAMPED_DISPOSITION_GUIDANCE = [
+  'For a PR with no linked issue, replace --claim-issue <claim-issue> --claim-id <claim-id> with --claimless (#2616).',
+  'For a cited title that repeats within one review, add --item-index <n> immediately before --apply.',
+  'A cited item outside a Previously missed section has no helper path: report it to the operator and do not answer it with a direct PR comment.',
+];
+/**
  * Compact next-action guidance for a non-ready `--assert` verdict (#2142).
  * Formats {@link collectAssertNextActions}; does not read
  * `verdict.nextActions`, so a spread-mutated verdict stays consistent
@@ -4336,6 +4350,16 @@ export function formatAssertNextActions(verdict) {
     if (item.pointer.includes('\n')) {
       for (const extra of item.pointer.split('\n')) {
         lines.push(`  ${extra}`);
+      }
+    }
+    // #4063: the flag guidance is text-only, so the structured summary stays
+    // one line. It follows the pointer's line, which ends with the pointer.
+    if (
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED
+    ) {
+      for (const guidance of STAMPED_DISPOSITION_GUIDANCE) {
+        lines.push(`  ${guidance}`);
       }
     }
   }

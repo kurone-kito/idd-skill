@@ -8969,6 +8969,67 @@ test('stamped disposition (#4007): cited-only items name the stamped reply, not 
   assert.doesNotMatch(text, /--type review-ack/);
 });
 
+test('stamped disposition (#4063): the pointer names the body-item helper and the guidance follows on its own lines', () => {
+  const { verdict, items, text } = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY);
+  const item = items.find(
+    (entry) => entry.token === 'stamped-disposition-suppressed',
+  );
+  assert.ok(item);
+  assert.match(item.pointer, /^node scripts\/resolve-review-thread\.mjs /);
+  for (const flag of [
+    '--pr',
+    '--review-id',
+    '--item-title',
+    '--body',
+    '--claim-issue',
+    '--claim-id',
+    '--apply',
+  ]) {
+    assert.ok(item.pointer.includes(flag), flag);
+  }
+  assert.doesNotMatch(item.pointer, /gh pr comment/);
+  assert.doesNotMatch(text, /gh pr comment/);
+  assert.match(text, /opens with \*\*Accepted\*\*/);
+  assert.match(text, /A review-ack does not cover these\./);
+  // The structured summary stays one line and ends with the pointer. It
+  // carries the unsupported-case instruction, which structured consumers
+  // and the ::notice:: line both read.
+  assert.doesNotMatch(item.summary, /\n/);
+  assert.doesNotMatch(item.summary, /--claimless/);
+  assert.ok(item.summary.endsWith(item.pointer));
+  assert.match(
+    item.summary,
+    /A cited item outside a Previously missed section .* has no helper path: report it to the operator and do not answer it with a direct PR comment\. The <review-id> is the numeric REST id of review /,
+  );
+  // The summary maps the verdict's GraphQL node id to the REST id that
+  // --review-id takes, so the lookup is runnable from the verdict alone.
+  const reviewNodeId = verdict.review.reviewId ?? '<review-node-id>';
+  assert.ok(
+    item.summary.includes(
+      `of review ${reviewNodeId}; find it with gh api repos/<owner>/<repo>/pulls/`,
+    ),
+  );
+  assert.ok(item.summary.includes(`node_id == "${reviewNodeId}") | .id'.`));
+  // The text formatter prints the pointer at the end of its bullet line,
+  // with the flag guidance on the lines directly below it.
+  const lines = text.split('\n');
+  const pointerAt = lines.findIndex((line) => line.includes(item.pointer));
+  assert.ok(pointerAt >= 0);
+  assert.ok(lines[pointerAt].endsWith(item.pointer));
+  assert.match(
+    lines[pointerAt + 1] ?? '',
+    /^ {2}For a PR with no linked issue, .* --claimless \(#2616\)\.$/,
+  );
+  assert.match(
+    lines[pointerAt + 2] ?? '',
+    /^ {2}For a cited title that repeats within one review, .* --item-index <n> immediately before --apply\.$/,
+  );
+  assert.match(
+    lines[pointerAt + 3] ?? '',
+    /^ {2}A cited item outside a Previously missed section has no helper path: .* do not answer it with a direct PR comment\.$/,
+  );
+});
+
 test('stamped disposition (#4007): mixed items name the stamped reply first, then a citation-free ack', () => {
   const { verdict, items, text } = nextActionsFor(MIXED_PREVIOUSLY_MISSED_BODY);
   assert.equal(verdict.review.suppressedCount, 2);
