@@ -1791,17 +1791,19 @@ that rule 3 held:
    the parent directory's own entries, and it deletes nothing it
    cannot attribute to the round. Other sessions under the same OS user
    write to these locations too, so a flagged entry there is a lead to
-   check, not proof of a violation. A write outside the named directory
-   and the parent directory that the subagent does not report stays
-   unverified; the parent records that limit rather than claiming that
-   rule 3 held.
+   check, not proof of a violation; that includes the directories of
+   other passes the parent runs at the same time. A write outside the
+   named directory and the parent directory that the subagent does not
+   report stays unverified; the parent records that limit rather than
+   claiming that rule 3 held.
 
 When the subagent created its own directory instead (the fallback),
 there is no pre-launch listing. The parent then checks only the paths
 the subagent reported. It treats the directory the subagent reported
-creating as the named directory for steps 2 and 3 (recursive listing,
-resolution, and link flags), never lists `/tmp` itself, and records
-that the round had no named directory as residual risk.
+creating as the named directory for steps 2 and 3 (the recursive
+listing, the resolution, and every step-3 flag), never lists `/tmp`
+itself, and records that the round had no named directory as residual
+risk.
 
 The parent bounds its wait for each delegated per-agent critique pass by
 the resolved `critiqueLoop.subagentWaitCeiling`. Enforce that ceiling
