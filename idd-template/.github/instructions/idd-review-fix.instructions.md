@@ -106,7 +106,7 @@ the defer-source marker that E6 uses for `review-fix-loop-cutoff`
 issue-authoring's Stage 2 narrow
 auto-release, not the Stage 1 hold. Then continue to E11. The cap never
 applies while a High or Medium finding is open. If the count cannot be
-established, the cap is not reached. Observed on issue `#3878` (PR `#3919`).
+established, the cap is not reached.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
