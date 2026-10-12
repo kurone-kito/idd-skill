@@ -1186,10 +1186,15 @@ A failure after the POSTs may leave a live claim, so never answer it by
 repeating a POST blind. Re-read the issue comments first, paginated, and apply
 the claim verification rules in `idd-claim.instructions.md`.
 
-- Step 3 or 4 exited nonzero. A `claimed-by` (step 3) or activation-nonce
-  (step 4) marker with your `{claim-id}` means the POST landed, even when the
-  command failed after GitHub accepted it. Continue from the next step. With
-  no such marker, nothing was posted: restart from step 1.
+- Step 3 exited nonzero. A `claimed-by` marker with your `{claim-id}` means
+  the claim POST landed, even when the command failed after GitHub accepted
+  it. The claim is then live, so go to step 4. With no such marker, nothing
+  was posted: restart from step 1.
+- Step 4 exited nonzero. The claim is live, so do not restart from step 1 and
+  do not release it yet. An activation-nonce marker with your `{claim-id}` and
+  nonce means the POST landed: continue at step 5. With none, confirm the
+  active claim is still yours, then repeat step 4 with a fresh nonce. If the
+  active claim is no longer yours, stop and report without posting a release.
 - Steps 5 to 8 failed. Before any release or retry, confirm that the active
   claim is your `{claim-id}` and that the activation nonce is yours. If that
   proof does not hold, stop and report without posting a release.
