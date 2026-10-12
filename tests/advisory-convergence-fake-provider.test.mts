@@ -441,6 +441,112 @@ test('collectFromGitHub never fetches listChangeRequestChangedFiles when no cand
   });
 });
 
+// kurone-kito/idd-skill#4015: a trusted approval of a decision-rule diff
+// must count even when no auto-waiver marker was posted, so the collector
+// fetches the changed files for it and passes the configured
+// trustedMarkerActors list (never the widened marker-trust set) as the
+// approver list.
+function decisionRuleApprovalFixture(approver: string) {
+  const head = 'a'.repeat(40);
+  return createFakeProviderAdapter({
+    ...baseFixture(),
+    reviewsWithHeadCommitDate: {
+      [PR_NUMBER]: {
+        reviews: [
+          {
+            id: 'PRR_maint',
+            authorLogin: approver,
+            authorTypename: 'User',
+            submittedAt: '2026-07-31T23:30:00Z',
+            commitId: head,
+            commentCount: 0,
+            body: '',
+            state: 'APPROVED',
+          },
+        ],
+        headCommittedAt: '2026-07-31T23:00:00Z',
+      },
+    },
+    comments: { [PR_NUMBER]: [] },
+    changedFiles: {
+      [PR_NUMBER]: ['src/scripts/advisory-convergence.mts'],
+    },
+  });
+}
+
+test('#4015: collectFromGitHub fetches changed files for a trusted approval with no auto-waiver marker', () => {
+  withHermeticCwd(() => {
+    const port = decisionRuleApprovalFixture('maint');
+    const { inputs, options } = collectFromGitHub(
+      parseArgs([
+        '--pr',
+        String(PR_NUMBER),
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'maint',
+      ]),
+      () => port,
+    );
+    assert.deepEqual(inputs.changedFilePaths, [
+      'src/scripts/advisory-convergence.mts',
+    ]);
+    assert.deepEqual(options.decisionRuleApproverLogins, ['maint']);
+    const verdict = computeAdvisoryConvergenceVerdict(inputs, options);
+    assert.equal(verdict.waiver.decisionRuleFilesTouched, true);
+    assert.equal(verdict.waiver.decisionRuleApprovalValid, true);
+    assert.equal(verdict.ready, true);
+  });
+});
+
+test('#4015: collectFromGitHub skips the changed-file fetch for a trusted approval in an adopter repository', () => {
+  withHermeticCwd(() => {
+    const port = decisionRuleApprovalFixture('maint');
+    const { inputs } = collectFromGitHub(
+      parseArgs([
+        '--pr',
+        String(PR_NUMBER),
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--trusted-marker-logins',
+        'maint',
+      ]),
+      () => port,
+    );
+    assert.equal(inputs.changedFilePaths, undefined);
+  });
+});
+
+test('#4015: collectFromGitHub fetches changed files in the source repository even without a trusted approval', () => {
+  withHermeticCwd(() => {
+    const port = decisionRuleApprovalFixture('someone-else');
+    const { inputs, options } = collectFromGitHub(
+      parseArgs([
+        '--pr',
+        String(PR_NUMBER),
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'maint',
+      ]),
+      () => port,
+    );
+    assert.deepEqual(inputs.changedFilePaths, [
+      'src/scripts/advisory-convergence.mts',
+    ]);
+    const verdict = computeAdvisoryConvergenceVerdict(inputs, options);
+    assert.equal(verdict.waiver.decisionRuleFilesTouched, true);
+    assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+    assert.equal(verdict.ready, false);
+  });
+});
+
 test('collectFromGitHub resolves a candidate run-id lookup failure to an {error} entry instead of crashing the whole collection', () => {
   withHermeticCwd(() => {
     const port = createFakeProviderAdapter({

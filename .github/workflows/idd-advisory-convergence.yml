@@ -610,23 +610,30 @@ jobs:
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_TRIGGER_FILES
-          # in src/scripts/advisory-convergence.mts -- exactly the same
-          # committed paths, never derived from imports (see that
-          # constant's own doc comment for why an import-derived set would
-          # auto-waive most PRs).
+          # Kept in sync by hand with SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES
+          # (ALLOWLIST) and SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES
+          # (DECISION_RULES) in src/scripts/advisory-convergence.mts --
+          # exactly the same committed paths, never derived from imports
+          # (see that file's doc comments for why an import-derived set
+          # would auto-waive most PRs). kurone-kito/idd-skill#4015: a diff
+          # that touches a decision-rule file gets no auto-waiver, so no
+          # marker is posted for it.
           ALLOWLIST=(
-            "src/scripts/advisory-convergence.mts"
             "src/scripts/advisory-wait-state.mts"
-            "src/scripts/advisory-wait-policy.mts"
             "src/scripts/rerun-advisory-convergence.mts"
             "src/scripts/external-check-waiver.mts"
             "src/scripts/marker-helpers.mts"
-            "src/scripts/protocol-helpers.mts"
             "src/scripts/provider-adapter-github.mts"
             ".github/idd/config.json"
             ".github/workflows/idd-advisory-convergence.yml"
             ".github/workflows/idd-advisory-convergence-comment.yml"
+          )
+          DECISION_RULES=(
+            "src/scripts/advisory-convergence.mts"
+            "src/scripts/advisory-wait-policy.mts"
+            "src/scripts/protocol-helpers.mts"
+            "src/scripts/review-clause.mts"
+            "src/scripts/copilot-review-body.mts"
           )
           # kurone-kito/idd-skill#2657 (Codex review, PR #2895): `gh pr
           # diff --name-only` documents itself as "Display only names of
@@ -643,6 +650,12 @@ jobs:
           for FILE in "${ALLOWLIST[@]}"; do
             if grep -qxF "$FILE" <<<"$CHANGED"; then
               TOUCHED=true
+              break
+            fi
+          done
+          for FILE in "${DECISION_RULES[@]}"; do
+            if grep -qxF "$FILE" <<<"$CHANGED"; then
+              TOUCHED=false
               break
             fi
           done

@@ -120,8 +120,9 @@ layered on top of the distributed IDD defaults:
 - **Advisory-convergence self-referential-bootstrap-auto waiver**: A
   second, narrower `idd-advisory-convergence` bypass alongside the
   maintainer-authorized one above (Refs #2657): when a PR's own diff
-  touches this check's own committed trigger-file allowlist (its
-  source, policy inputs, or workflow files), a dedicated CI job
+  touches this check's committed bootstrap trigger files (its waiver
+  trust path, policy inputs, or workflow files) and none of its
+  decision-rule files, a dedicated CI job
   auto-posts a run-bound waiver as `github-actions[bot]`, verified
   against the GitHub Actions runs API and this PR's own changed files
   before it is trusted. Unlike the maintainer-authorized waiver, this
@@ -131,7 +132,10 @@ layered on top of the distributed IDD defaults:
   bootstrapping a fix to the checker (including the deadline mechanism
   itself) while a PR editing it is still unmerged. It exists only for
   that narrow trigger set, never as a general substitute for review.
-  See
+  A diff that touches one of the check's decision-rule files gets no
+  such waiver; it needs a converged review, an approval of its HEAD
+  from a `trustedMarkerActors` login, or the maintainer-authorized
+  waiver after the deadline (issue `#4015`). See
   [docs/idd-helper-scripts.md](docs/idd-helper-scripts.md#automated-self-referential-bootstrap-auto-waiver-kurone-kitoidd-skill2657)
   for the full trust model.
 - **ciGate F2 bootstrap**: This source repository follows the
