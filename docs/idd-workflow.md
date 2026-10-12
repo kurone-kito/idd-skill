@@ -1231,6 +1231,13 @@ identify its old claims, and step 1 treats them as not its own.
    equals this session's session-suffixed agent-id. If the session cannot
    determine that id, every claim is not own. Claims that are not own are not
    dispatched again, and they are reported to the operator.
+   F4 removes the worktree, with its admin directory and this token file,
+   before it posts the final `unclaimed-by` marker, so a claim that F4
+   completed has no token file. For each such claim, take the issue number
+   from the worker's brief in the agent listing, or from the issue-number
+   prefix of its report draft in the session scratchpad. Then read that
+   issue's trusted `claimed-by` and `unclaimed-by` markers for the agent-id
+   and claim-id, and apply the same agent-id test.
 2. **Verify each own claim.** Take `--issue` from the worktree's branch,
    `issue/<number>-<slug>`, and confirm it against the trusted `claimed-by`
    marker that carries the same claim-id, because the token record holds no
@@ -1244,7 +1251,9 @@ identify its old claims, and step 1 treats them as not its own.
    equals this claim-id and either the state is `unclaimed`, or the state is
    `local_worktree_occupied` with the reason
    `released-claim-local-worktree-occupied`, the claim goes to step 4. `stale`
-   goes to the takeover path in `idd-resume.instructions.md`. Any other result,
+   goes to the takeover path in `idd-resume.instructions.md`. A claim with no
+   worktree needs no `--worktree`: run the command without `--assert` and read
+   its `state`, which gives the same released-claim result. Any other result,
    including an unreadable worktree, is reported to the operator with its
    state, and no further action is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
@@ -1275,9 +1284,11 @@ identify its old claims, and step 1 treats them as not its own.
    `discover-shared-file-overlap` command with
    `--issues <n,...>` (the startable candidates), `--batch <k>` (the `slots`
    value), `--check-overlap`, one `--in-flight <n>` for each counted running
-   worker's issue, and `--desync-token <session-suffixed agent-id>` when
-   `discover.selectionDesync` is `session-offset`. Otherwise skip it: the helper
-   rejects an empty candidate list and a zero batch.
+   worker's issue, and `--desync-token` set to this session's session-suffixed
+   agent-id, or to the session-local token that Discover generated at its entry
+   when the session has no suffix, whenever `discover.selectionDesync` is
+   `session-offset`. Otherwise skip it: the helper rejects an empty candidate
+   list and a zero batch.
 4. **Recover reports.** Run this step for each matched finished worker, under
    that worker's own listed handle. For a released claim with no matched
    worker, run this step under the claim-id as its handle. The append's own
