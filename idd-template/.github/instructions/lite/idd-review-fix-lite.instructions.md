@@ -160,7 +160,7 @@ self-critique and record risk.
    diff to a clean pass, then return to E1 before F1 — see
    `idd-review-fix.instructions.md`'s E10 repair path for the full
    procedure. Exception: once `critiqueLoop.e10MaxPasses` (default 2) E10
-   passes have run on the issue, no High or Medium finding is open, and
+   passes have run on the issue, no High or Medium Accepted finding is open, and
    `fix-validate` has passed on the current HEAD, the per-issue cap in
    `idd-review-fix.instructions.md` applies: file one follow-up issue (do not
    append) with one AC bullet per residual Low finding, exactly one
