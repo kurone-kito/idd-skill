@@ -1168,9 +1168,11 @@ succeeded.
    comments are eventually consistent, so an early assert can report a false
    failure while the markers are still propagating.
 
-If step 5 or 6 fails after the POSTs in steps 3 and 4, the claim is live with
-no linked worktree. Do not wait for it to go stale. Release your own pair
-first:
+A failure after the POSTs in steps 3 and 4 leaves a live claim, and the next
+action depends on whether a linked worktree exists.
+
+If step 5 fails, no linked worktree was attached, and the claim has no
+worktree. Do not wait for it to go stale. Release your own pair first:
 
 ```sh
 node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
@@ -1179,6 +1181,15 @@ node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
 
 The release is safe because you provably hold the pair, the same reasoning as
 the release-then-fresh rule in `idd-claim.instructions.md`. Then restart from
-step 1. A local ref that differs from `origin/<branch>` fails the same check
-on every restart, so resolve that ref first. The claim comes before the attach
-because #4071's decided sequence orders them that way.
+step 1. A local branch that the script already created is attached again on
+the restart, because the script attaches a local branch that equals
+`origin/<branch>`. A local ref that differs fails the same check on every
+restart, so resolve that ref first.
+
+If step 6, 7, or 8 fails, the linked worktree exists and the claim is yours.
+Do not release it and do not restart from step 1, because the existing
+worktree blocks the no-worktree gate. Repeat the failed step, then continue
+with the next one.
+
+The claim comes before the attach because #4071's decided sequence orders
+them that way.
