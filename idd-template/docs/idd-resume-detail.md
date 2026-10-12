@@ -1110,21 +1110,30 @@ order succeeded.
 1. Fresh-claim gate with no worktree:
    `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
    returns `claimable`.
-2. Before the claim POST:
+2. Before the claim POST, record the tokens on the primary worktree:
    `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
-   --agent-id <id> --claim-id <id>`, on the primary worktree.
-3. Claim POST: `node scripts/post-idd-marker.mjs --type claim ... --apply`.
-4. Before the activation-nonce POST: the same `--record-tokens` call on the
-   primary path with `--nonce <nonce>`, then
-   `node scripts/post-idd-marker.mjs --type activation-nonce ... --apply`.
+   --agent-id <id> --claim-id <id>`.
+3. Claim POST, with the branch of the existing PR:
+   `node scripts/post-idd-marker.mjs --target issue <N> --type claim
+   --agent-id <id> --claim-id <id> --timestamp <ISO8601> --branch <branch>
+   --apply`.
+4. Activation-nonce POST. Record the nonce on the primary worktree first:
+   `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
+   --agent-id <id> --claim-id <id> --nonce <nonce>`, then:
+   `node scripts/post-idd-marker.mjs --target issue <N> --type
+   activation-nonce --agent-id <id> --claim-id <id> --nonce <nonce>
+   --timestamp <ISO8601> --apply`.
 5. Attach the existing branch to a sibling worktree:
    `git worktree add <path> <branch>`, without `-b`.
 6. Carry the nonce forward on the linked worktree:
-   `--record-tokens --worktree <linked> ... --nonce <nonce>`.
+   `node scripts/claim-lock.mjs --record-tokens --worktree <linked>
+   --agent-id <id> --claim-id <id> --nonce <nonce>`.
 7. Acquire on the linked worktree:
    `node scripts/claim-lock.mjs --acquire --worktree <linked> --agent-id <id>
    --claim-id <id>`.
-8. Assert:
+8. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
    `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
-   --nonce <nonce> --worktree <linked>` returns `already_owned` with action
-   `keep`.
+   --nonce <nonce> --worktree <linked>`. It returns `already_owned` with
+   action `keep`. Do not assert before the delay: the nonce and the claim
+   comments are eventually consistent, so an early assert can report a false
+   failure while the markers are still propagating.
