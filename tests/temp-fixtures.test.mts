@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -37,6 +37,47 @@ test('a prefix outside tmpdir() throws and creates nothing (#4049)', () => {
   );
 });
 
+test('a prefix with a .. segment throws, even one that stays inside (#4049)', () => {
+  const parent = makeTempDir(join(tmpdir(), 'idd-temp-fixtures-dots-'));
+  mkdirSync(join(parent, 'inner'));
+  assert.throws(
+    () => makeTempDir(`${parent}/inner/../child-`),
+    /must resolve below/,
+  );
+  assert.deepEqual(readdirSync(parent), ['inner']);
+});
+
 test('tmpdir() itself is not an accepted prefix (#4049)', () => {
   assert.throws(() => makeTempDir(resolve(tmpdir())), /must resolve below/);
+});
+
+test('a prefix through a symbolic link that leaves tmpdir() throws and creates nothing (#4049)', {
+  skip:
+    process.platform === 'win32'
+      ? 'creating a symlink needs privileges'
+      : false,
+}, () => {
+  // The link points at tmpdir()'s own parent, which is outside it.
+  const outside = dirname(resolve(tmpdir()));
+  const parent = makeTempDir(join(tmpdir(), 'idd-temp-fixtures-link-'));
+  symlinkSync(outside, join(parent, 'link'));
+  // Also with a trailing separator or `.` segment, which `resolve` drops.
+  // Only the named prefix is checked for leftovers below: had the check
+  // let the other two through, they would have created a bare or
+  // dot-prefixed random name there, which cannot be told apart from what
+  // other processes write.
+  for (const prefix of [
+    join(parent, 'link', 'idd-temp-fixtures-via-link-'),
+    `${join(parent, 'link')}/`,
+    `${join(parent, 'link')}/.`,
+  ]) {
+    assert.throws(() => makeTempDir(prefix), /must resolve below/, prefix);
+  }
+  // Matched by name: other processes may write to that parent at any time.
+  assert.deepEqual(
+    readdirSync(outside).filter((name) =>
+      name.startsWith('idd-temp-fixtures-via-link-'),
+    ),
+    [],
+  );
 });

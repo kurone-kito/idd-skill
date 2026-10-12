@@ -8,9 +8,9 @@
  *
  * This module imports only `node:` builtins.
  */
-import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { after } from 'node:test';
 
 /** Whether `path` is strictly below `root` (both resolved). */
@@ -27,10 +27,14 @@ function isStrictlyInside(root: string, path: string): boolean {
  * already exited.
  *
  * As `trackedMkdtemp` in `tests/idd-onboard.test.mts` does, the recursive
- * removal never reaches outside the temporary directory: a `prefix` that
- * does not resolve strictly below the `os.tmpdir()` captured by this call
- * throws before anything is created, and so does a created directory that
- * is not below it. A prefix in a nested fixture directory there is allowed.
+ * removal never reaches outside the temporary directory. A `prefix` must
+ * resolve strictly below the `os.tmpdir()` captured by this call, must not
+ * contain a `..` segment, and the real path of the directory it names
+ * (symbolic links followed) must be that directory's real path or below it;
+ * otherwise the call throws before anything is created. A prefix in a nested
+ * fixture directory is allowed. The real path of each created directory is
+ * checked the same way and is what the hook removes, so a symbolic link
+ * cannot redirect the removal.
  *
  * On `win32` a removal failure is ignored, because Windows refuses to remove
  * a directory that holds a running executable image (issue #3680); the
@@ -39,6 +43,7 @@ function isStrictlyInside(root: string, path: string): boolean {
  */
 export function trackTempDirectories(): (prefix: string) => string {
   const root = resolve(tmpdir());
+  const realRoot = realpathSync(root);
   const created: string[] = [];
   after(() => {
     const failures: unknown[] = [];
@@ -59,22 +64,41 @@ export function trackTempDirectories(): (prefix: string) => string {
     }
   });
   return (prefix: string): string => {
-    if (!isStrictlyInside(root, resolve(prefix))) {
+    // mkdtempSync appends six characters to the prefix as written, so check
+    // the path it will create, not the prefix: `resolve` would drop a
+    // trailing separator or `.` segment and misplace the parent.
+    const target = resolve(`${prefix}XXXXXX`);
+    let parent = '';
+    try {
+      parent = realpathSync(dirname(target));
+    } catch {
+      // A missing parent is rejected below; mkdtempSync would fail anyway.
+    }
+    if (
+      // The operating system follows a link before a later `..`, while
+      // `resolve` and `realpathSync` drop the pair as text first.
+      prefix.split(/[\\/]/).includes('..') ||
+      !isStrictlyInside(root, target) ||
+      parent === '' ||
+      (parent !== realRoot && !isStrictlyInside(realRoot, parent))
+    ) {
       throw new Error(
         `trackTempDirectories: prefix must resolve below ${root}: ${prefix}`,
       );
     }
     const directory = mkdtempSync(prefix);
-    if (!isStrictlyInside(root, resolve(directory))) {
-      // Unreachable given the check above; kept so the after hook can never
-      // remove a directory outside the temporary root. The new directory is
-      // empty, so a non-recursive removal is enough.
-      rmdirSync(directory);
+    const real = realpathSync(directory);
+    if (!isStrictlyInside(realRoot, real)) {
+      // Unreachable given the checks above unless the file system changed
+      // in between; the hook must never remove a directory outside the
+      // temporary root. The new directory is empty, so a non-recursive
+      // removal is enough.
+      rmdirSync(real);
       throw new Error(
         `trackTempDirectories: refusing to track ${directory} outside ${root}`,
       );
     }
-    created.push(directory);
+    created.push(real);
     return directory;
   };
 }
