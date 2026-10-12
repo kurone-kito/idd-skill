@@ -308,6 +308,54 @@ never treated as live or flagged; anti-spoofing is unaffected.
 **Also post an [activation-nonce marker](#activation-nonce-format)** for
 every fresh `{claim-id}`.
 
+### Lost-claim cleanup (`lost-claim-cleanup`)
+
+Run this after the step 1 worktree exists, at every exit where this session no
+longer holds the claim: a `--record-tokens` failure (step 2), a failed claim or
+activation-nonce post (step 3), a `--acquire` collision or other non-success
+exit (step 4), an `--assert` result other than `already_owned`/`keep` (step
+5), or an `unclaimed-by` posted after an authoring hold that followed a
+successful assert (Claim verification step 5). Never use `--takeover`. Fill in
+the placeholders of the script, each as a single-quoted shell word (write a `'`
+as `'\''`), resolve each helper as in A5(a), and run it as one hold of the
+[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
+`node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash <script>`.
+The gates and removal run under that hold, from the primary checkout (or with
+`--repo`), never from the worktree being removed.
+
+```sh
+set -euo pipefail
+node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
+route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
+printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
+test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
+tip=$(git rev-parse <branch>)
+base=$(git rev-parse origin/{development-branch})
+test "$tip" = "$base"
+tags=$(git -C <path> ls-files -v | cut -c1 | tr -d 'H\n')
+test -z "$tags"
+dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+test -z "$dirty"
+git worktree remove <path>
+git branch -D <branch>
+```
+
+Every gate runs before `git worktree remove`, the only removal step (no
+`--force`). A failure before removal keeps the worktree, branch, and lock on
+purpose, so a later claim stops at the collision check (A5(e)).
+
+If `git branch -D` fails after removal, or the harness denies it (the
+distributed Claude baseline denies `Bash(git branch -D*)`), report a leftover
+branch at `<branch>`; the A5(e) orphan hold covers the next claimant.
+
+Instructions-only: take the worktree-local lock from its
+[helper-free fallback](../../docs/idd-helper-scripts.md#worktree-local-claim-lock),
+read the claim state under Claim-state parsing, and give each worker its own
+clone ([fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
+
+Observed in PR `#4018` review; rationale in
+[docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
+
 ## Activation-nonce format
 
 Post this alongside every claim **activation** — fresh claim, takeover,

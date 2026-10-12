@@ -614,6 +614,81 @@ explicitly as a known, accepted limitation in both
 `idd-claim.instructions.md` and `docs/idd-workflow.md`'s Orchestrator
 fan-out variant section.
 
+### Lite claim rationale
+
+The lite claim file keeps only the rules; their rationale lives here.
+
+- **Forced-handoff author bind.** The lite file requires the comment
+  author to equal the marker's `forcedBy` field unconditionally, which is
+  stricter than the full spec's opt-in `requireAuthorMatchesForcedBy`. It
+  blocks a same-identity self-signed hijack, where a displaced session
+  spoofs a different `forcedBy` name while posting the marker itself
+  (preventive; no observed incident yet).
+- **Sticky successor pair.** Forced-handoff re-derives the adopted pair as
+  the active claim on every resolution pass, so a later plain
+  `claimed-by supersedes: none` cannot activate and reads as contested
+  (preventive; no observed incident yet).
+- **Heartbeat branch invariant.** A `claimed-by` with the active
+  `{claim-id}` but a different `{agent-id}` or `branch:` is not a
+  heartbeat. The claim-id is public, not a secret, so it proves nothing
+  about the poster on its own (preventive; no observed incident yet).
+- **Later claims stay diagnostic (`#3268`).** A later trusted
+  `claimed-by` with a different `{claim-id}` cannot dispute Claim
+  verification step 3, because Claim-state parsing rules 4 and 6 could
+  never have activated it while the current claim is active.
+- **Pre-mutation guard scope.** The work-lite guard's checks 3-4 bind the
+  cwd and branch only once B2 starts; before that, the claim check alone
+  applies (preventive; no observed incident yet).
+- **Claim-comment body.** `gh issue comment` and `gh api -f body=` silently
+  reject HTML-comment-first bodies, so the written fallback posts a JSON
+  payload instead (preventive; no observed incident yet).
+- **Pre-check (c) before the gate.** The fresh-claim gate ignores
+  `--claim-id`, so it cannot tell "yours" from "a competitor's"; pre-check
+  (c) runs first for that reason (preventive; no observed incident yet).
+
+### Lost-claim cleanup (issue `#4042`)
+
+On 2026-10-12, PR `#4018` review raised four edge cases for the pre-claim
+worktree that a lost fresh claim leaves behind: a `--record-tokens` failure
+after `git worktree add` (review comment `4242624517`); an `unclaimed-by` posted
+after an authoring hold that followed a successful assert (`4242624520`);
+removal outside the clone-scoped lock (`4242577825`); and `git branch -d`
+refusing a branch whose tip is not merged into a lagging local `main`, so the
+branch survived (`4242489039`). The decided policy (maintainer hearing,
+2026-10-12) covers them. A later review of the procedure (PR `#4058`) led to the
+amendments below.
+
+- Gates run before removal, under one hold of the clone-scoped lock, after
+  the worktree-local claim lock is acquired. The route gate reads
+  `active_claim`, not the route `state`, because `state` is written for a
+  claiming session and a released claim can show a local-occupied state.
+  Removal needs `active_claim` to be null or another claim id. The HEAD gate
+  requires the worktree to be attached to the cleanup branch. The status gate
+  is `git status --porcelain --ignored --untracked-files=all
+  --ignore-submodules=none`, empty. The tip gate requires the branch to equal
+  local `origin/{development-branch}`, read without a fetch.
+- Removal comes before deletion. Git refuses to delete a branch checked out in
+  any worktree, so `git worktree remove` (no `--force`) runs first, and
+  `git branch -D` follows. The tip gate is the removal gate. If `-D` fails
+  after removal, or a harness denies it (the distributed Claude baseline denies
+  `Bash(git branch -D*)`), the procedure reports a leftover branch. The A5(e)
+  orphan hold covers the next claimant. The deny rule is unchanged.
+- Failures before removal keep the worktree, its branch, and its lock on
+  purpose. A later claim of the issue then stops at the collision check
+  instead of inheriting the path. No helper releases the lock, and a release
+  would need a new helper mode.
+- Plain `git branch -d` is not used, because it refuses against a lagging
+  local `main`.
+- Placeholders are filled as single-quoted shell words, because a valid branch
+  name can contain shell metacharacters such as `$` and `;`.
+- On `instructions-only`, the worktree-local claim lock uses its helper-free
+  fallback. The clone-scoped steps are serialized by giving each worker its own
+  clone, because the clone-scoped lock has no helper-free fallback.
+- `git status --porcelain` cannot see assume-unchanged or skip-worktree entries,
+  so the gate also requires every `git ls-files -v` tag to be `H`. A legacy active
+  claim with a null id keeps the worktree, because it cannot be ruled out as
+  another session's claim.
+
 ## Work and self-review
 
 ### B1 Step 3 — install-deps silent under-install detection
