@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   lstatSync,
@@ -1060,6 +1061,102 @@ test('install refuses a dangling symlink at an ancestor of a harness entry file 
     );
     assert.equal(existsSync(join(box.root, 'no-such-dir')), false);
     assert.equal(lstatSync(join(box.home, '.claude')).isSymbolicLink(), true);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install preflights every write destination before any write (#3825)', () => {
+  const box = sandbox();
+  try {
+    const versionDir = join(box.root, 'data', 'idd-skill');
+    mkdirSync(versionDir, { recursive: true });
+    const claudeTmp = `${box.claudeFile}.idd-tmp-${process.pid}`;
+    mkdirSync(join(box.home, '.claude'), { recursive: true });
+    writeFixture(claudeTmp, 'user content\n');
+    assert.throws(
+      () => runUserGlobalInstall(box.options()),
+      /temporary file .* already exists/,
+    );
+    assert.equal(
+      existsSync(join(box.root, 'data', 'idd-skill', '0.14.0')),
+      false,
+      'no payload may be written when a later destination is blocked',
+    );
+    assert.equal(
+      existsSync(join(box.home, '.agents')),
+      false,
+      'no shared skill may be written when a later destination is blocked',
+    );
+    assert.equal(readFileSync(claudeTmp, 'utf8'), 'user content\n');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall keeps the mode of a restrictive harness file it rewrites (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options(['claude']));
+    const text = readFileSync(box.claudeFile, 'utf8');
+    writeFileSync(box.claudeFile, `# mine\n${text}`);
+    chmodSync(box.claudeFile, 0o600);
+    runUserGlobalUninstall(box.options(['claude']));
+    assert.equal(statSync(box.claudeFile).mode & 0o777, 0o600);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall keeps a user newline placed directly before the managed block (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options(['claude']));
+    const text = readFileSync(box.claudeFile, 'utf8');
+    writeFileSync(box.claudeFile, `user addition\n${text}`);
+    runUserGlobalUninstall(box.options(['claude']));
+    assert.equal(readFileSync(box.claudeFile, 'utf8'), 'user addition\n');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('a receipt cannot direct cleanup at a directory elsewhere under home (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const stray = join(box.home, 'projects', 'empty');
+    mkdirSync(stray, { recursive: true });
+    const receiptPath = join(
+      box.root,
+      'data',
+      'idd-skill',
+      'user-global-receipt.json',
+    );
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      dirsCreated: string[];
+    };
+    receipt.dirsCreated.push(stray);
+    writeFileSync(receiptPath, JSON.stringify(receipt));
+    assert.throws(
+      () => runUserGlobalUninstall(box.options()),
+      /outside the skill roots/,
+    );
+    assert.equal(existsSync(stray), true);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('a clean full uninstall accepts every directory install really created (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    runUserGlobalUninstall(box.options());
+    assert.equal(existsSync(box.payloadRoot), false);
+    assert.equal(existsSync(box.claudeFile), false);
+    assert.equal(existsSync(box.agentsFile), false);
+    assert.equal(existsSync(box.opencodeFile), false);
   } finally {
     box.cleanup();
   }

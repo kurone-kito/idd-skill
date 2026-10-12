@@ -305,6 +305,11 @@ function buildBlock(bodyLines, eol) {
     .map((line) => `${line}${eol}`)
     .join('');
 }
+/** The separator install inserts before a new block for `text`. */
+function markdownSeparator(text) {
+  if (text === null || text.length === 0) return '';
+  return lineEndingOf(text);
+}
 /** Install or refresh the managed block; returns the full new file text. */
 function wireMarkdown(text, bodyLines, path) {
   if (text === null || text.length === 0) {
@@ -319,12 +324,15 @@ function wireMarkdown(text, bodyLines, path) {
   return `${text.slice(0, region.begin)}${block}${text.slice(region.end)}`;
 }
 /** Remove the managed block and the separator that install added before it. */
-function unwireMarkdown(text, path) {
+function unwireMarkdown(text, path, separator) {
   const region = findRegion(text, path);
   if (region === null) return null;
   let start = region.begin;
-  if (region.begin > 0) {
-    start -= text.slice(0, region.begin).endsWith('\r\n') ? 2 : 1;
+  // Remove the recorded separator only when it is exactly the bytes just before
+  // the block. A user newline placed there is not the installer's, so it stays.
+  if (separator !== undefined && separator.length > 0) {
+    const before = text.slice(0, region.begin);
+    if (before.endsWith(separator)) start -= separator.length;
   }
   return text.slice(0, start) + text.slice(region.end);
 }
@@ -596,6 +604,12 @@ function validHarnessRecords(value) {
       fileCreated: record.fileCreated === true,
       entryAdded: record.entryAdded === true,
       keyCreated: record.keyCreated === true,
+      separator:
+        record.separator === '' ||
+        record.separator === '\n' ||
+        record.separator === '\r\n'
+          ? record.separator
+          : undefined,
     };
   }
   return result;
@@ -879,6 +893,9 @@ function planHarnessFile(plan, prior, path, wire, createdDirs) {
     fileCreated: (prior?.fileCreated ?? false) || text === null,
     entryAdded: (prior?.entryAdded ?? false) || next.entryAdded,
     keyCreated: (prior?.keyCreated ?? false) || next.keyCreated,
+    // The separator is fixed when the block is first appended. A re-install that
+    // only refreshes the block keeps the value recorded then.
+    separator: prior?.separator ?? next.separator,
   };
 }
 /**
@@ -1009,6 +1026,7 @@ export function runUserGlobalInstall(options) {
         text: wireMarkdown(text, body, path),
         entryAdded: true,
         keyCreated: false,
+        separator: markdownSeparator(text),
       }),
       createdDirs,
     );
@@ -1098,19 +1116,29 @@ export function runUserGlobalUninstall(options) {
         plan.ops.push({ kind: 'unlink', path });
         pushChange(plan, path, 'delete');
       } else {
-        plan.ops.push({ kind: 'write', path, content: Buffer.from(next) });
+        plan.ops.push({
+          kind: 'write',
+          path,
+          content: Buffer.from(next),
+          mode: statIfExists(path)?.mode ?? undefined,
+        });
         pushChange(plan, path, 'remove');
       }
       continue;
     }
-    const next = unwireMarkdown(text, path);
+    const next = unwireMarkdown(text, path, prior.separator);
     if (next === null) {
       pushChange(plan, path, 'unchanged');
     } else if (prior.fileCreated && next.length === 0) {
       plan.ops.push({ kind: 'unlink', path });
       pushChange(plan, path, 'delete');
     } else {
-      plan.ops.push({ kind: 'write', path, content: Buffer.from(next) });
+      plan.ops.push({
+        kind: 'write',
+        path,
+        content: Buffer.from(next),
+        mode: statIfExists(path)?.mode ?? undefined,
+      });
       pushChange(plan, path, 'remove');
     }
   }
@@ -1172,25 +1200,26 @@ function assertReceiptInSkillRoots(receipt, locations) {
     locations.claudeSkillsRoot,
     locations.agentsSkillsRoot,
   ].map((root) => resolve(root));
-  // Every directory install creates above what it wires: the payload's data
-  // directory and its parent, the OpenCode config directory and its parent,
-  // and the Claude and Codex roots. Anything else a receipt names is foreign.
-  const ancestorsOf = (path) => {
-    const chain = [];
-    for (let dir = resolve(path); ; dir = dirname(dir)) {
-      chain.push(dir);
-      if (dirname(dir) === dir) break;
-    }
-    return chain;
-  };
-  const wiredRoots = [
-    ...ancestorsOf(locations.dataRoot),
-    ...ancestorsOf(dirname(locations.opencodeFile)),
+  // The only non-skill directories install creates are the data directory and
+  // the OpenCode config directory, plus their immediate parents when install made
+  // them. Those are exact paths: a receipt may name them, and nothing beneath
+  // them. Only the skill roots match descendants.
+  // The shared agents skills root is <home>/.agents/skills, so the home directory
+  // is two levels up. It is derived from data rather than passed in.
+  const homeDir = resolve(dirname(dirname(locations.agentsSkillsRoot)));
+  const exactWiredDirs = [
+    homeDir,
     resolve(locations.claudeRoot),
     resolve(locations.codexRoot),
+    resolve(dirname(locations.agentsSkillsRoot)),
+    resolve(locations.dataRoot),
+    resolve(dirname(locations.dataRoot)),
+    resolve(dirname(locations.opencodeFile)),
+    resolve(dirname(dirname(locations.opencodeFile))),
   ];
   const within = (path, roots) =>
     roots.some((root) => path === root || path.startsWith(`${root}${sep}`));
+  const insideSkillRoot = (path) => within(path, skillRoots);
   const outsideSkills = [
     ...receipt.skillDirs,
     ...receipt.skillFiles.map((file) => file.path),
@@ -1199,7 +1228,7 @@ function assertReceiptInSkillRoots(receipt, locations) {
     .filter((path) => !within(path, skillRoots));
   const outsideCreated = receipt.dirsCreated
     .map((path) => resolve(path))
-    .filter((path) => !within(path, [...skillRoots, ...wiredRoots]));
+    .filter((path) => !insideSkillRoot(path) && !exactWiredDirs.includes(path));
   const offending = [...outsideSkills, ...outsideCreated][0];
   if (offending !== undefined) {
     throw new Error(
@@ -1343,7 +1372,25 @@ function unlinkIfPresent(path) {
     if (error.code !== 'ENOENT') throw error;
   }
 }
+/**
+ * Preflight every planned write before the first mutation. A destination whose
+ * temporary path is already taken, or whose path crosses a link, refuses the whole
+ * run, so a later blocked write can never leave an earlier one applied.
+ */
+function preflightWrites(ops) {
+  for (const op of ops) {
+    if (op.kind !== 'write') continue;
+    const real = existsSync(op.path) ? realpathSync(op.path) : op.path;
+    const tmp = `${real}.idd-tmp-${process.pid}`;
+    if (lstatIfExists(tmp) !== null) {
+      throw new Error(
+        `user-global install: the temporary file ${tmp} already exists; refusing to overwrite it`,
+      );
+    }
+  }
+}
 function applyOps(ops) {
+  preflightWrites(ops);
   for (const op of ops) {
     switch (op.kind) {
       case 'mkdir':
