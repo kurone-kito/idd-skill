@@ -570,6 +570,34 @@ function formatBlockingRunNames(names) {
   return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
 }
 /**
+ * #4053: the required-CI/HEAD agreement the `--from-pr --type watermark` path
+ * compares. Forwards `--global-only` into {@link collectCiWaitState}, which
+ * resolves the global-only ignore list and reads the trusted base-ref
+ * `ciGate.allowNoRequiredChecksInGlobalOnly` opt-in itself, since it already
+ * owns the trusted ref, the head SHA, and the provider port. The port, config
+ * loader, and activation resolver are injectable so tests drive this without
+ * a live `gh` process.
+ */
+export function readWatermarkRequiredCiAgreement(input) {
+  const argv = [
+    '--pr',
+    String(input.prNumber),
+    '--owner',
+    input.owner,
+    '--repo',
+    input.repo,
+    ...(input.globalOnly ? ['--global-only'] : []),
+  ];
+  return requiredCiHeadAgreementFromSummary(
+    collectCiWaitState(
+      argv,
+      input.createPort,
+      input.loadTrustedConfig,
+      input.resolveActivation,
+    ),
+  );
+}
+/**
  * Derive watermark fields from one fresh activity capture, then compare a
  * separate required-CI/HEAD agreement read. Does not accept a saved snapshot.
  * `collectRichActivity` runs once per call; a later operation must call again.
@@ -1404,6 +1432,7 @@ export function parseArgs(rawArgv) {
     fromPr: null,
     expectedHeadSha: '',
     operationLocal: false,
+    globalOnly: false,
     priorHeadSha: '',
     priorTotalItemCount: null,
     priorMaxActivityAt: '',
@@ -1427,6 +1456,10 @@ export function parseArgs(rawArgv) {
     }
     if (token === '--operation-local') {
       args.operationLocal = true;
+      continue;
+    }
+    if (token === '--global-only') {
+      args.globalOnly = true;
       continue;
     }
     if (!token.startsWith('--')) {
@@ -2205,6 +2238,14 @@ function main() {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
+  // #4053: --global-only only changes the --from-pr --type watermark CI read.
+  // Elsewhere it would be silently ignored, so reject it like --expected-head-sha.
+  if (args.globalOnly && (args.fromPr === null || args.type !== 'watermark')) {
+    const message =
+      '--global-only is only valid together with --from-pr --type watermark';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
   if (
     args.operationLocal &&
     (args.type !== 'watermark' || args.fromPr === null)
@@ -2328,16 +2369,12 @@ function main() {
               port: createGithubProviderAdapter(args.owner, args.repo),
             }),
           readRequiredCiAgreement: () =>
-            requiredCiHeadAgreementFromSummary(
-              collectCiWaitState([
-                '--pr',
-                String(args.fromPr),
-                '--owner',
-                args.owner,
-                '--repo',
-                args.repo,
-              ]),
-            ),
+            readWatermarkRequiredCiAgreement({
+              prNumber: args.fromPr ?? 0,
+              owner: args.owner,
+              repo: args.repo,
+              globalOnly: args.globalOnly,
+            }),
         });
         if (local.decision !== 'publish') {
           const message = local.reason ?? 'refusing to post watermark';

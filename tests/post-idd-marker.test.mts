@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-owner-provenance.mts';
+import type { ActivationResult } from '../src/scripts/idd-activation.mts';
 import { parseAuthoringOwnerComment } from '../src/scripts/marker-helpers.mts';
 import {
   buildMarkerBody,
@@ -20,6 +21,7 @@ import {
   MARKER_TYPES,
   parseArgs,
   parseIssueReference,
+  readWatermarkRequiredCiAgreement,
   runOperationLocalSnapshotWatermark,
   selectAuthoringOwnerOpeningMarkers,
   selectLatestAuthoringOwnerMarker,
@@ -41,6 +43,7 @@ import {
   parseReviewAckComment,
   parseReviewWatermarkComment,
 } from '../src/scripts/protocol-helpers.mts';
+import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import {
   checkSchemaKeywords,
   loadJson,
@@ -2285,6 +2288,27 @@ test('--expected-head-sha is rejected together with --from-pr for a non-watermar
   assert.match(
     stderr,
     /--expected-head-sha is only valid together with --from-pr --type watermark/,
+  );
+});
+
+test('--global-only fails closed outside --from-pr --type watermark', () => {
+  // #4053: the flag only changes the watermark CI read, so elsewhere it would
+  // be silently ignored. Reject it the same way --expected-head-sha is.
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'advisory',
+    '--from-pr',
+    '1200',
+    '--global-only',
+    '--agent-id',
+    'a',
+    '--timestamp',
+    TS,
+  ]);
+  assert.match(
+    stderr,
+    /--global-only is only valid together with --from-pr --type watermark/,
   );
 });
 
@@ -5571,6 +5595,101 @@ function passingAgreement(head = OPERATION_LOCAL_SHA) {
     latestPassingCompletedAt: '2026-06-25T11:00:00Z',
   };
 }
+
+// --- #4053: the `--from-pr --type watermark` CI read honors the zero-check
+// global-only opt-in. The seam is the exact call the CLI's watermark path
+// makes, driven here through a fake port, config loader, and activation.
+
+const ZERO_CHECK_GLOBAL_ONLY_ACTIVE: ActivationResult = {
+  active: true,
+  tier: 'user-global-override',
+  instructionsRoot: '/payload/idd',
+  reason: 'repository-policy-minimal-import',
+};
+
+function zeroCheckWatermarkPort() {
+  return createFakeProviderAdapter({
+    changeRequestBranchAndChecks: {
+      3592: {
+        headSha: OPERATION_LOCAL_SHA,
+        baseRefName: 'main',
+        statusCheckRollup: [],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    repositoryContentAtRef: {
+      'o/r/@main': [],
+      [`o/r/@${OPERATION_LOCAL_SHA}`]: [],
+    },
+  });
+}
+
+function watermarkDecision(input: {
+  setting?: boolean;
+  globalOnly: boolean;
+  activation?: ActivationResult | null;
+}) {
+  const agreement = readWatermarkRequiredCiAgreement({
+    prNumber: 3592,
+    owner: 'o',
+    repo: 'r',
+    globalOnly: input.globalOnly,
+    createPort: () => zeroCheckWatermarkPort(),
+    loadTrustedConfig: () =>
+      input.setting === undefined
+        ? {}
+        : { ciGate: { allowNoRequiredChecksInGlobalOnly: input.setting } },
+    resolveActivation: () =>
+      input.activation === undefined
+        ? ZERO_CHECK_GLOBAL_ONLY_ACTIVE
+        : input.activation,
+  });
+  return runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: OPERATION_LOCAL_SHA,
+    // No present check run: `latestPassingCiCompletedAt` is empty, so the
+    // snapshot's `ci-completed-at` is `none`, matching the agreement.
+    collectRichActivity: () =>
+      operationLocalSnapshot({ latestPassingCiCompletedAt: '' }),
+    readRequiredCiAgreement: () => agreement,
+  });
+}
+
+test('#4053: the watermark publishes the zero-check global-only state when the opt-in is true', () => {
+  const result = watermarkDecision({ setting: true, globalOnly: true });
+  assert.equal(result.decision, 'publish');
+  assert.equal(result.reasonCode, 'publish');
+  assert.equal(result.watermarkFields?.['head-sha'], OPERATION_LOCAL_SHA);
+  assert.equal(result.watermarkFields?.['ci-completed-at'], 'none');
+});
+
+test('#4053: the watermark defers the same state when the setting is unset or false', () => {
+  for (const setting of [undefined, false]) {
+    const result = watermarkDecision({ setting, globalOnly: true });
+    assert.equal(result.decision, 'defer');
+    assert.equal(result.reasonCode, 'required-checks');
+  }
+});
+
+test('#4053: the watermark still defers with the setting true when the global-only profile is not active', () => {
+  const noFlag = watermarkDecision({ setting: true, globalOnly: false });
+  assert.equal(noFlag.decision, 'defer');
+  assert.equal(noFlag.reasonCode, 'required-checks');
+
+  const repositoryLocal = watermarkDecision({
+    setting: true,
+    globalOnly: true,
+    activation: {
+      active: true,
+      tier: 'repository-local',
+      instructionsRoot: '/repo/.github/instructions',
+      reason: 'repository-instruction-files',
+    },
+  });
+  assert.equal(repositoryLocal.decision, 'defer');
+  assert.equal(repositoryLocal.reasonCode, 'required-checks');
+});
 
 test('operation-local watermark uses one rich capture and one CI agreement read', () => {
   let rich = 0;
