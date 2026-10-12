@@ -498,13 +498,13 @@
         "bundle": "bundle-review-fix-phase",
         "limitBytes": 82600,
         "issue": 3943,
-        "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E10 per-issue pass cap text adds about 1,000 bytes to review-fix, which sat at 97.56% of its limit before. Measured 75,074 bytes after the change; raised to 82,600, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 90.9%."
+        "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E10 per-issue pass cap text adds about 1,000 bytes to review-fix, which sat at 97.56% of its limit before. Measured 74,994 bytes on the current tree; raised to 82,600, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 90.8%."
       },
       {
         "bundle": "bundle-review-fix-lite",
         "limitBytes": 46800,
         "issue": 3943,
-        "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the lite E10 cap wording adds about 370 bytes to review-fix-lite, which sat at 97.92% of its limit before. Measured 42,471 bytes after the change; raised to 46,800, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 90.7%."
+        "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the lite E10 cap wording adds about 370 bytes to review-fix-lite, which sat at 97.92% of its limit before. Measured 43,287 bytes on the current tree; raised to 46,800, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 92.5%."
       }
     ]
   },
