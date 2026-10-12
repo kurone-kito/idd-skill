@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -14,13 +14,17 @@ import {
   parseRepoFlag,
   sampleDedupKey,
 } from '../src/scripts/idd-critique-harvest.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-harvest.mjs');
 const FIXTURE_LOG = join(REPO_ROOT, 'tests/fixtures/idd-critique/log.jsonl');
 
 function sandboxDir(): string {
-  return mkdtempSync(join(tmpdir(), 'idd-critique-harvest-test-'));
+  return makeTempDir(join(tmpdir(), 'idd-critique-harvest-test-'));
 }
 
 function validLine(overrides: Record<string, unknown> = {}): string {

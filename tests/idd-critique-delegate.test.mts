@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { buildCritiqueDelegateReport } from '../src/scripts/idd-critique-delegate.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-delegate.mjs');
@@ -19,7 +23,7 @@ const CLI_PATH = join(REPO_ROOT, 'scripts/idd-critique-delegate.mjs');
  * GITHUB_ACTIONS auto-skip -- a separate behavior this suite covers on its
  * own. Pass `env: { GITHUB_ACTIONS: 'true' }` to opt back in. */
 function runCli(args: string[], env?: NodeJS.ProcessEnv): unknown {
-  const isolatedHome = mkdtempSync(
+  const isolatedHome = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-home-'),
   );
   const output = execFileSync(process.execPath, [CLI_PATH, ...args], {
@@ -80,7 +84,7 @@ test('reports usable:false, reason repository-local-explicit-disable for a null 
 // #3820: without an explicit localConfig, the repository document is read raw,
 // so a user-global delegate is still attributed to the user-global layer.
 test('a user-global delegate with no repository file is reported as user-global (#3820)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-source-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-critique-delegate-source-'));
   const globalPath = join(sandbox, 'config.json');
   writeFileSync(
     globalPath,
@@ -113,7 +117,7 @@ test('a user-global delegate with no repository file is reported as user-global 
 // readable git repository with no GitHub origin, so the checkout is initialized
 // as one here.
 test('a user-global override selected for this checkout supplies the delegate when local is absent (#3820)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-override-'),
   );
   const checkout = join(sandbox, 'checkout-override');
@@ -157,7 +161,7 @@ test('a user-global override selected for this checkout supplies the delegate wh
 // #3820: a path override never applies to a directory that is not a readable
 // git repository, so the base delegate stays in force there.
 test('a path override does not apply to a directory that is not a git repository (#3820)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-nongit-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-critique-delegate-nongit-'));
   const checkout = join(sandbox, 'checkout-nongit');
   mkdirSync(checkout);
   const globalPath = join(sandbox, 'config.json');
@@ -190,7 +194,7 @@ test('a path override does not apply to a directory that is not a git repository
 });
 
 test('a malformed repository-local delegate fails closed and never inherits a configured global delegate', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-malformed-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -217,7 +221,7 @@ test('a malformed repository-local delegate fails closed and never inherits a co
 });
 
 test('falls back to a configured user-global delegate only when local is entirely absent', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-global-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-critique-delegate-global-'));
   const globalPath = join(sandbox, 'config.json');
   writeFileSync(
     globalPath,
@@ -240,7 +244,7 @@ test('falls back to a configured user-global delegate only when local is entirel
 });
 
 test('consults an $HOME-resolved user-global delegate outside GITHUB_ACTIONS', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-remote-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -262,7 +266,7 @@ test('consults an $HOME-resolved user-global delegate outside GITHUB_ACTIONS', (
 });
 
 test('skips the $HOME-resolved user-global delegate under GITHUB_ACTIONS=true (#2329 review)', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-remote-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -284,7 +288,7 @@ test('skips the $HOME-resolved user-global delegate under GITHUB_ACTIONS=true (#
 });
 
 test('skips the $HOME-resolved user-global delegate when noUserGlobal is passed explicitly, outside GITHUB_ACTIONS (#2329 review)', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-remote-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -306,7 +310,7 @@ test('skips the $HOME-resolved user-global delegate when noUserGlobal is passed 
 });
 
 test('noUserGlobal also clears an explicitly supplied globalConfigPath, not just env (#2329 review)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-explicit-global-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -330,7 +334,7 @@ test('noUserGlobal also clears an explicitly supplied globalConfigPath, not just
 });
 
 test('GITHUB_ACTIONS=true also clears an explicitly supplied globalConfigPath, not just env (#2329 review)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-explicit-global-ci-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -355,7 +359,7 @@ test('GITHUB_ACTIONS=true also clears an explicitly supplied globalConfigPath, n
 });
 
 test('noUserGlobal also clears an explicitly supplied homedir, not just env (#2329 review)', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-explicit-homedir-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -401,7 +405,7 @@ test('CLI --help exits 0 and does not require config resolution', () => {
 });
 
 test('CLI --policy resolves an absent local config to usable:false with an isolated HOME', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-cli-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-critique-delegate-cli-'));
   const policyPath = join(sandbox, 'config.json');
   writeFileSync(policyPath, JSON.stringify({}));
   const report = runCli(['--policy', policyPath]) as {
@@ -415,7 +419,7 @@ test('CLI --policy resolves an absent local config to usable:false with an isola
 });
 
 test('CLI --policy resolves a configured local delegate to usable:true', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-cli-local-'),
   );
   const policyPath = join(sandbox, 'config.json');
@@ -439,13 +443,13 @@ test('CLI --policy resolves a configured local delegate to usable:true', () => {
 });
 
 test('CLI --no-user-global skips an otherwise-picked-up $HOME delegate (#2329 review)', () => {
-  const home = mkdtempSync(join(tmpdir(), 'idd-critique-delegate-cli-home-'));
+  const home = makeTempDir(join(tmpdir(), 'idd-critique-delegate-cli-home-'));
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
   writeFileSync(
     join(home, '.config', 'idd-skill', 'config.json'),
     JSON.stringify({ critiqueLoop: { delegate: { command: 'home-review' } } }),
   );
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-critique-delegate-cli-empty-'),
   );
   const policyPath = join(sandbox, 'config.json');

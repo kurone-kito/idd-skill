@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -38,7 +38,11 @@ import {
   unsafeTextReason,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
 import { readJson } from './test-utils.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const ciSuccess = readJson('fixtures/ci/success.json');
 const ciPending = readJson('fixtures/ci/pending.json');
@@ -905,7 +909,7 @@ test('advisory wait policy resolves defaults, explicit values, and fail-safe fal
 });
 
 test('advisory wait policy only applies file overrides from a schema-valid advisoryWait section', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-policy-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-advisory-policy-'));
   const validPath = join(root, 'policy.valid.json');
   const invalidPath = join(root, 'policy.invalid.json');
   const validConfig = JSON.parse(
@@ -956,7 +960,7 @@ test('advisory wait policy still honors advisoryWait when an unrelated top-level
   // false` at the whole-document level, but must not zero out an otherwise
   // schema-valid advisoryWait section — validation is scoped to
   // advisoryWait's own subtree.
-  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-policy-scoped-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-advisory-policy-scoped-'));
   const configPath = join(root, 'policy.json');
   const config = JSON.parse(
     JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
@@ -1535,7 +1539,7 @@ test('primary advisory bot login resolves defaults, overrides, and fail-safe fal
 });
 
 test('readAdvisoryPrimaryBotLogin only applies a schema-valid file override', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-primary-bot-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-advisory-primary-bot-'));
   const validPath = join(root, 'policy.valid.json');
   const invalidPath = join(root, 'policy.invalid.json');
   const validConfig = JSON.parse(
@@ -1585,7 +1589,7 @@ test('secondary advisory bot login resolves to empty when absent and normalizes 
 });
 
 test('readAdvisorySecondaryBotLogin only applies a schema-valid file override, else empty', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-secondary-bot-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-advisory-secondary-bot-'));
   const validPath = join(root, 'policy.valid.json');
   const invalidPath = join(root, 'policy.invalid.json');
   const validConfig = JSON.parse(
@@ -1721,7 +1725,7 @@ test('resolveAdvisorySecondaryBotLogin (singular) is authoritative only for exac
 });
 
 test('readAdvisorySecondaryBotLogins reads a two-login array from a schema-valid file, and fails closed on a schema-invalid one', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-secondary-bots-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-advisory-secondary-bots-'));
   const validPath = join(root, 'policy.valid.json');
   const invalidPath = join(root, 'policy.invalid.json');
   const validConfig = JSON.parse(
@@ -1751,7 +1755,7 @@ test('readAdvisorySecondaryBotLogins reads a two-login array from a schema-valid
 });
 
 test('readAdvisoryConvergenceDeadlineMinutes applies a schema-valid override and is scoped to advisoryWait', () => {
-  const root = mkdtempSync(
+  const root = makeTempDir(
     join(tmpdir(), 'idd-advisory-convergence-deadline-'),
   );
   const validPath = join(root, 'policy.valid.json');
@@ -1820,7 +1824,7 @@ test('resolveAdvisoryRecoveryCycleCap falls back to the default on a non-positiv
 });
 
 test('readAdvisoryRecoveryCycleCap applies a schema-valid override and is scoped to advisoryWait', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-recovery-cap-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-advisory-recovery-cap-'));
   const validPath = join(root, 'policy.valid.json');
   const invalidPath = join(root, 'policy.invalid.json');
   const validConfig = JSON.parse(
@@ -1886,7 +1890,7 @@ test('resolveAdvisoryTerminalWindowMinutes falls back to the default on an inval
 });
 
 test('readAdvisoryTerminalWindowMinutes applies a schema-valid override and is scoped to advisoryWait', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-terminal-window-'));
+  const root = makeTempDir(join(tmpdir(), 'idd-advisory-terminal-window-'));
   const validPath = join(root, 'policy.valid.json');
   const invalidPath = join(root, 'policy.invalid.json');
   const validConfig = JSON.parse(
@@ -2083,7 +2087,7 @@ test('resolveAdvisorySecondaryQuietWindowMinutes falls back to 0 (off) on an unp
 });
 
 test('readAdvisorySecondaryQuietWindowMinutes applies a schema-valid override and is scoped to advisoryWait', () => {
-  const root = mkdtempSync(
+  const root = makeTempDir(
     join(tmpdir(), 'idd-advisory-secondary-quiet-window-'),
   );
   const validPath = join(root, 'policy.valid.json');
